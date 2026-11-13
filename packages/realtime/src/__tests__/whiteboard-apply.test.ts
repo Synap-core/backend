@@ -97,7 +97,16 @@ const shape = (id: string, x = 0) => ({
   x,
   y: 0,
 });
-const put = (...records: ReturnType<typeof shape>[]): YjsRoomApplyRequest => ({
+const AGENT = { userId: "u", agentUserId: "agent-1" };
+/** A shape an agent placed that the person has not yet kept. */
+const pendingShape = (id: string, x = 0) => ({
+  ...shape(id, x),
+  props: { w: 100, h: 50 },
+  meta: { pending: true, placedBy: AGENT },
+});
+const put = (
+  ...records: Array<ReturnType<typeof shape> | ReturnType<typeof pendingShape>>
+): YjsRoomApplyRequest => ({
   documentId: BOARD,
   put: records,
   origin: "synap-place:u",
@@ -152,7 +161,9 @@ describe("applyWhiteboardRecords: an OPEN board", () => {
       applied: true,
       target: "live",
       put: 2,
+      patched: 0,
       removed: 0,
+      skipped: [],
     });
     expect(Object.keys(doc.getMap(MAP).toJSON()).sort()).toEqual([
       "shape:a",
@@ -168,15 +179,111 @@ describe("applyWhiteboardRecords: an OPEN board", () => {
     ]);
   });
 
-  it("a retry with the same ids REPLACES, never duplicates", async () => {
+  it("a retry with the same ids REPLACES a still-pending shape, never duplicates", async () => {
     const s = server();
     const doc = roomDoc();
     await s.persistence.bindState(ROOM, doc);
-    await s.applyWhiteboardRecords(ROOM, put(shape("shape:b", 1)));
-    await s.applyWhiteboardRecords(ROOM, put(shape("shape:b", 2)));
+    await s.applyWhiteboardRecords(ROOM, put(pendingShape("shape:b", 1)));
+    await s.applyWhiteboardRecords(ROOM, put(pendingShape("shape:b", 2)));
     const map = doc.getMap(MAP).toJSON();
     expect(Object.keys(map).sort()).toEqual(["shape:a", "shape:b"]);
     expect(map["shape:b"].x).toBe(2);
+  });
+
+  it("NEVER resets a shape the person kept: the repeat is skipped and reported", async () => {
+    const s = server();
+    const doc = roomDoc();
+    await s.persistence.bindState(ROOM, doc);
+    await s.applyWhiteboardRecords(ROOM, put(pendingShape("shape:b", 1)));
+    // The person keeps it (pending dropped) and moves it.
+    doc.getMap(MAP).set("shape:b", {
+      ...pendingShape("shape:b", 900),
+      meta: { placedBy: AGENT },
+    });
+    const reply = await s.applyWhiteboardRecords(
+      ROOM,
+      put(pendingShape("shape:b", 0))
+    );
+    expect(reply).toMatchObject({ put: 0, skipped: ["shape:b"] });
+    const kept = doc.getMap(MAP).toJSON()["shape:b"];
+    expect(kept.x).toBe(900);
+    expect(kept.meta.pending).toBeUndefined();
+    expect(storedRecords()["shape:b"].x).toBe(900);
+  });
+
+  it("a patch merges into the LIVE record: a person's edit since the API read survives", async () => {
+    const s = server();
+    const doc = roomDoc();
+    await s.persistence.bindState(ROOM, doc);
+    doc.getMap(MAP).set("shape:a", {
+      ...shape("shape:a", 5),
+      props: { w: 100, h: 50, text: "typed by a person just now" },
+    });
+    const reply = await s.applyWhiteboardRecords(ROOM, {
+      documentId: BOARD,
+      patch: [{ shapeId: "shape:a", w: 300 }],
+      origin: "o",
+    });
+    expect(reply).toMatchObject({ patched: 1, put: 0 });
+    const rec = doc.getMap(MAP).toJSON()["shape:a"];
+    expect(rec.x).toBe(5);
+    expect(rec.props).toEqual({
+      w: 300,
+      h: 50,
+      text: "typed by a person just now",
+    });
+  });
+
+  it("a patch the shape cannot take is refused, nothing written", async () => {
+    const s = server();
+    const doc = roomDoc();
+    await s.persistence.bindState(ROOM, doc);
+    await expect(
+      s.applyWhiteboardRecords(ROOM, {
+        documentId: BOARD,
+        patch: [{ shapeId: "shape:a", w: 3 }],
+        origin: "o",
+      })
+    ).rejects.toMatchObject({ reason: "bad_request", status: 400 });
+    await expect(
+      s.applyWhiteboardRecords(ROOM, {
+        documentId: BOARD,
+        patch: [{ shapeId: "shape:nope", x: 3 }],
+        put: [pendingShape("shape:new")],
+        origin: "o",
+      })
+    ).rejects.toMatchObject({ reason: "shape_not_found" });
+    expect(doc.getMap(MAP).has("shape:new")).toBe(false);
+  });
+
+  it("a removal takes what is in the board NOW: a child added since the API read goes too", async () => {
+    const s = server();
+    const doc = roomDoc();
+    await s.persistence.bindState(ROOM, doc);
+    doc.getMap(MAP).set("shape:late", {
+      ...shape("shape:late"),
+      parentId: "shape:a",
+    });
+    const reply = await s.applyWhiteboardRecords(ROOM, {
+      documentId: BOARD,
+      remove: ["shape:a"],
+      origin: "o",
+    });
+    expect(reply.removed).toBe(2);
+    expect(Object.keys(doc.getMap(MAP).toJSON())).toEqual([]);
+  });
+
+  it("removing the LAST shape is a real save, not save_failed", async () => {
+    const s = server();
+    const doc = roomDoc();
+    await s.persistence.bindState(ROOM, doc);
+    const reply = await s.applyWhiteboardRecords(ROOM, {
+      documentId: BOARD,
+      remove: ["shape:a"],
+      origin: "o",
+    });
+    expect(reply).toMatchObject({ removed: 1, target: "live" });
+    expect(storedRecords()).toEqual({});
   });
 
   it("removes by id", async () => {
@@ -369,6 +476,20 @@ describe("parseYjsApplyRequest (the bridge's body check)", () => {
       "a removal of a non-record key",
       ROOM,
       { documentId: BOARD, origin: "o", remove: ["synap-room"] },
+    ],
+    [
+      "a patch that names no shape",
+      ROOM,
+      { documentId: BOARD, origin: "o", patch: [{ shapeId: "page:p" }] },
+    ],
+    [
+      "a record larger than the cap",
+      ROOM,
+      {
+        documentId: BOARD,
+        origin: "o",
+        put: [{ ...shape("shape:big"), props: { x: "a".repeat(300_000) } }],
+      },
     ],
   ])("refuses %s", (_n, room, body) => {
     expect(parseYjsApplyRequest(room, body).ok).toBe(false);

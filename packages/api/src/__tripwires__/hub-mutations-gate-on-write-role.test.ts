@@ -108,13 +108,18 @@ describe("tripwire: mutating Hub routes gate on the write role", () => {
       }
       offenders.push(...offendersIn(f.split("\\").join("/"), src));
     }
-    // Non-vacuity: ~300 non-GET handlers exist, and nine of them gate on the
-    // write check today (cells ×3, whiteboards ×2, entities ×4: attachments,
+    // Non-vacuity: ~300 non-GET handlers exist, and seven of them gate on the
+    // write check in the handler today (cells ×3, entities ×4: attachments,
     // /files, /files/uploads, finalize). On origin/main before this guard the
-    // scan flagged exactly those nine. A broken glob or splitter that sees no
-    // handler would pass the assertion below trivially.
+    // scan flagged exactly nine: the two whiteboard placement routes were the
+    // others. Their one replacement (`POST /whiteboards/:viewId/placements`)
+    // gates in `placeOnBoard` on the board's own room floor
+    // (`resolveDocumentRoomAccess` = edit, never `verifyWorkspaceAccess`),
+    // which `whiteboards.place.test.ts` pins ("a reader of the board cannot
+    // place"). A broken glob or splitter that sees no handler would pass the
+    // assertion below trivially.
     expect(mutating).toBeGreaterThanOrEqual(200);
-    expect(writeGated).toBeGreaterThanOrEqual(8);
+    expect(writeGated).toBeGreaterThanOrEqual(7);
     expect(offenders).toEqual([]);
   });
 

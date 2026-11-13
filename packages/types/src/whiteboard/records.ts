@@ -422,13 +422,13 @@ export function placedShapeId(
 
 // ── The builder ──────────────────────────────────────────────────────────────
 
-export class BoardPlacementError extends Error {
+export class BoardBuildError extends Error {
   constructor(
     readonly reason: "frame_not_found" | "bad_request",
     message: string
   ) {
     super(message);
-    this.name = "BoardPlacementError";
+    this.name = "BoardBuildError";
   }
 }
 
@@ -477,7 +477,7 @@ export function buildPlacementRecords(
 
   const frameId = options.frameId;
   if (frameId !== undefined && ctx.pagePosition[frameId] === undefined) {
-    throw new BoardPlacementError(
+    throw new BoardBuildError(
       "frame_not_found",
       `frameId ${frameId} names no shape on this board (read the board for its frame ids).`
     );
@@ -674,46 +674,108 @@ export function buildPlacementRecords(
   return { records, shapeIds };
 }
 
-// ── Changing and removing shapes already there ───────────────────────────────
+// ── Reading the marks, walking the tree ──────────────────────────────────────
+
+/** Is this shape one an agent placed and the person has not yet kept? */
+export function isPendingPlacement(shape: { meta?: unknown }): boolean {
+  return (
+    isRec(shape.meta) && shape.meta[BOARD_PLACEMENT_META_KEYS.pending] === true
+  );
+}
+
+/** `meta.placedBy`, or null when missing or malformed. */
+export function readPlacedBy(shape: { meta?: unknown }): BoardPlacedBy | null {
+  if (!isRec(shape.meta)) return null;
+  const by = shape.meta[BOARD_PLACEMENT_META_KEYS.placedBy];
+  if (!isRec(by) || typeof by.userId !== "string") return null;
+  return {
+    userId: by.userId,
+    ...(typeof by.agentUserId === "string"
+      ? { agentUserId: by.agentUserId }
+      : {}),
+    ...(typeof by.proposalId === "string" ? { proposalId: by.proposalId } : {}),
+  };
+}
+
+/** The shape records of a board, by id, and the shapes each parent holds. */
+function shapeTree(records: Record<string, unknown>): {
+  shapes: Map<string, Rec>;
+  children: Map<string, string[]>;
+} {
+  const shapes = new Map<string, Rec>();
+  const children = new Map<string, string[]>();
+  for (const [key, value] of Object.entries(records)) {
+    if (!isRec(value) || value.typeName !== "shape") continue;
+    const id = typeof value.id === "string" ? value.id : key;
+    shapes.set(id, value);
+    if (typeof value.parentId === "string") {
+      const list = children.get(value.parentId) ?? [];
+      list.push(id);
+      children.set(value.parentId, list);
+    }
+  }
+  return { shapes, children };
+}
+
+/** The shapes among `shapeIds` plus everything they hold, at any depth. */
+export function shapeDescendantIds(
+  records: Record<string, unknown>,
+  shapeIds: readonly string[]
+): string[] {
+  const { shapes, children } = shapeTree(records);
+  const out = new Set<string>();
+  const walk = (id: string) => {
+    if (out.has(id)) return;
+    out.add(id);
+    for (const child of children.get(id) ?? []) walk(child);
+  };
+  for (const id of shapeIds) if (shapes.has(id)) walk(id);
+  return [...out];
+}
 
 /**
- * The records an update writes: each target shape with the given position,
- * size and props merged in. A target that is not a shape on the board is
- * returned in `missing` (the door refuses the whole call: `shape_not_found`).
+ * The pending shapes with no pending ancestor: what a person keeps or rejects
+ * as ONE decision (an artboard and its slide cell are one).
  */
-export function buildShapeUpdates(
-  records: Record<string, unknown>,
-  updates: ReadonlyArray<{
-    shapeId: string;
-    x?: number;
-    y?: number;
-    w?: number;
-    h?: number;
-    props?: Record<string, unknown>;
-  }>
-): { records: BoardRecord[]; missing: string[] } {
-  const out: BoardRecord[] = [];
-  const missing: string[] = [];
-  for (const u of updates) {
-    const current = records[u.shapeId];
-    if (!isRec(current) || current.typeName !== "shape") {
-      missing.push(u.shapeId);
-      continue;
+export function pendingPlacementRootIds(
+  records: Record<string, unknown>
+): string[] {
+  const { shapes } = shapeTree(records);
+  const pending = (id: string) => {
+    const s = shapes.get(id);
+    return s !== undefined && isPendingPlacement(s);
+  };
+  const hasPendingAncestor = (id: string): boolean => {
+    let parent = shapes.get(id)?.parentId;
+    for (let depth = 0; typeof parent === "string" && depth < 64; depth++) {
+      if (pending(parent)) return true;
+      parent = shapes.get(parent)?.parentId;
     }
-    const props: Rec = {
-      ...(isRec(current.props) ? current.props : {}),
-      ...json({ ...(u.props ?? {}) }),
-      ...(u.w !== undefined ? { w: u.w } : {}),
-      ...(u.h !== undefined ? { h: u.h } : {}),
-    };
-    out.push({
-      ...(current as BoardRecord),
-      ...(u.x !== undefined ? { x: u.x } : {}),
-      ...(u.y !== undefined ? { y: u.y } : {}),
-      props,
-    });
+    return false;
+  };
+  return [...shapes.keys()].filter(
+    (id) => pending(id) && !hasPendingAncestor(id)
+  );
+}
+
+/**
+ * The records that keeping `shapeIds` writes: the pending shapes among them
+ * and what they hold, with `meta.pending` dropped and everything else (the
+ * `placedBy` / `placedAt` marks included) kept.
+ */
+export function approvedPlacementRecords(
+  records: Record<string, unknown>,
+  shapeIds: readonly string[]
+): BoardRecord[] {
+  const out: BoardRecord[] = [];
+  for (const id of shapeDescendantIds(records, shapeIds)) {
+    const shape = records[id];
+    if (!isRec(shape) || !isPendingPlacement(shape)) continue;
+    const { [BOARD_PLACEMENT_META_KEYS.pending]: _kept, ...meta } =
+      shape.meta as Rec;
+    out.push({ ...(shape as BoardRecord), meta });
   }
-  return { records: out, missing };
+  return out;
 }
 
 /**
@@ -725,40 +787,22 @@ export function shapeRemovalIds(
   records: Record<string, unknown>,
   shapeIds: readonly string[]
 ): { ids: string[]; missing: string[] } {
-  const children = new Map<string, string[]>();
-  const bindings: Array<{ id: string; fromId: unknown; toId: unknown }> = [];
+  const { shapes } = shapeTree(records);
+  const missing = shapeIds.filter((id) => !shapes.has(id));
+  const removed = new Set(
+    shapeDescendantIds(
+      records,
+      shapeIds.filter((id) => shapes.has(id))
+    )
+  );
   for (const [key, value] of Object.entries(records)) {
-    if (!isRec(value)) continue;
+    if (!isRec(value) || value.typeName !== "binding") continue;
     const id = typeof value.id === "string" ? value.id : key;
-    if (value.typeName === "shape" && typeof value.parentId === "string") {
-      const list = children.get(value.parentId) ?? [];
-      list.push(id);
-      children.set(value.parentId, list);
-    } else if (value.typeName === "binding") {
-      bindings.push({ id, fromId: value.fromId, toId: value.toId });
-    }
-  }
-  const missing: string[] = [];
-  const removed = new Set<string>();
-  const walk = (id: string) => {
-    if (removed.has(id)) return;
-    removed.add(id);
-    for (const child of children.get(id) ?? []) walk(child);
-  };
-  for (const id of shapeIds) {
-    const current = records[id];
-    if (!isRec(current) || current.typeName !== "shape") {
-      missing.push(id);
-      continue;
-    }
-    walk(id);
-  }
-  for (const b of bindings) {
     if (
-      (typeof b.fromId === "string" && removed.has(b.fromId)) ||
-      (typeof b.toId === "string" && removed.has(b.toId))
+      (typeof value.fromId === "string" && removed.has(value.fromId)) ||
+      (typeof value.toId === "string" && removed.has(value.toId))
     ) {
-      removed.add(b.id);
+      removed.add(id);
     }
   }
   return { ids: [...removed], missing };

@@ -369,11 +369,21 @@ async function handleEmit(
 /**
  * Parse request body
  */
-function parseBody(req: IncomingMessage): Promise<unknown> {
+/** The largest body the apply route reads (bytes): bigger is refused. */
+export const BRIDGE_MAX_BODY_BYTES = 10 * 1024 * 1024;
+
+function parseBody(req: IncomingMessage, maxBytes?: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let body = "";
+    let size = 0;
 
     req.on("data", (chunk) => {
+      size += chunk.length;
+      if (maxBytes !== undefined && size > maxBytes) {
+        reject(new Error("Body too large"));
+        req.destroy();
+        return;
+      }
       body += chunk.toString();
     });
 
@@ -541,11 +551,13 @@ const APPLY_RECORD_PREFIX: Record<string, string> = {
 };
 /** At most this many records per apply (a 50-slide deck is ~100). */
 export const YJS_APPLY_MAX_RECORDS = 1000;
+/** Largest serialized record in `put` (chars). */
+export const YJS_APPLY_MAX_RECORD_CHARS = 200_000;
 
 /**
  * Read an apply body, or say what is wrong with it. Only whiteboard rooms,
  * the room of the named document, tldraw shape/page/binding records whose id
- * matches their typeName.
+ * matches their typeName; patches name shapes; removals name shapes.
  */
 export function parseYjsApplyRequest(
   roomId: string,
@@ -562,12 +574,13 @@ export function parseYjsApplyRequest(
   if (typeof b.origin !== "string" || !b.origin || b.origin.length > 200)
     return { ok: false, error: "origin is required (who writes)." };
   const put = b.put ?? [];
+  const patch = b.patch ?? [];
   const remove = b.remove ?? [];
-  if (!Array.isArray(put) || !Array.isArray(remove))
-    return { ok: false, error: "put and remove must be arrays." };
-  if (put.length + remove.length === 0)
-    return { ok: false, error: "Nothing to apply." };
-  if (put.length + remove.length > YJS_APPLY_MAX_RECORDS)
+  if (!Array.isArray(put) || !Array.isArray(patch) || !Array.isArray(remove))
+    return { ok: false, error: "put, patch and remove must be arrays." };
+  const total = put.length + patch.length + remove.length;
+  if (total === 0) return { ok: false, error: "Nothing to apply." };
+  if (total > YJS_APPLY_MAX_RECORDS)
     return {
       ok: false,
       error: `At most ${YJS_APPLY_MAX_RECORDS} records per apply.`,
@@ -585,14 +598,27 @@ export function parseYjsApplyRequest(
           "Every record in put is a tldraw shape, page or binding whose id matches its typeName.",
       };
     }
-  }
-  const prefixes = Object.values(APPLY_RECORD_PREFIX);
-  for (const id of remove) {
-    if (typeof id !== "string" || !prefixes.some((p) => id.startsWith(p))) {
+    if (JSON.stringify(r).length > YJS_APPLY_MAX_RECORD_CHARS) {
       return {
         ok: false,
-        error: "Every id in remove is a shape, page or binding id.",
+        error: `A record in put is larger than ${YJS_APPLY_MAX_RECORD_CHARS} characters.`,
       };
+    }
+  }
+  for (const u of patch) {
+    const p = u as Record<string, unknown> | null;
+    if (
+      !p ||
+      typeof p !== "object" ||
+      typeof p.shapeId !== "string" ||
+      !p.shapeId.startsWith("shape:")
+    ) {
+      return { ok: false, error: "Every patch names a shape (shapeId)." };
+    }
+  }
+  for (const id of remove) {
+    if (typeof id !== "string" || !id.startsWith("shape:")) {
+      return { ok: false, error: "Every id in remove is a shape id." };
     }
   }
   return {
@@ -600,7 +626,10 @@ export function parseYjsApplyRequest(
     request: {
       documentId: room[1],
       origin: b.origin,
-      put: put as YjsRoomApplyRequest["put"],
+      ...(put.length > 0 ? { put: put as YjsRoomApplyRequest["put"] } : {}),
+      ...(patch.length > 0
+        ? { patch: patch as YjsRoomApplyRequest["patch"] }
+        : {}),
       ...(remove.length > 0 ? { remove: remove as string[] } : {}),
     },
   };
@@ -639,9 +668,16 @@ async function handleYjsApply(req: IncomingMessage, res: ServerResponse) {
   const roomId = match ? decodeURIComponent(match[1]) : "";
   let body: unknown;
   try {
-    body = await parseBody(req);
-  } catch {
-    applyError(res, "bad_request", "Invalid JSON", roomId);
+    body = await parseBody(req, BRIDGE_MAX_BODY_BYTES);
+  } catch (err) {
+    applyError(
+      res,
+      "bad_request",
+      err instanceof Error && err.message === "Body too large"
+        ? "The body is too large."
+        : "Invalid JSON",
+      roomId
+    );
     return;
   }
   const parsed = parseYjsApplyRequest(roomId, body);
@@ -660,7 +696,7 @@ async function handleYjsApply(req: IncomingMessage, res: ServerResponse) {
       parsed.request
     );
     console.log(
-      `[Bridge] Applied ${reply.put} record(s), removed ${reply.removed} in ${roomId} (${reply.target})`
+      `[Bridge] Applied ${reply.put} created, ${reply.patched} patched, ${reply.removed} removed in ${roomId} (${reply.target})`
     );
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(reply));

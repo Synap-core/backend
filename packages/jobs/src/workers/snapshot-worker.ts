@@ -26,7 +26,10 @@ import {
 } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
 import type { YjsRoomStateReply } from "@synap/events/realtime-schemas";
-import { broadcastSuccess } from "../utils/realtime-broadcast.js";
+import {
+  broadcastError,
+  broadcastSuccess,
+} from "../utils/realtime-broadcast.js";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
 
@@ -342,6 +345,24 @@ export async function handleWhiteboardRestore(
   });
   if (!response.ok)
     throw new Error(`Realtime server error: ${response.status}`);
+
+  // The bridge answers 200 `applied: false` for a board nobody has open: the
+  // version went nowhere, so it is never announced as restored.
+  const reply = (await response.json().catch(() => null)) as {
+    applied?: boolean;
+  } | null;
+  if (reply?.applied === false) {
+    logger.warn(
+      { viewId, versionId, yjsRoomId },
+      "Whiteboard restore not applied: the board is not open"
+    );
+    await broadcastError(
+      userId,
+      "whiteboard.restore.failed",
+      "The board is not open, so the version was not restored. Open the board and restore it again."
+    );
+    return;
+  }
 
   await broadcastSuccess(userId, "whiteboard.restored", {
     viewId,

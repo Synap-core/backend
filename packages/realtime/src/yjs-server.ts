@@ -49,7 +49,12 @@ import {
   whiteboardLoadFailed,
   WHITEBOARD_LOAD_FAILED_MESSAGE,
 } from "./whiteboard-room-state.js";
-import { withRoomLock } from "./room-lock.js";
+import { RoomLockTimeoutError, withRoomLock } from "./room-lock.js";
+import {
+  BoardApplyError,
+  boardStoreMapName,
+  planBoardApply,
+} from "@synap-core/types/whiteboard";
 import {
   YJS_APPLY_FAILURES,
   type YjsApplyFailure,
@@ -234,17 +239,48 @@ export class WhiteboardApplyError extends Error {
   }
 }
 
-/** Put and remove records in a board's map, as ONE Y transaction. */
+/**
+ * Decide, against the board's records as they are NOW, what the write does
+ * (`planBoardApply`), then put and delete them as ONE Y transaction.
+ */
 function applyBoardRecords(
   ydoc: Y.Doc,
   documentId: string,
-  request: Pick<YjsRoomApplyRequest, "put" | "remove" | "origin">
-): void {
-  const yMap = ydoc.getMap(`tl_map_${documentId}`);
+  request: Pick<YjsRoomApplyRequest, "put" | "patch" | "remove" | "origin">
+): {
+  put: number;
+  patched: number;
+  removed: number;
+  skipped: string[];
+  emptied: boolean;
+} {
+  const yMap = ydoc.getMap(boardStoreMapName(documentId));
+  let plan;
+  try {
+    plan = planBoardApply(yMap.toJSON() as Record<string, unknown>, {
+      create: request.put,
+      patch: request.patch,
+      remove: request.remove,
+    });
+  } catch (err) {
+    if (err instanceof BoardApplyError) {
+      throw new WhiteboardApplyError(err.reason, err.message);
+    }
+    throw err;
+  }
   ydoc.transact(() => {
-    for (const record of request.put) yMap.set(record.id, record);
-    for (const id of request.remove ?? []) yMap.delete(id);
+    for (const record of plan.put) yMap.set(record.id, record);
+    for (const id of plan.delete) yMap.delete(id);
   }, request.origin);
+  const patchedIds = new Set((request.patch ?? []).map((u) => u.shapeId));
+  return {
+    put: plan.created.length,
+    patched: plan.put.filter((r) => patchedIds.has(r.id)).length,
+    removed: plan.delete.length,
+    skipped: plan.skipped,
+    // Removing the last record is a real save, not an empty client state.
+    emptied: plan.delete.length > 0 && yMap.size === 0,
+  };
 }
 
 /** A save the place door reports as done must be on disk. */
@@ -356,7 +392,7 @@ class DatabasePersistence {
           ) {
             throw new Error("the stored body is not a tldraw store");
           }
-          const yMap = ydoc.getMap(`tl_map_${documentId}`);
+          const yMap = ydoc.getMap(boardStoreMapName(documentId));
           ydoc.transact(() => {
             for (const [key, val] of Object.entries(store)) {
               if (val != null && typeof val === "object") {
@@ -444,7 +480,8 @@ class DatabasePersistence {
    */
   async saveWhiteboardRoom(
     roomName: string,
-    ydoc: Y.Doc
+    ydoc: Y.Doc,
+    opts: { emptiedByApply?: boolean } = {}
   ): Promise<WhiteboardSaveOutcome> {
     const documentId = parseRoomName(roomName);
     if (!documentId) return "no-document";
@@ -482,7 +519,7 @@ class DatabasePersistence {
     }
 
     // Extract Tldraw store from Yjs Map
-    const yMap = ydoc.getMap(`tl_map_${documentId}`);
+    const yMap = ydoc.getMap(boardStoreMapName(documentId));
     const store: TldrawStoreSnapshot = {};
     yMap.forEach((val, key) => {
       if (val != null && typeof val === "object") {
@@ -493,7 +530,12 @@ class DatabasePersistence {
     let content: string;
     const storeIsEmpty = Object.keys(store).length === 0;
 
-    if (!storeIsEmpty) {
+    if (opts.emptiedByApply && storeIsEmpty) {
+      // The place door removed the board's last records: an empty store is
+      // the result it was asked for, not a client's lost state (GUARD 1 below
+      // is for the latter).
+      content = JSON.stringify({ store });
+    } else if (!storeIsEmpty) {
       // Tldraw store found — save as JSON
       content = JSON.stringify({ store });
     } else {
@@ -510,7 +552,7 @@ class DatabasePersistence {
     // If the Yjs map is empty, check what's already in MinIO before writing.
     // An empty client state must not clobber existing content (e.g. after a
     // client error, reconnect, or partial sync).
-    if (storeIsEmpty) {
+    if (storeIsEmpty && !opts.emptiedByApply) {
       let priorIsNonEmpty = false;
       try {
         const priorBuf = await storage.downloadBuffer(storageKey);
@@ -982,10 +1024,18 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
         await persistence.bindState(docName, ydoc);
         return;
       }
-      await withRoomLock(docName, async () => {
-        await persistence.bindState(docName, ydoc);
-        boundWhiteboards.set(docName, ydoc);
-      });
+      try {
+        await withRoomLock(docName, async () => {
+          await persistence.bindState(docName, ydoc);
+          boundWhiteboards.set(docName, ydoc);
+        });
+      } catch (err) {
+        if (!(err instanceof RoomLockTimeoutError)) throw err;
+        // The load did not finish: this room holds no board (it may fill in
+        // later). Never let it save over the stored file.
+        console.error(`[Yjs] bindState timed out for ${docName}:`, err);
+        markWhiteboardLoadFailed(ydoc);
+      }
     },
     writeState: async (docName: string, ydoc: Y.Doc) => {
       if (isWhiteboard(docName)) {
@@ -998,32 +1048,30 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
   };
 
   async function writeStateUnlocked(docName: string, ydoc: Y.Doc) {
-    {
-      if (closingRooms.has(docName)) {
-        // Room is closing — do final snapshot instead of regular write
-        closingRooms.delete(docName);
-        try {
-          await persistence.createSnapshot(docName, ydoc);
-        } catch (err) {
-          console.error(
-            `[Yjs] createSnapshot failed for ${docName}, falling back to writeState:`,
-            err
-          );
-          try {
-            await persistence.writeState(docName, ydoc);
-          } catch (fallbackErr) {
-            console.error(
-              `[Yjs] writeState fallback also failed for ${docName}:`,
-              fallbackErr
-            );
-          }
-        }
-      } else {
+    if (closingRooms.has(docName)) {
+      // Room is closing — do final snapshot instead of regular write
+      closingRooms.delete(docName);
+      try {
+        await persistence.createSnapshot(docName, ydoc);
+      } catch (err) {
+        console.error(
+          `[Yjs] createSnapshot failed for ${docName}, falling back to writeState:`,
+          err
+        );
         try {
           await persistence.writeState(docName, ydoc);
-        } catch (err) {
-          console.error(`[Yjs] writeState failed for ${docName}:`, err);
+        } catch (fallbackErr) {
+          console.error(
+            `[Yjs] writeState fallback also failed for ${docName}:`,
+            fallbackErr
+          );
         }
+      }
+    } else {
+      try {
+        await persistence.writeState(docName, ydoc);
+      } catch (err) {
+        console.error(`[Yjs] writeState failed for ${docName}:`, err);
       }
     }
   }
@@ -1189,62 +1237,72 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
    *    and loads the result.
    *  - A room, or a stored file, that failed to load takes no write.
    */
-  const applyWhiteboardRecords = (
+  const applyWhiteboardRecords = async (
     roomName: string,
     request: YjsRoomApplyRequest
-  ): Promise<YjsRoomApplyReply> =>
-    withRoomLock(roomName, async () => {
-      const removed = request.remove?.length ?? 0;
-      const live =
-        boundWhiteboards.get(roomName) ??
-        (yServer as unknown as { documents: Map<string, Y.Doc> }).documents.get(
-          roomName
-        );
-      if (live) {
-        if (whiteboardLoadFailed(live)) {
-          throw new WhiteboardApplyError(
-            "load_failed",
-            `${WHITEBOARD_LOAD_FAILED_MESSAGE} It takes no write until everyone has left the board.`
-          );
+  ): Promise<YjsRoomApplyReply> => {
+    try {
+      return await withRoomLock(roomName, async () => {
+        const live =
+          boundWhiteboards.get(roomName) ??
+          (
+            yServer as unknown as { documents: Map<string, Y.Doc> }
+          ).documents.get(roomName);
+        if (live) {
+          if (whiteboardLoadFailed(live)) {
+            throw new WhiteboardApplyError(
+              "load_failed",
+              `${WHITEBOARD_LOAD_FAILED_MESSAGE} It takes no write until everyone has left the board.`
+            );
+          }
+          const done = applyBoardRecords(live, request.documentId, request);
+          if (done.put + done.patched + done.removed > 0) {
+            assertSaved(
+              await persistence.saveWhiteboardRoom(roomName, live, {
+                emptiedByApply: done.emptied,
+              }),
+              roomName
+            );
+          }
+          const { emptied: _e, ...counts } = done;
+          return { roomId: roomName, applied: true, target: "live", ...counts };
         }
-        applyBoardRecords(live, request.documentId, request);
-        assertSaved(
-          await persistence.saveWhiteboardRoom(roomName, live),
-          roomName
-        );
-        return {
-          roomId: roomName,
-          applied: true,
-          target: "live",
-          put: request.put.length,
-          removed,
-        };
-      }
-      const scratch = Object.assign(new Y.Doc(), { name: roomName });
-      try {
-        await persistence.bindState(roomName, scratch);
-        if (whiteboardLoadFailed(scratch)) {
-          throw new WhiteboardApplyError(
-            "load_failed",
-            WHITEBOARD_LOAD_FAILED_MESSAGE
-          );
+        const scratch = Object.assign(new Y.Doc(), { name: roomName });
+        try {
+          await persistence.bindState(roomName, scratch);
+          if (whiteboardLoadFailed(scratch)) {
+            throw new WhiteboardApplyError(
+              "load_failed",
+              WHITEBOARD_LOAD_FAILED_MESSAGE
+            );
+          }
+          const done = applyBoardRecords(scratch, request.documentId, request);
+          if (done.put + done.patched + done.removed > 0) {
+            assertSaved(
+              await persistence.saveWhiteboardRoom(roomName, scratch, {
+                emptiedByApply: done.emptied,
+              }),
+              roomName
+            );
+          }
+          const { emptied: _e, ...counts } = done;
+          return {
+            roomId: roomName,
+            applied: true,
+            target: "stored",
+            ...counts,
+          };
+        } finally {
+          scratch.destroy();
         }
-        applyBoardRecords(scratch, request.documentId, request);
-        assertSaved(
-          await persistence.saveWhiteboardRoom(roomName, scratch),
-          roomName
-        );
-      } finally {
-        scratch.destroy();
+      });
+    } catch (err) {
+      if (err instanceof RoomLockTimeoutError) {
+        throw new WhiteboardApplyError("timeout", err.message);
       }
-      return {
-        roomId: roomName,
-        applied: true,
-        target: "stored",
-        put: request.put.length,
-        removed,
-      };
-    });
+      throw err;
+    }
+  };
 
   const server = yServer as unknown as YjsServerInstance;
   server.flushAll = flushAll;

@@ -8,7 +8,6 @@ import {
   boardRoomId,
   boardStoreMapName,
   buildPlacementRecords,
-  buildShapeUpdates,
   indexAbove,
   isValidIndexKey,
   placedShapeId,
@@ -379,23 +378,6 @@ describe("updates and removals", () => {
       toId: "shape:child",
     } as BoardRecord
   );
-
-  it("merges position, size and props into the existing record", () => {
-    const { records, missing } = buildShapeUpdates(recs, [
-      { shapeId: "shape:other", x: 10, w: 222, props: { color: "red" } },
-      { shapeId: "shape:nope", x: 1 },
-    ]);
-    expect(missing).toEqual(["shape:nope"]);
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      id: "shape:other",
-      type: "geo",
-      x: 10,
-      y: 0,
-      index: "a1",
-      props: { w: 222, h: 50, color: "red" },
-    });
-  });
 
   it("removes a shape with everything it holds and the bindings pointing at them", () => {
     const { ids, missing } = shapeRemovalIds(recs, [

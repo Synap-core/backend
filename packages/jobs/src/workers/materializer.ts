@@ -271,10 +271,15 @@ export async function handleMaterialize(
         // A whiteboard write is applied by its approve executor
         // (api routers/proposals/executors/whiteboard.ts, through the place
         // door's realtime write), never here: this worker cannot reach the
-        // board. Refuse loudly rather than report a write that did not happen.
-        throw new Error(
-          `Whiteboard ${action} is applied by its approve executor, not the materializer (proposal subject ${subjectId}).`
+        // board. Nothing emits `whiteboard.*.validated` any more (the catch-all
+        // executor no longer hands whiteboards to this worker), so a stray job
+        // is refused loudly and ONCE: a throw would retry a write that can never
+        // succeed here and dead-letter it.
+        logger.error(
+          { subjectType, action, subjectId, correlationId },
+          "REFUSED materialization: a whiteboard write is applied by its approve executor (api routers/proposals/executors/whiteboard.ts), not this worker."
         );
+        return;
       default:
         logger.warn(
           { subjectType },

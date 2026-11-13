@@ -13,40 +13,22 @@
  * (`@synap-core/types/whiteboard`): `{ preset, title?, slides:[{ html, title? }] }`.
  */
 
-import { z } from "zod";
-import { TRPCError } from "@trpc/server";
-import type { BoardPlacePartResult } from "@synap-core/types/whiteboard";
+import {
+  ArtboardDeckSchema,
+  BoardPlacementOptionsSchema,
+  type ArtboardDeck,
+  type BoardPlacePartResult,
+  type BoardPlacementOptions,
+} from "@synap-core/types/whiteboard";
 import {
   BoardPlaceError,
+  boardPlaceErrorToTrpc,
   placeOnBoard,
 } from "../whiteboards/place-on-board.js";
 
-/** One slide of an artboard deck — HTML content with an optional title. */
-export const ArtboardDeckSlideSchema = z.object({
-  html: z.string(),
-  title: z.string().optional(),
-});
-
-/** The artboard-deck resource (the `artboard-deck` kind of BoardResourceRef). */
-export const ArtboardDeckSchema = z.object({
-  preset: z.string(),
-  title: z.string().optional(),
-  slides: z.array(ArtboardDeckSlideSchema).min(1),
-});
-
-export type ArtboardDeck = z.infer<typeof ArtboardDeckSchema>;
-
-/** Where to put it (the place door's `options`). */
-export const BoardPlacementOptionsSchema = z.object({
-  x: z.number().optional(),
-  y: z.number().optional(),
-  w: z.number().optional(),
-  h: z.number().optional(),
-  frameId: z.string().optional(),
-  layout: z.enum(["stack", "grid", "flow", "freeform"]).optional(),
-});
-
-export type BoardPlacementOptions = z.infer<typeof BoardPlacementOptionsSchema>;
+// The deck and the options are the place door's own schemas: one contract.
+export { ArtboardDeckSchema, BoardPlacementOptionsSchema };
+export type { ArtboardDeck, BoardPlacementOptions };
 
 /** Place one `artboard-deck` resource through the place door. */
 export async function placeArtboardDeck(input: {
@@ -88,21 +70,7 @@ export async function placeArtboardDeck(input: {
       placement: result.created,
     };
   } catch (err) {
-    if (err instanceof BoardPlaceError) {
-      throw new TRPCError({
-        code:
-          err.status === 404
-            ? "NOT_FOUND"
-            : err.status === 403
-              ? "FORBIDDEN"
-              : err.status === 400
-                ? "BAD_REQUEST"
-                : err.status === 409
-                  ? "CONFLICT"
-                  : "INTERNAL_SERVER_ERROR",
-        message: `${err.message} (reason: ${err.reason})`,
-      });
-    }
+    if (err instanceof BoardPlaceError) throw boardPlaceErrorToTrpc(err);
     throw err;
   }
 }

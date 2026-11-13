@@ -31,20 +31,35 @@
  */
 
 import { createHash } from "node:crypto";
+import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
-import { db, eq, cellInstances } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  inArray,
+  cellInstances,
+  entities,
+  views,
+  automations,
+  getActingAgentUserId,
+  userVisibleWhere,
+  ownerPrivateVisibleWhere,
+} from "@synap/database";
 import {
   AUTOMATION_CELL_BY_MODE,
   BOARD_PLACE_FAILURES,
-  BoardPlacementError,
+  BOARD_PROPS_MAX_CHARS,
+  BoardApplyError,
+  BoardBuildError,
   EMBED_CELL_GRID_SIZE,
   HTML_CELL_KEY,
   URL_CELL_KEY,
   boardPlacementContext,
   buildPlacementRecords,
-  buildShapeUpdates,
+  planBoardApply,
   placedShapeId,
-  shapeRemovalIds,
+  stableDigest,
   type BoardPlaceFailure,
   type BoardPlacePartResult,
   type BoardPlacedBy,
@@ -96,6 +111,26 @@ export class BoardPlaceError extends Error {
   }
 }
 
+/** A place-door refusal as a tRPC error (the one status → code map). */
+export function boardPlaceErrorToTrpc(err: BoardPlaceError): TRPCError {
+  const code =
+    err.status === 404
+      ? "NOT_FOUND"
+      : err.status === 403
+        ? "FORBIDDEN"
+        : err.status === 409
+          ? "CONFLICT"
+          : err.status === 400
+            ? "BAD_REQUEST"
+            : err.status === 504
+              ? "TIMEOUT"
+              : "INTERNAL_SERVER_ERROR";
+  return new TRPCError({
+    code,
+    message: `${err.message} (reason: ${err.reason})`,
+  });
+}
+
 /** The read door's reasons, as the place door words them. */
 function fromReadError(err: BoardSceneReadError): BoardPlaceError {
   const reason: BoardPlaceFailure =
@@ -123,9 +158,12 @@ function realtimeUrl(): string {
 // ── The one write: the realtime bridge ──────────────────────────────────────
 
 /**
- * Write records into the board (`POST /yjs/:roomId/apply`). Any answer but a
- * 200 is a refusal with a reason; a realtime server that does not answer is
- * `unavailable`. Retry is safe (records replace themselves by id).
+ * Write to the board (`POST /yjs/:roomId/apply`): create records, patch and
+ * remove shapes, decided against the board AS IT IS under the room's lock.
+ * Any answer but a 200 is a refusal with a reason; a realtime server that
+ * does not answer is `unavailable`; one that answers too late is `timeout`
+ * (the write MAY have landed). Retry is safe either way (records replace
+ * themselves by id while pending; a kept shape is never reset).
  */
 export async function applyToBoard(
   board: Pick<ResolvedBoard, "roomId" | "documentId">,
@@ -143,14 +181,20 @@ export async function applyToBoard(
       }
     );
   } catch (err) {
+    const timedOut = err instanceof Error && err.name === "TimeoutError";
     logger.warn(
-      { err, roomId: board.roomId },
-      "board apply: realtime unreachable"
+      { err, roomId: board.roomId, timedOut },
+      "board apply: realtime did not answer"
     );
-    throw new BoardPlaceError(
-      "unavailable",
-      "The realtime server did not answer, so nothing was written. Retry shortly: the same call replaces itself."
-    );
+    throw timedOut
+      ? new BoardPlaceError(
+          "timeout",
+          "The realtime server did not answer in time. The write may or may not have landed: retry is safe (the same call replaces itself, a shape you kept is never reset)."
+        )
+      : new BoardPlaceError(
+          "unavailable",
+          "The realtime server could not be reached, so nothing was written. Retry shortly: the same call replaces itself."
+        );
   }
   const body = (await res.json().catch(() => null)) as
     (YjsRoomApplyReply & Partial<YjsRoomApplyError>) | null;
@@ -161,6 +205,8 @@ export async function applyToBoard(
     reason === "not_found" ||
     reason === "save_failed" ||
     reason === "bad_request" ||
+    reason === "shape_not_found" ||
+    reason === "timeout" ||
     reason === "unavailable"
   ) {
     throw new BoardPlaceError(
@@ -178,16 +224,50 @@ export async function applyToBoard(
   );
 }
 
+/** A refused patch or removal, as the place door words it. */
+function fromApplyError(err: unknown): unknown {
+  return err instanceof BoardApplyError
+    ? new BoardPlaceError(err.reason, err.message)
+    : err;
+}
+
+/**
+ * Did a write whose answer was lost (`timeout`) land? Read the board: the
+ * shapes it creates are there / the shapes it removes are gone.
+ */
+export async function writeLanded(
+  board: Pick<ResolvedBoard, "roomId" | "documentId">,
+  expect: { present?: readonly string[]; absent?: readonly string[] }
+): Promise<boolean> {
+  try {
+    const { records } = await loadBoardRecords(board.roomId, board.documentId);
+    return (
+      (expect.present ?? []).every((id) => id in records) &&
+      (expect.absent ?? []).every((id) => !(id in records)) &&
+      (expect.present?.length ?? 0) + (expect.absent?.length ?? 0) > 0
+    );
+  } catch {
+    return false;
+  }
+}
+
 // ── Materializing resources into what the board can hold ────────────────────
 
-/** A cell instance id fixed by the placement (retry reuses the same cell). */
+/**
+ * A cell instance id fixed by the placement AND the cell's content: a retry
+ * reuses the same cell; the same key reused with different content makes a
+ * new one (the second call's html is never dropped for the first's).
+ */
 export function placedCellId(
   placementKey: string,
   resourceIndex: number,
-  part = "main"
+  part: string,
+  content: unknown
 ): string {
   const h = createHash("sha256")
-    .update(`synap-placed-cell:${placementKey}:${resourceIndex}:${part}`)
+    .update(
+      `synap-placed-cell:${placementKey}:${resourceIndex}:${part}:${JSON.stringify(content)}`
+    )
     .digest("hex");
   // A v4-shaped uuid (version and variant nibbles set) from the digest.
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${(
@@ -261,7 +341,11 @@ export async function materializeBoardResources(
       ) {
         out.push(r);
       } else if (r.kind === "cellDefinition") {
-        const id = placedCellId(ctx.placementKey, i);
+        const id = placedCellId(ctx.placementKey, i, "main", {
+          k: r.cellKey,
+          p: r.props,
+          n: r.name,
+        });
         await ensureCell(id, ctx, () =>
           insertCellInstance({
             ...base,
@@ -280,7 +364,10 @@ export async function materializeBoardResources(
           defaultSize: r.defaultSize,
         });
       } else if (r.kind === "html") {
-        const id = placedCellId(ctx.placementKey, i);
+        const id = placedCellId(ctx.placementKey, i, "main", {
+          h: r.html,
+          n: r.name,
+        });
         await ensureCell(id, ctx, () =>
           createHtmlCellInstance({ ...base, id, html: r.html, name: r.name })
         );
@@ -294,7 +381,11 @@ export async function materializeBoardResources(
       } else if (r.kind === "automation") {
         const def = AUTOMATION_CELL_BY_MODE[r.mode];
         const props = { automationId: r.automationId };
-        const id = placedCellId(ctx.placementKey, i);
+        const id = placedCellId(ctx.placementKey, i, "main", {
+          a: r.automationId,
+          m: r.mode,
+          t: r.title,
+        });
         await ensureCell(id, ctx, () =>
           insertCellInstance({
             ...base,
@@ -317,7 +408,7 @@ export async function materializeBoardResources(
           url: r.url,
           ...(r.title !== undefined ? { title: r.title } : {}),
         };
-        const id = placedCellId(ctx.placementKey, i);
+        const id = placedCellId(ctx.placementKey, i, "main", props);
         await ensureCell(id, ctx, () =>
           insertCellInstance({
             ...base,
@@ -339,7 +430,10 @@ export async function materializeBoardResources(
         // artboard-deck: one html-embed cell per slide.
         const slides: Array<{ cellInstanceId: string; title?: string }> = [];
         for (const [j, slide] of r.slides.entries()) {
-          const id = placedCellId(ctx.placementKey, i, `slide-${j}`);
+          const id = placedCellId(ctx.placementKey, i, `slide-${j}`, {
+            h: slide.html,
+            n: slide.title ?? r.title,
+          });
           await ensureCell(id, ctx, () =>
             createHtmlCellInstance({
               ...base,
@@ -411,8 +505,9 @@ export function assertEmbeddableResources(
 // ── The cores the door and the executors share ──────────────────────────────
 
 /**
- * The placement key: the caller's idempotency key, else the request itself
- * (same board, same actor, same resources and options = same ids).
+ * The placement key: the caller's idempotency key, else the request itself.
+ * Both are scoped to the board AND the actor, so two actors using the key
+ * "1" never share shape ids or cells.
  */
 export function placementKeyFor(input: {
   viewId: string;
@@ -422,7 +517,7 @@ export function placementKeyFor(input: {
   options?: BoardPlacementOptions;
 }): string {
   if (input.idempotencyKey)
-    return `${input.viewId}:key:${input.idempotencyKey}`;
+    return `${input.viewId}:${input.actorId}:key:${input.idempotencyKey}`;
   const digest = createHash("sha256")
     .update(
       JSON.stringify({
@@ -448,35 +543,195 @@ export function predictedShapeIds(
   );
 }
 
+// ── References: every id a resource names is checked and its card filled ──
+
 /**
- * Materialize, build and write a placement. Shared by the door (granted) and
+ * Resolve the ids a resource points at, as the person: it must exist, be
+ * readable by them, and (for a key bound to a space) lie in that space; a
+ * cell or automation must belong to the board's own space. The shape shows
+ * what the ROW says (an entity card's title and type), never what the agent
+ * wrote. A reference that does not resolve refuses the whole call.
+ */
+export async function resolveBoardReferences(
+  resources: readonly BoardResourceRef[],
+  ctx: {
+    userId: string;
+    boardWorkspaceId: string | null;
+    confinedWorkspaceId?: string | null;
+  }
+): Promise<BoardResourceRef[]> {
+  const entityIds = new Set<string>();
+  const viewIds = new Set<string>();
+  const cellIds = new Set<string>();
+  const automationIds = new Set<string>();
+  for (const r of resources) {
+    if (r.kind === "entity") entityIds.add(r.entityId);
+    else if (r.kind === "view") viewIds.add(r.viewId);
+    else if (r.kind === "cellInstance") cellIds.add(r.cellInstanceId);
+    else if (r.kind === "automation") automationIds.add(r.automationId);
+  }
+  const confined = ctx.confinedWorkspaceId ?? null;
+  const inConfined = (ws: string | null, home?: string | null) =>
+    !confined || ws === confined || (ws === null && home === confined);
+  const notFound = (what: string, id: string) =>
+    new BoardPlaceError(
+      "reference_not_found",
+      `${what} ${id} does not exist, or you cannot read it from this board's space. Nothing was placed.`
+    );
+
+  const entityRows = entityIds.length
+    ? await db
+        .select({
+          id: entities.id,
+          type: entities.type,
+          title: entities.title,
+          profileId: entities.profileId,
+          workspaceId: entities.workspaceId,
+          homeWorkspaceId: entities.homeWorkspaceId,
+          properties: entities.properties,
+          status: entities.status,
+          updatedAt: entities.updatedAt,
+        })
+        .from(entities)
+        .where(
+          and(
+            inArray(entities.id, [...entityIds]),
+            userVisibleWhere(entities.workspaceId, ctx.userId)
+          )
+        )
+    : [];
+  const entityById = new Map(entityRows.map((r) => [r.id, r]));
+  const viewRows = viewIds.length
+    ? await db
+        .select({
+          id: views.id,
+          type: views.type,
+          name: views.name,
+          workspaceId: views.workspaceId,
+        })
+        .from(views)
+        .where(
+          and(
+            inArray(views.id, [...viewIds]),
+            ownerPrivateVisibleWhere(
+              views.workspaceId,
+              views.userId,
+              ctx.userId
+            )
+          )
+        )
+    : [];
+  const viewById = new Map(viewRows.map((r) => [r.id, r]));
+  const cellRows = cellIds.length
+    ? await db
+        .select({
+          id: cellInstances.id,
+          cellType: cellInstances.cellType,
+          name: cellInstances.name,
+          workspaceId: cellInstances.workspaceId,
+        })
+        .from(cellInstances)
+        .where(inArray(cellInstances.id, [...cellIds]))
+    : [];
+  const cellById = new Map(cellRows.map((r) => [r.id, r]));
+  const automationRows = automationIds.length
+    ? await db
+        .select({ id: automations.id, workspaceId: automations.workspaceId })
+        .from(automations)
+        .where(inArray(automations.id, [...automationIds]))
+    : [];
+  const automationById = new Map(automationRows.map((r) => [r.id, r]));
+
+  return resources.map((r) => {
+    if (r.kind === "entity") {
+      const row = entityById.get(r.entityId);
+      if (!row || !inConfined(row.workspaceId, row.homeWorkspaceId))
+        throw notFound("Entity", r.entityId);
+      const properties =
+        row.properties && typeof row.properties === "object"
+          ? (row.properties as Record<string, unknown>)
+          : {};
+      return {
+        kind: "entity",
+        entityId: row.id,
+        entityType: row.type,
+        profileId: row.profileId,
+        title: row.title,
+        properties:
+          JSON.stringify(properties).length <= BOARD_PROPS_MAX_CHARS
+            ? properties
+            : {},
+        ...(row.status ? { status: row.status } : {}),
+        updatedAt: row.updatedAt?.toISOString(),
+      };
+    }
+    if (r.kind === "view") {
+      const row = viewById.get(r.viewId);
+      if (!row || !inConfined(row.workspaceId))
+        throw notFound("View", r.viewId);
+      return {
+        kind: "view",
+        viewId: row.id,
+        viewType: row.type,
+        title: row.name,
+      };
+    }
+    if (r.kind === "cellInstance") {
+      const row = cellById.get(r.cellInstanceId);
+      if (!row || row.workspaceId !== ctx.boardWorkspaceId)
+        throw notFound("Cell", r.cellInstanceId);
+      return {
+        ...r,
+        cellKey: row.cellType,
+        title: row.name ?? r.title ?? null,
+      };
+    }
+    if (r.kind === "automation") {
+      const row = automationById.get(r.automationId);
+      if (!row || row.workspaceId !== ctx.boardWorkspaceId)
+        throw notFound("Automation", r.automationId);
+    }
+    return r;
+  });
+}
+
+// ── The cores the door and the executors share ──────────────────────────────
+
+/**
+ * Materialize and build a placement's records against the board as it is now
+ * (new shapes stack above what it holds). Shared by the door (granted) and
  * the `whiteboard/place` executor (approved): the same records either way.
  */
-export async function applyPlacement(input: {
+export async function buildPlacement(input: {
   board: ResolvedBoard;
   userId: string;
   agentUserId?: string | null;
+  confinedWorkspaceId?: string | null;
   resources: readonly BoardResourceRef[];
   options?: BoardPlacementOptions;
   placementKey: string;
   placedBy: BoardPlacedBy;
   pending: boolean;
-}): Promise<{ shapeIds: string[]; target: "live" | "stored" }> {
+}): Promise<{ records: BoardRecord[]; shapeIds: string[] }> {
   assertEmbeddableResources(input.resources);
-  const placeable = await materializeBoardResources(input.resources, {
+  const workspaceId = input.board.view.workspaceId ?? null;
+  const resolved = await resolveBoardReferences(input.resources, {
+    userId: input.userId,
+    boardWorkspaceId: workspaceId,
+    confinedWorkspaceId: input.confinedWorkspaceId,
+  });
+  const placeable = await materializeBoardResources(resolved, {
     placementKey: input.placementKey,
     userId: input.userId,
     agentUserId: input.agentUserId,
-    workspaceId: input.board.view.workspaceId ?? null,
+    workspaceId,
   });
-  // Read the board AFTER the cells exist, as close to the write as possible:
-  // the new shapes stack above what it holds now.
+  // Read the board AFTER the cells exist, as close to the write as possible.
   const current = await readBoard(() =>
     loadBoardRecords(input.board.roomId, input.board.documentId)
   );
-  let built;
   try {
-    built = buildPlacementRecords({
+    const built = buildPlacementRecords({
       resources: placeable,
       options: input.options,
       placementKey: input.placementKey,
@@ -485,16 +740,40 @@ export async function applyPlacement(input: {
       placedAt: new Date().toISOString(),
       pending: input.pending,
     });
+    return { records: built.records, shapeIds: built.shapeIds };
   } catch (err) {
-    if (err instanceof BoardPlacementError)
+    if (err instanceof BoardBuildError)
       throw new BoardPlaceError(err.reason, err.message);
     throw err;
   }
+}
+
+/** What a create wrote: its top-level shapes, minus those the board kept. */
+function createdPart(
+  shapeIds: string[],
+  reply: YjsRoomApplyReply,
+  pending: boolean
+): BoardPlacePartResult {
+  const skipped = shapeIds.filter((id) => reply.skipped.includes(id));
+  return {
+    status: "applied",
+    shapeIds: shapeIds.filter((id) => !reply.skipped.includes(id)),
+    target: reply.target,
+    pending,
+    ...(skipped.length > 0 ? { skipped } : {}),
+  };
+}
+
+/** Build and write an approved placement (the `whiteboard/place` executor). */
+export async function applyPlacement(
+  input: Parameters<typeof buildPlacement>[0]
+): Promise<BoardPlacePartResult> {
+  const built = await buildPlacement(input);
   const reply = await applyToBoard(input.board, {
     put: built.records,
     origin: placeOrigin(input.placedBy),
   });
-  return { shapeIds: built.shapeIds, target: reply.target };
+  return createdPart(built.shapeIds, reply, input.pending);
 }
 
 /** Apply approved (or granted) changes to existing shapes. */
@@ -504,24 +783,9 @@ export async function applyShapeChanges(input: {
   remove?: readonly string[];
   actor: BoardPlacedBy;
 }): Promise<{ target: "live" | "stored"; shapeIds: string[] }> {
-  const current = await readBoard(() =>
-    loadBoardRecords(input.board.roomId, input.board.documentId)
-  );
-  const put: BoardRecord[] = [];
-  const remove: string[] = [];
-  if (input.update?.length) {
-    const u = buildShapeUpdates(current.records, input.update);
-    if (u.missing.length > 0) throw missingShapes(u.missing);
-    put.push(...u.records);
-  }
-  if (input.remove?.length) {
-    const r = shapeRemovalIds(current.records, input.remove);
-    if (r.missing.length > 0) throw missingShapes(r.missing);
-    remove.push(...r.ids);
-  }
   const reply = await applyToBoard(input.board, {
-    put,
-    ...(remove.length > 0 ? { remove } : {}),
+    ...(input.update?.length ? { patch: [...input.update] } : {}),
+    ...(input.remove?.length ? { remove: [...input.remove] } : {}),
     origin: placeOrigin(input.actor),
   });
   return {
@@ -535,13 +799,6 @@ export async function applyShapeChanges(input: {
 
 function placeOrigin(by: BoardPlacedBy): string {
   return `synap-place:${by.agentUserId ?? by.userId}`;
-}
-
-function missingShapes(ids: string[]): BoardPlaceError {
-  return new BoardPlaceError(
-    "shape_not_found",
-    `The board holds no shape ${ids.join(", ")} (read the board for its shape ids). Nothing was changed.`
-  );
 }
 
 // ── The door ────────────────────────────────────────────────────────────────
@@ -560,11 +817,10 @@ export interface PlaceOnBoardInput {
 type Gate = PermissionResult;
 
 function proposedPart(perm: Gate, shapeIds: string[]): BoardPlacePartResult {
-  if (!("proposalId" in perm)) throw new Error("not a proposal");
   return {
     status: "proposed",
-    proposalId: perm.proposalId,
-    reviewUrl: perm.reviewUrl,
+    proposalId: "proposalId" in perm ? perm.proposalId : "",
+    ...("reviewUrl" in perm ? { reviewUrl: perm.reviewUrl } : {}),
     shapeIds,
   };
 }
@@ -576,11 +832,23 @@ function deniedError(perm: Gate): BoardPlaceError | null {
   return null;
 }
 
+/**
+ * Place on a board, or change what it holds.
+ *
+ * Order: (1) the floor and every check that needs no write (frame, shapes,
+ * references, embeds); (2) EVERY governance gate; (3) ONE write that carries
+ * every granted part (a create, patches and removals land in one Y
+ * transaction). A refusal anywhere in (1) or (2) wrote nothing to the board;
+ * a proposal filed before a later refusal stays reviewable. A write whose
+ * answer was lost is `timeout`: it may have landed, retry is safe.
+ */
 export async function placeOnBoard(
   input: PlaceOnBoardInput
 ): Promise<PlaceOnBoardResult> {
   const { request } = input;
-  const agentUserId = input.agentUserId ?? null;
+  // The same identity governance uses (`getActingAgentUserId() ?? supplied`):
+  // an agent acting through a key is pending-marked and governed as an agent.
+  const agentUserId = getActingAgentUserId() ?? input.agentUserId ?? null;
   const board = await readBoard(() =>
     resolveBoardView({
       viewId: input.viewId,
@@ -608,9 +876,14 @@ export async function placeOnBoard(
   const update = request.update ?? [];
   const remove = request.remove ?? [];
 
-  // Check the whole call against the board BEFORE governance or any write: a
-  // bad frame or an unknown shape refuses everything.
+  // (1) Check the whole call against the board BEFORE governance or any
+  // write: a bad frame, reference, embed or unknown shape refuses everything.
   assertEmbeddableResources(resources);
+  await resolveBoardReferences(resources, {
+    userId: input.userId,
+    boardWorkspaceId: workspaceId,
+    confinedWorkspaceId: input.confinedWorkspaceId,
+  });
   const current = await readBoard(() =>
     loadBoardRecords(board.roomId, board.documentId)
   );
@@ -624,15 +897,15 @@ export async function placeOnBoard(
       );
     }
   }
-  if (update.length > 0) {
-    const u = buildShapeUpdates(current.records, update);
-    if (u.missing.length > 0) throw missingShapes(u.missing);
-  }
-  if (remove.length > 0) {
-    const r = shapeRemovalIds(current.records, remove);
-    if (r.missing.length > 0) throw missingShapes(r.missing);
+  if (update.length > 0 || remove.length > 0) {
+    try {
+      planBoardApply(current.records, { patch: update, remove });
+    } catch (err) {
+      throw fromApplyError(err);
+    }
   }
 
+  // (2) Every gate, before any write.
   const { checkPermissionOrPropose } =
     await import("../../utils/permission-check.js");
   const gateBase = {
@@ -651,6 +924,11 @@ export async function placeOnBoard(
     documentId: board.documentId,
     workspaceId,
   };
+
+  let create:
+    { placementKey: string; shapeIds: string[]; pending: boolean } | undefined;
+  let patch: BoardShapeUpdate[] | undefined;
+  let removal: string[] | undefined;
 
   if (resources.length > 0) {
     const placementKey = placementKeyFor({
@@ -675,35 +953,19 @@ export async function placeOnBoard(
     });
     const denied = deniedError(perm);
     if (denied) throw denied;
+    const shapeIds = predictedShapeIds(placementKey, resources);
     if ("proposalId" in perm) {
-      result.created = proposedPart(
-        perm,
-        predictedShapeIds(placementKey, resources)
-      );
+      result.created = proposedPart(perm, shapeIds);
     } else {
-      const pending = agentUserId !== null;
-      const placed = await applyPlacement({
-        board,
-        userId: input.userId,
-        agentUserId,
-        resources,
-        options: request.options,
-        placementKey,
-        placedBy: actor,
-        pending,
-      });
-      result.created = {
-        status: "applied",
-        shapeIds: placed.shapeIds,
-        target: placed.target,
-        pending,
-      };
+      create = { placementKey, shapeIds, pending: agentUserId !== null };
     }
   }
 
   if (update.length > 0) {
+    // An agent's change beyond its key's grant is a proposal, not a refusal.
     const perm = await checkPermissionOrPropose({
       ...gateBase,
+      proposeBeyondGrant: true,
       subjectType: "whiteboard",
       action: "update_shapes",
       data: {
@@ -715,18 +977,20 @@ export async function placeOnBoard(
     });
     const denied = deniedError(perm);
     if (denied) throw denied;
-    const shapeIds = update.map((u) => u.shapeId);
     if ("proposalId" in perm) {
-      result.updated = proposedPart(perm, shapeIds);
+      result.updated = proposedPart(
+        perm,
+        update.map((u) => u.shapeId)
+      );
     } else {
-      const done = await applyShapeChanges({ board, update, actor });
-      result.updated = { status: "applied", shapeIds, target: done.target };
+      patch = [...update];
     }
   }
 
   if (remove.length > 0) {
     const perm = await checkPermissionOrPropose({
       ...gateBase,
+      proposeBeyondGrant: true,
       subjectType: "whiteboard",
       action: "delete_shapes",
       data: {
@@ -741,15 +1005,48 @@ export async function placeOnBoard(
     if ("proposalId" in perm) {
       result.removed = proposedPart(perm, [...remove]);
     } else {
-      const done = await applyShapeChanges({ board, remove, actor });
-      result.removed = {
-        status: "applied",
-        shapeIds: [...remove],
-        target: done.target,
-      };
+      removal = [...remove];
     }
   }
 
+  // (3) One write for everything granted.
+  if (!create && !patch && !removal) return result;
+  const built = create
+    ? await buildPlacement({
+        board,
+        userId: input.userId,
+        agentUserId,
+        confinedWorkspaceId: input.confinedWorkspaceId,
+        resources,
+        options: request.options,
+        placementKey: create.placementKey,
+        placedBy: actor,
+        pending: create.pending,
+      })
+    : undefined;
+  const reply = await applyToBoard(board, {
+    ...(built ? { put: built.records } : {}),
+    ...(patch ? { patch } : {}),
+    ...(removal ? { remove: removal } : {}),
+    origin: placeOrigin(actor),
+  });
+  if (create && built) {
+    result.created = createdPart(built.shapeIds, reply, create.pending);
+  }
+  if (patch) {
+    result.updated = {
+      status: "applied",
+      shapeIds: patch.map((u) => u.shapeId),
+      target: reply.target,
+    };
+  }
+  if (removal) {
+    result.removed = {
+      status: "applied",
+      shapeIds: removal,
+      target: reply.target,
+    };
+  }
   return result;
 }
 

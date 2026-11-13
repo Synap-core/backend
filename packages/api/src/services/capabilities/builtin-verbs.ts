@@ -50,7 +50,6 @@ import {
   desc,
   drizzleSql,
   channels,
-  views,
   entities,
   relations,
   type messages,
@@ -86,7 +85,7 @@ import {
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
 import {
   placeArtboardDeck,
-  ArtboardDeckSlideSchema,
+  ArtboardDeckSchema,
   BoardPlacementOptionsSchema,
 } from "./place-artboard-deck.js";
 import { VerbRefusal } from "./verb-refusal.js";
@@ -312,12 +311,8 @@ const feedPostHandler: BuiltinVerbHandler = async (params, ctx) => {
 const outputGenerateParams = z.object({
   /** The whiteboard view id (board) to place the deck onto. */
   boardId: z.string().uuid(),
-  /** Deck preset (e.g. a layout/style key the board client understands). */
-  preset: z.string().min(1),
-  /** Optional deck title. */
-  title: z.string().max(500).optional(),
-  /** One or more slides, each with HTML content + optional title. */
-  slides: z.array(ArtboardDeckSlideSchema).min(1),
+  /** The deck: preset, optional title, one or more slides (the door's own schema). */
+  ...ArtboardDeckSchema.shape,
   /** Optional layout hints forwarded to the board client verbatim. */
   options: BoardPlacementOptionsSchema.optional(),
 });
@@ -350,22 +345,8 @@ const outputGenerateHandler: BuiltinVerbHandler = async (params, ctx) => {
     });
   }
 
-  // Confirm the target board actually lives in the acting workspace (the
-  // place door refuses another space's board too: `workspaceId` below).
-  const [board] = await db
-    .select({ id: views.id })
-    .from(views)
-    .where(
-      and(eq(views.id, input.boardId), eq(views.workspaceId, ctx.workspaceId))
-    )
-    .limit(1);
-  if (!board) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "Board not found in the acting workspace.",
-    });
-  }
-
+  // The place door fences the board to the acting workspace itself
+  // (`workspaceId` below: another space's board is not found).
   // THE place door: governed, written into the open board or its saved file.
   const result = await placeArtboardDeck({
     viewId: input.boardId,
