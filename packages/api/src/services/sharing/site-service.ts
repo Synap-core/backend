@@ -1525,7 +1525,7 @@ async function grantReachesSite(
   projectId: string
 ): Promise<boolean> {
   const grant = getRequestGrant();
-  if (!isFencedGrant(grant)) return true;
+  if (grant !== null || !isFencedGrant(grant)) return true;
   return !(await grantDeniedKey(
     { subjectType: "share", action: "create", workspaceId, projectId },
     grant!

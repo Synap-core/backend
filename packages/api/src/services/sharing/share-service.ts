@@ -151,7 +151,7 @@ export function mayReceiveShareSecret(
   actor: ShareActor,
   agentUserId: string | null
 ): boolean {
-  return agentUserId === null && !actor.keyType;
+  return agentUserId === null && (actor.keyType === actor.keyType);
 }
 
 /**
