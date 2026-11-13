@@ -12,8 +12,9 @@
  * file, the lock, load-failed) is the realtime package's own test
  * (`whiteboard-apply.test.ts`).
  *
- * Cannot see: a real pod's governance ladder, a running realtime server, a
- * browser rendering the shapes (NEEDS-DOGFOOD).
+ * Cannot see: a real pod's governance ladder (the real gate is driven by
+ * `whiteboards.place.governance.pglite.test.ts`), a running realtime server,
+ * a browser rendering the shapes (NEEDS-DOGFOOD).
  */
 
 import { OpenAPIHono } from "@hono/zod-openapi";
@@ -27,6 +28,9 @@ const DOC = "2c2c2c2c-0000-4000-8000-0000000000bb";
 const WS = "3d3d3d3d-0000-4000-8000-0000000000cc";
 const OTHER_WS = "4e4e4e4e-0000-4000-8000-0000000000dd";
 const ENTITY = "5f5f5f5f-0000-4000-8000-0000000000ee";
+const CELL = "7b7b7b7b-0000-4000-8000-0000000000f1";
+const AUTOMATION = "6a6a6a6a-0000-4000-8000-0000000000ff";
+const OTHER_AGENT = "0aaaaaaa-0000-4000-8000-0000000000b8";
 const ROOM = `whiteboard-${DOC}`;
 
 const RECORDS: Record<string, Record<string, unknown>> = {
@@ -80,7 +84,12 @@ const m = vi.hoisted(() => ({
   view: null as Record<string, unknown> | null,
   doc: null as Record<string, unknown> | null,
   access: "edit" as "edit" | "read" | "none",
-  existingCells: [] as Array<{ id: string; workspaceId: string | null }>,
+  existingCells: [] as Array<Record<string, unknown>>,
+  entityRows: [] as Array<Record<string, unknown>>,
+  viewRows: [] as Array<Record<string, unknown>>,
+  automationRows: [] as Array<Record<string, unknown>>,
+  /** The agent the request context says is acting (`getActingAgentUserId`). */
+  acting: undefined as string | undefined,
   verdicts: {} as Record<string, unknown>,
   gateCalls: [] as Array<Record<string, unknown>>,
   cellInserts: [] as Array<Record<string, unknown>>,
@@ -101,11 +110,25 @@ vi.mock("@synap/database", async (importOriginal) => {
         documents: { findFirst: async () => m.doc },
       },
       select: () => ({
-        from: () => ({
-          where: () => ({ limit: async () => m.existingCells }),
+        from: (table: unknown) => ({
+          where: () => {
+            const rows =
+              table === actual.entities
+                ? m.entityRows
+                : table === actual.views
+                  ? m.viewRows
+                  : table === actual.automations
+                    ? m.automationRows
+                    : m.existingCells;
+            // Awaited as is (references) or `.limit(1)` (ensureCell).
+            return Object.assign(Promise.resolve(rows), {
+              limit: async () => rows,
+            });
+          },
         }),
       }),
     },
+    getActingAgentUserId: () => m.acting,
     transitionProposal: () => ({
       returning: async () => {
         m.transitions++;
@@ -196,14 +219,16 @@ const roomClosed = async () =>
   });
 const applied =
   (target: "live" | "stored") =>
-  async (body: { put: unknown[]; remove?: unknown[] }) =>
+  async (body: { put?: unknown[]; patch?: unknown[]; remove?: unknown[] }) =>
     new Response(
       JSON.stringify({
         roomId: ROOM,
         applied: true,
         target,
-        put: body.put.length,
+        put: body.put?.length ?? 0,
+        patched: body.patch?.length ?? 0,
         removed: body.remove?.length ?? 0,
+        skipped: [],
       }),
       { status: 200 }
     );
@@ -259,6 +284,22 @@ beforeEach(() => {
   };
   m.access = "edit";
   m.existingCells = [];
+  m.entityRows = [
+    {
+      id: ENTITY,
+      type: "task",
+      title: "Acme",
+      profileId: null,
+      workspaceId: WS,
+      homeWorkspaceId: null,
+      properties: {},
+      status: null,
+      updatedAt: new Date("2026-11-01T00:00:00Z"),
+    },
+  ];
+  m.viewRows = [];
+  m.automationRows = [{ id: AUTOMATION, workspaceId: WS }];
+  m.acting = undefined;
   m.verdicts = {};
   m.gateCalls = [];
   m.cellInserts = [];
@@ -412,7 +453,7 @@ describe("creating shapes: applied at once, marked pending, retry-safe", () => {
         { kind: "url", url: "https://example.com/a", title: "A" },
         {
           kind: "automation",
-          automationId: "6a6a6a6a-0000-4000-8000-0000000000ff",
+          automationId: AUTOMATION,
           mode: "status",
         },
       ],
@@ -535,20 +576,18 @@ describe("changing and removing shapes: a proposal by default", () => {
     expect(m.applies).toHaveLength(0);
   });
 
-  it("granted, an update writes the merged record and a removal deletes the shape", async () => {
+  it("granted, an update and a removal are sent as intent in ONE write (the merge happens on the live board)", async () => {
     const res = await place({
       update: [{ shapeId: "shape:s", x: 50, props: { color: "blue" } }],
       remove: ["shape:frame"],
     });
     expect(res.status).toBe(200);
-    expect(m.applies).toHaveLength(2);
-    expect(m.applies[0].put[0]).toMatchObject({
-      id: "shape:s",
-      x: 50,
-      y: 20,
-      props: { color: "blue", content: "Call Bob" },
+    expect(m.applies).toHaveLength(1);
+    expect(m.applies[0]).toMatchObject({
+      patch: [{ shapeId: "shape:s", x: 50, props: { color: "blue" } }],
+      remove: ["shape:frame"],
     });
-    expect(m.applies[1]).toMatchObject({ put: [], remove: ["shape:frame"] });
+    expect(m.applies[0]).not.toHaveProperty("put");
   });
 
   it("an unknown shape refuses the whole call before governance (shape_not_found)", async () => {
@@ -766,13 +805,21 @@ describe("approval replays the same cores (whiteboard/* executors)", () => {
   });
 
   it("a shape gone since the proposal refuses the approval (nothing written, still pending)", async () => {
+    // The realtime server decides against the live board and refuses.
+    m.applyImpl = async () =>
+      new Response(
+        JSON.stringify({
+          error: "The board holds no shape shape:gone.",
+          reason: "shape_not_found",
+        }),
+        { status: 400 }
+      );
     await expect(
       run("whiteboard/update_shapes", {
         viewId: VIEW,
         update: [{ shapeId: "shape:gone", x: 1 }],
       })
     ).rejects.toThrow(/shape_not_found/);
-    expect(m.applies).toHaveLength(0);
     expect(m.transitions).toBe(0);
   });
 
@@ -782,5 +829,345 @@ describe("approval replays the same cores (whiteboard/* executors)", () => {
       run("whiteboard/delete_shapes", { viewId: VIEW, shapeIds: ["shape:s"] })
     ).rejects.toThrow(/read_only/);
     expect(m.applies).toHaveLength(0);
+  });
+});
+
+describe("a create never overwrites what is not the same actor's pending shape", () => {
+  const req = (key?: string) => ({
+    resources: [{ kind: "entity", entityId: ENTITY }],
+    ...(key ? { idempotencyKey: key } : {}),
+  });
+  const ids = async (res: Response) => (await res.json()).created.shapeIds;
+
+  it("two actors using the same idempotencyKey get different shape ids", async () => {
+    const a = await ids(await place(req("1"), { agentUserId: AGENT }));
+    const b = await ids(await place(req("1"), { agentUserId: OTHER_AGENT }));
+    expect(a).not.toEqual(b);
+  });
+
+  it("the same actor and key replace themselves (a retry)", async () => {
+    const a = await ids(await place(req("1")));
+    const b = await ids(await place(req("1")));
+    expect(a).toEqual(b);
+  });
+
+  it("a reused key with DIFFERENT html makes a different cell (the second html is never dropped)", async () => {
+    const html = (h: string) => ({
+      resources: [{ kind: "html", name: "Hi", html: h }],
+      idempotencyKey: "deck-1",
+    });
+    await place(html("<p>one</p>"));
+    await place(html("<p>two</p>"));
+    expect(m.htmlCells).toHaveLength(2);
+    expect(m.htmlCells[0]!.id).not.toBe(m.htmlCells[1]!.id);
+    // The same content again is the same cell.
+    await place(html("<p>two</p>"));
+    expect(m.htmlCells[2]!.id).toBe(m.htmlCells[1]!.id);
+  });
+
+  it("what the board kept is reported skipped, not claimed written", async () => {
+    let skippedId = "";
+    m.applyImpl = async (body: any) => {
+      skippedId = body.put[0].id;
+      return new Response(
+        JSON.stringify({
+          roomId: ROOM,
+          applied: true,
+          target: "live",
+          put: 0,
+          patched: 0,
+          removed: 0,
+          skipped: [skippedId],
+        }),
+        { status: 200 }
+      );
+    };
+    const body = await (await place(req())).json();
+    expect(body.created.shapeIds).toEqual([]);
+    expect(body.created.skipped).toEqual([skippedId]);
+  });
+});
+
+describe("every gate runs before any write; one write carries everything granted", () => {
+  it("a denied removal refuses the whole call: nothing written, no cell made", async () => {
+    m.verdicts["whiteboard/delete_shapes"] = { denied: true, reason: "never" };
+    const res = await place({
+      resources: [{ kind: "html", name: "Hi", html: "<p>hi</p>" }],
+      remove: ["shape:frame"],
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ reason: "denied" });
+    expect(m.applies).toHaveLength(0);
+    expect(m.htmlCells).toHaveLength(0);
+    expect(m.gateCalls).toHaveLength(2);
+  });
+
+  it("a create plus a proposed removal writes only the create, in one apply", async () => {
+    m.verdicts["whiteboard/delete_shapes"] = proposed("prop-d");
+    const body = await (
+      await place({
+        resources: [{ kind: "entity", entityId: ENTITY }],
+        remove: ["shape:frame"],
+      })
+    ).json();
+    expect(body.created.status).toBe("applied");
+    expect(body.removed).toMatchObject({
+      status: "proposed",
+      proposalId: "prop-d",
+    });
+    expect(m.applies).toHaveLength(1);
+    expect(m.applies[0]).toHaveProperty("put");
+    expect(m.applies[0]).not.toHaveProperty("remove");
+  });
+
+  it("create, update and remove land in ONE apply", async () => {
+    await place({
+      resources: [{ kind: "entity", entityId: ENTITY }],
+      update: [{ shapeId: "shape:s", x: 1 }],
+      remove: ["shape:frame"],
+    });
+    expect(m.applies).toHaveLength(1);
+    expect(Object.keys(m.applies[0]).sort()).toEqual(
+      ["documentId", "origin", "patch", "put", "remove"].sort()
+    );
+  });
+
+  it("an agent's update or removal beyond its grant is a proposal (proposeBeyondGrant), a create is not", async () => {
+    await place({
+      update: [{ shapeId: "shape:s", x: 1 }],
+      remove: ["shape:frame"],
+    });
+    const byAction = Object.fromEntries(
+      m.gateCalls.map((g) => [g.action as string, g])
+    );
+    expect(byAction.update_shapes).toMatchObject({ proposeBeyondGrant: true });
+    expect(byAction.delete_shapes).toMatchObject({ proposeBeyondGrant: true });
+    await place({ resources: [{ kind: "entity", entityId: ENTITY }] });
+    expect(m.gateCalls.find((g) => g.action === "place")).not.toHaveProperty(
+      "proposeBeyondGrant"
+    );
+  });
+
+  it("pending and governance read the SAME identity: an acting agent the caller did not pass", async () => {
+    m.acting = AGENT;
+    const body = await (
+      await place(
+        { resources: [{ kind: "entity", entityId: ENTITY }] },
+        { agentUserId: undefined }
+      )
+    ).json();
+    expect(body.created.pending).toBe(true);
+    expect(m.gateCalls[0]).toMatchObject({ agentUserId: AGENT });
+    expect(m.applies[0].put[0].meta.pending).toBe(true);
+  });
+});
+
+describe("the ids a call names are checked, and the card shows the row", () => {
+  it("an entity card shows what the ROW says, not what the agent wrote", async () => {
+    await place({
+      resources: [
+        {
+          kind: "entity",
+          entityId: ENTITY,
+          title: "Fake title",
+          entityType: "invoice",
+          properties: { secret: "spoofed" },
+        },
+      ],
+    });
+    expect(m.applies[0].put[0].props).toMatchObject({
+      title: "Acme",
+      entityType: "task",
+      properties: {},
+    });
+  });
+
+  it("an entity that does not exist or is not readable refuses the whole call", async () => {
+    m.entityRows = [];
+    const res = await place({
+      resources: [{ kind: "entity", entityId: ENTITY }],
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ reason: "reference_not_found" });
+    expect(m.gateCalls).toHaveLength(0);
+    expect(m.applies).toHaveLength(0);
+  });
+
+  it("a key bound to one space cannot embed an entity of another", async () => {
+    m.entityRows = [{ ...m.entityRows[0]!, workspaceId: OTHER_WS }];
+    const res = await place(
+      { resources: [{ kind: "entity", entityId: ENTITY }] },
+      { keyWorkspaceId: WS }
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ reason: "reference_not_found" });
+  });
+
+  it("a cell or an automation of another space is refused", async () => {
+    m.existingCells = [
+      { id: CELL, workspaceId: OTHER_WS, cellType: "kpi", name: "K" },
+    ];
+    let res = await place({
+      resources: [{ kind: "cellInstance", cellInstanceId: CELL }],
+    });
+    expect(await res.json()).toMatchObject({ reason: "reference_not_found" });
+    m.automationRows = [{ id: AUTOMATION, workspaceId: OTHER_WS }];
+    res = await place({
+      resources: [
+        { kind: "automation", automationId: AUTOMATION, mode: "flow" },
+      ],
+    });
+    expect(await res.json()).toMatchObject({ reason: "reference_not_found" });
+    expect(m.applies).toHaveLength(0);
+  });
+
+  it("a cell of the board's space is placed with the key the ROW says", async () => {
+    m.existingCells = [
+      { id: CELL, workspaceId: WS, cellType: "kpi", name: "Revenue" },
+    ];
+    await place({
+      resources: [
+        { kind: "cellInstance", cellInstanceId: CELL, cellKey: "spoofed" },
+      ],
+    });
+    expect(m.applies[0].put[0].props).toMatchObject({
+      cellInstanceId: CELL,
+      cellKey: "kpi",
+      title: "Revenue",
+    });
+  });
+});
+
+describe("sizes are bounded before any work is done", () => {
+  it("50 decks of 50 slides is refused before a single cell is made", async () => {
+    const deck = {
+      kind: "artboard-deck",
+      preset: "slide-16-9",
+      slides: Array.from({ length: 50 }, () => ({ html: "<p/>" })),
+    };
+    const res = await place({
+      resources: Array.from({ length: 50 }, () => deck),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/at most 200 shapes/);
+    expect(m.htmlCells).toHaveLength(0);
+    expect(m.applies).toHaveLength(0);
+  });
+
+  it("a body past the limit is a 413 before it is parsed", async () => {
+    const res = await app().request(`/whiteboards/${VIEW}/placements`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(9 * 1024 * 1024),
+      },
+      body: JSON.stringify({
+        remove: ["shape:" + "a".repeat(9 * 1024 * 1024)],
+      }),
+    });
+    expect(res.status).toBe(413);
+    expect(m.gateCalls).toHaveLength(0);
+  });
+});
+
+describe("a write whose answer was lost is a timeout, not a refusal", () => {
+  const timeoutError = () =>
+    Object.assign(new Error("The operation was aborted due to timeout"), {
+      name: "TimeoutError",
+    });
+
+  it("the door says it may have landed and that a retry is safe (504)", async () => {
+    m.applyImpl = async () => {
+      throw timeoutError();
+    };
+    const res = await place({
+      resources: [{ kind: "entity", entityId: ENTITY }],
+    });
+    expect(res.status).toBe(504);
+    const body = await res.json();
+    expect(body.reason).toBe("timeout");
+    expect(body.error).toMatch(/may or may not have landed/);
+  });
+
+  it("the realtime server's own lock timeout is the same answer", async () => {
+    m.applyImpl = async () =>
+      new Response(
+        JSON.stringify({ error: "held too long", reason: "timeout" }),
+        {
+          status: 504,
+        }
+      );
+    const res = await place({
+      resources: [{ kind: "entity", entityId: ENTITY }],
+    });
+    expect(res.status).toBe(504);
+  });
+
+  describe("approval reconciles against the board", () => {
+    const deps = {
+      emitProposalReviewed: vi.fn(),
+      reportProposalOutcome: vi.fn(),
+    };
+    const approve = () =>
+      proposalExecRegistry.resolveExact("whiteboard/delete_shapes")!.execute({
+        proposal: {
+          id: "prop-t",
+          workspaceId: WS,
+          subjectUserId: USER,
+          agentUserId: AGENT,
+          data: { data: { viewId: VIEW, shapeIds: ["shape:frame"] } },
+        },
+        payload: null,
+        userId: USER,
+        input: { proposalId: "prop-t" },
+        ctx: {},
+        deps,
+      } as never);
+
+    it("the removal landed (the shape is gone): the approval completes", async () => {
+      m.applyImpl = async () => {
+        throw timeoutError();
+      };
+      const { "shape:frame": _gone, ...without } = RECORDS;
+      m.stateImpl = liveRoom(without);
+      await expect(approve()).resolves.toMatchObject({ success: true });
+      expect(m.transitions).toBe(1);
+    });
+
+    it("the removal did NOT land (the shape is still there): the proposal stays pending", async () => {
+      m.applyImpl = async () => {
+        throw timeoutError();
+      };
+      await expect(approve()).rejects.toThrow(/timeout/);
+      expect(m.transitions).toBe(0);
+    });
+  });
+});
+
+describe("a proposal filed before the door fixed its key still approves", () => {
+  it("whiteboard/place with no placementKey derives one from the proposal (no dead end)", async () => {
+    const res = await proposalExecRegistry
+      .resolveExact("whiteboard/place")!
+      .execute({
+        proposal: {
+          id: "prop-old",
+          workspaceId: WS,
+          subjectUserId: USER,
+          agentUserId: AGENT,
+          data: {
+            data: {
+              viewId: VIEW,
+              resources: [{ kind: "entity", entityId: ENTITY }],
+            },
+          },
+        },
+        payload: null,
+        userId: USER,
+        input: { proposalId: "prop-old" },
+        ctx: {},
+        deps: { emitProposalReviewed: vi.fn(), reportProposalOutcome: vi.fn() },
+      } as never);
+    expect(res).toMatchObject({ success: true });
+    expect(m.applies[0].put[0].id.startsWith("shape:synap-placed-")).toBe(true);
   });
 });

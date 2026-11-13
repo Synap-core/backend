@@ -58,10 +58,19 @@ describe("no code path emits board:place", () => {
     .flatMap((dir) => sources(dir));
 
   it("scans a real tree (non-vacuity)", () => {
-    expect(files.length).toBeGreaterThan(500);
-    expect(
-      files.some((f) => f.endsWith("services/whiteboards/place-on-board.ts"))
-    ).toBe(true);
+    // Anchors, not a count: the files that once emitted and the door that
+    // replaced them must be in the scanned set, in the packages that hold them.
+    for (const anchor of [
+      "api/src/services/whiteboards/place-on-board.ts",
+      "api/src/routers/hub-protocol/rest/whiteboards.ts",
+      "realtime/src/yjs-server.ts",
+      "realtime/src/bridge.ts",
+    ]) {
+      expect(
+        files.some((f) => f.endsWith(anchor)),
+        anchor
+      ).toBe(true);
+    }
   });
 
   it("no source names the event", () => {

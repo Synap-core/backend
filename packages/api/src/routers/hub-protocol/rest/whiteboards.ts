@@ -20,15 +20,17 @@ import {
 } from "./_shared.js";
 import {
   BOARD_PLACE_FAILURES,
+  BOARD_PLACE_MAX_BODY_BYTES,
   PlaceOnBoardRequestSchema,
 } from "@synap-core/types/whiteboard";
 import {
   BoardPlaceError,
   placeOnBoard,
 } from "../../../services/whiteboards/place-on-board.js";
+import { bodyLimit } from "hono/body-limit";
 import { z as zOpenapi } from "@hono/zod-openapi";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { uuidParam } from "./_codecs/_openapi.js";
+import { uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import {
   BOARD_SCENE_FAILURES,
   BoardSceneReadError,
@@ -185,7 +187,8 @@ const PlacementResourceDoc = zOpenapi
     description:
       "One thing to place (`BoardResourceRef`): entity {entityId, title?}, view {viewId}, cellInstance {cellInstanceId}, cellDefinition {cellKey, props?}, html {name, html}, artboard-deck {preset, title?, slides:[{html, title?}]}, automation {automationId, mode}, url {url, title?}.",
   });
-const PlacementRequestDoc = zOpenapi
+/** Exported for the parity tripwire (same keys as `PlaceOnBoardRequestObject`). */
+export const PlacementRequestDoc = zOpenapi
   .object({
     resources: zOpenapi.array(PlacementResourceDoc).max(50).optional(),
     options: zOpenapi
@@ -215,7 +218,7 @@ const PlacementRequestDoc = zOpenapi
       .optional(),
     remove: zOpenapi.array(zOpenapi.string()).max(50).optional(),
     idempotencyKey: zOpenapi.string().optional(),
-    workspaceId: zOpenapi.string().optional(),
+    workspaceId: uuidQueryParam.optional(),
     reasoning: zOpenapi.string().optional(),
     sourceMessageId: zOpenapi.string().optional(),
   })
@@ -339,7 +342,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     tags: ["Views"],
     summary: "Place things on a whiteboard, or change what it holds",
     description:
-      "The ONE governed place door (`placeOnBoard`, the same function as MCP `synap_place_on_board`). `resources` CREATES shapes: entity cards, live views, cells, html (an html-embed cell), urls (an iframe-embed cell), automations, and artboard decks (one artboard per slide). By default they appear at once; an agent's are marked `meta.pending` (with `meta.placedBy` / `meta.placedAt`) until the person keeps or rejects them on the board. `update` (position, size, props) and `remove` change shapes already there and are proposals by default. Written into the open board (every viewer sees it) or, when nobody has it open, into its saved file. Shape ids are fixed by `idempotencyKey` (else by the request), so a retry replaces what the first call placed. Needs edit access to the board; a board of another space than `workspaceId` is not found. A refusal is an error with a `reason`; nothing is half-written.",
+      "The ONE governed place door (`placeOnBoard`, the same function as MCP `synap_place_on_board`). `resources` CREATES shapes: entity cards, live views, cells, html (an html-embed cell), urls (an iframe-embed cell), automations, and artboard decks (one artboard per slide). By default they appear at once; an agent's are marked `meta.pending` (with `meta.placedBy` / `meta.placedAt`) until the person keeps or rejects them on the board. `update` (position, size, props) and `remove` change shapes already there and are proposals by default. Written into the open board (every viewer sees it) or, when nobody has it open, into its saved file. Shape ids are fixed by `idempotencyKey` (else by the request), so a retry replaces what the first call placed. Needs edit access to the board; a board of another space than `workspaceId` is not found. A refusal is an error with a `reason`; a refused call wrote nothing to the board, and everything granted lands in one write.",
     request: {
       params: zOpenapi.object({ viewId: uuidParam }),
       body: PlacementRequestDoc,
@@ -350,7 +353,11 @@ export function registerWhiteboardsRoutes(app: HubHono) {
         schema: PlacementResultDoc,
       },
       400: {
-        description: "Bad request, unknown frame or shape",
+        description: "Bad request, unknown frame, shape or reference",
+        schema: PlacementErrorDoc,
+      },
+      413: {
+        description: "The request body is too large",
         schema: PlacementErrorDoc,
       },
       403: {
@@ -375,6 +382,11 @@ export function registerWhiteboardsRoutes(app: HubHono) {
           "The realtime server or storage did not answer, or the save did not land",
         schema: PlacementErrorDoc,
       },
+      504: {
+        description:
+          "The write took too long and may have landed: retry is safe",
+        schema: PlacementErrorDoc,
+      },
     },
   });
 
@@ -386,53 +398,67 @@ export function registerWhiteboardsRoutes(app: HubHono) {
    * (`whiteboard/update_shapes` / `whiteboard/delete_shapes`, proposals by
    * default). The board's own room floor, never the body's workspace.
    */
-  app.post("/whiteboards/:viewId/placements", async (c) => {
-    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
-      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
-    }
-    const viewId = requireUuidParam(c, "viewId");
-    if (viewId instanceof Response) return viewId;
-    const raw = (await c.req.json().catch(() => null)) as unknown;
-    if (raw === null)
-      return c.json({ error: "Invalid JSON in request body" }, 400);
-    const parsed = PlaceOnBoardRequestSchema.safeParse(raw);
-    if (!parsed.success) {
-      return c.json(
-        {
-          error: parsed.error.issues
-            .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
-            .join(", "),
-          reason: "bad_request",
-        },
-        400
-      );
-    }
-    // The acting identity comes from the verified key, never the body.
-    const userId = c.get("userId") as string;
-    const agentUserId = c.get("agentUserId") as string | undefined;
-    const actor = await resolveActorId(agentUserId, userId);
-    if ("error" in actor) return c.json({ error: actor.error }, 400);
-    try {
-      const result = await placeOnBoard({
-        viewId,
-        userId,
-        agentUserId: agentUserId ?? null,
-        confinedWorkspaceId:
-          (c.get("keyWorkspaceId") as string | null | undefined) ?? null,
-        request: parsed.data,
-      });
-      return c.json(result);
-    } catch (err) {
-      if (err instanceof BoardPlaceError) {
-        return c.json({ error: err.message, reason: err.reason }, err.status);
+  app.post(
+    "/whiteboards/:viewId/placements",
+    bodyLimit({
+      maxSize: BOARD_PLACE_MAX_BODY_BYTES,
+      onError: (c) =>
+        c.json(
+          {
+            error: `The request is larger than ${BOARD_PLACE_MAX_BODY_BYTES} bytes. Split it into several calls.`,
+            reason: "bad_request",
+          },
+          413
+        ),
+    }),
+    async (c) => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+        return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
       }
-      logger.error({ err, viewId }, "whiteboard placement failed");
-      return c.json(
-        { error: err instanceof Error ? err.message : "Unknown error" },
-        httpStatusForTrpcError(err)
-      );
+      const viewId = requireUuidParam(c, "viewId");
+      if (viewId instanceof Response) return viewId;
+      const raw = (await c.req.json().catch(() => null)) as unknown;
+      if (raw === null)
+        return c.json({ error: "Invalid JSON in request body" }, 400);
+      const parsed = PlaceOnBoardRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return c.json(
+          {
+            error: parsed.error.issues
+              .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
+              .join(", "),
+            reason: "bad_request",
+          },
+          400
+        );
+      }
+      // The acting identity comes from the verified key, never the body.
+      const userId = c.get("userId") as string;
+      const agentUserId = c.get("agentUserId") as string | undefined;
+      const actor = await resolveActorId(agentUserId, userId);
+      if ("error" in actor) return c.json({ error: actor.error }, 400);
+      try {
+        const result = await placeOnBoard({
+          viewId,
+          userId,
+          agentUserId: agentUserId ?? null,
+          confinedWorkspaceId:
+            (c.get("keyWorkspaceId") as string | null | undefined) ?? null,
+          request: parsed.data,
+        });
+        return c.json(result);
+      } catch (err) {
+        if (err instanceof BoardPlaceError) {
+          return c.json({ error: err.message, reason: err.reason }, err.status);
+        }
+        logger.error({ err, viewId }, "whiteboard placement failed");
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          httpStatusForTrpcError(err)
+        );
+      }
     }
-  });
+  );
 
   /**
    * GET /whiteboards/:viewId/state

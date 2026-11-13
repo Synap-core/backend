@@ -163,8 +163,13 @@ export const whiteboardsRouter = router({
       const yjsRoomId = view.yjsRoomId ?? `whiteboard-${view.documentId}`;
 
       // Get version
+      // Get version: one OF THIS BOARD'S document (a version id of another
+      // document is "not found", never restored into this board).
       const version = await db.query.documentVersions.findFirst({
-        where: eq(documentVersions.id, input.versionId),
+        where: and(
+          eq(documentVersions.id, input.versionId),
+          eq(documentVersions.documentId, view.documentId)
+        ),
       });
 
       if (!version) {
@@ -209,8 +214,13 @@ export const whiteboardsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
+      // Get version: one OF THIS BOARD'S document (a version id of another
+      // document is "not found", never restored into this board).
       const version = await db.query.documentVersions.findFirst({
-        where: eq(documentVersions.id, input.versionId),
+        where: and(
+          eq(documentVersions.id, input.versionId),
+          eq(documentVersions.documentId, view.documentId)
+        ),
       });
 
       if (!version) {

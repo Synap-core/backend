@@ -27,6 +27,7 @@ import {
 } from "@synap-core/types/whiteboard";
 import {
   registerProposalExecutor,
+  type ProposalExecutorArgs,
   type ProposalRow,
 } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
@@ -34,8 +35,13 @@ import {
   BoardPlaceError,
   applyPlacement,
   applyShapeChanges,
+  boardPlaceErrorToTrpc,
+  placementKeyFor,
+  predictedShapeIds,
   resolveBoardForApprover,
+  writeLanded,
 } from "../../../services/whiteboards/place-on-board.js";
+import type { ResolvedBoard } from "../../../services/whiteboards/read-board-scene.js";
 
 type Row = ProposalRow;
 
@@ -48,25 +54,6 @@ function innerData(proposal: Row): Record<string, unknown> {
 
 function bad(message: string): TRPCError {
   return new TRPCError({ code: "BAD_REQUEST", message });
-}
-
-/** A place-door refusal, as the approval surface words it. */
-function asTrpc(err: unknown): unknown {
-  if (!(err instanceof BoardPlaceError)) return err;
-  const code =
-    err.status === 404
-      ? "NOT_FOUND"
-      : err.status === 403
-        ? "FORBIDDEN"
-        : err.status === 409
-          ? "CONFLICT"
-          : err.status === 400
-            ? "BAD_REQUEST"
-            : "INTERNAL_SERVER_ERROR";
-  return new TRPCError({
-    code,
-    message: `${err.message} (reason: ${err.reason})`,
-  });
 }
 
 function viewIdOf(data: Record<string, unknown>): string {
@@ -101,11 +88,52 @@ async function markApproved(
   return Boolean(claimed);
 }
 
+/**
+ * The tail every whiteboard executor shares. Claim FIRST, write second is not
+ * possible here (a failed write must leave the proposal pending), so: write,
+ * then flip to APPROVED only when it landed. A write whose answer was lost
+ * (`timeout`) is reconciled against the board (`landed`): when it is there,
+ * the approval completes; else the proposal stays pending and a retry is safe.
+ */
+async function finish(
+  { proposal, userId, input, deps }: ProposalExecutorArgs,
+  work: () => Promise<unknown>,
+  landed?: (board: ResolvedBoard) => Promise<boolean>,
+  board?: () => ResolvedBoard | undefined
+) {
+  try {
+    await work();
+  } catch (err) {
+    const b = board?.();
+    const reconciled =
+      err instanceof BoardPlaceError &&
+      err.reason === "timeout" &&
+      landed !== undefined &&
+      b !== undefined &&
+      (await landed(b));
+    if (!reconciled) {
+      throw err instanceof BoardPlaceError ? boardPlaceErrorToTrpc(err) : err;
+    }
+  }
+  if (!(await markApproved(input.proposalId, userId))) {
+    return { success: true, alreadyApproved: true };
+  }
+  reportApproved(deps, proposal, input.proposalId);
+  deps.emitProposalReviewed(
+    input.proposalId,
+    proposal.workspaceId,
+    "approved",
+    userId
+  );
+  return { success: true };
+}
+
 /** Register the whiteboard/* approve executors. */
 export function registerWhiteboardExecutors(): void {
   registerProposalExecutor({
     key: "whiteboard/place",
-    async execute({ proposal, userId, input, deps }) {
+    async execute(args) {
+      const { proposal, userId } = args;
       const data = innerData(proposal);
       const viewId = viewIdOf(data);
       const resources = BoardResourceRefSchema.array().safeParse(
@@ -114,82 +142,75 @@ export function registerWhiteboardExecutors(): void {
       const options = BoardPlacementOptionsSchema.optional().safeParse(
         data.options
       );
-      const placementKey = data.placementKey;
       if (
         !resources.success ||
         resources.data.length === 0 ||
-        !options.success ||
-        typeof placementKey !== "string"
+        !options.success
       ) {
-        throw bad(
-          "Whiteboard placement proposal is missing its resources or placement key."
-        );
+        throw bad("Whiteboard placement proposal is missing its resources.");
       }
-      try {
-        const board = await resolveBoardForApprover(viewId, userId);
-        await applyPlacement({
-          board,
-          userId: proposal.subjectUserId ?? userId,
-          agentUserId: proposal.agentUserId ?? null,
-          resources: resources.data,
-          options: options.data,
-          placementKey,
-          placedBy: placedByOf(proposal, userId),
-          pending: false,
-        });
-      } catch (err) {
-        throw asTrpc(err);
-      }
-      if (!(await markApproved(input.proposalId, userId))) {
-        return { success: true, alreadyApproved: true };
-      }
-      reportApproved(deps, proposal, input.proposalId);
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
+      // A proposal filed before the door fixed its key has none: the proposal
+      // itself fixes the ids then (a retry of this approval replaces).
+      const placementKey =
+        typeof data.placementKey === "string"
+          ? data.placementKey
+          : placementKeyFor({
+              viewId,
+              actorId: proposal.agentUserId ?? proposal.subjectUserId ?? userId,
+              idempotencyKey: `proposal:${proposal.id}`,
+              resources: resources.data,
+              options: options.data,
+            });
+      let board: ResolvedBoard | undefined;
+      return finish(
+        args,
+        async () => {
+          board = await resolveBoardForApprover(viewId, userId);
+          await applyPlacement({
+            board,
+            userId: proposal.subjectUserId ?? userId,
+            agentUserId: proposal.agentUserId ?? null,
+            resources: resources.data,
+            options: options.data,
+            placementKey,
+            placedBy: placedByOf(proposal, userId),
+            pending: false,
+          });
+        },
+        (b) =>
+          writeLanded(b, {
+            present: predictedShapeIds(placementKey, resources.data),
+          }),
+        () => board
       );
-      return { success: true };
     },
   });
 
   registerProposalExecutor({
     key: "whiteboard/update_shapes",
-    async execute({ proposal, userId, input, deps }) {
+    async execute(args) {
+      const { proposal, userId } = args;
       const data = innerData(proposal);
       const viewId = viewIdOf(data);
       const update = BoardShapeUpdateSchema.array().safeParse(data.update);
       if (!update.success || update.data.length === 0) {
         throw bad("Whiteboard change proposal is missing its shape changes.");
       }
-      try {
+      return finish(args, async () => {
         const board = await resolveBoardForApprover(viewId, userId);
         await applyShapeChanges({
           board,
           update: update.data,
           actor: placedByOf(proposal, userId),
         });
-      } catch (err) {
-        throw asTrpc(err);
-      }
-      if (!(await markApproved(input.proposalId, userId))) {
-        return { success: true, alreadyApproved: true };
-      }
-      reportApproved(deps, proposal, input.proposalId);
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
-      return { success: true };
+      });
     },
   });
 
   registerProposalExecutor({
     key: "whiteboard/delete_shapes",
-    async execute({ proposal, userId, input, deps }) {
+    async execute(args) {
+      const { proposal, userId } = args;
       const data = innerData(proposal);
       const viewId = viewIdOf(data);
       const shapeIds = Array.isArray(data.shapeIds)
@@ -201,27 +222,20 @@ export function registerWhiteboardExecutors(): void {
       if (shapeIds.length === 0) {
         throw bad("Whiteboard removal proposal is missing its shape ids.");
       }
-      try {
-        const board = await resolveBoardForApprover(viewId, userId);
-        await applyShapeChanges({
-          board,
-          remove: shapeIds,
-          actor: placedByOf(proposal, userId),
-        });
-      } catch (err) {
-        throw asTrpc(err);
-      }
-      if (!(await markApproved(input.proposalId, userId))) {
-        return { success: true, alreadyApproved: true };
-      }
-      reportApproved(deps, proposal, input.proposalId);
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
+      let board: ResolvedBoard | undefined;
+      return finish(
+        args,
+        async () => {
+          board = await resolveBoardForApprover(viewId, userId);
+          await applyShapeChanges({
+            board,
+            remove: shapeIds,
+            actor: placedByOf(proposal, userId),
+          });
+        },
+        (b) => writeLanded(b, { absent: shapeIds }),
+        () => board
       );
-      return { success: true };
     },
   });
 }

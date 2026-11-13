@@ -77,7 +77,26 @@ export interface YjsRoomStateReply {
  */
 export interface YjsRoomApplyRequest {
   documentId: string;
-  put: Array<{ id: string; typeName: string } & Record<string, unknown>>;
+  /**
+   * Records to CREATE. One whose id the board already holds is written only
+   * while it is still pending and the same actor placed it; otherwise it is
+   * left alone and reported in `skipped` (a shape the person kept is never
+   * reset).
+   */
+  put?: Array<{ id: string; typeName: string } & Record<string, unknown>>;
+  /**
+   * Changes to shapes already there, merged into the LIVE record under the
+   * room's lock (`planBoardApply`, `@synap-core/types/whiteboard`).
+   */
+  patch?: Array<{
+    shapeId: string;
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+    props?: Record<string, unknown>;
+  }>;
+  /** Shape ids to delete: their children and bindings go with them. */
   remove?: string[];
   /** The Y transaction origin (who wrote it), e.g. `synap-place:<userId>`. */
   origin: string;
@@ -89,12 +108,19 @@ export interface YjsRoomApplyReply {
   /** `live` = the open room (saved too); `stored` = the saved file. */
   target: "live" | "stored";
   put: number;
+  /** Shapes changed in place. */
+  patched: number;
+  /** Records deleted (the removal closure). */
   removed: number;
+  /** Created record ids left alone: the board holds them, kept. */
+  skipped: string[];
 }
 
 /** Why an apply was refused (status → the bridge's HTTP answer). */
 export const YJS_APPLY_FAILURES = {
   bad_request: 400,
+  /** A patch or removal names a shape the board does not hold. */
+  shape_not_found: 400,
   /** No such board document. */
   not_found: 404,
   /** The board's saved content failed to load: it takes no write. */
@@ -103,6 +129,8 @@ export const YJS_APPLY_FAILURES = {
   save_failed: 503,
   /** The Yjs server is not up yet. */
   unavailable: 503,
+  /** The room's lock was held too long: the write MAY have landed. */
+  timeout: 504,
 } as const;
 export type YjsApplyFailure = keyof typeof YJS_APPLY_FAILURES;
 

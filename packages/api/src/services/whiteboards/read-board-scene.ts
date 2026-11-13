@@ -26,6 +26,7 @@ import { db, documents, eq, views } from "@synap/database";
 import { storage } from "@synap/storage";
 import { isStorageObjectNotFound } from "@synap/storage/interface";
 import { createLogger } from "@synap-core/core";
+import { boardRoomId, boardStoreMapName } from "@synap-core/types/whiteboard";
 import type { YjsRoomStateReply } from "@synap/events/realtime-schemas";
 import { resolveDocumentRoomAccess } from "../../utils/document-edit-access.js";
 import { bridgeRequestHeaders } from "../../utils/chat-realtime-broadcast.js";
@@ -122,7 +123,7 @@ function recordsFromYjsUpdate(update: Uint8Array, documentId: string): unknown {
   const doc = new Y.Doc();
   try {
     Y.applyUpdate(doc, update);
-    return doc.getMap(`tl_map_${documentId}`).toJSON();
+    return doc.getMap(boardStoreMapName(documentId)).toJSON();
   } finally {
     doc.destroy();
   }
@@ -316,7 +317,7 @@ export async function resolveBoardView(input: {
   return {
     view,
     documentId,
-    roomId: view.yjsRoomId ?? `whiteboard-${documentId}`,
+    roomId: view.yjsRoomId ?? boardRoomId(documentId),
     access,
   };
 }
