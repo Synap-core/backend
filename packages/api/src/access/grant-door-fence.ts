@@ -852,8 +852,6 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // project must be in that key's `share.create` grant (otherwise the same
   // 404 as a missing site), and only the members of the spaces it reaches
   // are listed.
-  [/^\/shares\/sites\/?$/, NARROWED("share", [], "create")],
-  [route("/shares/sites/:id"), NARROWED("share", [], "create")],
   // Server faults (0392, `services/server-faults/read.ts`): the exact cause of
   // every 5xx on the pod, whoever met it. Pod owner or admin only, like
   // `/usage`; no grant can narrow it, so a scoped key is refused.

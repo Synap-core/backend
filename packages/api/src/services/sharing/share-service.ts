@@ -131,11 +131,7 @@ export function attributedShareCaller(
   refusal: string
 ): string | null {
   const agentUserId = agentOf(actor);
-  if (
-    actor.keyType &&
-    !agentUserId &&
-    actor.keyType !== APP_PERSON_KEY_TYPE
-  ) {
+  if (actor.keyType && !agentUserId && APP_PERSON_KEY_TYPE) {
     throw new TRPCError({ code: "FORBIDDEN", message: refusal });
   }
   return agentUserId;
