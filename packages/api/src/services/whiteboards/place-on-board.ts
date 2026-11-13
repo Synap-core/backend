@@ -61,7 +61,12 @@ import type {
   YjsRoomApplyReply,
   YjsRoomApplyRequest,
 } from "@synap/events/realtime-schemas";
+import {
+  classifyEmbedUrl,
+  embedUrlRefusalMessage,
+} from "@synap-core/types/embed-url";
 import { bridgeRequestHeaders } from "../../utils/chat-realtime-broadcast.js";
+import { podPublicOrigin } from "../../utils/deep-links.js";
 import type { PermissionResult } from "../../utils/permission-check.js";
 import {
   BoardSceneReadError,
@@ -367,6 +372,42 @@ export async function materializeBoardResources(
   return out;
 }
 
+/** The url a resource would embed in an iframe, if any. */
+function embeddedUrlOf(r: BoardResourceRef): string | null {
+  if (r.kind === "url") return r.url;
+  if (
+    (r.kind === "cellDefinition" && r.cellKey === URL_CELL_KEY) ||
+    (r.kind === "cellInstance" && r.cellKey === URL_CELL_KEY)
+  ) {
+    const url = r.props?.url;
+    return typeof url === "string" ? url : null;
+  }
+  return null;
+}
+
+/**
+ * The browser's embed rule, on the server (`classifyEmbedUrl`, shared from
+ * `@synap-core/types/embed-url`): an agent's url embed must be a website
+ * (https, not a stored file, not the pod itself) before it reaches a board.
+ * HTML is not a url embed: it renders as a sandboxed `srcdoc` (scripts, no
+ * same origin), so this rule does not apply to it.
+ */
+export function assertEmbeddableResources(
+  resources: readonly BoardResourceRef[]
+): void {
+  const podUrl = podPublicOrigin() ?? null;
+  resources.forEach((r, i) => {
+    const url = embeddedUrlOf(r);
+    if (url === null) return;
+    const verdict = classifyEmbedUrl(url, { podUrl });
+    if (verdict.kind === "website") return;
+    throw new BoardPlaceError(
+      "embed_refused",
+      `resources[${i}]: ${embedUrlRefusalMessage(verdict)} (${verdict.kind === "refused" ? verdict.reason : verdict.kind}). Nothing was placed.`
+    );
+  });
+}
+
 // ── The cores the door and the executors share ──────────────────────────────
 
 /**
@@ -421,6 +462,7 @@ export async function applyPlacement(input: {
   placedBy: BoardPlacedBy;
   pending: boolean;
 }): Promise<{ shapeIds: string[]; target: "live" | "stored" }> {
+  assertEmbeddableResources(input.resources);
   const placeable = await materializeBoardResources(input.resources, {
     placementKey: input.placementKey,
     userId: input.userId,
@@ -568,6 +610,7 @@ export async function placeOnBoard(
 
   // Check the whole call against the board BEFORE governance or any write: a
   // bad frame or an unknown shape refuses everything.
+  assertEmbeddableResources(resources);
   const current = await readBoard(() =>
     loadBoardRecords(board.roomId, board.documentId)
   );
