@@ -118,21 +118,31 @@ describe("projectRunnableActions", () => {
 });
 
 describe("withheldWithSource: what the projection omits, and why", () => {
-  const launchable = (id: string) =>
-    verb({
-      id,
-      label: id,
-      kind: "write",
-      granted: false,
-      govDefault: "propose",
-      backingSkillExecutable: true,
-    });
   const ENABLE = {
     kind: "enable" as const,
     hint: "Its actions are off. Turn them on to use it.",
     url: "https://pod.test/open/capability/c-locked",
     opensIn: "web" as const,
   };
+  /** A registry verb row as the registry stamps it (launchable, blocks). */
+  type RegistryVerb = NonNullable<Capability["verbs"]>[number] & {
+    backingSkillExecutable?: boolean;
+    blocked?: "not_enabled";
+    enable?: typeof ENABLE;
+  };
+  const launchable = (
+    id: string,
+    extra: Partial<RegistryVerb> = {}
+  ): RegistryVerb => ({
+    id,
+    label: id,
+    kind: "write",
+    granted: false,
+    govDefault: "propose",
+    effectiveExecMode: "propose",
+    backingSkillExecutable: true,
+    ...extra,
+  });
   const rows = [
     capability({ id: "ok", kind: "tool", verbs: [launchable("ok_send")] }),
     capability({
@@ -164,13 +174,12 @@ describe("withheldWithSource: what the projection omits, and why", () => {
       id: "locked",
       kind: "tool",
       verbs: [
-        {
-          ...launchable("locked_send"),
+        launchable("locked_send", {
           backingSkillExecutable: false,
           blocked: "not_enabled",
           enable: ENABLE,
-        } as ReturnType<typeof launchable>,
-        { ...launchable("orphan_send"), backingSkillExecutable: false },
+        }),
+        launchable("orphan_send", { backingSkillExecutable: false }),
       ],
     }),
     // A backing skill of a tool verb: its tool row speaks for it, so it is
@@ -212,7 +221,9 @@ describe("withheldWithSource: what the projection omits, and why", () => {
 
   it("never names a verb the projection offers, and misses none it omits", () => {
     const projected = new Set(
-      projectWithSource(rows).map(({ action }) => action.verbId)
+      projectWithSource(rows).flatMap(({ action }) =>
+        action.verbId ? [action.verbId] : []
+      )
     );
     const withheld = new Set(withheldWithSource(rows).map((w) => w.verbId));
     expect([...projected]).toEqual(["ok_send"]);
