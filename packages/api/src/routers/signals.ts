@@ -1486,7 +1486,7 @@ const NARROWED_KEY_HALVES = {
 export function needsYouWithheld(
   // The request grant's own type: this file reads a grant, never its reach
   // (the one-parse tripwire scans files that NAME a grant type).
-  grant: ReturnType<typeof getRequestGrant>
+  grant: ReturnType<typeof getRequestGrant> | null
 ): AttentionHalf[] {
   if (needsYouReadableWhole(grant)) return [];
   const readsProposals = grantHoldsAction(grant!, "proposal", "read");
