@@ -38,43 +38,47 @@ const visibleProjectIds = new Set<string>();
 // That is what `__tripwires__/database-mock-total-ratchet` counts.
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    db: {
-      query: {
-        workspaces: {
-          findFirst: vi.fn(async ({ where }: { where: unknown }) => {
-            // The route ANDs `eq(workspaces.id, endpointWorkspaceId)` with
-            // `isNull(workspaces.archivedAt)` — our stub `eq`/`isNull`
-            // encode the compared id in the returned condition object so we
-            // can read it back here without a real SQL engine.
-            const cond = where as { ids?: string[] };
-            const id = cond.ids?.[0];
-            return id ? workspaceRowsById.get(id) : undefined;
-          }),
-        },
-        projects: {
-          findFirst: vi.fn(async ({ where }: { where: unknown }) => {
-            const cond = where as { ids?: string[] };
-            const id = cond.ids?.[0];
-            return id && visibleProjectIds.has(id) ? { id } : undefined;
-          }),
-        },
-        focusSessions: {
-          // The route ANDs `eq(focusSessions.id, fromId)` with
-          // `eq(focusSessions.userId, userId)` — same `ids` encoding, so
-          // `ids[0]` is the session id being looked up.
-          findFirst: vi.fn(async ({ where }: { where: unknown }) => {
-            const cond = where as { ids?: string[] };
-            const sessionId = cond.ids?.[0];
-            const workspaceId = sessionId
-              ? focusSessionWorkspaceById.get(sessionId)
-              : undefined;
-            return workspaceId !== undefined ? { workspaceId } : undefined;
-          }),
-        },
+  const dbStub = {
+    query: {
+      workspaces: {
+        findFirst: vi.fn(async ({ where }: { where: unknown }) => {
+          // The route ANDs `eq(workspaces.id, endpointWorkspaceId)` with
+          // `isNull(workspaces.archivedAt)` — our stub `eq`/`isNull`
+          // encode the compared id in the returned condition object so we
+          // can read it back here without a real SQL engine.
+          const cond = where as { ids?: string[] };
+          const id = cond.ids?.[0];
+          return id ? workspaceRowsById.get(id) : undefined;
+        }),
+      },
+      projects: {
+        findFirst: vi.fn(async ({ where }: { where: unknown }) => {
+          const cond = where as { ids?: string[] };
+          const id = cond.ids?.[0];
+          return id && visibleProjectIds.has(id) ? { id } : undefined;
+        }),
+      },
+      focusSessions: {
+        // The route ANDs `eq(focusSessions.id, fromId)` with
+        // `eq(focusSessions.userId, userId)` — same `ids` encoding, so
+        // `ids[0]` is the session id being looked up.
+        findFirst: vi.fn(async ({ where }: { where: unknown }) => {
+          const cond = where as { ids?: string[] };
+          const sessionId = cond.ids?.[0];
+          const workspaceId = sessionId
+            ? focusSessionWorkspaceById.get(sessionId)
+            : undefined;
+          return workspaceId !== undefined ? { workspaceId } : undefined;
+        }),
       },
     },
+  };
+  return {
+    ...actual,
+    db: dbStub,
+    // The `uses` branch runs THE governed `uses` writer, which reads the
+    // project through `getDb()` — the same stub.
+    getDb: vi.fn(async () => dbStub),
     eq: vi.fn((_col: unknown, val: unknown) => ({ ids: [val as string] })),
     and: vi.fn((...conds: { ids?: string[] }[]) => ({
       ids: conds.flatMap((c) => c.ids ?? []),
@@ -155,6 +159,18 @@ vi.mock(
 // `link-endpoint-visibility.pglite.test.ts`; here it is driven by the same
 // maps the rest of this file uses, so these tests pin that the HANDLER
 // consults it before governance and returns its refusal verbatim.
+// The session handle door (`resolveVerifiedSessionId`, its own suite pins the
+// ownership SQL): here it follows the same contract over a set of sessions
+// the caller owns, so these tests pin that the HANDLER asks it.
+const ownedSessionIds = new Set<string>();
+vi.mock("../_middleware/session.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveVerifiedSessionId: vi.fn(
+    async (_userId: string, header?: string | null, body?: string | null) =>
+      header ?? (body && ownedSessionIds.has(body) ? body : undefined)
+  ),
+}));
+
 vi.mock("./link-endpoint-visibility.js", () => ({
   checkLinkEndpointsVisible: vi.fn(
     async (e: {
@@ -682,6 +698,56 @@ describe("POST /links — project --uses--> workspace", () => {
     ).toMatchObject({
       reasoning: "Architech runs through Operations",
     });
+  });
+
+  // Rules out "a malformed purpose reads as a clear": only a string or null.
+  it("refuses a non-string metadata.purpose with 400, before governance", async () => {
+    visibleProjectIds.add(PROJECT);
+    const res = await postLinks(buildTestApp(), {
+      ...usesBody,
+      metadata: { purpose: 42 },
+    });
+    expect(res.status).toBe(400);
+    expect(checkPermissionOrPropose).not.toHaveBeenCalled();
+  });
+
+  it("files the gate under the caller's session, with the purpose", async () => {
+    visibleProjectIds.add(PROJECT);
+    vi.mocked(checkPermissionOrPropose).mockResolvedValueOnce({
+      granted: false,
+      proposalId: "prop-uses-2",
+    } as never);
+    const SESSION = "44444444-4444-4444-8444-444444444444";
+    ownedSessionIds.add(SESSION);
+    await postLinks(buildTestApp(), {
+      ...usesBody,
+      sessionId: SESSION,
+      metadata: { purpose: "Win the first clients" },
+    });
+    expect(
+      vi.mocked(checkPermissionOrPropose).mock.calls[0]?.[0]
+    ).toMatchObject({
+      sessionId: SESSION,
+      data: { metadata: { purpose: "Win the first clients" } },
+    });
+  });
+
+  // Rules out "the body's session wins": another user's session named in the
+  // body is never the gate's session (the verified-handle door drops it).
+  it("never files the gate under another user's session named in the body", async () => {
+    visibleProjectIds.add(PROJECT);
+    ownedSessionIds.clear();
+    vi.mocked(checkPermissionOrPropose).mockResolvedValueOnce({
+      granted: false,
+      proposalId: "prop-uses-3",
+    } as never);
+    await postLinks(buildTestApp(), {
+      ...usesBody,
+      sessionId: "55555555-5555-4555-8555-555555555555",
+    });
+    expect(
+      vi.mocked(checkPermissionOrPropose).mock.calls[0]?.[0]
+    ).not.toHaveProperty("sessionId", "55555555-5555-4555-8555-555555555555");
   });
 });
 

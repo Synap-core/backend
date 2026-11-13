@@ -24,6 +24,7 @@ import {
   httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+import { resolveVerifiedSessionId } from "../_middleware/session.js";
 import {
   createLink,
   getLinksFor,
@@ -33,10 +34,9 @@ import {
   validateSessionBlocker,
 } from "../../../services/focus-sessions/session-blocked-by.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
-import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
+import { setProjectWorkspaceMembershipGoverned } from "../../../services/projects/project-workspace-membership.js";
 import { stampAutoApprovedCreate } from "../../../services/proposals/stamp-materialized.js";
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
-import { db } from "@synap/database";
 import { checkLinkEndpointsVisible } from "./link-endpoint-visibility.js";
 import { linkProposalTitle } from "../../../services/links/link-proposal-title.js";
 import {
@@ -149,6 +149,11 @@ const LINK_TYPES = [
   // dependency door (below, `governedDependencyLink`); reader: the goal
   // rollup (`services/status/status-rollup.ts`).
   "serves",
+  // track --advances--> workspace: the goal moves a pillar (a space its
+  // project uses). Producer: THE dependency door (project-uses floor, one
+  // primary per goal); reader: the pillar health read
+  // (`services/projects/pillar-health.ts`).
+  "advances",
 ] as const;
 
 /** Link types this door names but never writes — each has its own human door. */
@@ -226,6 +231,8 @@ export function registerLinksRoutes(app: HubHono): void {
       metadata?: Record<string, unknown>;
       agentUserId?: string;
       reasoning?: string;
+      /** The session the caller works in; the gate files the write under it. */
+      sessionId?: string;
     } | null;
     if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
 
@@ -395,6 +402,65 @@ export function registerLinksRoutes(app: HubHono): void {
         }
       }
 
+      // `project --uses--> workspace` goes through THE governed `uses` writer
+      // (`setProjectWorkspaceMembershipGoverned`), shared with tRPC and MCP:
+      // the gate at pod scope, `metadata.purpose` (the pillar's line) carried
+      // and replayed — never dropped by a raw edge write.
+      if (parsed.data.linkType === "uses") {
+        // `metadata.purpose`: a string sets it, `null` clears it, absent
+        // leaves it. Any other value is refused, never read as a clear.
+        const meta = parsed.data.metadata;
+        const rawPurpose = meta && "purpose" in meta ? meta.purpose : undefined;
+        if (
+          rawPurpose !== undefined &&
+          rawPurpose !== null &&
+          typeof rawPurpose !== "string"
+        ) {
+          return c.json(
+            {
+              error:
+                "metadata.purpose is text (a string), or null to clear it.",
+            },
+            400
+          );
+        }
+        const purpose = rawPurpose as string | null | undefined;
+        // The verified X-Session-Id header wins; the body's handle only for
+        // a session the caller OWNS (never another user's), as capture does.
+        const sessionId =
+          (await resolveVerifiedSessionId(
+            userId,
+            c.get("sessionId"),
+            typeof body.sessionId === "string" ? body.sessionId : undefined
+          )) ?? null;
+        const outcome = await setProjectWorkspaceMembershipGoverned({
+          userId,
+          agentUserId: actorId !== userId ? actorId : undefined,
+          projectId: parsed.data.fromId,
+          workspaceId: parsed.data.toId,
+          member: true,
+          ...(purpose !== undefined ? { purpose } : {}),
+          ...(typeof body.reasoning === "string" && body.reasoning.trim()
+            ? { reasoning: body.reasoning.trim() }
+            : {}),
+          sessionId,
+          door: "POST /links",
+        });
+        if (outcome.status === "proposed") {
+          return jsonGoverned(c, {
+            status: "proposed",
+            proposalId: outcome.proposalId,
+            reviewPath: outcome.reviewPath,
+            reviewUrl: outcome.reviewUrl,
+          });
+        }
+        return c.json({
+          status: "created",
+          link: null,
+          uses: { indexed: true },
+        });
+      }
+
       // `userId` must stay the acting human (`proposals.subjectUserId`'s
       // source — see `applyApprovedBlockedBy`); `actorId` goes in `agentUserId`
       // only when it differs, mirroring `runs.ts`. For `blocked_by`, judge in
@@ -434,7 +500,6 @@ export function registerLinksRoutes(app: HubHono): void {
         });
       }
 
-      const isUsesIndex = parsed.data.linkType === "uses";
       // Undo record for an AUTO-APPROVED edge: the row this call inserted, or
       // the empty record when the edge already existed (created nothing).
       const receiptId =
@@ -469,27 +534,6 @@ export function registerLinksRoutes(app: HubHono): void {
           status: "created" as const,
           link: null,
           blockedBy: { inserted: result.inserted },
-        });
-      }
-
-      if (isUsesIndex) {
-        const uses = await linkProjectToWorkspace(db, {
-          projectId: parsed.data.fromId,
-          workspaceId: parsed.data.toId,
-          userId,
-        });
-        if (!uses.linked) {
-          const message =
-            uses.reason === "workspace_not_found"
-              ? "Workspace not found"
-              : "Project not found";
-          return c.json({ error: message }, 404);
-        }
-        await stampLink(uses.linkId);
-        return c.json({
-          status: "created",
-          link: null,
-          uses: { indexed: true },
         });
       }
 

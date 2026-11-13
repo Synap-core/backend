@@ -119,6 +119,13 @@ const REFUSED = (reason: string): FencedReadDoor => ({
 const FLOW_OF = NARROWED("entity", []);
 
 /**
+ * The board read (`readBoardScene`): Hub `GET /whiteboards/:viewId/scene` and
+ * MCP `synap_read_board` call the same function, so they share this one
+ * declaration.
+ */
+const BOARD_SCENE = READS("view", "document", "entity");
+
+/**
  * ONE proposal by id: tRPC `proposals.get`, the row on the person's
  * visibility floor (`assertProposalVisibleTo`, no grant clause) with the names
  * of the objects it touches. MCP `synap_get_proposal` and Hub
@@ -852,6 +859,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [/^\/automations\/?$/, LIST_AUTOMATIONS],
   [route("/threads/:id/context"), THREAD_CONTEXT],
   [/^\/channels\/personal\/?$/, GET_CHANNEL],
+  // A board's content (`readBoardScene`, services/whiteboards/): the view row
+  // and its document's tldraw records (live room or stored file), floored on
+  // the person by the room's own predicate (`resolveDocumentRoomAccess`), not
+  // through a grant clause. The scene names entities (card ids, their titles
+  // as drawn), so `entity` is declared too. A pinned key is refused. Same as
+  // MCP `synap_read_board` (BOARD_SCENE).
+  [route("/whiteboards/:id/scene"), BOARD_SCENE],
 ];
 
 /**
@@ -984,6 +998,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_views: SEAMED,
   // Same door as `GET /flow` (FLOW_OF): the read narrows itself.
   synap_get_flow: FLOW_OF,
+  // Same door as `GET /whiteboards/:viewId/scene` (BOARD_SCENE).
+  synap_read_board: BOARD_SCENE,
   // Aggregate doors: the subjects they read.
   synap_ask: READS(
     "entity",
@@ -1205,7 +1221,7 @@ export const GRANT_SAFE_TRPC_QUERIES: ReadonlySet<string> = new Set([
 ]);
 
 export const GRANT_DOOR_UNSUPPORTED =
-  "This door does not support scoped keys yet: its reads are not bounded by a grant. Use a door listed in the API keys guide, or a key with the full-access '*' grant.";
+  "This door does not support scoped keys yet: its reads are not bounded by a grant. Use a door that does (for example the ask, orient or find tools), or ask the person for a key with unrestricted full access ('*' with no space, project or object limit), which they create on the Keys page of pod admin.";
 
 /**
  * What a READ door asks of a grant that does not hold it, in the grant
@@ -1572,7 +1588,7 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
   };
 
 export const GRANT_WRITE_DOOR_UNSUPPORTED =
-  "This door does not support scoped keys yet: its writes are not bounded by a grant. Use a door listed in the API keys guide, or a key with unrestricted full access ('*' with no space, project or object limit).";
+  "This door does not support scoped keys yet: its writes are not bounded by a grant. Use a door that does, or ask the person for a key with unrestricted full access ('*' with no space, project or object limit), which they create on the Keys page of pod admin.";
 
 /**
  * tRPC (the Bearer door): may a key holding `grant` call this procedure?

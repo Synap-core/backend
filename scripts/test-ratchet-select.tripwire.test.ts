@@ -95,6 +95,7 @@ type Sel = {
   tests: string[];
   dropped: string[];
   added?: string[];
+  redAtBase?: string[];
 };
 
 /** Write what the shards write for this plan (with faults), then judge. */
@@ -321,6 +322,41 @@ describe("test-ratchet --select: the PR selection, judged as CI judges it", () =
     expect(r.out).toContain(EXTRA[2]);
   });
 
+  // RED AT BASE (a merge-queue entry, scripts/ci-changes.mjs header): a file
+  // main's latest finished push run also named as a new failure is listed,
+  // not counted. Only THAT file: another red file in the same entry stays red.
+  it("red at base: a file main's run named too is listed, not counted; any other red still fails", () => {
+    const tolerated = judge(
+      { ...small, redAtBase: [EXTRA[2]] },
+      {
+        red: [EXTRA[2]],
+      }
+    );
+    expect(tolerated.out).toContain("[red-at-base]");
+    expect(tolerated.out).toContain(EXTRA[2]);
+    expect(tolerated.out).not.toContain("[new-failure]");
+    expect(tolerated.status).toBe(0);
+    const other = judge(
+      { ...small, redAtBase: [EXTRA[1]] },
+      {
+        red: [EXTRA[2]],
+      }
+    );
+    expect(other.out).toContain("[new-failure]");
+    expect(other.out).toContain(EXTRA[2]);
+    expect(other.status).toBe(1);
+    const both = judge(
+      { ...small, redAtBase: [EXTRA[2]] },
+      {
+        red: [EXTRA[1], EXTRA[2]],
+      }
+    );
+    expect(both.out).toContain("[red-at-base]");
+    expect(both.out.split("[new-failure]")[1]).toContain(EXTRA[1]);
+    expect(both.out.split("[new-failure]")[1]).not.toContain(EXTRA[2]);
+    expect(both.status).toBe(1);
+  });
+
   it("a run with tests and not one passing: red (vacuous), as in the full mode", () => {
     const run = small.runs.find((x) => x.files.some((f) => !baseline.has(f)))!;
     const r = judge(small, { vacuousRun: run.id });
@@ -333,8 +369,8 @@ describe("test-ratchet --select: the PR selection, judged as CI judges it", () =
     // An EXTRA file is red in its own run and passes in a run collected AFTER
     // it (vitest's file filters are substrings: one file can run twice). The
     // file is derived: one whose own run is not the last, since which run a
-    // file lands in moves with every tripwire added to the repo (adding
-    // scripts/ci/semantic-overlap.tripwire.test.ts put EXTRA[0] in the last).
+    // file lands in moves with every tripwire added to the repo (adding one
+    // tripwire on 31 Oct put EXTRA[0] in the last).
     const last = large.runs.length - 1;
     const file = EXTRA.find((f) => {
       const i = large.runs.findIndex((x) => x.files.includes(f));

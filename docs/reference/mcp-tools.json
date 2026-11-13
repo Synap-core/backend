@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 120,
+  "toolCount": 121,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -40,7 +40,8 @@
       "synap_get_channel",
       "synap_diagnose",
       "synap_template_health",
-      "synap_get_flow"
+      "synap_get_flow",
+      "synap_read_board"
     ],
     "data": [
       "synap_create_entity",
@@ -4920,6 +4921,65 @@
       }
     },
     {
+      "name": "synap_read_board",
+      "title": "Read a whiteboard",
+      "group": "read",
+      "annotations": {
+        "title": "Read a whiteboard",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "What a whiteboard holds, in ONE read — read-only. `scene.shapes`: each shape's tldraw `type` (entityCard, view, cell, sticky, artboard, frame = a section, text, geo, note, draw…), page-space `x`/`y`/`w`/`h`, `parentId` and `frameId` (the frame or artboard holding it), `refs` (entityId, viewId, cellInstanceId, cellKey, url), `title`, `text`, `artboard` (presetId, pageIndex), `placedBy`/`pending` marks. `scene.arrows`: each end's bound `shapeId` and point, label, `relationId` when it draws a pod relation. `counts` and `bounds` (whole board; a big board is read in pages: `scene.window.nextOffset`, or one frame with `frameId`). `source`: `live` (the open board), `stored` (the saved copy, up to ~10 s behind an open board) or `new` (never saved, empty); `asOf` says when. A failed read is an error with a `reason`, never an empty board. Get a board's viewId from synap_list_views.",
+      "parameters": [
+        {
+          "name": "viewId",
+          "type": "string",
+          "required": true,
+          "description": "The whiteboard view's id (synap_list_views)."
+        },
+        {
+          "name": "frameId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: only what this frame or artboard holds (a shape id from a previous read)."
+        },
+        {
+          "name": "offset",
+          "type": "number",
+          "required": false,
+          "description": "Skip this many shapes (use `scene.window.nextOffset`)."
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "Shapes per read (default 15, max 60)."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "viewId": {
+            "type": "string",
+            "description": "The whiteboard view's id (synap_list_views)."
+          },
+          "frameId": {
+            "type": "string",
+            "description": "Optional: only what this frame or artboard holds (a shape id from a previous read)."
+          },
+          "offset": {
+            "type": "number",
+            "description": "Skip this many shapes (use `scene.window.nextOffset`)."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Shapes per read (default 15, max 60)."
+          }
+        },
+        "required": ["viewId"]
+      }
+    },
+    {
       "name": "synap_list_sessions",
       "title": "List focus sessions",
       "group": "sessions",
@@ -5611,7 +5671,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Escalation L4 — crystallize AFTER a session succeeded and the process is clearly repeatable (not a one-off). Promotes a validated focus session into a reusable Playbook (runtime → config): re-grants capabilities used and records lineage. May propose; never promote failed or speculative sessions.",
+      "description": "Escalation L4 — crystallize AFTER a session succeeded and the process is clearly repeatable (not a one-off). Promotes a validated focus session into a reusable Playbook (runtime → config): its `tools` list keeps what the session's work had (the core write tools, the origin playbook's tools, the capabilities used), and it records lineage. May propose; never promote failed or speculative sessions.",
       "parameters": [
         {
           "name": "sessionId",
@@ -8109,7 +8169,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Read one project: name, description, home workspace, and usedWorkspaces (domains this engagement spans via the uses INDEX). Call after orient when you need the span map. Not an ACL.",
+      "description": "Read one project: name, description, home workspace, usedWorkspaces (the uses INDEX; not an ACL), mainGoal, and pillars: each used space with its purpose, goals and derived health; rootHealth is the worst. Call after orient.",
       "parameters": [
         {
           "name": "projectId",
@@ -8205,7 +8265,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Start a GOAL on a project (a TRACK in tool and field names — say 'goal' to the person), e.g. 'Launch the new site': pass a `name` in the person's words, an `endState` (what done looks like, a short paragraph) and 2 to 5 `criteria` (binary checks, each with how it is checked) — or no criteria for a goal kept open as long as it matters ('keep the newsletter growing'): it then steers by its `direction` (one line) and, only if the person names a number, a `kpi`. Propose the `workKind` and `uncertainty` too: the person confirms them. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting, for as long as the goal matters. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met — hitting a number never closes it. No method needed and never stages: playbookId (a project-scoped playbook with stages) is OPTIONAL and legacy — omit it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
+      "description": "Start a GOAL on a project (a TRACK in tool and field names — say 'goal' to the person), pass a `name` in the person's words, an `endState` (what done looks like, a short paragraph) and 2 to 5 `criteria` (binary checks) — or no criteria for a goal kept open as long as it matters ('keep the newsletter growing'): it then steers by its `direction` (one line) and, only if the person names a number, a `kpi`. Propose the `workKind` and `uncertainty` too: the person confirms them. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting. A person closes it with a verdict once its criteria are met; a number never closes it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
       "parameters": [
         {
           "name": "projectId",
@@ -8296,6 +8356,18 @@
           "type": "object | null",
           "required": false,
           "description": "Optional: the goal's loop — { on: true } makes the goal PROPOSE its next session (filed into it, carrying its unmet criteria) whenever a required criterion is unmet and no session of it is open, at most perWeek times a week (default 3). It stops and asks the owner when the same criterion fails in two sessions; { on: true } again is \"try again\". Every next session is a proposal a person approves. Your switch-on is always proposed for review. null turns it off."
+        },
+        {
+          "name": "parentGoalId",
+          "type": "string",
+          "required": false,
+          "description": "Goal it serves (primary parent if it has none)."
+        },
+        {
+          "name": "pillars",
+          "type": "array<object>",
+          "required": false,
+          "description": "Project spaces it advances, the whole list; one primary, default the first."
         },
         {
           "name": "reasoning",
@@ -8437,6 +8509,22 @@
               "perWeek": { "type": "integer", "minimum": 1, "maximum": 14 }
             },
             "description": "Optional: the goal's loop — { on: true } makes the goal PROPOSE its next session (filed into it, carrying its unmet criteria) whenever a required criterion is unmet and no session of it is open, at most perWeek times a week (default 3). It stops and asks the owner when the same criterion fails in two sessions; { on: true } again is \"try again\". Every next session is a proposal a person approves. Your switch-on is always proposed for review. null turns it off."
+          },
+          "parentGoalId": {
+            "type": "string",
+            "description": "Goal it serves (primary parent if it has none)."
+          },
+          "pillars": {
+            "type": "array",
+            "description": "Project spaces it advances, the whole list; one primary, default the first.",
+            "items": {
+              "type": "object",
+              "required": ["workspaceId"],
+              "properties": {
+                "workspaceId": { "type": "string" },
+                "primary": { "type": "boolean" }
+              }
+            }
           },
           "reasoning": {
             "type": "string",
@@ -9283,7 +9371,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Set what a goal holds: its DIRECTION (where it is heading, one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "description": "Set what a goal holds: its DIRECTION (one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the value (stamped: STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. A KPI needs a label and a target. Reaching the target NUDGES the person; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
       "parameters": [
         {
           "name": "trackId",
@@ -9301,7 +9389,7 @@
           "name": "kpi",
           "type": "object | null",
           "required": false,
-          "description": "A KPI patch { label?, unit?, target?, current? } (numbers), or null to clear."
+          "description": "A KPI patch, or null to clear."
         },
         {
           "name": "endState",
@@ -9358,6 +9446,18 @@
           "description": "Optional: the goal's loop — { on: true } makes the goal PROPOSE its next session (filed into it, carrying its unmet criteria) whenever a required criterion is unmet and no session of it is open, at most perWeek times a week (default 3). It stops and asks the owner when the same criterion fails in two sessions; { on: true } again is \"try again\". Every next session is a proposal a person approves. Your switch-on is always proposed for review. null turns it off."
         },
         {
+          "name": "parentGoalId",
+          "type": "string",
+          "required": false,
+          "description": "Goal it serves (primary parent if it has none)."
+        },
+        {
+          "name": "pillars",
+          "type": "array<object>",
+          "required": false,
+          "description": "Project spaces it advances, the whole list; one primary, default the first."
+        },
+        {
           "name": "reasoning",
           "type": "string",
           "required": false,
@@ -9380,7 +9480,7 @@
           },
           "kpi": {
             "type": ["object", "null"],
-            "description": "A KPI patch { label?, unit?, target?, current? } (numbers), or null to clear.",
+            "description": "A KPI patch, or null to clear.",
             "properties": {
               "label": { "type": "string" },
               "unit": { "type": "string" },
@@ -9485,6 +9585,22 @@
             },
             "description": "Optional: the goal's loop — { on: true } makes the goal PROPOSE its next session (filed into it, carrying its unmet criteria) whenever a required criterion is unmet and no session of it is open, at most perWeek times a week (default 3). It stops and asks the owner when the same criterion fails in two sessions; { on: true } again is \"try again\". Every next session is a proposal a person approves. Your switch-on is always proposed for review. null turns it off."
           },
+          "parentGoalId": {
+            "type": "string",
+            "description": "Goal it serves (primary parent if it has none)."
+          },
+          "pillars": {
+            "type": "array",
+            "description": "Project spaces it advances, the whole list; one primary, default the first.",
+            "items": {
+              "type": "object",
+              "required": ["workspaceId"],
+              "properties": {
+                "workspaceId": { "type": "string" },
+                "primary": { "type": "boolean" }
+              }
+            }
+          },
           "reasoning": {
             "type": "string",
             "description": "Why — shown to the reviewer. One line."
@@ -9581,7 +9697,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, mark it as sample (demo) data, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
+      "description": "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, name its main goal, mark it as sample (demo) data, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
       "parameters": [
         {
           "name": "projectId",
@@ -9622,6 +9738,12 @@
           "description": "Move the project's HOME to this workspace (UUID from synap_list_workspaces). You must be able to write it. Entities and sessions stay where they are."
         },
         {
+          "name": "mainGoalId",
+          "type": "string | null",
+          "required": false,
+          "description": "One of its live goals; null clears it."
+        },
+        {
           "name": "reasoning",
           "type": "string",
           "required": false,
@@ -9660,6 +9782,10 @@
             "type": "string",
             "description": "Move the project's HOME to this workspace (UUID from synap_list_workspaces). You must be able to write it. Entities and sessions stay where they are."
           },
+          "mainGoalId": {
+            "type": ["string", "null"],
+            "description": "One of its live goals; null clears it."
+          },
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the reviewer. One line."
@@ -9682,10 +9808,16 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent. Governed: may return proposed. remove:true removes the edge instead (always a proposal for an agent).",
+      "description": "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). A used space is a PILLAR of the project. packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent. Governed: may return proposed. remove:true removes the edge instead (always a proposal for an agent).",
       "parameters": [
         { "name": "projectId", "type": "string", "required": true },
         { "name": "workspaceId", "type": "string", "required": true },
+        {
+          "name": "purpose",
+          "type": "string | null",
+          "required": false,
+          "description": "What the project needs from it; null clears it."
+        },
         {
           "name": "remove",
           "type": "boolean",
@@ -9710,6 +9842,10 @@
         "properties": {
           "projectId": { "type": "string" },
           "workspaceId": { "type": "string" },
+          "purpose": {
+            "type": ["string", "null"],
+            "description": "What the project needs from it; null clears it."
+          },
           "remove": {
             "type": "boolean",
             "description": "true = REMOVE this project's uses edge to the workspace (e.g. a retired domain). Default false = add."

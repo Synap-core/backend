@@ -66,10 +66,13 @@ import {
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
+  ADVANCES_LINK_TYPE,
   DEPENDENCY_LINK_TYPE,
+  LINK_PRIMARY_KEY,
   REPLACES_LINK_TYPE,
   SERVES_LINK_TYPE,
   deriveOpenBlockers,
+  isAdvancesPair,
   isDependencyEndpointKind,
   isDependencyEnded,
   isServesPair,
@@ -203,8 +206,96 @@ export async function insertDependencyEdge(input: {
       input.createdBy,
       input.attribution
     );
+  } else {
+    await restampPrimaryMark(edge, input.metadata);
   }
   return { inserted: inserted.length, ...(linkId ? { linkId } : {}) };
+}
+
+/** The edges whose `metadata.primary` names a goal's primary parent or pillar. */
+function carriesPrimaryMark(linkType: string): boolean {
+  return linkType === SERVES_LINK_TYPE || linkType === ADVANCES_LINK_TYPE;
+}
+
+/**
+ * Re-linking an EXISTING goal edge (`serves` goal → goal, `advances`) with an
+ * explicit `primary` boolean sets that one key on the stored row — how a
+ * person moves a goal's primary parent or pillar (demote one, promote
+ * another). The insert above is a no-op on an existing edge, so without this
+ * a re-link carrying `primary` would report success and change nothing. Only
+ * `primary` is merged: every other stored key (a criterion) is left as is.
+ * The at-most-one rule was checked before this write (`validateServesEdge`,
+ * `validateAdvancesEdge`), excluding this very pair.
+ */
+async function restampPrimaryMark(
+  edge: DependencyEdgeInput,
+  metadata: Record<string, unknown> | undefined
+): Promise<void> {
+  const primary = metadata?.[LINK_PRIMARY_KEY];
+  if (typeof primary !== "boolean" || !carriesPrimaryMark(edge.linkType)) {
+    return;
+  }
+  await db
+    .update(links)
+    .set({
+      metadata: drizzleSql`${links.metadata} || jsonb_build_object(${LINK_PRIMARY_KEY}::text, ${primary}::boolean)`,
+    })
+    .where(
+      and(
+        eq(links.fromType, edge.fromType as never),
+        eq(links.fromId, edge.fromId),
+        eq(links.toType, edge.toType as never),
+        eq(links.toId, edge.toId),
+        eq(links.linkType, edge.linkType)
+      )
+    );
+}
+
+/**
+ * THE primary reader: the end of goal `goalId`'s PRIMARY `linkType` edge
+ * (`metadata.primary`), or `null` when it has none. For `advances`, only an
+ * edge to a space the goal's project still `uses` counts (a pillar the
+ * project dropped is no pillar). `except` leaves one end out (a re-link of
+ * that very pair). Read by the one-primary rule here and by goal placement
+ * (`services/tracks/goal-placement.ts`), so both mean the same edge.
+ */
+export async function readGoalPrimary(
+  goalId: string,
+  linkType: typeof SERVES_LINK_TYPE | typeof ADVANCES_LINK_TYPE,
+  except?: { toType: string; toId: string }
+): Promise<{ toType: string; toId: string } | null> {
+  const [row] = await db
+    .select({ toType: links.toType, toId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.linkType, linkType),
+        eq(links.fromType, "track"),
+        eq(links.fromId, goalId),
+        drizzleSql`(${links.metadata} ->> ${LINK_PRIMARY_KEY}) = 'true'`,
+        except
+          ? drizzleSql`NOT (${links.toType} = ${except.toType} AND ${links.toId} = ${except.toId})`
+          : undefined,
+        linkType === ADVANCES_LINK_TYPE
+          ? drizzleSql`EXISTS (SELECT 1 FROM links u JOIN ${projectTracks} t ON t.project_id::text = u.from_id WHERE t.id::text = ${links.fromId} AND u.link_type = 'uses' AND u.from_type = 'project' AND u.to_type = 'workspace' AND u.to_id = ${links.toId})`
+          : undefined
+      )
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+/** Does goal `edge.fromId` have a primary `linkType` edge to another end? */
+async function hasOtherPrimary(
+  edge: DependencyEdgeInput,
+  linkType: typeof SERVES_LINK_TYPE | typeof ADVANCES_LINK_TYPE
+): Promise<boolean> {
+  return (
+    (await readGoalPrimary(edge.fromId, linkType, {
+      toType: edge.toType,
+      toId: edge.toId,
+    })) !== null
+  );
 }
 
 /** THE delete. Emits `link.delete.completed` per row actually removed. */
@@ -411,11 +502,106 @@ async function validateServesEdge(
       };
     }
   }
+  const primary = metadata?.[LINK_PRIMARY_KEY];
+  if (primary !== undefined) {
+    if (edge.fromType !== "track") {
+      return {
+        reason: "invalid_pair",
+        httpStatus: 400,
+        error:
+          "Only a goal names a primary parent goal; a session serves without one.",
+      };
+    }
+    if (typeof primary !== "boolean") {
+      return {
+        reason: "invalid_pair",
+        httpStatus: 400,
+        error: "primary is true or false.",
+      };
+    }
+  }
   if (
     edge.fromType === "track" &&
     (await closesDependencyCycle(edge, SERVES_LINK_TYPE))
   ) {
     return { reason: "cycle", httpStatus: 400, error: SERVES_CYCLE_ERROR };
+  }
+  if (primary === true && (await hasOtherPrimary(edge, SERVES_LINK_TYPE))) {
+    return {
+      reason: "invalid_pair",
+      httpStatus: 400,
+      error: PRIMARY_PARENT_TAKEN_ERROR,
+    };
+  }
+  return null;
+}
+
+/** The refusal for a second primary parent goal. */
+export const PRIMARY_PARENT_TAKEN_ERROR =
+  "This goal already has a primary parent goal. Make that link non-primary first (primary: false), or link this parent as non-primary.";
+
+/** The refusal for a second primary pillar. */
+export const PRIMARY_PILLAR_TAKEN_ERROR =
+  "This goal already has a primary pillar. Make that one non-primary first (primary: false), or add this space as a non-primary pillar.";
+
+/** The refusal for a pillar its goal's project does not use. */
+export const PILLAR_NOT_USED_ERROR =
+  "That space is not a pillar of the goal's project: link the project to the space first (synap_project_use_workspace), then say which goals advance it.";
+
+/**
+ * The `advances` checks, on CREATE, after the endpoint floor (the goal and
+ * the space are both visible to the caller):
+ *
+ *   - the goal's PROJECT must `uses` that space — only a space linked to the
+ *     project can be one of its pillars (founder decision 6, 2026-11-12);
+ *   - `metadata.primary`, when given, is a boolean, and at most ONE of a
+ *     goal's `advances` edges is primary.
+ *
+ * No same-space-as-home rule: the project's home space is one of its `uses`
+ * edges like any other (`stampProjectHomeUse`).
+ */
+async function validateAdvancesEdge(
+  edge: DependencyEdgeInput,
+  metadata: Record<string, unknown> | undefined
+): Promise<DependencyRefusal | null> {
+  const primary = metadata?.[LINK_PRIMARY_KEY];
+  if (primary !== undefined && typeof primary !== "boolean") {
+    return {
+      reason: "invalid_pair",
+      httpStatus: 400,
+      error: "primary is true or false.",
+    };
+  }
+  const [used] = await db
+    .select({ id: links.id })
+    .from(links)
+    .innerJoin(
+      projectTracks,
+      drizzleSql`${projectTracks.projectId}::text = ${links.fromId}`
+    )
+    .where(
+      and(
+        eq(projectTracks.id, edge.fromId),
+        eq(links.linkType, "uses"),
+        eq(links.fromType, "project"),
+        eq(links.toType, "workspace"),
+        eq(links.toId, edge.toId)
+      )
+    )
+    .limit(1);
+  if (!used) {
+    return {
+      reason: "invalid_pair",
+      httpStatus: 400,
+      error: PILLAR_NOT_USED_ERROR,
+    };
+  }
+  if (primary === true && (await hasOtherPrimary(edge, ADVANCES_LINK_TYPE))) {
+    return {
+      reason: "invalid_pair",
+      httpStatus: 400,
+      error: PRIMARY_PILLAR_TAKEN_ERROR,
+    };
   }
   return null;
 }
@@ -456,6 +642,15 @@ export async function validateDependencyEdge(
         reason: "invalid_pair",
         httpStatus: 400,
         error: "Only a session or a goal can serve a goal.",
+      };
+    }
+  } else if (edge.linkType === ADVANCES_LINK_TYPE) {
+    if (!isAdvancesPair(edge.fromType, edge.toType)) {
+      return {
+        ok: false,
+        reason: "invalid_pair",
+        httpStatus: 400,
+        error: "Only a goal advances a space (goal --advances--> space).",
       };
     }
   } else if (
@@ -532,6 +727,10 @@ export async function validateDependencyEdge(
   if (action === "create" && edge.linkType === SERVES_LINK_TYPE) {
     const servesRefusal = await validateServesEdge(edge, metadata);
     if (servesRefusal) return { ok: false, ...servesRefusal };
+  }
+  if (action === "create" && edge.linkType === ADVANCES_LINK_TYPE) {
+    const advancesRefusal = await validateAdvancesEdge(edge, metadata);
+    if (advancesRefusal) return { ok: false, ...advancesRefusal };
   }
   return { ok: true, workspaceId: home?.workspaceId ?? null };
 }

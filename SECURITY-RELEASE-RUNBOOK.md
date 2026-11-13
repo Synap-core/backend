@@ -8,12 +8,12 @@ Vulnerability reports go to [SECURITY.md](SECURITY.md), not here.
 
 ## 1. The publish doors
 
-| What                                               | Workflow                               | Credential                                                  |
-| -------------------------------------------------- | -------------------------------------- | ----------------------------------------------------------- |
-| `@synap-core/types`, `@synap-core/api-types` (npm) | `.github/workflows/publish-types.yml`  | npm Trusted Publishing (OIDC), see §2                       |
-| The version-bump commit back to `main`             | `publish-types.yml`, last step         | `GITHUB_TOKEN` today; the Release App once it exists (§5.2) |
-| Pod images (GHCR) and the signed pod release       | `.github/workflows/docker-publish.yml` | `GITHUB_TOKEN` plus keyless cosign (OIDC)                   |
-| Reads of the private sibling repos in CI           | `.github/actions/monorepo-setup`       | the Reader App (§5.1), else `CROSS_REPO_TOKEN` (§4)         |
+| What                                                                            | Workflow                               | Credential                                                  |
+| ------------------------------------------------------------------------------- | -------------------------------------- | ----------------------------------------------------------- |
+| `@synap-core/types`, `@synap-core/api-types`, `@synap-core/markdown-core` (npm) | `.github/workflows/publish-types.yml`  | npm Trusted Publishing (OIDC), see §2                       |
+| The version-bump commit back to `main`                                          | `publish-types.yml`, last step         | `GITHUB_TOKEN` today; the Release App once it exists (§5.2) |
+| Pod images (GHCR) and the signed pod release                                    | `.github/workflows/docker-publish.yml` | `GITHUB_TOKEN` plus keyless cosign (OIDC)                   |
+| Reads of the private sibling repos in CI                                        | `.github/actions/monorepo-setup`       | the Reader App (§5.1), else `CROSS_REPO_TOKEN` (§4)         |
 
 The rules every publish workflow must satisfy, in every repo, are checked by
 `ci/scripts/check.mjs` and described in [ci/README.md](ci/README.md).
@@ -34,6 +34,31 @@ steps alone switch to an exact Node (22.18.0) and an exact npm (Node 22 ships
 npm 10). Both pins are
 exact on purpose: a floating `22` or `npm@11` would let a registry release
 change what publishes.
+
+### 2.2 A new package: its first version (one time, an npm owner)
+
+Trusted Publishing cannot create a package: "The package you're configuring
+must already exist on the npm registry" (docs.npmjs.com/cli/v11/commands/npm-trust,
+Prerequisites; the website's Trusted Publisher form lives in the package's own
+settings). Until a package exists, `publish-types.yml` skips it with a warning
+and publishes the others. `@synap-core/markdown-core` is in that state.
+
+1. **Bootstrap a placeholder, not a release.** From a clean checkout of `main`,
+   in the package directory, with Node and npm as in §2.1:
+   `npm version 0.0.0-bootstrap.0 --no-git-tag-version && pnpm build && pnpm publish --no-git-checks --access public`,
+   then drop the local version change. A version below the repo's (`0.1.0`)
+   leaves the real first release to the workflow, so no hand-built artifact is
+   ever the version consumers install (`^0.1.0` never resolves a pre-release).
+2. **Trust the workflow** in the package's settings (Organization `Synap-core`,
+   repository `Synap-core/backend`, workflow `publish-types.yml`, environment
+   blank) and tick **npm publish** under "Allowed actions": the workflow
+   publishes directly, and only `npm stage publish` is allowed without it.
+3. **Release within 2 days.** A new trusted-publisher configuration expires if
+   its first publish does not happen within 2 days (docs.npmjs.com/trusted-publishers,
+   "Trusted publisher configuration expiry"). The next run of this workflow
+   (a `v*` tag, or a manual run on `main`) publishes the repo's version, which
+   validates it. Expired: delete it and add it again.
+4. Optional, after that release: `npm deprecate @synap-core/markdown-core@0.0.0-bootstrap.0 "placeholder"`.
 
 ## 3. Pod images and releases
 

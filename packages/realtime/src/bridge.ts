@@ -15,7 +15,11 @@ import { safeTokenEqual } from "@synap/auth";
 // bridge doesn't pull in `@synap/events`' boss/db side-effects, which require
 // DATABASE_URL): the pod's emitters test their payloads against this same
 // function.
-import { validateEmitPayload } from "@synap/events/realtime-schemas";
+import {
+  validateEmitPayload,
+  type YjsRoomStateReply,
+} from "@synap/events/realtime-schemas";
+import { whiteboardLoadFailure } from "./whiteboard-room-state.js";
 export {
   validateEmitPayload,
   type ValidateEmitResult,
@@ -411,16 +415,19 @@ async function handleYjsGetState(req: IncomingMessage, res: ServerResponse) {
 
     const state = Y.encodeStateAsUpdate(doc);
     const base64State = Buffer.from(state).toString("base64");
+    // The server's own flag (never a Y.Doc key): this room failed to load the
+    // board's saved content, so its state is not the board.
+    const failure = whiteboardLoadFailure(doc);
+    const reply: YjsRoomStateReply = {
+      roomId,
+      state: base64State,
+      encoding: "base64",
+      byteLength: state.byteLength,
+      ...(failure ? { loadFailed: true, loadError: failure.message } : {}),
+    };
 
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(
-      JSON.stringify({
-        roomId,
-        state: base64State,
-        encoding: "base64",
-        byteLength: state.byteLength,
-      })
-    );
+    res.end(JSON.stringify(reply));
   } catch (error) {
     console.error("[Bridge] Error getting Yjs state:", error);
     res.writeHead(500, { "Content-Type": "application/json" });
@@ -474,6 +481,23 @@ async function handleYjsRestore(req: IncomingMessage, res: ServerResponse) {
           roomId,
           applied: false,
           message: "Room not active — state will apply on next open via DB",
+        })
+      );
+      return;
+    }
+
+    // A room that failed to load the board takes no restore: it would be
+    // dropped at close (the room is never saved) while the caller announced
+    // "restored". Refuse it, saying why.
+    const failure = whiteboardLoadFailure(doc);
+    if (failure) {
+      res.writeHead(409, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: failure.message,
+          reason: "load-failed",
+          roomId,
+          applied: false,
         })
       );
       return;

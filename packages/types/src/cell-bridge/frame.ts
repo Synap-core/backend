@@ -4,6 +4,7 @@
  */
 
 import { CELL_BRIDGE_SDK } from "./sdk.js";
+import { CELL_FRAME_LINK_DOOR } from "./frame-links.js";
 import { frameExternalOrigins } from "./external-origins.js";
 
 /**
@@ -79,11 +80,25 @@ export function buildCellModuleFrameCsp(
   }).join("; ");
 }
 
+/**
+ * What a host may ask of the frame beyond the shared policy. OFF by default,
+ * so a host that does not handle the message keeps its frame as it was.
+ */
+export interface CellFrameOptions {
+  /**
+   * Hand a clicked link to the host (`synap:navigate`, `frame-links.ts`)
+   * instead of letting it navigate the frame itself. Only a host that listens
+   * for the message may ask for this: otherwise its links go nowhere.
+   */
+  links?: boolean;
+}
+
 /** The block injected ahead of everything the author wrote. */
-export function cellFrameHeadBlock(): string {
+export function cellFrameHeadBlock(options: CellFrameOptions = {}): string {
   return (
     `<meta http-equiv="Content-Security-Policy" content="${buildCellFrameCsp()}">` +
-    `<script>${CELL_BRIDGE_SDK}</script>`
+    `<script>${CELL_BRIDGE_SDK}</script>` +
+    (options.links ? `<script>${CELL_FRAME_LINK_DOOR}</script>` : "")
   );
 }
 
@@ -106,9 +121,12 @@ const LEADING_DOCTYPE = /^(\uFEFF?\s*<!doctype[^>]*>)/i;
  * enforced IN ADDITION (both must allow), and removing our `<meta>` from the
  * DOM does not lift a policy already in force.
  */
-export function wrapHtmlForFrame(html: string): string {
+export function wrapHtmlForFrame(
+  html: string,
+  options: CellFrameOptions = {}
+): string {
   const doctype = LEADING_DOCTYPE.exec(html);
-  const head = cellFrameHeadBlock();
+  const head = cellFrameHeadBlock(options);
   if (!doctype) return head + html;
   const lead = doctype[1]!;
   return lead + head + html.slice(lead.length);

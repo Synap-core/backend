@@ -239,6 +239,12 @@ export const contextRouter = router({
           // so projecting the teammate alone still renders no attribution.
           routedSource: m.routedSource ?? null,
           sessionId: m.sessionId ?? null,
+          // A channel with a person: which way the message went and the
+          // provider's own message id, so a reader can tell an echoed copy of
+          // our own send from a real reply (additive; null on a message that
+          // is neither, e.g. an in-pod chat turn).
+          direction: m.direction ?? null,
+          externalMessageId: m.externalMessageId ?? null,
         })),
         // Older messages exist: read them with `cursor: nextCursor`.
         hasMore: messagesResult.hasMore,

@@ -131,6 +131,11 @@ export function registerLinkExecutors(): void {
         projectId: inner.fromId,
         workspaceId: inner.toId,
         userId: ownerUserId,
+        attribution: {
+          agentUserId: proposal.agentUserId ?? null,
+          proposalId: input.proposalId,
+          sessionId: proposal.sessionId ?? null,
+        },
       });
       if (!result.unlinked) {
         throw refuse(

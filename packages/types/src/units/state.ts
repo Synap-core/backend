@@ -180,6 +180,13 @@ export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   unmeasured: "textMuted",
   // AI provenance
   drafting: "ai",
+  // A project PILLAR's derived health (`./pillar-health.ts`). Never green
+  // unless it moves; an absence is muted, not an error (nothing failed).
+  moving: "success",
+  needs_attention: "warning",
+  unproven: "info",
+  stalled: LIFECYCLE_CATEGORY_TONE.paused,
+  no_active_goal: "textMuted",
 };
 
 /** The tone of a status word ({@link STATUS_TONE}); unknown or absent ⇒ `textMuted`. */

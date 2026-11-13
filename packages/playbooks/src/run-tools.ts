@@ -118,6 +118,15 @@ export const LONG_RUN_FLOOR = [
   "get_session",
 ] as const;
 
+/**
+ * The tools a long run has and a short run does not: the core's writes.
+ * Where a playbook is made from work that had them (a promoted session, a
+ * pre-0419 row: migration 0419), they are declared so its runs keep them.
+ */
+export const LONG_RUN_WRITES: readonly string[] = LONG_RUN_FLOOR.filter(
+  (t) => !(SHORT_RUN_FLOOR as readonly string[]).includes(t)
+);
+
 /** The floor of each class. */
 export const RUN_TOOL_FLOORS: Readonly<Record<RunClass, readonly string[]>> = {
   "one-shot": [],
@@ -156,6 +165,27 @@ const RUN_TOOL_NAME_SET: ReadonlySet<string> = new Set(RUN_TOOL_NAMES);
 /** Is this `tools` entry a run tool (an IS tool name)? */
 export function isRunToolName(entry: string): boolean {
   return RUN_TOOL_NAME_SET.has(entry);
+}
+
+/** The run tools that read outside the pod (the web). */
+export const RUN_TOOLS_OUTSIDE_POD = [
+  "web_search",
+  "web_fetch",
+  "batch_web_fetch",
+] as const;
+
+const RUN_TOOLS_OUTSIDE_POD_SET: ReadonlySet<string> = new Set(
+  RUN_TOOLS_OUTSIDE_POD
+);
+
+/**
+ * Is this `tools` entry a run tool that works on the pod's own data? Not an
+ * intent or a capability (either can reach outside), not a web read. A run
+ * whose tools are all such entries is what a person may pre-approve for
+ * agents (plan fbfadf54 §6.4b). PURE.
+ */
+export function isPodDataRunTool(entry: string): boolean {
+  return isRunToolName(entry) && !RUN_TOOLS_OUTSIDE_POD_SET.has(entry);
 }
 
 /** The MCP prefix of a pod tool (`synap_list_playbooks`). */

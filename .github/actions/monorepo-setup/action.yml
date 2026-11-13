@@ -29,8 +29,8 @@ inputs:
   refs:
     description: >
       Space-separated `<dir>=<ref>` pairs that pin a sibling to a ref (passed
-      to the layout resolver as `--ref`, over main and over a Depends-On test
-      ref). Only ci.yml's "Dependent repos typecheck" sets it, from the PR
+      to the layout resolver as `--ref`, over a Depends-On test ref, a
+      sibling-pins.json pin and main). Only ci.yml's "Dependent repos typecheck" sets it, from the PR
       body's `Companion:` lines (scripts/layout/layout.mjs companionRefs).
     required: false
     default: ""
@@ -85,13 +85,16 @@ runs:
     # (scripts/layout/layout.mjs, layout "backend-ci" of layout.json): the CP
     # as ../synap-control-plane-api, the app as ../synap-app, and this checkout
     # reachable as ../synap-backend (a symlink: the runner names it after the
-    # repo, `backend`). Each sibling is a shallow checkout of main or, when this
-    # PR's body has a `Depends-On:` line for it that has not landed, of that
-    # dependency's test ref (GitHub's test merge of the PR, or the commit): the
-    # change is tested WITH what it depends on. A merge-queue or main run has no
-    # PR body, so every sibling is at main. Plain node before setup-node: the
-    # resolver needs no install. The token reaches git as a per-command header,
-    # never a remote URL, and is not persisted in the siblings' .git/config.
+    # repo, `backend`). Each sibling is a shallow checkout of, first match wins:
+    # a `refs` input; the test ref of this PR body's `Depends-On:` line for it
+    # that has not landed (GitHub's test merge of the PR, or the commit), so the
+    # change is tested WITH what it depends on; its pin in this checkout's
+    # sibling-pins.json (control-plane-api: a sibling's moving main must not
+    # turn this tree red, plan b5820982 §2); else its main. A merge-queue or
+    # main run has no PR body: pinned siblings at the pin, the others at main.
+    # Plain node before setup-node: the resolver needs no install. The token
+    # reaches git as a per-command header, never a remote URL, and is not
+    # persisted in the siblings' .git/config.
     - name: Lay out the monorepo beside this checkout
       shell: bash
       env:

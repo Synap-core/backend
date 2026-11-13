@@ -28,8 +28,9 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { stripComments } from "../../../../scripts/strip-comments.mjs";
 import { fileURLToPath } from "node:url";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -224,5 +225,236 @@ describe("tools — reaches the row, not just the schema", () => {
       "/**\n * Idempotency-by-subject"
     );
     expect(snapshot).toMatch(/\btools\s*:\s*playbook\.tools\b/);
+  });
+});
+
+// ── Every OTHER writer of a playbook ────────────────────────────────────────
+//
+// The door above folds and stores `tools`, but a playbook is also created by
+// code that builds its own object for `playbooks.create` (a loop install, a
+// capability install) or inserts a row itself (promote). Each such literal that
+// leaves `tools` out gives the playbook its class floor only — the defect the
+// 2026-11-11 review found in promote and the loop install.
+//
+// THE SET IS DERIVED: every object literal in a non-test `.ts` under
+// `packages/api/src` that is the argument of a `.create(` or a `.values(` and
+// whose DEPTH-1 keys (shorthand included) hold both `name` and `goalTemplate`
+// (a playbook create always carries both; `goalTemplate` is required). It must
+// name `tools` or spread another object (a spread passes the whole definition
+// through: the package applier's `...projected`; a conditional
+// `...(x ? {…} : {})` does not count), or be classified below with its reason.
+//
+// WHAT IT CANNOT SEE (stated, not implied): a playbook built from a literal
+// without `goalTemplate` at depth 1 (e.g. assembled field by field), a create
+// whose argument is a variable (the approval replay: covered by the replay
+// assertions above), and whether a spread's source actually holds `tools`.
+
+/** Strip comments and string contents (keeps the quotes), so braces inside never count. */
+function codeOf(src: string): string {
+  return stripComments(src, "ts").replace(
+    /(["'`])(?:\\.|(?!\1)[^\\])*\1/g,
+    (m) => m[0] + m[0]
+  );
+}
+
+/** Every `{…}` literal of `code` with its depth-1 keys, its spreads, its line. */
+function objectLiterals(
+  code: string
+): Array<{ line: number; keys: string[]; spreads: boolean; written: boolean }> {
+  const out: Array<{
+    line: number;
+    keys: string[];
+    spreads: boolean;
+    written: boolean;
+  }> = [];
+  const stack: Array<{
+    at: number;
+    keys: string[];
+    spreads: boolean;
+    seg: number;
+    depth: number;
+  }> = [];
+  /** A shorthand key (`name,`) ends the segment it is alone in. */
+  const shorthand = (top: { keys: string[]; seg: number }, end: number) => {
+    const m = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(code.slice(top.seg, end));
+    if (m && !top.keys.includes(m[1]!)) top.keys.push(m[1]!);
+  };
+  let depth = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i]!;
+    if (c === "{") {
+      depth++;
+      stack.push({ at: i, keys: [], spreads: false, seg: i + 1, depth });
+      continue;
+    }
+    if (c === "}") {
+      const top = stack.pop();
+      depth--;
+      if (top) {
+        shorthand(top, i);
+        out.push({
+          line: code.slice(0, top.at).split("\n").length,
+          keys: top.keys,
+          spreads: top.spreads,
+          // WRITTEN = the literal is the argument of a create or an insert.
+          written: /(?:\.create|\.values)\(\s*$/.test(
+            code.slice(Math.max(0, top.at - 40), top.at)
+          ),
+        });
+      }
+      continue;
+    }
+    const top = stack[stack.length - 1];
+    if (!top) continue;
+    // Depth-1 of `top`: no other bracket opened since it.
+    if (c === "(" || c === "[") {
+      // Skip to the matching bracket: its contents are not this literal's keys.
+      const close = c === "(" ? ")" : "]";
+      let d = 1;
+      let j = i + 1;
+      for (; j < code.length && d > 0; j++) {
+        if (code[j] === c) d++;
+        else if (code[j] === close) d--;
+        else if (code[j] === "{" || code[j] === "}") break;
+      }
+      if (d === 0) {
+        i = j - 1;
+        continue;
+      }
+    }
+    if (c === "," || c === "\n") {
+      if (c === ",") shorthand(top, i);
+      top.seg = i + 1;
+    }
+    if (c === ":") {
+      const m = /^\s*([A-Za-z_$][\w$]*)\??\s*$/.exec(code.slice(top.seg, i));
+      if (m && !top.keys.includes(m[1]!)) top.keys.push(m[1]!);
+    }
+    // A spread of a whole object (`...projected`) passes a definition through;
+    // a conditional spread (`...(x ? { a } : {})`) adds one optional key and
+    // does not count.
+    if (
+      c === "." &&
+      code.startsWith("...", i) &&
+      /^\s*$/.test(code.slice(top.seg, i)) &&
+      /^\.\.\.\s*[A-Za-z_$]/.test(code.slice(i, i + 40))
+    ) {
+      top.spreads = true;
+    }
+    // A conditional spread that adds `tools` (`...(x.tools !== undefined ?
+    // { tools: x.tools } : {})`) carries it.
+    if (c === "." && code.startsWith("...(", i)) {
+      let d = 0;
+      let j = i + 3;
+      for (; j < code.length; j++) {
+        if (code[j] === "(") d++;
+        else if (code[j] === ")" && --d === 0) break;
+      }
+      if (
+        /\?\s*\{\s*tools\s*[:,}]/.test(code.slice(i, j)) &&
+        !top.keys.includes("tools")
+      )
+        top.keys.push("tools");
+      i = j;
+      continue;
+    }
+  }
+  return out;
+}
+
+function tsFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory())
+      return name === "node_modules" ||
+        name === "__tests__" ||
+        name === "__tripwires__"
+        ? []
+        : tsFiles(p);
+    return p.endsWith(".ts") &&
+      !/\.(test|spec)\.ts$/.test(p) &&
+      !p.endsWith(".d.ts")
+      ? [p]
+      : [];
+  });
+}
+
+/**
+ * Playbook literals that deliberately carry no `tools`, each with why. A new
+ * one fails the scan; a classified one that starts carrying `tools` fails too
+ * (the classification is then stale).
+ */
+const NO_TOOLS_BY_DESIGN: Record<string, string> = {
+  // A graph op (`create_playbook` in a capture graph / rule loop) has no tools
+  // in its op shape: it files a DRAFT the person shapes before running it.
+  "utils/materialize-composite.ts":
+    "create_playbook graph op: the op shape has no tools; it creates a draft",
+  "utils/rule-loop-callers.ts":
+    "create_playbook rule-loop op: the op shape has no tools; it creates a draft",
+};
+
+describe("every playbook writer carries tools (derived)", () => {
+  const found = tsFiles(SRC).flatMap((file) =>
+    objectLiterals(codeOf(read(file)))
+      .filter(
+        (o) =>
+          o.written &&
+          o.keys.includes("name") &&
+          o.keys.includes("goalTemplate")
+      )
+      .map((o) => ({
+        file: relative(SRC, file),
+        line: o.line,
+        carries: o.keys.includes("tools") || o.spreads,
+      }))
+  );
+
+  it("non-vacuity: the scan finds the door, promote, the loop and capability installs", () => {
+    const files = new Set(found.map((f) => f.file));
+    for (const f of [
+      "routers/playbooks.ts",
+      "services/playbooks/playbook-lifecycle.ts",
+      "services/loops/create-from-definition.ts",
+      "services/capabilities/create-from-definition.ts",
+    ])
+      expect(files.has(f), `scan no longer sees ${f}`).toBe(true);
+    // Self-check of the extractor on a literal sample.
+    const sample = codeOf(
+      `a.create({ name: "x", goalTemplate: "y", nested: { tools: [] } }); b.create({ name, goalTemplate: "b", tools }); t.insert(p).values({ ...def, name: "c", goalTemplate: "d" }); read({ name: true, goalTemplate: true }); c.create({ name: "e", goalTemplate: "f", ...(x ? { y: 1 } : {}) }); d.create({ name: "g", goalTemplate: "h", ...(p.tools !== undefined ? { tools: p.tools } : {}) });`
+    );
+    const lits = objectLiterals(sample).filter((o) =>
+      o.keys.includes("goalTemplate")
+    );
+    expect(
+      lits.map((o) => [o.written, o.keys.includes("tools") || o.spreads])
+    ).toEqual([
+      [true, false],
+      [true, true],
+      [true, true],
+      [false, false],
+      [true, false],
+      [true, true],
+    ]);
+  });
+
+  it("each one names tools, spreads a definition through, or is classified", () => {
+    const missing = found
+      .filter((f) => !f.carries && !(f.file in NO_TOOLS_BY_DESIGN))
+      .map((f) => `${f.file}:${f.line}`);
+    expect(missing, "a playbook literal drops tools").toEqual([]);
+  });
+
+  it("every classification is still a real tools-less site", () => {
+    for (const file of Object.keys(NO_TOOLS_BY_DESIGN)) {
+      const here = found.filter((f) => f.file === file);
+      expect(
+        here.length,
+        `${file} no longer creates a playbook`
+      ).toBeGreaterThan(0);
+      expect(
+        here.every((f) => !f.carries),
+        `${file} now carries tools: drop its classification`
+      ).toBe(true);
+    }
   });
 });

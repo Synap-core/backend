@@ -14,8 +14,13 @@
  *    floored on the proposal's SUBJECT user (not the approver), refuses any
  *    other link shape, and reports the DELETE's own row count.
  *
- * No database: governance, the floor and the util are mocked at the module
- * seam — the unlink SQL itself is proven on PGlite in
+ * The handler runs THE governed `uses` writer
+ * (`services/projects/project-workspace-membership.ts`), so these drive it
+ * end to end through the handler; it gates at POD scope (`workspaceId`
+ * undefined), the archived relaxation included.
+ *
+ * No database: governance, the floor, the project read and the util are
+ * mocked at the module seam — the unlink SQL itself is proven on PGlite in
  * `utils/project-workspace.unlink.pglite.test.ts`.
  */
 
@@ -27,6 +32,7 @@ const h = vi.hoisted(() => ({
   link: vi.fn(),
   unlink: vi.fn(),
   archivedOk: vi.fn(),
+  pillarGoals: 0,
   proposalStatus: "pending" as string,
   updates: [] as unknown[],
 }));
@@ -36,6 +42,16 @@ vi.mock("../../../utils/permission-check.js", () => ({
 }));
 vi.mock("../../hub-protocol/rest/link-endpoint-visibility.js", () => ({
   checkLinkEndpointsVisible: (...a: unknown[]) => h.refusal(...a),
+}));
+vi.mock("../../../services/projects/load-visible-project.js", () => ({
+  loadVisibleProject: async () => ({
+    id: "44444444-4444-4444-8444-444444444444",
+    workspaceId: null,
+    userId: "11111111-1111-4111-8111-111111111111",
+  }),
+}));
+vi.mock("../../../services/proposals/stamp-materialized.js", () => ({
+  stampAutoApprovedCreate: async () => undefined,
 }));
 vi.mock("../../../utils/project-workspace.js", async (importOriginal) => {
   const actual =
@@ -47,6 +63,7 @@ vi.mock("../../../utils/project-workspace.js", async (importOriginal) => {
     linkProjectToWorkspace: (...a: unknown[]) => h.link(...a),
     unlinkProjectFromWorkspace: (...a: unknown[]) => h.unlink(...a),
     archivedUsesTargetRemovable: (...a: unknown[]) => h.archivedOk(...a),
+    countProjectPillarGoals: async () => h.pillarGoals,
   };
 });
 vi.mock("@synap/database", async (importOriginal) => {
@@ -106,6 +123,7 @@ beforeEach(() => {
   h.archivedOk.mockResolvedValue(false);
   h.proposalStatus = "pending";
   h.updates = [];
+  h.pillarGoals = 0;
 });
 
 describe("synap_project_use_workspace {remove:true}", () => {
@@ -144,12 +162,32 @@ describe("synap_project_use_workspace {remove:true}", () => {
       remove: true,
     });
     expect(out).toMatchObject({ status: "unlinked", removed: 1 });
-    expect(h.unlink).toHaveBeenCalledWith(expect.anything(), {
+    expect(h.unlink).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        projectId: PROJECT,
+        workspaceId: WS,
+        userId: USER,
+      })
+    );
+    expect(h.link).not.toHaveBeenCalled();
+  });
+
+  // Rules out "the approver cannot see the cascade": a removal says how
+  // many goals stop advancing the space, in the reasoning the reviewer reads
+  // and in the reply.
+  it("says how many goals stop advancing the space", async () => {
+    h.pillarGoals = 2;
+    h.perm.mockResolvedValue({ proposalId: "p-3", reviewUrl: "u" });
+    const out = await call({
       projectId: PROJECT,
       workspaceId: WS,
-      userId: USER,
+      remove: true,
     });
-    expect(h.link).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ status: "proposed", goalsStopAdvancing: 2 });
+    const opts = h.perm.mock.calls[0]![0] as Record<string, any>;
+    expect(opts.reasoning).toMatch(/2 goals stop advancing this space\./);
+    expect(opts.data.goalsStopAdvancing).toBe(2);
   });
 
   it("the endpoint floor refuses before governance", async () => {
@@ -180,10 +218,10 @@ describe("synap_project_use_workspace {remove:true}", () => {
       userId: USER,
     });
     const opts = h.perm.mock.calls[0]![0] as Record<string, any>;
-    // Still governed as a link DELETE (destructive ⇒ agent proposes), but the
-    // archived lens is not the RBAC workspace.
+    // Still governed as a link DELETE (destructive ⇒ agent proposes), at
+    // POD scope: the archived lens is not the RBAC workspace.
     expect(opts).toMatchObject({ subjectType: "link", action: "delete" });
-    expect(opts.workspaceId).toBeNull();
+    expect(opts.workspaceId).toBeUndefined();
     expect(h.unlink).not.toHaveBeenCalled();
   });
 
@@ -205,6 +243,37 @@ describe("synap_project_use_workspace {remove:true}", () => {
       "create"
     );
     expect(h.unlink).not.toHaveBeenCalled();
+  });
+
+  it("an add with a purpose carries it to the gate and to the edge door", async () => {
+    h.perm.mockResolvedValue({ allowed: true });
+    h.link.mockResolvedValue({ linked: true });
+    const out = await call({
+      projectId: PROJECT,
+      workspaceId: WS,
+      purpose: "  Win the first clients ",
+    });
+    expect(out.status).toBe("linked");
+    const opts = h.perm.mock.calls[0]![0] as Record<string, any>;
+    expect(opts.workspaceId).toBeUndefined();
+    expect(opts.data.metadata).toEqual({ purpose: "Win the first clients" });
+    expect(h.link).toHaveBeenCalledWith(expect.anything(), {
+      projectId: PROJECT,
+      workspaceId: WS,
+      userId: USER,
+      purpose: "Win the first clients",
+    });
+  });
+
+  it("a purpose with remove is refused, nothing filed", async () => {
+    const out = await call({
+      projectId: PROJECT,
+      workspaceId: WS,
+      remove: true,
+      purpose: "x",
+    });
+    expect(String(out.error)).toMatch(/purpose/i);
+    expect(h.perm).not.toHaveBeenCalled();
   });
 });
 
@@ -256,11 +325,19 @@ describe("link/delete approval executor", () => {
   it("replays unlink floored on the SUBJECT user and reports the delete's rows", async () => {
     h.unlink.mockResolvedValue({ unlinked: true, rows: 1 });
     const res = await run(stored);
-    expect(h.unlink).toHaveBeenCalledWith(expect.anything(), {
-      projectId: PROJECT,
-      workspaceId: WS,
-      userId: USER,
-    });
+    expect(h.unlink).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        projectId: PROJECT,
+        workspaceId: WS,
+        userId: USER,
+        // The cascade's link.delete events name the agent and the approval.
+        attribution: expect.objectContaining({
+          agentUserId: AGENT,
+          proposalId: "p-1",
+        }),
+      })
+    );
     expect(res).toMatchObject({
       success: true,
       effect: { applied: "verified", rows: 1, subject: "link" },

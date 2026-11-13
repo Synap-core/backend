@@ -32,18 +32,41 @@
  * summary; it is never skipped by its `if:` (GitHub counts a skipped job as a
  * passed required check, #441).
  *
- * ── THE MERGE QUEUE (founder, 2026-10-28: "light queue run", #428) ──────────
+ * ── THE MERGE QUEUE (founder, 2026-10-28: "light queue run", #428; every
+ * tripwire since 2026-11-12, plan b5820982 §1) ────────────────────────────────
  * A queue entry re-checks what can break when PRs combine — the Release gate
  * (install, lint, typecheck, build, migrate, boot; the image per
- * IMAGE_INPUTS) — and takes the Full
- * suite + API e2e from the PR's OWN run, but only when that run really ran
- * them: both checks concluded `success` on the PR's head commit (since
+ * IMAGE_INPUTS) and EVERY TRIPWIRE (the tier of an empty change: affected.mjs
+ * selectTier([]), planned like a PR selection) — and takes the rest of the
+ * Full suite + API e2e from the PR's OWN run, but only when that run really
+ * ran them: both checks concluded `success` on the PR's head commit (since
  * 2026-10-29 that run checked the PR's tier, not everything: main's
  * post-merge run checks everything, and only an all-green one reaches a pod).
+ * Why the tripwires: two PRs each green alone broke main together four times
+ * on a tripwire (uuid-one-check, grant-door-classification,
+ * presence-approve-doors x2) while the queue re-ran only the Release gate. The
+ * one tripwire shard (~7 min) runs beside the Release gate (~10 min).
  * A skipped or neutral conclusion, a failure, a missing check or any API
  * error falls through to the tier of what the entry changes on top of the
  * main it will land on (`git diff <merge_group.base_sha>...<merge_group.
  * head_sha>`: the PR plus any entry ahead of it), on the combined tree.
+ *
+ * RED AT BASE (Chromium CQ's rule: a failure is the change's when it fails
+ * with it, fails on retry, and passes without it). A light entry's selection
+ * carries `redAtBase`: the test files main's latest FINISHED push run named
+ * as new failures (its Full suite log, culprit-finder.mjs failingFiles; the
+ * run merge-bot.mjs finishedMainRuns calls main's state, so the queue and the
+ * bot agree on whether main is red). The judge (test-ratchet.mjs) lists such
+ * a file `[red-at-base]` instead of failing the entry: it fails without this
+ * entry too, and ejecting the entry would only count a strike against a PR
+ * that did not cause it. The ratchet's retry still runs first, so a file it
+ * tolerates failed twice here AND failed on main. A newer main run still in
+ * progress is not waited for: it has measured nothing yet, and while the
+ * latest finished run is red the bot itself calls main red. Unreadable (no
+ * token, an API error, no finished run) tolerates nothing: the entry fails
+ * as before. Granularity is the FILE: an entry that breaks a second test in
+ * a file already red on main lands; main's next push run and the culprit
+ * finder catch it.
  *
  * SAME TREE, NOTHING RE-RUNS (2026-10-28): #471 passed all 4 required checks
  * on its PR run, entered the queue with main unchanged, and the queue ran a
@@ -53,27 +76,19 @@
  * whose tree equals the tree of the commit tested by the PR run on which ALL
  * 5 required checks (4 until 2026-11-09) concluded `success` (one run; skipped, neutral or missing
  * is not success) re-runs nothing: the required checks skip, which GitHub
- * reports as passed, and the step summary names the reused run. Anything else
+ * reports as passed, and the step summary names the reused run. That run's
+ * Full suite already judged every tripwire on this exact tree (or, for a
+ * docs-only PR, judged that none needed to run), so re-running them would
+ * re-ask the question it answered. Anything else
  * falls through to the light queue run above, then to the tier. What it
  * does not re-check: the sibling repos (control-plane-api, app-bases) at
  * main may have moved since; Preflight re-reads the one cross-repo red we
  * measured (door-tool-names) on every queue run.
  *
- * ── SEMANTIC OVERLAP, LOG-ONLY (plan d679e92c C1(a), 31 Oct) ───────────────
- * Two PRs green alone can be red together: #403×#265 and #556×#558 broke
- * main, and #558 entered the queue after #556 had merged, so comparing only
- * the entries queued together would miss it too. Before a light queue entry
- * takes its PR's Full suite and API e2e, this run measures the overlap: the
- * test files the PR's change reaches, intersected with the test files that
- * every file changed on main (and in the entries ahead of it) since the
- * commit the PR's run tested reaches, both through affected.mjs selectTier
- * on this checkout's graph (every-tripwire padding left out: it would make
- * every pair overlap). It writes one log line, a step summary section and
- * OVERLAP_OUT (default coverage/semantic-overlap.json, uploaded by ci.yml as
- * the "semantic-overlap" artifact) so 2-3 days of queue runs can be counted.
- * It changes NO output: it runs after GITHUB_OUTPUT is written, and any
- * failure is recorded as status "error". Whether to re-run the overlap is
- * the next decision, taken on those counts.
+ * (A log-only "semantic overlap" measure ran here from 31 Oct to 12 Nov,
+ * plan d679e92c C1(a). Its answer, from 292 light entries: a median 1,752 of
+ * ~3,785 test files overlap, so selecting the overlap would re-run nearly the
+ * PR tier; it was deleted for the every-tripwire run above.)
  *
  * ── OUTPUTS (GITHUB_OUTPUT) ──────────────────────────────────────────────────
  *   gate          Release gate runs           false: negctl branch, docs-only
@@ -81,8 +96,8 @@
  *                                             touching no IMAGE_INPUTS path
  *   image_reason  image=false: why (the judge prints it beside the skip)
  *   suites        the Full suite shards run   false: draft, stack, negctl,
- *                                             docs-only, a same-tree or a
- *                                             light queue entry
+ *                                             docs-only, a same-tree queue
+ *                                             entry
  *   scope         what the shards run: "full" | "selected" | "none"
  *   shards        the shard matrix, JSON (`[1,2,3,4]`; scope=selected: 1 to
  *                 SELECTION_MAX_SHARDS, sized from the selection's measured
@@ -92,7 +107,8 @@
  *   The selection itself (which files, in which shard, under which report id)
  *   is written to SELECTION_OUT (default coverage/selection.json); ci.yml
  *   uploads it, and the shards and the judge read that one file
- *   (test-ratchet.mjs --select=).
+ *   (test-ratchet.mjs --select=). A light queue entry's adds `redAtBase`
+ *   (header, "RED AT BASE").
  *   e2e           API e2e runs (the API surface changed, or everything runs)
  *   reuse         a queue entry re-runs nothing (same tree as its PR's
  *                 all-green run)
@@ -120,11 +136,18 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  PINS_FILE_NAME,
+  loadLayout,
+  loadSiblingPins,
+} from "./layout/layout.mjs";
+import { stripComments } from "./strip-comments.mjs";
 import {
   BASELINE,
   PACKAGE_JSON,
@@ -140,6 +163,9 @@ import {
   planSelection,
 } from "./test-ratchet-shards.mjs";
 import { isTripwire } from "./tripwire-discovery.mjs";
+import { failingFiles } from "./ci/culprit-finder.mjs";
+import { finishedMainRuns } from "./ci/merge-bot.mjs";
+import { CI_WORKFLOW } from "./ci/release-gate-wait.mjs";
 // THE test-file pattern (the import graph's): the selection, everyTest and
 // the negctl tests agree on what a test file is.
 import { TEST_FILE } from "./ci/import-graph.mjs";
@@ -209,6 +235,42 @@ const SHARED_FOR_DEPENDENTS = [
 ];
 export const touchesDependents = (files) =>
   files.some((f) => SHARED_FOR_DEPENDENTS.some((re) => re.test(f)));
+
+// THE SIBLING PINS (plan b5820982 §2). sibling-pins.json fixes the commit CI
+// lays each pinned sibling out at (scripts/layout/layout.mjs). Bumping a pin
+// changes what every test reading that sibling reads, but no import or path
+// edge leads there: those tests read `../<dir>`, never the pins file. So a
+// change to it stands for a change to every code file that names a pinned
+// sibling's directory in a string (comments stripped: siblingCheckout("<dir>"),
+// "<dir>/src/…"); the import graph then reaches the tests of those files. A
+// pins file that does not parse stands for every sibling: over-select, never
+// under-select. affected.mjs NARROWED keeps the file itself out of the full
+// suite.
+export function withSiblingPinReaders(
+  files,
+  { root, codeFiles, read = (f) => readFileSync(join(root, f), "utf8") }
+) {
+  if (!files.includes(PINS_FILE_NAME)) return files;
+  let dirs;
+  try {
+    dirs = [...loadSiblingPins(join(root, PINS_FILE_NAME)).keys()];
+  } catch {
+    dirs = Object.keys(loadLayout().repos);
+  }
+  // layout.json directories are [\w-]: nothing to escape
+  const names = dirs.map((d) => new RegExp(`["'\`]${d}["'\`/]`));
+  const readers = codeFiles.filter((f) => {
+    if (!/\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(f) || f.endsWith(".d.ts"))
+      return false;
+    try {
+      const text = stripComments(read(f), "ts");
+      return names.some((re) => re.test(text));
+    } catch {
+      return false;
+    }
+  });
+  return [...new Set([...files, ...readers])];
+}
 
 export const isDocsOnly = (path) => DOCS_ONLY.some((re) => re.test(path));
 export const isImageInput = (path) => IMAGE_INPUTS.some((re) => re.test(path));
@@ -354,7 +416,7 @@ export function decide({
     return {
       ...nothing,
       reuse: true,
-      reason: `merge queue: tree ${reuse.testedTree.slice(0, 9)} is the tree #${queue.pr}'s run ${reuse.runId} tested (commit ${String(reuse.testedCommit).slice(0, 9)}), where all ${QUEUE_REUSE_CHECKS.length} required checks passed; nothing re-runs`,
+      reason: `merge queue: tree ${reuse.testedTree.slice(0, 9)} is the tree #${queue.pr}'s run ${reuse.runId} tested (commit ${String(reuse.testedCommit).slice(0, 9)}), where all ${QUEUE_REUSE_CHECKS.length} required checks passed, the tripwires included; nothing re-runs`,
     };
   if (event !== "pull_request" && event !== "merge_group")
     return { ...all, reason: `${event}: every check runs (tier 2: main)` };
@@ -394,24 +456,41 @@ export function decide({
     why: t.why,
   });
 
-  // The light queue run (#428): the PR's own Full suite and API e2e passed,
-  // so the entry re-checks the Release gate. The two suite checks pass
-  // through their "Not affected" steps, which name this reason.
-  if (event === "merge_group" && queue?.suitesPassed === true)
+  // The light queue run (#428; every tripwire since 2026-11-12, header "THE
+  // MERGE QUEUE"): the PR's own Full suite and API e2e passed, so the entry
+  // re-checks the Release gate and every tripwire on the combined tree (the
+  // tier of an empty change). API e2e passes through its "Not affected" step,
+  // which names this reason. Docs only still runs no suite; an unreadable
+  // graph runs the full suite (fail-safe).
+  if (event === "merge_group" && queue?.suitesPassed === true) {
+    const t = docsOnly
+      ? pick()
+      : ((tier && tier([])) ?? {
+          scope: "full",
+          tests: [],
+          e2e: false,
+          why: ["full suite: the dependency graph could not be read"],
+        });
+    const suite =
+      t.scope === "none"
+        ? "no test suite (docs only)"
+        : t.scope === "full"
+          ? `the full suite [${t.why.join("; ")}]`
+          : `every tripwire (${t.tests.length} test file(s)${t.selection ? ` in ${t.selection.shards} shard(s)` : ""})`;
     return {
       ...all,
       image,
       imageWhy,
-      suites: false,
-      scope: "none",
+      ...tierFields(t),
       e2e: false,
       reason: [
-        `merge queue: #${queue.pr}'s own Full suite and API e2e passed on ${String(queue.headSha).slice(0, 9)}; this run re-checks the Release gate`,
+        `merge queue: #${queue.pr}'s own Full suite and API e2e passed on ${String(queue.headSha).slice(0, 9)}; this run re-checks the Release gate and ${suite} on the combined tree, and takes API e2e from that run`,
         imageWhy,
       ]
         .filter(Boolean)
         .join("; "),
     };
+  }
 
   // A queue entry whose PR run did not pass both: the Release gate and the
   // FULL suite on the combined tree (rare: the PR's own suites were red,
@@ -502,121 +581,6 @@ export function decide({
       .filter(Boolean)
       .join("; "),
   };
-}
-
-/**
- * The semantic overlap of a light queue entry (header, "SEMANTIC OVERLAP").
- * Pure. `prFiles`: what the PR changes on top of the code it lands on.
- * `mainFiles`: what changed on main and in the entries ahead since the commit
- * the PR's run tested. Either null = unreadable. `testsOf(files, side)` is
- * selectTier's answer ({ scope, tests, why }) for one side ("pr" | "main"),
- * or null when the graph is unreadable; a "full" side reaches `everyTest`.
- * Returns { status: "ok" | "unknown", overlap (sorted test files), prTests,
- * mainTests (counts), prFull, mainFull, why }.
- */
-export function semanticOverlap({
-  prFiles,
-  mainFiles,
-  testsOf,
-  everyTest = [],
-}) {
-  const unknown = (why) => ({
-    status: "unknown",
-    overlap: [],
-    prTests: null,
-    mainTests: null,
-    prFull: false,
-    mainFull: false,
-    why: [why],
-  });
-  if (!prFiles || !mainFiles) return unknown("changed files unreadable");
-  if (mainFiles.length === 0)
-    return {
-      status: "ok",
-      overlap: [],
-      prTests: null,
-      mainTests: 0,
-      prFull: false,
-      mainFull: false,
-      why: ["nothing changed on main since the PR's run tested it"],
-    };
-  const side = (files, name) => {
-    const t = testsOf(files, name);
-    if (!t) return null;
-    const full = t.scope === "full";
-    return {
-      full,
-      tests: new Set(full ? everyTest : t.tests),
-      why: full ? t.why : [],
-    };
-  };
-  const pr = side(prFiles, "pr");
-  const main = side(mainFiles, "main");
-  if (!pr || !main) return unknown("dependency graph unreadable");
-  return {
-    status: "ok",
-    overlap: [...pr.tests].filter((f) => main.tests.has(f)).sort(),
-    prTests: pr.tests.size,
-    mainTests: main.tests.size,
-    prFull: pr.full,
-    mainFull: main.full,
-    why: [
-      ...pr.why.map((w) => `PR side: ${w}`),
-      ...main.why.map((w) => `main side: ${w}`),
-    ],
-  };
-}
-
-/**
- * The `testsOf` semanticOverlap reads: affected.mjs selectTier over `g`, the
- * graph a PR's tier uses, without the every-tripwire padding (a tripwire the
- * change reaches through imports or reads stays). Docs-only paths widen
- * nothing, as in a PR's tier. `sidesOf(side)` returns the [before, after]
- * reader of that side's range, for package.json files that change only inert
- * keys (collectionInert).
- */
-export function overlapTestsOf(g, sidesOf = () => () => [null, null]) {
-  return (files, side) =>
-    selectTier(
-      files.filter((f) => !isDocsOnly(f)),
-      g,
-      {
-        collectionInert: collectionInert(files, sidesOf(side)),
-        everyTripwire: false,
-      }
-    );
-}
-
-/** The one log line of a semantic overlap (header, "SEMANTIC OVERLAP"). */
-export function overlapLine(o) {
-  if (o.status !== "ok")
-    return `semantic overlap: ${o.status}${o.why?.length ? ` (${o.why.join("; ")})` : ""}; reuse unchanged (log-only)`;
-  const n = o.overlap.length;
-  const names = o.overlap.slice(0, 10).join(", ");
-  return `semantic overlap: ${n} test file(s) would re-run${n ? `: ${names}${n > 10 ? `, and ${n - 10} more` : ""}` : ""} (PR side ${o.prTests ?? 0}, main side ${o.mainTests}); reuse unchanged (log-only)`;
-}
-
-/** The step summary section of a semantic overlap. */
-export function overlapSummary(o) {
-  return [
-    "### Merge queue: semantic overlap (log-only, plan d679e92c C1(a))",
-    "",
-    `${overlapLine(o)}.`,
-    ...(o.why?.length && o.status === "ok"
-      ? ["", ...o.why.map((w) => `- ${w}`)]
-      : []),
-    ...(o.overlap?.length
-      ? [
-          "",
-          "<details><summary>The overlapping test files</summary>",
-          "",
-          ...o.overlap.map((f) => `- \`${f}\``),
-          "",
-          "</details>",
-        ]
-      : []),
-    "",
-  ].join("\n");
 }
 
 /** One line for a tier: what the Full suite and API e2e run, and why. */
@@ -819,7 +783,8 @@ function githubGet() {
   const repo = process.env.REPO;
   const token = process.env.GITHUB_TOKEN;
   if (!repo || !token) return null;
-  return async (path) => {
+  // `raw`: the body as text (a job log; GitHub redirects to its storage).
+  return async (path, { raw = false } = {}) => {
     const res = await fetch(`https://api.github.com/repos/${repo}${path}`, {
       headers: {
         authorization: `Bearer ${token}`,
@@ -827,7 +792,7 @@ function githubGet() {
       },
     });
     if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
-    return res.json();
+    return raw ? res.text() : res.json();
   };
 }
 
@@ -849,8 +814,6 @@ async function queueEvidence() {
       pr,
       headSha,
       suitesPassed: suitesPassed(checkRuns),
-      // The run whose Full suite a light entry takes (semantic overlap).
-      suitesRun: runIdOf(decidingRun(checkRuns, "Full suite")),
       reuse: await reuseEvidence(get, checkRuns),
     };
   } catch (err) {
@@ -897,78 +860,44 @@ async function testedCommitOf(get, runId) {
   );
 }
 
-// A commit's first parent, or null (git cannot say).
-function firstParent(sha) {
-  if (!sha) return null;
-  try {
-    return execFileSync("git", ["rev-parse", `${sha}^1`], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return null;
-  }
+/**
+ * The test files a Full suite judge's log names as new failures (the
+ * ratchet's `[new-failure]` list: failed twice where retried), through
+ * culprit-finder.mjs failingFiles, the one parser of that log. Pure.
+ */
+export function newFailuresInLog(log) {
+  return failingFiles(log)
+    .filter((f) => f.kind === "test")
+    .map((f) => f.file);
 }
 
 /**
- * The semantic overlap of this queue entry (header, "SEMANTIC OVERLAP"),
- * with what it was measured from. Never throws: a failure is status "error".
- * Only a light entry (its PR's suites taken, not re-run) is measured: a
- * same-tree entry re-runs nothing on the very tree that was tested, and an
- * entry whose suites run checks the combined tree already.
+ * RED AT BASE (header): main's latest finished push run of CI and the test
+ * files its Full suite named as new failures ([] when it is green), or null
+ * when unreadable (then nothing is tolerated). `get` is githubGet().
  */
-async function queueOverlap(queue, d) {
-  const head = process.env.QUEUE_HEAD_SHA ?? null;
-  const record = { pr: queue?.pr ?? null, queueHeadSha: head };
-  const skip = (status, why, extra = {}) => ({
-    ...record,
-    ...extra,
-    status,
-    overlap: [],
-    why: [why],
-  });
-  if (!queue) return skip("unknown", "no queue evidence");
-  if (d.reuse)
-    return skip("same-tree", "the queue tree is the tree the PR's run tested");
-  if (!queue.suitesPassed)
-    return skip("not-reused", "the PR's own suites are not taken");
+export async function redAtBase(get) {
+  if (!get) return null;
   try {
-    const get = githubGet();
-    const testedRun = queue.suitesRun;
-    const testedCommit =
-      get && testedRun ? await testedCommitOf(get, testedRun) : null;
-    if (!testedCommit)
-      return skip("unknown", "the PR's Full suite run names no tested commit", {
-        testedRun,
-      });
-    // A PR run tests GitHub's test merge: its first parent is the main it
-    // was tested on. The queue head's first parent is main plus the entries
-    // ahead of this one (merge_group.base_sha when it cannot be read).
-    const mainAtTest =
-      (await get(`/git/commits/${testedCommit}`)).parents?.[0]?.sha ?? null;
-    const landsOn = firstParent(head) ?? process.env.QUEUE_BASE_SHA ?? null;
-    const prFiles = changedFiles(landsOn, head);
-    const mainFiles = changedFiles(mainAtTest, landsOn);
-    const cg = checkoutGraph();
-    const sides = { pr: [landsOn, head], main: [mainAtTest, landsOn] };
-    const o = semanticOverlap({
-      prFiles,
-      mainFiles,
-      everyTest: cg.everyTest,
-      testsOf: overlapTestsOf(cg.g, (side) => sidesOf(...sides[side])),
-    });
-    return {
-      ...record,
-      testedRun,
-      testedCommit,
-      mainAtTest,
-      landsOn,
-      prFiles: prFiles?.length ?? null,
-      mainFiles: mainFiles?.length ?? null,
-      ...o,
-    };
+    const runs = (
+      await get(
+        `/actions/workflows/${CI_WORKFLOW}/runs?branch=main&event=push&per_page=30`
+      )
+    ).workflow_runs;
+    const run = finishedMainRuns(runs)[0];
+    if (!run) return null;
+    if (run.conclusion === "success") return { run, files: [] };
+    const judge = (
+      await get(`/actions/runs/${run.id}/jobs?filter=latest&per_page=100`)
+    ).jobs.find((j) => j.name === "Full suite");
+    if (judge?.conclusion !== "failure") return { run, files: [] };
+    const log = await get(`/actions/jobs/${judge.id}/logs`, { raw: true });
+    return { run, files: newFailuresInLog(log) };
   } catch (err) {
-    return skip("error", String(err?.message ?? err));
+    console.log(
+      `merge queue: main's latest run could not be read (${err.message}); no red at base is tolerated`
+    );
+    return null;
   }
 }
 
@@ -989,8 +918,9 @@ function baselineAt(sha) {
 // comes with its shard plan (scripts/test-ratchet-shards.mjs planSelection).
 // So does a PR's FULL tier (lead decision, 29 Oct): every test file, planned
 // by cost in up to 8 shards, judged with the full mode's floors (`full`).
-// Main pushes and the merge queue never reach this function: they keep the
-// 4-shard plan.
+// A light merge-queue entry plans the tier of an empty change (every
+// tripwire). Main pushes and a queue entry's full fall-through never reach
+// this function: they keep the 4-shard plan.
 // This checkout's graph, read once ({ root, g, everyTest }); throws when it
 // cannot be read.
 let graphMemo = null;
@@ -1021,10 +951,14 @@ function tierOfCheckout(baseSha, headSha) {
     const added = addedFiles(baseSha, headSha).filter((f) => TEST_FILE.test(f));
     return (files) =>
       withPlan(
-        selectTier(files, g, {
-          baseBaseline,
-          collectionInert: collectionInert(files, sides),
-        }),
+        selectTier(
+          withSiblingPinReaders(files, { root, codeFiles: g.imports.files }),
+          g,
+          {
+            baseBaseline,
+            collectionInert: collectionInert(files, sides),
+          }
+        ),
         {
           everyTest,
           suiteDirs: suites,
@@ -1069,7 +1003,8 @@ export function withPlan(t, ctx) {
 
 /**
  * The shard matrix of a decision: a selection's own count (a PR's selected or
- * full tier), else the committed plan's 4 (main, the merge queue, fail-safe).
+ * full tier, a light queue entry's tripwires), else the committed plan's 4
+ * (main, a queue entry's full fall-through, fail-safe).
  */
 export function shardMatrix(d) {
   const n = d.selection ? d.selection.shards : 4;
@@ -1103,6 +1038,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // A selection reaches the shards and the judge as one file (ci.yml uploads
   // it); without it they fail, they never run something else.
   if (d.selection) {
+    if (event === "merge_group" && queue?.suitesPassed === true) {
+      const base = await redAtBase(githubGet());
+      d.selection.redAtBase = base?.files ?? [];
+      console.log(
+        base
+          ? `red at base: main's run ${base.run.id} (${String(base.run.head_sha).slice(0, 9)}, ${base.run.conclusion}) names ${base.files.length} new failure(s)${base.files.length ? `: ${base.files.join(", ")}` : ""}`
+          : "red at base: main's latest finished run unread; nothing is tolerated"
+      );
+    }
     const outFile = resolve(
       process.env.SELECTION_OUT ?? "coverage/selection.json"
     );
@@ -1138,30 +1082,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         ? `### Merge queue: verdict reused\n\n${d.reason}.\n\nReused run: https://github.com/${process.env.REPO}/actions/runs/${queue?.reuse?.runId}\n`
         : summary(d, files)
     );
-  // Log-only (header, "SEMANTIC OVERLAP"): after the outputs, so it cannot
-  // change them.
-  if (event === "merge_group") {
-    let o;
-    try {
-      o = await queueOverlap(queue, d);
-    } catch (err) {
-      o = { status: "error", overlap: [], why: [String(err?.message ?? err)] };
-    }
-    console.log(overlapLine(o));
-    try {
-      const outFile = resolve(
-        process.env.OVERLAP_OUT ?? "coverage/semantic-overlap.json"
-      );
-      mkdirSync(dirname(outFile), { recursive: true });
-      const decision = d.reuse ? "same-tree" : d.suites ? "suites" : "light";
-      writeFileSync(
-        outFile,
-        `${JSON.stringify({ ...o, overlapCount: o.overlap.length, decision }, null, 1)}\n`
-      );
-      if (process.env.GITHUB_STEP_SUMMARY)
-        appendFileSync(process.env.GITHUB_STEP_SUMMARY, overlapSummary(o));
-    } catch (err) {
-      console.log(`semantic overlap: not recorded (${err.message})`);
-    }
-  }
 }

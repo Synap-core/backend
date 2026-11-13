@@ -43,6 +43,7 @@ import { SectionCard } from "../../../(admin)/components/section-card";
 import { StatusPill } from "../../../(admin)/components/status-pill";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import { readForPage } from "./html-bridge-reads";
+import { browserFrameLinkEnv, handleFrameLink } from "./html-frame-links";
 import { frameT } from "./frame-copy";
 import type { PreparedContent } from "./markdown-model";
 
@@ -129,6 +130,7 @@ export function HtmlFrame({
   title,
   refusedAction,
   fullSize,
+  bridge = true,
 }: {
   html: string;
   /** The page's space: the lens every read is stamped with. */
@@ -138,6 +140,12 @@ export function HtmlFrame({
   refusedAction?: ReactNode;
   /** The box the section's Full size button shows full screen. */
   fullSize?: FullSize;
+  /**
+   * Answer the page's pod reads (default). `false` runs the page with NO
+   * bridge: a preview of something nobody has approved yet (a proposal)
+   * draws, but reads nothing of the viewer's pod.
+   */
+  bridge?: boolean;
 }) {
   const client = trpc.useUtils().client;
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -145,10 +153,12 @@ export function HtmlFrame({
   const [run, setRun] = useState(0);
   const [left, setLeft] = useState(false);
   const refusal = useMemo(() => frameNetworkCodeRefusal(html), [html]);
-  const srcDoc = useMemo(() => wrapHtmlForFrame(html), [html]);
+  // `links`: a clicked link is handed to this host (below) and never navigates
+  // the frame itself, which would load pod admin inside the sandbox.
+  const srcDoc = useMemo(() => wrapHtmlForFrame(html, { links: true }), [html]);
 
   useEffect(() => {
-    if (left || refusal) return;
+    if (!bridge || left || refusal) return;
     const host = createCellBridgeHost({
       frameWindow: () => frameRef.current?.contentWindow ?? null,
       read: (op, params) => readForPage(client, op, params, { workspaceId }),
@@ -156,7 +166,19 @@ export function HtmlFrame({
     const onMessage = (event: MessageEvent) => void host(event);
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [client, workspaceId, left, refusal, run]);
+  }, [client, workspaceId, bridge, left, refusal, run]);
+
+  // The link door: the page asks, the reader's browser follows (or not). It
+  // answers with or without the data bridge: a preview with no bridge has links
+  // too, and an unanswered click would be a dead link.
+  useEffect(() => {
+    if (left || refusal) return;
+    const env = browserFrameLinkEnv();
+    const onMessage = (event: MessageEvent) =>
+      void handleFrameLink(event, frameRef.current?.contentWindow ?? null, env);
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [left, refusal, run]);
 
   if (refusal) {
     const t = frameT();
@@ -253,6 +275,7 @@ export function HtmlPageBody({
   sourceBody,
   onShowSource,
   fullSize,
+  bridge,
 }: {
   view: HtmlPageView;
   html: string;
@@ -265,6 +288,8 @@ export function HtmlPageBody({
   sourceBody: (prepared: PreparedContent) => ReactNode;
   onShowSource?: () => void;
   fullSize?: FullSize;
+  /** `HtmlFrame`'s `bridge`: `false` for a page nobody has approved yet. */
+  bridge?: boolean;
 }) {
   if (view === "source") return <>{sourceBody(source)}</>;
   const t = frameT();
@@ -292,6 +317,7 @@ export function HtmlPageBody({
       title={title}
       refusedAction={viewSource}
       fullSize={fullSize}
+      bridge={bridge}
     />
   );
 }

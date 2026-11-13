@@ -615,7 +615,7 @@ export function enqueueDecision(input) {
 const at = (x) => Date.parse(x ?? "") || 0;
 
 /** CI push runs on main that finished green or red, newest first. */
-function finishedMainRuns(runs) {
+export function finishedMainRuns(runs) {
   return (runs ?? [])
     .filter(
       (r) =>

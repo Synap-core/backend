@@ -25,6 +25,7 @@ import {
   views,
 } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
+import type { YjsRoomStateReply } from "@synap/events/realtime-schemas";
 import { broadcastSuccess } from "../utils/realtime-broadcast.js";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -241,6 +242,20 @@ export async function handleWhiteboardSnapshot(
     throw new Error(`Realtime server error: ${response.status}`);
 
   const buffer = await response.arrayBuffer();
+  // The realtime server flags a room that failed to load the board's saved
+  // content (`YjsRoomStateReply.loadFailed`): its state is not the board, so
+  // it is never stored as a version.
+  let reply: Partial<YjsRoomStateReply> | null = null;
+  try {
+    reply = JSON.parse(Buffer.from(buffer).toString("utf-8"));
+  } catch {
+    reply = null;
+  }
+  if (reply?.loadFailed === true) {
+    throw new Error(
+      `Refusing to snapshot whiteboard ${viewId}: its room failed to load the saved board (${reply.loadError ?? "unknown error"})`
+    );
+  }
   const base64State = Buffer.from(buffer).toString("base64");
 
   const document = await db.query.documents.findFirst({

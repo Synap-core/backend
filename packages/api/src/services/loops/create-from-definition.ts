@@ -263,6 +263,16 @@ export async function createLoopFromDefinition(
         subjectProfile: pb.subjectProfile,
         schedule: pb.schedule,
         executor: pb.executor ?? "is-agent",
+        // The ONE tools list (0419, `LoopPlaybookDef.tools`) and its deprecated
+        // input: `playbooks.create` folds them and refuses a stage list outside
+        // the playbook's. Dropping them gave every loop playbook its floor only.
+        ...(pb.tools !== undefined ? { tools: pb.tools } : {}),
+        ...((pb as { requiredIntents?: string[] }).requiredIntents !== undefined
+          ? {
+              requiredIntents: (pb as { requiredIntents?: string[] })
+                .requiredIntents,
+            }
+          : {}),
         agentUserId,
         source,
       });

@@ -32,9 +32,12 @@
  *   semantics. The run's granted capabilities are read from the playbook's
  *   `grants` links at run time — not copied here.
  * - promoteSessionToPlaybook: snapshot a validated session into a reusable
- *   Playbook. Captures goal + expectedOutputs and re-grants the capabilities the
- *   session USED (its `used` links) as the new playbook's `grants` links; writes
- *   the `session → promoted_to → playbook` lineage edge.
+ *   Playbook. Captures goal + expectedOutputs, declares in its ONE `tools` list
+ *   what the session's work had (the origin playbook's tools, the capabilities
+ *   the session USED by name, and the core's write tools: the promoted playbook
+ *   is short-class, whose floor is reads only), keeps the used capabilities as
+ *   `grants` links for governance, and writes the `session → promoted_to →
+ *   playbook` lineage edge.
  *
  * GOVERNANCE: these are pure domain operations — the caller (tRPC router / Hub
  * REST) MUST run `checkPermissionOrPropose` before invoking them. The link
@@ -55,8 +58,11 @@ import {
   drizzleSql,
   entities,
   focusSessions,
+  inArray,
   isUniqueViolation,
   playbooks,
+  skills,
+  tools,
   insertFocusSessionRow,
 } from "@synap/database";
 import type { Playbook, FocusSession } from "@synap/database/schema";
@@ -68,6 +74,8 @@ import {
 import {
   collectPlaybookCriteria,
   describeMissingParams,
+  LONG_RUN_WRITES,
+  readToolsList,
   fillParamsFromSubject,
   needsSubjectKinds,
   readCriteria,
@@ -956,6 +964,16 @@ export async function promoteSessionToPlaybook(
     ];
   }
 
+  // WHAT A RUN OF IT MAY USE (0419, "only these"): what the session's work
+  // had. A promoted playbook has no stages, so it is SHORT-class and its floor
+  // is 6 reads: without the core's writes declared here, its runs could not
+  // write what the session wrote. Then the origin playbook's own list (the
+  // session followed it), then each capability the session USED, by name.
+  const declaredTools = await promotedTools(db, {
+    originPlaybookId: session.playbookId,
+    used: grantedCaps,
+  });
+
   // The session's NAME (its title, else the goal's first line) — not the
   // goal clipped mid-paragraph.
   const name =
@@ -999,6 +1017,7 @@ export async function promoteSessionToPlaybook(
           executor: "is-agent",
           status: "draft",
           subjectProfile,
+          tools: declaredTools,
           // Lineage lives in the `session → promoted_to → playbook` edge below — the
           // single source of truth — not duplicated here.
         })
@@ -1117,4 +1136,49 @@ export async function promoteSessionToPlaybook(
   });
 
   return { status: "promoted", playbook, reused, receipt };
+}
+
+/**
+ * The `tools` of a promoted playbook (see `promoteSessionToPlaybook`): the
+ * core's write tools, the origin playbook's list, then each USED capability
+ * by its row's name (its id when the row is gone: the resolver matches both).
+ * PURE but for the reads; each entry once.
+ */
+async function promotedTools(
+  db: Awaited<ReturnType<typeof getDb>>,
+  input: {
+    originPlaybookId: string | null;
+    used: ReadonlyArray<{ kind: string; id: string }>;
+  }
+): Promise<string[]> {
+  const origin = input.originPlaybookId
+    ? await db.query.playbooks.findFirst({
+        columns: { tools: true },
+        where: eq(playbooks.id, input.originPlaybookId),
+      })
+    : undefined;
+  const toolIds = input.used.filter((c) => c.kind === "tool").map((c) => c.id);
+  const skillIds = input.used
+    .filter((c) => c.kind === "skill")
+    .map((c) => c.id);
+  const names = new Map<string, string>();
+  if (toolIds.length > 0) {
+    for (const r of await db
+      .select({ id: tools.id, name: tools.name })
+      .from(tools)
+      .where(inArray(tools.id, toolIds)))
+      names.set(r.id, r.name);
+  }
+  if (skillIds.length > 0) {
+    for (const r of await db
+      .select({ id: skills.id, name: skills.name })
+      .from(skills)
+      .where(inArray(skills.id, skillIds)))
+      names.set(r.id, r.name);
+  }
+  return readToolsList([
+    ...LONG_RUN_WRITES,
+    ...readToolsList(origin?.tools),
+    ...input.used.map((c) => names.get(c.id) ?? c.id),
+  ]);
 }

@@ -138,3 +138,65 @@ describe("synap_get_thread_context limit", () => {
     expect((await viaMcp({ limit: 500 })).messages).toHaveLength(12);
   });
 });
+
+describe("synap_get_thread_context direction and provider id", () => {
+  const PERSON_CHANNEL = randomUUID();
+
+  it("returns direction and externalMessageId on each message (null when absent)", async () => {
+    await q(
+      `insert into channels (id, user_id, workspace_id, channel_type, created_at, updated_at)
+       values ($1, $2, null, 'ai_thread', now(), now())`,
+      [PERSON_CHANNEL, OWNER]
+    );
+    const rows: Array<[string, string | null, string | null, number]> = [
+      ["we sent this", "outbound", "ext-out-1", 3],
+      ["they replied", "inbound", "ext-in-1", 2],
+      ["plain turn", null, null, 1],
+    ];
+    for (const [content, direction, ext, minsAgo] of rows) {
+      await q(
+        `insert into messages (id, channel_id, role, author_type, user_id, content, timestamp, ephemeral, hash, previous_hash, direction, external_message_id)
+         values ($1, $2, 'user', 'human', $3, $4, $5, false, 'h', '', $6, $7)`,
+        [
+          randomUUID(),
+          PERSON_CHANNEL,
+          OWNER,
+          content,
+          new Date(Date.now() - minsAgo * 60_000).toISOString(),
+          direction,
+          ext,
+        ]
+      );
+    }
+    const ctx = await createHubProtocolCallerContext(OWNER, [
+      "hub-protocol.read",
+    ]);
+    const result = await readHandlers.synap_get_thread_context!({
+      toolName: "synap_get_thread_context",
+      args: { threadId: PERSON_CHANNEL },
+      userId: OWNER,
+      apiKeyScopes: ["mcp.read"],
+      caller: { context: contextRouter.createCaller(ctx as never) },
+    } as never);
+    const out = JSON.parse((result.content[0] as { text: string }).text) as {
+      messages: Array<{
+        content: string;
+        direction: string | null;
+        externalMessageId: string | null;
+      }>;
+    };
+    const byContent = new Map(out.messages.map((m) => [m.content, m]));
+    expect(byContent.get("we sent this")).toMatchObject({
+      direction: "outbound",
+      externalMessageId: "ext-out-1",
+    });
+    expect(byContent.get("they replied")).toMatchObject({
+      direction: "inbound",
+      externalMessageId: "ext-in-1",
+    });
+    expect(byContent.get("plain turn")).toMatchObject({
+      direction: null,
+      externalMessageId: null,
+    });
+  });
+});

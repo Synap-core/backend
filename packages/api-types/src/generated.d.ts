@@ -2612,6 +2612,99 @@ export interface StatusOfSignal {
 	role: string | null;
 	raisedAt: string;
 }
+declare const PILLAR_HEALTH_STATES: readonly [
+	"no_active_goal",
+	"stalled",
+	"unproven",
+	"needs_attention",
+	"moving"
+];
+export type PillarHealthState = (typeof PILLAR_HEALTH_STATES)[number];
+export interface PillarGoalCounts {
+	/** Primary goals RUNNING (status active). */
+	open: number;
+	/** Primary goals not started yet (proposed, agreed, ready). */
+	notStarted: number;
+	/** Primary goals closed as met or partly met. */
+	validated: number;
+	/** Running primary goals that are unvalidated bets ({@link isGoalBet}). */
+	bet: number;
+	/** Paused primary goals. */
+	paused: number;
+}
+export interface PillarHealth {
+	state: PillarHealthState;
+	counts: PillarGoalCounts;
+	/** Nothing moved in the pillar within the window — its own signal. */
+	stale: boolean;
+	/** One line for an agent; a surface draws the state's label and the counts. */
+	reason: string;
+	/**
+	 * Distinct work sessions on the pillar's primary goals (filed in, serving,
+	 * or spawned under one of them), each counted once. A sub-goal's sessions
+	 * count only under its PRIMARY parent, so a session counts in one pillar.
+	 * Absent when the pod did not count them.
+	 */
+	sessions?: number;
+}
+/** Lifecycle categories a pillar's indicator counts things in. */
+export interface PillarIndicatorCounts {
+	open: number;
+	active: number;
+	paused: number;
+	done: number;
+	lost: number;
+}
+export interface PillarIndicatorKind {
+	/** The kind's slug (its words come from the vocabulary door). */
+	kind: string;
+	byCategory: PillarIndicatorCounts;
+	/** Things past their status's `stuckAfterDays`. */
+	stuck: number;
+}
+/**
+ * What the pillar's own work looks like: the things of a kind with a DECLARED
+ * lifecycle, in the project and the space. `declared: false` = no such kind
+ * here — a surface says "no indicator declared"; an indicator is never
+ * invented for a space that declares none.
+ */
+export interface PillarIndicator {
+	declared: boolean;
+	kinds: PillarIndicatorKind[];
+}
+export type PillarGoalRole = "contributing" | "primary";
+export interface PillarGoal {
+	goalId: string;
+	name: string;
+	status: string;
+	verdict: string | null;
+	role: PillarGoalRole;
+	isBet: boolean;
+}
+export interface Pillar {
+	workspaceId: string;
+	workspaceName: string;
+	/** What the project needs from the space (`uses` `metadata.purpose`). */
+	purpose: string | null;
+	/** Always true: only a space the project uses is a pillar. */
+	isLinked: true;
+	health: PillarHealth;
+	indicator: PillarIndicator;
+	goals: PillarGoal[];
+}
+export interface ProjectMainGoal {
+	id: string;
+	name: string;
+	status: string;
+}
+export interface ProjectRootHealth {
+	/** The worst pillar state; `no_active_goal` when the project has no pillar. */
+	state: PillarHealthState;
+	pillarsMoving: number;
+	pillarsTotal: number;
+	/** Pillars with no live primary goal. */
+	pillarsEmpty: number;
+}
 /**
  * The kind of object on one end of a relation edge.
  *
@@ -8400,7 +8493,8 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  *   source              --feeds-->             playbook     (input-strategy source)
  *   tool                --provided_by-->       source       (tool backed by a provider)
  *   participant|channel --member_of-->         session      (room participants)
- *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL)
+ *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL; metadata.purpose)
+ *   track               --advances-->          workspace    (the goal moves that pillar of its project; metadata.primary)
  *   participant(agent)  --dispatched_via-->    tool         (BINDING: how the pod hands this agent work — tools.config.agentBinding)
  *   participant(agent)  --assigned_to-->       playbook|profile|project|workspace (who takes that work by default — route())
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
@@ -8513,8 +8607,23 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * reader follows it. Goal rollups do (`services/status/status-rollup.ts`):
  * a goal's work counts the sessions filed in it OR serving it, each once,
  * and its sub-goals are listed as `children`.
+ *
+ * `metadata.primary: true` names the goal's PRIMARY parent: at most one per
+ * goal, on a goal → goal edge only (`validateServesEdge`). A goal rolls up
+ * fully to its primary parent; other parents only list it.
  */
- | "serves";
+ | "serves"
+/**
+ * track --advances--> workspace. The goal moves one SPACE of its project
+ * forward — the space is a "pillar" of the project (the `uses` edge, whose
+ * `metadata.purpose` says what the project needs from it). Written by THE
+ * dependency door (`services/links/dependency-links.ts`), which refuses a
+ * space the goal's project does not `uses`. `metadata.primary: true` on at
+ * most one per goal: a goal rolls up FULLY to its primary pillar only; in
+ * the others it is listed and changes nothing (`services/projects/
+ * pillar-health.ts`).
+ */
+ | "advances";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /**
@@ -11257,6 +11366,16 @@ declare const ACTION_RUN_MODES: readonly [
 	"never"
 ];
 export type ActionRunMode = (typeof ACTION_RUN_MODES)[number];
+declare const PRE_APPROVAL_HELD_REASONS: readonly [
+	"version_changed",
+	"declares_tools",
+	"runs_elsewhere",
+	"runs_other_playbook",
+	"could_not_check"
+];
+export type PreApprovalHeldReason = (typeof PRE_APPROVAL_HELD_REASONS)[number];
+/** Why a playbook cannot be pre-approved for agents, whatever its rules. */
+export type PreApprovalIneligibleReason = Exclude<PreApprovalHeldReason, "version_changed">;
 declare const PACKAGE_FIELD_STATES: readonly [
 	"updates",
 	"yours",
@@ -19810,8 +19929,14 @@ export interface GoalRollup {
 	children?: string[];
 }
 export interface ScopeRollup {
-	lens: "project" | "workspace";
+	/**
+	 * `pillar` = BOTH lenses: one project INSIDE one space (a project's pillar).
+	 * `id` is then the project's, `workspaceId` the space's.
+	 */
+	lens: "pillar" | "project" | "workspace";
 	id: string;
+	/** The space of a `pillar` lens. */
+	workspaceId?: string;
 	windowDays: number;
 	/** Things with a declared lifecycle (kinds; roles are not counted here). */
 	things: CategoryCounts;
@@ -19829,6 +19954,14 @@ export interface ScopeRollup {
 		}>;
 	};
 	waitingOn: WaitingOnMark[];
+	/** Per kind (asked with `byKind`): its things per category and its stuck count. */
+	kinds?: ScopeKindRollup[];
+}
+/** One kind's things in the lens: per lifecycle category, and how many are stuck. */
+export interface ScopeKindRollup {
+	kind: string;
+	byCategory: CategoryCounts;
+	stuck: number;
 }
 /**
  * A move a thing's step offers: every declared option but the one it stands
@@ -19914,6 +20047,16 @@ export type StatusOfAnswer = StatusOf | {
 	id: string;
 	type: "unknown";
 };
+export interface DependencyState {
+	blocked: boolean;
+	/**
+	 * The blockers still holding it up, after `replaces` following — open ones
+	 * and dropped ones (`dropped: true`, ended without delivering).
+	 */
+	openBlockers: OpenBlocker[];
+	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
+	declared: DependencyNodeRef[];
+}
 /** INDEX projection a UI/agent can name, not just id. */
 export type UsedWorkspaceRef = {
 	domain: string | null;
@@ -22291,16 +22434,6 @@ export interface GraphEnvelope {
 	 */
 	found: boolean;
 }
-export interface DependencyState {
-	blocked: boolean;
-	/**
-	 * The blockers still holding it up, after `replaces` following — open ones
-	 * and dropped ones (`dropped: true`, ended without delivering).
-	 */
-	openBlockers: OpenBlocker[];
-	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
-	declared: DependencyNodeRef[];
-}
 /** Per space and kind: the rows missing one required link. */
 export interface RequiredLinkDebt {
 	kind: string;
@@ -23225,6 +23358,14 @@ export interface PresenceRecoveryRequest {
 	cancelledAt: Date | null;
 	completedAt: Date | null;
 }
+/** May a run of this playbook start on a person's pre-approval? */
+export type PreApprovalEligibility = {
+	eligible: true;
+	reason: null;
+} | {
+	eligible: false;
+	reason: PreApprovalIneligibleReason;
+};
 type GovernanceRuleDraft$1 = ReturnType<typeof nextRungRuleDraft>;
 export interface NextRungProjection {
 	proposalId: string;
@@ -24199,6 +24340,13 @@ export interface TriageProjection {
 	acceptedAt: string | null;
 	/** Who accepted it, or null. */
 	acceptedBy: string | null;
+	/**
+	 * Why a pending agent run is held although its person allowed the playbook
+	 * (or an earlier version of it) for agents (`PreApprovalHeldReason`), or
+	 * null. Only on a pending draft. Always set by {@link projectTriage};
+	 * optional so a row built elsewhere (a sample world) still types.
+	 */
+	heldBecause?: PreApprovalHeldReason | null;
 }
 /**
  * Session PARTICIPANTS — the roster of everyone staffed on a focus session,
@@ -25654,9 +25802,22 @@ export type FileEntitiesResult = ProjectFilingApplied | {
 	status: "proposed";
 };
 export type SetProjectWorkspaceMembershipOutcome = {
+	effect: "linked";
+	status: "updated";
+}
+/** `rows` = the edges actually removed (`0` = there was none). */
+ | {
+	effect: "unlinked";
+	/** Goals of the project that advanced the space (their edges went too). */
+	goalsStoppedAdvancing: number;
+	rows: number;
 	status: "updated";
 } | {
+	/** On a removal: goals that will stop advancing the space. */
+	goalsStopAdvancing?: number;
 	proposalId: string;
+	reviewPath?: string;
+	reviewUrl?: string;
 	status: "proposed";
 };
 export type StageDomainFallbackReason = 
@@ -38982,7 +39143,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | string[] | null | undefined;
 				q?: string | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
+				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -40242,7 +40403,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
+				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -41853,6 +42014,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetKind: "action" | "capability" | "connection" | "profile";
 				targetPattern: string;
 				targetProfile?: string | undefined;
+				targetSubjectId?: string | undefined;
+				targetSubjectVersion?: number | undefined;
 				verdict: "auto" | "deny" | "propose";
 				workspaceId?: string | undefined;
 			};
@@ -41866,6 +42029,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					principalClass: string | null;
 					principalKind: "agent" | "any" | "class";
+					principalOwnerId: string | null;
 					revokedAt: Date | null;
 					revokedReason: string | null;
 					scopeKind: "pod" | "workspace";
@@ -41873,6 +42037,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId: string | null;
+					targetSubjectVersion: number | null;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
@@ -41907,9 +42073,41 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId?: string | undefined;
+					targetSubjectLabel?: string | null | undefined;
+					targetSubjectVersion?: number | null | undefined;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				} | null;
+			};
+		}>;
+		forSubject: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				subjectId: string;
+			};
+			meta: object;
+			output: {
+				preApproval: PreApprovalEligibility | null;
+				rules: {
+					agentLabel: string | null;
+					agentUserId: string | null;
+					createdAt: Date;
+					createdBy: string;
+					expiresAt: Date | null;
+					id: string;
+					principalClass: string | null;
+					principalKind: "agent" | "any" | "class";
+					scopeKind: "pod" | "workspace";
+					sourceProposalId: string | null;
+					targetKind: "action" | "capability" | "connection" | "profile";
+					targetPattern: string;
+					targetProfile: string | null;
+					targetSubjectId?: string | undefined;
+					targetSubjectLabel?: string | null | undefined;
+					targetSubjectVersion?: number | null | undefined;
+					verdict: "auto" | "deny" | "propose";
+					workspaceId: string | null;
+				}[];
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -41932,6 +42130,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId?: string | undefined;
+					targetSubjectLabel?: string | null | undefined;
+					targetSubjectVersion?: number | null | undefined;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
@@ -41955,6 +42156,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId?: string | undefined;
+					targetSubjectLabel?: string | null | undefined;
+					targetSubjectVersion?: number | null | undefined;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
@@ -42119,6 +42323,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					principalClass: string | null;
 					principalKind: "agent" | "any" | "class";
+					principalOwnerId: string | null;
 					revokedAt: Date | null;
 					revokedReason: string | null;
 					scopeKind: "pod" | "workspace";
@@ -42126,6 +42331,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId: string | null;
+					targetSubjectVersion: number | null;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
@@ -42446,7 +42653,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				criterionKey?: string | undefined;
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces" | "serves";
+				linkType: "advances" | "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -42660,7 +42867,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces" | "serves";
+				linkType: "advances" | "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -52477,6 +52684,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					icon: string | null;
 					id: string;
+					mainGoalId: string | null;
 					metadata: unknown;
 					name: string;
 					phase: string | null;
@@ -52537,16 +52745,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
+				include?: "pillars"[] | undefined;
 			};
 			meta: object;
 			output: {
+				mainGoal?: ProjectMainGoal | {
+					readonly status: "unavailable";
+				} | null | undefined;
 				phaseCategory: PlaybookStageCategory;
+				pillars?: {
+					readonly status: "unavailable";
+				} | Pillar[] | undefined;
 				project: {
 					colorSlot: number | null;
 					createdAt: Date;
 					description: string | null;
 					icon: string | null;
 					id: string;
+					mainGoalId: string | null;
 					metadata: unknown;
 					name: string;
 					phase: string | null;
@@ -52559,6 +52775,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					workspaceId: string | null;
 				};
+				rootHealth?: {
+					readonly status: "unavailable";
+				} | ProjectRootHealth | undefined;
 				subject: ProjectSubject | null;
 				usedWorkspaceIds: string[];
 				usedWorkspaces: UsedWorkspaceRef[];
@@ -52578,6 +52797,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					icon: string | null;
 					id: string;
+					mainGoalId: string | null;
 					metadata: unknown;
 					name: string;
 					phase: string | null;
@@ -52605,6 +52825,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					icon: string | null;
 					id: string;
+					mainGoalId: string | null;
 					metadata: unknown;
 					name: string;
 					phase: string | null;
@@ -52663,6 +52884,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				member: boolean;
 				projectId: string;
+				purpose?: string | null | undefined;
+				reasoning?: string | undefined;
 				workspaceId: string;
 			};
 			meta: object;
@@ -52675,6 +52898,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				homeWorkspaceId?: string | undefined;
 				icon?: string | null | undefined;
 				id: string;
+				mainGoalId?: string | null | undefined;
 				metadata?: Record<string, unknown> | undefined;
 				name?: string | undefined;
 				phase?: string | null | undefined;
@@ -58436,6 +58660,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					on: boolean;
 					perWeek?: number | undefined;
 				} | null | undefined;
+				parentGoalId?: string | undefined;
+				pillars?: {
+					primary?: boolean | undefined;
+					workspaceId: string;
+				}[] | undefined;
 				reasoning?: string | undefined;
 				uncertainty?: "chaotic" | "clear" | "complex" | "complicated" | "unknown" | null | undefined;
 				workKind?: "commission" | "flow" | "incident" | "investigation" | "operation" | "pathway" | "project" | null | undefined;
@@ -58518,6 +58747,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null | undefined;
 				name?: string | undefined;
 				params?: Record<string, unknown> | undefined;
+				parentGoalId?: string | undefined;
+				pillars?: {
+					primary?: boolean | undefined;
+					workspaceId: string;
+				}[] | undefined;
 				playbookId?: string | undefined;
 				projectId: string;
 				reasoning?: string | undefined;

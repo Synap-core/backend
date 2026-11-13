@@ -23,6 +23,7 @@ export const en = {
   "toggle.page": "Page",
   "toggle.source": "Source",
   fullSize: "Full size",
+  "preview.note": "Preview. It reads nothing from your pod until approved.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -39,6 +40,7 @@ export const fr: Catalog<typeof en> = {
   "toggle.page": "Page",
   "toggle.source": "Source",
   fullSize: "Plein écran",
+  "preview.note": "Aperçu. Il ne lit rien de votre pod avant l’approbation.",
 };
 
 /** The frame's translator, in the ambient catalog locale. */

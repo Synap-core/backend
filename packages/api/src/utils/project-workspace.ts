@@ -22,6 +22,7 @@ import {
   getDb,
   links,
   projects,
+  projectTracks,
   workspaces,
   ownerPrivateVisibleWhere,
   userVisibleWhere,
@@ -72,6 +73,10 @@ export async function hydrateUsedWorkspaces(
   return out;
 }
 import { createLink } from "../services/links/links-service.js";
+import {
+  recordLinkMutation,
+  type LinkAttribution,
+} from "../services/links/dependency-links.js";
 import { isUuid } from "@synap-core/types/property-render";
 
 export type LinkProjectToWorkspaceResult =
@@ -97,6 +102,11 @@ export async function linkProjectToWorkspace(
     projectId: string;
     workspaceId: string;
     userId: string;
+    /**
+     * What the project needs from this space (`metadata.purpose`): a string
+     * sets it, `null` clears it, absent leaves the stored one untouched.
+     */
+    purpose?: string | null;
   }
 ): Promise<LinkProjectToWorkspaceResult> {
   const [visible] = await db
@@ -134,8 +144,50 @@ export async function linkProjectToWorkspace(
     toType: "workspace",
     toId: args.workspaceId,
     linkType: "uses",
+    ...(typeof args.purpose === "string"
+      ? { metadata: { [USES_PURPOSE_KEY]: args.purpose } }
+      : {}),
   });
+  // The edge already existed: the insert was a no-op, so a purpose the caller
+  // named is set on the stored row (`null` clears it; absent leaves it).
+  if (!created && args.purpose !== undefined) {
+    await db
+      .update(links)
+      .set({
+        metadata:
+          args.purpose === null
+            ? drizzleSql`${links.metadata} - ${USES_PURPOSE_KEY}::text`
+            : drizzleSql`${links.metadata} || jsonb_build_object(${USES_PURPOSE_KEY}::text, ${args.purpose}::text)`,
+      })
+      .where(
+        and(
+          eq(links.fromType, "project"),
+          eq(links.fromId, args.projectId),
+          eq(links.toType, "workspace"),
+          eq(links.toId, args.workspaceId),
+          eq(links.linkType, "uses")
+        )
+      );
+  }
   return { linked: true, ...(created?.id ? { linkId: created.id } : {}) };
+}
+
+/**
+ * `links.metadata.purpose` on a `project --uses--> workspace` edge: what the
+ * project needs from that space — the PILLAR's one line ("Win the first
+ * clients" in CRM). Written only by {@link linkProjectToWorkspace}, through
+ * the governed membership door; read by the pillar health read.
+ */
+export const USES_PURPOSE_KEY = "purpose" as const;
+
+/** The longest purpose a pillar carries: one line, not a brief. */
+export const USES_PURPOSE_MAX = 280;
+
+/** The purpose stored on a `uses` edge's metadata; `null` when none. */
+export function readUsesPurpose(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const v = (metadata as Record<string, unknown>)[USES_PURPOSE_KEY];
+  return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
 export type UnlinkProjectFromWorkspaceResult =
@@ -160,6 +212,8 @@ export async function unlinkProjectFromWorkspace(
     projectId: string;
     workspaceId: string;
     userId: string;
+    /** Who the removed pillar edges' `link.delete.completed` names. */
+    attribution?: LinkAttribution;
   }
 ): Promise<UnlinkProjectFromWorkspaceResult> {
   const [visible] = await db
@@ -192,6 +246,20 @@ export async function unlinkProjectFromWorkspace(
       )
     )
     .returning({ id: links.id });
+  // A space the project no longer uses is no longer one of its pillars: its
+  // goals' `advances` edges to it go with the `uses` edge (same door, same
+  // gate: removing a `uses` edge is a DESTRUCTIVE link delete, an agent's
+  // always a proposal). Otherwise a stale primary pillar would block a goal
+  // from naming a new one. Each removed edge emits `link.delete.completed`.
+  if (removed.length > 0) {
+    const advances = await removeProjectPillarEdges(db, {
+      projectId: args.projectId,
+      workspaceId: args.workspaceId,
+    });
+    for (const row of advances) {
+      recordLinkMutation("delete", row, args.userId, args.attribution ?? {});
+    }
+  }
   return { unlinked: true, rows: removed.length };
 }
 
@@ -361,4 +429,57 @@ export async function listProjectsUsingWorkspaces(
     }
   }
   return result;
+}
+
+/**
+ * How many of the project's goals advance that space (read-only): what
+ * removing the `uses` edge would stop, said to the approver BEFORE it is
+ * removed (the proposal's reasoning) and in the door's reply.
+ */
+export async function countProjectPillarGoals(
+  executor: Pick<Awaited<ReturnType<typeof getDb>>, "select">,
+  args: { projectId: string; workspaceId: string }
+): Promise<number> {
+  const rows = await executor
+    .select({
+      n: drizzleSql<number>`cast(count(distinct ${links.fromId}) as integer)`,
+    })
+    .from(links)
+    .where(
+      and(
+        eq(links.linkType, "advances"),
+        eq(links.fromType, "track"),
+        eq(links.toType, "workspace"),
+        eq(links.toId, args.workspaceId),
+        drizzleSql`${links.fromId} IN (SELECT ${projectTracks.id}::text FROM ${projectTracks} WHERE ${eq(projectTracks.projectId, args.projectId)})`
+      )
+    );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * THE cascade of a removed `project --uses--> workspace` edge: the project's
+ * goals' `advances` edges to that space go too (a space the project no longer
+ * uses is no pillar). Run by every door that removes a `uses` edge
+ * (`unlinkProjectFromWorkspace`, the safe revert of a recorded `uses` link),
+ * on the executor it is given (a transaction included). Returns the removed
+ * rows; emitting their `link.delete.completed` is the caller's (after its
+ * transaction).
+ */
+export async function removeProjectPillarEdges(
+  executor: Pick<Awaited<ReturnType<typeof getDb>>, "delete">,
+  args: { projectId: string; workspaceId: string }
+) {
+  return executor
+    .delete(links)
+    .where(
+      and(
+        eq(links.linkType, "advances"),
+        eq(links.fromType, "track"),
+        eq(links.toType, "workspace"),
+        eq(links.toId, args.workspaceId),
+        drizzleSql`${links.fromId} IN (SELECT ${projectTracks.id}::text FROM ${projectTracks} WHERE ${eq(projectTracks.projectId, args.projectId)})`
+      )
+    )
+    .returning();
 }

@@ -25,7 +25,9 @@
 import type { UnitGlyph, UnitTone } from "../units/index.js";
 import {
   isWaitKind,
+  resolveStatusTone,
   trackStatusCategory,
+  type PillarHealthState,
   type GoalCriterionMark,
   type WaitKind,
   type TrackCommitmentState,
@@ -174,6 +176,32 @@ export function goalStatusMark(goal: {
     tone: LIFECYCLE_CATEGORY_TONE[category],
     glyph: CATEGORY_GLYPH[category],
     label: statusWord,
+  };
+}
+
+// ── a project pillar's health ──────────────────────────────────────────────
+
+/** The glyph of each pillar health state; the tone is the status word's. */
+const PILLAR_HEALTH_GLYPH: Record<PillarHealthState, GoalGlyph> = {
+  moving: "circle-dot",
+  needs_attention: "alert",
+  unproven: "lightbulb",
+  stalled: "pause",
+  no_active_goal: "dashed-circle",
+};
+
+/**
+ * THE mark of a project pillar's (or the project root's) derived health
+ * (`units/pillar-health.ts`): the state's words and tone from the vocabulary
+ * and status-tone doors, one glyph per state. Never green unless `moving`;
+ * `no_active_goal` is an absence (muted), not a failure.
+ */
+export function pillarHealthMark(state: PillarHealthState): GoalMarkView {
+  return {
+    state,
+    tone: resolveStatusTone(state),
+    glyph: PILLAR_HEALTH_GLYPH[state],
+    label: resolveStatusLabel(state),
   };
 }
 

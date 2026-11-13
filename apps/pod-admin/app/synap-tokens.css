@@ -207,24 +207,33 @@
   --synap-highlight: rgba(255, 238, 205, 0.085); /* inset 0 1px 0 top-edge catch-light */
   --synap-highlight-strong: rgba(255, 238, 205, 0.14); /* stronger edge for popover/modal */
 
-  /* Elevation — the ONLY sanctioned shadows: ambient lift for glass over canvas (design-language §8.3) */
+  /* Elevation — ONE scale, tokens only (founder, 2026-11-07, plan 622f058b): flat (--synap-elevation-flat, the 0.5px ring, composed in spatial-derived.css) for rows, panels, sections and pages; card and card-hover for a card; floating for every floating layer. No literal box-shadow (pnpm check:shape). */
   --synap-elevation-overlay: 0 8px 32px rgba(0, 0, 0, 0.35);
-  --synap-elevation-popover: 0 16px 48px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --synap-elevation-floating: 0 16px 48px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.2);
   --synap-elevation-card: 0 1px 2px rgba(0, 0, 0, 0.4);
   --synap-elevation-card-hover: 0 6px 16px -6px rgba(0, 0, 0, 0.5);
 
-  /* Radius — mirrors Tamagui $1–$4 / $round, extended for large surfaces (design-language §8.4) */
-  --synap-radius-chip: 4px; /* a status pill, tag or kbd chip (AffectUI 4px) */
+  /* Radius — ONE shape family (founder, 2026-11-07, plan 622f058b): every control is a pill (radius-pill), a container in flow is radius-container (8), a floating layer is radius-floating (12), a keycap or code span is radius-xs (4). Underline tabs stay square; avatars and dots stay circles. The numbered steps and older names below are the scale they replace. */
+  --synap-radius-pill: 9999px; /* every control: button, input, chip, tab, segmented control, badge, select trigger, on the page and inside a card */
+  --synap-radius-container: 8px; /* a container in flow: card, panel, option card, and a row or menu item inside a floating layer (concentric with radius-floating) */
+  --synap-radius-floating: 12px; /* a floating layer: popover, menu, dialog, floating panel */
+  --synap-radius-xs: 4px; /* keycaps and code spans ONLY; never a control (controls are pills) */
+  --synap-radius-chip: var(--synap-radius-xs); /* DEPRECATED (a chip is a control: a pill) — use --synap-radius-pill; a keycap uses --synap-radius-xs */
   --synap-radius-1: 6px;
-  --synap-radius-2: 8px;
-  --synap-radius-3: 12px;
+  --synap-radius-2: var(--synap-radius-container); /* DEPRECATED numbered step — use --synap-radius-container */
+  --synap-radius-3: var(--synap-radius-floating); /* DEPRECATED numbered step — use --synap-radius-floating */
   --synap-radius-4: 16px;
   --synap-radius-5: 18px; /* large container surfaces / floating islands */
   --synap-radius-overlay: 22px; /* side panels / large glass surfaces */
   --synap-radius-modal: 28px; /* modal cards */
-  --synap-radius-round: 9999px;
-  --synap-radius-card: var(--synap-radius-2); /* a card, an option card, an open row panel (AffectUI 8px) */
-  --synap-radius-control: var(--synap-radius-1); /* a button, input or icon tile inside a card (6px: concentric with radius-card) */
+  --synap-radius-round: var(--synap-radius-pill); /* DEPRECATED — use --synap-radius-pill */
+  --synap-radius-card: var(--synap-radius-container); /* DEPRECATED — use --synap-radius-container (a card, an option card, an open row panel) */
+  --synap-radius-control: var(--synap-radius-pill); /* a control inside a card, a panel or a row: a pill, like every control (founder, 2026-11-07) */
+
+  /* ── Border width (founder, 2026-11-07, plan 622f058b) ──────────────────────
+   * `border-width-hairline` 1 = a drawn edge (a divider, an input outline); `border-width-strong` 2 = a selected or emphasised edge. The 0.5px card ring is not a border: it is --synap-ring-width, drawn as a box-shadow (--synap-elevation-flat). */
+  --synap-border-width-hairline: 1px;
+  --synap-border-width-strong: 2px;
 
   /* Space — ONE shared 4px-based scale for web + relay (founder decision 2026-09-24).
    * Atlassian-style names: the number is the step as a percentage of the 8px base
@@ -482,6 +491,13 @@
   --synap-row: 40px;
   --synap-row-roomy: 48px;
 
+  /* ── Control heights (founder, 2026-11-07, plan 622f058b) ──────────────────
+   * The ONE height scale for controls (button, input, select trigger, segmented control): `control-xs` 28 · `control-sm` 34 · `control-md` 40 · `control-lg` 46. A control is a pill (--synap-radius-pill). Rows use the row scale. */
+  --synap-control-xs: 28px;
+  --synap-control-sm: 34px;
+  --synap-control-md: 40px;
+  --synap-control-lg: 46px;
+
   /* ── Reading measure ─────────────────────────────────────────────────────
    * The ONE width a reading column caps at: the detail shell's reading body
    * (`ObjectDetailShell` `.ods__scroll`) and the document page's prose column
@@ -632,7 +648,7 @@ html.light,
 
   /* Elevation — ambient lift for glass over canvas (design-language §8.3) */
   --synap-elevation-overlay: 0 8px 32px rgba(50, 38, 22, 0.12);
-  --synap-elevation-popover: 0 16px 48px rgba(50, 38, 22, 0.18), 0 2px 8px rgba(50, 38, 22, 0.1);
+  --synap-elevation-floating: 0 16px 48px rgba(50, 38, 22, 0.18), 0 2px 8px rgba(50, 38, 22, 0.1);
   --synap-elevation-card: 0 1px 1px -1px rgba(50, 38, 22, 0.1), 0 1px 2px rgba(50, 38, 22, 0.05);
   --synap-elevation-card-hover: 0 4px 12px -4px rgba(50, 38, 22, 0.14), 0 1px 2px rgba(50, 38, 22, 0.06);
 
@@ -757,7 +773,7 @@ html.dark,
 
   /* Elevation — ambient lift for glass over canvas (design-language §8.3) */
   --synap-elevation-overlay: 0 8px 32px rgba(0, 0, 0, 0.35);
-  --synap-elevation-popover: 0 16px 48px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --synap-elevation-floating: 0 16px 48px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.2);
   --synap-elevation-card: 0 1px 2px rgba(0, 0, 0, 0.4);
   --synap-elevation-card-hover: 0 6px 16px -6px rgba(0, 0, 0, 0.5);
 
@@ -843,12 +859,13 @@ html.dark,
   --synap-border-strong: var(--synap-border-color-hover);
   --synap-border-color-strong: var(--synap-border-color-hover);
   --synap-focus: var(--synap-border-color-focus);
-  --synap-radius: var(--synap-radius-3);
-  --synap-radius-full: var(--synap-radius-round);
+  --synap-radius: var(--synap-radius-floating);
+  --synap-radius-full: var(--synap-radius-pill);
   --synap-font-size-base: var(--synap-text-base);
   --synap-primary-soft: var(--synap-primary-light);
   --synap-primary-subtle: var(--synap-primary-light);
-  --synap-elevation-tool: var(--synap-elevation-popover);
+  --synap-elevation-tool: var(--synap-elevation-floating);
+  --synap-elevation-popover: var(--synap-elevation-floating);
   --synap-ai-soft: color-mix(in srgb, var(--synap-ai) 10%, transparent);
   --synap-ai-border: color-mix(in srgb, var(--synap-ai) 28%, transparent);
   --synap-error-soft: var(--synap-error-light);
@@ -960,23 +977,23 @@ html.dark,
     0 1px 1px color-mix(in srgb, var(--synap-theme-shadow-base) 4%, transparent),
     0 4px 10px color-mix(in srgb, var(--synap-theme-shadow-base) 6%, transparent),
     0 24px 56px color-mix(in srgb, var(--synap-theme-shadow-base) 10%, transparent),
-    0 1px 0 var(--synap-theme-edge-light) inset;
+    0 1px 0 var(--synap-theme-edge-light) inset; /* @deprecated --synap-elevation-floating */
   --synap-spatial-shadow-glass:
     0 1px 1px color-mix(in srgb, var(--synap-theme-shadow-base) 4%, transparent),
     0 6px 14px color-mix(in srgb, var(--synap-theme-shadow-base) 8%, transparent),
     0 28px 60px color-mix(in srgb, var(--synap-theme-shadow-base) 10%, transparent),
     0 1px 0 var(--synap-theme-edge-light) inset,
-    0 0 0 1px color-mix(in srgb, var(--synap-theme-shadow-base) 6%, transparent) inset;
+    0 0 0 1px color-mix(in srgb, var(--synap-theme-shadow-base) 6%, transparent) inset; /* @deprecated --synap-elevation-floating */
   --synap-spatial-shadow-companion:
     0 1px 1px color-mix(in srgb, var(--synap-theme-shadow-base) 5%, transparent),
     0 12px 24px color-mix(in srgb, var(--synap-theme-shadow-base) 10%, transparent),
     0 36px 80px color-mix(in srgb, var(--synap-theme-shadow-base) 16%, transparent),
     0 1px 0 var(--synap-theme-edge-light) inset,
-    0 0 0 1px color-mix(in srgb, var(--synap-theme-shadow-base) 8%, transparent) inset;
+    0 0 0 1px color-mix(in srgb, var(--synap-theme-shadow-base) 8%, transparent) inset; /* @deprecated --synap-elevation-floating */
   --synap-spatial-shadow-tool:
     0 1px 1px color-mix(in srgb, var(--synap-theme-shadow-base) 6%, transparent),
     0 8px 18px color-mix(in srgb, var(--synap-theme-shadow-base) 12%, transparent),
-    0 1px 0 var(--synap-theme-edge-light) inset;
+    0 1px 0 var(--synap-theme-edge-light) inset; /* @deprecated --synap-elevation-floating */
   /* The card finish: the 0.5px ring (ring group) alone for
      an in-flow edge, + elevation-card for a CARD at rest (Decision B: cards
      only), + the strong ring and elevation-card-hover for its hover lift. */
@@ -984,6 +1001,9 @@ html.dark,
   --synap-shadow-ring-strong: 0 0 0 var(--synap-ring-width) var(--synap-ring-color-strong);
   --synap-shadow-card: var(--synap-shadow-ring), var(--synap-elevation-card);
   --synap-shadow-card-hover: var(--synap-shadow-ring-strong), var(--synap-elevation-card-hover);
+  /* The FLAT step of the elevation scale (flat, card, card-hover, floating):
+     the 0.5px ring alone, for rows, panels, sections and pages. */
+  --synap-elevation-flat: var(--synap-shadow-ring);
   /* SEMANTIC — aliased to the canonical --synap-* layer (single source of truth) */
   --synap-spatial-ink: var(--synap-color);
   --synap-spatial-ink-2: var(--synap-color-secondary);

@@ -87,6 +87,7 @@ import {
   getOAuthConsentContext,
 } from "./oauth/consent.js";
 import { OAuthError } from "./oauth/protocol.js";
+import { CIMD_MAX_BYTES } from "./oauth/client-metadata.js";
 import { readKeyDetail } from "../services/key-detail.js";
 import { logOAuthRefusal } from "./oauth/refusal-log.js";
 import { isPodAdminOrigin } from "../utils/pod-admin-origin.js";
@@ -204,7 +205,12 @@ const oauthAuthorizeParamsSchema = z.object({
   clientId: z.string().min(1).max(512),
   redirectUri: z.string().min(1).max(2048),
   responseType: z.string().max(64).optional(),
-  scope: z.string().max(1024).optional(),
+  // The scope /authorize forwards is the app's declared permissions joined
+  // (routes.ts), and they all come from its description of at most
+  // CIMD_MAX_BYTES: the bound follows that limit, never a number of its own.
+  // A fixed 1024 refused Content Studio's 48 permissions (1046 characters)
+  // once the description limits were raised (1ecd985fa).
+  scope: z.string().max(CIMD_MAX_BYTES).optional(),
   state: z.string().max(2048).optional(),
   codeChallenge: z.string().max(256).optional(),
   codeChallengeMethod: z.string().max(64).optional(),

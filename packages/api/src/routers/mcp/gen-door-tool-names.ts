@@ -5,9 +5,10 @@
  *   cd packages/api && npx tsx src/routers/mcp/gen-door-tool-names.ts --check  # exit 1 if stale
  *
  * Reads the SIBLING repo `synap-control-plane-api` at generation time only —
- * the pod never imports it at runtime. Regenerate after the pod manifest
- * (`pnpm gen:mcp-manifest`) or the CP curated catalog (`gen-pod-tools.ts`)
- * changes.
+ * the pod never imports it at runtime — from `../synap-control-plane-api`,
+ * which CI lays out at the commit the repo-root `sibling-pins.json` pins.
+ * Regenerate after the pod manifest (`pnpm gen:mcp-manifest`) changes, or in
+ * the PR that bumps the CP pin, with the sibling checked out at the new pin.
  *
  * Freshness compares the TABLE VALUE, not file bytes: a formatter reflows the
  * written module, and a byte compare would then read stale forever.
