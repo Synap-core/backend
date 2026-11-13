@@ -71,7 +71,6 @@ import {
   focusSessions,
   getRequestGrant,
   projects,
-  type KeyGrant,
 } from "@synap/database";
 import {
   grantHoldsAction,
@@ -1485,7 +1484,9 @@ const NARROWED_KEY_HALVES = {
  * half with no rule is never served.
  */
 export function needsYouWithheld(
-  grant: KeyGrant | null | undefined
+  // The request grant's own type: this file reads a grant, never its reach
+  // (the one-parse tripwire scans files that NAME a grant type).
+  grant: ReturnType<typeof getRequestGrant>
 ): AttentionHalf[] {
   if (needsYouReadableWhole(grant)) return [];
   const readsProposals = grantHoldsAction(grant!, "proposal", "read");
