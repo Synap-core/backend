@@ -69,7 +69,12 @@ import {
 } from "./exposure-policy.js";
 import { projectPublishedProperties } from "./public-read.js";
 import { isPublicationLive } from "./publication-live.js";
-import { agentOf, type ShareActor } from "./share-service.js";
+import {
+  agentOf,
+  attributedShareCaller,
+  mayReceiveShareSecret,
+  type ShareActor,
+} from "./share-service.js";
 
 type Db = Awaited<ReturnType<typeof getDb>>;
 
@@ -259,16 +264,11 @@ export async function publishResource(
   actor: ShareActor,
   req: PublishRequest & { reasoning?: string }
 ): Promise<PublishResult> {
-  const agentUserId = agentOf(actor);
-  // ATTRIBUTION FLOOR — same as `shareResource`: an unattributed API key is
-  // neither the signed-in owner nor an attributable agent.
-  if (actor.keyType && !agentUserId) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message:
-        "Publishing needs a signed-in person or an agent key (run `synap init`); this API key is not attributed to either.",
-    });
-  }
+  // ATTRIBUTION FLOOR — the one rule of every share door.
+  const agentUserId = attributedShareCaller(
+    actor,
+    "Publishing needs a signed-in person, an agent key (run `synap init`) or an app you signed in to; this API key is none of them."
+  );
   const database = await getDb();
   const plan = await planPublish(database, actor.userId, req);
 
@@ -301,8 +301,8 @@ export async function publishResource(
     userId: actor.userId,
     agentUserId,
     // Belt and braces: an agent is never granted here (ADMIN floor); if it
-    // ever were, it still gets no token.
-    mintToken: agentUserId === null,
+    // ever were, it still gets no token; nor does a key.
+    mintToken: mayReceiveShareSecret(actor, agentUserId),
   });
 }
 

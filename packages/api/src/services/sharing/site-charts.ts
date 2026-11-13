@@ -76,7 +76,11 @@ import {
   mintPublicId,
   SLUG_INDEX,
 } from "./site-service.js";
-import { agentOf, type ShareActor } from "./share-service.js";
+import {
+  agentOf,
+  attributedShareCaller,
+  type ShareActor,
+} from "./share-service.js";
 
 type Db = Awaited<ReturnType<typeof getDb>>;
 
@@ -677,14 +681,11 @@ export async function publishChartsToSite(
   actor: ShareActor,
   req: { siteId: string; charts: ChartPublishItem[]; reasoning?: string }
 ): Promise<PublishChartsResult> {
-  const agentUserId = agentOf(actor);
-  if (actor.keyType && !agentUserId) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message:
-        "Publishing to a site needs a signed-in person or an agent key (run `synap init`); this API key is not attributed to either.",
-    });
-  }
+  // ATTRIBUTION FLOOR — the one rule of every share door.
+  const agentUserId = attributedShareCaller(
+    actor,
+    "Publishing to a site needs a signed-in person, an agent key (run `synap init`) or an app you signed in to; this API key is none of them."
+  );
   const strict = new Set(req.charts.map((c) => c.cellInstanceId)).size === 1;
   const database = await getDb();
   const plan = await planChartsPublish(database, actor.userId, req, {
