@@ -1647,6 +1647,12 @@ describe("ci-changes: holds never read as passed", () => {
         true,
       ],
       ["ci.yml", [".github/workflows/ci.yml"], true],
+      ["the person-doors check", ["scripts/ci/person-doors.mjs"], true],
+      [
+        "the person-doors list",
+        ["packages/api/src/routers/person-doors.json"],
+        true,
+      ],
       ["api source", ["packages/api/src/x.ts"], false],
       ["a sibling named like types", ["packages/types-extra/src/x.ts"], false],
     ];
@@ -1973,5 +1979,13 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
       "steps.head.outputs.red == 'true'"
     );
     expect(step("Verdict")).toContain("dependents-typecheck.mjs verdict");
+    // Person doors: runs on the laid-out siblings even after a red typecheck,
+    // and reads both sides from git (the base step rewrites api-types).
+    const doors = step("Person doors");
+    expect(doors).toContain("!cancelled()");
+    expect(doors).toContain("person-doors.mjs check --root ..");
+    expect(doors).toContain(
+      'git show "$1:packages/api-types/src/generated.d.ts"'
+    );
   });
 });
