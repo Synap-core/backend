@@ -5977,7 +5977,14 @@
                       "properties": {
                         "kind": {
                           "type": "string",
-                          "enum": ["add", "connect", "enable", "run", "none"]
+                          "enum": [
+                            "add",
+                            "connect",
+                            "enable",
+                            "update",
+                            "run",
+                            "none"
+                          ]
                         },
                         "hint": { "type": "string" },
                         "url": { "type": "string" }
@@ -20150,7 +20157,7 @@
       "get": {
         "tags": ["Capabilities"],
         "summary": "List only actions an external AI can execute now",
-        "description": "Projects the shared capability registry into executable actions. Draft, disconnected, teaching-only, and catalog-only entries are omitted. Each action carries its real parameter schema, connection state, approval posture, and effective execution mode. Requires a workspace lens. Pass `intent` (a closed ABSTRACT_VERBS value) to keep only the actions whose verb declares that routing intent — the vendor-independent way to ask \"what can send a message?\". A verb that declares no intent is never matched (the vocabulary is closed; absence is never guessed). A key the grant fence bounds (a pod app) must pass `intent`, needs `capability.<intent>.run` in that workspace, and gets that intent's actions in the pod's words: an opaque id, the verb's label, the tool, the account, and the ONE input the action accepts. Such a key may pass `subject` (a person's or company's entity id it may read, else 403 SUBJECT_NOT_READABLE): each action then carries `reach` ({ ok, why? }: can it reach them, from the addresses the pod holds), and the list is ranked for them: reachable first, then the channel last used with them. Any other key (an agent drafting for the person) gets the same intent form when it asks for it: by passing `subject`, or `form=intent` to list an intent's actions for no one; without either it reads the raw projection above.",
+        "description": "Projects the shared capability registry into executable actions. Draft, disconnected, teaching-only, and catalog-only entries are omitted. Each action carries its real parameter schema, connection state, approval posture, and effective execution mode. Requires a workspace lens. Pass `intent` (a closed ABSTRACT_VERBS value) to keep only the actions whose verb declares that routing intent — the vendor-independent way to ask \"what can send a message?\". A verb that declares no intent is never matched (the vocabulary is closed; absence is never guessed). A key the grant fence bounds (a pod app) must pass `intent`, needs `capability.<intent>.run` in that workspace, and gets that intent's actions in the pod's words: an opaque id, the verb's label, the tool, the account, and the ONE input the action accepts. Such a key may pass `subject` (a person's or company's entity id it may read, else 403 SUBJECT_NOT_READABLE): each action then carries `reach` ({ ok, why? }: can it reach them, from the addresses the pod holds), and the list is ranked for them: reachable first, then the channel last used with them. Any other key (an agent drafting for the person) gets the same intent form when it asks for it: by passing `subject`, or `form=intent` to list an intent's actions for no one; without either it reads the raw projection above. The intent form also returns `unavailable`: every verb declaring the intent that is not offered, one entry per tool and account and cause, with `why` (a stable key: no_input_schema, not_enabled, not_connected, not_launchable, update_waiting, intent_not_declared, no_input_map, no_account, connection_expired, accounts_unreadable), `label` (the pod's sentence), `tool`, `connection`, `retryable` (a failed read: asking again may help) and `fix` ({ kind: add|connect|enable|update|run|none, hint, url?, opensIn? } or null). An empty `actions` with an empty `unavailable` means no tool declares the intent; a read the pod could not make is an entry, never an empty list. A fenced key refused for want of the intent's permission gets 403 GRANT_DENIED with `why: permission_missing` and `permission` (the grant to ask the person for, `capability.<intent>.run`).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -20301,6 +20308,71 @@
                               "input"
                             ]
                           }
+                        ]
+                      }
+                    },
+                    "unavailable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "why": {
+                            "type": "string",
+                            "enum": [
+                              "no_input_schema",
+                              "not_enabled",
+                              "not_connected",
+                              "not_launchable",
+                              "update_waiting",
+                              "intent_not_declared",
+                              "no_input_map",
+                              "no_account",
+                              "connection_expired",
+                              "accounts_unreadable"
+                            ]
+                          },
+                          "label": { "type": "string" },
+                          "tool": { "type": ["string", "null"] },
+                          "connection": {
+                            "type": ["object", "null"],
+                            "properties": {
+                              "provider": { "type": ["string", "null"] },
+                              "account": { "type": ["string", "null"] }
+                            },
+                            "required": ["provider", "account"]
+                          },
+                          "retryable": { "type": "boolean" },
+                          "fix": {
+                            "type": ["object", "null"],
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "add",
+                                  "connect",
+                                  "enable",
+                                  "update",
+                                  "run",
+                                  "none"
+                                ]
+                              },
+                              "hint": { "type": "string" },
+                              "url": { "type": "string" },
+                              "opensIn": {
+                                "type": "string",
+                                "enum": ["web", "desktop"]
+                              }
+                            },
+                            "required": ["kind", "hint"]
+                          }
+                        },
+                        "required": [
+                          "why",
+                          "label",
+                          "tool",
+                          "connection",
+                          "retryable",
+                          "fix"
                         ]
                       }
                     }
