@@ -139,7 +139,21 @@ export function execFieldsChanged(
   patch: Record<string, unknown>,
   existing: Record<string, unknown>
 ): boolean {
-  return fields.some(
+  return changedExecFieldNames(fields, patch, existing).length > 0;
+}
+
+/**
+ * The same rule as `execFieldsChanged`, naming WHICH of `fields` the patch
+ * changes (in `fields` order) instead of only whether one does. The boolean is
+ * derived from this list, so the two can never disagree; a held capability
+ * update reports these names to the owner (`definitionSkillExecChanges`).
+ */
+export function changedExecFieldNames(
+  fields: readonly string[],
+  patch: Record<string, unknown>,
+  existing: Record<string, unknown>
+): string[] {
+  return fields.filter(
     (k) =>
       patch[k] !== undefined &&
       canonicalJson(patch[k]) !== canonicalJson(existing[k])

@@ -21877,11 +21877,32 @@ export interface RetireShadowsResult {
 		reason: string;
 	}>;
 }
+/**
+ * Why an automatic pass HELD an update for the owner instead of applying it
+ * (an `updatesAvailable` entry the owner's "Apply updates" lands):
+ *  - `changes_execution`: it changes what an approved skill runs, so applying
+ *    it unattended would switch that skill off (`changedExecFields` says
+ *    which skills and fields);
+ *  - `moves_to_box`: it makes a skill run on the person's computer in a box.
+ * Absent on an entry that is not such a hold (a `notify` policy, a template
+ * that needs install-time params, any applied/skipped/conflict entry).
+ */
+export type CapabilityUpdateHold = "changes_execution" | "moves_to_box";
 export interface CapabilityReconcileEntry {
 	containerId: string;
 	name: string;
 	templateKey?: string;
 	reason: string;
+	/** Set only on a held `updatesAvailable` entry — see {@link CapabilityUpdateHold}. */
+	held?: CapabilityUpdateHold;
+	/**
+	 * With `held: "changes_execution"`: each approved skill the update would
+	 * switch off → the execution fields it changes, named by the applier's own
+	 * rule (`definitionSkillExecChanges`: `code`, `inputMap`, ...,
+	 * `metadata.allowedHosts`), plus `requires` when it needs a tool the skill
+	 * did not require. Never empty on a held entry.
+	 */
+	changedExecFields?: Record<string, string[]>;
 }
 export interface CapabilityReconcileReport {
 	checked: number;

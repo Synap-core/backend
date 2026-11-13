@@ -44,7 +44,7 @@ import { officialCatalogStandingNow } from "./official-catalog-trust.js";
 import {
   loadCapabilityTemplate,
   createCapabilityFromDefinition,
-  definitionSkillChangesExecution,
+  definitionSkillExecChanges,
   deriveToolVerbs,
   declaredContainerMetadata,
   GRANT_DEFAULT_EXEC_MODE,
@@ -63,11 +63,33 @@ import type { Context } from "../../types/context.js";
 
 const logger = createLogger({ module: "reconcile-capabilities-to-templates" });
 
+/**
+ * Why an automatic pass HELD an update for the owner instead of applying it
+ * (an `updatesAvailable` entry the owner's "Apply updates" lands):
+ *  - `changes_execution`: it changes what an approved skill runs, so applying
+ *    it unattended would switch that skill off (`changedExecFields` says
+ *    which skills and fields);
+ *  - `moves_to_box`: it makes a skill run on the person's computer in a box.
+ * Absent on an entry that is not such a hold (a `notify` policy, a template
+ * that needs install-time params, any applied/skipped/conflict entry).
+ */
+export type CapabilityUpdateHold = "changes_execution" | "moves_to_box";
+
 export interface CapabilityReconcileEntry {
   containerId: string;
   name: string;
   templateKey?: string;
   reason: string;
+  /** Set only on a held `updatesAvailable` entry — see {@link CapabilityUpdateHold}. */
+  held?: CapabilityUpdateHold;
+  /**
+   * With `held: "changes_execution"`: each approved skill the update would
+   * switch off → the execution fields it changes, named by the applier's own
+   * rule (`definitionSkillExecChanges`: `code`, `inputMap`, ...,
+   * `metadata.allowedHosts`), plus `requires` when it needs a tool the skill
+   * did not require. Never empty on a held entry.
+   */
+  changedExecFields?: Record<string, string[]>;
 }
 
 export interface CapabilityReconcileReport {
@@ -166,12 +188,14 @@ async function stampContainerMetadata(
 }
 
 /**
- * The APPROVED member skills a re-apply of `def` would demote: the applier's
- * own rule (`definitionSkillChangesExecution`, at the official trust a
- * reconcile applies with) plus a `requires` set that adds a tool the skill
- * does not already require (the applier's `requiresWidened`). Like the
- * applier, only names of this definition's own tools count; one this
- * container does not hold yet is created by the re-apply, so it widens.
+ * The APPROVED member skills a re-apply of `def` would demote, each with the
+ * execution fields that demote it: the applier's own rule
+ * (`definitionSkillExecChanges`, at the official trust a reconcile applies
+ * with) plus `requires` when the set adds a tool the skill does not already
+ * require (the applier's `requiresWidened`). Like the applier, only names of
+ * this definition's own tools count; one this container does not hold yet is
+ * created by the re-apply, so it widens. A skill the update leaves alone is
+ * absent; a present one always names at least one field.
  */
 async function approvedSkillsAnUpdateSwitchesOff(
   def: CapabilityDefinition,
@@ -179,9 +203,9 @@ async function approvedSkillsAnUpdateSwitchesOff(
     InstalledSkillRow & { id: string; approved: boolean }
   >,
   memberTools: ReadonlyArray<{ id: string; name: string }>
-): Promise<string[]> {
+): Promise<Record<string, string[]>> {
   const approved = installedSkills.filter((r) => r.approved === true);
-  if (approved.length === 0) return [];
+  if (approved.length === 0) return {};
   const held = await db
     .select({ fromId: links.fromId, toId: links.toId })
     .from(links)
@@ -198,7 +222,7 @@ async function approvedSkillsAnUpdateSwitchesOff(
     );
   const toolIdByName = new Map(memberTools.map((t) => [t.name, t.id]));
   const definedTools = new Set((def.tools ?? []).map((t) => t.name));
-  const out: string[] = [];
+  const out: Record<string, string[]> = {};
   for (const row of approved) {
     const s = (def.skills ?? []).find((d) => d.name === row.name);
     if (!s) continue;
@@ -211,18 +235,15 @@ async function approvedSkillsAnUpdateSwitchesOff(
         const id = toolIdByName.get(name);
         return !id || !heldIds.has(id);
       });
-    if (
-      requiresWidened ||
-      definitionSkillChangesExecution(
-        s,
-        row as unknown as Record<string, unknown>,
-        {
-          officialSource: true,
-        }
-      )
-    ) {
-      out.push(row.name);
-    }
+    const fields = definitionSkillExecChanges(
+      s,
+      row as unknown as Record<string, unknown>,
+      {
+        officialSource: true,
+      }
+    );
+    if (requiresWidened) fields.push("requires");
+    if (fields.length > 0) out[row.name] = fields;
   }
   return out;
 }
@@ -642,17 +663,20 @@ export async function reconcileCapabilitiesToTemplates(
       // carries) lands it AND approves it, so the skill stays on (founder,
       // 2026-11-02: an update from the marketplace used to switch it off).
       if (!opts.applyNotifyPolicy) {
-        const switchedOff = await approvedSkillsAnUpdateSwitchesOff(
+        const changedExecFields = await approvedSkillsAnUpdateSwitchesOff(
           cachedDef,
           installedSkills,
           memberToolRows
         );
+        const switchedOff = Object.keys(changedExecFields);
         if (switchedOff.length > 0) {
           report.updatesAvailable.push({
             containerId: container.id,
             name: container.name,
             templateKey,
             reason: `${driftReason} — waits for you: it changes what ${switchedOff.join(", ")} runs`,
+            held: "changes_execution",
+            changedExecFields,
           });
           continue;
         }
@@ -668,6 +692,7 @@ export async function reconcileCapabilitiesToTemplates(
             name: container.name,
             templateKey,
             reason: `${driftReason} — waits for you: applying it makes ${movesToBox.join(", ")} run on your computer in a box`,
+            held: "moves_to_box",
           });
           continue;
         }
