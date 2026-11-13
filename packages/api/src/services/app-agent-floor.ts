@@ -57,28 +57,15 @@ export async function appAgentGovernanceDenial(
 /**
  * The origin a pod app's webhooks may be sent to: its own site (the origin of
  * its metadata-document URL, the origin its redirect_uris must be on too).
- * The caller is a pod app when its key is held by the app's agent (a token
- * minted before 12 Nov 2026) OR when its grant names a pod app connection
- * (`KeyGrant.clientId` = the connection's public id): since 12 Nov every pod
- * app's token is the PERSON's (`app_person`, app-person-token.ts), so it
- * carries no agent and only its grant says which app is calling. `null` when
- * the caller is no pod app's.
+ * `null` when the agent is not a pod app's.
  */
-export async function podAppWebhookOrigin(caller: {
-  agentUserId?: string | null;
-  /** The request grant's app (`getRequestGrant()?.clientId`). */
-  appPublicId?: string | null;
-}): Promise<string | null> {
-  const which = caller.agentUserId
-    ? eq(apps.agentUserId, caller.agentUserId)
-    : caller.appPublicId
-      ? eq(apps.publicId, caller.appPublicId)
-      : null;
-  if (!which) return null;
+export async function podAppWebhookOrigin(
+  agentUserId: string
+): Promise<string | null> {
   const [row] = await db
     .select({ clientId: apps.oauthClientId })
     .from(apps)
-    .where(and(which, eq(apps.mode, "oauth")))
+    .where(and(eq(apps.agentUserId, agentUserId), eq(apps.mode, "oauth")))
     .limit(1);
   if (!row?.clientId) return null;
   try {

@@ -24,19 +24,12 @@
  *
  * POD APPS (spec 17 PB4). A pod app may subscribe under its grant (the D7
  * rule above bounds what it receives), but only to a URL on its own site
- * (the origin of its metadata-document client_id), whether its token is its
- * agent's or, since 12 Nov 2026, the person's (the grant names the app). Its subscriptions move to
+ * (the origin of its metadata-document client_id). Its subscriptions move to
  * each new access key of its connection (`app-connect` `moveSlotWebhooks`),
  * so they survive the hourly rotation, and revoking the app deletes them.
  */
 
-import {
-  db,
-  webhookSubscriptions,
-  eq,
-  and,
-  getRequestGrant,
-} from "@synap/database";
+import { db, webhookSubscriptions, eq, and } from "@synap/database";
 import {
   liveApiKeyIds,
   subscriptionKeyLive,
@@ -185,12 +178,10 @@ export function registerWebhooksRoutes(app: HubHono) {
       // (`moveSlotWebhooks`), so one created with a stolen 1 h token must not
       // be able to send the person's events anywhere else for as long as the
       // app keeps refreshing.
-      // The app is its agent (a token from before 12 Nov 2026) or, for a
-      // person's token for a pod app, the app its grant names.
-      const appOrigin = await podAppWebhookOrigin({
-        agentUserId: c.get("agentUserId") as string | undefined,
-        appPublicId: getRequestGrant()?.clientId,
-      });
+      const agentUserId = c.get("agentUserId") as string | undefined;
+      const appOrigin = agentUserId
+        ? await podAppWebhookOrigin(agentUserId)
+        : null;
       if (appOrigin && new URL(url).origin !== appOrigin) {
         return c.json(
           {
