@@ -147,7 +147,11 @@ vi.mock("../../../services/whiteboards/read-board-scene.js", async (orig) => ({
     asOf: new Date().toISOString(),
   }),
 }));
-vi.stubGlobal("fetch", async (_url: string, init?: { body?: string }) => {
+vi.stubGlobal("fetch", async (url: string, init?: { body?: string }) => {
+  // Only the bridge's apply is the write; other bridge calls (a proposal's
+  // realtime event) are acknowledged and not counted.
+  if (!String(url).endsWith("/apply"))
+    return new Response("{}", { status: 200 });
   const body = JSON.parse(init?.body ?? "{}");
   h.applies.push(body);
   return new Response(

@@ -579,7 +579,7 @@ export async function resolveBoardReferences(
       `${what} ${id} does not exist, or you cannot read it from this board's space. Nothing was placed.`
     );
 
-  const entityRows = entityIds.length
+  const entityRows = entityIds.size
     ? await db
         .select({
           id: entities.id,
@@ -601,7 +601,7 @@ export async function resolveBoardReferences(
         )
     : [];
   const entityById = new Map(entityRows.map((r) => [r.id, r]));
-  const viewRows = viewIds.length
+  const viewRows = viewIds.size
     ? await db
         .select({
           id: views.id,
@@ -622,7 +622,7 @@ export async function resolveBoardReferences(
         )
     : [];
   const viewById = new Map(viewRows.map((r) => [r.id, r]));
-  const cellRows = cellIds.length
+  const cellRows = cellIds.size
     ? await db
         .select({
           id: cellInstances.id,
@@ -634,7 +634,7 @@ export async function resolveBoardReferences(
         .where(inArray(cellInstances.id, [...cellIds]))
     : [];
   const cellById = new Map(cellRows.map((r) => [r.id, r]));
-  const automationRows = automationIds.length
+  const automationRows = automationIds.size
     ? await db
         .select({ id: automations.id, workspaceId: automations.workspaceId })
         .from(automations)
