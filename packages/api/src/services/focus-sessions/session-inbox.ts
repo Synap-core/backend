@@ -344,6 +344,65 @@ export async function readSessionInbox(
   );
 }
 
+/** At most this many unread wake-worthy posts are listed at close. */
+export const UNREAD_AT_CLOSE_MAX = 20;
+
+/** A `blocked_on_you` / `handoff` addressed to a session and not yet read. */
+export interface UnreadWakeWorthyPost {
+  messageId: string;
+  at: string;
+  intent: SessionPostIntent;
+  fromSessionId: string | null;
+  text: string;
+}
+
+/**
+ * The UNREAD `blocked_on_you` / `handoff` posts addressed to a session, oldest
+ * first, at most {@link UNREAD_AT_CLOSE_MAX}: what an agent's close must not
+ * leave behind (`close-not-done.ts`, finding cc65844a). The same predicates as
+ * every inbox reader ({@link addressedToSessionWhere},
+ * {@link unreadSessionPostWhere}, {@link WAKE_WORTHY_SESSION_POST_INTENTS}).
+ * Not floored by room visibility: the caller already read the session under
+ * its owner, and this is that session's own mail. A failed read THROWS.
+ */
+export async function readUnreadWakeWorthyPosts(
+  database: typeof db,
+  p: { channelId: string; sessionId: string }
+): Promise<UnreadWakeWorthyPost[]> {
+  const rows = await database
+    .select({
+      id: messages.id,
+      content: messages.content,
+      metadata: messages.metadata,
+      timestamp: messages.timestamp,
+    })
+    .from(messages)
+    .where(
+      and(
+        addressedToSessionWhere(p),
+        unreadSessionPostWhere(),
+        inArray(drizzleSql`${post}->>'intent'`, [
+          ...WAKE_WORTHY_SESSION_POST_INTENTS,
+        ])
+      )
+    )
+    .orderBy(asc(messages.timestamp), asc(messages.id))
+    .limit(UNREAD_AT_CLOSE_MAX);
+  return rows.flatMap((row) => {
+    const read = addressedPost(row);
+    if (!read) return [];
+    return [
+      {
+        messageId: row.id,
+        at: row.timestamp.toISOString(),
+        intent: read.meta.intent,
+        fromSessionId: read.meta.from.sessionId,
+        text: row.content,
+      },
+    ];
+  });
+}
+
 /**
  * The READ RECEIPT — the ONE writer of `sessionPost.readAt` / `readBy`.
  * Called by the change-feed wait when an AGENT's read (not a `stamp: false`
