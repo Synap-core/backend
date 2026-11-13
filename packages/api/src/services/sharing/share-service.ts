@@ -60,6 +60,7 @@ import {
   resourceShares,
   projectMembers,
   workspaces,
+  APP_PERSON_KEY_TYPE,
 } from "@synap/database/schema";
 import { randomUUID } from "node:crypto";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
@@ -103,6 +104,54 @@ export interface ShareActor {
 /** The acting agent (ambient scope first). Shared with `publish-service.ts`. */
 export function agentOf(actor: ShareActor): string | null {
   return getActingAgentUserId() ?? actor.agentUserId ?? null;
+}
+
+/**
+ * THE ATTRIBUTION FLOOR of every share door that writes (share, publish,
+ * configure a site, publish records or charts to it). A caller is attributed
+ * when it is one of:
+ *  - a signed-in person (no API key);
+ *  - an agent key: the gate runs the agent ladder (share.create is
+ *    ADMIN-floored, so it proposes);
+ *  - a person's own app sign-in token (`app_person`, backend#1046 "every pod
+ *    app acts as the person who connects it"): the ONE identity door
+ *    (`access/key-identity.ts`) resolved it AS that person, its grant cut down
+ *    to what the app may give them now, every write stamped "via <app>". The
+ *    gate then judges the person's role against that grant (rung 0 denies
+ *    `share.create` the app was not given). The type is read from the key ROW
+ *    by the auth door, never from the caller.
+ * Any other key with no agent behind it (a bare `user_pat` / `service` /
+ * `hub_inbound` key) is neither: the gate would read it as the person and
+ * apply it, so it is refused here, as `/mcp` refuses such writes.
+ *
+ * Returns the acting agent (null for a person).
+ */
+export function attributedShareCaller(
+  actor: ShareActor,
+  refusal: string
+): string | null {
+  const agentUserId = agentOf(actor);
+  if (
+    actor.keyType &&
+    !agentUserId &&
+    actor.keyType !== APP_PERSON_KEY_TYPE
+  ) {
+    throw new TRPCError({ code: "FORBIDDEN", message: refusal });
+  }
+  return agentUserId;
+}
+
+/**
+ * A new link or publication secret is handed only to a signed-in person in
+ * the pod (as `assertHumanSession`): never to an agent, and never to an API
+ * key, a person's app token included. A write applied for a key leaves the
+ * row without a token; the owner mints it from the pod.
+ */
+export function mayReceiveShareSecret(
+  actor: ShareActor,
+  agentUserId: string | null
+): boolean {
+  return agentUserId === null && !actor.keyType;
 }
 
 /**
@@ -417,18 +466,10 @@ export async function shareResource(
   actor: ShareActor,
   req: ShareRequest
 ): Promise<ShareResult> {
-  const agentUserId = agentOf(actor);
-  // ATTRIBUTION FLOOR: an API key with no agent behind it (a bare `user_pat` /
-  // `service` / `hub_inbound` key) is neither the signed-in owner nor an
-  // attributable agent — the gate would read it as the human and apply it
-  // directly. Refused at every share door, like `/mcp` refuses such writes.
-  if (actor.keyType && !agentUserId) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message:
-        "Sharing needs a signed-in person or an agent key (run `synap init`); this API key is not attributed to either.",
-    });
-  }
+  const agentUserId = attributedShareCaller(
+    actor,
+    "Sharing needs a signed-in person, an agent key (run `synap init`) or an app you signed in to; this API key is none of them."
+  );
   const database = await getDb();
   const plan = await planShare(database, actor.userId, req);
 
@@ -449,11 +490,11 @@ export async function shareResource(
     return { status: "proposed", proposalId: perm.proposalId };
   }
   // Belt and braces: `share.create` is ADMIN-floored, so an agent can never be
-  // granted here. If it ever were, it still gets no token.
+  // granted here. If it ever were, it still gets no token; nor does a key.
   return applyShare(database, plan, {
     userId: actor.userId,
     agentUserId,
-    mintToken: agentUserId === null,
+    mintToken: mayReceiveShareSecret(actor, agentUserId),
   });
 }
 

@@ -473,6 +473,9 @@ describe("CIMD — document validation", () => {
       "tool.create",
       "proposal.approve",
       "proposal.reject",
+      // The verb the site doors check (configure, publish records or charts):
+      // an app the person signs in to asks for it like any write.
+      "share.create",
       "entity.merge",
       "entity.post.*",
       "entity.*",

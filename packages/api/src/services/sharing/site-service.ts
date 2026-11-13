@@ -57,6 +57,7 @@ import { TRPCError } from "@trpc/server";
 import { randomBytes, randomUUID } from "node:crypto";
 import {
   getDb,
+  getRequestGrant,
   and,
   desc,
   eq,
@@ -75,7 +76,11 @@ import {
 } from "@synap/database/schema";
 import { count, ne, sql } from "drizzle-orm";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
-import { grantWriteDenial } from "../../utils/grant-write-check.js";
+import {
+  grantDeniedKey,
+  grantWriteDenial,
+} from "../../utils/grant-write-check.js";
+import { isFencedGrant } from "../../access/grant-door-fence.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { auditLog } from "../../utils/audit-log.js";
@@ -111,6 +116,7 @@ import { projectPublishedProperties } from "./public-read.js";
 import { clampSiteLimit, SITE_MAX_LIMIT } from "./public-site-read.js";
 import {
   agentOf,
+  attributedShareCaller,
   assertCanNarrow,
   assertHumanSession,
   type ShareActor,
@@ -444,15 +450,11 @@ export async function configureSite(
   actor: ShareActor,
   req: ConfigureSiteRequest & { reasoning?: string }
 ): Promise<ConfigureSiteResult> {
-  const agentUserId = agentOf(actor);
-  // ATTRIBUTION FLOOR — same as every share door.
-  if (actor.keyType && !agentUserId) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message:
-        "Publishing a site needs a signed-in person or an agent key (run `synap init`); this API key is not attributed to either.",
-    });
-  }
+  // ATTRIBUTION FLOOR — the one rule of every share door.
+  const agentUserId = attributedShareCaller(
+    actor,
+    "Publishing a site needs a signed-in person, an agent key (run `synap init`) or an app you signed in to; this API key is none of them."
+  );
   const database = await getDb();
   const plan = await planSite(database, actor.userId, req);
   const perm = await checkPermissionOrPropose({
@@ -1303,15 +1305,11 @@ export async function publishToSite(
   actor: ShareActor,
   req: { siteId: string; entityIds: string[]; reasoning?: string }
 ): Promise<PublishToSiteResult> {
-  const agentUserId = agentOf(actor);
-  // ATTRIBUTION FLOOR — same as every share door.
-  if (actor.keyType && !agentUserId) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message:
-        "Publishing to a site needs a signed-in person or an agent key (run `synap init`); this API key is not attributed to either.",
-    });
-  }
+  // ATTRIBUTION FLOOR — the one rule of every share door.
+  const agentUserId = attributedShareCaller(
+    actor,
+    "Publishing to a site needs a signed-in person, an agent key (run `synap init`) or an app you signed in to; this API key is none of them."
+  );
   const strict = new Set(req.entityIds).size === 1;
   const database = await getDb();
   const plan = await planSitePublish(database, actor.userId, req, { strict });
@@ -1513,11 +1511,61 @@ export interface SiteStatusMember {
   stale: boolean;
 }
 
+/**
+ * Does the request's FENCED key reach a site's `(space, project)` for
+ * `share.create`, the verb its configure and publish doors check? `true` for
+ * a request with no grant or an unbounded one (a signed-in person, a
+ * full-access key): the owner floor alone decides for them. The door fence
+ * admits a fenced key to the status read only when it holds `share.create`
+ * somewhere (`GRANT_REST_GET_READS`, finding f4f0cbf4); this is the read's
+ * own narrowing to THIS site.
+ */
+async function grantReachesSite(
+  workspaceId: string,
+  projectId: string
+): Promise<boolean> {
+  const grant = getRequestGrant();
+  if (!isFencedGrant(grant)) return true;
+  return !(await grantDeniedKey(
+    { subjectType: "share", action: "create", workspaceId, projectId },
+    grant!
+  ));
+}
+
+/**
+ * The spaces whose members a fenced key sees in a site's status: those its
+ * grant reaches for `share.create` on the site's project (as `publishToSite`
+ * checks a record of another space). null = every space (no fence).
+ */
+async function memberSpacesForGrant(
+  database: Db,
+  site: { id: string; projectId: string }
+): Promise<string[] | null> {
+  if (!isFencedGrant(getRequestGrant())) return null;
+  const spaces = await database
+    .selectDistinct({ workspaceId: resourceShares.workspaceId })
+    .from(resourceShares)
+    .where(
+      and(
+        eq(resourceShares.siteShareId, site.id),
+        eq(resourceShares.resourceType, "entity"),
+        isNull(resourceShares.revokedAt)
+      )
+    );
+  const reached: string[] = [];
+  for (const { workspaceId } of spaces) {
+    if (workspaceId && (await grantReachesSite(workspaceId, site.projectId)))
+      reached.push(workspaceId);
+  }
+  return reached;
+}
+
 async function statusMembers(
   database: Db,
   site: { id: string; projectId: string },
   siteLive: boolean,
-  page: SiteStatusPage
+  page: SiteStatusPage,
+  memberSpaces: string[] | null
 ): Promise<{
   members: SiteStatusMember[];
   nextCursor: string | null;
@@ -1526,11 +1574,17 @@ async function statusMembers(
   const limit = clampSiteLimit(page.limit ?? SITE_MAX_LIMIT);
   const after = page.cursor ? decodeInstantCursor(page.cursor) : null;
   // Records only: a chart member (`resource_type = 'cell'`, site-charts.ts)
-  // is not a record and is listed by its own door.
+  // is not a record and is listed by its own door. A fenced key lists only
+  // the members of the spaces its grant reaches (`memberSpacesForGrant`).
   const ofSite = and(
     eq(resourceShares.siteShareId, site.id),
     eq(resourceShares.resourceType, "entity"),
-    isNull(resourceShares.revokedAt)
+    isNull(resourceShares.revokedAt),
+    memberSpaces === null
+      ? undefined
+      : memberSpaces.length > 0
+        ? inArray(resourceShares.workspaceId, memberSpaces)
+        : sql`false`
   );
   const rows = await database
     .select({
@@ -1625,6 +1679,12 @@ export async function siteStatus(
     if (!live) {
       // Same authz as a status read of an existing site, on the project's
       // own workspace (a pod-wide project: its owner).
+      if (
+        project.workspaceId &&
+        !(await grantReachesSite(project.workspaceId, project.id))
+      ) {
+        throw notFound("Project");
+      }
       if (project.workspaceId) {
         await assertCanNarrow(
           database,
@@ -1651,12 +1711,27 @@ export async function siteStatus(
     }
     site = live;
   }
+  // A fenced key reads only a site its grant reaches: any other is the same
+  // 404 as a missing one.
+  if (
+    !site.workspaceId ||
+    !(await grantReachesSite(site.workspaceId, site.resourceId))
+  ) {
+    throw notFound("Site");
+  }
   await assertCanNarrowSite(database, actor.userId, site, project);
   const config = resolveSiteConfig(site.siteConfig);
   const ref = { id: site.id, projectId: site.resourceId };
+  // Counts of LIVE members: what the public manifest already serves.
   const counts = await liveMemberCounts(ref, Object.keys(config.collections));
   const live = isSiteLive({ ...site, hasToken: !!site.tokenHash });
-  const page = await statusMembers(database, ref, live, req);
+  const page = await statusMembers(
+    database,
+    ref,
+    live,
+    req,
+    await memberSpacesForGrant(database, ref)
+  );
   return {
     siteId: site.id,
     projectId: site.resourceId,
