@@ -174,7 +174,9 @@ import {
   grantOfScope,
   runWithActingAgent,
   runWithGrant,
+  setPodClassDefault,
 } from "@synap/database";
+import { REVERSIBLE_CLASS_PATTERN } from "@synap/governance-policy";
 import {
   AI_READ_PROPOSE_ROLE_ID,
   GRANT_PRESETS,
@@ -206,7 +208,7 @@ const door = (request: Parameters<typeof placeOnBoard>[0]["request"]) =>
 const proposalsOf = async () =>
   (
     await q<{ target_type: string; proposal_type: string; status: string }>(
-      `select target_type, proposal_type, status from proposals where agent_user_id = $1 order by created_at`,
+      `select target_type, proposal_type, status from proposals where agent_user_id = $1 and target_type = 'whiteboard' order by created_at`,
       [AGENT]
     )
   ).rows;
@@ -239,6 +241,15 @@ beforeAll(async () => {
     `insert into entities (id, user_id, workspace_id, type, title) values ($1,$2,$3,'task','Acme')`,
     [ENTITY, OWNER, SPACE]
   );
+  // The pod default every pod is seeded with (migration 0282, founder
+  // 2026-09-28): an agent acts directly on an easily-reversible write, which
+  // is what makes `whiteboard/place` apply at once. Without it the same create
+  // is a proposal (the ladder's default for an agent).
+  await setPodClassDefault(h.db as never, {
+    pattern: REVERSIBLE_CLASS_PATTERN,
+    enabled: true,
+    userId: OWNER,
+  });
 }, 120_000);
 
 beforeEach(() => {
