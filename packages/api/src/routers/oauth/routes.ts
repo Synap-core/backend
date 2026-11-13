@@ -28,9 +28,9 @@
  * A pod app (CIMD client, spec 17) walks 5–7 too, and its /token answer adds a
  * rotating refresh token (`grant_type=refresh_token`, refresh.ts). An MCP
  * (DCR) client never gets one: its key lives 90 days. A pod app's token is
- * its own ask-first agent's — unless the app is a SYNAP app (`isSynapApp`,
- * founder 2026-10-22): then it is HELD BY THE PERSON who consented
- * (`synap_acts_as: "person"`, services/app-person-token.ts). An MCP client may
+ * HELD BY THE PERSON who consented (`synap_acts_as: "person"`,
+ * services/app-person-token.ts; founder 12 Nov 2026: an app is not an AI
+ * agent, connecting is the approval). An MCP client may
  * name a metadata document instead of registering (one that declares no
  * `synap_requests`, `isMcpClient`): it is an MCP client in every respect.
  *
@@ -549,9 +549,9 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
       id: minted.publicId,
       manageUrl: appManageUrl(minted.publicId),
     },
-    // Who the token acts as (`podAppActsAs`): "person" — a Synap app, the
-    // token is the person's own, their clicks write as them, directly;
-    // "agent" — the app's own agent, its writes become proposals.
+    // Who the token acts as (`podAppActsAs`): "person" — every pod app; the
+    // token is the person's own, their clicks write as them, directly, "via
+    // <app>". An older pod may still answer "agent" (the SDK reads both).
     synap_acts_as: minted.actsAs,
   };
 }
@@ -975,10 +975,10 @@ oauthApp.post("/token", async (c) => {
     }
 
     // A pod app (CIMD client) is NEVER minted the shared `claude-web*` agent
-    // (spec 17 I3): its key belongs to the app's OWN agent for this person,
-    // carrying exactly what the person approved at consent, for 1 h — or,
-    // for a SYNAP app only, to the PERSON (`mintAppOAuthAccessKey` routes by
-    // `podAppActsAs`; the one person-token door states the threat model). A
+    // (spec 17 I3): its key belongs to the PERSON who consented, carrying
+    // exactly what they approved at consent ∩ their reach, for 1 h
+    // (`mintAppOAuthAccessKey`; the one person-token door states the threat
+    // model). A
     // code that names an approved connection is always a pod app's, even if
     // the document has since dropped its `synap_requests`. Only a code naming
     // none, for a document that declares none, is an MCP client's (A1): it

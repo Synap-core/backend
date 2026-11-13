@@ -133,17 +133,23 @@ export function isSynapApp(clientId: string): boolean {
 
 /**
  * Who a pod app's (CIMD client's) access token acts as — the `synap_acts_as`
- * of its /token answer (spec 17 §6.6 extension, founder decision 2026-10-22):
- *  - `"person"`: a Synap app (`isSynapApp`). The token is HELD BY THE PERSON
- *    who consented (`app_person`, services/app-person-token.ts): their own
- *    clicks in the app write as them, directly, within what they consented to.
- *  - `"agent"`: every other app. The token is held by the app's OWN agent,
- *    posture ask-first: its writes become proposals the person reviews.
+ * of its /token answer (spec 17 §6.6 extension).
+ *
+ * An app is not an AI agent (founder, 12 Nov 2026: "connecting is the
+ * approval"): EVERY pod app's token is HELD BY THE PERSON who consented
+ * (`app_person`, services/app-person-token.ts), so their own clicks in the
+ * app write as them, "via <app>", within what they ticked and their own
+ * rights. Being a Synap app (`isSynapApp`) is now a label and one privilege:
+ * only a Synap app's token may carry the review verbs (`appSignInReach`).
+ * This replaces the 22 Oct 2026 rule (person for a Synap app, its own
+ * ask-first agent for every other app).
+ *
+ * `"agent"` stays in the type: an older pod answers it, and the SDK reads it.
  */
 export type PodAppActsAs = "person" | "agent";
 
-export function podAppActsAs(clientId: string): PodAppActsAs {
-  return isSynapApp(clientId) ? "person" : "agent";
+export function podAppActsAs(): PodAppActsAs {
+  return "person";
 }
 
 /**

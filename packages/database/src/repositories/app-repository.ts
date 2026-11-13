@@ -738,6 +738,28 @@ export class AppRepository {
    * on another app is an `AppNameTakenError`, never a raw unique violation.
    */
   /**
+   * A pod app connection: the hash of the client-id document the person
+   * consented to (`oauth_clients.metadata_sha256` at consent, stored in
+   * `metadata.consentedDocumentSha256`). An app that is not a Synap app acts
+   * as the person only while its document still hashes to this
+   * (`consentedDocumentHolds`, app-client.ts). Written only by the consent
+   * door (`connectOAuthApp`).
+   */
+  async setConsentedDocument(
+    appId: string,
+    documentSha256: string
+  ): Promise<AppRecord | null> {
+    const [row] = await this.db
+      .update(apps)
+      .set({
+        metadata: sql`COALESCE(${apps.metadata}, '{}'::jsonb) || jsonb_build_object('consentedDocumentSha256', ${documentSha256}::text)`,
+      })
+      .where(eq(apps.id, appId))
+      .returning();
+    return row ?? null;
+  }
+
+  /**
    * "Sign in with Synap": may a person signed in to this app decide (approve)
    * proposals the app's OWN agent filed? Stored in `metadata`
    * (`personMayDecideOwnAgentProposals`, absent = true). The owner's write

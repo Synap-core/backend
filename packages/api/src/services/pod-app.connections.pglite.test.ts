@@ -8,13 +8,15 @@
  * (`narrow`, `setWriteMode`, `revoke`, `list`), the admin's its `admin*`
  * procedures; webhooks go through the REAL `POST /webhooks` handler and the
  * generic governance door through the REAL `PATCH /agent-users/:id/governance`,
- * behind a stand-in for the hub auth door that resolves the bearer with
- * `apiKeyService.validateApiKey` the way the real one does.
+ * behind a stand-in for the hub auth door that resolves the bearer the way
+ * the real one does (`apiKeyService.validateApiKey`, then `resolveKeyIdentity`:
+ * its holder, key type and grant). Since 12 Nov 2026 a pod app's token is the
+ * PERSON's (`app_person`): no agent, and only its grant names the app.
  *
  * Pinned (spec 17 PB4):
- *   N  narrow shrinks the live key now (refused at once) and the next refresh
- *      (narrower grant, memberships, scope); it can only take access away;
- *      an agent's credential cannot narrow;
+ *   N  narrow shrinks the live key now (refused at once, the person's token
+ *      too) and the next refresh (narrower grant, scope); it can only take
+ *      access away; an agent's credential cannot narrow;
  *   V  revoke kills keys + refresh families + waiting codes;
  *   P  the unverified switch refuses at /authorize, consent context and the
  *      Allow click; a Synap app still connects; on again, it connects;
@@ -33,7 +35,7 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -125,6 +127,8 @@ import type {
 } from "../routers/hub-protocol/rest/_shared.js";
 import { apiKeyService } from "./api-keys.js";
 import { podAppViews } from "./app-connect.js";
+import { resolveKeyIdentity } from "../access/key-identity.js";
+import { oauthKeyInstanceId } from "../routers/oauth/config.js";
 
 const ISSUER = "https://pod.test.synap.live";
 const STUDIO = "https://studio.example.com/.well-known/synap-client.json";
@@ -222,9 +226,17 @@ beforeAll(async () => {
   ]) {
     await q(
       `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
-         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, created_at)
-       values ($1, 'cimd', 'Content Studio', $2, '{}', $3, '{}', now(), now() + interval '1 hour', now())`,
-      [clientId, [callback], [READ, CREATE]]
+         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, metadata_sha256, created_at)
+       values ($1, 'cimd', 'Content Studio', $2, '{}', $3, '{}', now(), now() + interval '1 hour', $4, now())`,
+      // A real cached document always carries its hash (client-metadata.ts):
+      // an app that is not a Synap app acts as the person only while its
+      // document is the one consented to (12 Nov 2026, `consentedDocumentHolds`).
+      [
+        clientId,
+        [callback],
+        [READ, CREATE],
+        createHash("sha256").update(`${clientId}#1`).digest("hex"),
+      ]
     );
   }
   // The foreign keys the GC and the webhook binding rely on (0305, 0335);
@@ -379,18 +391,25 @@ const memberships = async (userId: string) =>
     )
   ).map((m) => `${m.workspace_id}:${m.role}`);
 
-/** The hub auth door, as far as these routes read it: the bearer → its key. */
+/**
+ * The hub auth door, as far as these routes read it: the bearer → its key →
+ * `resolveKeyIdentity` (who it acts as, the acting agent if any, the grant the
+ * request runs under), its type and scopes, as `hubAuthMiddleware` sets them.
+ */
 function hubApp(register: (app: HubHono) => void): HubHono {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   app.use("*", async (c, next) => {
     const bearer = c.req.header("authorization")?.replace(/^Bearer /, "");
     const rec = bearer ? await apiKeyService.validateApiKey(bearer) : null;
     if (!rec) return c.json({ error: "Unauthenticated" }, 401);
-    c.set("userId", rec.linkedUserId ?? rec.userId);
-    if (rec.linkedUserId) c.set("agentUserId", rec.userId);
+    const identity = await resolveKeyIdentity(rec).catch(() => null);
+    if (!identity) return c.json({ error: "Unauthenticated" }, 401);
+    c.set("userId", identity.effectiveUserId);
+    if (identity.agentUserId) c.set("agentUserId", identity.agentUserId);
     c.set("apiKeyId", rec.id);
+    c.set("keyType", rec.keyType);
     c.set("scopes", rec.scope ?? []);
-    await next();
+    await runWithGrant(identity.grant, () => next());
     return undefined;
   });
   register(app);
@@ -427,9 +446,10 @@ describe("N — narrow without a new consent", () => {
       { permission: READ, workspaceId: SHARED },
     ]);
     const app = await connection();
-    expect((await memberships(app.agent_user_id)).sort()).toEqual(
-      [`${BRAND}:editor`, `${SHARED}:viewer`].sort()
-    );
+    // The token is the person's (12 Nov 2026): connecting makes no agent, so
+    // no agent joins a space; the person's own role decides each write.
+    expect(app.agent_user_id).toBeNull();
+    const own = await memberships(OWNER);
 
     const narrowed = await caller(OWNER).narrow({
       publicId: app.public_id,
@@ -440,8 +460,8 @@ describe("N — narrow without a new consent", () => {
     ]);
     // The live key shrinks NOW: the token the app holds is refused.
     expect(await valid(access)).toBe(false);
-    // The agent left the space it lost, and is a viewer where it only reads.
-    expect(await memberships(app.agent_user_id)).toEqual([`${BRAND}:viewer`]);
+    // Narrowing the app never touches the person's own memberships.
+    expect(await memberships(OWNER)).toEqual(own);
 
     // The next refresh mints from the narrowed approval.
     const r = await refresh(rt);
@@ -581,12 +601,14 @@ describe("V — revoke kills keys, refresh families and waiting codes", () => {
     const code = await exchange(waiting, NOTES, NOTES_CB);
     expect(code.status).toBe(400);
     expect(code.body.access_token).toBeUndefined();
+    // The connection's key slot holds no live key: the person's token (every
+    // pod app since 12 Nov 2026) is gone, and no agent was ever made.
     const liveKeys = await q<{ id: string }>(
-      `select id from api_keys where user_id = $1 and is_active = true`,
-      [app.agent_user_id]
+      `select id from api_keys where instance_id = $1 and is_active = true`,
+      [oauthKeyInstanceId(NOTES, OWNER)]
     );
     expect(liveKeys).toEqual([]);
-    expect(await memberships(app.agent_user_id)).toEqual([]);
+    expect(app.agent_user_id).toBeNull();
   });
 });
 
@@ -741,14 +763,17 @@ describe("M — 'apply automatically' is the owner's, after connecting", () => {
       { permission: READ, workspaceId: BRAND },
       { permission: CREATE, workspaceId: BRAND },
     ]);
-    const app = await connection();
+    let app = await connection();
     const posture = async () =>
       (await readAgentGovernance({
         db: h.db as never,
         agentUserId: app.agent_user_id,
       }))!.posture;
 
-    // Never set at consent.
+    // Never set at consent. The token is the person's (12 Nov 2026), so
+    // connecting makes no agent: the page reads "ask first", where every
+    // connection starts (`appWriteMode(null)`).
+    expect(app.agent_user_id).toBeNull();
     const [listed] = (await caller(OWNER).list()).filter(
       (a) => a.public_id === app.public_id
     );
@@ -757,15 +782,27 @@ describe("M — 'apply automatically' is the owner's, after connecting", () => {
       verified: false,
       write_mode: { applyAutomatically: false, writeMode: "ask-first" },
     });
-    expect(await posture()).toBe("ask-first");
 
-    // An agent acting for the owner, at the app's door…
+    // An agent acting for the owner, at the app's door: refused, and it
+    // makes nothing on the way.
     await expect(
       caller(OWNER, SOME_AGENT).setWriteMode({
         publicId: app.public_id,
         applyAutomatically: true,
       })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await connection()).agent_user_id).toBeNull();
+
+    // The owner's own choice is what makes the app's agent, the holder of the
+    // switch: choosing "ask first" keeps it off.
+    const kept = await caller(OWNER).setWriteMode({
+      publicId: app.public_id,
+      applyAutomatically: false,
+    });
+    expect(kept.applyAutomatically).toBe(false);
+    app = await connection();
+    expect(app.agent_user_id).toBeTruthy();
+    expect(await posture()).toBe("ask-first");
     // …and at the generic agent-governance door, which its creator check
     // would otherwise pass as the owner (posture null = follow the pod default).
     const generic = new OpenAPIHono<{ Variables: HubVariables }>() as HubHono;
@@ -875,6 +912,17 @@ describe("S7 — the pod app lists cost a fixed number of queries", () => {
 
   it("one pod app or three: the same queries; write mode and connected_at stay each row's own", async () => {
     await connect([{ permission: READ, workspaceId: BRAND }]);
+    // Connecting makes no agent since 12 Nov 2026, and the write postures are
+    // read only when some row has one (`readAgentWritePostures([])` reads
+    // nothing): the owner's "ask first" gives this row its agent, so both
+    // counts below include that read and compare like with like.
+    const studio = (await caller(OWNER).list()).find(
+      (a) => a.pod_app?.client_id === STUDIO
+    )!;
+    await caller(OWNER).setWriteMode({
+      publicId: studio.public_id,
+      applyAutomatically: false,
+    });
     const one = await views();
     expect(one.rows.length).toBeGreaterThan(0);
 

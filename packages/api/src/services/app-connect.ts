@@ -90,14 +90,8 @@ import {
   parseOauthKeyInstanceId,
 } from "../routers/oauth/config.js";
 import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
-import { createAndVerifyHubInboundKey } from "./external-registration.js";
-import { revokeActiveHubInboundKeysForUser } from "./hub-integration-registration.js";
 import { revokeConnectionRefreshTokens } from "../routers/oauth/refresh.js";
-import {
-  isSynapApp,
-  podAppActsAs,
-  type PodAppActsAs,
-} from "../routers/oauth/config.js";
+import { isSynapApp, type PodAppActsAs } from "../routers/oauth/config.js";
 import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
 import { assertPresencePass, type PresencePass } from "./presence/pass.js";
@@ -1522,6 +1516,14 @@ export async function connectOAuthApp(args: {
       message: "The connection could not be approved.",
     });
   }
+  // What the person consented to is THIS document: an app that is not a
+  // Synap app acts as them only while its document is unchanged
+  // (`consentedDocumentHolds`). The consent screen was rendered from the
+  // cached document this authorization just validated.
+  const { currentDocumentSha256 } =
+    await import("../routers/oauth/app-client.js");
+  const documentSha256 = await currentDocumentSha256(args.oauthClientId);
+  if (documentSha256) await repo.setConsentedDocument(app.id, documentSha256);
   return { appId: app.id, publicId: app.publicId, proposalId: proposal.id };
 }
 
@@ -1566,7 +1568,7 @@ export interface AppOAuthAccessKey {
   accessToken: string;
   keyId: string;
   expiresAt: Date;
-  /** Who the key acts as (`podAppActsAs`): the person, or the app's agent. */
+  /** Who the key acts as (`podAppActsAs`): the person, for every pod app. */
   actsAs: PodAppActsAs;
   /** The app's agent holding the key; null when the PERSON holds it. */
   agentUserId: string | null;
@@ -1647,34 +1649,6 @@ function appOAuthKeyScope(approved: readonly AppApprovedRequest[]): string[] {
     : ["hub-protocol.read"];
 }
 
-/**
- * `setApprovedReach`, spelled out so the grant expires WITH the token: the
- * agent's memberships = the approved spaces, one grant per approved space
- * (`attachMany` replaces the key's live grants). Then the /token answer.
- */
-async function grantAppOAuthKey(
-  conn: Awaited<ReturnType<typeof loadAppOAuthConnection>>,
-  key: {
-    agentUserId: string;
-    keyId: string;
-    accessToken: string;
-    expiresAt: Date;
-  }
-): Promise<AppOAuthAccessKey> {
-  const { app, approved } = conn;
-  await syncAppAgentMemberships(key.agentUserId, app.ownerUserId, approved);
-  await attachGrantsOrRevoke({
-    apiKeyId: key.keyId,
-    principalUserId: key.agentUserId,
-    onBehalfOf: app.ownerUserId,
-    grants: grantsForApprovedRequests(approved),
-    expiresAt: key.expiresAt,
-    createdBy: app.ownerUserId,
-    clientId: app.publicId,
-  });
-  return appOAuthAnswer(conn, key, approved, "agent");
-}
-
 /** The /token answer for a key and the reach it carries. */
 async function appOAuthAnswer(
   conn: Awaited<ReturnType<typeof loadAppOAuthConnection>>,
@@ -1728,18 +1702,18 @@ async function appOAuthAnswer(
 
 /** Why a Synap app's person token was refused, as the /token door says it. */
 const PERSON_TOKEN_REFUSALS = {
-  not_verified: "This app is not a Synap app.",
   not_a_person: "Only a person's connection can be used.",
+  reconsent:
+    "Connect this app again: it changed, or it was connected before apps acted as the person who connects them.",
   app_unavailable: "This app's connection was revoked.",
   nothing_left:
     "Nothing you approved for this app is in a space you can still reach.",
 } as const;
 
 /**
- * A SYNAP app's access token (`podAppActsAs` = "person", founder decision
- * 2026-10-22): minted by the ONE app-person-token door — held by the person,
- * the connection's approval ∩ their reach — then the slot's bookkeeping
- * (event, webhooks, GC) exactly as for an agent key.
+ * A pod app's access token (`podAppActsAs` = "person"): minted by the ONE
+ * app-person-token door — held by the person, the connection's approval ∩
+ * their reach — then the slot's bookkeeping (event, webhooks, GC).
  */
 async function mintPersonOAuthAccessKey(
   conn: Awaited<ReturnType<typeof loadAppOAuthConnection>>,
@@ -1783,84 +1757,28 @@ async function mintPersonOAuthAccessKey(
 }
 
 /**
- * Mint a pod app's access token: an `api_keys` row held by the app's OWN agent
- * (one per person × app, `ensureAppAgent`, ask-first) and linked to the
- * person, carrying EXACTLY the approved reach (`setApprovedReach`: one grant
- * per approved space, `client_id` = the app's public_id) and expiring in
- * 1 h. Never a `claude-web*` agent, never `*`, never `mcp.*`: its scopes are
- * `hub-protocol.read`, plus `.write` only when something approved is a write.
+ * Mint a pod app's access token. An app is not an AI agent (founder, 12 Nov
+ * 2026: "connecting is the approval"): the token is HELD BY THE PERSON who
+ * consented (`app_person`, `mintPersonOAuthAccessKey`), carries what they
+ * ticked ∩ their reach now (never the review verbs for an app that is not a
+ * Synap app, `appSignInReach`), `client_id` = the connection's public id
+ * ("via <app>"), and expires in 1 h. Before 12 Nov every app but a Synap app
+ * got a key held by its own ask-first agent; such a slot's agent key is
+ * revoked by the first person mint (`mintPodAppPersonToken`), so a live
+ * connection switches at its next refresh.
  *
- * The connection's previous key (instance `instanceId`) is revoked first, so
- * one connection holds one live key. Refused (FORBIDDEN / CONFLICT) when the
- * code's app is not this person's live pod app connection for this client,
- * has nothing approved, or the person is no longer a human user.
+ * Refused (FORBIDDEN / CONFLICT) when the code's app is not this person's
+ * live pod app connection for this client, has nothing approved, or the
+ * person is no longer a human user.
  *
  * `plainKey`: the refresh grant passes the key its successor refresh token
  * re-derives (`successorAccessToken`, refresh.ts), so the reuse grace can hand
  * this same key back (`reuseAppOAuthAccessKey`). Random otherwise.
- *
- * A SYNAP app (`podAppActsAs` = "person") is never minted its agent's key:
- * its token is the PERSON's (`mintPersonOAuthAccessKey`), same slot, same
- * 1 h, same refresh family.
  */
 export async function mintAppOAuthAccessKey(
   args: AppOAuthKeyArgs & { plainKey?: string }
 ): Promise<AppOAuthAccessKey> {
-  const conn = await loadAppOAuthConnection(args);
-  if (podAppActsAs(args.oauthClientId) === "person") {
-    return mintPersonOAuthAccessKey(conn, args);
-  }
-  const { app, approved, found } = conn;
-  const agentUserId = await ensureAppAgent(found, "ui");
-  await revokeActiveHubInboundKeysForUser(db, {
-    userId: agentUserId,
-    instanceId: args.instanceId,
-    revokedBy: app.ownerUserId,
-    revokedReason: `Rotated by a new access token for ${app.name}`,
-  });
-  const expiresAt = new Date(Date.now() + APP_OAUTH_ACCESS_TTL_SECONDS * 1000);
-  const minted = await createAndVerifyHubInboundKey(
-    new ApiKeyRepository(db, new EventRepository(sql)),
-    {
-      keyName: `${app.name} (pod app)`,
-      scope: appOAuthKeyScope(approved),
-      userId: agentUserId,
-      linkedUserId: app.ownerUserId,
-      keyType: "hub_inbound",
-      instanceId: args.instanceId,
-      expiresAt,
-      description: `Access token for ${app.name} (${app.publicId}), issued by this pod's OAuth door`,
-      ...(args.plainKey ? { plainKey: args.plainKey } : {}),
-    },
-    app.ownerUserId,
-    agentUserId
-  );
-  if (minted.outcome !== "CONNECTED_VERIFIED") {
-    await revokeApiKeys(db, {
-      where: eq(apiKeys.id, minted.apiKey.id),
-      revokedBy: app.ownerUserId,
-      reason: "Pod app access token failed verification",
-    });
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "The access token could not be verified.",
-    });
-  }
-  const answer = await grantAppOAuthKey(conn, {
-    agentUserId,
-    keyId: minted.apiKey.id,
-    accessToken: minted.plainKey,
-    expiresAt,
-  });
-  await recordAppEvent(found, app.ownerUserId, APP_EVENT_ACTIONS.keyIssued, {
-    keyId: minted.apiKey.id,
-    via: "oauth",
-    expiresAt: expiresAt.toISOString(),
-  });
-  // Before the sweep: a subscription still on a swept key would cascade away.
-  await moveSlotWebhooks(agentUserId, args.instanceId, minted.apiKey.id);
-  await sweepDeadOAuthKeys(agentUserId, args.instanceId);
-  return answer;
+  return mintPersonOAuthAccessKey(await loadAppOAuthConnection(args), args);
 }
 
 /**
@@ -1876,46 +1794,7 @@ export async function mintAppOAuthAccessKey(
 export async function reuseAppOAuthAccessKey(
   args: AppOAuthKeyArgs & { accessToken: string }
 ): Promise<AppOAuthAccessKey | null> {
-  const conn = await loadAppOAuthConnection(args);
-  if (podAppActsAs(args.oauthClientId) === "person") {
-    return reusePersonOAuthAccessKey(conn, args);
-  }
-  const agentUserId = conn.app.agentUserId;
-  if (!agentUserId) return null;
-  const [key] = await db
-    .select({
-      id: apiKeys.id,
-      scope: apiKeys.scope,
-      expiresAt: apiKeys.expiresAt,
-    })
-    .from(apiKeys)
-    .where(
-      and(
-        eq(
-          apiKeys.keyLookupHash,
-          createHash("sha256").update(args.accessToken).digest("hex")
-        ),
-        eq(apiKeys.userId, agentUserId),
-        eq(apiKeys.instanceId, args.instanceId),
-        eq(apiKeys.isActive, true),
-        drizzleSql`${apiKeys.expiresAt} > now()`
-      )
-    )
-    .limit(1);
-  if (!key?.expiresAt) return null;
-  const scope = appOAuthKeyScope(conn.approved);
-  if (
-    key.scope.length !== scope.length ||
-    !scope.every((s) => key.scope.includes(s))
-  ) {
-    return null;
-  }
-  return grantAppOAuthKey(conn, {
-    agentUserId,
-    keyId: key.id,
-    accessToken: args.accessToken,
-    expiresAt: key.expiresAt,
-  });
+  return reusePersonOAuthAccessKey(await loadAppOAuthConnection(args), args);
 }
 
 /**
@@ -2347,10 +2226,11 @@ const pairKey = (r: AppApprovedRequest) =>
  * exact (permission, space) pairs of the current approval, at least one (all
  * gone is Revoke). Anything not already approved is refused.
  *
- * The live access shrinks now: a pod app's live key is revoked (its 1 h
- * token cannot be re-issued to the app from here), and its next refresh is
- * minted from the narrowed approval (`mintAppOAuthAccessKey` reads the current
- * one); its agent leaves the spaces it lost. An App Connect app's long-lived
+ * The live access shrinks now: a pod app's live key is revoked, the
+ * person's token as much as a legacy agent's (its 1 h token cannot be
+ * re-issued to the app from here), and its next refresh is minted from the
+ * narrowed approval (`mintAppOAuthAccessKey` reads the current one); a legacy
+ * agent leaves the spaces it lost. An App Connect app's long-lived
  * key is re-derived in place (`applyApprovedReach`).
  *
  * Who may: the app's owner signed in as themselves (`assertOwnerCredential`),
@@ -2394,17 +2274,20 @@ export async function narrowApp(args: {
   const repo = new AppRepository(db);
   await repo.setApprovedRequests(found.app.id, keep);
   if (found.app.mode === "oauth") {
+    // The connection's live key, whoever holds it: the person's token (every
+    // pod app since 12 Nov 2026) or, for a connection not refreshed since,
+    // its agent's. Its grants go with it (`revokeAppKeys`).
+    await revokeAppKeys(
+      found,
+      args.ownerUserId,
+      `Access narrowed for ${found.app.name}: the next token carries the narrower reach`
+    );
     if (found.app.agentUserId) {
       await syncAppAgentMemberships(
         found.app.agentUserId,
         found.app.ownerUserId,
         keep
       );
-      await revokeActiveHubInboundKeysForUser(db, {
-        userId: found.app.agentUserId,
-        revokedBy: args.ownerUserId,
-        revokedReason: `Access narrowed for ${found.app.name}: the next token carries the narrower reach`,
-      });
     }
   } else {
     await applyApprovedReach(found.app.id);

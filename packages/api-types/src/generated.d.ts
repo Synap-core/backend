@@ -17844,12 +17844,14 @@ export interface AppSignInDescription {
 }
 /**
  * What a POD APP's consent screen says about who its token acts as
- * (`podAppActsAs`), every word from here — the screen writes none of it.
- *  - `person` (a Synap app): `note` says it acts as the person, how a write
- *    lands and what it cannot do, derived from the permissions the app asked
- *    for. What it may do where is the consent's headline, the ONE access
- *    sentence over the person's ticks (pod admin `consentHeadline`).
- *  - `agent` (any other app): the ask-first sentence, unchanged.
+ * (`podAppActsAs`: the person, for every pod app since 12 Nov 2026), every
+ * word from here — the screen writes none of it. `note` says it acts as the
+ * person, how a write lands and what it cannot do, derived from the
+ * permissions the app asked for; deciding proposals only for a Synap app
+ * (`appSignInReach` rule 3). What it may do where is the consent's headline,
+ * the ONE access sentence over the person's ticks (pod admin
+ * `consentHeadline`). `agent` stays in the type for the pod admin screen,
+ * which still renders an older pod's answer.
  */
 export type PodAppActsAsDescription = {
 	kind: "person";

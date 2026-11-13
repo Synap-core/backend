@@ -13,19 +13,21 @@
  *   (`applyProposalApproval`); then `grant_type=refresh_token`, `revokeApp`
  *   and `POST /revoke`.
  *
- * Three clients, the same documents but for their origin:
- *   VERIFIED  https://content-studio.synap.live/…       → the person's token
- *   UNVERIFIED https://studio.example.com/…              → the app's agent
- *   LOOKALIKE https://content-studio.synap.live.evil.com/… → the app's agent
+ * Three clients, the same documents but for their origin. Every one is
+ * given the PERSON's token (founder, 12 Nov 2026: an app is not an AI agent,
+ * connecting is the approval); only a Synap app may decide proposals:
+ *   VERIFIED  https://content-studio.synap.live/…       → person, may approve
+ *   UNVERIFIED https://studio.example.com/…              → person, never approves
+ *   LOOKALIKE https://content-studio.synap.live.evil.com/… → person, never approves
  *
  * OWNER owns every space and is a pod admin, so every refusal of OWNER's
  * token below is the token's grant (what they ticked), never their role.
  * MEMBER (not an admin) edits Content only.
  *
  * Threats (services/app-person-token.ts): T9′ any member, their own
- * connection; T11 lookalike / unverified never reaches the person path, and a
- * person key naming an unverified connection is dead; T12 refresh keeps the
- * person and revoking ends it; T13 approves in its granted space only.
+ * connection; T11 a lookalike is not a Synap app, so it never holds the
+ * review verbs; T12 refresh keeps the person and revoking ends it; T13 only a
+ * Synap app approves, in its granted space only.
  *
  * Seams replaced, and why: the event store (`EventRepository`) and
  * `auditLog` write through the postgres-js client this harness has not —
@@ -181,6 +183,9 @@ const LOOKALIKE = `https://content-studio.synap.live.evil.com${DOC}`;
 /** A Synap app that asks to read decisions everywhere (decision e1b59d38 B). */
 const DEVPLANE = `https://devplane.synap.live${DOC}`;
 const DECISIONS = "entity.decision.read";
+/** The cached document's hash (`oauth_clients.metadata_sha256`), v1. */
+const docSha = (clientId: string, version = 1) =>
+  createHash("sha256").update(`${clientId}#${version}`).digest("hex");
 const callbackOf = (clientId: string) =>
   `${new URL(clientId).origin}/api/synap/callback`;
 
@@ -207,8 +212,8 @@ const PLAYBOOK_READ = "playbook.read";
 const PLAYBOOK_RUN = "playbook.run";
 const DECLARED: Record<string, string[]> = {
   [VERIFIED]: [READ, CREATE, APPROVE, PLAYBOOK_READ, PLAYBOOK_RUN],
-  [UNVERIFIED]: [READ, CREATE, PLAYBOOK_READ, PLAYBOOK_RUN],
-  [LOOKALIKE]: [READ, CREATE],
+  [UNVERIFIED]: [READ, CREATE, APPROVE, PLAYBOOK_READ, PLAYBOOK_RUN],
+  [LOOKALIKE]: [READ, CREATE, APPROVE],
   [DEVPLANE]: [READ, CREATE, DECISIONS],
 };
 
@@ -311,9 +316,9 @@ beforeAll(async () => {
   for (const clientId of [VERIFIED, UNVERIFIED, LOOKALIKE]) {
     await q(
       `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
-         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, created_at)
-       values ($1, 'cimd', 'Content Studio', $2, '{}', $3, '{}', now(), now() + interval '1 hour', now())`,
-      [clientId, [callbackOf(clientId)], DECLARED[clientId]]
+         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, metadata_sha256, created_at)
+       values ($1, 'cimd', 'Content Studio', $2, '{}', $3, '{}', now(), now() + interval '1 hour', $4, now())`,
+      [clientId, [callbackOf(clientId)], DECLARED[clientId], docSha(clientId)]
     );
   }
   registerProposalExecutor({
@@ -510,7 +515,7 @@ const write = async (bearer: string, workspaceId: string) =>
 
 // ─── the consent screen ─────────────────────────────────────────────────────
 
-describe("the consent screen says 'act as you' for a Synap app only", () => {
+describe("the consent screen says 'saved as you' for every pod app", () => {
   it("a Synap app: who it acts as, from the server, approving included", async () => {
     const ctx = await getOAuthConsentContext(params(VERIFIED), OWNER);
     expect(ctx.app?.verified).toBe(true);
@@ -526,15 +531,18 @@ describe("the consent screen says 'act as you' for a Synap app only", () => {
     ).toEqual(expect.arrayContaining(["Content OS", "Ecosystem", "Finance"]));
   });
 
-  it("an unverified app and a lookalike keep the ask-first words, and never say 'act as you'", async () => {
+  it("an app that is not a Synap app: saved as you, never offered the review verbs", async () => {
     for (const clientId of [UNVERIFIED, LOOKALIKE]) {
       const ctx = await getOAuthConsentContext(params(clientId), OWNER);
-      expect(ctx.app?.verified).toBe(false);
-      expect(ctx.app?.actsAs).toEqual({
-        kind: "agent",
-        note: "Every change it makes is sent to you for review first. It can never approve its own changes or create keys.",
+      expect(ctx.app?.verified, clientId).toBe(false);
+      expect(ctx.app?.actsAs, clientId).toEqual({
+        kind: "person",
+        note: "What you do in Content Studio is saved as you, right away — not sent for review. It cannot approve changes, delete, or create keys. You can sign it out any time from Connected.",
       });
-      expect(JSON.stringify(ctx)).not.toMatch(/act as you/);
+      // It asked for proposal.approve; it is not offered.
+      const offered = ctx.app!.permissions.map((p) => p.permission);
+      expect(offered, clientId).toEqual(expect.arrayContaining([READ, CREATE]));
+      expect(offered, clientId).not.toContain(APPROVE);
     }
   });
 });
@@ -645,16 +653,16 @@ describe("a Synap app's token is HELD BY THE PERSON, within what they ticked", (
   });
 });
 
-// ─── every other app: its agent, ask-first ──────────────────────────────────
+// ─── every other app: the person too, never deciding proposals ─────────────
 
-describe("an unverified app and a lookalike keep the ask-first agent key", () => {
+describe("an app that is not a Synap app acts as the person, and never decides the person's proposals", () => {
   for (const clientId of [UNVERIFIED, LOOKALIKE]) {
-    it(`${new URL(clientId).host}: its agent's key; its write is proposed; it never approves`, async () => {
+    it(`${new URL(clientId).host}: the person's key; its write applies via the app; review verbs cut on every request`, async () => {
       const body = await connect(OWNER, clientId, [
         { permission: READ, workspaceId: CONTENT },
         { permission: CREATE, workspaceId: CONTENT },
       ]);
-      expect(body.synap_acts_as).toBe("agent");
+      expect(body.synap_acts_as).toBe("person");
       // Every pod app's synap_grant names a templated space's template.
       expect(body.synap_grant).toEqual(
         expect.arrayContaining([
@@ -665,38 +673,62 @@ describe("an unverified app and a lookalike keep the ask-first agent key", () =>
         ])
       );
       const conn = await connectionOf(OWNER, clientId);
-      const row = await keyRow(body.access_token);
-      expect(row).toMatchObject({
-        user_id: conn.agent_user_id,
-        linked_user_id: OWNER,
-        key_type: "hub_inbound",
+      expect(await keyRow(body.access_token)).toMatchObject({
+        user_id: OWNER,
+        linked_user_id: null,
+        key_type: "app_person",
+        instance_id: oauthKeyInstanceId(clientId, OWNER),
       });
-      expect(
-        (
-          await q(
-            `select id from api_keys where key_type = 'app_person' and instance_id = $1`,
-            [oauthKeyInstanceId(clientId, OWNER)]
-          )
-        ).rows
-      ).toHaveLength(0);
-      // The discriminating control: the same write the person's token makes
-      // directly is a proposal for the agent.
-      const preview = await (
-        await hub(body.access_token, "/__probe/preview", {
-          workspaceId: CONTENT,
-        })
-      ).json();
-      expect(preview).toEqual({ decision: "propose" });
+      // The discriminating control: the write an agent key would PROPOSE
+      // applies, as the person, stamped with the app.
+      const res = await write(body.access_token, CONTENT);
+      expect(res.userId).toBe(OWNER);
+      expect(res.agentUserId).toBeNull();
+      expect(res.clientId).toBe(conn.public_id);
+      expect(res.decision).toMatchObject({ granted: true });
+
+      // An approval that holds the review verb (e.g. stored before this
+      // rule) never reaches the token: rule 3 of appSignInReach, at mint AND
+      // on every request.
+      await q(
+        `update apps set approved_requests = approved_requests || $1::jsonb where id = $2`,
+        [
+          JSON.stringify([{ permission: APPROVE, workspaceId: CONTENT }]),
+          conn.id,
+        ]
+      );
+      const next = await refresh(body.refresh_token, clientId);
+      expect(next.status).toBe(200);
+      const row = await keyRow(next.body.access_token);
+      expect(await livePairs(row.id)).not.toContain(
+        "Content OS:proposal.approve"
+      );
+      // A pending proposal of its own in the ticked space (the shared one
+      // was approved by the Synap app above).
+      const pending = randomUUID();
+      await q(
+        `insert into proposals (id, target_type, target_id, proposal_type, workspace_id, status, data, created_by)
+         values ($1,'probe','probe-target','noop',$2,'pending','{}'::jsonb,$3)`,
+        [pending, CONTENT, OWNER]
+      );
       const approve = (await (
-        await hub(body.access_token, "/__probe/approve", {
-          proposalId: PROPOSAL[FINANCE],
+        await hub(next.body.access_token, "/__probe/approve", {
+          proposalId: pending,
         })
       ).json()) as any;
-      expect(approve.refused).toMatch(/agent credential cannot approve/);
+      expect(approve.refused).toMatch(/approve/i);
+      expect(
+        (
+          await q<{ status: string }>(
+            `select status from proposals where id = $1`,
+            [pending]
+          )
+        ).rows[0]!.status
+      ).toBe("pending");
     });
   }
 
-  it("a person key naming an UNVERIFIED connection is dead (T11, read on every request)", async () => {
+  it("a person key whose connection's approval names the review verb is cut on its request too (not only at mint)", async () => {
     const conn = await connectionOf(OWNER, UNVERIFIED);
     const keyId = randomUUID();
     await q(
@@ -710,14 +742,98 @@ describe("an unverified app and a lookalike keep the ask-first agent key", () =>
       onBehalfOf: OWNER,
       grants: grantsForApprovedRequests([
         { permission: CREATE, workspaceId: CONTENT },
+        { permission: APPROVE, workspaceId: CONTENT },
       ]),
       expiresAt: null,
       createdBy: OWNER,
       clientId: conn.public_id,
     });
-    await expect(
-      resolveKeyIdentity({ id: keyId, userId: OWNER, linkedUserId: null })
-    ).rejects.toThrow(/sign in to the app again/);
+    const identity = await resolveKeyIdentity({
+      id: keyId,
+      userId: OWNER,
+      linkedUserId: null,
+    });
+    expect(identity.principal.kind).toBe("human");
+    const permissions = identity.grant!.scopes.flatMap((g) => g.permissions);
+    expect(permissions).toContain(CREATE);
+    expect(permissions).not.toContain(APPROVE);
+  });
+});
+
+// ─── bound to the document the person consented to ──────────────────────────
+
+describe("an app that is not a Synap app is bound to the document the person consented to", () => {
+  const PAIRS = [
+    { permission: READ, workspaceId: CONTENT },
+    { permission: CREATE, workspaceId: CONTENT },
+  ];
+  const setDoc = (clientId: string, version: number) =>
+    q(`update oauth_clients set metadata_sha256 = $2 where client_id = $1`, [
+      clientId,
+      docSha(clientId, version),
+    ]);
+
+  it("consent records the document's hash on the person's connection", async () => {
+    await connect(OWNER, UNVERIFIED, PAIRS);
+    const conn = await q<{ metadata: Record<string, unknown> }>(
+      `select metadata from apps where owner_user_id = $1 and oauth_client_id = $2 and revoked_at is null`,
+      [OWNER, UNVERIFIED]
+    );
+    expect(conn.rows[0]!.metadata.consentedDocumentSha256).toBe(
+      docSha(UNVERIFIED)
+    );
+  });
+
+  it("its document changes: the live token is dead on its next request, a refresh is refused, and re-consenting restores it", async () => {
+    const body = await connect(OWNER, UNVERIFIED, PAIRS);
+    const row = await keyRow(body.access_token);
+    expect((await write(body.access_token, CONTENT)).decision).toMatchObject({
+      granted: true,
+    });
+    await setDoc(UNVERIFIED, 2);
+    try {
+      await expect(
+        resolveKeyIdentity({ id: row.id, userId: OWNER, linkedUserId: null })
+      ).rejects.toThrow(/sign in to the app again/);
+      const next = await refresh(body.refresh_token, UNVERIFIED);
+      expect(next.status).not.toBe(200);
+      expect(next.body.synap_acts_as).toBeUndefined();
+      // The person sees the new document and consents again.
+      const again = await connect(OWNER, UNVERIFIED, PAIRS);
+      expect(again.synap_acts_as).toBe("person");
+      expect((await write(again.access_token, CONTENT)).decision).toMatchObject(
+        { granted: true }
+      );
+    } finally {
+      await setDoc(UNVERIFIED, 1);
+      await connect(OWNER, UNVERIFIED, PAIRS);
+    }
+  });
+
+  it("a connection consented before 12 Nov (no recorded document) must be connected again", async () => {
+    const body = await connect(OWNER, LOOKALIKE, PAIRS);
+    await q(
+      `update apps set metadata = metadata - 'consentedDocumentSha256' where owner_user_id = $1 and oauth_client_id = $2`,
+      [OWNER, LOOKALIKE]
+    );
+    const next = await refresh(body.refresh_token, LOOKALIKE);
+    expect(next.status).not.toBe(200);
+    expect((await connect(OWNER, LOOKALIKE, PAIRS)).synap_acts_as).toBe(
+      "person"
+    );
+  });
+
+  it("a Synap app is not bound: Synap serves its document", async () => {
+    const body = await connect(OWNER, VERIFIED, TICKED);
+    await setDoc(VERIFIED, 2);
+    try {
+      expect((await write(body.access_token, CONTENT)).decision).toMatchObject({
+        granted: true,
+      });
+      expect((await refresh(body.refresh_token, VERIFIED)).status).toBe(200);
+    } finally {
+      await setDoc(VERIFIED, 1);
+    }
   });
 });
 
@@ -957,7 +1073,7 @@ describe("a pod-wide read: asked in the document, ticked once, held with no spac
 
 // ─── who runs a playbook: the signed-in site is the person (run choice v3) ──
 
-describe("remembering who runs a playbook: a Synap site signed in as the person applies; an app on its own asks (D7)", () => {
+describe("remembering who runs a playbook: a pod app signed in as the person applies (D7)", () => {
   const PLAYBOOK = randomUUID();
   const RUN_CHOICE_GRANT = [
     { permission: READ, workspaceId: CONTENT },
@@ -1018,33 +1134,23 @@ describe("remembering who runs a playbook: a Synap site signed in as the person 
     expect(h.runChoiceGate).toEqual([]);
   });
 
-  it("an app acting on its own (its ask-first agent): a playbook/set_run_choice proposal, nothing stored", async () => {
+  it("an app that is not a Synap app, signed in as the person: the choice applies too", async () => {
     await q(
       `delete from links where link_type = 'assigned_to' and to_id = $1`,
       [PLAYBOOK]
     );
     const body = await connect(OWNER, UNVERIFIED, RUN_CHOICE_GRANT);
-    expect(body.synap_acts_as).toBe("agent");
+    expect(body.synap_acts_as).toBe("person");
     h.runChoiceGate.length = 0;
     const res = await putRunChoice(body.access_token);
     const answer = (await res.json()) as any;
-    expect(res.status, JSON.stringify(answer)).toBe(202);
+    expect(res.status, JSON.stringify(answer)).toBe(200);
     expect(answer).toMatchObject({
-      status: "proposed",
-      proposalId: "00000000-0000-4000-8000-00000000d007",
-      runChoice: null,
+      status: "applied",
+      proposalId: null,
+      runChoice: { stored: { executor: "is-agent" }, ask: false },
     });
-    // The door asked as the app's agent, for the floored door, and the
-    // engine said propose.
-    const conn = await connectionOf(OWNER, UNVERIFIED);
-    expect(h.runChoiceGate).toHaveLength(1);
-    expect(h.runChoiceGate[0]).toMatchObject({
-      userId: OWNER,
-      agentUserId: conn.agent_user_id,
-      workspaceId: CONTENT,
-      subjectType: "playbook",
-      action: "set_run_choice",
-    });
-    expect(await choiceEdges()).toEqual([]);
+    expect(await choiceEdges()).toEqual([{ from_type: "agent" }]);
+    expect(h.runChoiceGate).toEqual([]);
   });
 });
