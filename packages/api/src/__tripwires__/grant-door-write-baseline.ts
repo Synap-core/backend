@@ -78,7 +78,6 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /focus-sessions/:id/evaluations",
   "POST /focus-sessions/:id/evidence",
   "POST /focus-sessions/:id/inputs",
-  "POST /focus-sessions/:id/outputs/delegate",
   "POST /focus-sessions/:id/rerun",
   "POST /focus-sessions/:id/revert",
   "POST /focus-sessions/:id/used",
@@ -175,4 +174,4 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
 ];
 
 /** Lower it when the list shrinks; never raise it. */
-export const UNCLASSIFIED_WRITE_ROUTES_CAP = 156;
+export const UNCLASSIFIED_WRITE_ROUTES_CAP = 155;
