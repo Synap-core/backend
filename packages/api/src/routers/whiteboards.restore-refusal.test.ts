@@ -24,6 +24,8 @@ const ROOM = `whiteboard-${DOC}`;
 const m = vi.hoisted(() => ({
   sends: [] as unknown[],
   state: null as null | (() => Promise<Response>),
+  /** The document the version row belongs to. */
+  versionDoc: "2c2c2c2c-0000-4000-8000-0000000000bb",
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -41,13 +43,18 @@ vi.mock("@synap/database", async (importOriginal) => {
           }),
         },
         documentVersions: {
-          findFirst: async () => ({ id: VERSION, documentId: DOC }),
+          findFirst: async () => ({ id: VERSION, documentId: m.versionDoc }),
         },
       },
     },
     readDocumentVersionContent: async () => "c3RhdGU=",
   };
 });
+// The read-only guard asks the sync state; the mocked db holds none (CI has no
+// database for this suite), and a pod that is not read-only is the case here.
+vi.mock("../utils/split-brain-service.js", () => ({
+  isPodReadOnly: async () => false,
+}));
 vi.mock("@synap/jobs", () => ({
   getBoss: () => ({
     send: async (...args: unknown[]) => {
@@ -80,6 +87,7 @@ function roomState(extra: Record<string, unknown>) {
 
 beforeEach(() => {
   m.sends = [];
+  m.versionDoc = DOC;
 });
 
 describe("whiteboards.restoreVersion refuses what the room will refuse", () => {
@@ -120,5 +128,14 @@ describe("whiteboards.restoreVersion refuses what the room will refuse", () => {
       caller().restoreVersion({ viewId: VIEW, versionId: VERSION })
     ).resolves.toMatchObject({ status: "restoring" });
     expect(m.sends).toHaveLength(2);
+  });
+
+  it("a version of ANOTHER document is not found: never restored into this board", async () => {
+    m.state = roomState({});
+    m.versionDoc = "9e9e9e9e-0000-4000-8000-0000000000ff";
+    await expect(
+      caller().restoreVersion({ viewId: VIEW, versionId: VERSION })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(m.sends).toHaveLength(0);
   });
 });

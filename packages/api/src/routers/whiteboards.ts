@@ -165,12 +165,11 @@ export const whiteboardsRouter = router({
       // Get version
       // Get version: one OF THIS BOARD'S document (a version id of another
       // document is "not found", never restored into this board).
-      const version = await db.query.documentVersions.findFirst({
-        where: and(
-          eq(documentVersions.id, input.versionId),
-          eq(documentVersions.documentId, view.documentId)
-        ),
+      const found = await db.query.documentVersions.findFirst({
+        where: eq(documentVersions.id, input.versionId),
       });
+      const version =
+        found && found.documentId === view.documentId ? found : undefined;
 
       if (!version) {
         throw new TRPCError({
@@ -216,12 +215,11 @@ export const whiteboardsRouter = router({
     .query(async ({ input, ctx }) => {
       // Get version: one OF THIS BOARD'S document (a version id of another
       // document is "not found", never restored into this board).
-      const version = await db.query.documentVersions.findFirst({
-        where: and(
-          eq(documentVersions.id, input.versionId),
-          eq(documentVersions.documentId, view.documentId)
-        ),
+      const found = await db.query.documentVersions.findFirst({
+        where: eq(documentVersions.id, input.versionId),
       });
+      const version =
+        found && found.documentId === view.documentId ? found : undefined;
 
       if (!version) {
         throw new TRPCError({

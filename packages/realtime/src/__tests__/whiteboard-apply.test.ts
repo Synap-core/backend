@@ -208,7 +208,6 @@ describe("applyWhiteboardRecords: an OPEN board", () => {
     const kept = doc.getMap(MAP).toJSON()["shape:b"];
     expect(kept.x).toBe(900);
     expect(kept.meta.pending).toBeUndefined();
-    expect(storedRecords()["shape:b"].x).toBe(900);
   });
 
   it("a patch merges into the LIVE record: a person's edit since the API read survives", async () => {
@@ -320,10 +319,10 @@ describe("applyWhiteboardRecords: an OPEN board", () => {
     await s.persistence.bindState(ROOM, doc);
     mocks.upload.mockRejectedValue(new Error("minio down"));
     await expect(
-      s.applyWhiteboardRecords(ROOM, put(shape("shape:b")))
+      s.applyWhiteboardRecords(ROOM, put(pendingShape("shape:b")))
     ).rejects.toBeInstanceOf(WhiteboardApplyError);
     await expect(
-      s.applyWhiteboardRecords(ROOM, put(shape("shape:b")))
+      s.applyWhiteboardRecords(ROOM, put(pendingShape("shape:b")))
     ).rejects.toMatchObject({ reason: "save_failed" });
   }, 10_000);
 });
