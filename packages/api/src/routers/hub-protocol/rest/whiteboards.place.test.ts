@@ -1049,7 +1049,7 @@ describe("sizes are bounded before any work is done", () => {
       resources: Array.from({ length: 50 }, () => deck),
     });
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/at most 200 shapes/);
+    expect((await res.json()).error).toMatch(/at most 100 cells/);
     expect(m.htmlCells).toHaveLength(0);
     expect(m.applies).toHaveLength(0);
   });

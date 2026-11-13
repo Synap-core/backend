@@ -32828,7 +32828,7 @@
       "post": {
         "tags": ["Views"],
         "summary": "Place things on a whiteboard, or change what it holds",
-        "description": "The ONE governed place door (`placeOnBoard`, the same function as MCP `synap_place_on_board`). `resources` CREATES shapes: entity cards, live views, cells, html (an html-embed cell), urls (an iframe-embed cell), automations, and artboard decks (one artboard per slide). By default they appear at once; an agent's are marked `meta.pending` (with `meta.placedBy` / `meta.placedAt`) until the person keeps or rejects them on the board. `update` (position, size, props) and `remove` change shapes already there and are proposals by default. Written into the open board (every viewer sees it) or, when nobody has it open, into its saved file. Shape ids are fixed by `idempotencyKey` (else by the request), so a retry replaces what the first call placed. Needs edit access to the board; a board of another space than `workspaceId` is not found. A refusal is an error with a `reason`; nothing is half-written.",
+        "description": "The ONE governed place door (`placeOnBoard`, the same function as MCP `synap_place_on_board`). `resources` CREATES shapes: entity cards, live views, cells, html (an html-embed cell), urls (an iframe-embed cell), automations, and artboard decks (one artboard per slide). By default they appear at once; an agent's are marked `meta.pending` (with `meta.placedBy` / `meta.placedAt`) until the person keeps or rejects them on the board. `update` (position, size, props) and `remove` change shapes already there and are proposals by default. Written into the open board (every viewer sees it) or, when nobody has it open, into its saved file. Shape ids are fixed by `idempotencyKey` (else by the request), so a retry replaces what the first call placed. Needs edit access to the board; a board of another space than `workspaceId` is not found. A refusal is an error with a `reason`; a refused call wrote nothing to the board, and everything granted lands in one write.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -32861,7 +32861,7 @@
             }
           },
           "400": {
-            "description": "Bad request, unknown frame or shape",
+            "description": "Bad request, unknown frame, shape or reference",
             "content": {
               "application/json": {
                 "schema": {
@@ -32879,12 +32879,15 @@
                         "bad_request",
                         "frame_not_found",
                         "shape_not_found",
+                        "reference_not_found",
                         "denied",
                         "load_failed",
                         "unavailable",
+                        "timeout",
                         "unreadable",
                         "save_failed",
-                        "materialize_failed"
+                        "materialize_failed",
+                        "embed_refused"
                       ]
                     }
                   },
@@ -32912,12 +32915,15 @@
                         "bad_request",
                         "frame_not_found",
                         "shape_not_found",
+                        "reference_not_found",
                         "denied",
                         "load_failed",
                         "unavailable",
+                        "timeout",
                         "unreadable",
                         "save_failed",
-                        "materialize_failed"
+                        "materialize_failed",
+                        "embed_refused"
                       ]
                     }
                   },
@@ -32945,12 +32951,15 @@
                         "bad_request",
                         "frame_not_found",
                         "shape_not_found",
+                        "reference_not_found",
                         "denied",
                         "load_failed",
                         "unavailable",
+                        "timeout",
                         "unreadable",
                         "save_failed",
-                        "materialize_failed"
+                        "materialize_failed",
+                        "embed_refused"
                       ]
                     }
                   },
@@ -32978,12 +32987,51 @@
                         "bad_request",
                         "frame_not_found",
                         "shape_not_found",
+                        "reference_not_found",
                         "denied",
                         "load_failed",
                         "unavailable",
+                        "timeout",
                         "unreadable",
                         "save_failed",
-                        "materialize_failed"
+                        "materialize_failed",
+                        "embed_refused"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
                       ]
                     }
                   },
@@ -33011,12 +33059,15 @@
                         "bad_request",
                         "frame_not_found",
                         "shape_not_found",
+                        "reference_not_found",
                         "denied",
                         "load_failed",
                         "unavailable",
+                        "timeout",
                         "unreadable",
                         "save_failed",
-                        "materialize_failed"
+                        "materialize_failed",
+                        "embed_refused"
                       ]
                     }
                   },
@@ -33044,12 +33095,15 @@
                         "bad_request",
                         "frame_not_found",
                         "shape_not_found",
+                        "reference_not_found",
                         "denied",
                         "load_failed",
                         "unavailable",
+                        "timeout",
                         "unreadable",
                         "save_failed",
-                        "materialize_failed"
+                        "materialize_failed",
+                        "embed_refused"
                       ]
                     }
                   },
@@ -33077,12 +33131,51 @@
                         "bad_request",
                         "frame_not_found",
                         "shape_not_found",
+                        "reference_not_found",
                         "denied",
                         "load_failed",
                         "unavailable",
+                        "timeout",
                         "unreadable",
                         "save_failed",
-                        "materialize_failed"
+                        "materialize_failed",
+                        "embed_refused"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The write took too long and may have landed: retry is safe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "reference_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "timeout",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed",
+                        "embed_refused"
                       ]
                     }
                   },
