@@ -85,7 +85,8 @@ const NOT_YET_UNDOABLE: Readonly<Record<string, string>> = {
   "view/update": "No undo record: a view update records no before/after.",
   "view/updateContent":
     "No undo record: the previous view content is not recorded.",
-  "whiteboard/place": "No undo record: the placement is not recorded.",
+  "whiteboard/place":
+    "No undo record: an agent's placed shapes are marked pending and the person keeps or rejects them on the board, not through Undo.",
 };
 
 /** The list may not grow past this. Lower it when you remove a line. */

@@ -50,7 +50,6 @@ import {
   desc,
   drizzleSql,
   channels,
-  views,
   entities,
   relations,
   type messages,
@@ -86,7 +85,7 @@ import {
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
 import {
   placeArtboardDeck,
-  ArtboardDeckSlideSchema,
+  ArtboardDeckSchema,
   BoardPlacementOptionsSchema,
 } from "./place-artboard-deck.js";
 import { VerbRefusal } from "./verb-refusal.js";
@@ -301,26 +300,19 @@ const feedPostHandler: BuiltinVerbHandler = async (params, ctx) => {
 
 /**
  * output.generate — place a multi-slide artboard deck (carousel/deck) onto a
- * whiteboard, IN-PROCESS, through the SAME `placeArtboardDeck` emit the Hub REST
- * `POST /whiteboards/:viewId/place` route calls. This is the governed, discoverable
- * capability surface for "generate output": any client finds it via
- * list_capabilities and runs it via run_capability, while the existing IS-tool →
- * /whiteboards/place path keeps working unchanged (hybrid, not a migration).
+ * whiteboard, IN-PROCESS, through THE place door (`placeOnBoard`, via
+ * `placeArtboardDeck`): the same governed write as Hub
+ * `POST /whiteboards/:viewId/placements` and MCP `synap_place_on_board`. Any
+ * client finds it via list_capabilities and runs it via run_capability.
  *
- * The args mirror the existing place resource: a board id (viewId) + workspace
- * lens + the artboard-deck fields (preset, title, slides[{html,title?}]). The
- * emit itself is NOT reimplemented here — it delegates to the shared function so
- * the socket event shape has exactly one home.
+ * The args mirror the deck resource: a board id (viewId) + workspace lens +
+ * the artboard-deck fields (preset, title, slides[{html,title?}]).
  */
 const outputGenerateParams = z.object({
   /** The whiteboard view id (board) to place the deck onto. */
   boardId: z.string().uuid(),
-  /** Deck preset (e.g. a layout/style key the board client understands). */
-  preset: z.string().min(1),
-  /** Optional deck title. */
-  title: z.string().max(500).optional(),
-  /** One or more slides, each with HTML content + optional title. */
-  slides: z.array(ArtboardDeckSlideSchema).min(1),
+  /** The deck: preset, optional title, one or more slides (the door's own schema). */
+  ...ArtboardDeckSchema.shape,
   /** Optional layout hints forwarded to the board client verbatim. */
   options: BoardPlacementOptionsSchema.optional(),
 });
@@ -353,33 +345,23 @@ const outputGenerateHandler: BuiltinVerbHandler = async (params, ctx) => {
     });
   }
 
-  // Confirm the target board actually lives in the acting workspace. Without
-  // this a member of workspace A could emit a board:place onto a board in
-  // workspace B by passing its viewId. (The verb is emit-only, no read leak,
-  // but this closes the cross-workspace placement surface the review flagged.)
-  const [board] = await db
-    .select({ id: views.id })
-    .from(views)
-    .where(
-      and(eq(views.id, input.boardId), eq(views.workspaceId, ctx.workspaceId))
-    )
-    .limit(1);
-  if (!board) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "Board not found in the acting workspace.",
-    });
-  }
-
-  // Delegate to the SHARED emit — the SAME function the /whiteboards/:id/place
-  // route uses. No duplicated event logic.
-  const result = placeArtboardDeck({
+  // The place door fences the board to the acting workspace itself
+  // (`workspaceId` below: another space's board is not found).
+  // THE place door: governed, written into the open board or its saved file.
+  const result = await placeArtboardDeck({
     viewId: input.boardId,
     deck: { preset: input.preset, title: input.title, slides: input.slides },
     options: input.options,
+    userId: ctx.userId,
+    agentUserId: ctx.agentUserId ?? null,
+    workspaceId: ctx.workspaceId,
   });
 
-  return { boardId: result.viewId, slideCount: result.slideCount };
+  return {
+    boardId: result.viewId,
+    slideCount: result.slideCount,
+    placement: result.placement,
+  };
 };
 
 /**

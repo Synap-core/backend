@@ -169,8 +169,6 @@ export const HUB_ROUTES_MISSING_FROM_SPEC: readonly string[] = [
   "POST /tracks/{id}/stages",
   "POST /tracks/{id}/stages/{stageKey}/sessions",
   "POST /vault/secrets/{id}/grant",
-  "POST /whiteboards/{viewId}/place",
-  "POST /whiteboards/{viewId}/placements/propose",
   "POST /workers",
   "POST /workers/{ruleId}/paused",
   "POST /workers/{ruleId}/run",

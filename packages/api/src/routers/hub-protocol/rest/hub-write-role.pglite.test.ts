@@ -7,7 +7,7 @@
  * Stubbed: the key lookup, the guest check, the storage/presign seams and the
  * governed file builders (recorded, so the JSON `/files` mode is proven to
  * reach the GOVERNED builder, never the direct `uploadBufferAsFileEntity`),
- * the whiteboard socket emit and the governance gate (granted). An editor's
+ * and the governance gate (granted). An editor's
  * request is asserted only to clear the role gate (`status !== 403`): what
  * the route does next is covered by its own tests.
  *
@@ -84,13 +84,6 @@ vi.mock("../../file-upload-presign.js", async (importOriginal) => ({
     workspaceId: WS,
   }),
 }));
-vi.mock(
-  "../../../services/capabilities/place-artboard-deck.js",
-  async (io) => ({
-    ...(await io<Record<string, unknown>>()),
-    emitBoardPlace: vi.fn(),
-  })
-);
 vi.mock("../../../utils/permission-check.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   checkPermissionOrPropose: async () => ({ granted: true }),
@@ -146,6 +139,7 @@ const VIEWER = randomUUID();
 const EDITOR = randomUUID();
 const WS = randomUUID();
 const BOARD = randomUUID();
+const BOARD_DOC = randomUUID();
 const TARGET = randomUUID(); // an entity in WS, readable by both members
 const KEYS = { viewer: randomUUID(), editor: randomUUID() } as const;
 type Who = keyof typeof KEYS;
@@ -186,6 +180,18 @@ beforeAll(async () => {
     `insert into entities (id, user_id, workspace_id, type, title, properties, system_data)
      values ($1,$2,$3,'note','t','{}'::jsonb,'{}'::jsonb)`,
     [TARGET, OWNER, WS]
+  );
+  // A whiteboard in WS (its floor is the board's own room: a viewer reads it,
+  // an editor may place on it).
+  await q(
+    `insert into documents (id, user_id, workspace_id, title, type)
+     values ($1,$2,$3,'Board','whiteboard')`,
+    [BOARD_DOC, OWNER, WS]
+  );
+  await q(
+    `insert into views (id, user_id, workspace_id, type, category, name, document_id)
+     values ($1,$2,$3,'whiteboard','canvas','Board',$4)`,
+    [BOARD, OWNER, WS, BOARD_DOC]
   );
   for (const who of ["viewer", "editor"] as const) {
     await q(
@@ -327,16 +333,9 @@ const WRITES: Array<{
     path: `/cells/my-cell?workspaceId=${WS}`,
   },
   {
-    name: "POST /whiteboards/{id}/placements/propose",
+    name: "POST /whiteboards/{id}/placements",
     method: "POST",
-    path: `/whiteboards/${BOARD}/placements/propose`,
-    json: true,
-    body: () => JSON.stringify(placement),
-  },
-  {
-    name: "POST /whiteboards/{id}/place",
-    method: "POST",
-    path: `/whiteboards/${BOARD}/place`,
+    path: `/whiteboards/${BOARD}/placements`,
     json: true,
     body: () => JSON.stringify(placement),
   },

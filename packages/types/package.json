@@ -185,6 +185,10 @@
       "types": "./dist/views/index.d.ts",
       "import": "./dist/views/index.js"
     },
+    "./whiteboard": {
+      "types": "./dist/whiteboard/index.d.ts",
+      "import": "./dist/whiteboard/index.js"
+    },
     "./relations": {
       "types": "./dist/relations/index.d.ts",
       "import": "./dist/relations/index.js"

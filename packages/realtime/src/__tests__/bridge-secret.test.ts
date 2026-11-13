@@ -115,7 +115,12 @@ describe("bridgeSecretOk", () => {
 
   it("TRIPWIRE: both yjs handlers gate on bridgeSecretOk", () => {
     const src = readFileSync(join(__dirname, "..", "bridge.ts"), "utf8");
-    for (const fn of ["handleYjsGetState", "handleYjsRestore", "handleEmit"]) {
+    for (const fn of [
+      "handleYjsGetState",
+      "handleYjsRestore",
+      "handleYjsApply",
+      "handleEmit",
+    ]) {
       const start = src.indexOf(`async function ${fn}(`);
       expect(start, `${fn} not found`).toBeGreaterThan(-1);
       // Look only at the handler's own opening region — the gate must be early,

@@ -2452,7 +2452,14 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "view/create": "reversible",
   "view/update": "reversible",
   "view/updateContent": "reversible",
+  // An agent's NEW shapes on a whiteboard (services/whiteboards/
+  // place-on-board.ts): applied at once, marked pending for the person to keep
+  // or reject on the board (founder, 2026-11-13).
   "whiteboard/place": "reversible",
+  // CHANGING or REMOVING shapes already on a board (a person's work): a
+  // proposal by default (founder, 2026-11-13). Removal is destroy.
+  "whiteboard/update_shapes": "disruptive",
+  "whiteboard/delete_shapes": "disruptive",
   "widget/register": "disruptive", // struct (2.09)
   "workspace/adopt": "disruptive", // scope
   "workspace/archive": "disruptive", // destroy
@@ -2828,7 +2835,11 @@ export const GATE_WRITE_DOORS = {
   "view/create": "gate",
   "view/update": "gate",
   "view/updateContent": "gate",
+  // The whiteboard place door (`placeOnBoard`): create, change, remove.
+  // Approved by `routers/proposals/executors/whiteboard.ts`.
   "whiteboard/place": "gate",
+  "whiteboard/update_shapes": "gate",
+  "whiteboard/delete_shapes": "gate",
   "widget/register": "gate",
   "workspace/adopt": "gate",
   // Soft-archive (R8a, `workspaces.archive`). `archive` is a DESTRUCTIVE_ACTIONS

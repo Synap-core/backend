@@ -26,6 +26,7 @@ import { db, documents, eq, views } from "@synap/database";
 import { storage } from "@synap/storage";
 import { isStorageObjectNotFound } from "@synap/storage/interface";
 import { createLogger } from "@synap-core/core";
+import { boardRoomId, boardStoreMapName } from "@synap-core/types/whiteboard";
 import type { YjsRoomStateReply } from "@synap/events/realtime-schemas";
 import { resolveDocumentRoomAccess } from "../../utils/document-edit-access.js";
 import { bridgeRequestHeaders } from "../../utils/chat-realtime-broadcast.js";
@@ -122,7 +123,7 @@ function recordsFromYjsUpdate(update: Uint8Array, documentId: string): unknown {
   const doc = new Y.Doc();
   try {
     Y.applyUpdate(doc, update);
-    return doc.getMap(`tl_map_${documentId}`).toJSON();
+    return doc.getMap(boardStoreMapName(documentId)).toJSON();
   } finally {
     doc.destroy();
   }
@@ -133,7 +134,7 @@ function recordsFromYjsUpdate(update: Uint8Array, documentId: string): unknown {
  * other answer is a failure, never "not open": a closed bridge must not read
  * as a closed room, because the stored file lags an open one.
  */
-async function readLiveRecords(
+export async function readLiveRecords(
   roomId: string,
   documentId: string
 ): Promise<unknown | null> {
@@ -251,9 +252,27 @@ async function readStoredRecords(
   }
 }
 
-export async function readBoardScene(
-  input: ReadBoardSceneInput
-): Promise<BoardSceneRead> {
+/** A board the caller may at least read: its view row and room. */
+export interface ResolvedBoard {
+  view: typeof views.$inferSelect;
+  documentId: string;
+  /** The realtime room (`whiteboard-<documentId>` unless the row names one). */
+  roomId: string;
+  /** The room floor's answer for the caller. */
+  access: "read" | "edit";
+}
+
+/**
+ * The board a caller names, on the room's own floor
+ * (`resolveDocumentRoomAccess`): `none` (or another space for a confined key)
+ * is `not_found`, never an existence oracle. Shared by the read and place
+ * doors so both see exactly the same boards.
+ */
+export async function resolveBoardView(input: {
+  viewId: string;
+  userId: string;
+  confinedWorkspaceId?: string | null;
+}): Promise<ResolvedBoard> {
   const notFound = () =>
     new BoardSceneReadError(
       "not_found",
@@ -295,16 +314,30 @@ export async function readBoardScene(
       `This view is a ${view.type}, not a whiteboard.`
     );
   }
-
-  const base = {
-    viewId: view.id,
+  return {
+    view,
     documentId,
-    workspaceId: view.workspaceId ?? null,
-    title: view.name ?? null,
+    roomId: view.yjsRoomId ?? boardRoomId(documentId),
     access,
   };
+}
 
-  const roomId = view.yjsRoomId ?? `whiteboard-${documentId}`;
+/** A board's records (id → tldraw record) and where they were read from. */
+export interface BoardRecordsRead {
+  records: Record<string, unknown>;
+  source: "live" | "stored" | "new";
+  asOf: string;
+  legacyFormat?: true;
+}
+
+/**
+ * The board's records: the open room's live doc first, else the stored file,
+ * else nothing (never saved). A failed read throws, never answers empty.
+ */
+export async function loadBoardRecords(
+  roomId: string,
+  documentId: string
+): Promise<BoardRecordsRead> {
   const asOfLive = new Date().toISOString();
   const live = await readLiveRecords(roomId, documentId);
   const loadDoc = () =>
@@ -329,36 +362,57 @@ export async function readBoardScene(
       }
     }
     return {
-      ...base,
+      records: asRecordMap(live),
       source: "live",
       asOf: asOfLive,
-      scene: windowBoardScene(buildBoardScene(live), input.window ?? {}),
     };
   }
 
   const doc = await loadDoc();
-  if (!doc) throw notFound();
+  if (!doc) {
+    throw new BoardSceneReadError(
+      "not_found",
+      "Board not found (or you cannot see it). List boards with synap_list_views."
+    );
+  }
   const stored = doc.storageKey
     ? await readStoredRecords(doc.storageKey, documentId)
     : null;
   if (!stored || stored.missing) {
     // Never saved (no key, or a key that names no object yet): the realtime
     // server starts such a room empty too.
-    return {
-      ...base,
-      source: "new",
-      asOf: doc.createdAt.toISOString(),
-      scene: windowBoardScene(buildBoardScene({}), input.window ?? {}),
-    };
+    return { records: {}, source: "new", asOf: doc.createdAt.toISOString() };
   }
   return {
-    ...base,
+    records: asRecordMap(stored.records),
     source: "stored",
     asOf: doc.updatedAt.toISOString(),
     ...(stored.legacy ? { legacyFormat: true as const } : {}),
-    scene: windowBoardScene(
-      buildBoardScene(stored.records),
-      input.window ?? {}
-    ),
+  };
+}
+
+function asRecordMap(records: unknown): Record<string, unknown> {
+  return typeof records === "object" &&
+    records !== null &&
+    !Array.isArray(records)
+    ? (records as Record<string, unknown>)
+    : {};
+}
+
+export async function readBoardScene(
+  input: ReadBoardSceneInput
+): Promise<BoardSceneRead> {
+  const board = await resolveBoardView(input);
+  const read = await loadBoardRecords(board.roomId, board.documentId);
+  return {
+    viewId: board.view.id,
+    documentId: board.documentId,
+    workspaceId: board.view.workspaceId ?? null,
+    title: board.view.name ?? null,
+    access: board.access,
+    source: read.source,
+    asOf: read.asOf,
+    ...(read.legacyFormat ? { legacyFormat: true as const } : {}),
+    scene: windowBoardScene(buildBoardScene(read.records), input.window ?? {}),
   };
 }

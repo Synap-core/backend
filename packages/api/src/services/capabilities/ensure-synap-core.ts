@@ -210,7 +210,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       scope: "pod",
       intent: "generate_media",
       description:
-        "Generate output: place a multi-slide artboard deck (carousel/deck) onto a whiteboard. Emits the same board:place placement the generate_carousel/generate_deck path produces.",
+        "Generate output: place a multi-slide artboard deck (carousel/deck) onto a whiteboard, one artboard per slide, through the governed place door (the same write as synap_place_on_board).",
       parameters: {
         type: "object",
         required: ["boardId", "preset", "slides"],

@@ -281,6 +281,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_pause_worker",
     "cp-connector": "pod__pause_worker",
   },
+  synap_place_on_board: {
+    "pod-mcp": "synap_place_on_board",
+    "cp-connector": null,
+  },
   synap_post_message: {
     "pod-mcp": "synap_post_message",
     "cp-connector": "pod__post_message",

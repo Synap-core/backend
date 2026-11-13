@@ -1221,6 +1221,10 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_declare_lifecycle: WRITE,
     synap_create_view: WRITE,
     synap_update_view_content: WRITE,
+    // The board write (`placeOnBoard`): through the gate on the board's own
+    // room floor; it returns ids only. Same as Hub POST
+    // /whiteboards/:viewId/placements (GATED_ELSEWHERE in the tripwire).
+    synap_place_on_board: WRITE,
     // Hub `views.updateView`: the view.update gate on the loaded view's space.
     synap_update_view: WRITE,
     // `workspaces.setPrimarySurface`: the workspace/update gate (ADMIN floor).
