@@ -1,16 +1,15 @@
 /**
  * Hub Protocol REST — whiteboards
  *
- * Agent-facing spatial composition surface. V1 intentionally proposes
- * placements instead of writing directly into the Yjs document: the whiteboard
- * remains the canvas/layout plane while resources keep their own source of truth.
+ * Agent-facing spatial composition surface: READ a board's content
+ * (`GET /whiteboards/:viewId/scene`, `readBoardScene`) and PLACE on it
+ * (`POST /whiteboards/:viewId/placements`, `placeOnBoard`). Both are the same
+ * functions as MCP `synap_read_board` / `synap_place_on_board`. Resources keep
+ * their own source of truth; the board holds shapes that point at them.
  */
 
-import { z } from "zod";
-import { getConfinedWorkspace } from "../confine-workspace.js";
 import { db, views, eq, and } from "@synap/database";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
-import { emitBoardPlace } from "../../../services/capabilities/place-artboard-deck.js";
 import {
   hasScope,
   logger,
@@ -19,8 +18,14 @@ import {
   httpStatusForTrpcError,
   requireUuidParam,
 } from "./_shared.js";
-import { canWrite, userPrincipal } from "../../../access/door.js";
-import { jsonGoverned } from "../proposal-response.js";
+import {
+  BOARD_PLACE_FAILURES,
+  PlaceOnBoardRequestSchema,
+} from "@synap-core/types/whiteboard";
+import {
+  BoardPlaceError,
+  placeOnBoard,
+} from "../../../services/whiteboards/place-on-board.js";
 import { z as zOpenapi } from "@hono/zod-openapi";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { uuidParam } from "./_codecs/_openapi.js";
@@ -158,99 +163,91 @@ const BoardSceneErrorSchema = zOpenapi.object({
     .optional(),
 });
 
-const BoardPlacementOptionsSchema = z.object({
-  x: z.number().optional(),
-  y: z.number().optional(),
-  w: z.number().optional(),
-  h: z.number().optional(),
-  frameId: z.string().optional(),
-  layout: z.enum(["stack", "grid", "flow", "freeform"]).optional(),
-});
+// ── POST /whiteboards/:viewId/placements: the documented wire ──────────────
+// Parsed by `PlaceOnBoardRequestSchema` (@synap-core/types/whiteboard, the one
+// contract); these schemas only document it.
 
-const BoardResourceRefSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("entity"),
-    entityId: z.string().uuid(),
-    entityType: z.string().nullable().optional(),
-    profileId: z.string().uuid().nullable().optional(),
-    title: z.string().nullable().optional(),
-    properties: z.record(z.string(), z.unknown()).optional(),
-    status: z.string().optional(),
-    updatedAt: z.string().optional(),
-  }),
-  z.object({
-    kind: z.literal("view"),
-    viewId: z.string().uuid(),
-    viewType: z.string().nullable().optional(),
-    title: z.string().nullable().optional(),
-  }),
-  z.object({
-    kind: z.literal("cellInstance"),
-    cellInstanceId: z.string().uuid(),
-    cellKey: z.string().optional(),
-    props: z.record(z.string(), z.unknown()).optional(),
-    title: z.string().nullable().optional(),
-    defaultSize: z.object({ w: z.number(), h: z.number() }).optional(),
-  }),
-  z.object({
-    kind: z.literal("cellDefinition"),
-    cellKey: z.string().min(1),
-    props: z.record(z.string(), z.unknown()).optional(),
-    name: z.string().optional(),
-    defaultSize: z.object({ w: z.number(), h: z.number() }).optional(),
-  }),
-  z.object({
-    kind: z.literal("html"),
-    name: z.string().min(1),
-    html: z.string(),
-  }),
-  z.object({
-    // Multi-slide artboard deck (carousel/deck) authored by the generate_carousel
-    // / generate_deck agent tools. The backend passes it through to the board's
-    // socket room verbatim; the whiteboard client materializes one artboard per
-    // slide. Kept in sync with the IS place-on-whiteboard union + the synap-app
-    // placement handler.
-    kind: z.literal("artboard-deck"),
-    preset: z.string(),
-    title: z.string().optional(),
-    slides: z
+const PlacementResourceDoc = zOpenapi
+  .object({
+    kind: zOpenapi.enum([
+      "entity",
+      "view",
+      "cellInstance",
+      "cellDefinition",
+      "html",
+      "artboard-deck",
+      "automation",
+      "url",
+    ]),
+  })
+  .passthrough()
+  .openapi({
+    description:
+      "One thing to place (`BoardResourceRef`): entity {entityId, title?}, view {viewId}, cellInstance {cellInstanceId}, cellDefinition {cellKey, props?}, html {name, html}, artboard-deck {preset, title?, slides:[{html, title?}]}, automation {automationId, mode}, url {url, title?}.",
+  });
+const PlacementRequestDoc = zOpenapi
+  .object({
+    resources: zOpenapi.array(PlacementResourceDoc).max(50).optional(),
+    options: zOpenapi
+      .object({
+        x: zOpenapi.number().optional(),
+        y: zOpenapi.number().optional(),
+        w: zOpenapi.number().optional(),
+        h: zOpenapi.number().optional(),
+        frameId: zOpenapi.string().optional(),
+        layout: zOpenapi.enum(["stack", "grid", "flow", "freeform"]).optional(),
+      })
+      .optional(),
+    update: zOpenapi
       .array(
-        z.object({
-          html: z.string(),
-          title: z.string().optional(),
+        zOpenapi.object({
+          shapeId: zOpenapi.string(),
+          x: zOpenapi.number().optional(),
+          y: zOpenapi.number().optional(),
+          w: zOpenapi.number().optional(),
+          h: zOpenapi.number().optional(),
+          props: zOpenapi
+            .record(zOpenapi.string(), zOpenapi.unknown())
+            .optional(),
         })
       )
-      .min(1),
-  }),
-  z.object({
-    kind: z.literal("automation"),
-    automationId: z.string().uuid(),
-    mode: z.enum(["flow", "detail", "status", "trigger"]),
-    title: z.string().optional(),
-  }),
-  z.object({
-    kind: z.literal("url"),
-    url: z.string().url(),
-    title: z.string().optional(),
-    embedMode: z.enum(["iframe", "link"]).optional(),
-  }),
-]);
-
-const DirectPlacementBodySchema = z.object({
-  workspaceId: z.string().uuid(),
-  userId: z.string().uuid().optional(),
-  resources: z.array(BoardResourceRefSchema).min(1),
-  options: BoardPlacementOptionsSchema.optional(),
+      .max(50)
+      .optional(),
+    remove: zOpenapi.array(zOpenapi.string()).max(50).optional(),
+    idempotencyKey: zOpenapi.string().optional(),
+    workspaceId: zOpenapi.string().optional(),
+    reasoning: zOpenapi.string().optional(),
+    sourceMessageId: zOpenapi.string().optional(),
+  })
+  .openapi("BoardPlacementRequest");
+const PlacementPartDoc = zOpenapi.object({
+  status: zOpenapi.enum(["applied", "proposed"]),
+  shapeIds: zOpenapi.array(zOpenapi.string()),
+  target: zOpenapi.enum(["live", "stored"]).optional(),
+  pending: zOpenapi.boolean().optional(),
+  proposalId: zOpenapi.string().optional(),
+  reviewUrl: zOpenapi.string().optional(),
 });
-
-const ProposePlacementsBodySchema = z.object({
-  workspaceId: z.string().uuid(),
-  userId: z.string().uuid().optional(),
-  resources: z.array(BoardResourceRefSchema).min(1),
-  options: BoardPlacementOptionsSchema.optional(),
-  agentUserId: z.string().uuid().optional(),
-  reasoning: z.string().optional(),
-  sourceMessageId: z.string().optional(),
+const PlacementResultDoc = zOpenapi
+  .object({
+    viewId: zOpenapi.string(),
+    documentId: zOpenapi.string(),
+    workspaceId: zOpenapi.string().nullable(),
+    created: PlacementPartDoc.optional(),
+    updated: PlacementPartDoc.optional(),
+    removed: PlacementPartDoc.optional(),
+  })
+  .openapi("BoardPlacementResult");
+const PlacementErrorDoc = zOpenapi.object({
+  error: zOpenapi.string(),
+  reason: zOpenapi
+    .enum(
+      Object.keys(BOARD_PLACE_FAILURES) as [
+        keyof typeof BOARD_PLACE_FAILURES,
+        ...Array<keyof typeof BOARD_PLACE_FAILURES>,
+      ]
+    )
+    .optional(),
 });
 
 export function registerWhiteboardsRoutes(app: HubHono) {
@@ -336,158 +333,100 @@ export function registerWhiteboardsRoutes(app: HubHono) {
     }
   });
 
-  /**
-   * POST /whiteboards/:viewId/placements/propose
-   *
-   * Creates a governed proposal for board placements. Applying the accepted
-   * proposal is handled by the proposal execution/Yjs applier path, not here.
-   */
-  app.post("/whiteboards/:viewId/placements/propose", async (c) => {
-    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
-      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
-    }
-
-    const viewId = requireUuidParam(c, "viewId");
-    if (viewId instanceof Response) return viewId;
-    const raw = (await c.req.json().catch(() => null)) as Record<
-      string,
-      unknown
-    > | null;
-    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
-
-    const parsed = ProposePlacementsBodySchema.safeParse(raw);
-    if (!parsed.success) {
-      return c.json(
-        { error: parsed.error.issues.map((i) => i.message).join(", ") },
-        400
-      );
-    }
-
-    const body = parsed.data;
-    // Pin to the authenticated owner — never a body-supplied userId.
-    const userId = c.get("userId") as string;
-    // Item 3 Part 3: confine a bound service key to its workspace. body.workspaceId
-    // is a required uuid, so the `??` is a type-narrowing guard, never a widen.
-    const workspaceId =
-      getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
-    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
-      return c.json({ error: "Access denied to workspace" }, 403);
-    }
-
-    const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-    const agentUserId = body.agentUserId ?? ctxAgentUserId;
-    const actorResolution = await resolveActorId(agentUserId, userId);
-    if ("error" in actorResolution) {
-      return c.json({ error: actorResolution.error }, 400);
-    }
-
-    try {
-      const { checkPermissionOrPropose } =
-        await import("../../../utils/permission-check.js");
-      const perm = await checkPermissionOrPropose({
-        userId,
-        agentUserId,
-        workspaceId,
-        subjectType: "whiteboard",
-        action: "place",
-        // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
-        source: "intelligence",
-        data: {
-          viewId,
-          resources: body.resources,
-          options: body.options,
-          resourceCount: body.resources.length,
-        },
-        reasoning: body.reasoning,
-        sourceMessageId: body.sourceMessageId,
-      });
-
-      if ("denied" in perm && perm.denied) {
-        return c.json({ status: "denied", message: perm.reason }, 403);
-      }
-
-      if ("proposalId" in perm) {
-        return jsonGoverned(c, {
-          status: "proposed",
-          proposalId: perm.proposalId,
-          summary: perm.summary,
-          reasoning: perm.reasoning,
-          reviewPath: perm.reviewPath,
-          reviewUrl: perm.reviewUrl,
-        });
-      }
-
-      return c.json({
-        status: "accepted",
-        message:
-          "Whiteboard placement was allowed by governance, but direct Yjs application is not enabled for Hub REST yet.",
-        viewId,
-        resourceCount: body.resources.length,
-      });
-    } catch (err) {
-      logger.error({ err, viewId }, "whiteboard placement proposal failed");
-      return c.json(
-        { error: err instanceof Error ? err.message : "Unknown error" },
-        httpStatusForTrpcError(err)
-      );
-    }
+  registerOpenApi(app, {
+    method: "post",
+    path: "/whiteboards/{viewId}/placements",
+    tags: ["Views"],
+    summary: "Place things on a whiteboard, or change what it holds",
+    description:
+      "The ONE governed place door (`placeOnBoard`, the same function as MCP `synap_place_on_board`). `resources` CREATES shapes: entity cards, live views, cells, html (an html-embed cell), urls (an iframe-embed cell), automations, and artboard decks (one artboard per slide). By default they appear at once; an agent's are marked `meta.pending` (with `meta.placedBy` / `meta.placedAt`) until the person keeps or rejects them on the board. `update` (position, size, props) and `remove` change shapes already there and are proposals by default. Written into the open board (every viewer sees it) or, when nobody has it open, into its saved file. Shape ids are fixed by `idempotencyKey` (else by the request), so a retry replaces what the first call placed. Needs edit access to the board; a board of another space than `workspaceId` is not found. A refusal is an error with a `reason`; nothing is half-written.",
+    request: {
+      params: zOpenapi.object({ viewId: uuidParam }),
+      body: PlacementRequestDoc,
+    },
+    responses: {
+      200: {
+        description: "What was placed, changed or proposed",
+        schema: PlacementResultDoc,
+      },
+      400: {
+        description: "Bad request, unknown frame or shape",
+        schema: PlacementErrorDoc,
+      },
+      403: {
+        description: "Missing scope, read-only, or denied",
+        schema: PlacementErrorDoc,
+      },
+      404: {
+        description: "No such board, or not in your space",
+        schema: PlacementErrorDoc,
+      },
+      409: {
+        description: "The board failed to load or has no document",
+        schema: PlacementErrorDoc,
+      },
+      500: { description: "Internal error", schema: PlacementErrorDoc },
+      502: {
+        description: "The board or a cell could not be read or made",
+        schema: PlacementErrorDoc,
+      },
+      503: {
+        description:
+          "The realtime server or storage did not answer, or the save did not land",
+        schema: PlacementErrorDoc,
+      },
+    },
   });
 
   /**
-   * POST /whiteboards/:viewId/place
+   * POST /whiteboards/:viewId/placements
    *
-   * Direct placement — emits a board:place socket event to the board's room so
-   * connected whiteboard clients can place the resources immediately. No
-   * governance proposal is created.
+   * THE place door (`placeOnBoard`): create shapes (governed `whiteboard/place`,
+   * applied by default, pending-marked for an agent), change or remove shapes
+   * (`whiteboard/update_shapes` / `whiteboard/delete_shapes`, proposals by
+   * default). The board's own room floor, never the body's workspace.
    */
-  app.post("/whiteboards/:viewId/place", async (c) => {
+  app.post("/whiteboards/:viewId/placements", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-
     const viewId = requireUuidParam(c, "viewId");
     if (viewId instanceof Response) return viewId;
-    const raw = (await c.req.json().catch(() => null)) as Record<
-      string,
-      unknown
-    > | null;
-    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
-
-    const parsed = DirectPlacementBodySchema.safeParse(raw);
+    const raw = (await c.req.json().catch(() => null)) as unknown;
+    if (raw === null)
+      return c.json({ error: "Invalid JSON in request body" }, 400);
+    const parsed = PlaceOnBoardRequestSchema.safeParse(raw);
     if (!parsed.success) {
       return c.json(
-        { error: parsed.error.issues.map((i) => i.message).join(", ") },
+        {
+          error: parsed.error.issues
+            .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
+            .join(", "),
+          reason: "bad_request",
+        },
         400
       );
     }
-
-    const body = parsed.data;
-    // Pin to the authenticated owner — never a body-supplied userId.
+    // The acting identity comes from the verified key, never the body.
     const userId = c.get("userId") as string;
-    // Item 3 Part 3: confine a bound service key to its workspace. body.workspaceId
-    // is a required uuid, so the `??` is a type-narrowing guard, never a widen.
-    const workspaceId =
-      getConfinedWorkspace(c, body.workspaceId) ?? body.workspaceId;
-    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
-      return c.json({ error: "Access denied to workspace" }, 403);
-    }
-
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    const actor = await resolveActorId(agentUserId, userId);
+    if ("error" in actor) return c.json({ error: actor.error }, 400);
     try {
-      // Shared emit — the SAME function the builtin `output.generate` verb calls,
-      // so the `board:place` event shape is identical across both placement paths.
-      emitBoardPlace({
+      const result = await placeOnBoard({
         viewId,
-        resources: body.resources,
-        options: body.options,
+        userId,
+        agentUserId: agentUserId ?? null,
+        confinedWorkspaceId:
+          (c.get("keyWorkspaceId") as string | null | undefined) ?? null,
+        request: parsed.data,
       });
-
-      return c.json({
-        status: "placed",
-        viewId,
-        resourceCount: body.resources.length,
-      });
+      return c.json(result);
     } catch (err) {
-      logger.error({ err, viewId }, "whiteboard direct placement failed");
+      if (err instanceof BoardPlaceError) {
+        return c.json({ error: err.message, reason: err.reason }, err.status);
+      }
+      logger.error({ err, viewId }, "whiteboard placement failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)

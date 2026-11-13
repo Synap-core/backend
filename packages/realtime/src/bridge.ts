@@ -17,6 +17,11 @@ import { safeTokenEqual } from "@synap/auth";
 // function.
 import {
   validateEmitPayload,
+  YJS_APPLY_FAILURES,
+  type YjsApplyFailure,
+  type YjsRoomApplyError,
+  type YjsRoomApplyReply,
+  type YjsRoomApplyRequest,
   type YjsRoomStateReply,
 } from "@synap/events/realtime-schemas";
 import { whiteboardLoadFailure } from "./whiteboard-room-state.js";
@@ -36,7 +41,13 @@ interface BridgeEmitRequest {
 }
 
 /** Lazy getter for the Yjs server — set after yjsServer is initialized in server.ts */
-type YjsServerAccessor = () => { documents: Map<string, Y.Doc> } | null;
+type YjsServerAccessor = () => {
+  documents: Map<string, Y.Doc>;
+  applyWhiteboardRecords?: (
+    roomName: string,
+    request: YjsRoomApplyRequest
+  ) => Promise<YjsRoomApplyReply>;
+} | null;
 let getYjsServer: YjsServerAccessor = () => null;
 
 /** Track last successful MinIO/DB write for /health/yjs */
@@ -177,6 +188,12 @@ async function handleBridgeRequest(
     req.method === "GET"
   ) {
     await handleYjsGetState(req, res);
+    return;
+  }
+
+  // Yjs apply endpoint (the whiteboard place door's write)
+  if (/^\/yjs\/[^/]+\/apply$/.test(url) && req.method === "POST") {
+    await handleYjsApply(req, res);
     return;
   }
 
@@ -513,5 +530,157 @@ async function handleYjsRestore(req: IncomingMessage, res: ServerResponse) {
     console.error("[Bridge] Error restoring Yjs state:", error);
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Failed to apply state update" }));
+  }
+}
+
+/** The record kinds the place door writes (tldraw typeName → id prefix). */
+const APPLY_RECORD_PREFIX: Record<string, string> = {
+  shape: "shape:",
+  page: "page:",
+  binding: "binding:",
+};
+/** At most this many records per apply (a 50-slide deck is ~100). */
+export const YJS_APPLY_MAX_RECORDS = 1000;
+
+/**
+ * Read an apply body, or say what is wrong with it. Only whiteboard rooms,
+ * the room of the named document, tldraw shape/page/binding records whose id
+ * matches their typeName.
+ */
+export function parseYjsApplyRequest(
+  roomId: string,
+  body: unknown
+): { ok: true; request: YjsRoomApplyRequest } | { ok: false; error: string } {
+  const room = /^whiteboard-([0-9a-f-]{36})$/i.exec(roomId);
+  if (!room)
+    return { ok: false, error: "Only a whiteboard room takes records." };
+  if (typeof body !== "object" || body === null || Array.isArray(body))
+    return { ok: false, error: "The body must be an object." };
+  const b = body as Record<string, unknown>;
+  if (b.documentId !== room[1])
+    return { ok: false, error: "documentId does not name this room's board." };
+  if (typeof b.origin !== "string" || !b.origin || b.origin.length > 200)
+    return { ok: false, error: "origin is required (who writes)." };
+  const put = b.put ?? [];
+  const remove = b.remove ?? [];
+  if (!Array.isArray(put) || !Array.isArray(remove))
+    return { ok: false, error: "put and remove must be arrays." };
+  if (put.length + remove.length === 0)
+    return { ok: false, error: "Nothing to apply." };
+  if (put.length + remove.length > YJS_APPLY_MAX_RECORDS)
+    return {
+      ok: false,
+      error: `At most ${YJS_APPLY_MAX_RECORDS} records per apply.`,
+    };
+  for (const record of put) {
+    const r = record as Record<string, unknown> | null;
+    const prefix =
+      r && typeof r === "object" && typeof r.typeName === "string"
+        ? APPLY_RECORD_PREFIX[r.typeName]
+        : undefined;
+    if (!prefix || typeof r?.id !== "string" || !r.id.startsWith(prefix)) {
+      return {
+        ok: false,
+        error:
+          "Every record in put is a tldraw shape, page or binding whose id matches its typeName.",
+      };
+    }
+  }
+  const prefixes = Object.values(APPLY_RECORD_PREFIX);
+  for (const id of remove) {
+    if (typeof id !== "string" || !prefixes.some((p) => id.startsWith(p))) {
+      return {
+        ok: false,
+        error: "Every id in remove is a shape, page or binding id.",
+      };
+    }
+  }
+  return {
+    ok: true,
+    request: {
+      documentId: room[1],
+      origin: b.origin,
+      put: put as YjsRoomApplyRequest["put"],
+      ...(remove.length > 0 ? { remove: remove as string[] } : {}),
+    },
+  };
+}
+
+function applyError(
+  res: ServerResponse,
+  reason: YjsApplyFailure,
+  error: string,
+  roomId?: string
+) {
+  const body: YjsRoomApplyError = {
+    error,
+    reason,
+    ...(roomId ? { roomId } : {}),
+  };
+  res.writeHead(YJS_APPLY_FAILURES[reason], {
+    "Content-Type": "application/json",
+  });
+  res.end(JSON.stringify(body));
+}
+
+/**
+ * Handle a whiteboard write
+ * POST /yjs/:roomId/apply
+ *
+ * The place door's ONE write (`YjsRoomApplyRequest`): records into the open
+ * room or the stored file, under the room's lock (`applyWhiteboardRecords`,
+ * yjs-server.ts). A refusal is an error with a `reason`, never a success
+ * that wrote nothing (unlike `/restore`, which answers 200 for a closed room).
+ */
+async function handleYjsApply(req: IncomingMessage, res: ServerResponse) {
+  // Same gate as /bridge/emit: this writes any board.
+  if (!bridgeSecretOk(req, res)) return;
+  const match = req.url?.match(/^\/yjs\/([^/]+)\/apply$/);
+  const roomId = match ? decodeURIComponent(match[1]) : "";
+  let body: unknown;
+  try {
+    body = await parseBody(req);
+  } catch {
+    applyError(res, "bad_request", "Invalid JSON", roomId);
+    return;
+  }
+  const parsed = parseYjsApplyRequest(roomId, body);
+  if (!parsed.ok) {
+    applyError(res, "bad_request", parsed.error, roomId);
+    return;
+  }
+  const yjsServer = getYjsServer();
+  if (!yjsServer?.applyWhiteboardRecords) {
+    applyError(res, "unavailable", "Yjs server not yet initialized", roomId);
+    return;
+  }
+  try {
+    const reply = await yjsServer.applyWhiteboardRecords(
+      roomId,
+      parsed.request
+    );
+    console.log(
+      `[Bridge] Applied ${reply.put} record(s), removed ${reply.removed} in ${roomId} (${reply.target})`
+    );
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(reply));
+  } catch (error) {
+    const reason = (error as { reason?: unknown }).reason;
+    if (typeof reason === "string" && reason in YJS_APPLY_FAILURES) {
+      applyError(
+        res,
+        reason as YjsApplyFailure,
+        error instanceof Error ? error.message : String(error),
+        roomId
+      );
+      return;
+    }
+    console.error("[Bridge] Error applying whiteboard records:", error);
+    applyError(
+      res,
+      "save_failed",
+      "The records could not be applied. Retry: the same records replace themselves.",
+      roomId
+    );
   }
 }

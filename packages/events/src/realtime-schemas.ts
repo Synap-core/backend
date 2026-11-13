@@ -64,6 +64,54 @@ export interface YjsRoomStateReply {
   loadError?: string;
 }
 
+/**
+ * `POST /yjs/:roomId/apply` (BRIDGE_SECRET): write tldraw records into a
+ * whiteboard, the place door's ONE write path (`@synap/api`
+ * `services/whiteboards/place-on-board.ts` sends it, `@synap/realtime`
+ * bridge.ts + yjs-server.ts apply it). The room is the board's
+ * (`whiteboard-<documentId>`). Open room: one Y transaction in the live doc
+ * (every client receives it), then saved at once. Closed: loaded from the
+ * stored file and saved back, under the room's lock so a person opening the
+ * board meanwhile loads the result. Records are put whole (same id =
+ * replaced); `remove` deletes by id.
+ */
+export interface YjsRoomApplyRequest {
+  documentId: string;
+  put: Array<{ id: string; typeName: string } & Record<string, unknown>>;
+  remove?: string[];
+  /** The Y transaction origin (who wrote it), e.g. `synap-place:<userId>`. */
+  origin: string;
+}
+
+export interface YjsRoomApplyReply {
+  roomId: string;
+  applied: true;
+  /** `live` = the open room (saved too); `stored` = the saved file. */
+  target: "live" | "stored";
+  put: number;
+  removed: number;
+}
+
+/** Why an apply was refused (status → the bridge's HTTP answer). */
+export const YJS_APPLY_FAILURES = {
+  bad_request: 400,
+  /** No such board document. */
+  not_found: 404,
+  /** The board's saved content failed to load: it takes no write. */
+  load_failed: 409,
+  /** Written in memory but the save did not land (retry is safe). */
+  save_failed: 503,
+  /** The Yjs server is not up yet. */
+  unavailable: 503,
+} as const;
+export type YjsApplyFailure = keyof typeof YJS_APPLY_FAILURES;
+
+export interface YjsRoomApplyError {
+  error: string;
+  reason: YjsApplyFailure;
+  roomId?: string;
+}
+
 // ============================================================================
 // Pass-through schema for legacy events without a dedicated shape
 // ============================================================================
