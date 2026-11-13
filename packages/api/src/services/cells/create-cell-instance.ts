@@ -74,7 +74,7 @@ export async function createHtmlCellInstance(input: {
     extension: "html",
     content: input.html,
     mimeType: "text/html",
-    provenance: { createdByKind: input.agentUserId ? "agent" : "human" },
+    provenance: { createdByKind: input.agentUserId ? "ai_agent" : "human" },
   });
   return insertCellInstance({
     id: input.id,

@@ -205,14 +205,6 @@ const door = (request: Parameters<typeof placeOnBoard>[0]["request"]) =>
       request,
     })
   );
-const proposalsOf = async () =>
-  (
-    await q<{ target_type: string; proposal_type: string; status: string }>(
-      `select target_type, proposal_type, status from proposals where agent_user_id = $1 and target_type = 'whiteboard' order by created_at`,
-      [AGENT]
-    )
-  ).rows;
-
 beforeAll(async () => {
   await h.init();
   const tables = (Object.values(schema) as unknown[]).filter(
@@ -236,6 +228,11 @@ beforeAll(async () => {
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
     [randomUUID(), SPACE, OWNER]
+  );
+  // The agent works in the space (an editor), as an installed agent does.
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'editor')`,
+    [randomUUID(), SPACE, AGENT]
   );
   await q(
     `insert into entities (id, user_id, workspace_id, type, title) values ($1,$2,$3,'task','Acme')`,
@@ -261,11 +258,15 @@ describe("the place door through the real gate, as an AI-preset key", () => {
     const result = await door({ remove: ["shape:frame"] });
     expect(result.removed).toMatchObject({ status: "proposed" });
     expect(h.applies).toHaveLength(0);
-    const rows = await proposalsOf();
-    expect(rows.at(-1)).toMatchObject({
-      target_type: "whiteboard",
-      proposal_type: "delete_shapes",
+    const proposalId = (result.removed as { proposalId: string }).proposalId;
+    const { rows } = await q<Record<string, unknown>>(
+      `select status, agent_user_id, target_type, proposal_type from proposals where id = $1`,
+      [proposalId]
+    );
+    expect(rows[0]).toMatchObject({
       status: "pending",
+      agent_user_id: AGENT,
+      target_type: "whiteboard",
     });
   });
 

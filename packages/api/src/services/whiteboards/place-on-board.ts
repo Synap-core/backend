@@ -59,7 +59,6 @@ import {
   buildPlacementRecords,
   planBoardApply,
   placedShapeId,
-  stableDigest,
   type BoardPlaceFailure,
   type BoardPlacePartResult,
   type BoardPlacedBy,

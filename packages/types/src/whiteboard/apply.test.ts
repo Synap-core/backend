@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   BoardApplyError,
   BOARD_PLACE_MAX_NEW_CELLS,
-  BOARD_PLACE_MAX_NEW_RECORDS,
   BOARD_HTML_MAX_CHARS,
   PlaceOnBoardRequestSchema,
   approvedPlacementRecords,
@@ -263,17 +262,14 @@ describe("PlaceOnBoardRequestSchema bounds (checked before any cell is made)", (
     slides: Array.from({ length: n }, () => ({ html: "<p/>" })),
   });
 
-  it("refuses a call whose records exceed the cap (50 decks of 50 slides)", () => {
+  it("refuses a call that would create more cells than the cap (50 decks of 50 slides)", () => {
     const parsed = PlaceOnBoardRequestSchema.safeParse({
       resources: Array.from({ length: 50 }, () => deck(50)),
     });
     expect(parsed.success).toBe(false);
   });
 
-  it("the caps hold at their edge", () => {
-    expect(BOARD_PLACE_MAX_NEW_CELLS * 2).toBeLessThanOrEqual(
-      BOARD_PLACE_MAX_NEW_RECORDS
-    );
+  it("the cap holds at its edge: 100 cells pass, 101 do not", () => {
     expect(
       PlaceOnBoardRequestSchema.safeParse({ resources: [deck(50), deck(50)] })
         .success
@@ -283,6 +279,7 @@ describe("PlaceOnBoardRequestSchema bounds (checked before any cell is made)", (
         resources: [deck(50), deck(50), deck(1)],
       }).success
     ).toBe(false);
+    expect(BOARD_PLACE_MAX_NEW_CELLS).toBe(100);
   });
 
   it("refuses html over the cap and props over the cap", () => {

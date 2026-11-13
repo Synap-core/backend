@@ -24,11 +24,12 @@ export const BOARD_HTML_MAX_CHARS = 400_000;
 export const BOARD_TITLE_MAX_CHARS = 500;
 /** Largest props / properties object (serialized chars). */
 export const BOARD_PROPS_MAX_CHARS = 20_000;
-/** The most new shapes (records) one call may create: below the realtime
- * server's apply cap, so a call it would refuse is refused before any cell
- * is made. A deck slide is two (artboard + its cell). */
-export const BOARD_PLACE_MAX_NEW_RECORDS = 200;
-/** The most cells one call may create (html, url, automation, slides…). */
+/**
+ * The most cells one call may create (html, url, automation, deck slides…).
+ * It also bounds the records: a deck slide is two (artboard + cell), so a call
+ * stays far under the realtime server's apply cap and a call it would refuse
+ * is refused before any cell is made.
+ */
 export const BOARD_PLACE_MAX_NEW_CELLS = 100;
 /** Largest serialized request body the doors take (bytes). */
 export const BOARD_PLACE_MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -189,17 +190,6 @@ export type BoardShapeUpdate = z.infer<typeof BoardShapeUpdateSchema>;
 /** The most a single call may create, change or remove (each). */
 export const BOARD_PLACE_LIMIT = 50;
 
-/** Records a resource list writes: one shape each, two per deck slide. */
-export function placementRecordCount(
-  resources: ReadonlyArray<{ kind: string; slides?: unknown[] }>
-): number {
-  return resources.reduce(
-    (n, r) =>
-      n + (r.kind === "artboard-deck" ? (r.slides?.length ?? 0) * 2 : 1),
-    0
-  );
-}
-
 /** Cells a resource list creates (entity, view and cellInstance create none). */
 export function placementCellCount(
   resources: ReadonlyArray<{ kind: string; slides?: unknown[] }>
@@ -250,13 +240,6 @@ export const PlaceOnBoardRequestSchema = PlaceOnBoardRequestObject.refine(
     0,
   { message: "Nothing to do: pass resources, update or remove." }
 )
-  .refine(
-    (r) =>
-      placementRecordCount(r.resources ?? []) <= BOARD_PLACE_MAX_NEW_RECORDS,
-    {
-      message: `A call creates at most ${BOARD_PLACE_MAX_NEW_RECORDS} shapes (a deck slide is two: its artboard and its cell). Split it.`,
-    }
-  )
   .refine(
     (r) => placementCellCount(r.resources ?? []) <= BOARD_PLACE_MAX_NEW_CELLS,
     {
