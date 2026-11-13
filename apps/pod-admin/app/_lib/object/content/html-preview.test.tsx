@@ -46,3 +46,34 @@ describe("ProposedRecordCard — a Define Card proposal", () => {
     expect(out).not.toContain("Show all");
   });
 });
+
+describe("a card written for the widget host, in the real frame", () => {
+  const CARD =
+    "<!DOCTYPE html><html><body><div id=root>Loading…</div><script>SynapWidget.onInit(function(i){});</script></body></html>";
+  const srcdocOf = (markup: string) => {
+    const m = /srcDoc="([^"]*)"|srcdoc="([^"]*)"/i.exec(markup);
+    return (m?.[1] ?? m?.[2] ?? "")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#x27;/g, "'")
+      .replace(/&amp;/g, "&");
+  };
+
+  it("a proposal's preview defines SynapWidget and serves the sample, no pod read", () => {
+    const doc = srcdocOf(
+      renderToStaticMarkup(<HtmlPagePreview html={CARD} title="Person card" />)
+    );
+    expect(doc).toContain("window.SynapWidget =");
+    expect(doc).toContain("Léa Martin");
+  });
+
+  it("a plain page is not given a widget host", () => {
+    const doc = srcdocOf(
+      renderToStaticMarkup(
+        <HtmlPagePreview html="<!doctype html><p>hi</p>" title="x" />
+      )
+    );
+    expect(doc).not.toContain("SynapWidget");
+  });
+});
