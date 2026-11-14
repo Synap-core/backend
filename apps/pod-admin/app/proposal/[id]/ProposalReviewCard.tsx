@@ -97,6 +97,8 @@ import {
 } from "../../_lib/object/provenance-chips";
 import { deriveDeferredWritesReview } from "@synap-core/types/proposals/deferred-writes";
 import { DocumentChanges } from "../../_lib/object/content/document-changes";
+import { DocumentUpdateChanges } from "./DocumentUpdateChanges";
+import { UpdatedDoor } from "./UpdatedDoor";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu, RejectNeverMenu } from "./AlwaysApproveMenu";
 import { proposalPageT, type OutcomeKey } from "./copy";
@@ -142,6 +144,7 @@ import {
   type ReviewMark,
   createdObject,
   type CreatedObject,
+  updatedObject,
 } from "./proposal-review-model";
 import { askingComputer, proposalWhy } from "./proposal-why";
 import {
@@ -909,6 +912,14 @@ export function ProposalReviewBody({
     data: p.data,
   });
   const graph = isGraphPayload(payload);
+  // The existing object an update changes: a door to it at every status.
+  const updated = updatedObject({
+    action,
+    targetType: p.targetType ? String(p.targetType) : null,
+    targetId: p.targetId ?? null,
+    title: p.targetName ? String(p.targetName) : null,
+    graph,
+  });
   const createKind =
     !graph && action === "create" && payload && typeof payload === "object"
       ? proposalProfileSlug(payload)
@@ -1092,6 +1103,13 @@ export function ProposalReviewBody({
         />
       )}
 
+      {updated && (
+        <UpdatedDoor
+          updated={updated}
+          applied={status === "approved" || status === "auto_approved"}
+        />
+      )}
+
       {/* The change first. */}
       {appConnect ? (
         <Section label="What it asks for">
@@ -1117,7 +1135,14 @@ export function ProposalReviewBody({
         <DeferredWritesList review={deferredWrites} />
       ) : docChanges ? (
         <Section label="What changes">
-          <DocumentChanges changes={docChanges} />
+          <DocumentUpdateChanges
+            payload={payload}
+            envelope={p.data}
+            documentId={p.targetType === "document" ? p.targetId : null}
+            workspaceId={p.workspaceId ? String(p.workspaceId) : null}
+            status={status}
+            fallback={<DocumentChanges changes={docChanges} />}
+          />
         </Section>
       ) : toolRun ? (
         <ToolRunArguments run={toolRun} />
