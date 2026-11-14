@@ -547,12 +547,14 @@ describe("an app holding package.install may install a package (Add to my pod)",
 });
 
 // The exception is decided door by door: the template-apply filing, the
-// history import (founder, 2026-11-03), and the installation request (an agent
-// always proposes: reconciliation f75fbb48 §3.4.1, founder 2026-11-07). Derived from the source tree (never a
+// history import (founder, 2026-11-03), the installation request (an agent
+// always proposes: reconciliation f75fbb48 §3.4.1, founder 2026-11-07) and the
+// whiteboard place door (an agent's change or removal of what a person has on
+// a board is a proposal by default, never a refusal: founder, 2026-11-13). Derived from the source tree (never a
 // hand list), so another door that starts turning grant denials into
 // proposals goes red here until decided.
 describe("only the decided doors ask to propose beyond the grant", () => {
-  it("proposeBeyondGrant is set by the template apply, the history import and the installation request, nowhere else", async () => {
+  it("proposeBeyondGrant is set by the template apply, the history import, the installation request and the whiteboard place door, nowhere else", async () => {
     const { readdirSync, readFileSync, statSync } = await import("node:fs");
     const { join, relative } = await import("node:path");
     const root = join(__dirname, "../..");
@@ -577,6 +579,8 @@ describe("only the decided doors ask to propose beyond the grant", () => {
       // and MCP synap_request_installation ask through it).
       "services/installations/request-installation.ts",
       "services/template-apply/propose.ts",
+      // `update_shapes` / `delete_shapes` of the place door (not `place`).
+      "services/whiteboards/place-on-board.ts",
     ]);
   });
 });
