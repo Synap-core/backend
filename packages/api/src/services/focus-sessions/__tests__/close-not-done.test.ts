@@ -80,6 +80,7 @@ describe("openRequiredWork", () => {
       ],
       outcomes: [],
       owedByPerson: [{ key: "sign-off", label: "Founder sign-off" }],
+      unreadMessages: [],
       waiting: { criteria: [], outcomes: [] },
     });
     expect(err.code).toBe("NOT_DONE");
@@ -89,6 +90,8 @@ describe("openRequiredWork", () => {
     expect(err.message).toContain("wait for the person");
     // No agent outcome listed: the claim/withdraw advice is not offered.
     expect(err.message).not.toContain("completeOutput");
+    // No unread message listed: the read-and-answer advice is not offered.
+    expect(err.message).not.toContain("synap_wait_for_answer");
     expect(err.message).toContain("`reason`");
   });
 });

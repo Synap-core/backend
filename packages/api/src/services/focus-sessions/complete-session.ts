@@ -107,6 +107,7 @@ import type { SessionVerdict } from "@synap-core/types/focus-sessions";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
 import {
   boundReason,
+  closedNotDoneItems,
   describeWaiting,
   hasOpenRequiredWork,
   hasWaiting,
@@ -605,6 +606,7 @@ export async function completeFocusSession(
         criteria: openWork.criteria,
         outcomes: openWork.outcomes,
         owedByPerson: openWork.owedByPerson,
+        unreadMessages: openWork.unreadMessages,
         reason,
         by: params.agentUserId,
         at: new Date().toISOString(),
@@ -757,11 +759,7 @@ export async function completeFocusSession(
 
   if (closedNotDone) {
     warnings.push(
-      `Closed with required work still open (${[
-        ...closedNotDone.criteria.map((c) => c.key),
-        ...closedNotDone.outcomes.map((o) => o.key),
-        ...closedNotDone.owedByPerson.map((o) => o.key),
-      ].join(", ")}), for the reason you gave: "${closedNotDone.reason}".`
+      `Closed with required work still open (${closedNotDoneItems(closedNotDone)}), for the reason you gave: "${closedNotDone.reason}".`
     );
   }
   const waitingLine = waitingAtClose ? describeWaiting(waitingAtClose) : null;
@@ -1047,11 +1045,7 @@ export async function completeFocusSession(
         await import("../messaging/post-message.js");
       await postChannelMessage({
         channelId: updated.channelId,
-        content: `Closed with required work still open (${[
-          ...closedNotDone.criteria.map((c) => c.key),
-          ...closedNotDone.outcomes.map((o) => o.key),
-          ...closedNotDone.owedByPerson.map((o) => o.key),
-        ].join(", ")}). The agent's reason: ${closedNotDone.reason}`,
+        content: `Closed with required work still open (${closedNotDoneItems(closedNotDone)}). The agent's reason: ${closedNotDone.reason}`,
         role: "system",
         triggerAI: false,
         userId: params.userId,
