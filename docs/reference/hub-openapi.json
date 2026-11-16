@@ -50293,7 +50293,7 @@
       "get": {
         "tags": ["Attention"],
         "summary": "What really needs the person, and where everything else went",
-        "description": "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days; one row per ask, `needsYouRows` draws one per session), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads. A key bounded by a grant needs `session.read`: one that reads sessions, proposals, rooms and records everywhere gets the whole read; any other gets only the asks and sessions of the spaces, projects and objects its grant names, the proposals only with `proposal.read`, and `withheld` names the halves it did not read (`notifications`, the person's own `captures`, `invites` and access requests). `withheld` is absent for the whole read.",
+        "description": "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days; one row per ask, `needsYouRows` draws one per session), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads. A key bounded by a grant needs `session.read`: one that reads sessions, proposals, rooms and records everywhere gets the whole read; any other gets only the asks and sessions of the spaces, projects and objects its grant names, the proposals only with `proposal.read`, and `withheld` names the halves it did not read (`notifications`, the person's own `captures`, `invites` and access requests). `withheld` is absent for the whole read. `include=context` adds `context` (`NeedsYouContextRead`, `@synap-core/types/needs-you`): per session its newest `timelineItems` (default 4) timeline items, what the agent does meanwhile and the open sessions that wait on it; per row its session, its proposals' waits and its `subject` (the object it is about, under the caller's read floor; absent when it names none the caller can read), read once for the page; a part whose read failed is `{status: 'unreadable'}`.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -50324,6 +50324,18 @@
             "schema": { "type": "integer", "minimum": 1, "maximum": 200 },
             "required": false,
             "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "enum": ["context"] },
+            "required": false,
+            "name": "include",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 20 },
+            "required": false,
+            "name": "timelineItems",
             "in": "query"
           }
         ],

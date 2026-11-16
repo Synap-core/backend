@@ -1130,6 +1130,34 @@ export function isOpenAgentSlot(slot: ExpectedOutput): boolean {
   );
 }
 
+/**
+ * What the agent can do now: its open slots (`isOpenAgentSlot`). An ANSWERED
+ * slot is the agent's most actionable work (the person already replied), so
+ * it leads (stable sort: declaration order otherwise). ONE rule for the
+ * packet's `aiCanDo` and the needs-you context's "Meanwhile".
+ */
+export function aiCanDoItems(all: readonly ExpectedOutput[]): PacketSlotItem[] {
+  return all
+    .filter(isOpenAgentSlot)
+    .map((s): PacketSlotItem => ({
+      label: s.label,
+      kind: s.kind,
+      ...kindIdentity(s.kind),
+      ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
+      ...(s.answer
+        ? {
+            answer: {
+              text: s.answer.text,
+              answeredAt: s.answer.answeredAt,
+              messageId: s.answer.messageId,
+              ...(s.answer.value ? { value: s.answer.value } : {}),
+            },
+          }
+        : {}),
+    }))
+    .sort((a, b) => Number(!!b.answer) - Number(!!a.answer));
+}
+
 /** The session's step entries, with the agent's and the computer's names. */
 async function readStageRuns(
   database: typeof db,
@@ -2869,29 +2897,7 @@ export async function projectContinuationPacket(
   const blockers = section(
     owed.filter((s) => s.blockedReason !== undefined).map(owedItem)
   );
-  // An ANSWERED slot is the agent's most actionable work — the person already
-  // replied — so it leads (stable sort: declaration order otherwise).
-  const aiCanDo = section(
-    all
-      .filter(isOpenAgentSlot)
-      .map((s): PacketSlotItem => ({
-        label: s.label,
-        kind: s.kind,
-        ...kindIdentity(s.kind),
-        ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
-        ...(s.answer
-          ? {
-              answer: {
-                text: s.answer.text,
-                answeredAt: s.answer.answeredAt,
-                messageId: s.answer.messageId,
-                ...(s.answer.value ? { value: s.answer.value } : {}),
-              },
-            }
-          : {}),
-      }))
-      .sort((a, b) => Number(!!b.answer) - Number(!!a.answer))
-  );
+  const aiCanDo = section(aiCanDoItems(all));
 
   // One rejected promise, shared: `outputs` and `alreadyDone` each turn it into
   // their own `unavailable` below.
