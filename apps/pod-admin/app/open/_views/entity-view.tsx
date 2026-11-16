@@ -49,6 +49,7 @@ import {
 } from "../open-model";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
+import { ConnectedObjects } from "../../_lib/object/connected-objects";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
@@ -210,6 +211,7 @@ export function EntityView({ id }: { id: string }) {
           openInApp={openInApp}
         />
       ))}
+      <ConnectedObjects entityId={id} />
       {entity.documentId && !bodyIsMedia && (
         <DocumentContentSection
           title="Content"

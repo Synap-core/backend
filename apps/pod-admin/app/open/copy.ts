@@ -46,6 +46,13 @@ export const en = {
   "view.shows.layoutOver": "{layout} view of {noun}.",
   "view.shows.layout": "{layout} view.",
   "view.shows.unknown": "A saved view.",
+  "connected.title": "Connected",
+  "connected.pages": "Images",
+  "connected.failed": "The connected objects couldn’t be read.",
+  "connected.retry": "Try again",
+  "connected.showAll": "Show all {n}",
+  "connected.showLess": "Show fewer",
+  "connected.untitled": "Untitled",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -87,6 +94,13 @@ export const fr: Catalog<typeof en> = {
   "view.shows.layoutOver": "Vue {layout} de {noun}.",
   "view.shows.layout": "Vue {layout}.",
   "view.shows.unknown": "Une vue enregistrée.",
+  "connected.title": "Liés",
+  "connected.pages": "Images",
+  "connected.failed": "Les objets liés n’ont pas pu être lus.",
+  "connected.retry": "Réessayer",
+  "connected.showAll": "Tout afficher ({n})",
+  "connected.showLess": "En afficher moins",
+  "connected.untitled": "Sans titre",
 };
 
 /** `/open`'s translator, in the ambient catalog locale. */
