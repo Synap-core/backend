@@ -175,6 +175,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "kind.review.other": "Revues",
   "kind.test_run.one": "Série de tests",
   "kind.test_run.other": "Séries de tests",
+  "kind.branch.one": "Branche",
+  "kind.branch.other": "Branches",
   // ── Verbs: `action.<token>.imperative` (infinitive) / `.past` (masculine
   // participle, D4) / `.progressive` / `.present` ──
   "action.create.imperative": "Créer",
@@ -788,4 +790,5 @@ export const vocabularyFrNouns: Readonly<Record<NounSlug, FrenchNounGrammar>> =
     room: { gender: "m", elides: false },
     review: { gender: "f", elides: false },
     test_run: { gender: "f", elides: false },
+    branch: { gender: "f", elides: false },
   };

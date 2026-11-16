@@ -835,6 +835,10 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   // The user word for a track stage is "Step"; both spellings reach one kind.
   step: "stage",
   track_stage: "stage",
+  // What waits for a person's yes is a "Request" (founder G1, 2026-10-30):
+  // the user word reaches the one `proposal` row, never a second noun.
+  request: "proposal",
+  requests: "proposal",
   // The package layer's tag for a bundle (`workspace` package tagged `suite`).
   suite: "pack",
   suites: "pack",
