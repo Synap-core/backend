@@ -161,7 +161,7 @@ beforeAll(async () => {
       [randomUUID(), ws, U, `Deploy board ${i}`]
     );
     await q(
-      `insert into playbooks (id, user_id, workspace_id, name, description, status, scope, params) values ($1,$2,$3,$4,'How we deploy','active','session','[]'::jsonb)`,
+      `insert into playbooks (id, created_by, workspace_id, name, description, goal_template, status, scope, params) values ($1,$2,$3,$4,'How we deploy','Deploy it','active','session','[]'::jsonb)`,
       [randomUUID(), U, ws, `Deploy playbook ${i}`]
     );
     const entity = randomUUID();

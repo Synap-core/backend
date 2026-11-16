@@ -188,6 +188,7 @@ beforeEach(() => {
   // The assembled registry is held 15 s: every test starts from a cold read.
   invalidateCapabilityReadCaches();
   vi.useRealTimers();
+  listIntentRows.mockClear();
   installedRecipesFor.mockReset().mockResolvedValue(new Map());
   listCapabilities.mockReset().mockResolvedValue(CATALOG);
   matchSessionTemplate.mockReset().mockResolvedValue(NO_PLAYBOOKS);

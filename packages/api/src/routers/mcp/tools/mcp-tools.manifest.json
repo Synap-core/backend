@@ -7627,7 +7627,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: records (people, companies, tasks…), skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. Pass `intent` as free text. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+      "description": "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: records, skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. Pass `intent` as free text. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
       "inputSchema": {
         "type": "object",
         "properties": {
