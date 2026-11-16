@@ -212,6 +212,45 @@ function notLanded(bag: Record<string, unknown>): {
 export async function finishTemplateApply(
   input: FinishTemplateApplyInput
 ): Promise<FinishTemplateApplyResult> {
+  const result = await finishTemplateApplyOutcome(input);
+  if (result.state !== "failed") await fillSpaceNeedsAfterApply(input);
+  return result;
+}
+
+/**
+ * The space's NEEDS after an apply (0426, founder decision D3): each need the
+ * space's processes declare gets its binding (the one installed provider that
+ * fills it), or stays empty with an install proposal or a choice for the
+ * person (`reconcileSpaceNeeds`). The apply was the person's act, or an
+ * approved proposal, so the reconcile runs as the person. Best effort: a
+ * failure here is logged and never fails or un-stamps the apply.
+ */
+async function fillSpaceNeedsAfterApply(
+  input: Pick<FinishTemplateApplyInput, "workspaceId" | "userId">
+): Promise<void> {
+  try {
+    const { reconcileSpaceNeeds } = await import("./needs/space-need-coverage.js");
+    const report = await reconcileSpaceNeeds({
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+    });
+    if (report.steps.length > 0) {
+      logger.info(
+        { workspaceId: input.workspaceId, steps: report.steps },
+        "template apply: the space's needs were reconciled"
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err, workspaceId: input.workspaceId },
+      "template apply: the space's needs could not be reconciled — they stay as they were"
+    );
+  }
+}
+
+async function finishTemplateApplyOutcome(
+  input: FinishTemplateApplyInput
+): Promise<FinishTemplateApplyResult> {
   const { workspaceId, userId, built, pendingVersionStamp, pendingPack, post } =
     input;
   if (input.overlay && input.layerTwoFailed)

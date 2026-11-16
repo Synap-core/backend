@@ -367,6 +367,11 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../services/playbooks/set-run-choice.js"),
     why: "playbook.set_run_choice through checkPermissionOrPropose (an agent's choice is a proposal)",
   },
+  "PUT /workspaces/:workspaceId/needs/:need": {
+    via: "bindSpaceNeedThroughGate",
+    load: () => import("../services/needs/space-need-door.js"),
+    why: "workspace.bind_need through checkPermissionOrPropose (an agent's choice of provider is a proposal), shared with tRPC needs.bind",
+  },
   "POST /projects": {
     via: "createProjectGoverned",
     load: () => import("../services/projects/create-project.js"),

@@ -657,6 +657,7 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
       {
         const {
           registerCapabilityExecutor,
+          registerNeedVerbResolver,
           registerPlaybookRunner,
           registerPlaybookReadinessGate,
           registerSessionScheduler,
@@ -728,6 +729,9 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/intelligence-health-check.js");
         const api = await import("@synap/api");
         registerCapabilityExecutor((input) => api.executeCapability(input));
+        // ONE need resolver (0426): an automation `capability` node that names
+        // a need runs the verb of the provider its space bound to it.
+        registerNeedVerbResolver((input) => api.resolveNeedVerb(input));
         // ONE playbook-run spine: the scheduled path (@synap/jobs) delegates
         // to api's runPlaybook via this slot, so is-agent | external-agent |
         // hybrid all dispatch through the executor spine + triggerAutoRespond.

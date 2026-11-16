@@ -192,6 +192,7 @@ export {
 export { evaluateCondition } from "./condition-eval.js";
 export {
   registerCapabilityExecutor,
+  registerNeedVerbResolver,
   registerPlaybookRunner,
   registerPlaybookReadinessGate,
   registerSessionScheduler,
@@ -1304,6 +1305,7 @@ async function executeAutomationFlow(params: {
                           childNode.data as {
                             capabilityId?: string;
                             verbId?: string;
+                            need?: string;
                             inputMapping?: Record<string, string>;
                             connectionSelector?: {
                               connectionId?: string;
@@ -1750,6 +1752,7 @@ async function executeAutomationFlow(params: {
                 node.data as {
                   capabilityId?: string;
                   verbId?: string;
+                  need?: string;
                   inputMapping?: Record<string, string>;
                   connectionSelector?: {
                     connectionId?: string;

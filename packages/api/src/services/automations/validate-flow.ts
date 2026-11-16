@@ -39,7 +39,8 @@
  * `AssertExact` guard below binding its arrays to the `@synap/database` unions).
  */
 
-// `import type` — erased at compile time, so this file stays runtime pure/DB-free.
+// `import { needRefProblem } from "@synap-core/types/needs";
+import type` — erased at compile time, so this file stays runtime pure/DB-free.
 // It exists only to bind the runtime arrays below to the schema union at compile
 // time (the drift guard after the constants).
 import type { AutomationNodeBase, OutputNodeDef } from "@synap/database";
@@ -330,11 +331,24 @@ export function validateFlowDefinition(
 
     switch (type) {
       case "capability": {
+        // A node may name a NEED instead of a verb (0426): the verb is the
+        // space's bound provider's, resolved at run time.
+        if (!nonEmptyString(data.verbId) && nonEmptyString(data.need)) {
+          const problem = needRefProblem(data.need);
+          if (problem) {
+            errors.push({
+              nodeId,
+              code: "capability_unknown_need",
+              message: `Capability node "${nodeId}": ${problem}`,
+            });
+          }
+          break;
+        }
         if (!nonEmptyString(data.verbId)) {
           errors.push({
             nodeId,
             code: "capability_missing_verbId",
-            message: `Capability node "${nodeId}" has no \`verbId\`. Pick a verb on the selected tool.`,
+            message: `Capability node "${nodeId}" has no \`verbId\` (or \`need\`). Pick a verb on the selected tool, or name a need.`,
           });
         } else if (
           resolvers?.verbExists &&

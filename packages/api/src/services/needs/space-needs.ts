@@ -475,3 +475,35 @@ export async function resolveRequiresNeeds(
     return [...keys];
   }
 }
+
+/**
+ * The ONE verb a single-verb need ref runs in a space (a criterion's
+ * `check.capability`, an automation `capability` node's `need`): the space's
+ * binding, the registry under the space's lens, {@link chooseNeedVerb}.
+ * Answers the verb, or the reason in one sentence; throws only when a read
+ * fails (never folded into "not filled").
+ */
+export async function resolveNeedVerb(input: {
+  need: string;
+  workspaceId: string | null;
+  userId: string;
+}): Promise<{ verbId: string } | { reason: string }> {
+  const entry = input.need.startsWith("need:") ? input.need : `need:${input.need}`;
+  if (!input.workspaceId) {
+    return {
+      reason: `"${entry}" names a need, and needs are filled per space: this runs in no space.`,
+    };
+  }
+  const [{ listCapabilities }, bindings] = await Promise.all([
+    import("../capabilities/capability-registry.js"),
+    readSpaceNeedBindings(input.workspaceId),
+  ]);
+  const rows = await listCapabilities(
+    { workspaceId: input.workspaceId, userId: input.userId },
+    { limit: null }
+  );
+  const choice = chooseNeedVerb(resolveNeedRefVerbs(entry, bindings, rows));
+  return choice.status === "ok"
+    ? { verbId: choice.verbId }
+    : { reason: needResolutionReason(choice) };
+}

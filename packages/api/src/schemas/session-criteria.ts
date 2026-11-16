@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import { looksLikeNeedRef, needRefProblem } from "@synap-core/types/needs";
 import {
   CRITERION_ABOUT,
   CRITERION_CHECK_KINDS,
@@ -74,6 +75,18 @@ export const sessionCriterionSchema = z
         message: "A capability check names the capability verb to run",
         path: ["check", "capability"],
       });
+    }
+    // A need ref (0426) instead of a verb: it must name a need of the
+    // vocabulary (and, with a suffix, one of its intents).
+    if (c.check.capability && looksLikeNeedRef(c.check.capability)) {
+      const problem = needRefProblem(c.check.capability);
+      if (problem) {
+        ctx.addIssue({
+          code: "custom",
+          message: problem,
+          path: ["check", "capability"],
+        });
+      }
     }
     if (c.check.kind === "evidence" && !c.check.evidenceKey) {
       ctx.addIssue({
