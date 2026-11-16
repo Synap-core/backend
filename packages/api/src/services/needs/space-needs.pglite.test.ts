@@ -605,6 +605,13 @@ describe("the template-install reconcile and requires", () => {
       const only = await provider(S, "GitHub");
       await backfillSpaceNeedBindings();
       await q(`DELETE FROM capabilities WHERE id = $1`, [only]);
+      // This harness builds tables from the drizzle schema without foreign
+      // keys; the real FK (ON DELETE SET NULL) is pinned on the migration SQL
+      // in migrations-0426.pglite.test.ts. Apply its effect here, then read.
+      await q(
+        `UPDATE installation_bindings SET provider_capability_id = NULL WHERE provider_capability_id = $1`,
+        [only]
+      );
       expect((await rowsOf(S)).rows).toEqual([
         { provider: null, origin: "automatic", state: "live" },
       ]);
