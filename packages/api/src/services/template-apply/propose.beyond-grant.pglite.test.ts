@@ -577,6 +577,9 @@ describe("only the decided doors ask to propose beyond the grant", () => {
       // and MCP synap_request_installation ask through it).
       "services/installations/request-installation.ts",
       "services/template-apply/propose.ts",
+      // The whiteboard place door: an agent's update/remove beyond its grant
+      // is a proposal, never a denial (founder rule; the real-gate test pins it).
+      "services/whiteboards/place-on-board.ts",
     ]);
   });
 });

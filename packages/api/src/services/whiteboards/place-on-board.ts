@@ -43,7 +43,6 @@ import {
   views,
   automations,
   getActingAgentUserId,
-  userVisibleWhere,
   ownerPrivateVisibleWhere,
 } from "@synap/database";
 import {
@@ -595,7 +594,11 @@ export async function resolveBoardReferences(
         .where(
           and(
             inArray(entities.id, [...entityIds]),
-            userVisibleWhere(entities.workspaceId, ctx.userId)
+            ownerPrivateVisibleWhere(
+              entities.workspaceId,
+              entities.userId,
+              ctx.userId
+            )
           )
         )
     : [];
