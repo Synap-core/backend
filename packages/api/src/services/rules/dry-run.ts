@@ -74,8 +74,10 @@ import {
   desc,
   isNull,
   or,
+  actorsOfSamePerson,
   type AutomationTriggerConfig,
 } from "@synap/database";
+import { readAutomationAudience } from "@synap-core/types/automations";
 import type { SQL } from "drizzle-orm";
 // Deep worker import, exactly like `automation-cron-scheduler.js` /
 // `automation-run-reaper.js` already are from this package. The four predicates
@@ -390,6 +392,23 @@ export function triggerReplayCaveats(
 }
 
 /**
+ * What an `everyone` replay cannot see: the preview reads only the caller's own
+ * person's events (theirs and their agents'), never another member's log, so
+ * for a rule answering to everyone the count is a floor.
+ */
+export function audienceReplayCaveats(
+  config: AutomationTriggerConfig
+): string[] {
+  const audience = readAutomationAudience(config);
+  if (audience.ok && audience.value === "everyone") {
+    return [
+      "This rule answers to everyone's events, but the preview counts only yours and your agents' — other members' history is never read here, so the real number can be higher.",
+    ];
+  }
+  return [];
+}
+
+/**
  * What a SCOPED replay cannot see. Membership is read as it is NOW — an entity
  * moved into the project since the event counts, one moved out does not — and
  * rows whose membership could not be read are left out, never counted.
@@ -536,10 +555,16 @@ export interface RuleDryRunInput {
  * SCOPING: `events` has no `VisibilityRule` in `access/registry.ts`, so
  * `scopedDb` cannot be used here (it throws for unregistered tables, by
  * design). The floor applied instead is the strictest one available and does
- * not depend on any request field: `events.user_id = <caller>`. A supplied
+ * not depend on any request field: the events of the caller's PERSON —
+ * `events.user_id IN actorsOfSamePerson(<caller>)`, the caller's person and
+ * that person's agents. It is the same set the live matcher answers a pod-wide
+ * automation with (decision 782c862e: an agent acting for P counts as P), so a
+ * preview and a firing cannot disagree on whose events count. A supplied
  * `workspaceId` can only NARROW that — it is ANDed on, never substituted for
- * the user floor, so a forged workspace id cannot reach another user's log.
- * The `automation_runs` half DOES go through the canonical predicate.
+ * the person floor, so a forged workspace id cannot reach another person's log.
+ * Audience `everyone` does NOT widen the read: other members' events stay out
+ * and a caveat says so. The `automation_runs` half DOES go through the
+ * canonical predicate.
  */
 export async function runRuleDryRun(
   input: RuleDryRunInput
@@ -557,8 +582,9 @@ export async function runRuleDryRun(
 
   const since = new Date(Date.now() - input.windowDays * 86_400_000);
 
+  const personActorIds = await actorsOfSamePerson(db, input.userId);
   const conditions: SQL[] = [
-    eq(events.userId, input.userId),
+    inArray(events.userId, personActorIds),
     gte(events.timestamp, since),
   ];
   const prefilter = eventTypePrefilter(eventPattern);
@@ -619,6 +645,7 @@ export async function runRuleDryRun(
     caveats: [
       ...triggerReplayCaveats(input.triggerConfig),
       ...scopeReplayCaveats(input.triggerConfig, unreadableCount),
+      ...audienceReplayCaveats(input.triggerConfig),
     ],
   };
 

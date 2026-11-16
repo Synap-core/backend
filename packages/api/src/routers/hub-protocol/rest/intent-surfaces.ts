@@ -28,6 +28,10 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import {
+  NEEDS_YOU_INCLUDE,
+  REQUEST_CONTEXT_TIMELINE_MAX,
+} from "@synap-core/types/needs-you";
 import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -124,6 +128,15 @@ const needsYouQuery = z.object({
   trackId: uuidQueryParam.optional(),
   sessionId: uuidQueryParam.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
+  /** `context` adds the page's request context (`signals.needsYou`'s `include`). */
+  include: z.enum(NEEDS_YOU_INCLUDE).optional(),
+  /** Timeline items per session in `context` (default 4). */
+  timelineItems: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(REQUEST_CONTEXT_TIMELINE_MAX)
+    .optional(),
 });
 
 type HubContext = HonoContext<{ Variables: HubVariables }>;
@@ -340,7 +353,7 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     tags: ["Attention"],
     summary: "What really needs the person, and where everything else went",
     description:
-      "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days; one row per ask, `needsYouRows` draws one per session), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads. A key bounded by a grant needs `session.read`: one that reads sessions, proposals, rooms and records everywhere gets the whole read; any other gets only the asks and sessions of the spaces, projects and objects its grant names, the proposals only with `proposal.read`, and `withheld` names the halves it did not read (`notifications`, the person's own `captures`, `invites` and access requests). `withheld` is absent for the whole read.",
+      "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days; one row per ask, `needsYouRows` draws one per session), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads. A key bounded by a grant needs `session.read`: one that reads sessions, proposals, rooms and records everywhere gets the whole read; any other gets only the asks and sessions of the spaces, projects and objects its grant names, the proposals only with `proposal.read`, and `withheld` names the halves it did not read (`notifications`, the person's own `captures`, `invites` and access requests). `withheld` is absent for the whole read. `include=context` adds `context` (`NeedsYouContextRead`, `@synap-core/types/needs-you`): per session its newest `timelineItems` (default 4) timeline items, what the agent does meanwhile and the open sessions that wait on it; per row its session, its proposals' waits and its `subject` (the object it is about, under the caller's read floor; absent when it names none the caller can read), read once for the page; a part whose read failed is `{status: 'unreadable'}`.",
     request: { query: needsYouQuery },
     responses: {
       200: {
@@ -363,6 +376,8 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
           ...(q.trackId ? { trackId: q.trackId } : {}),
           ...(q.sessionId ? { sessionId: q.sessionId } : {}),
           ...(q.limit ? { limit: q.limit } : {}),
+          ...(q.include ? { include: [q.include] } : {}),
+          ...(q.timelineItems ? { timelineItems: q.timelineItems } : {}),
         }),
       { confineWorkspace: true }
     )

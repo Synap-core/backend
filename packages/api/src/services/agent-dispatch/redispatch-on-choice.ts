@@ -28,6 +28,7 @@ import {
 import { registerReactor, type Reactor } from "@synap/events";
 import type { PlaybookStage, RunResult } from "@synap/playbooks";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import { isDeclinedValue } from "@synap-core/types/ask";
 import { resolveExecutor } from "../playbooks/executors/registry.js";
 import { recordExecutorResult } from "../playbooks/run-playbook.js";
 import { runPromptFor } from "../playbooks/playbook-lifecycle.js";
@@ -202,6 +203,8 @@ export const agentChoiceRedispatchReactor: Reactor = {
     payload.subjectType === "focus_session" &&
     payload.action === "slot_answered" &&
     payload.data?.kind === PARAM_SLOT_KIND &&
+    // A refusal names no agent: re-dispatching would fail and ask again.
+    !isDeclinedValue(payload.data?.value) &&
     normalizeExpectedLabel(
       payload.data?.expectedLabel as string | undefined
     ) === normalizeExpectedLabel(CHOOSE_AGENT_SLOT_LABEL),

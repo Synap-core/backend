@@ -636,6 +636,16 @@ const ACTION_VERB_ROWS = {
     past: "Declined",
     progressive: "Declining",
   },
+  // The person's NO to an agent's ask, on every mode (founder, 16 Nov 2026,
+  // plan d717d6ac §3): the stored answer is `{ type: "declined" }`
+  // (`@synap-core/types/ask`). Not `decline` (a connection asking for reach)
+  // and not `reject` (a proposal): the ask closes as refused, the reason goes
+  // to the agent, nothing is handed over.
+  refuse: {
+    imperative: "Refuse",
+    past: "Refused",
+    progressive: "Refusing",
+  },
   // Cutting a connection's sign-in (an account, a channel, an agent's keys).
   // Reversible by connecting again — never "Deleted".
   disconnect: {

@@ -397,8 +397,9 @@ export async function createRuleGoverned(
           //
           // A pod-wide automation IS a supported lane — `podWideMatch`
           // (automation-trigger-matcher.ts) pairs `workspaceId IS NULL` with
-          // `createdBy = userId`, so it matches the owner's events across every
-          // workspace, which is exactly what "pod" means here. The one gap is a
+          // the owner's PERSON (`podWideAutomationAnswersTo`, audience `me` by
+          // default), so it matches the owner's events — and their agents' —
+          // across every workspace, which is exactly what "pod" means here. The one gap is a
           // pod-wide automation meeting a pod-wide EVENT, which the matcher
           // skips with a loud warning — a pre-existing executor-side limitation,
           // not something this door introduces.

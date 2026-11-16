@@ -42,6 +42,7 @@
  *       (a JUDGEMENT of the agent's claim, whoever owns the slot — it
  *       outranks the owner: the act asked is "check this", not "make this")
  *   the person's                        → owed from you  → needs_you
+ *   the person refused its ask          → blocked on "Refused: …" → blocked
  *   handed back by its delegate         → blocked on the reason → blocked
  *   the session's, session still open   → running        → working
  *   the session's, session finished     → never started  → not_started
@@ -52,6 +53,11 @@
  */
 
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
+import {
+  declinedAnswerText,
+  declinedReasonOf,
+  isDeclinedAnswer,
+} from "../ask/declined.js";
 import {
   resolveUnitState,
   type UnitStateInput,
@@ -103,6 +109,11 @@ export const DECIDING_ASK_MODES = ["confirm", "choose"] as const;
  *     words with no ask file none).
  * A criterion's grade slot never counts, though its ask is a choose: it is a
  * verdict on the agent's work, discharged by the grade door, not a decision.
+ * A REFUSAL never counts either (`answer.value.type === "declined"`,
+ * `../ask/declined.ts`): the person said no to the ask, which decides
+ * nothing, so the slot stays owed (by the agent, after the hand-back). A
+ * decision ask OPENED FOR a decision already carries `decisionId` before any
+ * answer, which is why the value is read, not only the filing.
  *
  * READ-TIME, so a slot answered before the rule existed reads delivered too,
  * and a re-answer or a relay correction moves it with no second write. The
@@ -126,6 +137,7 @@ export function isDecidedByAnswer(
   if (!answer || typeof answer !== "object" || Array.isArray(answer)) {
     return false;
   }
+  if (isDeclinedAnswer(answer)) return false;
   const snapshot = (answer as { askSnapshot?: unknown }).askSnapshot;
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
     return false;
@@ -232,6 +244,12 @@ export function deliverableUnitInput(
   if (owedBy === null) return { terminal: true };
   if (slot.claimedDone) return { pendingDecisions: 1 };
   if (owedBy === "you") return { owedFromYou: 1 };
+  // The person REFUSED the ask: the agent owes a new plan, and the slot says
+  // why it is stuck, on an open session and a finished one alike (a refused
+  // slot of a closed session must not read "never started").
+  if (isDeclinedAnswer(slot.answer)) {
+    return { blockedBy: declinedAnswerText(declinedReasonOf(slot.answer)) };
+  }
   if (slot.returnedReason) return { blockedBy: slot.returnedReason };
   if (ctx.sessionTerminal) return { everStarted: false };
   return { running: true };

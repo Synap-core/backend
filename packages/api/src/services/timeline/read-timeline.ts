@@ -17,7 +17,13 @@
  *                     (`sessionDevFactWhere`, the change feed's rule), at the
  *                     time they happened, `recordedAt` when the pod heard late;
  *                 `decision_asked` / `decision_answered` — the proposals filed
- *                     in it (pending; decided by a PERSON), as the goal history.
+ *                     in it (pending; decided by a PERSON), as the goal history;
+ *                 `slot_asked` / `slot_answered` / `slot_attested` /
+ *                     `relay_corrected` / `question_withdrawn` — its slots'
+ *                     history rows (`focus_session.slot_*`, under the events
+ *                     floor), written by the ask doors in the same transaction
+ *                     as the change. Room posts are not in it.
+ *                 One session or a page of them: {@link readSessionTimelines}.
  *   pull_request  its `dev.pr_*` facts, and the CI runs that name it or ran on
  *                 a head sha one of them named (the PR fold's own rule).
  *   entity        a thing's status moves — its own and those of the roles it
@@ -47,8 +53,10 @@ import {
   isNotNull,
   isNull,
   lifecycleTransitionOutbox,
+  lte,
   or,
   proposals,
+  type SQL,
 } from "@synap/database";
 import {
   DEV_LOOP_EVENT_TYPES,
@@ -79,7 +87,16 @@ import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import {
   sessionDevFactWhere,
   sessionPullRequestRefs,
+  unstampedPullRequestFactWhere,
 } from "../focus-sessions/session-changes.js";
+import {
+  FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE,
+  FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE,
+  FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE,
+  FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE,
+  FOCUS_SESSION_SLOT_ATTESTED_EVENT_TYPE,
+  FOCUS_SESSION_SUBJECT_TYPE,
+} from "../focus-sessions/lifecycle-events.js";
 import { readTrackHistory } from "../tracks/track-history.js";
 import { readThingRoles } from "../status/status-roles.js";
 import type { TrackActor } from "../tracks/tracks-service.js";
@@ -375,11 +392,150 @@ async function readEntityTimeline(
   };
 }
 
-async function readSessionTimeline(
-  sessionId: string,
-  actor: TimelineReader
-): Promise<TimelineWire | null> {
-  const [session] = await db
+/** A slot history row's type → its timeline kind (`lifecycle-events.ts`). */
+const SLOT_EVENT_KIND: Readonly<
+  Record<
+    string,
+    | "slot_asked"
+    | "slot_answered"
+    | "slot_attested"
+    | "relay_corrected"
+    | "question_withdrawn"
+  >
+> = {
+  [FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE]: "slot_asked",
+  [FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE]: "slot_answered",
+  [FOCUS_SESSION_SLOT_ATTESTED_EVENT_TYPE]: "slot_attested",
+  [FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE]: "relay_corrected",
+  [FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE]: "question_withdrawn",
+};
+const SLOT_EVENT_TYPES = Object.keys(SLOT_EVENT_KIND);
+
+const str = (v: unknown): string | null =>
+  typeof v === "string" && v.trim() ? v : null;
+
+/**
+ * One slot history row (`focus_session.slot_*`, written by the door that made
+ * the change) as a timeline event; null when the row is not one. The actor
+ * is who ACTED: the asking agent (else the pod), the person who answered or
+ * attested or corrected, the agent that withdrew.
+ */
+function slotEvent(
+  row: DevFactRow & { userId: string },
+  sessionId: string
+): Pending | null {
+  const kind = SLOT_EVENT_KIND[row.type];
+  if (!kind) return null;
+  const d = (row.data ?? {}) as Record<string, unknown>;
+  const slot = str(d.expectedLabel);
+  const base = {
+    id: `event:${row.id}`,
+    at: iso(row.timestamp),
+    refs: { sessionId, ...(slot ? { slotLabel: slot } : {}) },
+  };
+  switch (kind) {
+    case "slot_asked": {
+      if (!slot) return null;
+      const ask = (d.ask ?? null) as { mode?: unknown } | null;
+      const agent = str(d.askedByAgentUserId);
+      return {
+        event: {
+          ...base,
+          kind,
+          slot,
+          askMode: str(ask?.mode),
+          blockedReason: str(d.blockedReason),
+          ...(agent ? {} : { actor: SYSTEM }),
+        },
+        actorId: agent,
+        isAgent: Boolean(agent),
+      };
+    }
+    case "slot_answered": {
+      if (!slot) return null;
+      const value = (d.value ?? null) as { type?: unknown } | null;
+      return {
+        event: {
+          ...base,
+          kind,
+          slot,
+          answerType: str(value?.type),
+          handedBack: d.handedBack === true,
+          relayed: d.via === "relayed" || Boolean(str(d.relayedBy)),
+        },
+        actorId: str(d.answeredBy) ?? row.userId,
+        isAgent: false,
+      };
+    }
+    case "slot_attested":
+      if (!slot) return null;
+      return {
+        event: { ...base, kind, slot },
+        actorId: str(d.attestedBy) ?? row.userId,
+        isAgent: false,
+      };
+    case "relay_corrected":
+      return {
+        event: { ...base, kind, slot },
+        actorId: row.userId,
+        isAgent: false,
+      };
+    case "question_withdrawn": {
+      const agent = str(d.withdrawnBy);
+      return {
+        event: {
+          ...base,
+          kind,
+          slot,
+          note: str(d.note),
+          ...(agent ? {} : { actor: SYSTEM }),
+        },
+        actorId: agent,
+        isAgent: Boolean(agent),
+      };
+    }
+  }
+}
+
+/** The `row_number()` of a row within its session, newest first. */
+function rankIn(partition: SQL, order: SQL) {
+  return drizzleSql<number>`row_number() over (partition by ${partition} order by ${order} desc)`;
+}
+
+/** One session's timeline as {@link readSessionTimelines} returns it. */
+export interface SessionTimelineRead {
+  title: string;
+  /** Newest first, every source merged. */
+  events: DevTimelineEvent[];
+  /** A source held more than `perSource` rows: older events exist. */
+  truncated: boolean;
+}
+
+/**
+ * THE session timeline, for one session or a PAGE of them, in a fixed number
+ * of queries whatever the page size: the session rows, then ONE read per
+ * source (moves, dev facts, decisions, slot history) ranked per session by a
+ * window, then ONE actor read. Each source keeps at most `perSource` rows per
+ * session, newest first; one more than that sets `truncated`. The one-session
+ * door ({@link readTimeline}) is this with `perSource` = the source cap, so
+ * the door and a page's tails cannot project a session differently.
+ *
+ * A dev fact that names NO session and is about a PR two sessions of the page
+ * both declared is attributed to the first of them here (the one-session door
+ * shows it in each).
+ *
+ * Missing and not-yours sessions are absent from the map. A FAILED source
+ * read THROWS.
+ */
+export async function readSessionTimelines(
+  sessionIds: readonly string[],
+  actor: TimelineReader,
+  perSource: number = TIMELINE_SOURCE_CAP
+): Promise<Map<string, SessionTimelineRead>> {
+  const ids = [...new Set(sessionIds.filter(isUuid))];
+  const out = new Map<string, SessionTimelineRead>();
+  if (ids.length === 0) return out;
+  const sessions = await db
     .select({
       id: focusSessions.id,
       title: focusSessions.title,
@@ -396,129 +552,238 @@ async function readSessionTimeline(
     .from(focusSessions)
     .where(
       and(
-        eq(focusSessions.id, sessionId),
+        inArray(focusSessions.id, ids),
         sessionReadableWhere({ userId: actor.userId, lens: actor.lens })
       )
-    )
-    .limit(1);
-  if (!session) return null;
-  const cap = TIMELINE_SOURCE_CAP;
+    );
+  if (sessions.length === 0) return out;
+  const readable = sessions.map((s) => s.id);
+  const limit = perSource + 1;
   const outbox = lifecycleTransitionOutbox;
 
-  const [moves, facts, decisions] = await Promise.all([
-    db
-      .select({
-        id: outbox.transitionId,
-        transition: outbox.transition,
-        createdAt: outbox.createdAt,
-      })
-      .from(outbox)
-      .where(
-        and(
-          // The subject index (0374): coalesce(subjectId, entityId), created_at.
-          drizzleSql`coalesce(${outbox.transition}->>'subjectId', ${outbox.transition}->>'entityId') = ${session.id}`,
-          drizzleSql`${outbox.transition}->>'subjectType' = 'focus_session'`
-        )
+  // Moves: the subject index (0374), coalesce(subjectId, entityId).
+  const moveSubject = drizzleSql`coalesce(${outbox.transition}->>'subjectId', ${outbox.transition}->>'entityId')`;
+  const movesRanked = db
+    .select({
+      id: outbox.transitionId,
+      transition: outbox.transition,
+      createdAt: outbox.createdAt,
+      owner: drizzleSql<string>`${moveSubject}`.as("owner"),
+      rank: rankIn(moveSubject, drizzleSql`${outbox.createdAt}`).as("rank"),
+    })
+    .from(outbox)
+    .where(
+      and(
+        inArray(moveSubject, readable),
+        drizzleSql`${outbox.transition}->>'subjectType' = 'focus_session'`
       )
-      .orderBy(desc(outbox.createdAt))
-      .limit(cap + 1),
-    db
-      .select({
-        id: events.id,
-        type: events.type,
-        timestamp: events.timestamp,
-        data: events.data,
-      })
-      .from(events)
-      .where(
-        and(
-          inArray(events.type, DEV_FACT_TYPES),
-          sessionDevFactWhere(
-            session.id,
-            sessionPullRequestRefs(session.expectedOutputs)
-          ),
-          eventVisibleWhere({
-            userId: actor.userId,
-            roster: false,
-            lens: actor.lens,
-          })
-        )
+    )
+    .as("moves_ranked");
+
+  // Dev facts: the fact names one of these sessions, else it is about a PR
+  // one of them declared (`sessionDevFactWhere`, clause by clause).
+  const refsOf = sessions.map((s) => ({
+    id: s.id,
+    refs: sessionPullRequestRefs(s.expectedOutputs),
+  }));
+  const stamped = drizzleSql`${events.data}->>'sessionId'`;
+  const factOwner = drizzleSql`case when ${inArray(stamped, readable)} then ${stamped}${drizzleSql.join(
+    refsOf.flatMap(({ id, refs }) =>
+      refs.map(
+        (r) =>
+          drizzleSql` when ${unstampedPullRequestFactWhere(r)} then ${id}::text`
       )
-      .orderBy(desc(events.timestamp))
-      .limit(cap + 1),
-    db
-      .select({
-        id: proposals.id,
-        status: proposals.status,
-        createdAt: proposals.createdAt,
-        reviewedAt: proposals.reviewedAt,
-        reviewedBy: proposals.reviewedBy,
-        agentUserId: proposals.agentUserId,
-        authorId: drizzleSql<
-          string | null
-        >`coalesce(${proposals.agentUserId}, ${proposals.proposedByUserId}, ${proposals.createdBy})`,
-        summary: drizzleSql<
-          string | null
-        >`coalesce(nullif(${proposals.data}->>'_summary', ''), nullif(${proposals.data}->>'summary', ''))`,
-        rejectionReason: proposals.rejectionReason,
-        comments: proposals.comments,
-      })
-      .from(proposals)
-      .where(
-        and(
-          eq(proposals.sessionId, session.id),
-          or(
-            eq(proposals.status, "pending"),
-            and(
-              inArray(proposals.status, [...DECISION_STATUSES]),
-              isNotNull(proposals.reviewedBy),
-              isNotNull(proposals.reviewedAt)
-            )
+    ),
+    drizzleSql``
+  )} end`;
+  const factsRanked = db
+    .select({
+      id: events.id,
+      type: events.type,
+      timestamp: events.timestamp,
+      data: events.data,
+      owner: drizzleSql<string>`${factOwner}`.as("owner"),
+      rank: rankIn(factOwner, drizzleSql`${events.timestamp}`).as("rank"),
+    })
+    .from(events)
+    .where(
+      and(
+        inArray(events.type, DEV_FACT_TYPES),
+        or(...refsOf.map(({ id, refs }) => sessionDevFactWhere(id, refs))),
+        eventVisibleWhere({
+          userId: actor.userId,
+          roster: false,
+          lens: actor.lens,
+        })
+      )
+    )
+    .as("facts_ranked");
+
+  const decisionsRanked = db
+    .select({
+      id: proposals.id,
+      sessionId: proposals.sessionId,
+      status: proposals.status,
+      createdAt: proposals.createdAt,
+      reviewedAt: proposals.reviewedAt,
+      reviewedBy: proposals.reviewedBy,
+      agentUserId: proposals.agentUserId,
+      authorId: drizzleSql<
+        string | null
+      >`coalesce(${proposals.agentUserId}, ${proposals.proposedByUserId}, ${proposals.createdBy})`.as(
+        "author_id"
+      ),
+      summary: drizzleSql<
+        string | null
+      >`coalesce(nullif(${proposals.data}->>'_summary', ''), nullif(${proposals.data}->>'summary', ''))`.as(
+        "summary"
+      ),
+      rejectionReason: proposals.rejectionReason,
+      comments: proposals.comments,
+      rank: rankIn(
+        drizzleSql`${proposals.sessionId}`,
+        drizzleSql`${proposals.createdAt}`
+      ).as("rank"),
+    })
+    .from(proposals)
+    .where(
+      and(
+        inArray(proposals.sessionId, readable),
+        or(
+          eq(proposals.status, "pending"),
+          and(
+            inArray(proposals.status, [...DECISION_STATUSES]),
+            isNotNull(proposals.reviewedBy),
+            isNotNull(proposals.reviewedAt)
           )
         )
       )
-      .orderBy(desc(proposals.createdAt))
-      .limit(cap + 1),
+    )
+    .as("decisions_ranked");
+
+  // The slots' history: the rows the ask doors write on the session.
+  const slotsRanked = db
+    .select({
+      id: events.id,
+      type: events.type,
+      timestamp: events.timestamp,
+      data: events.data,
+      userId: events.userId,
+      owner: drizzleSql<string>`${events.subjectId}`.as("owner"),
+      rank: rankIn(
+        drizzleSql`${events.subjectId}`,
+        drizzleSql`${events.timestamp}`
+      ).as("rank"),
+    })
+    .from(events)
+    .where(
+      and(
+        inArray(events.type, SLOT_EVENT_TYPES),
+        eq(events.subjectType, FOCUS_SESSION_SUBJECT_TYPE),
+        inArray(events.subjectId, readable),
+        eventVisibleWhere({
+          userId: actor.userId,
+          roster: false,
+          lens: actor.lens,
+        })
+      )
+    )
+    .as("slots_ranked");
+
+  const [moves, facts, decisions, slotRows] = await Promise.all([
+    db.select().from(movesRanked).where(lte(movesRanked.rank, limit)),
+    db.select().from(factsRanked).where(lte(factsRanked.rank, limit)),
+    db.select().from(decisionsRanked).where(lte(decisionsRanked.rank, limit)),
+    db.select().from(slotsRanked).where(lte(slotsRanked.rank, limit)),
   ]);
-  const truncated =
-    moves.length > cap || facts.length > cap || decisions.length > cap;
 
-  const title = resolveSessionTitle(session) || "Session";
-  const isAgent = Boolean(session.agentId) || session.origin === "agent";
-  const out: Pending[] = [
-    {
-      event: {
-        id: `session:${session.id}:start`,
-        kind: "session_started",
-        at: iso(session.startedAt ?? session.createdAt),
-        refs: { sessionId: session.id },
-        title,
+  const pending = new Map<string, Pending[]>();
+  const truncated = new Set<string>();
+  const push = (sessionId: string | null, p: Pending | null) => {
+    if (!sessionId || !p) return;
+    const list = pending.get(sessionId);
+    if (list) list.push(p);
+  };
+  const keep = (r: { owner: string | null; rank: number }) => {
+    if (!r.owner) return false;
+    if (Number(r.rank) > perSource) {
+      truncated.add(r.owner);
+      return false;
+    }
+    return true;
+  };
+
+  for (const s of sessions) {
+    const isAgent = Boolean(s.agentId) || s.origin === "agent";
+    pending.set(s.id, [
+      {
+        event: {
+          id: `session:${s.id}:start`,
+          kind: "session_started",
+          at: iso(s.startedAt ?? s.createdAt),
+          refs: { sessionId: s.id },
+          title: resolveSessionTitle(s) || "Session",
+        },
+        actorId: s.agentId ?? (isAgent ? null : s.userId),
+        isAgent,
       },
-      actorId: session.agentId ?? (isAgent ? null : session.userId),
-      isAgent,
-    },
-  ];
-
-  for (const r of moves.slice(0, cap)) {
-    const e = statusMovedEvent(r, { sessionId: session.id });
-    if (e) out.push(e);
+    ]);
+  }
+  for (const r of moves) {
+    if (keep(r)) push(r.owner, statusMovedEvent(r, { sessionId: r.owner }));
+  }
+  for (const r of facts) if (keep(r)) push(r.owner, devFactEvent(r));
+  const decisionsBySession = new Map<string, typeof decisions>();
+  for (const r of decisions) {
+    if (!keep({ owner: r.sessionId, rank: r.rank })) continue;
+    const list = decisionsBySession.get(r.sessionId!) ?? [];
+    list.push(r);
+    decisionsBySession.set(r.sessionId!, list);
+  }
+  for (const [sessionId, rows] of decisionsBySession) {
+    for (const e of decisionEvents(rows, (p) => ({
+      refs: { sessionId, proposalId: p.id },
+    }))) {
+      push(sessionId, e);
+    }
+  }
+  for (const r of slotRows) {
+    if (keep(r)) push(r.owner, slotEvent(r, r.owner));
   }
 
-  for (const r of facts.slice(0, cap)) {
-    const e = devFactEvent(r);
-    if (e) out.push(e);
+  // Every actor of every session, named in ONE read.
+  const ownerOf = new Map<string, string>();
+  for (const [sessionId, list] of pending) {
+    for (const p of list) ownerOf.set(p.event.id, sessionId);
   }
+  const named = await finish([...pending.values()].flat(), actor.userId);
+  const grouped = new Map<string, DevTimelineEvent[]>();
+  for (const e of named) {
+    const sessionId = ownerOf.get(e.id)!;
+    const list = grouped.get(sessionId) ?? [];
+    list.push(e);
+    grouped.set(sessionId, list);
+  }
+  for (const s of sessions) {
+    out.set(s.id, {
+      title: resolveSessionTitle(s) || "Session",
+      events: grouped.get(s.id) ?? [],
+      truncated: truncated.has(s.id),
+    });
+  }
+  return out;
+}
 
-  out.push(
-    ...decisionEvents(decisions.slice(0, cap), (p) => ({
-      refs: { sessionId: session.id, proposalId: p.id },
-    }))
-  );
-
+async function readSessionTimeline(
+  sessionId: string,
+  actor: TimelineReader
+): Promise<TimelineWire | null> {
+  const read = (await readSessionTimelines([sessionId], actor)).get(sessionId);
+  if (!read) return null;
   return {
-    subject: { kind: "session", id: session.id, title },
-    events: await finish(out, actor.userId),
-    truncated,
+    subject: { kind: "session", id: sessionId, title: read.title },
+    events: read.events,
+    truncated: read.truncated,
   };
 }
 
