@@ -41,6 +41,7 @@ import {
   hasScope,
   httpStatusForTrpcError,
   logger,
+  refuseStaleDeviceSession,
   type HubHono,
   type HubVariables,
 } from "./_shared.js";
@@ -219,6 +220,11 @@ export function registerInstallationsRoutes(app: HubHono): void {
         // The pod itself, before any computer is looked up: the one rule
         // (`requestPodInstall`), shared with MCP `synap_request_installation`.
         if (req.computer?.trim().toLowerCase() === "pod") {
+          // A person's install applies the template, which can enrol an agent
+          // in a space (a credential): a Synap app's device session must have
+          // signed in recently (tripwire credential-doors-refuse-device-session).
+          const stale = refuseStaleDeviceSession(c);
+          if (stale) return stale as never;
           if (req.action !== "install")
             return c.json(
               {
