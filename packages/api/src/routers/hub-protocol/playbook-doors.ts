@@ -491,8 +491,9 @@ export async function getProcessDoor(
 }
 
 /**
- * A space's processes as cards (`playbooks.processes`), or every visible one
- * (`workspaceId` omitted; `null` = pod-wide playbooks only).
+ * A space's process index (`playbooks.processes`): the cards and the
+ * automations outside any process, or every visible one (`workspaceId`
+ * omitted; `null` = pod-wide only).
  */
 export async function listProcessesDoor(
   identity: PlaybookDoorIdentity,

@@ -1,8 +1,9 @@
 /**
  * THE PROCESS READ — one playbook seen whole (Process wave plan 0adf8352,
  * founder-approved 16 Nov 2026, W2): `readProcess(playbookId)` for one page,
- * `listProcesses({ workspaceId? })` for a space's cards. The contract is
- * `@synap-core/types/processes` (`ProcessRead`, `ProcessSummary`); the doors
+ * `listProcesses({ workspaceId? })` for a space's index (cards + the
+ * automations outside any process). The contract is
+ * `@synap-core/types/processes` (`ProcessRead`, `ProcessIndex`); the doors
  * are tRPC `playbooks.process` / `playbooks.processes`, Hub REST
  * `GET /playbooks/:id/process` / `GET /processes`, and MCP
  * `synap_list_playbooks({ playbookId })` → `process` (no new MCP tool).
@@ -46,6 +47,7 @@ import {
   inArray,
   isNull,
   ne,
+  notInArray,
   or,
   automations,
   playbookAutomations,
@@ -61,6 +63,7 @@ import {
 } from "@synap/playbooks";
 import { isKnownIntent } from "@synap-core/types/capability-intents";
 import {
+  classifyStepRunner,
   deriveProcessHealth,
   summarizeProcessNeed,
   unmeasuredProcessRunCounts,
@@ -69,8 +72,10 @@ import {
   type ProcessDefinition,
   type ProcessGate,
   type ProcessHealth,
+  type ProcessIndex,
   type ProcessMoves,
   type ProcessNeed,
+  type ProcessOutsideAutomation,
   type ProcessRead,
   type ProcessReadPart,
   type ProcessRunCounts,
@@ -162,17 +167,22 @@ const str = (v: unknown): string | null =>
 export function processSteps(
   row: Pick<Row, "stages" | "requires">
 ): ProcessStep[] {
-  return stagesOf(row).map((stage) => ({
-    key: String(stage.key),
-    name: str(stage.name) ?? String(stage.key),
-    goal: str(stage.goal),
-    category: resolveStageCategory(stage),
-    runner: stage.runner ?? null,
-    tools: readToolsList(stage.tools),
-    requires: requiresOf(null, stage as { requires?: unknown }),
-    gate: resolveStageGate(stage)?.kind ?? null,
-    subjectStatus: str(stage.subjectStatus),
-  }));
+  return stagesOf(row).map((stage) => {
+    const gate = resolveStageGate(stage)?.kind ?? null;
+    const runner = stage.runner ?? null;
+    return {
+      key: String(stage.key),
+      name: str(stage.name) ?? String(stage.key),
+      goal: str(stage.goal),
+      category: resolveStageCategory(stage),
+      runner,
+      runnerKind: classifyStepRunner({ gate, runner }),
+      tools: readToolsList(stage.tools),
+      requires: requiresOf(null, stage as { requires?: unknown }),
+      gate,
+      subjectStatus: str(stage.subjectStatus),
+    };
+  });
 }
 
 /** The checks of a playbook: its criteria (the playbook's and each step's) and its gates. PURE. */
@@ -391,6 +401,59 @@ async function readAutomations(
     out.set(r.playbookId, list);
   }
   return out;
+}
+
+/**
+ * The automations the reader can see that belong to NO live process: no
+ * `playbook_automations` row to a playbook that is not archived. Archived
+ * automations are left out. Same space narrowing as the cards. THROWS on a
+ * failed read (the caller names it unavailable, never an empty list).
+ */
+async function readAutomationsOutside(
+  reader: ProcessReader,
+  narrowSpace: "all" | null | string
+): Promise<ProcessOutsideAutomation[]> {
+  const visible = scopedDb(AccessContext.from(reader)).predicate(automations);
+  const inAProcess = db
+    .select({ id: playbookAutomations.automationId })
+    .from(playbookAutomations)
+    .innerJoin(playbooks, eq(playbooks.id, playbookAutomations.playbookId))
+    .where(ne(playbooks.status, "archived"));
+  const space =
+    narrowSpace === "all"
+      ? undefined
+      : narrowSpace === null
+        ? isNull(automations.workspaceId)
+        : or(
+            isNull(automations.workspaceId),
+            eq(automations.workspaceId, narrowSpace)
+          );
+  const rows = await db
+    .select({
+      id: automations.id,
+      name: automations.name,
+      triggerType: automations.triggerType,
+      status: automations.status,
+      workspaceId: automations.workspaceId,
+    })
+    .from(automations)
+    .where(
+      and(
+        visible,
+        ne(automations.status, "archived"),
+        notInArray(automations.id, inAProcess),
+        space
+      )
+    )
+    .orderBy(asc(automations.name))
+    .limit(LIST_LIMIT);
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    triggerType: r.triggerType,
+    status: r.status,
+    workspaceId: r.workspaceId ?? null,
+  }));
 }
 
 /** Counts per playbook from the session list and the run ledger. THROWS on a failed read. */
@@ -741,13 +804,40 @@ async function readUpdateAvailable(row: Row): Promise<boolean | null> {
 }
 
 /**
- * A space's processes as cards (or every visible one with no space). Archived
+ * A space's process index: its processes as cards (or every visible one with
+ * no space) and the automations outside any process. User-floored (the
+ * access layer), so a pod admin sees every space they can see. Archived
  * playbooks are not processes a person works. Parts read in batches: one
  * registry read per space, one session read per count, the ledger per flow.
  */
 export async function listProcesses(
   reader: ProcessReader,
   input: { workspaceId?: string | null } = {}
+): Promise<ProcessIndex> {
+  const indexUnavailable = new Set<ProcessReadPart>();
+  const [processes, automationsOutsideProcess] = await Promise.all([
+    listProcessCards(reader, input),
+    part(
+      "when",
+      indexUnavailable,
+      () =>
+        readAutomationsOutside(
+          reader,
+          input.workspaceId === undefined ? "all" : input.workspaceId
+        ),
+      { workspaceId: input.workspaceId ?? null }
+    ),
+  ]);
+  return {
+    processes,
+    automationsOutsideProcess,
+    unavailable: [...indexUnavailable],
+  };
+}
+
+async function listProcessCards(
+  reader: ProcessReader,
+  input: { workspaceId?: string | null }
 ): Promise<ProcessSummary[]> {
   const narrow =
     typeof input.workspaceId === "string"

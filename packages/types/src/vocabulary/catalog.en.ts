@@ -8,7 +8,8 @@
  *   `NEEDS_YOU_ITEM_NOUNS`), so English has ONE home and each row's rationale
  *   stays beside it. Keys are today's tokens: `kind.<slug>.one|other`,
  *   `action.<token>.imperative|past|progressive|present`, `status.<token>`,
- *   `needsYou.count.<kind>`, `runner.<state>`, `waitKind.<kind>`. A row added to a table is a key of this catalog,
+ *   `needsYou.count.<kind>`, `runner.<state>`, `waitKind.<kind>`,
+ *   `gateKind.<kind>`. A row added to a table is a key of this catalog,
  *   and `Catalog<VocabularyEn>` then refuses every translation without it;
  * - the SENTENCES the door used to splice by hand (titles, button labels,
  *   "Private …", "Handed to …"), written here as messages. A sentence that
@@ -27,6 +28,7 @@ import type {
   RunnerStateLabelRows,
   StatusLabelRows,
   WaitKindLabelRows,
+  GateKindLabelRows,
 } from "./index.js";
 import type { ObjectKindRows } from "./object-kinds.js";
 
@@ -54,6 +56,7 @@ type NeedsYouCountKey = `needsYou.count.${keyof NeedsYouItemNounRows & string}`;
 type RunnerStateKey = `runner.${keyof RunnerStateLabelRows & string}`;
 
 type WaitKindKey = `waitKind.${keyof WaitKindLabelRows & string}`;
+type GateKindKey = `gateKind.${keyof GateKindLabelRows & string}`;
 
 /**
  * The door's sentences. Each English text reproduces what the door returned
@@ -162,7 +165,8 @@ export type VocabularyEn = Readonly<
     | StatusKey
     | NeedsYouCountKey
     | RunnerStateKey
-    | WaitKindKey,
+    | WaitKindKey
+    | GateKindKey,
     string
   >
 > &
@@ -180,6 +184,7 @@ export interface VocabularyTables {
   readonly needsYouNouns: Readonly<Record<string, readonly [string, string]>>;
   readonly runnerStates: Readonly<Record<string, string>>;
   readonly waitKinds: Readonly<Record<string, string>>;
+  readonly gateKinds: Readonly<Record<string, string>>;
 }
 
 /**
@@ -219,6 +224,9 @@ export function buildVocabularyEn(tables: VocabularyTables): VocabularyEn {
   }
   for (const [kind, label] of Object.entries(tables.waitKinds)) {
     words[`waitKind.${kind}`] = label;
+  }
+  for (const [kind, label] of Object.entries(tables.gateKinds)) {
+    words[`gateKind.${kind}`] = label;
   }
   return { ...words, ...vocabularySentencesEn } as VocabularyEn;
 }

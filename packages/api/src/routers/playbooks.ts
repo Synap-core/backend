@@ -1934,9 +1934,10 @@ export const playbooksRouter = router({
     }),
 
   /**
-   * A space's processes as cards (`ProcessSummary`), or every visible one
-   * when no space is named (`null` = pod-wide playbooks only). Archived
-   * playbooks are left out.
+   * A space's process index (`ProcessIndex`): the cards (`ProcessSummary`)
+   * and the automations outside any process, or every visible one when no
+   * space is named (`null` = pod-wide only). User-floored. Archived
+   * playbooks and automations are left out.
    */
   processes: protectedProcedure
     .input(

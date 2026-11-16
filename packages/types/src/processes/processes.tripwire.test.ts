@@ -169,6 +169,7 @@ describe("processes leaf", () => {
           goal: null,
           category: "started",
           runner: null,
+          runnerKind: "person",
           tools: [],
           requires: [],
           gate: "human",

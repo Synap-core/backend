@@ -22,6 +22,15 @@
  * any other value fall through to the runner. Pure, dependency-free.
  */
 
+/**
+ * The kinds of a step's entry gate (`@synap/playbooks` `StageGate.kind`):
+ * `human` (a person approves), `check` (verified automatically), `awaits`
+ * (the step waits on a signal). Their words: `resolveGateKindLabel`
+ * (`@synap-core/types/vocabulary`).
+ */
+export const PROCESS_GATE_KINDS = ["human", "check", "awaits"] as const;
+export type ProcessGateKind = (typeof PROCESS_GATE_KINDS)[number];
+
 export const PROCESS_STEP_RUNNER_KINDS = ["ai", "person", "automatic"] as const;
 export type ProcessStepRunnerKind = (typeof PROCESS_STEP_RUNNER_KINDS)[number];
 

@@ -567,8 +567,9 @@ export function registerPlaybooksRoutes(app: HubHono): void {
   });
 
   /**
-   * GET /processes?workspaceId= — a space's processes as cards
-   * (`playbooks.processes`).
+   * GET /processes?workspaceId= — a space's process index
+   * (`playbooks.processes`): `{ processes, automationsOutsideProcess,
+   * unavailable }`.
    */
   app.get("/processes", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -582,11 +583,11 @@ export function registerPlaybooksRoutes(app: HubHono): void {
     const confined = confineWorkspaceOrForbidden(c, parsed.data.workspaceId);
     if (!confined.ok) return c.json({ error: confined.error }, 403);
     try {
-      const processes = await listProcessesDoor(
+      const index = await listProcessesDoor(
         doorIdentity(c, c.get("agentUserId")),
         confined.workspaceId ? { workspaceId: confined.workspaceId } : {}
       );
-      return c.json({ processes });
+      return c.json(index);
     } catch (err) {
       return errorResponse(c, err, "playbooks.processes failed");
     }

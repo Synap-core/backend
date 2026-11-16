@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   openRows: [] as Array<{ id: string; playbookId: string }>,
   doneRows: [] as Array<{ playbookId: string; n: number }>,
   asksYou: new Set<string>(),
+  outside: [] as Array<Record<string, unknown>>,
+  outsideFail: false,
 }));
 
 vi.mock("../../access/scoped-db.js", () => ({
@@ -142,6 +144,10 @@ vi.mock("@synap/database", async (importOriginal) => {
         chain(() => {
           if ("n" in cols) return h.doneRows;
           if ("sessionId" in cols) return [];
+          if ("triggerType" in cols && "workspaceId" in cols) {
+            if (h.outsideFail) throw new Error("automations read failed");
+            return h.outside;
+          }
           if ("role" in cols)
             return [
               {
@@ -267,6 +273,12 @@ describe("the pure folds", () => {
       ["merge", "human", "merged", ["git"]],
     ]);
     expect(steps[0]!.tools).toEqual(["github"]);
+    // Who moves each step on comes from the one classifier: the human-gated
+    // step waits on a person, the other is worked by an agent.
+    expect(steps.map((s) => [s.key, s.runnerKind])).toEqual([
+      ["open", "ai"],
+      ["merge", "person"],
+    ]);
   });
 
   it("checks are the playbook's and each step's criteria, and the gates", () => {
@@ -395,7 +407,9 @@ describe("readProcess — composed from the existing reads", () => {
 
 describe("listProcesses — the same reads as cards", () => {
   it("a card carries health, counts, step and automation counts and its needs", async () => {
-    const [card] = await listProcesses(READER, { workspaceId: WS });
+    const {
+      processes: [card],
+    } = await listProcesses(READER, { workspaceId: WS });
     expect(card).toMatchObject({
       id: "pb-1",
       stepCount: 2,
@@ -407,5 +421,50 @@ describe("listProcesses — the same reads as cards", () => {
       "deploy_build",
       "empty",
     ]);
+  });
+});
+
+describe("listProcesses — the automations outside any process", () => {
+  beforeEach(() => {
+    h.outside = [];
+    h.outsideFail = false;
+  });
+
+  it("returns the automations in no process next to the cards", async () => {
+    h.outside = [
+      {
+        id: "a-loose",
+        name: "Weekly digest",
+        triggerType: "cron",
+        status: "active",
+        workspaceId: null,
+      },
+    ];
+    const index = await listProcesses(READER, { workspaceId: WS });
+    expect(index.processes.map((p) => p.id)).toEqual(["pb-1"]);
+    expect(index.automationsOutsideProcess).toEqual([
+      {
+        id: "a-loose",
+        name: "Weekly digest",
+        triggerType: "cron",
+        status: "active",
+        workspaceId: null,
+      },
+    ]);
+    expect(index.unavailable).toEqual([]);
+  });
+
+  it("none outside is an empty list, a read that read nothing", async () => {
+    const index = await listProcesses(READER, { workspaceId: WS });
+    expect(index.automationsOutsideProcess).toEqual([]);
+    expect(index.unavailable).toEqual([]);
+  });
+
+  it("a failed read is null and named unavailable, never an empty list; the cards still come", async () => {
+    h.outsideFail = true;
+    const index = await listProcesses(READER, { workspaceId: WS });
+    expect(index.automationsOutsideProcess).toBeNull();
+    expect(index.unavailable).toEqual(["when"]);
+    expect(index.processes).toHaveLength(1);
   });
 });

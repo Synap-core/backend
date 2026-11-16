@@ -57,6 +57,7 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
+import type { ProcessGateKind } from "../processes/steps.js";
 import type { SessionVerdict } from "../focus-sessions/verdict.js";
 import type { RunnerState } from "../units/runner-state.js";
 import type {
@@ -1607,6 +1608,26 @@ export function resolveToolKindLabel(kind: string | null | undefined): string {
 }
 
 /**
+ * The plural of {@link TOOL_KIND_LABELS}, for a block that lists several of
+ * one kind. A process's instruction skills ("What agents load",
+ * `ProcessRead.skills`) are "Skills": the noun for instructions an agent
+ * follows, distinct from the umbrella "Tool" (founder D2), which stays the
+ * noun of lists, counts and mentions.
+ */
+export const TOOL_KIND_PLURALS: Readonly<Record<string, string>> = {
+  skill: "Skills",
+  capability: "Capabilities",
+  tool: "Integrations",
+};
+
+export function resolveToolKindPlural(kind: string | null | undefined): string {
+  if (!kind) return "";
+  const key = kind.toLowerCase();
+  const canonical = OBJECT_KIND_ALIASES[key] ?? key;
+  return TOOL_KIND_PLURALS[canonical] ?? humanizeToken(canonical);
+}
+
+/**
  * The human label for a proposal kind. Unknown/new kinds humanize rather than
  * leak, so a future `ProposalKind` addition is safe (if unpolished) before
  * this table is updated.
@@ -2470,6 +2491,21 @@ export const WAIT_KIND_LABELS = {
 export type WaitKindLabelRows = typeof WAIT_KIND_LABELS;
 
 /**
+ * Each step gate kind's words (`PROCESS_GATE_KINDS`,
+ * `@synap-core/types/processes`): what a step's gate chip says on the
+ * process page, the step strip and pod admin, so no surface humanizes the
+ * token. Keyed by EVERY kind: a kind added without its words stops the build.
+ */
+export const GATE_KIND_LABELS = {
+  human: "Your approval",
+  check: "Automatic check",
+  awaits: "Waits for a signal",
+} as const satisfies Readonly<Record<ProcessGateKind, string>>;
+
+/** The gate kind rows, exactly typed: the keys of the `gateKind.*` catalog. */
+export type GateKindLabelRows = typeof GATE_KIND_LABELS;
+
+/**
  * What a session's runner says it is doing (0384, `RUNNER_STATES`), in a
  * person's words: the mark a session page and a needs-you row wear (decision
  * D-R1). Keyed by EVERY state: a word with no label stops the build.
@@ -2570,6 +2606,31 @@ export function resolveWaitKindLabel(
   return (
     translatedWord(`waitKind.${key}`, catalogLocaleOf(opts?.locale)) ??
     WAIT_KIND_LABELS[key as keyof WaitKindLabelRows]
+  );
+}
+
+/**
+ * The words for a step gate kind (`human` | `check` | `awaits`), in
+ * `opts.locale` (else the ambient catalog locale), through `gateKind.<kind>`.
+ * Takes the token or a stored `{ kind }` gate; unknown kinds humanize, never
+ * leak; no gate is "".
+ */
+export function resolveGateKindLabel(
+  gate: string | { kind?: unknown } | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  const v =
+    typeof gate === "string"
+      ? gate
+      : gate && typeof gate.kind === "string"
+        ? gate.kind
+        : "";
+  if (!v) return "";
+  const key = v.trim().toLowerCase();
+  if (!Object.hasOwn(GATE_KIND_LABELS, key)) return humanizeToken(v);
+  return (
+    translatedWord(`gateKind.${key}`, catalogLocaleOf(opts?.locale)) ??
+    GATE_KIND_LABELS[key as keyof GateKindLabelRows]
   );
 }
 
@@ -4123,6 +4184,7 @@ export const vocabularyEn = buildVocabularyEn({
   needsYouNouns: NEEDS_YOU_ITEM_NOUNS,
   runnerStates: RUNNER_STATE_LABELS,
   waitKinds: WAIT_KIND_LABELS,
+  gateKinds: GATE_KIND_LABELS,
 });
 
 /** Every locale's vocabulary catalog, for `createT` and the parity test. */
