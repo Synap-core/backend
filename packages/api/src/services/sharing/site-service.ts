@@ -21,6 +21,14 @@
  * when it has one; a pod-wide project's owner must name one. A project's
  * linked spaces are an index, not an ACL, and are never consulted.
  *
+ * A COLLECTION'S SOURCE SPACE. By default a collection is checked against the
+ * home space. Its owner may NAME another space (`sourceWorkspaceId`, e.g.
+ * essays that live in Content OS on a site whose home is Brand): the person
+ * configuring must write that space, its policy must publish entities, its
+ * `entity` allowlist holds the sort and slug fields, the collection's profile
+ * resolves in it, and only a record that sits in that space joins the
+ * collection. The space is named explicitly, so the linked-spaces rule holds.
+ *
  * LIFECYCLE.
  *   configure — create the site row (draft, no token) or replace its
  *               `site_config`, and re-snapshot its public metadata. Human
@@ -67,6 +75,7 @@ import {
 } from "@synap/database";
 import {
   entities,
+  profileWorkspaceAccess,
   profiles,
   projects,
   relations,
@@ -282,51 +291,92 @@ export interface SitePlan {
   projectId: string;
   homeWorkspaceId: string;
   config: SiteConfigV1;
+  /** Source spaces the config names other than home (none by default). */
+  otherSourceWorkspaceIds: string[];
 }
 
-/** Validate a config against the home space: profiles exist, fields allowlisted. */
+/**
+ * Validate a config: per collection, against its SOURCE space (the one it
+ * names, else the home space) — the profile resolves there, the sort and slug
+ * fields are in its allowlist. A named source must also be written by `userId`
+ * and publish entities. Returns the config and the named sources other than
+ * home (the configure door checks a key's grant there too).
+ */
 async function validateConfig(
   database: Db,
+  userId: string,
   raw: unknown,
   homeWorkspaceId: string,
-  settings: unknown
-): Promise<SiteConfigV1> {
+  homeSettings: unknown
+): Promise<{ config: SiteConfigV1; otherSources: string[] }> {
   const parsed = SiteConfigV1Schema.safeParse(raw);
   if (!parsed.success) {
     throw badRequest(`Invalid site configuration: ${parsed.error.message}`);
   }
   const config = parsed.data;
-  // A field the public can never see cannot sort or address a collection.
-  const fields = new Set(resolvePublicFields(settings, "entity"));
+  const settingsCache = new Map<string, unknown>([
+    [homeWorkspaceId, homeSettings],
+  ]);
+  const otherSources = new Set<string>();
   for (const [key, c] of Object.entries(config.collections)) {
+    const source = c.sourceWorkspaceId ?? homeWorkspaceId;
+    if (!settingsCache.has(source)) {
+      // Authorize on the named space BEFORE reading anything of it.
+      await assertWorkspaceWrite(database, userId, { workspaceId: source });
+      settingsCache.set(source, await loadSettings(database, source));
+    }
+    const settings = settingsCache.get(source);
+    if (c.sourceWorkspaceId) {
+      if (source !== homeWorkspaceId) otherSources.add(source);
+      if (resolveExposurePolicy(settings).entity.public.read !== "direct") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `Collection "${key}" names a source workspace whose exposure policy does not allow publishing an entity.`,
+        });
+      }
+    }
+    // A field the public can never see cannot sort or address a collection.
+    const fields = new Set(resolvePublicFields(settings, "entity"));
     for (const s of c.sort) {
       const field = s.replace(/^-/, "");
       if (field !== SITE_PUBLISHED_AT_SORT && !fields.has(field)) {
         throw badRequest(
-          `Collection "${key}" sorts on "${field}", which this workspace does not publish.`
+          `Collection "${key}" sorts on "${field}", which ${c.sourceWorkspaceId ? "its source" : "this"} workspace does not publish.`
         );
       }
     }
     if (c.slugField && !fields.has(c.slugField)) {
       throw badRequest(
-        `Collection "${key}" addresses records by "${c.slugField}", which this workspace does not publish.`
+        `Collection "${key}" addresses records by "${c.slugField}", which ${c.sourceWorkspaceId ? "its source" : "this"} workspace does not publish.`
       );
     }
-    // The profile the key names, as seen from the home space (a space's own
-    // profile first, then a pod-level one).
+    // The profile the key names, as seen from the source space: the space's
+    // own profile first, then a pod-level one, then a shared one granted to
+    // the space (a kind whose row lives elsewhere and is shared to it).
     const candidates = await database
       .select({
         workspaceId: profiles.workspaceId,
         profileKind: profiles.profileKind,
         entityScope: profiles.entityScope,
+        grantedTo: profileWorkspaceAccess.workspaceId,
       })
       .from(profiles)
+      .leftJoin(
+        profileWorkspaceAccess,
+        and(
+          eq(profileWorkspaceAccess.profileId, profiles.id),
+          eq(profileWorkspaceAccess.workspaceId, source)
+        )
+      )
       .where(eq(profiles.slug, key));
     const profile =
-      candidates.find((p) => p.workspaceId === homeWorkspaceId) ??
-      candidates.find((p) => p.workspaceId === null);
+      candidates.find((p) => p.workspaceId === source) ??
+      candidates.find((p) => p.workspaceId === null) ??
+      candidates.find((p) => p.grantedTo === source);
     if (!profile) {
-      throw badRequest(`Collection "${key}" names no profile in this space.`);
+      throw badRequest(
+        `Collection "${key}" names no profile in ${c.sourceWorkspaceId ? "its source" : "this"} space.`
+      );
     }
     // A pod-wide KIND (person, company…) publishes only as a role collection:
     // its records have no workspace whose policy could publish them.
@@ -336,7 +386,7 @@ async function validateConfig(
       );
     }
   }
-  return config;
+  return { config, otherSources: [...otherSources] };
 }
 
 /**
@@ -366,7 +416,13 @@ export async function planSite(
   await assertCanWidenSite(database, userId, project, home);
   const settings = await loadSettings(database, home);
   assertSitePolicy(settings);
-  const config = await validateConfig(database, req.config, home, settings);
+  const { config, otherSources } = await validateConfig(
+    database,
+    userId,
+    req.config,
+    home,
+    settings
+  );
   // An existing site keeps its home space for life: a different one is a new
   // site (revoke this one first).
   const live = await liveSiteOfProject(database, project.id);
@@ -375,7 +431,12 @@ export async function planSite(
       "This project's site is published from another workspace; revoke it to start a new one."
     );
   }
-  return { projectId: project.id, homeWorkspaceId: home, config };
+  return {
+    projectId: project.id,
+    homeWorkspaceId: home,
+    config,
+    otherSourceWorkspaceIds: otherSources,
+  };
 }
 
 // ── Snapshot ─────────────────────────────────────────────────────────────────
@@ -455,6 +516,19 @@ export async function configureSite(
   }
   const database = await getDb();
   const plan = await planSite(database, actor.userId, req);
+  // The gate sees the home space; a collection sourced from another space
+  // must be within the key's grant THERE too (no grant = nothing to check).
+  const data = configureProposalData(plan);
+  for (const ws of plan.otherSourceWorkspaceIds) {
+    const denied = await grantWriteDenial({
+      subjectType: "share",
+      action: "create",
+      workspaceId: ws,
+      projectId: plan.projectId,
+      data,
+    });
+    if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
+  }
   const perm = await checkPermissionOrPropose({
     userId: actor.userId,
     agentUserId: agentUserId ?? undefined,
@@ -464,7 +538,7 @@ export async function configureSite(
     action: "create",
     source: actor.source ?? undefined,
     reasoning: actor.reasoning ?? req.reasoning,
-    data: configureProposalData(plan),
+    data,
   });
   if ("denied" in perm && perm.denied) {
     throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
@@ -967,6 +1041,16 @@ async function planSiteMember(
   if (!collection || !collectionConfig) {
     throw badRequest(
       `This record's kind${collection ? ` ("${collection}")` : ""} is not a collection of this site; add it to the site's configuration first.`
+    );
+  }
+  // A collection that names its source space takes only records of that
+  // space (a same-slug kind of another space is not this collection).
+  if (
+    collectionConfig.sourceWorkspaceId &&
+    record.workspaceId !== collectionConfig.sourceWorkspaceId
+  ) {
+    throw badRequest(
+      `This record is not in the workspace the "${collection}" collection is published from; move it there or change the collection's source.`
     );
   }
   const [edge] = await database
