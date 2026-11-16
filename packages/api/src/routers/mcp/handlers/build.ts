@@ -1287,6 +1287,7 @@ export const buildHandlers: McpHandlerMap = {
         : {}),
       parentSessionId: trimmed(args.parentSessionId),
       suspendedIntent: trimmed(args.suspendedIntent),
+      ...(args.startAnother === true ? { startAnother: true } : {}),
       source: "mcp",
     });
     return renderPlaybookDoorOutcome(outcome, userId);

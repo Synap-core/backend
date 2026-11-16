@@ -399,7 +399,9 @@ describe("(6b) playbook/run is at-most-once — runPlaybook is NOT idempotent", 
   it("CAS-claims the dispatch instead of trusting the status read", () => {
     // `runPlaybook`'s own `idempotentBySubject` reuse is OPT-IN and
     // `playbooks.run` never sets it, so two approvals would mint two sessions,
-    // two channels, two ledger rows and two executor dispatches. The sibling
+    // two channels, two ledger rows and two executor dispatches (on a subject
+    // the door's one-live-run guard now answers the second `already_running`;
+    // a subjectless or "start another" run still mints two). The sibling
     // read-then-write status guard races a double-click; `dispatchExternalOnce`
     // claims `external_dispatched_at` atomically.
     expect(b).toContain("dispatchExternalOnce(input.proposalId");
@@ -449,5 +451,20 @@ describe("(6b) playbook/run is at-most-once — runPlaybook is NOT idempotent", 
     expect(start).toBeGreaterThan(-1);
     const call = runDoor.slice(start, runDoor.indexOf("});", start));
     expect(call).not.toContain("idempotentBySubject");
+    // ONE LIVE RUN PER OBJECT (founder, 2026-11-16): the door now passes
+    // `oneLivePerSubject`, so a second approval of a run ON A SUBJECT gets
+    // `already_running` instead of a second session. That does NOT make the
+    // replay idempotent, which is why the CAS claim above stays the floor: a
+    // run with no subject, a "start another" run and a trial still start one
+    // session per call, exactly as before.
+    // The spread itself, not the word: the comment above it names the flag
+    // too, and a bare `toContain("oneLivePerSubject")` stayed green with the
+    // spread deleted (negative control, 2026-11-16).
+    expect(call).toContain(
+      "...(oneLivePerSubject ? { oneLivePerSubject: true } : {})"
+    );
+    expect(runDoor).toContain(
+      "!input.startAnother && !input.trial && !!subjectId"
+    );
   });
 });

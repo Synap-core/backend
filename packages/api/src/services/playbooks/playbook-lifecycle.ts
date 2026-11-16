@@ -470,6 +470,12 @@ export interface InstantiateInput {
    */
   origin?: "playbook" | "automation" | "agent" | "human";
   /**
+   * The run holds its object's ONE live slot (0427): only `runPlaybook`, for
+   * a person's run through the run door (`RunPlaybookInput.oneLivePerSubject`).
+   * A second live slot-holder makes the insert throw on `ONE_LIVE_RUN_INDEX`.
+   */
+  oneLivePerSubject?: boolean;
+  /**
    * The agent that started the run, when one did. The birth stage's subject
    * move (`writeSessionBirthSubjectMove`) is governed as this agent; absent,
    * it is the person's (`userId`) — the approved-proposal path, where the
@@ -809,6 +815,7 @@ export async function instantiateSessionRow(
       channelId: input.channelId ?? null,
       agentIds: input.agentIds ?? [],
       status: input.status ?? "active",
+      ...(input.oneLivePerSubject ? { oneLivePerSubject: true } : {}),
       metadata: {
         ...(input.metadata ?? {}),
         [RUN_PROMPT_METADATA_KEY]: prompt,

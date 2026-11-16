@@ -163,4 +163,19 @@ describe("runPlaybook subject-idempotency — cooldown after a failed run", () =
     );
     expect(r).toBe(PROCEEDED);
   });
+
+  it("a person's run through the run door (oneLivePerSubject) is never cooled either", async () => {
+    // One live run per object REUSES a live run, but the failed-run cooldown
+    // is the automation path's alone: a failed run must not block a click.
+    await pastRun({ status: "failed", hoursAgo: 1 });
+    const r = await runPlaybook({
+      ...INPUT,
+      idempotentBySubject: false,
+      oneLivePerSubject: true,
+    } as never).then(
+      () => "returned",
+      (e: Error) => e.message
+    );
+    expect(r).toBe(PROCEEDED);
+  });
 });

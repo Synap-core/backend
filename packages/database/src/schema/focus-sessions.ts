@@ -57,11 +57,20 @@ import {
   varchar,
   jsonb,
   integer,
+  boolean,
   timestamp,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
+
+/**
+ * The partial unique index that IS "one live run per object" (0427): at most
+ * one live (active, paused, forming, stale) session per (playbook, subject,
+ * owner) among the runs that hold the slot (`one_live_per_subject`). The run
+ * door recognises its conflict by this name (`uniqueViolationConstraint`).
+ */
+export const ONE_LIVE_RUN_INDEX = "uniq_focus_sessions_one_live_run";
 
 /**
  * One stage a session ENTERED (0382), oldest first — the shape of a goal's
@@ -210,6 +219,19 @@ export const focusSessions = pgTable(
      */
     playbookId: uuid("playbook_id"),
     /**
+     * This run HOLDS its object's one live slot (0427, "one live run per
+     * object"): a person's run started through the run door (`playbooks.run`,
+     * and so Hub REST, MCP and the approved replay) without "start another".
+     * The partial unique index {@link ONE_LIVE_RUN_INDEX} lets one such row be
+     * live per (playbook, subject, owner); the door catches the conflict and
+     * answers `already_running` with the live run. Written ONCE, at birth, by
+     * the row writer (`insertFocusSessionRow`); never cleared, so ending the
+     * run (any terminal status) is what frees the object. FALSE for every
+     * other session: fan-out and hand-off children, automation runs, "start
+     * another" runs and every row from before 0427.
+     */
+    oneLivePerSubject: boolean("one_live_per_subject").notNull().default(false),
+    /**
      * Expected deliverables declared at session start.
      *
      * Shape: `ExpectedOutput[]` (@synap/playbooks) — that interface is the SSOT
@@ -354,6 +376,14 @@ export const focusSessions = pgTable(
     automationIdIdx: index("idx_focus_sessions_automation_id")
       .on(sql`(${table.metadata}->>'automationId')`)
       .where(sql`(metadata->>'automationId') IS NOT NULL`),
+    // One live run per object (0427): see ONE_LIVE_RUN_INDEX. The status
+    // list is LIVE_RUN_SESSION_STATUSES (@synap-core/types/focus-sessions),
+    // pinned equal by migrations-0427.pglite.test.ts.
+    oneLiveRunIdx: uniqueIndex(ONE_LIVE_RUN_INDEX)
+      .on(table.playbookId, table.subjectEntityId, table.userId)
+      .where(
+        sql`one_live_per_subject AND status IN ('active', 'paused', 'forming', 'stale')`
+      ),
   })
 );
 

@@ -44,6 +44,7 @@ import { documentPassages } from "../schema/document-passages.js";
 import { statusWaitEpisode } from "../schema/status-wait-episode.js";
 import { agentConfigs } from "../schema/agent-configs.js";
 import { agentTemplates } from "../schema/agent-templates.js";
+import { focusSessions } from "../schema/focus-sessions.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -817,6 +818,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "session_stage_runs",
     column: "fan_out",
     addedBy: "0424_session_stage_runs_fan_out.sql",
+  },
+  // One live run per object (0427): every session insert names it, so its
+  // absence fails every session birth.
+  {
+    table: "focus_sessions",
+    column: "one_live_per_subject",
+    addedBy: "0427_one_live_run_per_subject.sql",
   },
 
   // Backup run ledger (0295). The backup container writes it with psql and
@@ -3016,6 +3024,13 @@ const REQUIRED_INDEX_TABLES = [
   // Agent templates (0404): the install conflicts on `agent_templates_slug_unique`
   // (ON CONFLICT DO NOTHING), which IS "one installed template per slug".
   agentTemplates,
+  // One live run per object (0427): `uniq_focus_sessions_one_live_run` IS
+  // "one live run of a playbook per object and person"; without it two
+  // clicks that both read "nothing live" start two runs. Every other index
+  // declared on focus_sessions is checked too: each is created by the
+  // baseline or a numbered migration (`migrations-0427.pglite.test.ts` checks
+  // every declared name has a CREATE statement).
+  focusSessions,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

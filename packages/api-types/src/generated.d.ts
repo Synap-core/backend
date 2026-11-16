@@ -6219,56 +6219,6 @@ export interface AiProviderModelEntry {
 	costPer1MOutput?: number;
 }
 /**
- * Focus Sessions Schema
- *
- * A focus session is a goal-bound user work session — a discrete "working
- * mode" where the user (and optionally IS agents) collaborate toward a
- * stated objective.
- *
- * This is WORKFLOW-SIDE infrastructure, not data-side. It has no relationship
- * to the `sessions` table, which is IS memory/compaction machinery.
- *
- * ── LIFECYCLE ───────────────────────────────────────────────────────────────
- * This block must account for EVERY member of `FocusSessionStatus`. It did not:
- * it described `active → paused ↔ active → closed (or → stale)` while the enum
- * also carried `forming` and `scheduled`, two pre-start states the prose had
- * never heard of. A guard now derives both sets and fails when they diverge
- * (`__tests__/focus-session-lifecycle-doc.test.ts`), so a new status cannot be
- * added without this paragraph being updated in the same commit — prose alone
- * decays exactly the way the first version of this note did.
- *
- * PRE-START (a row exists; the work has not begun):
- *   - scheduled — waits for a CLOCK. The session was materialized ahead of time
- *     for a moment it is FOR; a person opens it when that moment arrives.
- *     Produced by `materializeScheduledSession`
- *     (api services/focus-sessions/schedule-session.ts) from a playbook whose
- *     `schedule.mode` is `"appointment"`. This is its ONLY producer.
- *   - forming — waits for a PERSON. Reserved for a session that has been drafted
- *     but not yet constituted. ⚠️ STILL UNPRODUCED: nothing in any repo assigns
- *     it (verified 2026-09-08 across the monorepo; the only occurrences are one
- *     browser test fixture and an unrelated content status). It is NOT redundant
- *     with triage — `services/focus-sessions/triage.ts` states outright that
- *     acceptance is a RECEIPT (`metadata.triage.acceptedAt`), not a status,
- *     precisely so a session can be `forming`/`scheduled` AND triage-pending at
- *     once. Status and acceptance are orthogonal axes. `forming` is unbuilt, not
- *     superfluous; do not repurpose or delete it without deciding what it means.
- *
- * RUNNING:  active → paused ↔ active
- *
- * EXITS (terminal — every one MUST go through `completeFocusSession`):
- *   closed · failed · cancelled
- *
- * NON-TERMINAL DECAY:
- *   - stale — auto-set by the focus-session reaper (C8 lifecycle hygiene) when
- *     an `active`/`paused` row has had no `updatedAt` activity for
- *     REAPER_STALE_HOURS. Non-destructive: the row can still be
- *     completed/reopened like any other session; it only stops counting as a
- *     live "in progress" session. The reaper is scoped to `('active','paused')`
- *     ONLY — a `scheduled` row is never aged out, which is why the appointment
- *     producer owns its own non-accumulation policy (roll-forward) rather than
- *     relying on the reaper.
- */
-/**
  * One stage a session ENTERED (0382), oldest first — the shape of a goal's
  * `ProjectTrackStageHistoryEntry` (0274) plus where the move came from.
  * Appended by `appendSessionStageHistory` in the write that sets
@@ -6517,6 +6467,23 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			isAutoincrement: false;
 			isPrimaryKey: false;
 			name: "metadata";
+			notNull: true;
+			tableName: "focus_sessions";
+		}, {}, {}>;
+		oneLivePerSubject: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgBoolean";
+			data: boolean;
+			dataType: "boolean";
+			driverParam: boolean;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "one_live_per_subject";
 			notNull: true;
 			tableName: "focus_sessions";
 		}, {}, {}>;
@@ -24907,6 +24874,7 @@ declare function projectSessionRows(sessions: FocusSession[], userId: string | n
 	goal: string;
 	id: string;
 	metadata: unknown;
+	oneLivePerSubject: boolean;
 	origin: "agent" | "automation" | "human" | "playbook" | null;
 	playbookId: string | null;
 	progress: number | null;
@@ -25712,6 +25680,12 @@ export interface RunnerOffer {
 	runner: PlaybookRunner;
 	message: string;
 }
+/**
+ * Why nothing new started. `live_run`: a run is live on the object (running,
+ * paused, or gone quiet). `draft_awaiting_acceptance`: an agent's run of it
+ * waits for the person to accept it (decision 3), so it has not started yet.
+ */
+export type AlreadyRunningReason = "draft_awaiting_acceptance" | "live_run";
 export interface CriterionScore {
 	key: string;
 	statement: string;
@@ -39083,6 +39057,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					goal: string;
 					id: string;
 					metadata: unknown;
+					oneLivePerSubject: boolean;
 					origin: "agent" | "automation" | "human" | "playbook" | null;
 					playbookId: string | null;
 					progress: number | null;
@@ -39557,6 +39532,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					goal: string;
 					id: string;
 					metadata: unknown;
+					oneLivePerSubject: boolean;
 					origin: "agent" | "automation" | "human" | "playbook" | null;
 					playbookId: string | null;
 					progress: number | null;
@@ -39623,6 +39599,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					goal: string;
 					id: string;
 					metadata: unknown;
+					oneLivePerSubject: boolean;
 					origin: "agent" | "automation" | "human" | "playbook" | null;
 					playbookId: string | null;
 					progress: number | null;
@@ -39673,6 +39650,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goal: string;
 				id: string;
 				metadata: unknown;
+				oneLivePerSubject: boolean;
 				origin: "agent" | "automation" | "human" | "playbook" | null;
 				playbookId: string | null;
 				progress: number | null;
@@ -40297,6 +40275,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goal: string;
 				id: string;
 				metadata: unknown;
+				oneLivePerSubject: boolean;
 				origin: "agent" | "automation" | "human" | "playbook" | null;
 				playbookId: string | null;
 				progress: number | null;
@@ -40329,6 +40308,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goal: string;
 				id: string;
 				metadata: unknown;
+				oneLivePerSubject: boolean;
 				origin: "agent" | "automation" | "human" | "playbook" | null;
 				parentLink?: CreateTimeParentLink | undefined;
 				playbookId: string | null;
@@ -40425,6 +40405,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					goal: string;
 					id: string;
 					metadata: unknown;
+					oneLivePerSubject: boolean;
 					origin: "agent" | "automation" | "human" | "playbook" | null;
 					playbookId: string | null;
 					progress: number | null;
@@ -40534,6 +40515,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: "receipt" | "run" | "work";
 				liveness: SessionLiveness;
 				metadata: unknown;
+				oneLivePerSubject: boolean;
 				origin: "agent" | "automation" | "human" | "playbook" | null;
 				participants: SessionParticipant[];
 				playbookId: string | null;
@@ -40578,6 +40560,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goal: string;
 				id: string;
 				metadata: unknown;
+				oneLivePerSubject: boolean;
 				origin: "agent" | "automation" | "human" | "playbook" | null;
 				playbookId: string | null;
 				progress: number | null;
@@ -40705,6 +40688,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: SessionKind;
 				lastAgentActivityAt: Date | null;
 				metadata: unknown;
+				oneLivePerSubject: boolean;
 				origin: "agent" | "automation" | "human" | "playbook" | null;
 				outputsSummary: SessionOutputsSummary;
 				parentSessionId: string | null;
@@ -40834,6 +40818,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goal: string;
 				id: string;
 				metadata: unknown;
+				oneLivePerSubject: boolean;
 				origin: "agent" | "automation" | "human" | "playbook" | null;
 				playbookId: string | null;
 				progress: number | null;
@@ -42045,6 +42030,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goal: string;
 				id: string;
 				metadata: unknown;
+				oneLivePerSubject: boolean;
 				origin: "agent" | "automation" | "human" | "playbook" | null;
 				playbookId: string | null;
 				progress: number | null;
@@ -49823,6 +49809,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				runner?: unknown;
 				source?: string | undefined;
 				stageRunners?: Record<string, unknown> | undefined;
+				startAnother?: boolean | undefined;
 				subjectId?: string | undefined;
 				suspendedIntent?: string | undefined;
 				trackId?: string | undefined;
@@ -49851,6 +49838,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				runnerOffer?: RunnerOffer | undefined;
 				session: FocusSession | null;
 				status: "proposed";
+				unenabledSkills?: undefined;
+			} | {
+				enableProposals?: undefined;
+				generated?: undefined;
+				message: string;
+				proposalId: string | null;
+				reason: AlreadyRunningReason;
+				run: {
+					completedAt: Date | null;
+					createdBy: string;
+					definitionSnapshot: unknown;
+					error: string | null;
+					executor: PlaybookRunExecutorRef;
+					externalAgent: PlaybookRunExternalAgent | null;
+					generation: PlaybookRunGeneration | null;
+					id: string;
+					input: unknown;
+					playbookId: string;
+					replayOf: string | null;
+					runOn: RunOn | null;
+					sessionId: string | null;
+					startedAt: Date;
+					status: PlaybookRunStatus;
+					stopReason: "budget" | null;
+					summary: string | null;
+					workspaceId: string | null;
+				} | null;
+				runnerOffer?: RunnerOffer | undefined;
+				session: FocusSession | null;
+				status: "already_running";
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
@@ -49919,6 +49936,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					goal: string;
 					id: string;
 					metadata: unknown;
+					oneLivePerSubject: boolean;
 					origin: "agent" | "automation" | "human" | "playbook" | null;
 					playbookId: string | null;
 					progress: number | null;
@@ -49988,6 +50006,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					goal: string;
 					id: string;
 					metadata: unknown;
+					oneLivePerSubject: boolean;
 					origin: "agent" | "automation" | "human" | "playbook" | null;
 					playbookId: string | null;
 					progress: number | null;
