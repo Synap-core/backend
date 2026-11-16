@@ -294,7 +294,8 @@ beforeEach(() => {
   // The vault's own create door runs for real (agent refusal, key check,
   // server-side encryption); only its row insert is recorded and written here.
   vi.spyOn(SecretsVaultRepository.prototype, "create").mockImplementation(
-    async (data: Record<string, unknown>, userId: string) => {
+    async (input, userId: string) => {
+      const data = input as unknown as Record<string, unknown>;
       h.vaultCreates.push({ ...data, userId });
       const id = (data.id as string | undefined) ?? randomUUID();
       await q(

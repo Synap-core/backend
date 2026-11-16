@@ -91,6 +91,7 @@ import {
   getActingAgentUserId,
   getRequestGrant,
 } from "@synap/database";
+import type { ProposalRevision } from "@synap/database";
 import { assertFreshAuthentication } from "../utils/device-session.js";
 import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
 import { pauseRuleOfUndoneReceipt } from "../services/proposals/recommend-tighten.js";
@@ -4345,7 +4346,7 @@ async function repairProposalSetup(args: {
     targetType: string;
     proposalType: string;
     data: unknown;
-    revisionHistory: unknown;
+    revisionHistory: ProposalRevision[] | null;
   };
   userId: string;
   setup: z.infer<typeof setupRepairInputSchema>;
