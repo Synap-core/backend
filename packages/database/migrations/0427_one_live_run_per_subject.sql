@@ -33,5 +33,5 @@
 
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "one_live_per_subject" boolean NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS "uniq_focus_sessions_one_live_run"
-  ON "focus_sessions" ("playbook_id", "subject_entity_id", "user_id")
-  WHERE "one_live_per_subject" AND "status" IN ('active', 'paused', 'forming', 'stale');
+  ON "focus_sessions" ("playbook_id", "subject_entity_id")
+  WHERE "status" IN ('active', 'paused', 'forming', 'stale');

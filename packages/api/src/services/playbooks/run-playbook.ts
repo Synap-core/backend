@@ -1575,12 +1575,7 @@ export async function runPlaybook(
   // subject comes back instead of a second one — before a rotating cursor
   // advances and before anything is written. The index (0427) is the floor
   // under this read: see `executeSingleRun`.
-  const oneLive =
-    runInput.oneLivePerSubject === true &&
-    !oneShot &&
-    !input.trial &&
-    typeof runInput.subjectId === "string" &&
-    runInput.subjectId !== "";
+  const oneLive = !oneShot && !input.trial; // NEGCTL B: reuse is every run's default
   runInput = { ...runInput, oneLivePerSubject: oneLive };
   if (oneLive) {
     const live = await findLiveRunOfSubject({
@@ -1806,7 +1801,7 @@ async function executeSingleRun(
   // run never comes here — its reuse is `oneLivePerSubject` (one live run per
   // object, per person, no cooldown), answered in `runPlaybook` before any
   // item resolves and floored by the 0427 index at the insert below.
-  if (input.idempotentBySubject && input.subjectId) {
+  if ((input.idempotentBySubject || input.oneLivePerSubject) && input.subjectId) { // NEGCTL B: cooldown on a person's run
     const existing = await db.query.focusSessions.findFirst({
       where: and(
         eq(focusSessions.playbookId, playbook.id),

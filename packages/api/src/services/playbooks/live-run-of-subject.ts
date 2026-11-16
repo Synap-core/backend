@@ -73,9 +73,15 @@ export async function findLiveRunOfSubject(input: {
     .where(
       and(
         eq(focusSessions.playbookId, input.playbookId),
-        eq(focusSessions.subjectEntityId, input.subjectId),
-        eq(focusSessions.userId, input.userId),
-        inArray(focusSessions.status, [...LIVE_RUN_SESSION_STATUSES]),
+        // NEGCTL B: no-subject matches NULL, no owner, ended runs count
+        input.subjectId
+          ? eq(focusSessions.subjectEntityId, input.subjectId)
+          : drizzleSql`${focusSessions.subjectEntityId} IS NULL`,
+        inArray(focusSessions.status, [
+          ...LIVE_RUN_SESSION_STATUSES,
+          "closed",
+          "cancelled",
+        ]),
         drizzleSql`NOT (coalesce(${focusSessions.metadata}, '{}'::jsonb) ? ${STAGE_OF_METADATA_KEY})`,
         drizzleSql`NOT (coalesce(${focusSessions.metadata}, '{}'::jsonb) ? 'trial')`
       )
