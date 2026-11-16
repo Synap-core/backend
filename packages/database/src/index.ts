@@ -197,6 +197,7 @@ export {
   findCapabilityGrant,
   resolveCapabilityGrant,
   incrementGrant,
+  consumeSecretGrantRead,
   VaultGrantError,
   assertGrantScoped,
   UnscopedVaultGrantError,

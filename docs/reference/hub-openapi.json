@@ -1326,6 +1326,36 @@
                             "type": "string",
                             "minLength": 1,
                             "maxLength": 120
+                          },
+                          "purpose": {
+                            "type": "object",
+                            "properties": {
+                              "for": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "tool": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              },
+                              "action": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              },
+                              "on": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              }
+                            },
+                            "required": ["for", "tool"]
+                          },
+                          "uses": {
+                            "type": "string",
+                            "enum": ["once", "session"]
                           }
                         },
                         "required": ["kind", "name"]
@@ -16579,6 +16609,36 @@
                                                     "type": "string",
                                                     "minLength": 1,
                                                     "maxLength": 120
+                                                  },
+                                                  "purpose": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "for": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 200
+                                                      },
+                                                      "tool": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      },
+                                                      "action": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      },
+                                                      "on": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      }
+                                                    },
+                                                    "required": ["for", "tool"]
+                                                  },
+                                                  "uses": {
+                                                    "type": "string",
+                                                    "enum": ["once", "session"]
                                                   }
                                                 },
                                                 "required": ["kind", "name"]
@@ -17479,6 +17539,42 @@
                                                           "type": "string",
                                                           "minLength": 1,
                                                           "maxLength": 120
+                                                        },
+                                                        "purpose": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "for": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 200
+                                                            },
+                                                            "tool": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            },
+                                                            "action": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            },
+                                                            "on": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "for",
+                                                            "tool"
+                                                          ]
+                                                        },
+                                                        "uses": {
+                                                          "type": "string",
+                                                          "enum": [
+                                                            "once",
+                                                            "session"
+                                                          ]
                                                         }
                                                       },
                                                       "required": [
@@ -18710,6 +18806,42 @@
                                                         "type": "string",
                                                         "minLength": 1,
                                                         "maxLength": 120
+                                                      },
+                                                      "purpose": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "for": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 200
+                                                          },
+                                                          "tool": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          },
+                                                          "action": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          },
+                                                          "on": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "for",
+                                                          "tool"
+                                                        ]
+                                                      },
+                                                      "uses": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                          "once",
+                                                          "session"
+                                                        ]
                                                       }
                                                     },
                                                     "required": ["kind", "name"]
@@ -21750,6 +21882,36 @@
                                                     "type": "string",
                                                     "minLength": 1,
                                                     "maxLength": 120
+                                                  },
+                                                  "purpose": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "for": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 200
+                                                      },
+                                                      "tool": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      },
+                                                      "action": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      },
+                                                      "on": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      }
+                                                    },
+                                                    "required": ["for", "tool"]
+                                                  },
+                                                  "uses": {
+                                                    "type": "string",
+                                                    "enum": ["once", "session"]
                                                   }
                                                 },
                                                 "required": ["kind", "name"]
@@ -22650,6 +22812,42 @@
                                                           "type": "string",
                                                           "minLength": 1,
                                                           "maxLength": 120
+                                                        },
+                                                        "purpose": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "for": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 200
+                                                            },
+                                                            "tool": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            },
+                                                            "action": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            },
+                                                            "on": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "for",
+                                                            "tool"
+                                                          ]
+                                                        },
+                                                        "uses": {
+                                                          "type": "string",
+                                                          "enum": [
+                                                            "once",
+                                                            "session"
+                                                          ]
                                                         }
                                                       },
                                                       "required": [
@@ -23881,6 +24079,42 @@
                                                         "type": "string",
                                                         "minLength": 1,
                                                         "maxLength": 120
+                                                      },
+                                                      "purpose": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "for": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 200
+                                                          },
+                                                          "tool": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          },
+                                                          "action": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          },
+                                                          "on": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "for",
+                                                          "tool"
+                                                        ]
+                                                      },
+                                                      "uses": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                          "once",
+                                                          "session"
+                                                        ]
                                                       }
                                                     },
                                                     "required": ["kind", "name"]
@@ -30021,6 +30255,36 @@
                                                 "type": "string",
                                                 "minLength": 1,
                                                 "maxLength": 120
+                                              },
+                                              "purpose": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "for": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 200
+                                                  },
+                                                  "tool": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 120
+                                                  },
+                                                  "action": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 120
+                                                  },
+                                                  "on": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 120
+                                                  }
+                                                },
+                                                "required": ["for", "tool"]
+                                              },
+                                              "uses": {
+                                                "type": "string",
+                                                "enum": ["once", "session"]
                                               }
                                             },
                                             "required": ["kind", "name"]
@@ -31162,6 +31426,36 @@
                                               "type": "string",
                                               "minLength": 1,
                                               "maxLength": 120
+                                            },
+                                            "purpose": {
+                                              "type": "object",
+                                              "properties": {
+                                                "for": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                },
+                                                "tool": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120
+                                                },
+                                                "action": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120
+                                                },
+                                                "on": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120
+                                                }
+                                              },
+                                              "required": ["for", "tool"]
+                                            },
+                                            "uses": {
+                                              "type": "string",
+                                              "enum": ["once", "session"]
                                             }
                                           },
                                           "required": ["kind", "name"]
@@ -39686,6 +39980,36 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "purpose": {
+                                          "type": "object",
+                                          "properties": {
+                                            "for": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "tool": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "action": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "on": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            }
+                                          },
+                                          "required": ["for", "tool"]
+                                        },
+                                        "uses": {
+                                          "type": "string",
+                                          "enum": ["once", "session"]
                                         }
                                       },
                                       "required": ["kind", "name"]
@@ -41992,6 +42316,36 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "purpose": {
+                                          "type": "object",
+                                          "properties": {
+                                            "for": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "tool": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "action": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "on": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            }
+                                          },
+                                          "required": ["for", "tool"]
+                                        },
+                                        "uses": {
+                                          "type": "string",
+                                          "enum": ["once", "session"]
                                         }
                                       },
                                       "required": ["kind", "name"]
@@ -43745,6 +44099,36 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "purpose": {
+                                          "type": "object",
+                                          "properties": {
+                                            "for": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "tool": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "action": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "on": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            }
+                                          },
+                                          "required": ["for", "tool"]
+                                        },
+                                        "uses": {
+                                          "type": "string",
+                                          "enum": ["once", "session"]
                                         }
                                       },
                                       "required": ["kind", "name"]
@@ -46051,6 +46435,36 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "purpose": {
+                                          "type": "object",
+                                          "properties": {
+                                            "for": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "tool": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "action": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "on": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            }
+                                          },
+                                          "required": ["for", "tool"]
+                                        },
+                                        "uses": {
+                                          "type": "string",
+                                          "enum": ["once", "session"]
                                         }
                                       },
                                       "required": ["kind", "name"]
@@ -47472,6 +47886,36 @@
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 120
+                                  },
+                                  "purpose": {
+                                    "type": "object",
+                                    "properties": {
+                                      "for": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "tool": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120
+                                      },
+                                      "action": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120
+                                      },
+                                      "on": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120
+                                      }
+                                    },
+                                    "required": ["for", "tool"]
+                                  },
+                                  "uses": {
+                                    "type": "string",
+                                    "enum": ["once", "session"]
                                   }
                                 },
                                 "required": ["kind", "name"]
@@ -48060,6 +48504,10 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200
+                  },
+                  "secretUses": {
+                    "type": "string",
+                    "enum": ["once", "session"]
                   },
                   "confirmRelayed": { "type": "boolean", "enum": [true] },
                   "rejectRelayed": { "type": "boolean", "enum": [true] },

@@ -15,7 +15,9 @@ An `ask` is HOW the person answers a human-owned slot or a question: one tap ins
 
 **act** (a thing to DO in the world; they answer 'I did this'): `{mode:'act', url? (http(s)), steps? (up to 7, each <=200 chars)}`. Never for a decision.
 
-**provide** (handed over through the vault; you receive a reference, never the secret): `{mode:'provide', provide: {kind:'connection', service} | {kind:'file', accept?: up to 10 types} | {kind:'secret', name}}`.
+**provide** (handed over through the vault; you receive a reference, never the secret): `{mode:'provide', provide: {kind:'connection', service} | {kind:'file', accept?: up to 10 types} | {kind:'secret', name, purpose?, uses?}}`.
+
+- A secret: always declare `purpose: {for (<=200, the work it serves), tool (<=120, the tool or capability that reads it), action? (<=120), on? (<=120, what it acts on)}`. Without it the person's card says you did not say what it is for. Name things, never a key or token: a part that looks like one is refused. `uses`: `session` (default: you may read it until the session closes or the hour ends) or `once` (one read within 15 minutes); ask for `once` when one read is enough. The person may pick the other, and if you already hold a permanent grant on the secret they hand over, that grant is reused and they are told so.
 
 **Which mode.** A DECISION is `confirm` or `choose`. When you have a view mark exactly ONE answer `recommended`: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity. `ask: null` clears a stored ask.
 
@@ -24,7 +26,7 @@ An `ask` is HOW the person answers a human-owned slot or a question: one tap ins
 - `{"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}`
 - `{"mode":"confirm","prompt":"Publish the post today?","yes":{"description":"Goes live at 9:00","recommended":true},"no":{"description":"Stays a draft"},"stakes":"commitment"}`
 - `{"mode":"choose","options":[{"label":"Deploy","followUp":{"prompt":"Which environment?","options":[{"label":"staging"},{"label":"production","caution":"Live users"}]}},{"label":"Not yet"}]}`
-- `{"mode":"provide","provide":{"kind":"secret","name":"STRIPE_KEY"}}`
+- `{"mode":"provide","provide":{"kind":"secret","name":"GITHUB_MERGE_TOKEN","purpose":{"for":"Merging the delivery PR","tool":"GitHub tool","action":"merge","on":"Synap-core/backend"},"uses":"once"}}`
 
 **Refuse.** On every ask, whatever its mode (and on a slot with no ask), the person can refuse it with an optional reason. The slot comes back to you with `answer.value = {type: 'declined', reason?}` and `answer.text` "Refused: <reason>"; nothing is handed over, no decision is filed, the thing it held up stays blocked. Read the reason, then do the work another way, ask something NEW (an identical re-ask is refused `ask_refused` while the refusal stands), withdraw the slot (`retireOutput`), or close the session `failed`. A `closed` close is refused while that outcome is still yours and open.
 
