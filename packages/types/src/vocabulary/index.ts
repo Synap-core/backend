@@ -2495,28 +2495,42 @@ export type WaitKindLabelRows = typeof WAIT_KIND_LABELS;
 
 /**
  * Each step gate kind's words (`PROCESS_GATE_KINDS`,
- * `@synap-core/types/processes`): what a step's gate chip says on the
- * process page, the step strip and pod admin, so no surface humanizes the
- * token. Keyed by EVERY kind: a kind added without its words stops the build.
+ * `@synap-core/types/processes`): the SHORT form is a step's gate badge on the
+ * process page, the step strip and pod admin; the LONG form says it in a
+ * sentence (a tooltip, a detail). Only `human` is an entry gate: `check` judges
+ * the step being left, `awaits` waits for an approval before it moves on.
+ * Keyed by EVERY kind: a kind added without its words stops the build.
  */
 export const GATE_KIND_LABELS = {
-  human: "Your approval",
-  check: "Automatic check",
-  awaits: "Waits for a signal",
+  human: "You approve",
+  check: "Checked",
+  awaits: "Waits for approval",
 } as const satisfies Readonly<Record<ProcessGateKind, string>>;
 
 /** The gate kind rows, exactly typed: the keys of the `gateKind.*` catalog. */
 export type GateKindLabelRows = typeof GATE_KIND_LABELS;
 
+/** Each gate kind's LONG form (`gateKind.<kind>.long`); see GATE_KIND_LABELS. */
+export const GATE_KIND_LONG_LABELS = {
+  human: "You approve before it starts",
+  check: "Checked before it moves on",
+  awaits: "Waits for an approval before it moves on",
+} as const satisfies Readonly<Record<ProcessGateKind, string>>;
+
+/** The long gate rows, exactly typed: the keys of `gateKind.<kind>.long`. */
+export type GateKindLongLabelRows = typeof GATE_KIND_LONG_LABELS;
+
 /**
  * Who moves a process step on, in a person's words (`PROCESS_STEP_RUNNER_KINDS`,
  * `classifyStepRunner`, `@synap-core/types/processes`): the step strip's and
- * pod admin's runner mark. `automatic` is declared and unreachable until W2b
- * declares "an automation moves this step". Keyed by EVERY kind.
+ * pod admin's runner mark. It never repeats the gate badge (a `human` gate is
+ * "You approve"; its step's runner is "You"). `automatic` is declared and
+ * unreachable until W2b declares "an automation moves this step". Keyed by
+ * EVERY kind.
  */
 export const STEP_RUNNER_KIND_LABELS = {
-  person: "You approve",
-  ai: "An agent works it",
+  person: "You",
+  ai: "An agent",
   automatic: "Runs by itself",
 } as const satisfies Readonly<Record<ProcessStepRunnerKind, string>>;
 
@@ -2629,13 +2643,14 @@ export function resolveWaitKindLabel(
 
 /**
  * The words for a step gate kind (`human` | `check` | `awaits`), in
- * `opts.locale` (else the ambient catalog locale), through `gateKind.<kind>`.
- * Takes the token or a stored `{ kind }` gate; unknown kinds humanize, never
- * leak; no gate is "".
+ * `opts.locale` (else the ambient catalog locale): the short badge through
+ * `gateKind.<kind>`, or with `opts.form: "long"` the sentence through
+ * `gateKind.<kind>.long`. Takes the token or a stored `{ kind }` gate; unknown
+ * kinds humanize, never leak; no gate is "".
  */
 export function resolveGateKindLabel(
   gate: string | { kind?: unknown } | null | undefined,
-  opts?: { locale?: Locale }
+  opts?: { locale?: Locale; form?: "short" | "long" }
 ): string {
   const v =
     typeof gate === "string"
@@ -2646,10 +2661,15 @@ export function resolveGateKindLabel(
   if (!v) return "";
   const key = v.trim().toLowerCase();
   if (!Object.hasOwn(GATE_KIND_LABELS, key)) return humanizeToken(v);
-  return (
-    translatedWord(`gateKind.${key}`, catalogLocaleOf(opts?.locale)) ??
-    GATE_KIND_LABELS[key as keyof GateKindLabelRows]
-  );
+  const kind = key as keyof GateKindLabelRows;
+  const locale = catalogLocaleOf(opts?.locale);
+  if (opts?.form === "long") {
+    return (
+      translatedWord(`gateKind.${kind}.long`, locale) ??
+      GATE_KIND_LONG_LABELS[kind]
+    );
+  }
+  return translatedWord(`gateKind.${kind}`, locale) ?? GATE_KIND_LABELS[kind];
 }
 
 /**
@@ -4221,6 +4241,7 @@ export const vocabularyEn = buildVocabularyEn({
   runnerStates: RUNNER_STATE_LABELS,
   waitKinds: WAIT_KIND_LABELS,
   gateKinds: GATE_KIND_LABELS,
+  gateKindsLong: GATE_KIND_LONG_LABELS,
   stepRunners: STEP_RUNNER_KIND_LABELS,
 });
 

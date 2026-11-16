@@ -582,13 +582,16 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "waitKind.another_work": "Autre travail",
   "waitKind.date": "Une date",
   "waitKind.nobody": "Personne",
-  // ── Gate kinds: `gateKind.<kind>` (what a step's gate chip names) ──
-  "gateKind.human": "Votre approbation",
-  "gateKind.check": "Vérification automatique",
-  "gateKind.awaits": "Attend un signal",
+  // ── Gate kinds: `gateKind.<kind>` (the badge) and `.long` (the sentence) ──
+  "gateKind.human": "Vous approuvez",
+  "gateKind.check": "Vérifié",
+  "gateKind.awaits": "Attend une approbation",
+  "gateKind.human.long": "Vous approuvez avant le démarrage",
+  "gateKind.check.long": "Vérifié avant de passer à la suite",
+  "gateKind.awaits.long": "Attend une approbation avant de passer à la suite",
   // ── Step runners: `stepRunner.<kind>` (who moves a step on) ──
-  "stepRunner.person": "Vous approuvez",
-  "stepRunner.ai": "Un agent s’en charge",
+  "stepRunner.person": "Vous",
+  "stepRunner.ai": "Un agent",
   "stepRunner.automatic": "S’exécute tout seul",
   // ── Needs-you counts: `needsYou.count.<kind>` (French counts 0 and 1 as
   // singular; `many` is a whole number of millions: "1000000 de décisions") ──

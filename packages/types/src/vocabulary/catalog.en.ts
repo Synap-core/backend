@@ -9,7 +9,8 @@
  *   stays beside it. Keys are today's tokens: `kind.<slug>.one|other`,
  *   `action.<token>.imperative|past|progressive|present`, `status.<token>`,
  *   `needsYou.count.<kind>`, `runner.<state>`, `waitKind.<kind>`,
- *   `gateKind.<kind>`, `stepRunner.<kind>`. A row added to a table is a key of this catalog,
+ *   `gateKind.<kind>`, `gateKind.<kind>.long`, `stepRunner.<kind>`. A row
+ *   added to a table is a key of this catalog,
  *   and `Catalog<VocabularyEn>` then refuses every translation without it;
  * - the SENTENCES the door used to splice by hand (titles, button labels,
  *   "Private …", "Handed to …"), written here as messages. A sentence that
@@ -29,6 +30,7 @@ import type {
   StatusLabelRows,
   WaitKindLabelRows,
   GateKindLabelRows,
+  GateKindLongLabelRows,
   StepRunnerKindLabelRows,
 } from "./index.js";
 import type { ObjectKindRows } from "./object-kinds.js";
@@ -58,6 +60,7 @@ type RunnerStateKey = `runner.${keyof RunnerStateLabelRows & string}`;
 
 type WaitKindKey = `waitKind.${keyof WaitKindLabelRows & string}`;
 type GateKindKey = `gateKind.${keyof GateKindLabelRows & string}`;
+type GateKindLongKey = `gateKind.${keyof GateKindLongLabelRows & string}.long`;
 type StepRunnerKey = `stepRunner.${keyof StepRunnerKindLabelRows & string}`;
 
 /**
@@ -169,6 +172,7 @@ export type VocabularyEn = Readonly<
     | RunnerStateKey
     | WaitKindKey
     | GateKindKey
+    | GateKindLongKey
     | StepRunnerKey,
     string
   >
@@ -188,6 +192,7 @@ export interface VocabularyTables {
   readonly runnerStates: Readonly<Record<string, string>>;
   readonly waitKinds: Readonly<Record<string, string>>;
   readonly gateKinds: Readonly<Record<string, string>>;
+  readonly gateKindsLong: Readonly<Record<string, string>>;
   readonly stepRunners: Readonly<Record<string, string>>;
 }
 
@@ -231,6 +236,9 @@ export function buildVocabularyEn(tables: VocabularyTables): VocabularyEn {
   }
   for (const [kind, label] of Object.entries(tables.gateKinds)) {
     words[`gateKind.${kind}`] = label;
+  }
+  for (const [kind, label] of Object.entries(tables.gateKindsLong)) {
+    words[`gateKind.${kind}.long`] = label;
   }
   for (const [kind, label] of Object.entries(tables.stepRunners)) {
     words[`stepRunner.${kind}`] = label;

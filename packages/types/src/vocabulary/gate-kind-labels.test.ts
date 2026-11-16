@@ -11,6 +11,7 @@ import {
 } from "../processes/steps.js";
 import {
   GATE_KIND_LABELS,
+  GATE_KIND_LONG_LABELS,
   STEP_RUNNER_KIND_LABELS,
   resolveGateKindLabel,
   resolveStepRunnerLabel,
@@ -29,13 +30,32 @@ describe("gate kind words", () => {
       const fr = resolveGateKindLabel(kind, { locale: "fr" });
       expect(fr, kind).toBe(vocabularyFr[`gateKind.${kind}`]);
       expect(fr, kind).not.toBe(GATE_KIND_LABELS[kind]);
+      const long = resolveGateKindLabel(kind, { form: "long" });
+      expect(long, kind).toBe(GATE_KIND_LONG_LABELS[kind]);
+      expect(long, kind).not.toBe(GATE_KIND_LABELS[kind]);
+      expect(resolveGateKindLabel(kind, { locale: "fr", form: "long" })).toBe(
+        vocabularyFr[`gateKind.${kind}.long`]
+      );
+    }
+    // Only `human` is an entry gate; no other gate's words say it starts.
+    for (const kind of PROCESS_GATE_KINDS.filter((k) => k !== "human")) {
+      expect(GATE_KIND_LONG_LABELS[kind]).not.toMatch(/start|entry/i);
     }
   });
 
   it("reads the token or a stored { kind } gate; no gate is empty; unknown humanizes", () => {
-    expect(resolveGateKindLabel("human")).toBe("Your approval");
-    expect(resolveGateKindLabel({ kind: "check" })).toBe("Automatic check");
-    expect(resolveGateKindLabel({ kind: "awaits" })).toBe("Waits for a signal");
+    expect(resolveGateKindLabel("human")).toBe("You approve");
+    expect(resolveGateKindLabel({ kind: "check" })).toBe("Checked");
+    expect(resolveGateKindLabel({ kind: "awaits" })).toBe("Waits for approval");
+    expect(resolveGateKindLabel("human", { form: "long" })).toBe(
+      "You approve before it starts"
+    );
+    expect(resolveGateKindLabel({ kind: "check" }, { form: "long" })).toBe(
+      "Checked before it moves on"
+    );
+    expect(resolveGateKindLabel("awaits", { form: "long" })).toBe(
+      "Waits for an approval before it moves on"
+    );
     expect(resolveGateKindLabel(null)).toBe("");
     expect(resolveGateKindLabel({})).toBe("");
     expect(resolveGateKindLabel("legal_review")).toBe("Legal review");
@@ -59,10 +79,14 @@ describe("step runner words", () => {
   });
 
   it("names each kind; no kind is empty, an unknown kind humanizes", () => {
-    expect(resolveStepRunnerLabel("person")).toBe("You approve");
-    expect(resolveStepRunnerLabel("ai")).toBe("An agent works it");
+    expect(resolveStepRunnerLabel("person")).toBe("You");
+    expect(resolveStepRunnerLabel("ai")).toBe("An agent");
     expect(resolveStepRunnerLabel("automatic")).toBe("Runs by itself");
     expect(resolveStepRunnerLabel(null)).toBe("");
+    // The runner mark never repeats the gate badge beside it.
+    expect(resolveStepRunnerLabel("person")).not.toBe(
+      resolveGateKindLabel("human")
+    );
     expect(resolveStepRunnerLabel("machine_step")).toBe("Machine step");
   });
 });

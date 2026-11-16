@@ -30,10 +30,11 @@
  */
 
 /**
- * The kinds of a step's entry gate (`@synap/playbooks` `StageGate.kind`):
- * `human` (a person approves), `check` (verified automatically), `awaits`
- * (the step waits on a signal). Their words: `resolveGateKindLabel`
- * (`@synap-core/types/vocabulary`).
+ * The kinds of a step's gate (`@synap/playbooks` `StageGate.kind`): `human`
+ * (the entry gate: a person approves before the step starts), `check` (judges
+ * the step being LEFT: its criteria are checked before it moves on), `awaits`
+ * (waits for a proposal's approval, e.g. a deploy, before it moves on). Their
+ * words: `resolveGateKindLabel` (`@synap-core/types/vocabulary`).
  */
 export const PROCESS_GATE_KINDS = ["human", "check", "awaits"] as const;
 export type ProcessGateKind = (typeof PROCESS_GATE_KINDS)[number];
