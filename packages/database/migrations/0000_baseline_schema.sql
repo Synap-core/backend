@@ -4559,7 +4559,9 @@ CREATE INDEX IF NOT EXISTS "idx_playbook_runs_external_agent_active"
 -- ── Playbook Automations (0179_playbook_automations.sql catch-up) ─────────────
 -- First-class, editable composition of a playbook's automations (promotes the
 -- read-only `automation --member_of--> playbook` link edges). Soft links: no FK
--- to playbooks or automations (enforced at the application layer).
+-- to playbooks or automations (enforced at the application layer). Since 0425
+-- the ONE store of a playbook's automations: its schedule (role `schedule`),
+-- its canvas flow (`flow`), its activators (`activator`), its members.
 CREATE TABLE IF NOT EXISTS "playbook_automations" (
   "id"            uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "playbook_id"   uuid        NOT NULL,
@@ -5006,11 +5008,8 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "title" varchar(200);  -- 
 -- session is graded against; the grade itself lives in session_evaluations.
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
--- 0291: the ABSTRACT intents a playbook needs the pod to be able to do
--- (capability_intents vocabulary). WHAT IT NEEDS, not what the pod has: a
--- playbook may declare an intent nothing installed serves, and that gap is
--- what a later install is checked against — so it is reported, never rejected.
-ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "required_intents" jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- 0291's `required_intents` is not here: 0419 folded it into `tools` and 0425
+-- dropped it.
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "guidance" jsonb NOT NULL DEFAULT '[]'::jsonb;  -- 0411 (the rules a playbook follows, by kind or skill ref)
 -- 0416: who runs a playbook by default (a PlaybookRunner; NULL = nobody
 -- named), the tools every step needs (capability keys), and every kept
@@ -5019,8 +5018,8 @@ ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "runner" jsonb;
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "requires" jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- 0419: the ONE list of what a run of the playbook may use beyond its class
 -- floor (run tools, intents, capabilities); "only these". Replaces
--- required_intents (kept one release for a rollback), grants links as run
--- tools, stages[].grants and the space's taskIntents.
+-- required_intents (dropped by 0425), grants links as run tools,
+-- stages[].grants and the space's taskIntents.
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "tools" jsonb NOT NULL DEFAULT '[]'::jsonb;
 CREATE TABLE IF NOT EXISTS "playbook_versions" (
   "playbook_id" uuid        NOT NULL,

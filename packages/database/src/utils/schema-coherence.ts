@@ -773,7 +773,7 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
 
   // The ONE tools list of a playbook (0419): every playbook read selects it
   // and every run turn resolves its tools from it. `required_intents` (0291)
-  // is no longer read: 0419 folded it in.
+  // was folded in by 0419 and dropped by 0425.
   {
     table: "playbooks",
     column: "tools",

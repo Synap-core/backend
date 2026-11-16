@@ -1381,14 +1381,11 @@ export async function handleAutomationTriggerMatch(job: {
   // automations composed into that playbook. These fire IN ADDITION TO the
   // active workspace-scoped automations above — they supplement, not replace.
   //
-  // Source of truth: `playbook_automations` (first-class, editable composition —
-  // see packages/api/src/routers/playbooks.ts `automations` sub-router). The
-  // legacy `links` (`automation --member_of--> playbook`) read is kept as a
-  // TRANSITION FALLBACK — the 0179 migration backfilled every member_of edge
-  // into playbook_automations, so this is additive/behavior-preserving; the
-  // fallback only guards a member_of link written after backfill but before all
-  // writers dual-write into the join table. Results from both sources are
-  // deduped by automationId so a playbook-scoped automation never fires twice.
+  // Source of truth: `playbook_automations`, the ONE playbook → automation link
+  // (0425; `services/playbooks/playbook-automation-links.ts`). The legacy
+  // `links` (`automation --member_of--> playbook`) fallback is gone: 0179 and
+  // 0425 backfilled every such edge into the join table, and since 0425 no
+  // writer creates one (a link write of that shape lands as the join row).
   let playbookScopedAutomations: typeof activeAutomations = [];
   if (job.data.sessionId) {
     try {
@@ -1404,22 +1401,8 @@ export async function handleAutomationTriggerMatch(job: {
           .from(playbookAutomations)
           .where(eq(playbookAutomations.playbookId, playbookId));
 
-        const linkRows = await db.query.links.findMany({
-          where: (fields, { and, eq }) =>
-            and(
-              eq(fields.fromType, "automation"),
-              eq(fields.linkType, "member_of"),
-              eq(fields.toType, "playbook"),
-              eq(fields.toId, playbookId)
-            ),
-          columns: { fromId: true },
-        });
-
         const playbookAutoIds = Array.from(
-          new Set([
-            ...joinRows.map((r) => r.automationId),
-            ...linkRows.map((l) => l.fromId),
-          ])
+          new Set(joinRows.map((r) => r.automationId))
         );
 
         if (playbookAutoIds.length > 0) {
