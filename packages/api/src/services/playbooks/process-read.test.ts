@@ -302,9 +302,7 @@ beforeEach(() => {
 /** The WHERE of a recorded query, rendered to SQL text. */
 async function whereText(where: unknown): Promise<string> {
   const { PgDialect } = await import("drizzle-orm/pg-core");
-  return where
-    ? new PgDialect().sqlToQuery(where as SQL).sql
-    : "";
+  return where ? new PgDialect().sqlToQuery(where as SQL).sql : "";
 }
 
 describe("the pure folds", () => {
