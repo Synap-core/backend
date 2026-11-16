@@ -48,6 +48,7 @@ import {
   httpStatusForTrpcError,
   logger,
   requireAppPublicIdParam,
+  requireUuidParam,
   type HubHono,
   type HubVariables,
   refuseStaleDeviceSession,
@@ -222,14 +223,14 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
-    const params = AccessAskParamsSchema.safeParse({ id: c.req.param("id") });
-    if (!params.success) return c.json({ error: "Invalid ask id" }, 400);
+    const askId = requireUuidParam(c, "id");
+    if (askId instanceof Response) return askId;
     try {
       return c.json(
         await readAppAccessAsk({
           publicId: getRequestGrant()?.clientId,
           callerUserId: userId,
-          askId: params.data.id,
+          askId,
         })
       );
     } catch (err) {

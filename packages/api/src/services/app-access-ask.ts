@@ -38,7 +38,6 @@ import {
   lt,
   drizzleSql,
   proposals,
-  transitionProposal,
   AppRepository,
   APP_CONNECT_PROPOSAL_TYPE,
   APP_CONNECT_TARGET_TYPE,
@@ -64,6 +63,10 @@ import { findClient } from "../routers/oauth/store.js";
 import { isSynapApp } from "../routers/oauth/config.js";
 import { grantsDecision } from "../routers/oauth/app-client.js";
 import {
+  resolveAskPairs,
+  type ResolvedAskPair,
+} from "./app-access-ask-pairs.js";
+import {
   assertOwnerMayGrant,
   oauthAppOffer,
   type OAuthAppOfferItem,
@@ -78,12 +81,7 @@ export const APP_CONSENT_VIA = "oauth-consent" as const;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** One pair resolved to a space the person may give it in. */
-export interface ResolvedAskPair {
-  permission: string;
-  workspaceId: string;
-  workspaceName: string;
-}
+export { resolveAskPairs, type ResolvedAskPair };
 
 /** A pod app connection, as an ask needs it. */
 export interface AskingApp {
@@ -124,54 +122,6 @@ export async function appAskCeiling(app: {
     (p) => !podWide.has(p) && (synapApp || !grantsDecision(p))
   );
   return oauthAppOffer(app.ownerUserId, declared);
-}
-
-/**
- * The asked pairs, each resolved within the ceiling: a space id must be on
- * offer for that permission; a template names the offered spaces made from
- * it. `undeclared`: permissions the document does not declare (exactly);
- * `notOnOffer`: pairs whose space the person cannot give it in, or no space
- * made from that template. Pure.
- */
-export function resolveAskPairs(
-  ceiling: readonly OAuthAppOfferItem[],
-  asked: readonly AppAccessAskPair[]
-): {
-  pairs: ResolvedAskPair[];
-  undeclared: string[];
-  notOnOffer: AppAccessAskPair[];
-} {
-  const pairs: ResolvedAskPair[] = [];
-  const undeclared: string[] = [];
-  const notOnOffer: AppAccessAskPair[] = [];
-  const seen = new Set<string>();
-  for (const ask of asked) {
-    const item = ceiling.find((o) => o.permission === ask.permission);
-    if (!item) {
-      if (!undeclared.includes(ask.permission)) undeclared.push(ask.permission);
-      continue;
-    }
-    const spaces = item.workspaces.filter((w) =>
-      "workspaceId" in ask
-        ? w.workspaceId === ask.workspaceId
-        : w.templateSlug === ask.template
-    );
-    if (spaces.length === 0) {
-      notOnOffer.push(ask);
-      continue;
-    }
-    for (const w of spaces) {
-      const pair = {
-        permission: ask.permission,
-        workspaceId: w.workspaceId,
-        workspaceName: w.workspaceName,
-      };
-      if (seen.has(pairKey(pair))) continue;
-      seen.add(pairKey(pair));
-      pairs.push(pair);
-    }
-  }
-  return { pairs, undeclared, notOnOffer };
 }
 
 /**
@@ -310,20 +260,6 @@ export async function lapsedAppAskIds(
   return rows.map((r) => r.id);
 }
 
-/** Expire one app's lapsed asks now, re-asserting PENDING (never over a decision). */
-async function expireLapsedAsks(appId: string, now: Date): Promise<void> {
-  const ids = await lapsedAppAskIds(now, appId);
-  if (ids.length === 0) return;
-  await transitionProposal(db, {
-    to: ProposalStatus.EXPIRED,
-    set: { updatedAt: now },
-    where: and(
-      inArray(proposals.id, ids),
-      eq(proposals.status, ProposalStatus.PENDING)
-    ),
-  });
-}
-
 /** What happened to each pair the app named. */
 export type AskPairState = "asked" | "given" | "open" | "quiet";
 
@@ -365,7 +301,6 @@ export async function fileAppAccessAsk(args: {
   assertAskWithinCeiling(app.name, resolved);
   await assertOwnerMayGrant(app.ownerUserId, resolved.pairs);
 
-  await expireLapsedAsks(app.id, now);
   const given = new Set(app.approvedRequests.map(pairKey));
   const open = new Map<string, string>();
   const quiet = new Map<string, string>();
@@ -382,8 +317,15 @@ export async function fileAppAccessAsk(args: {
     now.getTime() - APP_ACCESS_ASK_QUIET_DAYS * DAY_MS
   );
   for (const row of rows) {
-    const into =
-      row.status === ProposalStatus.PENDING
+    // A pending ask past its time no longer holds its pairs (the 6-hourly
+    // expiry pass moves it to EXPIRED, discarding what it staged).
+    const lapsed =
+      row.status === ProposalStatus.PENDING &&
+      !!row.expiresAt &&
+      row.expiresAt.getTime() < now.getTime();
+    const into = lapsed
+      ? null
+      : row.status === ProposalStatus.PENDING
         ? open
         : row.reviewedAt && row.reviewedAt > quietSince
           ? quiet

@@ -55,7 +55,7 @@ import { podAppMayConnect } from "../../services/pod-app-policy.js";
 import {
   resolveAskPairs,
   type ResolvedAskPair,
-} from "../../services/app-access-ask.js";
+} from "../../services/app-access-ask-pairs.js";
 import type { Context } from "../../types/context.js";
 import {
   isDeviceSession,
