@@ -42,6 +42,7 @@ export * from "./wire.js";
 export * from "./neighbourhood.js";
 export * from "./dependency.js";
 export * from "./neighbour-state.js";
+export * from "./graph-health.js";
 import { isProvenanceRole } from "./neighbourhood.js";
 
 export type ConnectionDirection = "outgoing" | "incoming" | "structural";
