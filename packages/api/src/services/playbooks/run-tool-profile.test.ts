@@ -347,20 +347,21 @@ describe("resolveRunToolProfile — a need ref resolves through the run's space 
     ],
   };
   const boundTo = (provider: string | null) =>
-    vi.fn(async () =>
-      new Map([
-        [
-          "code-host",
-          {
-            bindingId: "b1",
-            need: "code-host",
-            providerCapabilityId: provider,
-            providerName: "GitHub",
-            setBy: "u-1",
-            updatedAt: new Date(),
-          },
-        ],
-      ])
+    vi.fn(
+      async () =>
+        new Map([
+          [
+            "code-host",
+            {
+              bindingId: "b1",
+              need: "code-host",
+              providerCapabilityId: provider,
+              providerName: "GitHub",
+              setBy: "u-1",
+              updatedAt: new Date(),
+            },
+          ],
+        ])
     );
 
   it("offers the verbs of the provider the space bound, read in the RUN's space", async () => {

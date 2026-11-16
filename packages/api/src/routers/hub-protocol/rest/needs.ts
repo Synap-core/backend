@@ -38,7 +38,10 @@ const NeedCoverageSchema = zOpenapi.object({
   known: zOpenapi.boolean(),
   state: zOpenapi.enum(["filled", "empty"]),
   provider: zOpenapi
-    .object({ capabilityId: zOpenapi.string(), name: zOpenapi.string().nullable() })
+    .object({
+      capabilityId: zOpenapi.string(),
+      name: zOpenapi.string().nullable(),
+    })
     .nullable(),
   binding: zOpenapi
     .object({
@@ -48,7 +51,10 @@ const NeedCoverageSchema = zOpenapi.object({
     })
     .nullable(),
   candidates: zOpenapi.array(
-    zOpenapi.object({ capabilityId: zOpenapi.string(), name: zOpenapi.string() })
+    zOpenapi.object({
+      capabilityId: zOpenapi.string(),
+      name: zOpenapi.string(),
+    })
   ),
 });
 
@@ -77,7 +83,8 @@ export function registerNeedsRoutes(app: HubHono): void {
     method: "get",
     path: "/workspaces/{workspaceId}/needs",
     tags: ["Workspaces"],
-    summary: "A space's needs: the vocabulary, and each declared need filled or empty",
+    summary:
+      "A space's needs: the vocabulary, and each declared need filled or empty",
     description:
       "The needs a space's processes name (`need:` refs of its playbooks and " +
       "automations), each `filled` (with the provider the space bound) or " +
@@ -86,7 +93,10 @@ export function registerNeedsRoutes(app: HubHono): void {
       "hub-protocol.read scope.",
     request: { params: zOpenapi.object({ workspaceId: uuidQueryParam }) },
     responses: {
-      200: { description: "The space's needs", schema: SpaceNeedsResponseSchema },
+      200: {
+        description: "The space's needs",
+        schema: SpaceNeedsResponseSchema,
+      },
       400: { description: "Invalid workspace id", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -95,7 +105,10 @@ export function registerNeedsRoutes(app: HubHono): void {
 
   app.get("/workspaces/:workspaceId/needs", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
-      return c.json({ error: "Insufficient scope: hub-protocol.read required" }, 403);
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
     }
     const userId = c.get("userId") as string;
     const workspaceId = requireUuidParam(c, "workspaceId");
@@ -104,9 +117,8 @@ export function registerNeedsRoutes(app: HubHono): void {
       return c.json({ error: "Not a member of this space" }, 403);
     }
     try {
-      const { readSpaceNeeds } = await import(
-        "../../../services/needs/space-need-door.js"
-      );
+      const { readSpaceNeeds } =
+        await import("../../../services/needs/space-need-door.js");
       const out = await readSpaceNeeds(workspaceId);
       return c.json({
         vocabulary: out.vocabulary,
@@ -121,7 +133,10 @@ export function registerNeedsRoutes(app: HubHono): void {
         },
       });
     } catch (err) {
-      logger.error({ err, userId, workspaceId }, "GET /workspaces/:workspaceId/needs failed");
+      logger.error(
+        { err, userId, workspaceId },
+        "GET /workspaces/:workspaceId/needs failed"
+      );
       return c.json(
         { error: "The space's needs could not be read" },
         httpStatusForTrpcError(err)
@@ -151,8 +166,14 @@ export function registerNeedsRoutes(app: HubHono): void {
     },
     responses: {
       200: { description: "Applied", schema: BindNeedResponseSchema },
-      202: { description: "Proposed for review", schema: BindNeedResponseSchema },
-      400: { description: "Invalid input, or the provider cannot fill it", schema: ErrorSchema },
+      202: {
+        description: "Proposed for review",
+        schema: BindNeedResponseSchema,
+      },
+      400: {
+        description: "Invalid input, or the provider cannot fill it",
+        schema: ErrorSchema,
+      },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "No such provider", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -161,7 +182,10 @@ export function registerNeedsRoutes(app: HubHono): void {
 
   app.put("/workspaces/:workspaceId/needs/:need", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
-      return c.json({ error: "Insufficient scope: hub-protocol.write required" }, 403);
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
     }
     const userId = c.get("userId") as string;
     const agentUserId = (c.get("agentUserId") as string | undefined) ?? null;
@@ -174,14 +198,17 @@ export function registerNeedsRoutes(app: HubHono): void {
     } catch {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
-    const { BindSpaceNeedInputSchema, bindSpaceNeedThroughGate } = await import(
-      "../../../services/needs/space-need-door.js"
-    );
+    const { BindSpaceNeedInputSchema, bindSpaceNeedThroughGate } =
+      await import("../../../services/needs/space-need-door.js");
     const parsed = BindSpaceNeedInputSchema.safeParse(body);
     if (!parsed.success) {
-      return c.json({ error: "Invalid body", details: parsed.error.issues }, 400);
+      return c.json(
+        { error: "Invalid body", details: parsed.error.issues },
+        400
+      );
     }
-    const { SpaceNeedBindError } = await import("../../../services/needs/space-needs.js");
+    const { SpaceNeedBindError } =
+      await import("../../../services/needs/space-needs.js");
     const { canonicalNeedSlug } = await import("@synap-core/types/needs");
     const slug = canonicalNeedSlug(need);
     if (!slug) return c.json({ error: `"${need}" is not a need.` }, 400);
@@ -209,7 +236,10 @@ export function registerNeedsRoutes(app: HubHono): void {
         { err, userId, workspaceId, need },
         "PUT /workspaces/:workspaceId/needs/:need failed"
       );
-      return c.json({ error: "The need could not be filled" }, httpStatusForTrpcError(err));
+      return c.json(
+        { error: "The need could not be filled" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 }

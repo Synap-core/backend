@@ -210,7 +210,9 @@ export function processChecks(row: Pick<Row, "criteria" | "stages">): {
 }
 
 /** Does the playbook name a `need:` ref (tools or requires, its own or a step's)? PURE. */
-function declaresNeedRef(row: Pick<Row, "tools" | "requires" | "stages">): boolean {
+function declaresNeedRef(
+  row: Pick<Row, "tools" | "requires" | "stages">
+): boolean {
   return declaredNeeds(row).some((d) => d.kind === "need");
 }
 
@@ -301,7 +303,11 @@ function coverNeedRef(
   if (caps === null) return { ...d, state: "unknown", providers: [] };
   const r = resolveNeedRefVerbs(d.slug, bindings, caps);
   return r.status === "ok"
-    ? { ...d, state: "filled", providers: [{ ...provider, capabilityName: r.providerName }] }
+    ? {
+        ...d,
+        state: "filled",
+        providers: [{ ...provider, capabilityName: r.providerName }],
+      }
     : { ...d, state: "empty", providers: [] };
 }
 
@@ -770,7 +776,12 @@ export async function readProcess(
     // The space's need bindings (0426): a `need:` entry's state and provider,
     // read only when the playbook names a need.
     declaresNeedRef(row)
-      ? part("needs", unavailable, () => readNeedBindings(row.workspaceId ?? null), ctx)
+      ? part(
+          "needs",
+          unavailable,
+          () => readNeedBindings(row.workspaceId ?? null),
+          ctx
+        )
       : Promise.resolve(new Map() as SpaceNeedBindings),
   ]);
   const counts =
@@ -815,7 +826,12 @@ export async function readProcess(
     steps: processSteps(row),
     checks: processChecks(row),
     moves: flow && profileSlug ? movesOf(flow, row.id, profileSlug) : null,
-    needs: coverNeeds(declaredNeeds(row), caps, row.workspaceId ?? null, bindings),
+    needs: coverNeeds(
+      declaredNeeds(row),
+      caps,
+      row.workspaceId ?? null,
+      bindings
+    ),
     skills: (skills ?? []) as ProcessSkill[],
     runs: { counts, recent: recent ?? [] },
     health,
@@ -924,42 +940,45 @@ async function listProcessCards(
   const needSpaces = [
     ...new Set(rows.filter(declaresNeedRef).map((r) => r.workspaceId ?? null)),
   ];
-  const [automationsBy, groups, marks, capsBySpace, bindingsBySpace] = await Promise.all([
-    part("when", unavailable, () => readAutomations(reader, ids), ctx),
-    part("runs", unavailable, () => readGroups(reader, ids), ctx),
-    part("health", unavailable, () => readRecentMarks(reader, ids), ctx),
-    part(
-      "needs",
-      unavailable,
-      async () =>
-        new Map(
-          await Promise.all(
-            spaces.map(
-              async (ws) =>
-                [
-                  ws,
-                  await listCapabilities(
-                    { workspaceId: ws, userId: reader.userId },
-                    { limit: null }
-                  ),
-                ] as const
+  const [automationsBy, groups, marks, capsBySpace, bindingsBySpace] =
+    await Promise.all([
+      part("when", unavailable, () => readAutomations(reader, ids), ctx),
+      part("runs", unavailable, () => readGroups(reader, ids), ctx),
+      part("health", unavailable, () => readRecentMarks(reader, ids), ctx),
+      part(
+        "needs",
+        unavailable,
+        async () =>
+          new Map(
+            await Promise.all(
+              spaces.map(
+                async (ws) =>
+                  [
+                    ws,
+                    await listCapabilities(
+                      { workspaceId: ws, userId: reader.userId },
+                      { limit: null }
+                    ),
+                  ] as const
+              )
             )
-          )
-        ),
-      ctx
-    ),
-    part(
-      "needs",
-      unavailable,
-      async () =>
-        new Map(
-          await Promise.all(
-            needSpaces.map(async (ws) => [ws, await readNeedBindings(ws)] as const)
-          )
-        ),
-      ctx
-    ),
-  ]);
+          ),
+        ctx
+      ),
+      part(
+        "needs",
+        unavailable,
+        async () =>
+          new Map(
+            await Promise.all(
+              needSpaces.map(
+                async (ws) => [ws, await readNeedBindings(ws)] as const
+              )
+            )
+          ),
+        ctx
+      ),
+    ]);
   const countsBy = await part(
     "runs",
     unavailable,

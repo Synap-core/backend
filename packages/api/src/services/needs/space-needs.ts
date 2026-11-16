@@ -119,7 +119,12 @@ export type NeedRefResolution =
   | { status: "unknown_need"; need: string }
   | { status: "unfilled"; need: string }
   | { status: "provider_gone"; need: string }
-  | { status: "no_verb"; need: string; providerName: string; intents: string[] };
+  | {
+      status: "no_verb";
+      need: string;
+      providerName: string;
+      intents: string[];
+    };
 
 /**
  * Resolve a need ref against a space's bindings and the registry rows under
@@ -138,7 +143,8 @@ export function resolveNeedRefVerbs(
 ): NeedRefResolution {
   const ref = parseNeedRef(entry);
   const slug = ref ? canonicalNeedSlug(ref.need) : null;
-  if (!ref || !slug) return { status: "unknown_need", need: ref?.need ?? entry };
+  if (!ref || !slug)
+    return { status: "unknown_need", need: ref?.need ?? entry };
   const binding = bindings.get(slug);
   if (!binding) return { status: "unfilled", need: slug };
   const providerId = binding.providerCapabilityId;
@@ -157,7 +163,12 @@ export function resolveNeedRefVerbs(
   }
   const name = providerName ?? "its provider";
   if (verbs.length === 0) {
-    return { status: "no_verb", need: slug, providerName: name, intents: [...intents] };
+    return {
+      status: "no_verb",
+      need: slug,
+      providerName: name,
+      intents: [...intents],
+    };
   }
   return {
     status: "ok",
@@ -176,7 +187,12 @@ export function resolveNeedRefVerbs(
 export type NeedVerbChoice =
   | { status: "ok"; verbId: string; need: string; providerName: string }
   | Exclude<NeedRefResolution, { status: "ok" }>
-  | { status: "ambiguous"; need: string; providerName: string; verbs: string[] };
+  | {
+      status: "ambiguous";
+      need: string;
+      providerName: string;
+      verbs: string[];
+    };
 
 export function chooseNeedVerb(resolution: NeedRefResolution): NeedVerbChoice {
   if (resolution.status !== "ok") return resolution;
@@ -306,21 +322,20 @@ export async function applySpaceNeedBinding(input: {
   /** The person the write is attributed to (the approver, on a proposal). */
   userId: string;
   /** Does the provider serve one of the need's intents (registry fold)? */
-  servesIntent?: (providerCapabilityId: string, need: NeedDefinition) => Promise<boolean>;
+  servesIntent?: (
+    providerCapabilityId: string,
+    need: NeedDefinition
+  ) => Promise<boolean>;
 }): Promise<SpaceNeedBindResult> {
   const need = needOf(input.need);
   if (!need) {
-    throw new SpaceNeedBindError("UNKNOWN_NEED", `"${input.need}" is not a need.`);
+    throw new SpaceNeedBindError(
+      "UNKNOWN_NEED",
+      `"${input.need}" is not a need.`
+    );
   }
-  const {
-    db,
-    installationBindings,
-    capabilities,
-    and,
-    eq,
-    isNull,
-    ne,
-  } = await import("@synap/database");
+  const { db, installationBindings, capabilities, and, eq, isNull, ne } =
+    await import("@synap/database");
 
   let provider: { id: string; name: string } | null = null;
   if (input.providerCapabilityId) {
@@ -410,7 +425,11 @@ export async function applySpaceNeedBinding(input: {
       })
       .returning({ id: installationBindings.id });
     logger.info(
-      { workspaceId: input.workspaceId, need: need.slug, provider: provider.id },
+      {
+        workspaceId: input.workspaceId,
+        need: need.slug,
+        provider: provider.id,
+      },
       "space need bound"
     );
     return {
@@ -434,12 +453,14 @@ export async function providerServesNeedIntent(
   providerCapabilityId: string,
   need: NeedDefinition
 ): Promise<boolean> {
-  const { listCapabilities } = await import("../capabilities/capability-registry.js");
+  const { listCapabilities } =
+    await import("../capabilities/capability-registry.js");
   const rows = await listCapabilities(lens, { limit: null });
   const intents = new Set(need.intents);
   return rows.some(
     (r) =>
-      (r.id === providerCapabilityId || r.containerId === providerCapabilityId) &&
+      (r.id === providerCapabilityId ||
+        r.containerId === providerCapabilityId) &&
       (r.verbs ?? []).some((v) => !!v.intent && intents.has(v.intent))
   );
 }
@@ -488,7 +509,9 @@ export async function resolveNeedVerb(input: {
   workspaceId: string | null;
   userId: string;
 }): Promise<{ verbId: string } | { reason: string }> {
-  const entry = input.need.startsWith("need:") ? input.need : `need:${input.need}`;
+  const entry = input.need.startsWith("need:")
+    ? input.need
+    : `need:${input.need}`;
   if (!input.workspaceId) {
     return {
       reason: `"${entry}" names a need, and needs are filled per space: this runs in no space.`,

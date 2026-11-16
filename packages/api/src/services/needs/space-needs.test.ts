@@ -51,7 +51,9 @@ const REGISTRY = [
   {
     id: "cap-vercel",
     name: "Vercel",
-    verbs: [{ id: "vercel_deploy", kind: "action", intent: "run_external_job" }],
+    verbs: [
+      { id: "vercel_deploy", kind: "action", intent: "run_external_job" },
+    ],
   },
   {
     id: "cap-stripe",
@@ -61,7 +63,10 @@ const REGISTRY = [
 ];
 
 describe("resolveNeedRefVerbs — a need ref → the bound provider's verbs, or a reason", () => {
-  const bindings = new Map([binding("code-host", "cap-gh"), binding("gate", null)]);
+  const bindings = new Map([
+    binding("code-host", "cap-gh"),
+    binding("gate", null),
+  ]);
 
   it("offers the provider's verbs (its own rows and its container's) for the need's intents", () => {
     const r = resolveNeedRefVerbs("need:code-host", bindings, REGISTRY);
@@ -80,18 +85,29 @@ describe("resolveNeedRefVerbs — a need ref → the bound provider's verbs, or 
   });
 
   it("an /<intent> suffix narrows to that intent; an alias reads as its slug", () => {
-    const r = resolveNeedRefVerbs("need:git-host/fetch_record", bindings, REGISTRY);
+    const r = resolveNeedRefVerbs(
+      "need:git-host/fetch_record",
+      bindings,
+      REGISTRY
+    );
     expect(r.status === "ok" && r.verbs).toEqual(["github_pr_checks"]);
   });
 
   it("a trial keeps read verbs only", () => {
     const r = resolveNeedRefVerbs("need:code-host", bindings, REGISTRY, true);
-    expect(r.status === "ok" && r.verbs).toEqual(["github_list_prs", "github_pr_checks"]);
+    expect(r.status === "ok" && r.verbs).toEqual([
+      "github_list_prs",
+      "github_pr_checks",
+    ]);
   });
 
   it("says why when it offers nothing: unknown, unfilled, provider gone, no verb", () => {
-    expect(resolveNeedRefVerbs("need:nope", bindings, REGISTRY).status).toBe("unknown_need");
-    expect(resolveNeedRefVerbs("payments", bindings, REGISTRY).status).toBe("unknown_need");
+    expect(resolveNeedRefVerbs("need:nope", bindings, REGISTRY).status).toBe(
+      "unknown_need"
+    );
+    expect(resolveNeedRefVerbs("payments", bindings, REGISTRY).status).toBe(
+      "unknown_need"
+    );
     expect(resolveNeedRefVerbs("need:payments", bindings, REGISTRY)).toEqual({
       status: "unfilled",
       need: "payments",
@@ -114,13 +130,19 @@ describe("resolveNeedRefVerbs — a need ref → the bound provider's verbs, or 
     });
     // ...and fixing the binding fixes it: the reason was about the binding.
     expect(
-      resolveNeedRefVerbs("need:payments", new Map([binding("payments", "cap-stripe")]), REGISTRY)
-        .status
+      resolveNeedRefVerbs(
+        "need:payments",
+        new Map([binding("payments", "cap-stripe")]),
+        REGISTRY
+      ).status
     ).toBe("ok");
   });
 
   it("every reason is a sentence naming the need in the person's words", () => {
-    const sentence = needResolutionReason({ status: "unfilled", need: "code-host" });
+    const sentence = needResolutionReason({
+      status: "unfilled",
+      need: "code-host",
+    });
     expect(sentence).toContain("Code host");
     expect(sentence).toMatch(/not filled in this space/);
   });
@@ -139,7 +161,9 @@ describe("chooseNeedVerb — a single-verb reference runs ONE verb", () => {
       need: "code-host",
       providerName: "GitHub",
     });
-    const many = chooseNeedVerb(resolveNeedRefVerbs("need:code-host", bindings, REGISTRY));
+    const many = chooseNeedVerb(
+      resolveNeedRefVerbs("need:code-host", bindings, REGISTRY)
+    );
     expect(many.status).toBe("ambiguous");
     if (many.status === "ambiguous") {
       expect(needResolutionReason(many)).toMatch(/need:code-host\/<intent>/);
@@ -151,7 +175,9 @@ describe("needRequiresKey — a requires need → the bound provider's key", () 
   it("maps a filled need to its provider's key, and an unfilled one to null", () => {
     const bindings = new Map([binding("media-generation", "cap-ff")]);
     const keys = new Map([["cap-ff", "media-ffmpeg"]]);
-    expect(needRequiresKey("need:media-generation", bindings, keys)).toBe("media-ffmpeg");
+    expect(needRequiresKey("need:media-generation", bindings, keys)).toBe(
+      "media-ffmpeg"
+    );
     expect(needRequiresKey("need:media", bindings, keys)).toBe("media-ffmpeg");
     expect(needRequiresKey("need:deploy-target", bindings, keys)).toBeNull();
     expect(needRequiresKey("media-ffmpeg", bindings, keys)).toBeNull();
@@ -165,7 +191,11 @@ describe("foldNeedCoverage — a space's declared needs, filled or empty", () =>
       declared: ["code-host", "git-host", "payments", "mystery"],
       bindings: new Map([binding("code-host", "cap-gh")]),
       installed: [
-        { id: "cap-gh", name: "GitHub", metadata: { fills: ["code-host", "gate"] } },
+        {
+          id: "cap-gh",
+          name: "GitHub",
+          metadata: { fills: ["code-host", "gate"] },
+        },
         { id: "cap-stripe", name: "Stripe", metadata: { fills: ["payments"] } },
         { id: "cap-other", name: "Other", metadata: {} },
       ],
@@ -175,8 +205,13 @@ describe("foldNeedCoverage — a space's declared needs, filled or empty", () =>
       ["payments", "empty"],
       ["mystery", "empty"],
     ]);
-    expect(r.needs[0]!.provider).toEqual({ capabilityId: "cap-gh", name: "GitHub" });
-    expect(r.needs[1]!.candidates).toEqual([{ capabilityId: "cap-stripe", name: "Stripe" }]);
+    expect(r.needs[0]!.provider).toEqual({
+      capabilityId: "cap-gh",
+      name: "GitHub",
+    });
+    expect(r.needs[1]!.candidates).toEqual([
+      { capabilityId: "cap-stripe", name: "Stripe" },
+    ]);
     expect(r.needs[2]!.known).toBe(false);
     expect(r.empty).toEqual(["payments", "mystery"]);
   });

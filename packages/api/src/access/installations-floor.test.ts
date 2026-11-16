@@ -95,8 +95,12 @@ describe("installation_bindings — a space's need binding is the space's", () =
     );
     // Two branches: the installation one carries B's owner term, the space
     // one (installation_id IS NULL) carries none.
-    expect(q.sql).toContain(`"installation_bindings"."installation_id" is not null`);
-    expect(q.sql).toContain(`"installation_bindings"."installation_id" is null`);
+    expect(q.sql).toContain(
+      `"installation_bindings"."installation_id" is not null`
+    );
+    expect(q.sql).toContain(
+      `"installation_bindings"."installation_id" is null`
+    );
     const spaceBranch = q.sql.slice(
       q.sql.indexOf(`"installation_bindings"."installation_id" is null`)
     );

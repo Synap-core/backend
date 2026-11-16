@@ -227,7 +227,9 @@ describe("findRunToolsMissing — a step's need (0426)", () => {
         {
           id: "cap-gh",
           name: "GitHub",
-          verbs: [{ id: "github_pr_checks", kind: "read", intent: "fetch_record" }],
+          verbs: [
+            { id: "github_pr_checks", kind: "read", intent: "fetch_record" },
+          ],
         },
       ],
     }),
@@ -264,7 +266,10 @@ describe("findRunToolsMissing — a step's need (0426)", () => {
 
   it("an unfilled need is missing, with its reason, and the refusal says it", async () => {
     const pb = playbook(["need:payments"], ["need:payments"]);
-    const r = await findRunToolsMissing({ playbook: pb, ...lens }, needDeps("cap-gh"));
+    const r = await findRunToolsMissing(
+      { playbook: pb, ...lens },
+      needDeps("cap-gh")
+    );
     expect(r).toEqual({
       status: "ok",
       missing: [
@@ -291,8 +296,8 @@ describe("findRunToolsMissing — a step's need (0426)", () => {
       { playbook: playbook(["need:code-host"], ["need:code-host"]), ...lens },
       needDeps(null)
     );
-    expect(r.status === "ok" && r.missing[0]?.reasons?.["need:code-host"]).toMatch(
-      /was removed/
-    );
+    expect(
+      r.status === "ok" && r.missing[0]?.reasons?.["need:code-host"]
+    ).toMatch(/was removed/);
   });
 });

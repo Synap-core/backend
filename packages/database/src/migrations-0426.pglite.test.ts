@@ -158,7 +158,9 @@ describe("migration 0426 — needs filled once per space", () => {
       expect(M0426).toContain(line);
       expect(BASELINE).toContain(line);
     }
-    expect(BASELINE).not.toContain(`CREATE TABLE IF NOT EXISTS "intent_defaults"`);
+    expect(BASELINE).not.toContain(
+      `CREATE TABLE IF NOT EXISTS "intent_defaults"`
+    );
     expect(REQUIRED_COLUMNS.some((c) => c.table === "needs")).toBe(true);
     expect(REQUIRED_COLUMNS.some((c) => c.table === "intent_defaults")).toBe(
       false

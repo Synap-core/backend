@@ -470,6 +470,6 @@ describe("TRIPWIRE — the declared-intent sink is RETIRED; a space's needs are 
   it("a space's needs are derived from its processes", () => {
     const src = readFileSync(COVERAGE, "utf8");
     expect(src).toContain("declaredNeedsOf(");
-    expect(src).not.toContain("taskIntents\")");
+    expect(src).not.toContain('taskIntents")');
   });
 });

@@ -224,7 +224,9 @@ export async function proposeIntentGapInstall(input: {
 
   try {
     const alternatives = input.candidates.slice(1);
-    const needLabel = input.need ? (needOf(input.need)?.label ?? input.need) : null;
+    const needLabel = input.need
+      ? (needOf(input.need)?.label ?? input.need)
+      : null;
     const title = needLabel
       ? `Install "${chosen.name}" to fill the need "${needLabel}"`
       : `Install "${chosen.name}" for intent "${input.intent}"`;
@@ -351,7 +353,8 @@ export async function resolveIntentGap(input: {
 export function declaredFills(
   entry: Pick<CatalogCacheEntry, "definition">
 ): string[] | null {
-  const raw = (entry.definition as { fills?: unknown } | null | undefined)?.fills;
+  const raw = (entry.definition as { fills?: unknown } | null | undefined)
+    ?.fills;
   if (raw === undefined || raw === null || !Array.isArray(raw)) return null;
   const out: string[] = [];
   for (const v of raw) {
@@ -417,7 +420,9 @@ export async function resolveNeedGap(input: {
   const candidates = selectNeedProviders({
     entries,
     need: input.need,
-    ...(input.alreadyInstalled ? { alreadyInstalled: input.alreadyInstalled } : {}),
+    ...(input.alreadyInstalled
+      ? { alreadyInstalled: input.alreadyInstalled }
+      : {}),
   });
   return proposeIntentGapInstall({
     intent: input.need,

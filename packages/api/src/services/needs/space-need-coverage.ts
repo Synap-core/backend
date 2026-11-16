@@ -152,7 +152,10 @@ export async function readSpaceDeclaredNeeds(
       })
       .from(playbooks)
       .where(
-        and(eq(playbooks.workspaceId, workspaceId), ne(playbooks.status, "archived"))
+        and(
+          eq(playbooks.workspaceId, workspaceId),
+          ne(playbooks.status, "archived")
+        )
       ),
     db
       .select({ flowDefinition: automations.flowDefinition })
@@ -184,7 +187,10 @@ export async function readInstalledNeedProviders(
     })
     .from(capabilities)
     .where(
-      or(eq(capabilities.workspaceId, workspaceId), isNull(capabilities.workspaceId))
+      or(
+        eq(capabilities.workspaceId, workspaceId),
+        isNull(capabilities.workspaceId)
+      )
     );
 }
 
@@ -202,7 +208,12 @@ export async function workspaceNeedCoverage(
 
 /** What the reconcile did for one empty need. */
 export type NeedReconcileStep =
-  | { need: string; action: "bound"; providerCapabilityId: string; providerName: string }
+  | {
+      need: string;
+      action: "bound";
+      providerCapabilityId: string;
+      providerName: string;
+    }
   | { need: string; action: "choose"; candidates: string[] }
   | { need: string; action: "proposed"; proposalId: string; slug: string }
   | { need: string; action: "no_provider"; message: string }
@@ -229,7 +240,9 @@ export async function reconcileSpaceNeeds(input: {
   sessionId?: string | null;
 }): Promise<NeedReconcileReport> {
   const coverage = await workspaceNeedCoverage(input.workspaceId);
-  const filled = coverage.needs.filter((n) => n.state === "filled").map((n) => n.need);
+  const filled = coverage.needs
+    .filter((n) => n.state === "filled")
+    .map((n) => n.need);
   const steps: NeedReconcileStep[] = [];
   for (const n of coverage.needs) {
     if (n.state === "filled") continue;
@@ -262,9 +275,8 @@ export async function reconcileSpaceNeeds(input: {
         });
         continue;
       }
-      const { resolveNeedGap } = await import(
-        "../capabilities/propose-intent-gap-install.js"
-      );
+      const { resolveNeedGap } =
+        await import("../capabilities/propose-intent-gap-install.js");
       const offer = await resolveNeedGap({
         need: n.need,
         userId: input.userId,
@@ -280,7 +292,11 @@ export async function reconcileSpaceNeeds(input: {
           slug: offer.slug,
         });
       } else if (offer.status === "no_provider") {
-        steps.push({ need: n.need, action: "no_provider", message: offer.message });
+        steps.push({
+          need: n.need,
+          action: "no_provider",
+          message: offer.message,
+        });
       } else {
         steps.push({ need: n.need, action: "failed", error: offer.error });
       }

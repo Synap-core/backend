@@ -177,7 +177,10 @@ export function declaredNeedFills(raw: unknown): string[] | undefined {
   for (const v of raw) {
     const slug = canonicalNeedSlug(v);
     if (!slug) {
-      logger.warn({ fill: v }, "capability fills a need the pod does not know — not stamped");
+      logger.warn(
+        { fill: v },
+        "capability fills a need the pod does not know — not stamped"
+      );
       continue;
     }
     if (!out.includes(slug)) out.push(slug);

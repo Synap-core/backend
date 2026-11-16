@@ -203,7 +203,8 @@ export interface NeedRef {
   intent: string | null;
 }
 
-const NEED_REF_RE = /^need:([a-z][a-z0-9-]{0,63})(?:\/([a-z][a-z0-9_]{0,63}))?$/;
+const NEED_REF_RE =
+  /^need:([a-z][a-z0-9-]{0,63})(?:\/([a-z][a-z0-9_]{0,63}))?$/;
 
 /**
  * Parse a need ref (`need:code-host`, `need:gate/fetch_record`). `null` for

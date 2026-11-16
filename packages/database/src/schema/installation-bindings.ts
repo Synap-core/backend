@@ -62,10 +62,9 @@ export const installationBindings = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     /** The installation; null for a space's need binding (0426). */
-    installationId: uuid("installation_id").references(
-      () => installations.id,
-      { onDelete: "cascade" }
-    ),
+    installationId: uuid("installation_id").references(() => installations.id, {
+      onDelete: "cascade",
+    }),
     /** The owner (read floor), as on the installation. */
     userId: text("user_id").notNull(),
     workspaceId: uuid("workspace_id"),

@@ -588,8 +588,11 @@ export function registerWorkspaceExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const { applySpaceNeedBinding, providerServesNeedIntent, SpaceNeedBindError } =
-        await import("../../../services/needs/space-needs.js");
+      const {
+        applySpaceNeedBinding,
+        providerServesNeedIntent,
+        SpaceNeedBindError,
+      } = await import("../../../services/needs/space-needs.js");
       try {
         await applySpaceNeedBinding({
           workspaceId,

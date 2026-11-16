@@ -31,7 +31,13 @@ export const BindSpaceNeedInputSchema = z.object({
 });
 
 export type SpaceNeedDoorResult =
-  | { status: "proposed"; proposalId: string; summary: string; reviewUrl: string; reviewPath: string }
+  | {
+      status: "proposed";
+      proposalId: string;
+      summary: string;
+      reviewUrl: string;
+      reviewPath: string;
+    }
   | { status: "denied"; reason: string }
   | { status: "applied"; result: SpaceNeedBindResult };
 
@@ -87,5 +93,8 @@ export async function readSpaceNeeds(workspaceId: string): Promise<{
   vocabulary: typeof NEEDS;
   coverage: SpaceNeedCoverageResult;
 }> {
-  return { vocabulary: NEEDS, coverage: await workspaceNeedCoverage(workspaceId) };
+  return {
+    vocabulary: NEEDS,
+    coverage: await workspaceNeedCoverage(workspaceId),
+  };
 }

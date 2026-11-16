@@ -294,7 +294,11 @@ export async function evaluateSession(
           userId,
         });
         if ("reason" in resolved) {
-          results.push({ key: c.key, status: "skipped", reason: resolved.reason });
+          results.push({
+            key: c.key,
+            status: "skipped",
+            reason: resolved.reason,
+          });
           continue;
         }
         verbId = resolved.verbId;

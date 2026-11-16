@@ -97,12 +97,17 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 beforeAll(async () => {
   await h.client!.exec(pgliteAllTablesDdl());
-  await q(`INSERT INTO workspaces (id, owner_id, name) VALUES ($1, $3, 'Builder'), ($2, $3, 'Other')`, [
-    WS,
-    OTHER_WS,
-    PERSON,
-  ]);
-  const cap = (id: string, ws: string | null, name: string, key: string, fills?: string[]) =>
+  await q(
+    `INSERT INTO workspaces (id, owner_id, name) VALUES ($1, $3, 'Builder'), ($2, $3, 'Other')`,
+    [WS, OTHER_WS, PERSON]
+  );
+  const cap = (
+    id: string,
+    ws: string | null,
+    name: string,
+    key: string,
+    fills?: string[]
+  ) =>
     q(
       `INSERT INTO capabilities (id, workspace_id, created_by, name, template_key, metadata)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
@@ -133,14 +138,23 @@ beforeAll(async () => {
 describe("a space's declared needs and their state", () => {
   it("are the active processes' need refs, each empty with its candidates", async () => {
     const r = await workspaceNeedCoverage(WS);
-    expect(r.needs.map((n) => n.need)).toEqual(["code-host", "payments", "deploy-target"]);
+    expect(r.needs.map((n) => n.need)).toEqual([
+      "code-host",
+      "payments",
+      "deploy-target",
+    ]);
     // An archived playbook declares nothing.
     expect(r.needs.map((n) => n.need)).not.toContain("analytics");
     expect(r.empty).toEqual(["code-host", "payments", "deploy-target"]);
     const byNeed = Object.fromEntries(r.needs.map((n) => [n.need, n]));
     // A provider of another space is never a candidate.
-    expect(byNeed["code-host"]!.candidates).toEqual([{ capabilityId: GH, name: "GitHub" }]);
-    expect(byNeed["payments"]!.candidates.map((c) => c.name).sort()).toEqual(["Paddle", "Stripe"]);
+    expect(byNeed["code-host"]!.candidates).toEqual([
+      { capabilityId: GH, name: "GitHub" },
+    ]);
+    expect(byNeed["payments"]!.candidates.map((c) => c.name).sort()).toEqual([
+      "Paddle",
+      "Stripe",
+    ]);
   });
 });
 
@@ -152,14 +166,27 @@ describe("applySpaceNeedBinding — once per space, shared, governed by its own 
       providerCapabilityId: GH,
       userId: PERSON,
     });
-    expect(first).toMatchObject({ status: "bound", need: "gate", providerName: "GitHub" });
+    expect(first).toMatchObject({
+      status: "bound",
+      need: "gate",
+      providerName: "GitHub",
+    });
     const read = await readSpaceNeedBindings(WS);
-    expect(read.get("gate")).toMatchObject({ providerCapabilityId: GH, providerName: "GitHub", setBy: PERSON });
+    expect(read.get("gate")).toMatchObject({
+      providerCapabilityId: GH,
+      providerName: "GitHub",
+      setBy: PERSON,
+    });
     // The binding is the SPACE's: another space reads nothing.
     expect((await readSpaceNeedBindings(OTHER_WS)).size).toBe(0);
     // An alias names the same seat.
     expect(
-      await applySpaceNeedBinding({ workspaceId: WS, need: "ci", providerCapabilityId: GH, userId: PERSON })
+      await applySpaceNeedBinding({
+        workspaceId: WS,
+        need: "ci",
+        providerCapabilityId: GH,
+        userId: PERSON,
+      })
     ).toEqual({ status: "unchanged", need: "gate", providerCapabilityId: GH });
     const cleared = await applySpaceNeedBinding({
       workspaceId: WS,
@@ -167,7 +194,10 @@ describe("applySpaceNeedBinding — once per space, shared, governed by its own 
       providerCapabilityId: null,
       userId: PERSON,
     });
-    expect(cleared).toMatchObject({ status: "cleared", replaced: first.status === "bound" ? first.bindingId : null });
+    expect(cleared).toMatchObject({
+      status: "cleared",
+      replaced: first.status === "bound" ? first.bindingId : null,
+    });
     expect((await readSpaceNeedBindings(WS)).has("gate")).toBe(false);
     const rows = await q<{ state: string }>(
       `SELECT state FROM installation_bindings WHERE workspace_id = $1 AND need_key = 'gate' ORDER BY created_at`,
@@ -178,7 +208,11 @@ describe("applySpaceNeedBinding — once per space, shared, governed by its own 
   });
 
   it("refuses an unknown need, a provider of another space, a provider that cannot fill it", async () => {
-    const attempt = (need: string, provider: string, servesIntent?: () => Promise<boolean>) =>
+    const attempt = (
+      need: string,
+      provider: string,
+      servesIntent?: () => Promise<boolean>
+    ) =>
       applySpaceNeedBinding({
         workspaceId: WS,
         need,
@@ -186,14 +220,24 @@ describe("applySpaceNeedBinding — once per space, shared, governed by its own 
         userId: PERSON,
         ...(servesIntent ? { servesIntent } : {}),
       });
-    await expect(attempt("code-hots", GH)).rejects.toMatchObject({ code: "UNKNOWN_NEED" });
-    await expect(attempt("code-host", ELSEWHERE)).rejects.toMatchObject({ code: "PROVIDER_OUTSIDE_SPACE" });
-    await expect(attempt("code-host", PLAIN, async () => false)).rejects.toMatchObject({
+    await expect(attempt("code-hots", GH)).rejects.toMatchObject({
+      code: "UNKNOWN_NEED",
+    });
+    await expect(attempt("code-host", ELSEWHERE)).rejects.toMatchObject({
+      code: "PROVIDER_OUTSIDE_SPACE",
+    });
+    await expect(
+      attempt("code-host", PLAIN, async () => false)
+    ).rejects.toMatchObject({
       code: "PROVIDER_CANNOT_FILL",
     });
-    await expect(attempt("code-host", randomUUID())).rejects.toBeInstanceOf(SpaceNeedBindError);
+    await expect(attempt("code-host", randomUUID())).rejects.toBeInstanceOf(
+      SpaceNeedBindError
+    );
     // A provider that declares no fill but serves one of the need's intents may fill it.
-    await expect(attempt("analytics", PLAIN, async () => true)).resolves.toMatchObject({ status: "bound" });
+    await expect(
+      attempt("analytics", PLAIN, async () => true)
+    ).resolves.toMatchObject({ status: "bound" });
   });
 });
 
@@ -206,8 +250,15 @@ describe("the governed door", () => {
       need: "payments",
       providerCapabilityId: STRIPE,
     });
-    expect(applied).toMatchObject({ status: "applied", result: { status: "bound", providerName: "Stripe" } });
-    expect(h.gate[before]).toMatchObject({ subjectType: "workspace", action: "bind_need", workspaceId: WS });
+    expect(applied).toMatchObject({
+      status: "applied",
+      result: { status: "bound", providerName: "Stripe" },
+    });
+    expect(h.gate[before]).toMatchObject({
+      subjectType: "workspace",
+      action: "bind_need",
+      workspaceId: WS,
+    });
 
     const proposed = await bindSpaceNeedThroughGate({
       userId: PERSON,
@@ -217,7 +268,9 @@ describe("the governed door", () => {
       providerCapabilityId: PADDLE,
     });
     expect(proposed.status).toBe("proposed");
-    expect((await readSpaceNeedBindings(WS)).get("payments")?.providerCapabilityId).toBe(STRIPE);
+    expect(
+      (await readSpaceNeedBindings(WS)).get("payments")?.providerCapabilityId
+    ).toBe(STRIPE);
   });
 
   it("Hub PUT answers 202 for an agent and 200 applied for a person", async () => {
@@ -232,7 +285,11 @@ describe("the governed door", () => {
       registerNeedsRoutes(a);
       return a;
     };
-    const put = (a: HubHono, need: string, providerCapabilityId: string | null) =>
+    const put = (
+      a: HubHono,
+      need: string,
+      providerCapabilityId: string | null
+    ) =>
       a.request(`/workspaces/${WS}/needs/${need}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -240,12 +297,18 @@ describe("the governed door", () => {
       });
     const viaAgent = await put(app(AGENT), "code-host", GH);
     expect(viaAgent.status).toBe(202);
-    expect(await viaAgent.json()).toMatchObject({ status: "proposed", reviewUrl: expect.any(String) });
+    expect(await viaAgent.json()).toMatchObject({
+      status: "proposed",
+      reviewUrl: expect.any(String),
+    });
     expect((await readSpaceNeedBindings(WS)).has("code-host")).toBe(false);
 
     const viaPerson = await put(app(), "code-host", GH);
     expect(viaPerson.status).toBe(200);
-    expect(await viaPerson.json()).toMatchObject({ status: "applied", result: { status: "bound" } });
+    expect(await viaPerson.json()).toMatchObject({
+      status: "applied",
+      result: { status: "bound" },
+    });
     expect((await put(app(), "nope", GH)).status).toBe(400);
     expect((await put(app(), "code-host", ELSEWHERE)).status).toBe(400);
   });
@@ -258,25 +321,37 @@ describe("the governed door", () => {
        VALUES ($1, 'workspace', $2, 'bind_need', $3::jsonb, 'pending', '[]'::jsonb, $2, now(), now())`,
       [proposalId, WS, JSON.stringify({ data })]
     );
-    const executor = proposalExecRegistry.resolve("workspace/bind_need", "bind_need");
+    const executor = proposalExecRegistry.resolve(
+      "workspace/bind_need",
+      "bind_need"
+    );
     expect(executor, "workspace/bind_need executor").toBeDefined();
     // PLAIN declares no fill: the executor asks the registry whether it serves
     // one of the need's intents. It does not, so the approval is refused.
-    await expect(
-      executor!.execute(execArgs(proposalId, data))
-    ).rejects.toThrow(/cannot fill the need "Deploy target"/);
+    await expect(executor!.execute(execArgs(proposalId, data))).rejects.toThrow(
+      /cannot fill the need "Deploy target"/
+    );
     expect((await readSpaceNeedBindings(WS)).has("deploy-target")).toBe(false);
 
     const ok = { need: "gate", providerCapabilityId: GH };
-    await q(`UPDATE proposals SET data = $2::jsonb WHERE id = $1`, [proposalId, JSON.stringify({ data: ok })]);
+    await q(`UPDATE proposals SET data = $2::jsonb WHERE id = $1`, [
+      proposalId,
+      JSON.stringify({ data: ok }),
+    ]);
     await executor!.execute(execArgs(proposalId, ok));
     expect((await readSpaceNeedBindings(WS)).get("gate")?.setBy).toBe(PERSON);
-    const status = await q<{ status: string }>(`SELECT status FROM proposals WHERE id = $1`, [proposalId]);
+    const status = await q<{ status: string }>(
+      `SELECT status FROM proposals WHERE id = $1`,
+      [proposalId]
+    );
     expect(status.rows[0]!.status).toBe("approved");
   });
 });
 
-function execArgs(proposalId: string, data: Record<string, unknown>): ProposalExecutorArgs {
+function execArgs(
+  proposalId: string,
+  data: Record<string, unknown>
+): ProposalExecutorArgs {
   return {
     proposal: {
       id: proposalId,
@@ -307,21 +382,44 @@ function execArgs(proposalId: string, data: Record<string, unknown>): ProposalEx
 describe("the template-install reconcile and requires", () => {
   it("leaves filled needs, binds the one candidate, leaves a choice, says when none exists", async () => {
     // Start from a space whose code-host is empty again and payments has two candidates.
-    await applySpaceNeedBinding({ workspaceId: WS, need: "code-host", providerCapabilityId: null, userId: PERSON });
-    await applySpaceNeedBinding({ workspaceId: WS, need: "payments", providerCapabilityId: null, userId: PERSON });
-    const report = await reconcileSpaceNeeds({ workspaceId: WS, userId: PERSON });
+    await applySpaceNeedBinding({
+      workspaceId: WS,
+      need: "code-host",
+      providerCapabilityId: null,
+      userId: PERSON,
+    });
+    await applySpaceNeedBinding({
+      workspaceId: WS,
+      need: "payments",
+      providerCapabilityId: null,
+      userId: PERSON,
+    });
+    const report = await reconcileSpaceNeeds({
+      workspaceId: WS,
+      userId: PERSON,
+    });
     const step = (need: string) => report.steps.find((s) => s.need === need);
-    expect(step("code-host")).toMatchObject({ action: "bound", providerCapabilityId: GH });
+    expect(step("code-host")).toMatchObject({
+      action: "bound",
+      providerCapabilityId: GH,
+    });
     expect(step("payments")).toMatchObject({ action: "choose" });
     // No catalog pack fills deploy-target (the cache is empty): said plainly.
     expect(step("deploy-target")?.action).toMatch(/no_provider|failed/);
-    expect((await readSpaceNeedBindings(WS)).get("code-host")?.providerCapabilityId).toBe(GH);
+    expect(
+      (await readSpaceNeedBindings(WS)).get("code-host")?.providerCapabilityId
+    ).toBe(GH);
   });
 
   it("a requires need becomes the bound provider's key; an unfilled one stays as written", async () => {
     expect(
-      await resolveRequiresNeeds(["media-ffmpeg", "need:code-host", "need:deploy-target"], WS)
+      await resolveRequiresNeeds(
+        ["media-ffmpeg", "need:code-host", "need:deploy-target"],
+        WS
+      )
     ).toEqual(["media-ffmpeg", "github", "need:deploy-target"]);
-    expect(await resolveRequiresNeeds(["need:code-host"], null)).toEqual(["need:code-host"]);
+    expect(await resolveRequiresNeeds(["need:code-host"], null)).toEqual([
+      "need:code-host",
+    ]);
   });
 });

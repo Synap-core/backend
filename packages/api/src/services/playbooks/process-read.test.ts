@@ -626,7 +626,9 @@ describe("needs of kind `need` (0426): the space's binding, one provider", () =>
   ] as never;
 
   it("a need: ref is kind need, in tools and in requires", () => {
-    expect(declaredNeeds(PB as never).map((n) => [n.source, n.slug, n.kind])).toEqual([
+    expect(
+      declaredNeeds(PB as never).map((n) => [n.source, n.slug, n.kind])
+    ).toEqual([
       ["tools", "need:code-host/fetch_record", "need"],
       ["tools", "need:payments", "need"],
       ["requires", "need:deploy-target", "need"],
@@ -634,7 +636,12 @@ describe("needs of kind `need` (0426): the space's binding, one provider", () =>
   });
 
   it("filled with its provider, empty when unfilled, unknown when the bindings are unread", () => {
-    const covered = coverNeeds(declaredNeeds(PB as never), caps, "ws-1", bindings);
+    const covered = coverNeeds(
+      declaredNeeds(PB as never),
+      caps,
+      "ws-1",
+      bindings
+    );
     expect(covered.map((n) => [n.slug, n.state])).toEqual([
       ["need:code-host/fetch_record", "filled"],
       ["need:payments", "empty"],

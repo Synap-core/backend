@@ -343,7 +343,10 @@ export async function resolveRunToolProfile(
         );
       }
       verbs = foldRunVerbs(
-        [...needVerbs.verbs, ...namedVerbs(named, registry.capabilities, trial)],
+        [
+          ...needVerbs.verbs,
+          ...namedVerbs(named, registry.capabilities, trial),
+        ],
         intents,
         index
       );

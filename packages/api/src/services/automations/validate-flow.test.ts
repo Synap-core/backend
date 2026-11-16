@@ -895,9 +895,15 @@ describe("validateFlowDefinition — a capability node may name a need (0426)", 
   });
 
   it("a known need (and intent) with no verb is valid: the verb is the space's provider's", () => {
-    const r = validateFlowDefinition(capNode({ need: "need:deploy-target/run_external_job" }));
-    expect(r.errors.map((e) => e.code)).not.toContain("capability_missing_verbId");
-    expect(r.errors.map((e) => e.code)).not.toContain("capability_unknown_need");
+    const r = validateFlowDefinition(
+      capNode({ need: "need:deploy-target/run_external_job" })
+    );
+    expect(r.errors.map((e) => e.code)).not.toContain(
+      "capability_missing_verbId"
+    );
+    expect(r.errors.map((e) => e.code)).not.toContain(
+      "capability_unknown_need"
+    );
   });
 
   it("an unknown need is refused with its reason", () => {

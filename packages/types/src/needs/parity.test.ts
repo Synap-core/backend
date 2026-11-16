@@ -57,7 +57,11 @@ function deriveSeededNeeds(): SeededNeed[] {
     for (const m of insert.matchAll(
       /\(\s*'([a-z][a-z0-9-]*)'\s*,\s*'[^']*'\s*,\s*'[^']*'\s*,\s*ARRAY\[([^\]]*)\]\s*,\s*ARRAY\[([^\]]*)\](?:::text\[\])?\s*\)/g
     )) {
-      out.push({ slug: m[1]!, intents: arrayOf(m[2]!), aliases: arrayOf(m[3]!) });
+      out.push({
+        slug: m[1]!,
+        intents: arrayOf(m[2]!),
+        aliases: arrayOf(m[3]!),
+      });
     }
   }
   return out;
@@ -71,7 +75,8 @@ describe("need vocabulary parity — mirror === the pod's seeded needs", () => {
       expect(n.slug).toMatch(NEED_SLUG_RE);
       expect(n.intents.length, n.slug).toBeGreaterThan(0);
       // Every intent a need groups is a slug of the intent vocabulary.
-      for (const i of n.intents) expect(isKnownIntent(i), `${n.slug}:${i}`).toBe(true);
+      for (const i of n.intents)
+        expect(isKnownIntent(i), `${n.slug}:${i}`).toBe(true);
     }
     // No alias shadows a slug or another alias: a name resolves to ONE need.
     const names = [...NEED_SLUGS, ...NEEDS.flatMap((n) => n.aliases)];
@@ -96,7 +101,10 @@ describe("need vocabulary parity — mirror === the pod's seeded needs", () => {
 
 describe("need refs — the one parser every reader shares", () => {
   it("parses need:<slug> and need:<slug>/<intent>, and refuses the rest", () => {
-    expect(parseNeedRef("need:code-host")).toEqual({ need: "code-host", intent: null });
+    expect(parseNeedRef("need:code-host")).toEqual({
+      need: "code-host",
+      intent: null,
+    });
     expect(parseNeedRef("need:gate/fetch_record")).toEqual({
       need: "gate",
       intent: "fetch_record",
@@ -133,7 +141,9 @@ describe("need refs — the one parser every reader shares", () => {
     expect(needRefIntents({ need: "ci", intent: "fetch_record" })).toEqual([
       "fetch_record",
     ]);
-    expect(needRefIntents({ need: "gate", intent: "publish_post" })).toEqual([]);
+    expect(needRefIntents({ need: "gate", intent: "publish_post" })).toEqual(
+      []
+    );
     expect(needRefIntents({ need: "nope", intent: null })).toEqual([]);
   });
 
@@ -141,7 +151,9 @@ describe("need refs — the one parser every reader shares", () => {
     const playbook = {
       tools: ["get_entity", "need:code-host", "fetch_record"],
       requires: ["media-ffmpeg", "need:deploy-target"],
-      criteria: [{ check: { kind: "capability", capability: "need:gate/fetch_record" } }],
+      criteria: [
+        { check: { kind: "capability", capability: "need:gate/fetch_record" } },
+      ],
       stages: [
         { key: "a", tools: ["need:git-host"], requires: ["need:file-store"] },
         { key: "b", criteria: [{ check: { capability: "need:payments" } }] },

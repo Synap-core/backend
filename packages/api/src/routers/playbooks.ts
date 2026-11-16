@@ -3086,7 +3086,10 @@ export const playbooksRouter = router({
           // Before the run's space is resolved below: the explicit, the
           // playbook's or the ambient one, for a `need:` entry of `requires`.
           workspaceId:
-            input.workspaceId ?? playbook.workspaceId ?? ctx.workspaceId ?? null,
+            input.workspaceId ??
+            playbook.workspaceId ??
+            ctx.workspaceId ??
+            null,
         });
         if (mapped.handToAgentId) input.handToAgentId = mapped.handToAgentId;
         if (mapped.runOn) input.runOn = mapped.runOn;

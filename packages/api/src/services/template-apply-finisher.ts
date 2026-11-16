@@ -229,7 +229,8 @@ async function fillSpaceNeedsAfterApply(
   input: Pick<FinishTemplateApplyInput, "workspaceId" | "userId">
 ): Promise<void> {
   try {
-    const { reconcileSpaceNeeds } = await import("./needs/space-need-coverage.js");
+    const { reconcileSpaceNeeds } =
+      await import("./needs/space-need-coverage.js");
     const report = await reconcileSpaceNeeds({
       workspaceId: input.workspaceId,
       userId: input.userId,

@@ -7,7 +7,11 @@
  * disagree about which `tools` entries are needs.
  */
 import { describe, it, expect } from "vitest";
-import { NEED_TOOL_PREFIX, isNeedToolEntry, isRunToolName } from "@synap/playbooks";
+import {
+  NEED_TOOL_PREFIX,
+  isNeedToolEntry,
+  isRunToolName,
+} from "@synap/playbooks";
 import {
   NEED_REF_PREFIX,
   NEED_SLUGS,
@@ -35,7 +39,12 @@ describe("need refs: one prefix, one grammar", () => {
   });
 
   it("self-check: what is not a need ref is not taken for one", () => {
-    for (const entry of ["fetch_record", "github_pr_checks", "get_entity", "needs"]) {
+    for (const entry of [
+      "fetch_record",
+      "github_pr_checks",
+      "get_entity",
+      "needs",
+    ]) {
       expect(isNeedToolEntry(entry), entry).toBe(false);
       expect(looksLikeNeedRef(entry), entry).toBe(false);
     }
