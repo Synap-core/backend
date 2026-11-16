@@ -11,6 +11,16 @@
  * requests must stay within the frozen `asked` copy filed with the request: a
  * revise can narrow, never widen (`appApprovalWithinAsked`).
  *
+ * ADDITIVE (`data.mode = "add"`, plan 647ebfd4 option C, founder 16 Nov
+ * 2026): an app asked for one MORE thing (`services/app-access-ask.ts`, or the
+ * consent screen's short mode). Approving MERGES the pairs into the approval
+ * as it stands now (`addApprovedRequests`), never replaces it; the ask must
+ * not have expired, and its pairs are re-checked against the ceiling (the
+ * document the pod holds ∩ the spaces the person may give,
+ * `assertAddWithinCeiling`) besides the person's reach. Every other approval
+ * keeps replacing the whole set (the full consent screen is also where the
+ * person narrows).
+ *
  * IDENTITY: only the app's OWNER may approve. `app/connect` is filed by the
  * owner's CLI, but the default `owner_and_admins` policy could let a workspace
  * admin approve — and this write grants the app reach, so a non-owner approver
@@ -37,6 +47,11 @@ import {
   applyApprovedReach,
   assertOwnerMayGrant,
 } from "../../../services/app-connect.js";
+import {
+  APP_CONNECT_ADD_MODE,
+  assertAddWithinCeiling,
+  isAddMode,
+} from "../../../services/app-access-ask.js";
 
 export function registerAppExecutors(): void {
   registerProposalExecutor({
@@ -69,6 +84,7 @@ export function registerAppExecutors(): void {
         .select({
           status: proposals.status,
           revisionHistory: proposals.revisionHistory,
+          expiresAt: proposals.expiresAt,
         })
         .from(proposals)
         .where(eq(proposals.id, input.proposalId));
@@ -110,11 +126,36 @@ export function registerAppExecutors(): void {
         });
       }
 
+      const add = isAddMode(raw);
+      if (add) {
+        if (app.mode !== "oauth") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Only a pod app can ask for one more thing; this app asks for its whole access again.",
+          });
+        }
+        // An ask that waited past its time is no longer the app's question.
+        const expiresAt = alreadyDone?.expiresAt ?? null;
+        if (expiresAt && expiresAt.getTime() < Date.now()) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "This ask expired. The app asks again when it still needs it.",
+          });
+        }
+        await assertAddWithinCeiling(app, requests);
+      }
+
       // The owner's own rights, read NOW: a role dropped since the request
       // was filed must not reach the app's agent.
       await assertOwnerMayGrant(app.ownerUserId, requests);
 
-      const updated = await repo.setApprovedRequests(appId, requests);
+      // Additive: merged into the approval as it stands now, never a pair
+      // dropped. Otherwise the approval replaces the whole set.
+      const updated = add
+        ? await repo.addApprovedRequests(appId, requests)
+        : await repo.setApprovedRequests(appId, requests);
       if (!updated) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -150,6 +191,7 @@ export function registerAppExecutors(): void {
           publicId: app.publicId,
           proposalId: input.proposalId,
           requests,
+          ...(add ? { mode: APP_CONNECT_ADD_MODE } : {}),
           rederivedKeys,
         },
       });
