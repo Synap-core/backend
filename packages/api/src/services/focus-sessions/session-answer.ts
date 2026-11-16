@@ -102,6 +102,7 @@ import {
   askFingerprint,
   effectiveAskStakes,
   effectiveSlotAsk,
+  isDeclinedValue,
   resolveAskResolution,
   summarizeAnswer,
   validateAnswerAgainstAsk,
@@ -151,7 +152,9 @@ import { checkProvideRef } from "./provide-ref.js";
 import {
   grantProvidedSecret,
   planProvidedSecretGrant,
+  recordProvidedSecretAnswer,
   withdrawProvidedSecretGrant,
+  type ProvidedSecretRecord,
 } from "./provide-secret-grant.js";
 import { paramValueFromAnswer } from "./param-slots.js";
 import { criterionVerdictOf } from "./evaluations/record.js";
@@ -1252,10 +1255,13 @@ export async function answerSessionSlot(p: {
   // SECRET — handing it over also lets the agent that asked read it, for this
   // session (`provide-secret-grant.ts`). Written BEFORE the answer commits so
   // the receipt says exactly what exists, and taken back below if the commit
-  // is refused. An agent the pod cannot name gets no read; the hand-over
-  // still stands, and the receipt says no agent can read it.
+  // is refused; the slot's link to it and its "used by" row are written only
+  // after the commit (`secretRecord`). An agent the pod cannot name gets no
+  // read; the hand-over still stands, and the receipt says no agent can read
+  // it.
   let secretGrant: ProvideSecretGrant | undefined;
   let createdGrantId: string | null = null;
+  let secretRecord: ProvidedSecretRecord | null = null;
   if (value?.type === "provide" && value.ref.kind === "secret") {
     const secretId = vaultSecretIdOf(value.ref.vaultRef);
     if (secretId) {
@@ -1272,7 +1278,11 @@ export async function answerSessionSlot(p: {
         ask?.mode === "provide" && ask.provide.kind === "secret"
           ? ask.provide
           : null;
-      ({ grant: secretGrant, createdGrantId } = await grantProvidedSecret({
+      ({
+        grant: secretGrant,
+        createdGrantId,
+        record: secretRecord,
+      } = await grantProvidedSecret({
         plan,
         secretId,
         ownerId: p.userId,
@@ -1332,6 +1342,7 @@ export async function answerSessionSlot(p: {
   // attest's tail: a failure is logged and reported in the result, never
   // thrown — a committed answer must not come back as a 500 that invites the
   // person to answer twice.
+  await recordProvidedSecretAnswer(secretRecord);
   let posted = false;
   if (session.channelId && postKey) {
     try {
@@ -1591,18 +1602,12 @@ export async function notMineSessionSlot(p: {
       eq(focusSessions.id, p.sessionId),
       eq(focusSessions.userId, p.userId)
     ),
-    columns: { id: true, channelId: true, expectedOutputs: true },
+    columns: { id: true, channelId: true },
   });
-  const before: ExpectedOutput[] = Array.isArray(session?.expectedOutputs)
-    ? (session!.expectedOutputs as ExpectedOutput[])
-    : [];
   const result = await unblockExpectedOutput(p);
   if (result.status !== "unblocked" || !session) return result;
-  const slot = before.find(
-    (o) =>
-      normalizeExpectedLabel(o?.label) ===
-      normalizeExpectedLabel(result.expectedLabel)
-  );
+  // Who held it, read under the unblock's own lock (never a read before it).
+  const slot = result.before;
   if (slot?.owner !== "human") return result;
 
   const at = new Date().toISOString();
@@ -1615,7 +1620,9 @@ export async function notMineSessionSlot(p: {
         role: "user",
         triggerAI: false,
         userId: p.userId,
-        idempotencyKey: `slot-not-mine:${session.id}:${at}:${result.expectedLabel}`,
+        // No key: a key holding the time never dedups, and a key without it
+        // would swallow a later, real hand-back of the same slot. The post
+        // door's short content window guards a fast retry.
       });
       messageId = posted.messageId;
     } catch (err) {
@@ -1696,7 +1703,7 @@ export function resolveAnswer(
   }
   // An ask-less slot answered with `{type:'text'}` stays a legacy answer. A
   // REFUSAL keeps its value on any slot: it is what tells the agent "no".
-  if (!ask && checked.value.type !== "declined") {
+  if (!ask && !isDeclinedValue(checked.value)) {
     return { text, value: undefined };
   }
   return {
@@ -2250,7 +2257,7 @@ export async function relaySessionAnswer(p: {
 
   // A REFUSAL is the person's own tap for now (plan d717d6ac §3, phase 2
   // adds a relayed `declined` disposition): an agent cannot say "no" for them.
-  if (p.value?.type === "declined") {
+  if (isDeclinedValue(p.value)) {
     return {
       status: "ask_invalid",
       code: "wrong_door",

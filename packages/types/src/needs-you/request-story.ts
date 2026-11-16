@@ -19,6 +19,7 @@
  */
 
 import type { ActivityActor } from "../activity/index.js";
+import { DECLINED_ANSWER_TYPE } from "../ask/declined.js";
 import type { Locale } from "../i18n/index.js";
 import type {
   LensDoor,
@@ -42,7 +43,6 @@ import type {
   RequestSessionContext,
   RequestSubject,
 } from "./request-context.js";
-import { REQUEST_CONTEXT_LIST_CAP } from "./request-context.js";
 
 /** Groups of past events shown above Now; older ones fold into "N more events". */
 export const REQUEST_STORY_BEFORE_CAP = 3;
@@ -134,7 +134,7 @@ export type RequestStoryStep =
       key: string;
       line: string;
       total: number;
-      /** At most {@link REQUEST_CONTEXT_LIST_CAP}. */
+      /** As the context read capped them (`REQUEST_CONTEXT_LIST_CAP`). */
       sessions: Array<{
         id: string;
         title: string;
@@ -183,14 +183,22 @@ function eventDoor(e: DevTimelineEvent): LensDoor | null {
   return null;
 }
 
+/** A refusal: an answer on the wire, and its own act in the story (a no). */
+function isRefusal(e: DevTimelineEvent): boolean {
+  return e.kind === "slot_answered" && e.answerType === DECLINED_ANSWER_TYPE;
+}
+
 /** Events of one line: the same kind about the same slot, PR or decision. */
 function groupKey(e: DevTimelineEvent): string {
   switch (e.kind) {
-    case "slot_asked":
     case "slot_answered":
+      // A refusal and an answer of one slot are two acts, never one "N times".
+      return `${e.kind}:${isRefusal(e) ? "refused" : "answered"}:${e.slot}`;
+    case "slot_asked":
     case "slot_attested":
     case "relay_corrected":
     case "question_withdrawn":
+    case "slot_handed_back":
       return `${e.kind}:${e.slot ?? ""}`;
     case "pr_opened":
     case "pr_merged":
@@ -239,13 +247,16 @@ export function requestStoryLine(e: DevTimelineEvent, locale?: Locale): string {
       });
     case "decision_answered":
       return t("needsYou.story.decisionAnswered", {
-        decision: e.decision,
+        status: resolveStatusLabel(e.decision, locale),
+        titled: e.title ? "yes" : "no",
         title: e.title ?? "",
       });
     case "slot_asked":
       return t("needsYou.story.slotAsked", { slot: e.slot });
     case "slot_answered":
-      return t("needsYou.story.slotAnswered", { slot: e.slot });
+      return isRefusal(e)
+        ? t("needsYou.story.slotRefused", { slot: e.slot })
+        : t("needsYou.story.slotAnswered", { slot: e.slot });
     case "slot_attested":
       return t("needsYou.story.slotAttested", { slot: e.slot });
     case "relay_corrected":
@@ -258,6 +269,8 @@ export function requestStoryLine(e: DevTimelineEvent, locale?: Locale): string {
         named: e.slot ? "yes" : "no",
         slot: e.slot ?? "",
       });
+    case "slot_handed_back":
+      return t("needsYou.story.slotHandedBack", { slot: e.slot });
   }
 }
 
@@ -470,7 +483,7 @@ export function requestStory(
           key: "sessions-wait",
           line: t("needsYou.story.sessionsWait", { n: total }),
           total,
-          sessions: items.slice(0, REQUEST_CONTEXT_LIST_CAP).map((s) => ({
+          sessions: items.map((s) => ({
             ...s,
             door: { kind: "session", id: s.id },
           })),

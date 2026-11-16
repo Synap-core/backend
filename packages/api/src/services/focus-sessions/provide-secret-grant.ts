@@ -32,7 +32,10 @@
  * (`metadata.provideSecretGrantBySlot`), so the card can say afterwards how
  * often it was read and offer Take back (`provide-secret-use.ts`). The
  * declared purpose, when the ask has one, is written to `secret_usages`
- * (the vault's "used by"), in this session's context.
+ * (the vault's "used by"), in this session's context. Both are claims about
+ * a hand-over that HAPPENED, so both are written only once the answer
+ * committed ({@link recordProvidedSecretAnswer}): an answer refused at the
+ * lock leaves neither (review a089b624 S5).
  *
  * The grant goes through the ONE grant writer (`applyVaultSecretGrant`),
  * bound to the agent (`grantedTo`) and to no workspace: the agent redeems it
@@ -73,6 +76,7 @@ import { auditLog } from "../../utils/audit-log.js";
 import { grantWriteDenial } from "../../utils/grant-write-check.js";
 import {
   applyVaultSecretGrant,
+  findActiveSecretGrants,
   revokeVaultSecretGrant,
 } from "../vault-secret-grant.js";
 import { agentDisplayName } from "../agent-dispatch/binding-call.js";
@@ -221,9 +225,22 @@ export async function planProvidedSecretGrant(p: {
 }
 
 /**
- * Write the planned read. Returns the outcome for the receipt, and the grant
- * id when THIS call created it (so a refused answer can take it back). Never
- * throws: a failed write is `failed` and the hand-over stands.
+ * What a committed hand-over records about its read ({@link
+ * recordProvidedSecretAnswer}): the slot's link to the grant, and the
+ * declared purpose as the secret's "used by".
+ */
+export interface ProvidedSecretRecord {
+  sessionId: string;
+  expectedLabel: string;
+  entry: SlotGrantEntry;
+  purpose: AskSecretPurpose | null;
+}
+
+/**
+ * Write the planned read. Returns the outcome for the receipt, the grant id
+ * when THIS call created it (so a refused answer can take it back), and what
+ * to record once the answer commits (`record`; null = no read). Never throws:
+ * a failed write is `failed` and the hand-over stands.
  */
 export async function grantProvidedSecret(p: {
   plan: SecretGrantPlan;
@@ -235,11 +252,16 @@ export async function grantProvidedSecret(p: {
   uses?: ProvideSecretUses;
   /** The ask's declared purpose, written as the secret's "used by". */
   purpose?: AskSecretPurpose | null;
-}): Promise<{ grant: ProvideSecretGrant; createdGrantId: string | null }> {
+}): Promise<{
+  grant: ProvideSecretGrant;
+  createdGrantId: string | null;
+  record: ProvidedSecretRecord | null;
+}> {
   if (p.plan.status === "refused") {
     return {
       grant: { status: "refused", reason: p.plan.reason },
       createdGrantId: null,
+      record: null,
     };
   }
   const { agent } = p.plan;
@@ -270,21 +292,12 @@ export async function grantProvidedSecret(p: {
     };
     if (!written.reused) {
       // A read the session's close could not take back is never left behind.
-      await bindGrantToSession(p.sessionId, p.expectedLabel, slotEntry).catch(
+      // A standing grant stays as it is: the person's, not this session's.
+      await bindGrantToSession(p.sessionId, written.grantId).catch(
         async (err: unknown) => {
           await revokeVaultSecretGrant(written.grantId);
           throw err;
         }
-      );
-    } else {
-      // The standing grant stays as it is; only the card's link to it is
-      // written, and a failure to write it only costs the use line.
-      await recordSlotGrant(p.sessionId, p.expectedLabel, slotEntry).catch(
-        (err: unknown) =>
-          logger.warn(
-            { err, sessionId: p.sessionId },
-            "the slot's link to the standing grant was not written"
-          )
       );
     }
     void auditLog({
@@ -304,13 +317,6 @@ export async function grantProvidedSecret(p: {
         ...(written.reused ? { reused: true } : {}),
       },
     });
-    if (p.purpose) {
-      await recordDeclaredUse({
-        secretId: p.secretId,
-        sessionId: p.sessionId,
-        purpose: p.purpose,
-      });
-    }
     return {
       grant: {
         status: "granted",
@@ -321,13 +327,47 @@ export async function grantProvidedSecret(p: {
         uses: grantUses,
       },
       createdGrantId: written.reused ? null : written.grantId,
+      record: {
+        sessionId: p.sessionId,
+        expectedLabel: p.expectedLabel,
+        entry: slotEntry,
+        purpose: p.purpose ?? null,
+      },
     };
   } catch (err) {
     logger.error(
       { err, sessionId: p.sessionId },
       "the read for the asking agent was not written — the hand-over stands"
     );
-    return { grant: { status: "failed" }, createdGrantId: null };
+    return { grant: { status: "failed" }, createdGrantId: null, record: null };
+  }
+}
+
+/**
+ * The answer COMMITTED: name the grant as the slot's (the card's use line and
+ * Take back) and write the declared purpose as the secret's "used by". Never
+ * throws: both are presentational, and a committed answer stands.
+ */
+export async function recordProvidedSecretAnswer(
+  record: ProvidedSecretRecord | null
+): Promise<void> {
+  if (!record) return;
+  await recordSlotGrant(
+    record.sessionId,
+    record.expectedLabel,
+    record.entry
+  ).catch((err: unknown) =>
+    logger.warn(
+      { err, sessionId: record.sessionId },
+      "the slot's link to its grant was not written — the hand-over stands"
+    )
+  );
+  if (record.purpose) {
+    await recordDeclaredUse({
+      secretId: record.entry.secretId,
+      sessionId: record.sessionId,
+      purpose: record.purpose,
+    });
   }
 }
 
@@ -365,29 +405,25 @@ function withSlotGrant(base: SQL, label: string, entry: SlotGrantEntry): SQL {
 }
 
 /**
- * Keep the grant on the session it was given for, so its close revokes it,
- * and name it as the slot's grant. Only an open session: a closed one has no
- * "this session" left to read in, and nothing would take the read back
- * (throws, and the caller revokes).
+ * Keep the grant on the session it was given for, so its close revokes it.
+ * Only an open session: a closed one has no "this session" left to read in,
+ * and nothing would take the read back (throws, and the caller revokes). The
+ * slot's link to it is written once the answer commits
+ * ({@link recordProvidedSecretAnswer}).
  */
 async function bindGrantToSession(
   sessionId: string,
-  expectedLabel: string,
-  entry: SlotGrantEntry
+  grantId: string
 ): Promise<void> {
   const bound = await db
     .update(focusSessions)
     .set({
-      metadata: withSlotGrant(
-        drizzleSql`jsonb_set(
-          COALESCE(${focusSessions.metadata}, '{}'::jsonb),
-          ARRAY[${PROVIDE_GRANTS_META_KEY}]::text[],
-          COALESCE(${focusSessions.metadata} -> ${PROVIDE_GRANTS_META_KEY}, '[]'::jsonb)
-            || ${JSON.stringify([entry.grantId])}::jsonb
-        )`,
-        expectedLabel,
-        entry
-      ),
+      metadata: drizzleSql`jsonb_set(
+        COALESCE(${focusSessions.metadata}, '{}'::jsonb),
+        ARRAY[${PROVIDE_GRANTS_META_KEY}]::text[],
+        COALESCE(${focusSessions.metadata} -> ${PROVIDE_GRANTS_META_KEY}, '[]'::jsonb)
+          || ${JSON.stringify([grantId])}::jsonb
+      )`,
     })
     .where(
       and(
@@ -401,7 +437,7 @@ async function bindGrantToSession(
   }
 }
 
-/** Name a standing grant as the slot's grant, never binding it to the close. */
+/** Name a grant as the slot's grant, never binding it to the close. */
 async function recordSlotGrant(
   sessionId: string,
   expectedLabel: string,
@@ -466,37 +502,23 @@ async function recordDeclaredUse(p: {
  * The PERMANENT grants the agent already holds on these secrets, by secret
  * id: handing one of them over reuses it (`applyVaultSecretGrant`
  * `reusePermanentOnly`), so the sheet must say so before the person presses.
+ * The same read the reuse makes (`findActiveSecretGrants`, the oldest
+ * active one), so the sheet names the grant the answer reuses and Take back
+ * revokes.
  */
 export async function standingGrantsFor(
   agentUserId: string,
   secretIds: readonly string[]
 ): Promise<Map<string, ProvideStandingGrant>> {
-  const out = new Map<string, ProvideStandingGrant>();
-  if (secretIds.length === 0) return out;
-  const rows = await db
-    .select({
-      id: vaultGrants.id,
-      secretId: vaultGrants.grantableId,
-      useCount: vaultGrants.useCount,
-    })
-    .from(vaultGrants)
-    .where(
-      and(
-        eq(vaultGrants.grantableType, "secret"),
-        inArray(vaultGrants.grantableId, [...secretIds]),
-        eq(vaultGrants.grantedTo, agentUserId),
-        isNull(vaultGrants.workspaceId),
-        eq(vaultGrants.scope, "permanent"),
-        isNull(vaultGrants.revokedAt),
-        drizzleSql`(${vaultGrants.expiresAt} IS NULL OR ${vaultGrants.expiresAt} > now())`
-      )
-    )
-    .orderBy(vaultGrants.createdAt);
-  for (const r of rows) {
-    if (!out.has(r.secretId))
-      out.set(r.secretId, { grantId: r.id, useCount: r.useCount });
-  }
-  return out;
+  const active = await findActiveSecretGrants(secretIds, agentUserId, null, {
+    scope: "permanent",
+  });
+  return new Map(
+    [...active].map(([secretId, g]) => [
+      secretId,
+      { grantId: g.grantId, useCount: g.useCount },
+    ])
+  );
 }
 
 /**

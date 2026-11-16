@@ -171,6 +171,11 @@ export type BlockExpectedOutputResult =
       /** Block only: the ask's prompt only repeats the label (`ask-text.ts`). */
       hint?: string;
       /**
+       * Unblock only: the slot as it was UNDER the lock, just before the hand
+       * back (so a caller reads who held it from the same row it changed).
+       */
+      before?: ExpectedOutput;
+      /**
        * Block only: what the pod did not keep as sent, while the block landed.
        * Today: an agent's hand-over that said nothing it unblocks, stamped
        * with `ASK_UNBLOCKS_DEFAULT` (`unblocksAdvisedMessage`).
@@ -388,13 +393,25 @@ export async function unblockExpectedOutput(
   if (!loaded.ok) return loaded.result;
   const { slot } = loaded;
 
+  const locked: { before?: ExpectedOutput } = {};
   const stamped = await updateExpectedOutputsLocked(
     params.sessionId,
-    (current) => stampUnblocked(current, slot.label)
+    (current) => {
+      const wanted = normalizeExpectedLabel(slot.label);
+      locked.before = current.find(
+        (o) => normalizeExpectedLabel(o?.label) === wanted
+      );
+      return stampUnblocked(current, slot.label);
+    }
   );
   if (!stamped) return { status: "not_found" };
 
-  return { status: "unblocked", expectedLabel: slot.label, kind: slot.kind };
+  return {
+    status: "unblocked",
+    expectedLabel: slot.label,
+    kind: slot.kind,
+    ...(locked.before ? { before: locked.before } : {}),
+  };
 }
 
 /**

@@ -214,14 +214,22 @@ export async function findRedeemableGrant(
 }
 
 /**
- * Atomically consume ONE use of a specific grant by id, guarded by the active
- * predicate. This is the serialization point that prevents over-redemption of a
- * capped grant under concurrency: the guarded UPDATE only succeeds for the
- * caller that wins the race in the window between candidate-find and increment.
- *
- * Returns true if this call consumed the use; false if the grant was revoked,
- * expired, or already exhausted by a concurrent redeemer (lost race).
+ * The guarded UPDATE that consumes ONE use of a grant by id: only an active
+ * grant (not revoked, not expired, under its cap). The ONE statement both
+ * consumers run ({@link consumeSecretGrantRead}, {@link incrementGrant}).
  */
+function consumeOneUseSql(grantId: string) {
+  return drizzleSql`
+    UPDATE vault_grants
+    SET use_count = use_count + 1
+    WHERE id = ${grantId}
+      AND revoked_at IS NULL
+      AND (expires_at IS NULL OR expires_at > now())
+      AND (max_uses IS NULL OR use_count < max_uses)
+    RETURNING id
+  `;
+}
+
 /**
  * Consume one use of a SECRET grant and write its `read` row to
  * `secret_audit_log`, in ONE statement: the use and its record land together
@@ -244,15 +252,7 @@ export async function consumeSecretGrantRead(
     workspaceId: read.redeemer.workspaceId ?? null,
   };
   const consumed = await db.execute(drizzleSql`
-    WITH consumed AS (
-      UPDATE vault_grants
-      SET use_count = use_count + 1
-      WHERE id = ${grantId}
-        AND revoked_at IS NULL
-        AND (expires_at IS NULL OR expires_at > now())
-        AND (max_uses IS NULL OR use_count < max_uses)
-      RETURNING id
-    )
+    WITH consumed AS (${consumeOneUseSql(grantId)})
     INSERT INTO secret_audit_log (secret_id, user_id, action, metadata)
     SELECT ${read.secretId}::uuid, ${agentUserId ?? read.ownerId}, 'read',
            ${JSON.stringify(metadata)}::jsonb
@@ -262,17 +262,18 @@ export async function consumeSecretGrantRead(
   return (consumed as unknown as Array<{ id: string }>).length > 0;
 }
 
+/**
+ * Atomically consume ONE use of a specific grant by id, guarded by the active
+ * predicate. This is the serialization point that prevents over-redemption of a
+ * capped grant under concurrency: the guarded UPDATE only succeeds for the
+ * caller that wins the race in the window between candidate-find and increment.
+ *
+ * Returns true if this call consumed the use; false if the grant was revoked,
+ * expired, or already exhausted by a concurrent redeemer (lost race).
+ */
 export async function incrementGrant(grantId: string): Promise<boolean> {
   const db = await getDb();
-  const updated = await db.execute(drizzleSql`
-    UPDATE vault_grants
-    SET use_count = use_count + 1
-    WHERE id = ${grantId}
-      AND revoked_at IS NULL
-      AND (expires_at IS NULL OR expires_at > now())
-      AND (max_uses IS NULL OR use_count < max_uses)
-    RETURNING id
-  `);
+  const updated = await db.execute(consumeOneUseSql(grantId));
   return (updated as unknown as Array<{ id: string }>).length > 0;
 }
 

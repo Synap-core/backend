@@ -56,6 +56,7 @@ import { lookupCatalogEntry } from "../capabilities/marketplace-install.js";
 import { fetchCPCapabilityTemplate } from "../capabilities/cp-template-client.js";
 import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
 import { ProposalStatus } from "@synap/database/schema";
+import { createLogger } from "@synap-core/core";
 import { isBlankParamValue } from "./setup-required-error.js";
 import {
   makeVaultReference,
@@ -66,6 +67,8 @@ import type {
   CapabilityDefinition,
   CapabilityParamObtain,
 } from "@synap/playbooks";
+
+const logger = createLogger({ module: "proposal-setup" });
 
 /** THE proposal type that carries a manifest-derived setup gap. See the docblock. */
 export const SETUP_PROPOSAL_TYPE = "capability.install";
@@ -169,8 +172,13 @@ async function readDefinitionByKey(
   let def: CapabilityDefinition | null = null;
   try {
     def = await fetchCPCapabilityTemplate(slug);
-  } catch {
-    // A refused or failed read is not a manifest: the row says `unreadable`.
+  } catch (err) {
+    // A refused or failed read is not a manifest: the row says `unreadable`,
+    // and the log says why (a Control Plane outage is otherwise invisible).
+    logger.warn(
+      { err, slug },
+      "the catalog's by-key manifest read failed — the setup row is unreadable"
+    );
     def = null;
   }
   byKeyMemo.set(slug, {
@@ -276,8 +284,12 @@ export async function resolveProposalSetups(
       try {
         const entry = await lookupCatalogEntry("capability", t.slug, t.source);
         def = (entry?.definition as CapabilityDefinition | undefined) ?? null;
-      } catch {
+      } catch (err) {
         // A failed cache read is NOT an empty manifest.
+        logger.warn(
+          { err, slug: t.slug },
+          "the catalog cache read failed — the setup row is unreadable"
+        );
         def = null;
       }
       const official = !t.source || t.source === OFFICIAL_SOURCE_ID;

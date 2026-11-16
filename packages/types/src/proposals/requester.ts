@@ -150,6 +150,3 @@ export function proposalRequester(
     name: forWhom.name ?? "",
   });
 }
-
-/** The plan's name for it (d717d6ac §6): who is asking, as one sentence. */
-export const requesterSentence = proposalRequester;

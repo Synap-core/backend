@@ -435,6 +435,33 @@ describe("proposals.repair — setup arm", () => {
     });
   });
 
+  // Review a089b624 S7: the picker lists a capped page, but a pick is checked
+  // by id under the owner floor, never by membership in that page.
+  it("a secret of the person's own past the picker's cap is still theirs to pick", async () => {
+    const filler = randomUUID();
+    await q(
+      `insert into secrets (id, user_id, name, type, encrypted_data, iv, auth_tag, encryption_mode, created_at, updated_at)
+       select gen_random_uuid(), $1, 'zz-filler-' || lpad(n::text, 3, '0'), 'api_key', 'x', 'x', 'x', 'server', now(), now()
+       from generate_series(1, 200) as n`,
+      [OWNER]
+    );
+    await insertSecret(filler, OWNER, "zzz-past-the-cap");
+    const id = await fileInstall("pending");
+    const options = await caller(OWNER).repairOptions({ proposalId: id });
+    const refs = options.setup!.secretChoices.map((c) => c.ref);
+    expect(refs).toHaveLength(200);
+    expect(refs).not.toContain(`vault://${filler}`);
+
+    await caller(OWNER).repair({
+      proposalId: id,
+      expectedRevision: 0,
+      setup: { calApiKey: { kind: "existing", ref: `vault://${filler}` } },
+    });
+    expect((await rowOf(id)).data.params).toEqual({
+      calApiKey: `vault://${filler}`,
+    });
+  });
+
   it.each([
     [
       "someone else's secret",

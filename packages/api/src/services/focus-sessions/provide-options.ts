@@ -40,6 +40,7 @@ import { resolveServiceName } from "@synap-core/types/service-marks";
 import { canWrite, userPrincipal } from "../../access/door.js";
 import { selectSlotToAnswer } from "./answer-slot.js";
 import { describeAnswerRefusal } from "./session-answer.js";
+import { listOwnHandableSecrets } from "../vault-handable-secrets.js";
 import {
   resolveAskingAgent,
   standingGrantsFor,
@@ -367,25 +368,13 @@ export async function readProvideOptions(
 }
 
 /**
- * The person's own vault entries an agent could be granted: server-encrypted
- * (a legacy client row cannot be read by the pod) and not a connection
- * pointer (those are handed over as connections).
+ * The person's own vault entries an agent could be granted: the one floor
+ * (`listOwnHandableSecrets`) the proposal setup rows read too.
  */
 async function ownSecretRows(
   userId: string
 ): Promise<Array<Omit<ProvideSecretRow, "standingGrant"> & { id: string }>> {
-  const rows = await db
-    .select({ id: secrets.id, name: secrets.name, type: secrets.type })
-    .from(secrets)
-    .where(
-      and(
-        eq(secrets.userId, userId),
-        isNull(secrets.deletedAt),
-        isNull(secrets.capabilityId),
-        eq(secrets.encryptionMode, "server")
-      )
-    )
-    .orderBy(asc(secrets.name));
+  const rows = await listOwnHandableSecrets(userId);
   return rows.map((r) => ({
     id: r.id,
     ref: `vault://${r.id}`,

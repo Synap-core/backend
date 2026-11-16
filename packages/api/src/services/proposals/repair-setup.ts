@@ -32,8 +32,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db, and, eq, isNull, asc } from "@synap/database";
-import { secrets, ProposalStatus } from "@synap/database/schema";
+import { ProposalStatus } from "@synap/database/schema";
 import {
   SECRET_TYPES,
   parseVaultReference,
@@ -42,6 +41,10 @@ import {
 } from "@synap-core/types/vault";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import type { ProposalSetup, ProposalSetupParam } from "./proposal-setup.js";
+import {
+  isOwnHandableSecret,
+  listOwnHandableSecrets,
+} from "../vault-handable-secrets.js";
 import {
   listRequestableSecrets,
   matchRequestedSecrets,
@@ -125,29 +128,18 @@ export function setupRepairKind(p: {
   return null;
 }
 
+/** How many of the person's secrets the picker lists (a display cap only). */
+const SECRET_CHOICES_CAP = 200;
+
 /**
- * The person's own vault secrets a row may take: server-encrypted (the pod
- * can resolve it), not deleted, and not a connection pointer — the same floor
- * the provide sheet lists (`provide-options.ts`).
+ * The person's own vault secrets a row may take: the one floor the provide
+ * sheet lists too (`listOwnHandableSecrets`). A pick is checked by id under
+ * that floor, never against this capped list.
  */
 async function ownSecretChoices(userId: string): Promise<SetupSecretChoice[]> {
-  const rows = await db
-    .select({
-      id: secrets.id,
-      name: secrets.name,
-      category: secrets.category,
-    })
-    .from(secrets)
-    .where(
-      and(
-        eq(secrets.userId, userId),
-        isNull(secrets.deletedAt),
-        isNull(secrets.capabilityId),
-        eq(secrets.encryptionMode, "server")
-      )
-    )
-    .orderBy(asc(secrets.name))
-    .limit(200);
+  const rows = await listOwnHandableSecrets(userId, {
+    limit: SECRET_CHOICES_CAP,
+  });
   return rows.map((r) => ({
     ref: makeVaultReference(r.id),
     label: r.name,
@@ -268,7 +260,6 @@ export async function buildSetupRepair(args: {
     return refuse("Hand over at least one value.");
   }
   const rows = new Map(setup.params.map((p) => [p.name, p]));
-  const own = new Set(setup.secretChoices.map((c) => c.ref));
 
   // Every entry checked BEFORE any vault write.
   for (const name of names) {
@@ -285,8 +276,10 @@ export async function buildSetupRepair(args: {
         );
       }
       if (entry.kind === "existing") {
+        // By id under the owner floor: a valid pick past the picker's cap
+        // is still the person's.
         const id = parseVaultReference(entry.ref);
-        if (!id || !own.has(makeVaultReference(id))) {
+        if (!id || !(await isOwnHandableSecret(userId, id))) {
           refuse(
             `The secret picked for ${label} is not one of yours in the vault.`
           );

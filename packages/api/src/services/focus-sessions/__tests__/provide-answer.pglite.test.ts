@@ -1025,6 +1025,72 @@ describe("provide asks — the server doors", () => {
         readProvideSecretUse({ sessionId, userId: OTHER, expectedLabel: LABEL })
       ).resolves.toEqual({ status: "not_found" });
     });
+
+    // Review a089b624 S5: the slot's link and the "used by" row are claims
+    // about a hand-over that happened, so a refused answer leaves neither.
+    it("an answer refused at the commit leaves no 'used by' row and no slot link, and the standing grant stands", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const permanent = await seedPermanentGrant(secretId);
+      const ask = purposeAsk({ purpose: PURPOSE });
+      const { sessionId } = await seedSession([slotFor(ask)]);
+      await recordAsked(sessionId, ask, AGENT);
+      h.forceAnswerRefusal = true;
+      expect(await answerSecret(sessionId, secretId)).toEqual({
+        status: "ask_changed",
+      });
+      const usages = await q(
+        `select id from secret_usages where secret_id = $1`,
+        [secretId]
+      );
+      expect(usages.rows).toHaveLength(0);
+      expect((await slotGrants(sessionId))[LABEL]).toBeUndefined();
+      await expect(
+        readProvideSecretUse({ sessionId, userId: OWNER, expectedLabel: LABEL })
+      ).resolves.toEqual({ status: "none" });
+      const standing = (await grantsFor(secretId)).find(
+        (g) => g.id === permanent
+      );
+      expect(standing?.revoked_at).toBeNull();
+    });
+
+    // Review a089b624 S6: one derivation of "the standing grant", so the sheet
+    // never names one grant while the answer reuses (and Take back revokes)
+    // another.
+    it("two permanent grants on one secret: the sheet names the one the answer reuses, the oldest", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const insertPermanent = async (createdAt: string) => {
+        const id = randomUUID();
+        await q(
+          `insert into vault_grants (id, grantable_type, grantable_id, exec_mode, granted_to, workspace_id, scope, expires_at, max_uses, use_count, created_by, created_at)
+           values ($1, 'secret', $2, 'auto', $3, null, 'permanent', null, null, 0, $4, ${createdAt})`,
+          [id, secretId, AGENT, OWNER]
+        );
+        return id;
+      };
+      // The NEWER one first, so a read with no order meets it first.
+      await insertPermanent("now()");
+      const oldest = await insertPermanent("now() - interval '1 day'");
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(sessionId, secretAsk(), AGENT);
+
+      const o = await optionsFor(sessionId);
+      if (o.kind !== "secret") throw new Error(o.kind);
+      expect(
+        o.secret.rows.find((r) => r.ref === `vault://${secretId}`)
+          ?.standingGrant?.grantId
+      ).toBe(oldest);
+
+      const r = await answerSecret(sessionId, secretId);
+      if (r.status !== "answered") throw new Error(r.status);
+      expect(r.secretGrant).toMatchObject({
+        status: "granted",
+        grantId: oldest,
+        uses: "standing",
+      });
+      expect((await slotGrants(sessionId))[LABEL]).toMatchObject({
+        grantId: oldest,
+      });
+    });
   });
 
   describe("provideOptions", () => {

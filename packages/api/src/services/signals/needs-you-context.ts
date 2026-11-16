@@ -410,7 +410,7 @@ export async function readNeedsYouContext(
       part("timeline", () =>
         readSessionTimelines(
           sessionIds,
-          { userId: reader.userId, isHubProtocol: false },
+          { userId: reader.userId },
           timelineItems
         )
       ),

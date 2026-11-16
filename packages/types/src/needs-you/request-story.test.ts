@@ -13,7 +13,12 @@ import type {
   NeedsYouContextRead,
   RequestSessionContext,
 } from "./request-context.js";
-import { REQUEST_STORY_BEFORE_CAP, requestStory } from "./request-story.js";
+import {
+  REQUEST_STORY_BEFORE_CAP,
+  groupRequestEvents,
+  requestStory,
+  requestStoryLine,
+} from "./request-story.js";
 
 const S = "11111111-1111-4111-8111-111111111111";
 const AGENT: ActivityActor = { kind: "agent", id: "a1", name: "Scout" };
@@ -202,6 +207,71 @@ describe("requestStory — before", () => {
       title: "Pod-run delivery",
       door: { kind: "session", id: S },
     });
+  });
+});
+
+// Review a089b624: one history, one word for each act (S1 a refusal, S2 a
+// decision through the vocabulary door, S3 "Not mine").
+describe("requestStory — the past says each act as it was", () => {
+  const refused = (id: string, slot: string): DevTimelineEvent => ({
+    ...answered(id, slot),
+    answerType: "declined",
+    handedBack: true,
+  });
+  const decided = (
+    id: string,
+    decision: string,
+    title: string | null
+  ): DevTimelineEvent => ({
+    id,
+    kind: "decision_answered",
+    at: at(),
+    actor: ME,
+    refs: { sessionId: S, proposalId: `p-${id}` },
+    title,
+    decision,
+    note: null,
+  });
+
+  it("a refusal reads Refused, never Answered, and never groups with an answer", () => {
+    expect(requestStoryLine(refused("r", "Budget"))).toBe("Refused: Budget");
+    expect(requestStoryLine(answered("a", "Budget"))).toBe("Answered: Budget");
+    const groups = groupRequestEvents([
+      answered("a1", "Budget"),
+      refused("r1", "Budget"),
+      refused("r2", "Budget"),
+    ]);
+    expect(groups.map((g) => [g.line, g.count])).toEqual([
+      ["Answered: Budget", 1],
+      ["Refused: Budget", 2],
+    ]);
+  });
+
+  it("a decision says the vocabulary's word for its status, in each locale", () => {
+    expect(requestStoryLine(decided("d1", "rejected", "Ship it"))).toBe(
+      "Rejected: Ship it"
+    );
+    expect(requestStoryLine(decided("d2", "reverted", "Ship it"))).toBe(
+      "Reverted: Ship it"
+    );
+    expect(requestStoryLine(decided("d3", "approval_failed", null))).toBe(
+      "Approval failed"
+    );
+    expect(requestStoryLine(decided("d4", "rejected", "Ship it"), "fr")).toBe(
+      "Rejeté : Ship it"
+    );
+  });
+
+  it("a slot handed back with Not mine is its own line", () => {
+    const handedBack: DevTimelineEvent = {
+      id: "nm",
+      kind: "slot_handed_back",
+      at: at(),
+      actor: ME,
+      refs: { sessionId: S, slotLabel: "Budget" },
+      slot: "Budget",
+    };
+    expect(requestStoryLine(handedBack)).toBe("Not mine: Budget");
   });
 });
 

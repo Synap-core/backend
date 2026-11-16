@@ -672,6 +672,10 @@ const ACTION_VERB_ROWS = {
   // into a channel (`channel_message.created`).
   ask: { imperative: "Ask", past: "Asked", progressive: "Asking" },
   attest: { imperative: "Mark done", past: "Marked done" },
+  // The person's "Not mine" on a slot an agent handed them
+  // (`focus_session.slot_handed_back`): the slot is the agent's again,
+  // unanswered. Not an answer and not a refusal.
+  hand_back: { imperative: "Hand back", past: "Handed back" },
   post: { imperative: "Post", past: "Posted", progressive: "Posting" },
   see_failure: { imperative: "See what failed", past: "Saw what failed" },
   turn_on: {

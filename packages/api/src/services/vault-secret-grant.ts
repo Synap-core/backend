@@ -7,7 +7,17 @@
  * grant the owner would have made directly.
  */
 
-import { db, and, eq, isNull } from "@synap/database";
+import {
+  db,
+  and,
+  asc,
+  drizzleSql,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  or,
+} from "@synap/database";
 import { vaultGrants } from "@synap/database/schema";
 import { PROVIDE_SECRET_ONCE_MINUTES } from "@synap-core/types/ask";
 import { assertFreshAuthentication } from "../utils/device-session.js";
@@ -37,40 +47,85 @@ export interface VaultSecretGrantResult {
   reused?: true;
 }
 
+/** An active grant on one secret, as {@link findActiveSecretGrants} reads it. */
+export interface ActiveSecretGrant extends VaultSecretGrantResult {
+  useCount: number;
+}
+
 /**
- * An active grant identical in principal + workspace, if one exists. With
- * `scope`, only a grant of that scope: a caller that reuses only a permanent
- * grant must find it even when a shorter one for the same agent sits beside
- * it (a first-match read could return the shorter one and miss it).
+ * THE active grants identical in principal + workspace on these secrets, by
+ * secret id: not revoked, not expired (in SQL), and, with `scope`, only of
+ * that scope. Where several qualify, the OLDEST is the one (`createdAt`, then
+ * id): the ONE derivation the provide sheet's "already can read it"
+ * (`standingGrantsFor`), the reuse of a hand-over and its Take back all name,
+ * so the sheet never names one grant while the answer reuses another (review
+ * a089b624 S6). With `scope`, a caller that reuses only a permanent grant
+ * finds it even when a shorter one for the same agent sits beside it.
  */
+export async function findActiveSecretGrants(
+  secretIds: readonly string[],
+  grantedTo: string | null,
+  workspaceId: string | null,
+  opts?: { scope?: VaultSecretGrantScope }
+): Promise<Map<string, ActiveSecretGrant>> {
+  const out = new Map<string, ActiveSecretGrant>();
+  if (secretIds.length === 0) return out;
+  const rows = await db
+    .select({
+      id: vaultGrants.id,
+      secretId: vaultGrants.grantableId,
+      scope: vaultGrants.scope,
+      expiresAt: vaultGrants.expiresAt,
+      useCount: vaultGrants.useCount,
+    })
+    .from(vaultGrants)
+    .where(
+      and(
+        eq(vaultGrants.grantableType, "secret"),
+        inArray(vaultGrants.grantableId, [...secretIds]),
+        grantedTo
+          ? eq(vaultGrants.grantedTo, grantedTo)
+          : isNull(vaultGrants.grantedTo),
+        workspaceId
+          ? eq(vaultGrants.workspaceId, workspaceId)
+          : isNull(vaultGrants.workspaceId),
+        isNull(vaultGrants.revokedAt),
+        or(
+          isNull(vaultGrants.expiresAt),
+          gt(vaultGrants.expiresAt, drizzleSql`now()`)
+        ),
+        opts?.scope ? eq(vaultGrants.scope, opts.scope) : undefined
+      )
+    )
+    .orderBy(asc(vaultGrants.createdAt), asc(vaultGrants.id));
+  for (const r of rows) {
+    if (out.has(r.secretId)) continue;
+    out.set(r.secretId, {
+      grantId: r.id,
+      scope: r.scope ?? "permanent",
+      expiresAt: r.expiresAt ? r.expiresAt.toISOString() : null,
+      useCount: r.useCount,
+      reused: true,
+    });
+  }
+  return out;
+}
+
+/** The active grant on ONE secret ({@link findActiveSecretGrants}), if any. */
 export async function findActiveSecretGrant(
   secretId: string,
   grantedTo: string | null,
   workspaceId: string | null,
   opts?: { scope?: VaultSecretGrantScope }
 ): Promise<VaultSecretGrantResult | null> {
-  const existing = await db.query.vaultGrants.findFirst({
-    where: and(
-      eq(vaultGrants.grantableType, "secret"),
-      eq(vaultGrants.grantableId, secretId),
-      grantedTo
-        ? eq(vaultGrants.grantedTo, grantedTo)
-        : isNull(vaultGrants.grantedTo),
-      workspaceId
-        ? eq(vaultGrants.workspaceId, workspaceId)
-        : isNull(vaultGrants.workspaceId),
-      isNull(vaultGrants.revokedAt),
-      opts?.scope ? eq(vaultGrants.scope, opts.scope) : undefined
-    ),
-    columns: { id: true, scope: true, expiresAt: true },
-  });
-  if (!existing) return null;
-  if (existing.expiresAt !== null && existing.expiresAt <= new Date())
-    return null;
+  const found = (
+    await findActiveSecretGrants([secretId], grantedTo, workspaceId, opts)
+  ).get(secretId);
+  if (!found) return null;
   return {
-    grantId: existing.id,
-    scope: existing.scope ?? "permanent",
-    expiresAt: existing.expiresAt ? existing.expiresAt.toISOString() : null,
+    grantId: found.grantId,
+    scope: found.scope,
+    expiresAt: found.expiresAt,
     reused: true,
   };
 }

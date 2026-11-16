@@ -19,11 +19,16 @@ export const en = {
     "{result, select, passed {Checks passed} failed {Checks failed} other {Checks finished}}",
   "needsYou.story.decisionAsked":
     "{titled, select, yes {Proposed: {title}} other {Proposed a change}}",
+  // `status` is the decision's word from the vocabulary door
+  // (`resolveStatusLabel`), the one every surface says for it.
   "needsYou.story.decisionAnswered":
-    "{decision, select, approved {Approved: {title}} rejected {Declined: {title}} reverted {Undone: {title}} approval_failed {Could not apply: {title}} other {Decided: {title}}}",
+    "{titled, select, yes {{status}: {title}} other {{status}}}",
   "needsYou.story.slotAsked": "Asked you: {slot}",
   "needsYou.story.slotAnswered": "Answered: {slot}",
+  // A refusal (`{ type: "declined" }`) is an answer on the wire, and a no.
+  "needsYou.story.slotRefused": "Refused: {slot}",
   "needsYou.story.slotAttested": "Marked done: {slot}",
+  "needsYou.story.slotHandedBack": "Not mine: {slot}",
   "needsYou.story.relayCorrected":
     "{named, select, yes {Relayed answer corrected: {slot}} other {Relayed answer corrected}}",
   "needsYou.story.questionWithdrawn":
@@ -65,10 +70,12 @@ export const fr: Catalog<typeof en> = {
   "needsYou.story.decisionAsked":
     "{titled, select, yes {Proposé : {title}} other {A proposé un changement}}",
   "needsYou.story.decisionAnswered":
-    "{decision, select, approved {Approuvé : {title}} rejected {Refusé : {title}} reverted {Annulé : {title}} approval_failed {Non appliqué : {title}} other {Décidé : {title}}}",
+    "{titled, select, yes {{status} : {title}} other {{status}}}",
   "needsYou.story.slotAsked": "Vous a demandé : {slot}",
   "needsYou.story.slotAnswered": "Répondu : {slot}",
+  "needsYou.story.slotRefused": "Refusé : {slot}",
   "needsYou.story.slotAttested": "Marqué comme fait : {slot}",
+  "needsYou.story.slotHandedBack": "Pas pour moi : {slot}",
   "needsYou.story.relayCorrected":
     "{named, select, yes {Réponse relayée corrigée : {slot}} other {Réponse relayée corrigée}}",
   "needsYou.story.questionWithdrawn":
