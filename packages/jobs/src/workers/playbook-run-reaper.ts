@@ -91,12 +91,24 @@ function sessionQuietFor(hours: number) {
 )`;
 }
 
-/** A running run started more than `hours` ago whose session went quiet. */
+/**
+ * A run one of whose steps WAITS — on a child run or on tools being installed
+ * (its open `session_stage_runs` row, 0422) — is waiting, not idle: a parent
+ * paused on a child for days must not be reaped (runner engine spec 7111934d,
+ * risk 3). Never stale-marked, never failed, whatever its holder's window.
+ */
+export const RUN_STAGE_NOT_WAITING = drizzleSql`NOT ${stageRunWaitsWhere(playbookRuns.sessionId)}`;
+
+/**
+ * A running run started more than `hours` ago whose session went quiet and
+ * none of whose steps waits.
+ */
 function runQuietFor(hours: number) {
   return and(
     eq(playbookRuns.status, "running"),
     drizzleSql`${playbookRuns.startedAt} < now() - (${hours}::int * interval '1 hour')`,
-    sessionQuietFor(hours)
+    sessionQuietFor(hours),
+    RUN_STAGE_NOT_WAITING
   )!;
 }
 
@@ -141,19 +153,8 @@ export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
   )
 )`;
 
-/**
- * A run one of whose steps WAITS — on a child run or on tools being installed
- * (its open `session_stage_runs` row, 0422) — is waiting, not idle: a parent
- * paused on a child for days must not be reaped (runner engine spec 7111934d,
- * risk 3). Never stale-marked, never failed.
- */
-export const RUN_STAGE_NOT_WAITING = drizzleSql`NOT ${stageRunWaitsWhere(playbookRuns.sessionId)}`;
-
 /** A running run past the window whose session shows no recent activity. */
-const RUN_IS_STALE = and(
-  runQuietFor(PLAYBOOK_RUN_REAPER_STALE_HOURS),
-  RUN_STAGE_NOT_WAITING
-)!;
+const RUN_IS_STALE = runQuietFor(PLAYBOOK_RUN_REAPER_STALE_HOURS);
 
 /**
  * A run the pod handed to its OWN AI (the IS) is quiet much sooner: an IS turn
@@ -167,7 +168,6 @@ export const IS_RUN_REAPER_QUIET_HOURS = 2;
 /** An IS-held running run past its 2-hour window whose session went quiet. */
 const IS_RUN_IS_QUIET = and(
   runQuietFor(IS_RUN_REAPER_QUIET_HOURS),
-  RUN_STAGE_NOT_WAITING,
   drizzleSql`NOT ${RUN_EXTERNAL_HOLDER}`
 );
 

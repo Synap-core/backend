@@ -5988,7 +5988,7 @@ cmd_restore() {
         want="$(cat "$target/fingerprint" 2>/dev/null)"
         if [ -n "$want" ]; then
             got="$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" _pgs_fingerprint "$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" _pgs_container)")"
-            if [ "$got" != "$want" ]; then
+            if ! _pgs_fp_accepts "$target" "$got"; then
                 echo -e "${RED}❌ Restoring ${target} did not bring the data back: the dump recorded users|entities|api_keys=${want}, the database now has ${got:-<unreadable>}. The stack was NOT restarted — inspect before starting it.${NC}"
                 exit 1
             fi

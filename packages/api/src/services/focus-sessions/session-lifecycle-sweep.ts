@@ -452,6 +452,8 @@ export interface SessionLifecycleSweepResult {
   heldOnMerge: number;
   longStaleCancelled: number;
   runsClosed: number;
+  /** `forEach` steps with a batch whose run never started, pumped again. */
+  fanOutsPumped: number;
   failed: string[];
 }
 
@@ -462,6 +464,7 @@ export async function sweepSessionLifecycle(): Promise<SessionLifecycleSweepResu
     heldOnMerge: 0,
     longStaleCancelled: 0,
     runsClosed: 0,
+    fanOutsPumped: 0,
     failed: [],
   };
   const step = async (
@@ -477,6 +480,12 @@ export async function sweepSessionLifecycle(): Promise<SessionLifecycleSweepResu
     }
   };
   await step("runs", closeEndedRunSessions, (n) => (result.runsClosed = n));
+  await step(
+    "fan-out",
+    async () =>
+      (await import("../playbooks/stage-for-each.js")).sweepOrphanedFanOuts(),
+    (n) => (result.fanOutsPumped = n)
+  );
   await step("met", closeMetWorkSessions, (n) => (result.metClosed = n));
   await step(
     "merge-hold",
