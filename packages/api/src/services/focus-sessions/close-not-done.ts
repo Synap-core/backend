@@ -11,7 +11,11 @@
  *     one delegated to another agent: `delegatedTo`);
  *   - a required deliverable the PERSON owes that is still open (`owner:
  *     "human"`), the slot an outcome-with-`verify` folds into included: the
- *     session waits for the person, or closes with a reason.
+ *     session waits for the person, or closes with a reason;
+ *   - a `blocked_on_you` or `handoff` another session's agent sent this one
+ *     that its agent never read (`session-inbox.ts`, finding cc65844a): the
+ *     other session waits on an answer that closing would bury. Read it
+ *     (the change-feed wait marks it read), answer it, or close with a reason.
  * The refusal names every one of them and only ways out that work: grade,
  * claim or withdraw the agent's items; wait for the person (leave the session
  * open or pause it); close `cancelled` / `failed` when that is true; or name
@@ -84,6 +88,16 @@ export interface OpenOutcomeAtClose {
   delegatedTo?: string;
 }
 
+/** A `blocked_on_you` / `handoff` addressed to the session, never read. */
+export interface UnreadMessageAtClose {
+  messageId: string;
+  intent: string;
+  fromSessionId: string | null;
+  at: string;
+  /** At most {@link QUOTE_MAX} characters. */
+  text: string;
+}
+
 /** Why a required item that is not done does not hold the close. */
 export type AwaitingPerson =
   "person_check" | "person_graded" | "escalated" | "review" | "proposal";
@@ -104,6 +118,8 @@ export interface NotDoneAtClose {
   outcomes: OpenOutcomeAtClose[];
   /** Blocking: deliverables the person owes. */
   owedByPerson: OpenOutcomeAtClose[];
+  /** Blocking: another session's blocked_on_you / handoff, never read. */
+  unreadMessages: UnreadMessageAtClose[];
   /** Not blocking: awaiting the person's grade or review. */
   waiting: WaitingAtClose;
 }
@@ -113,9 +129,20 @@ export interface ClosedNotDoneRecord {
   criteria: UnmetCriterionAtClose[];
   outcomes: OpenOutcomeAtClose[];
   owedByPerson: OpenOutcomeAtClose[];
+  unreadMessages: UnreadMessageAtClose[];
   reason: string;
   by: string;
   at: string;
+}
+
+/** What a close-anyway left open, as one list for its room line and warning. */
+export function closedNotDoneItems(r: ClosedNotDoneRecord): string {
+  return [
+    ...r.criteria.map((c) => c.key),
+    ...r.outcomes.map((o) => o.key),
+    ...r.owedByPerson.map((o) => o.key),
+    ...r.unreadMessages.map((m) => `unread ${m.intent} ${m.messageId}`),
+  ].join(", ");
 }
 
 /** A trimmed reason clipped to {@link NOT_DONE_REASON_MAX}; blank ⇒ none. */
@@ -183,6 +210,8 @@ export function openRequiredWork(args: {
   agentMovable: ReadonlySet<string>;
   expectedOutputs: readonly unknown[];
   pendingClaims?: ReadonlySet<string>;
+  /** Read by the loader (`readUnreadWakeWorthyPosts`); passed through. */
+  unreadMessages?: readonly UnreadMessageAtClose[];
 }): NotDoneAtClose {
   const slots = args.expectedOutputs;
   const keys = deriveSlotKeys(slots);
@@ -258,12 +287,21 @@ export function openRequiredWork(args: {
         : undefined;
     outcomes.push({ key, label, ...(delegatedTo ? { delegatedTo } : {}) });
   });
-  return { criteria, outcomes, owedByPerson, waiting };
+  return {
+    criteria,
+    outcomes,
+    owedByPerson,
+    unreadMessages: [...(args.unreadMessages ?? [])],
+    waiting,
+  };
 }
 
 export function hasOpenRequiredWork(w: NotDoneAtClose): boolean {
   return (
-    w.criteria.length > 0 || w.outcomes.length > 0 || w.owedByPerson.length > 0
+    w.criteria.length > 0 ||
+    w.outcomes.length > 0 ||
+    w.owedByPerson.length > 0 ||
+    w.unreadMessages.length > 0
   );
 }
 
@@ -279,7 +317,12 @@ export function hasWaiting(w: NotDoneAtClose): boolean {
  * passing one.
  */
 export async function loadOpenRequiredWork(
-  session: Pick<FocusSession, "id" | "userId" | "criteria" | "expectedOutputs">
+  session: Pick<
+    FocusSession,
+    "id" | "userId" | "criteria" | "expectedOutputs"
+  > &
+    // The room the session's mail lands in; absent or null = no mail to read.
+    Partial<Pick<FocusSession, "channelId">>
 ): Promise<NotDoneAtClose> {
   // Loaded lazily: evaluate.ts pulls the capability runner and the stage
   // gates, which the close door must not load at import time.
@@ -321,12 +364,31 @@ export async function loadOpenRequiredWork(
     if (typeof label === "string" && label.trim())
       pendingClaims.add(label.trim());
   }
+  // Another session's blocked_on_you / handoff this one never read (every
+  // post to a session lands in its room, so no room = no mail). Loaded
+  // lazily for the same reason as evaluate.ts: the inbox pulls the
+  // agent-dispatch fence, which the close door must not load at import time.
+  const unread = session.channelId
+    ? await (
+        await import("./session-inbox.js")
+      ).readUnreadWakeWorthyPosts(db, {
+        channelId: session.channelId,
+        sessionId: session.id,
+      })
+    : [];
   return openRequiredWork({
     criteria: summary.criteria,
     latest: summary.evaluations,
     agentMovable: movable,
     expectedOutputs: slots,
     pendingClaims,
+    unreadMessages: unread.map((m) => ({
+      messageId: m.messageId,
+      intent: m.intent,
+      fromSessionId: m.fromSessionId,
+      at: m.at,
+      text: clip(m.text),
+    })),
   });
 }
 
@@ -397,6 +459,19 @@ export function notDoneAtCloseError(
       "wait for the person: leave the session open, or pause it (synap_update_session status 'paused'), until they answer"
     );
   }
+  if (work.unreadMessages.length > 0) {
+    parts.push(
+      `messages another session sent this one, never read: ${work.unreadMessages
+        .map(
+          (m) =>
+            `${m.messageId} (${m.intent}${m.fromSessionId ? ` from session ${m.fromSessionId}` : ""}): "${m.text}"`
+        )
+        .join("; ")}`
+    );
+    ways.push(
+      "read them (synap_wait_for_answer with events: your read marks them read) and answer the sender (synap_post_message with toSessionId and cause)"
+    );
+  }
   ways.push(
     "close as cancelled or failed when that is what happened",
     "or close again with `reason` saying why it is done anyway (MCP synap_complete_session, or Hub POST /focus-sessions/:id/complete): the reason is posted in the session room"
@@ -431,6 +506,7 @@ export function notDoneRefusal(
   unmetCriteria: UnmetCriterionAtClose[];
   openOutcomes: OpenOutcomeAtClose[];
   owedByPerson: OpenOutcomeAtClose[];
+  unreadMessages: UnreadMessageAtClose[];
   waiting: WaitingAtClose;
 } {
   return {
@@ -440,6 +516,7 @@ export function notDoneRefusal(
     unmetCriteria: err.notDone.criteria,
     openOutcomes: err.notDone.outcomes,
     owedByPerson: err.notDone.owedByPerson,
+    unreadMessages: err.notDone.unreadMessages,
     waiting: err.notDone.waiting,
   };
 }

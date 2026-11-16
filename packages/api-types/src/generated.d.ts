@@ -16027,7 +16027,11 @@ export interface RunAgent {
  */
 export type CapabilityActionSurface = "desktop" | "web";
 export interface CapabilityNextAction {
-	kind: "add" | "connect" | "enable" | "none" | "run";
+	/**
+	 * `update`: the capability holds an update waiting for the person (a held
+	 * catalog update); applying it is the fix (`capabilityUpdateAction`).
+	 */
+	kind: "add" | "connect" | "enable" | "none" | "run" | "update";
 	hint: string;
 	/**
 	 * Deep link to the capability's own card — where `kind` is performed.
@@ -17811,6 +17815,12 @@ export interface AdminPodAppGroup {
 	live: number;
 	members: AdminPodAppMember[];
 }
+/** One pair resolved to a space the person may give it in. */
+export interface ResolvedAskPair {
+	permission: string;
+	workspaceId: string;
+	workspaceName: string;
+}
 export interface AppSignInSpace {
 	workspaceId: string;
 	name: string;
@@ -17912,6 +17922,23 @@ export interface OAuthAppConsent {
 	podWideKinds: string[];
 	/** Scopes it asked for that a pod app is never given (`mcp.*`), shown as dropped. */
 	ignoredScopes: string[];
+	/**
+	 * The short consent (`synap_ask`): the pairs it asks for that the person
+	 * may give it, each in one space; null for the full screen. Allow ADDS
+	 * them to what it holds; nothing it holds is shown or changed here.
+	 */
+	ask: OAuthAppAsk | null;
+}
+/** What the short consent shows (`OAuthAppConsent.ask`). */
+export interface OAuthAppAsk {
+	/** "Content Studio asks to read notes in Content OS" (the card's words). */
+	title: string;
+	/** The pairs the person may give it, each in one space. */
+	pairs: ResolvedAskPair[];
+	/** Pairs it asked for that the person cannot give it (`perm@place`). */
+	unavailable: string[];
+	/** The app's page in pod admin ("See everything it has"), once connected. */
+	connectionPublicId: string | null;
 }
 export interface OAuthConsentContext {
 	clientId: string;
@@ -22893,6 +22920,7 @@ declare const SiteConfigV1Schema: z.ZodObject<{
 		}, z.core.$strict>>>;
 		slugField: z.ZodDefault<z.ZodNullable<z.ZodString>>;
 		sort: z.ZodDefault<z.ZodArray<z.ZodString>>;
+		sourceWorkspaceId: z.ZodDefault<z.ZodNullable<z.ZodString>>;
 	}, z.core.$strict>>;
 	version: z.ZodLiteral<1>;
 }, z.core.$strict>;
@@ -29298,6 +29326,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				responseType?: string | undefined;
 				scope?: string | undefined;
 				state?: string | undefined;
+				synapAsk?: string | undefined;
 			};
 			meta: object;
 			output: {
@@ -29342,6 +29371,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				responseType?: string | undefined;
 				scope?: string | undefined;
 				state?: string | undefined;
+				synapAsk?: string | undefined;
 			};
 			meta: object;
 			output: OAuthConsentContext;
@@ -36074,7 +36104,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorClass: "auth" | "conflict" | "do_not_contact" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
 					next?: {
 						hint: string;
-						kind: "add" | "connect" | "enable" | "none" | "run";
+						kind: "add" | "connect" | "enable" | "none" | "run" | "update";
 						url?: string | undefined;
 					} | undefined;
 					resolved?: true | undefined;
@@ -41433,6 +41463,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					tier?: "deep" | "quick" | "standard" | undefined;
 					forEach?: {
 						as?: string | undefined;
+						batch?: number | undefined;
 						max?: number | undefined;
 						over: string;
 					} | undefined;
@@ -48700,6 +48731,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					tier?: "deep" | "quick" | "standard" | undefined;
 					forEach?: {
 						as?: string | undefined;
+						batch?: number | undefined;
 						max?: number | undefined;
 						over: string;
 					} | undefined;
@@ -50043,6 +50075,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					tier?: "deep" | "quick" | "standard" | undefined;
 					forEach?: {
 						as?: string | undefined;
+						batch?: number | undefined;
 						max?: number | undefined;
 						over: string;
 					} | undefined;
@@ -61306,6 +61339,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							tier?: "deep" | "quick" | "standard" | undefined;
 							forEach?: {
 								as?: string | undefined;
+								batch?: number | undefined;
 								max?: number | undefined;
 								over: string;
 							} | undefined;

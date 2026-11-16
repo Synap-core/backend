@@ -45,6 +45,7 @@ import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import { readForPage } from "./html-bridge-reads";
 import { browserFrameLinkEnv, handleFrameLink } from "./html-frame-links";
 import { frameT } from "./frame-copy";
+import { withWidgetCompat } from "./widget-compat";
 import type { PreparedContent } from "./markdown-model";
 
 /**
@@ -155,7 +156,15 @@ export function HtmlFrame({
   const refusal = useMemo(() => frameNetworkCodeRefusal(html), [html]);
   // `links`: a clicked link is handed to this host (below) and never navigates
   // the frame itself, which would load pod admin inside the sandbox.
-  const srcDoc = useMemo(() => wrapHtmlForFrame(html, { links: true }), [html]);
+  // A card written for the widget host gets its `SynapWidget` here (a preview,
+  // with no bridge, also gets a sample entity): see `widget-compat`.
+  const srcDoc = useMemo(
+    () =>
+      wrapHtmlForFrame(withWidgetCompat(html, { sample: !bridge }), {
+        links: true,
+      }),
+    [html, bridge]
+  );
 
   useEffect(() => {
     if (!bridge || left || refusal) return;

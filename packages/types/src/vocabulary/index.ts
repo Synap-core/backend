@@ -2466,6 +2466,9 @@ export const WAIT_KIND_LABELS = {
   nobody: "Nobody",
 } as const satisfies Readonly<Record<WaitKind, string>>;
 
+/** The wait kind rows, exactly typed: the keys of the `waitKind.*` catalog. */
+export type WaitKindLabelRows = typeof WAIT_KIND_LABELS;
+
 /**
  * What a session's runner says it is doing (0384, `RUNNER_STATES`), in a
  * person's words: the mark a session page and a needs-you row wear (decision
@@ -2553,9 +2556,21 @@ export function resolveRunnerStateLabelFor(
   return name ? t(sentence.named, { name }) : t(sentence.unnamed);
 }
 
-/** The words for a wait kind; unknown values humanize, never leak. */
-export function resolveWaitKindLabel(v: string | null | undefined) {
-  return resolveFrom(WAIT_KIND_LABELS, v);
+/**
+ * The words for a wait kind, in `opts.locale` (else the ambient catalog
+ * locale), through `waitKind.<kind>`; unknown values humanize, never leak.
+ */
+export function resolveWaitKindLabel(
+  v: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!v) return "";
+  const key = v.trim().toLowerCase();
+  if (!Object.hasOwn(WAIT_KIND_LABELS, key)) return humanizeToken(v);
+  return (
+    translatedWord(`waitKind.${key}`, catalogLocaleOf(opts?.locale)) ??
+    WAIT_KIND_LABELS[key as keyof WaitKindLabelRows]
+  );
 }
 
 function resolveFrom<T extends Readonly<Record<string, string>>>(
@@ -4107,6 +4122,7 @@ export const vocabularyEn = buildVocabularyEn({
   statuses: STATUS_LABELS,
   needsYouNouns: NEEDS_YOU_ITEM_NOUNS,
   runnerStates: RUNNER_STATE_LABELS,
+  waitKinds: WAIT_KIND_LABELS,
 });
 
 /** Every locale's vocabulary catalog, for `createT` and the parity test. */

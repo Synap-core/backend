@@ -25,6 +25,7 @@
  */
 import { z } from "@hono/zod-openapi";
 import { getRequestGrant } from "@synap/database";
+import { humanizeToken } from "@synap-core/types/vocabulary";
 import { INTENT_SLUG_RE } from "@synap/database/schema";
 import { isFencedGrant } from "../../../access/grant-door-fence.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
@@ -54,6 +55,48 @@ export const IntentActionSchema = z.object({
   /** Listed for a `subject` only: can this action reach them, and if not why. */
   reach: z.object({ ok: z.boolean(), why: z.string().optional() }).optional(),
 });
+
+/**
+ * What unblocks a withheld action and where: the pod's ONE next-action shape
+ * (`CapabilityNextAction`, `capability-enable-link.ts`), `update` included.
+ */
+export const CapabilityFixSchema = z.object({
+  kind: z.enum(["add", "connect", "enable", "update", "run", "none"]),
+  hint: z.string(),
+  url: z.string().optional(),
+  opensIn: z.enum(["web", "desktop"]).optional(),
+});
+
+/**
+ * A verb declaring the intent that is not offered, and why
+ * (`IntentUnavailable`). `why` is a stable key (never renamed; a new cause is
+ * a new key), `label` the pod's sentence to show.
+ */
+export const IntentUnavailableSchema = z.object({
+  why: z.enum([
+    "no_input_schema",
+    "not_enabled",
+    "not_connected",
+    "not_launchable",
+    "update_waiting",
+    "intent_not_declared",
+    "no_input_map",
+    "no_account",
+    "connection_expired",
+    "accounts_unreadable",
+  ]),
+  label: z.string(),
+  tool: z.string().nullable(),
+  connection: z
+    .object({ provider: z.string().nullable(), account: z.string().nullable() })
+    .nullable(),
+  retryable: z.boolean(),
+  fix: CapabilityFixSchema.nullable(),
+});
+
+/** The permission the intent doors need for `intent`, in the grant grammar. */
+export const intentRunPermission = (intent: string) =>
+  `capability.${intent}.run`;
 
 /** The run body of the intent form: nothing else is accepted from such a key. */
 export const IntentRunRequestSchema = z
@@ -111,7 +154,20 @@ export async function admitIntent(
     workspaceId,
     data: { intent },
   });
-  if (denied) return { ok: false, ...refusal(403, "GRANT_DENIED", denied) };
+  // D-E (13 Nov 2026): the refusal names the permission that would open it,
+  // so an app can ask the person again for exactly that, instead of reading
+  // a bare 403 as "no tool". `code` and `error` are unchanged for old clients.
+  if (denied) {
+    const permission = intentRunPermission(intent);
+    return {
+      ok: false,
+      ...refusal(403, "GRANT_DENIED", denied, {
+        why: "permission_missing",
+        permission,
+        label: `This app may not ask for "${humanizeToken(intent)}" in this space: it needs the permission ${permission} here.`,
+      }),
+    };
+  }
   const acting = await resolveActingContext(c, { workspaceId });
   if (!acting.ok)
     return {

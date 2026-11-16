@@ -557,6 +557,46 @@ export class AppRepository {
   }
 
   /**
+   * The ADDITIVE approval write (`app/connect` with `mode: "add"`, plan
+   * 647ebfd4 option C): the pairs are merged into the approval as it stands
+   * NOW, read under a row lock, so an approval decided meanwhile is never
+   * lost and no pair it holds is ever dropped. Written through the same
+   * shape `setApprovedRequests` stores (explicit place per pair).
+   */
+  async addApprovedRequests(
+    appId: string,
+    requests: AppApprovedRequest[]
+  ): Promise<AppRecord | null> {
+    return this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({ approvedRequests: apps.approvedRequests })
+        .from(apps)
+        .where(eq(apps.id, appId))
+        .for("update");
+      if (!current) return null;
+      const seen = new Set<string>();
+      const merged: AppApprovedRequest[] = [];
+      for (const r of [...(current.approvedRequests ?? []), ...requests]) {
+        const key = `${r.permission}\u0000${r.workspaceId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(
+          withAppRequestScope({
+            permission: r.permission,
+            workspaceId: r.workspaceId,
+          })
+        );
+      }
+      const [row] = await tx
+        .update(apps)
+        .set({ approvedRequests: merged })
+        .where(eq(apps.id, appId))
+        .returning();
+      return row ?? null;
+    });
+  }
+
+  /**
    * The api_keys ids bound to this app: the keys whose grants carry
    * `client_id = public_id`, AND every key held by the app's own agent user
    * (`agent_user_id`) — so revoking the app stops any key that acts as it,
@@ -701,7 +741,13 @@ export class AppRepository {
   async withdrawPendingRequests(
     appId: string,
     by: string,
-    reason: string
+    reason: string,
+    /**
+     * Only the requests filed through this door (`data.via`): an additive
+     * consent withdraws the consent it interrupted, never the app's own asks
+     * still waiting for the person.
+     */
+    onlyVia?: string
   ): Promise<string[]> {
     const now = new Date();
     const rows = await transitionProposal(this.db, {
@@ -716,7 +762,12 @@ export class AppRepository {
         eq(proposals.targetType, APP_CONNECT_TARGET_TYPE),
         eq(proposals.proposalType, APP_CONNECT_PROPOSAL_TYPE),
         eq(proposals.targetId, appId),
-        eq(proposals.status, ProposalStatus.PENDING)
+        eq(proposals.status, ProposalStatus.PENDING),
+        ...(onlyVia
+          ? [
+              sql`COALESCE(${proposals.data}->'data'->>'via', ${proposals.data}->>'via') = ${onlyVia}`,
+            ]
+          : [])
       ),
     }).returning({ id: proposals.id });
     return rows.map((r) => r.id);

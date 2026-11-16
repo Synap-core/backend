@@ -42,6 +42,7 @@ import {
   events,
   lifecycleTransitionOutbox,
   sessionStageRuns,
+  apiKeys,
 } from "@synap/database/schema";
 import { handleFocusSessionReaper } from "../focus-session-reaper.js";
 import { handlePlaybookRunReaper } from "../playbook-run-reaper.js";
@@ -127,6 +128,7 @@ beforeAll(async () => {
     events,
     lifecycleTransitionOutbox,
     sessionStageRuns,
+    apiKeys,
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   registerStoppedSessionStaler(async ({ sessionId }) => ({

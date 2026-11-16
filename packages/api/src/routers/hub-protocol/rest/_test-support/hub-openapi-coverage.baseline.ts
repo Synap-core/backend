@@ -57,8 +57,6 @@ export const HUB_ROUTES_MISSING_FROM_SPEC: readonly string[] = [
   "GET /setup/status",
   "GET /shares",
   "GET /shares/policy",
-  "GET /shares/sites",
-  "GET /shares/sites/{id}",
   "GET /tracks",
   "GET /tracks/{id}",
   "GET /whiteboards/{viewId}/state",

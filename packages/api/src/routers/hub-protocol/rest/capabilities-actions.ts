@@ -22,6 +22,7 @@ import { loadRecipient } from "../../../services/capabilities/intent-recipient.j
 import {
   admitIntent,
   IntentActionSchema,
+  IntentUnavailableSchema,
   refusal,
   takesIntentForm,
 } from "./capabilities-intent.js";
@@ -88,7 +89,20 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
       "last used with them. Any other key (an agent drafting for the person) " +
       "gets the same intent form when it asks for it: by passing `subject`, " +
       "or `form=intent` to list an intent's actions for no one; without " +
-      "either it reads the raw projection above.",
+      "either it reads the raw projection above. The intent form also " +
+      "returns `unavailable`: every verb declaring the intent that is not " +
+      "offered, one entry per tool and account and cause, with `why` (a " +
+      "stable key: no_input_schema, not_enabled, not_connected, " +
+      "not_launchable, update_waiting, intent_not_declared, no_input_map, " +
+      "no_account, connection_expired, accounts_unreadable), `label` (the " +
+      "pod's sentence), `tool`, `connection`, `retryable` (a failed read: " +
+      "asking again may help) and `fix` ({ kind: add|connect|enable|update|" +
+      "run|none, hint, url?, opensIn? } or null). An empty `actions` with " +
+      "an empty `unavailable` means no tool declares the intent; a read " +
+      "the pod could not make is an entry, never an empty list. A fenced " +
+      "key refused for want of the intent's permission gets 403 " +
+      "GRANT_DENIED with `why: permission_missing` and `permission` (the " +
+      "grant to ask the person for, `capability.<intent>.run`).",
     request: {
       query: z.object({
         workspaceId: z.string().uuid(),
@@ -111,6 +125,8 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
         description: "Runnable actions",
         schema: z.object({
           actions: z.array(z.union([ActionSchema, IntentActionSchema])),
+          // Intent form only (absent on the raw projection).
+          unavailable: z.array(IntentUnavailableSchema).optional(),
         }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -173,7 +189,10 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
           ...(subject ? { subject } : {}),
         });
         return c.json(
-          { actions: (listed?.actions ?? []).map((a) => a.view) },
+          {
+            actions: (listed?.actions ?? []).map((a) => a.view),
+            unavailable: listed?.unavailable ?? [],
+          },
           200
         );
       } catch (err) {

@@ -1016,9 +1016,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a " +
       "question it asked is open, unless questionDispositions settles each. " +
       "An agent's closed close is refused (409 NOT_DONE: unmetCriteria[], " +
-      "openOutcomes[], owedByPerson[], waiting) while a required criterion it " +
-      "can still check is not passing or a required outcome (an agent's or " +
-      "the person's) is open, unless `reason` says why it is done anyway " +
+      "openOutcomes[], owedByPerson[], unreadMessages[], waiting) while a " +
+      "required criterion it can still check is not passing, a required " +
+      "outcome (an agent's or the person's) is open, or a blocked_on_you / " +
+      "handoff another session sent it was never read, unless `reason` says " +
+      "why it is done anyway " +
       "(posted in the session room). " +
       "Distinct from POST .../complete-run (playbook run only).",
     request: {

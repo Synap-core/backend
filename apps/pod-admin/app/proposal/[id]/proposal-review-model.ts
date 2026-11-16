@@ -144,3 +144,50 @@ export function createdObject(input: {
   if (!isUuid(id)) return null;
   return { kind, id, title: input.title?.trim() || null };
 }
+
+/** The object an update changes, named so the page can open it. */
+export interface UpdatedObject {
+  /** The object kind `openIn` opens (`document`, `session`, …). */
+  kind: string;
+  id: string;
+  title: string | null;
+}
+
+/**
+ * A proposal's `targetType` is its own word for what it changes; `/open` hosts
+ * the same objects under its own. Only the kinds seen on real update proposals
+ * are listed (document, entity, playbook, skill, and a session as
+ * `focus_session`): a kind not here gets no door, never a guessed route.
+ */
+const OPEN_KIND_OF_TARGET: ReadonlyMap<string, string> = new Map([
+  ["document", "document"],
+  ["entity", "entity"],
+  ["playbook", "playbook"],
+  ["skill", "skill"],
+  ["focus_session", "session"],
+]);
+
+/**
+ * The existing object an UPDATE changes, when the page can open it. Unlike a
+ * create (`createdObject`, which names something only once approved), an update
+ * names its object at every status: the reviewer wants to open the thing being
+ * changed BEFORE deciding, and the review page is not the object's page. A
+ * create has no object yet, a delete may have none left, and a capture graph's
+ * target id is not one object's, so those name nothing.
+ */
+export function updatedObject(input: {
+  action: string;
+  targetType: string | null | undefined;
+  targetId: string | null | undefined;
+  title: string | null | undefined;
+  graph: boolean;
+}): UpdatedObject | null {
+  if (input.action !== "update" || input.graph) return null;
+  // A Map, not an object: `targetType` comes from a stored row, and an object
+  // literal answers "constructor" or "toString" with an inherited function.
+  const kind = OPEN_KIND_OF_TARGET.get(input.targetType ?? "");
+  if (!kind) return null;
+  const id = input.targetId ?? "";
+  if (!isUuid(id)) return null;
+  return { kind, id, title: input.title?.trim() || null };
+}

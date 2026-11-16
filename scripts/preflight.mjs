@@ -69,6 +69,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { PINS_FILE_NAME, loadSiblingPins } from "./layout/layout.mjs";
+import { SIBLINGS, registryProblems } from "./ci/roll.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCORES_PATH = join(ROOT, "scripts", "ci", "check-scores.json");
@@ -464,6 +465,33 @@ export const CHECKS = [
         verdict: "FAIL",
         detail: `door-tool-names.generated.ts is stale against ${from}: ${diff.length} row(s) differ (${diff.slice(0, 4).join(", ")}${diff.length > 4 ? ", …" : ""}). The producer changed, not necessarily this PR`,
       };
+    },
+  },
+  {
+    // A sibling pinned in sibling-pins.json without a row in the roll registry
+    // (scripts/ci/roll.mjs) could have its pin bumped with its mirrors left
+    // stale; a row without a pin has nothing to roll. Both fail here, loudly.
+    id: "sibling-registry",
+    tier: 0,
+    mirrors: null,
+    costHint: 1,
+    fix: `every sibling in ${PINS_FILE_NAME} needs a row in SIBLINGS (scripts/ci/roll.mjs) with its mirrors, regenerate and check commands, and every row needs a pin`,
+    async run(ctx) {
+      let pins;
+      try {
+        pins = loadSiblingPins(ctx.pinsFile ?? join(ROOT, PINS_FILE_NAME));
+      } catch (err) {
+        return { verdict: "FAIL", detail: err.message };
+      }
+      const problems = registryProblems(SIBLINGS, pins, {
+        exists: (o) => existsSync(join(ROOT, o)),
+      });
+      return problems.length
+        ? { verdict: "FAIL", detail: problems.join("; ") }
+        : {
+            verdict: "PASS",
+            detail: `${SIBLINGS.length} rollable sibling(s), each pinned and registered`,
+          };
     },
   },
   {
