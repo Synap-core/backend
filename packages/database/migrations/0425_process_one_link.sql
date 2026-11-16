@@ -1,8 +1,7 @@
 -- 0425_process_one_link
 --
--- ONE LINK PER RELATION for a playbook's automations, and the owed drop of
--- `playbooks.required_intents` (Process wave plan 0adf8352, founder-approved
--- 16 Nov 2026, W2).
+-- ONE LINK PER RELATION for a playbook's automations (Process wave plan
+-- 0adf8352, founder-approved 16 Nov 2026, W2).
 --
 -- A playbook's automations were stored three ways: `playbooks.flow_automation_id`
 -- (the cron schedule's backing automation, or the automation the canvas saved),
@@ -25,10 +24,11 @@
 -- to the previous release's trigger matcher still reads them). Nothing writes a
 -- new `member_of` link from this release on.
 --
--- 3. `playbooks.required_intents` (0291) is dropped: 0419 folded it into
---    `playbooks.tools` and kept it one release "unread and unwritten" for a
---    rollback; the release that read it is two behind. The Drizzle schema has
---    not had it since 0419, so the previous release boots without it.
+-- NOT DROPPED HERE: `playbooks.required_intents` (0291). 0419 stops reading it,
+-- but 0419 has not shipped (newest tag v1.2.8 still reads it), and a failed
+-- update rolls back to that release on this schema. The drop is a later
+-- migration carrying `-- synap:contract-of 0419_playbook_tools.sql`, once 0419
+-- is in a release tag (deploy/__tests__/migration-forward-only.test.sh).
 --
 -- Re-runnable: every insert is ON CONFLICT, the role update only fills a NULL,
 -- the drop is IF EXISTS. Fresh installs: the baseline no longer adds the column.
@@ -53,5 +53,3 @@ SELECT l."to_id"::uuid, l."from_id"::uuid
    AND l."to_id"   ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
    AND l."from_id" ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 ON CONFLICT ("playbook_id", "automation_id") DO NOTHING;
-
-ALTER TABLE "playbooks" DROP COLUMN IF EXISTS "required_intents";

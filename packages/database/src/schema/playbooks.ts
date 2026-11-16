@@ -77,7 +77,7 @@ export const playbooks = pgTable(
      * nothing else is offered. Each stage may narrow it (`PlaybookStage.tools`).
      *
      * 0419 folded into it the four declarations it replaces: `required_intents`
-     * (kept one release for a rollback, then dropped by 0425), the
+     * (the column stays one release for a rollback, unread and unwritten), the
      * `grants` links' targets, `stages[].grants` and the space's `taskIntents`.
      */
     tools: jsonb("tools").notNull().default([]),

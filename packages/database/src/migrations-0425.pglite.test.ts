@@ -1,7 +1,6 @@
 /**
  * REAL-POSTGRES (PGlite) test for migration 0425 — one link per relation for a
- * playbook's automations, and the drop of `playbooks.required_intents`
- * (Process wave plan 0adf8352, W2):
+ * playbook's automations (Process wave plan 0adf8352, W2):
  *   - a `flow_automation_id` naming a cron automation becomes its join row with
  *     role `schedule`, one naming a manual (canvas) automation role `flow`;
  *   - a row that already composes that automation WITHOUT a role takes the
@@ -9,8 +8,10 @@
  *   - a dangling `flow_automation_id` (its automation is gone) is not copied;
  *   - every legacy `automation --member_of--> playbook` link lands in the join
  *     table (once), a malformed id is skipped;
- *   - `required_intents` is gone; re-running changes nothing;
- *   - the baseline no longer adds `required_intents`.
+ *   - re-running changes nothing;
+ *   - `required_intents` is KEPT, in the table and the baseline: 0419 (the
+ *     release that stops reading it) has not shipped, so the release a failed
+ *     update rolls back to still reads it (migration-forward-only.test.sh).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { readFileSync } from "node:fs";
@@ -117,13 +118,11 @@ describe("migration 0425 — one link per relation", () => {
     expect(all.some((r) => r.playbook_id === PB_DANGLING)).toBe(false);
   });
 
-  it("drops required_intents", async () => {
+  it("keeps required_intents (the release before 0419 still reads it)", async () => {
     const cols = await pg.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'playbooks'`
     );
-    expect(cols.rows.map((c) => c.column_name)).not.toContain(
-      "required_intents"
-    );
+    expect(cols.rows.map((c) => c.column_name)).toContain("required_intents");
   });
 
   it("re-running changes nothing", async () => {
@@ -132,7 +131,7 @@ describe("migration 0425 — one link per relation", () => {
     expect(await rows()).toEqual(before);
   });
 
-  it("the baseline no longer adds required_intents", () => {
-    expect(BASELINE).not.toMatch(/ADD COLUMN IF NOT EXISTS "required_intents"/);
+  it("the baseline still adds required_intents", () => {
+    expect(BASELINE).toMatch(/ADD COLUMN IF NOT EXISTS "required_intents"/);
   });
 });
