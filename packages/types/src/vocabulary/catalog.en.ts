@@ -126,10 +126,10 @@ export const vocabularySentencesEn = {
   // `resolveNextRungOfferLabel`: a trust offer that reaches every space.
   "vocabulary.offer.everySpace": "{offer} in every space",
   // `resolveTemplateNoun`: a template's noun, derived from its scope.
-  "vocabulary.templateNoun.goal.one": "Goal template",
-  "vocabulary.templateNoun.goal.other": "Goal templates",
-  "vocabulary.templateNoun.work.one": "Work template",
-  "vocabulary.templateNoun.work.other": "Work templates",
+  "vocabulary.templateNoun.goal.one": "Goal process",
+  "vocabulary.templateNoun.goal.other": "Goal processes",
+  "vocabulary.templateNoun.work.one": "Process",
+  "vocabulary.templateNoun.work.other": "Processes",
   "vocabulary.templateNoun.space.one": "Space template",
   "vocabulary.templateNoun.space.other": "Space templates",
   // `resolvePackageNoun`: what installs, named by what it holds (founder,

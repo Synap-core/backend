@@ -193,10 +193,10 @@ describe("French: words", () => {
 
   it("template nouns", () => {
     expect(resolveTemplateNoun("project", { locale: "fr" })).toBe(
-      "Modèle d’objectif"
+      "Processus d’objectif"
     );
     expect(resolveTemplateNoun(null, { plural: true, locale: "fr" })).toBe(
-      "Modèles de travail"
+      "Processus"
     );
   });
 });

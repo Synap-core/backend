@@ -71,7 +71,7 @@ export function toolRunsInput(params: {
 
 /**
  * A ledger's noun. Registry kinds read through the vocabulary ("Rule",
- * "Template", "Tool"); a chat turn and an agent write have no object of their
+ * "Process", "Tool"); a chat turn and an agent write have no object of their
  * own in the registry, so they are named for what the reader saw happen.
  */
 export function flowNoun(flowType: string): string {

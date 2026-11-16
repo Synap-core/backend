@@ -151,7 +151,7 @@ describe("playbooks.matchForEntity", () => {
         id: "pb-1",
         name: "Produce content from this idea",
         scope: "session",
-        templateKind: "Work template",
+        templateKind: "Process",
         // No description on the row: the key is there, null (never absent).
         description: null,
         goalTemplate: "Produce content for {{platform}} from {{subject}}",
@@ -232,7 +232,7 @@ describe("playbooks.matchForEntity", () => {
         id: "pb-lead",
         name: "Enrich this lead",
         scope: "session",
-        templateKind: "Work template",
+        templateKind: "Process",
         description: null,
         goalTemplate: "Enrich {{subject}}",
         subjectProfileSlug: "lead",
@@ -384,7 +384,7 @@ describe("playbooks.matchForEntity", () => {
         id: "pb-2",
         name: "Legacy playbook",
         scope: "session",
-        templateKind: "Work template",
+        templateKind: "Process",
         goalTemplate: "Do the thing",
         params: [],
         executor: "is-agent",
@@ -557,8 +557,8 @@ describe("playbooks.matchForEntity", () => {
       projectId: "00000000-0000-4000-8000-0000000000aa",
     });
     expect(lensed.map((r) => [r.id, r.scope, r.templateKind])).toEqual([
-      ["pb-track", "project", "Goal template"],
-      ["pb-twin", "session", "Work template"],
+      ["pb-track", "project", "Goal process"],
+      ["pb-twin", "session", "Process"],
     ]);
   });
 

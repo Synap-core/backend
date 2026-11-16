@@ -54,7 +54,7 @@ export interface PlaybookCandidate {
   reason: string;
   /** `project` = a method run as a TRACK; `session` = one sitting of work. */
   scope: PlaybookScope;
-  /** The user noun for that scope ("Goal template" / "Work template"). */
+  /** The user noun for that scope ("Goal process" / "Process"). */
   templateKind: string;
   /**
    * When to use it, in its author's words, cut at
