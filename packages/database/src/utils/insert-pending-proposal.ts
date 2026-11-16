@@ -324,15 +324,44 @@ const VOLATILE_DEDUP_KEYS = new Set([
 
 /**
  * What makes two proposed creates the SAME record: the record the create door
- * handed the gate, minus its per-attempt minted `id`. The ONE rule both the
- * dedup hash (two pending copies) and `expirePendingCreatesOfLandedRecord`
- * (a pending copy of a record that has since landed) apply.
+ * handed the gate, minus its per-attempt minted `id` and minus the install
+ * clock on its package source-link (`metadata.marketSource.installedAt`). The
+ * ONE rule both the dedup hash (two pending copies) and
+ * `expirePendingCreatesOfLandedRecord` (a pending copy of a record that has
+ * since landed) apply.
+ *
+ * The install clock: every package install/update run stamps
+ * `installedAt: new Date().toISOString()` into the source-link it writes on a
+ * created playbook (`package-apply-post-workspace.ts`, via
+ * `stampPlaybookMarketSource`; the same `marketSource` shape is built by
+ * `services/capabilities/market-source.ts`). It is when the run happened, not
+ * what the record is: with it in the hash, each `synap templates update`
+ * filed a fresh pending `create playbook` beside the last one (live
+ * 2026-11-16: seven pending copies of three playbooks). Only that one leaf is
+ * dropped: the rest of `marketSource` (package slug, version, baseline) is
+ * the record's content and still tells two creates apart.
  */
 export function createdRecordIdentity(
   record: Record<string, unknown>
 ): Record<string, unknown> {
   const { id: _mintedId, ...rest } = record;
-  return rest;
+  return withoutInstallClock(rest);
+}
+
+/** `record` without `metadata.marketSource.installedAt`, never mutating it. */
+function withoutInstallClock(
+  record: Record<string, unknown>
+): Record<string, unknown> {
+  const metadata = record.metadata;
+  if (!isPlainObject(metadata)) return record;
+  const source = metadata.marketSource;
+  if (!isPlainObject(source) || !("installedAt" in source)) return record;
+  const { installedAt: _installClock, ...sourceRest } = source;
+  return { ...record, metadata: { ...metadata, marketSource: sourceRest } };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
