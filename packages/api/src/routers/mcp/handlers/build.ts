@@ -22,7 +22,11 @@ import {
   toViewDigest,
   VIEWS_DIGEST_NOTE,
 } from "./read-lean.js";
-import { isUuid, resolveProposalId } from "../../hub-protocol/rest/_shared.js";
+import {
+  isUuid,
+  logger,
+  resolveProposalId,
+} from "../../hub-protocol/rest/_shared.js";
 import { revisionReplyFields } from "../../hub-protocol/rest/_codecs/proposal.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { CONTENT_KINDS } from "@synap/database/schema";
@@ -488,18 +492,15 @@ export const buildHandlers: McpHandlerMap = {
         });
       }
       try {
-        const process = await getProcessDoor(
-          playbookDoorIdentity(ctx),
-          playbookId
-        );
         return ok({
           ...one.result,
-          process: process.kind === "result" ? process.result : null,
-          ...(process.kind === "result"
-            ? {}
-            : { processError: "The process could not be read." }),
+          process: await getProcessDoor(playbookDoorIdentity(ctx), playbookId),
         });
-      } catch {
+      } catch (err) {
+        logger.warn(
+          { err, playbookId },
+          "synap_list_playbooks: the process read failed"
+        );
         return ok({
           ...one.result,
           process: null,

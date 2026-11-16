@@ -29,8 +29,8 @@
  *   skills      `readPlaybookSkills`;
  *   runs        the session list WHERE (`sessionListConditions` with
  *               `flow: { playbookId }`), THE needs-you owed predicate
- *               (`asksYouSessionIds`), the run ledger (`listRunGroupsPage`,
- *               `listRecentRunsByFlows`);
+ *               (`asksYouSessionIds`), the run ledger (`listPlaybookRunGroups`,
+ *               one grouped query, and `listRecentRunsByFlows`);
  *   health      `deriveProcessHealth` (the leaf, moved from the browser).
  *
  * UNMEASURED IS NOT EMPTY: a part whose read failed is listed in
@@ -95,7 +95,7 @@ import { foldIntentCoverage } from "../capabilities/capability-intent-index.js";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
 import { readFlowOf, flowOfInput } from "../lifecycle/flow-read.js";
-import { listRunGroupsPage } from "../runs/index.js";
+import { listPlaybookRunGroups } from "../runs/index.js";
 import { listRecentRunsByFlows } from "../runs/recent-by-flows.js";
 import type { RunGroup } from "../runs/types.js";
 import { asksYouSessionIds } from "../signals/needs-you-owed.js";
@@ -194,7 +194,7 @@ export function processChecks(row: Pick<Row, "criteria" | "stages">): {
     key: c.key,
     statement: c.statement,
     checkKind: (c.check as { kind?: string } | undefined)?.kind ?? null,
-    stepKey: (c as { stageKey?: string }).stageKey ?? null,
+    stepKey: c.stageKey ?? null,
   }));
   const gates = processSteps({ stages: row.stages, requires: [] })
     .filter((s) => s.gate !== null)
@@ -413,12 +413,16 @@ async function readAutomationsOutside(
   reader: ProcessReader,
   narrowSpace: "all" | null | string
 ): Promise<ProcessOutsideAutomation[]> {
-  const visible = scopedDb(AccessContext.from(reader)).predicate(automations);
+  const access = scopedDb(AccessContext.from(reader));
+  const visible = access.predicate(automations);
+  // "In a process" = in a live process the reader can SEE: an automation tied
+  // only to another member's private playbook is outside every process this
+  // reader has, so it is listed here rather than vanishing from both lists.
   const inAProcess = db
     .select({ id: playbookAutomations.automationId })
     .from(playbookAutomations)
     .innerJoin(playbooks, eq(playbooks.id, playbookAutomations.playbookId))
-    .where(ne(playbooks.status, "archived"));
+    .where(and(access.predicate(playbooks), ne(playbooks.status, "archived")));
   const space =
     narrowSpace === "all"
       ? undefined
@@ -510,25 +514,15 @@ async function readCounts(
   return out;
 }
 
-/** The run ledger's group per playbook (absent = zero runs). THROWS on a failed read. */
-async function readGroups(
+/**
+ * The run ledger's exact group per playbook (absent = zero runs), in ONE
+ * grouped query over every id. THROWS on a failed read.
+ */
+function readGroups(
   reader: ProcessReader,
   playbookIds: readonly string[]
 ): Promise<Map<string, RunGroup>> {
-  const out = new Map<string, RunGroup>();
-  // One flow per call keeps each read exact (no page cap across flows).
-  const pages = await Promise.all(
-    playbookIds.map((flowId) =>
-      listRunGroupsPage({
-        userId: reader.userId,
-        flowType: "playbook",
-        flowId,
-        limit: 1,
-      })
-    )
-  );
-  for (const page of pages) for (const g of page.groups) out.set(g.flowId, g);
-  return out;
+  return listPlaybookRunGroups({ userId: reader.userId, playbookIds });
 }
 
 async function readRecentMarks(
@@ -661,10 +655,12 @@ export async function readProcess(
     marks,
     recent,
   ] = await Promise.all([
-    readPreApprovedVersion(db, row.id, reader.userId).catch((err) => {
-      logger.warn({ err, ...ctx }, "process read: pre-approval unreadable");
-      return null;
-    }),
+    part(
+      "preApproval",
+      unavailable,
+      () => readPreApprovedVersion(db, row.id, reader.userId),
+      ctx
+    ),
     part("updateAvailable", unavailable, () => readUpdateAvailable(row), ctx),
     part("when", unavailable, () => readAutomations(reader, [row.id]), ctx),
     part(
@@ -808,7 +804,7 @@ async function readUpdateAvailable(row: Row): Promise<boolean | null> {
  * no space) and the automations outside any process. User-floored (the
  * access layer), so a pod admin sees every space they can see. Archived
  * playbooks are not processes a person works. Parts read in batches: one
- * registry read per space, one session read per count, the ledger per flow.
+ * registry read per space, one session read per count, one grouped ledger read.
  */
 export async function listProcesses(
   reader: ProcessReader,
@@ -914,7 +910,10 @@ async function listProcessCards(
       }),
       counts: countsBy?.get(row.id) ?? unmeasuredProcessRunCounts(),
       stepCount: stagesOf(row).length,
-      automationCount: automationsBy?.get(row.id)?.length ?? 0,
+      automationCount:
+        automationsBy === null
+          ? null
+          : (automationsBy.get(row.id)?.length ?? 0),
       needs: needs.map(summarizeProcessNeed),
       unavailable: [...unavailable],
     };

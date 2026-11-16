@@ -92,12 +92,9 @@ vi.mock("../../hub-protocol/playbook-doors.js", async (importOriginal) => {
     ...actual,
     listPlaybooksDoor: async () => ({ playbooks, nextCursor: null }),
     getProcessDoor: async (_identity: unknown, id: string) => ({
-      kind: "result",
-      result: {
-        playbook: { id },
-        health: { state: "never-run" },
-        unavailable: [],
-      },
+      playbook: { id },
+      health: { state: "never-run", reason: "never_run" },
+      unavailable: [],
     }),
     getPlaybookDoor: async (_identity: unknown, id: string) => {
       h.gets.push(id);

@@ -5,7 +5,9 @@
  * The pure folds are driven with real playbook shapes; `readProcess` is driven
  * through its real composition with each existing read replaced at its module
  * (the seam this file owns is the composition: which read fills which block,
- * and what a failed read turns into).
+ * and what a failed read turns into). The intent coverage is the REAL
+ * `foldIntentCoverage`; the visibility predicate is a marker per table, and
+ * each query's WHERE is rendered so a dropped floor is seen.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -20,15 +22,25 @@ const h = vi.hoisted(() => ({
   asksYou: new Set<string>(),
   outside: [] as Array<Record<string, unknown>>,
   outsideFail: false,
+  automationsFail: false,
+  skillsFail: false,
+  preApprovalFail: false,
+  /** Every select: the columns asked and the WHERE it got. */
+  queries: [] as Array<{ cols: Record<string, unknown>; where: unknown }>,
 }));
 
-vi.mock("../../access/scoped-db.js", () => ({
-  scopedDb: () => ({
-    findFirst: async () => h.row,
-    findMany: async () => (h.row ? [h.row] : []),
-    predicate: () => undefined,
-  }),
-}));
+vi.mock("../../access/scoped-db.js", async () => {
+  const { sql, getTableName } = await import("drizzle-orm");
+  return {
+    scopedDb: () => ({
+      findFirst: async () => h.row,
+      findMany: async () => (h.row ? [h.row] : []),
+      // A marker per table: a rendered WHERE shows which floor it carries.
+      predicate: (table: Parameters<typeof getTableName>[0]) =>
+        sql.raw(`VISIBLE_${getTableName(table)}`),
+    }),
+  };
+});
 vi.mock("../capabilities/capability-registry.js", () => ({
   listCapabilities: async () => {
     if (h.capsFail) throw new Error("registry down");
@@ -38,36 +50,25 @@ vi.mock("../capabilities/capability-registry.js", () => ({
         name: "github",
         kind: "tool",
         verbs: [
-          { id: "github_pr_checks", intent: "fetch_record", kind: "read" },
+          {
+            id: "github_pr_checks",
+            intent: "fetch_record",
+            kind: "read",
+            granted: true,
+          },
         ],
       },
     ];
   },
 }));
-vi.mock("../capabilities/capability-intent-index.js", async () => ({
-  // The real fold over the registry rows above, reduced to what it reads.
-  foldIntentCoverage: (input: { declared: string[] }) => ({
-    intents: input.declared.map((intent) =>
-      intent === "fetch_record"
-        ? {
-            intent,
-            satisfied: true,
-            providedBy: [
-              {
-                capabilityId: "cap-gh",
-                capabilityName: "github",
-                verbId: "github_pr_checks",
-              },
-            ],
-          }
-        : { intent, satisfied: false, providedBy: [] }
-    ),
-  }),
-}));
 vi.mock("../runs/index.js", () => ({
-  listRunGroupsPage: async () => {
+  listPlaybookRunGroups: async (input: { playbookIds: string[] }) => {
     if (h.groupsFail) throw new Error("ledger down");
-    return { groups: h.groups, nextCursor: null };
+    return new Map(
+      h.groups
+        .filter((g) => input.playbookIds.includes(g.flowId as string))
+        .map((g) => [g.flowId as string, g])
+    );
   },
 }));
 vi.mock("../runs/recent-by-flows.js", () => ({
@@ -93,18 +94,24 @@ vi.mock("./workers.js", () => ({
   ],
 }));
 vi.mock("./playbook-skills.js", () => ({
-  readPlaybookSkills: async () => [
-    {
-      id: "s-1",
-      slug: "dev/ship",
-      name: "Ship",
-      source: "guidance",
-      approved: true,
-    },
-  ],
+  readPlaybookSkills: async () => {
+    if (h.skillsFail) throw new Error("skills read failed");
+    return [
+      {
+        id: "s-1",
+        slug: "dev/ship",
+        name: "Ship",
+        source: "guidance",
+        approved: true,
+      },
+    ];
+  },
 }));
 vi.mock("./pre-approved-run.js", () => ({
-  readPreApprovedVersion: async () => 3,
+  readPreApprovedVersion: async () => {
+    if (h.preApprovalFail) throw new Error("rules read failed");
+    return 3;
+  },
 }));
 vi.mock("../lifecycle/flow-read.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -129,26 +136,41 @@ vi.mock("@synap/database", async (importOriginal) => {
   // One query double: `select(...)` → a chain whose terminal answers by the
   // shape asked (grouped done counts, open session ids, automation rows,
   // recent sessions).
-  const chain = (rows: () => unknown[]) => {
+  const { sql } = await import("drizzle-orm");
+  const chain = (cols: Record<string, unknown>, rows: () => unknown[]) => {
     const c: Record<string, unknown> = {};
-    for (const k of ["from", "innerJoin", "where", "orderBy", "groupBy"])
-      c[k] = () => c;
+    const q = { cols, where: undefined as unknown };
+    h.queries.push(q);
+    for (const k of ["from", "innerJoin", "orderBy", "groupBy"]) c[k] = () => c;
+    c.where = (w: unknown) => {
+      q.where = w;
+      return c;
+    };
     c.limit = async () => rows();
-    c.then = (resolve: (v: unknown) => void) => resolve(rows());
+    c.then = (resolve: (v: unknown) => void, reject: (e: unknown) => void) => {
+      try {
+        resolve(rows());
+      } catch (err) {
+        reject(err);
+      }
+    };
+    // Used as a subquery (`notInArray(col, select…)`): renders as a marker.
+    c.getSQL = () => sql.raw("(SUBQUERY)");
     return c;
   };
   return {
     ...actual,
     db: {
       select: (cols: Record<string, unknown>) =>
-        chain(() => {
+        chain(cols, () => {
           if ("n" in cols) return h.doneRows;
           if ("sessionId" in cols) return [];
           if ("triggerType" in cols && "workspaceId" in cols) {
             if (h.outsideFail) throw new Error("automations read failed");
             return h.outside;
           }
-          if ("role" in cols)
+          if ("role" in cols) {
+            if (h.automationsFail) throw new Error("automations read failed");
             return [
               {
                 playbookId: "pb-1",
@@ -171,6 +193,7 @@ vi.mock("@synap/database", async (importOriginal) => {
                 nextRunAt: null,
               },
             ];
+          }
           return h.openRows;
         }),
     },
@@ -261,7 +284,21 @@ beforeEach(() => {
   ];
   h.doneRows = [{ playbookId: "pb-1", n: 2 }];
   h.asksYou = new Set(["s-b"]);
+  h.automationsFail = false;
+  h.skillsFail = false;
+  h.preApprovalFail = false;
+  h.queries = [];
 });
+
+/** The WHERE of a recorded query, rendered to SQL text. */
+async function whereText(where: unknown): Promise<string> {
+  const { PgDialect } = await import("drizzle-orm/pg-core");
+  return where
+    ? new PgDialect().sqlToQuery(
+        where as Parameters<PgDialect["sqlToQuery"]>[0]
+      ).sql
+    : "";
+}
 
 describe("the pure folds", () => {
   it("steps carry each stage's runner, tools, requires, gate and subject status", () => {
@@ -466,5 +503,58 @@ describe("listProcesses — the automations outside any process", () => {
     expect(index.automationsOutsideProcess).toBeNull();
     expect(index.unavailable).toEqual(["when"]);
     expect(index.processes).toHaveLength(1);
+  });
+});
+
+describe("a failed part is named, never read as empty", () => {
+  it("skills: unavailable, the rest still read", async () => {
+    h.skillsFail = true;
+    const read = await readProcess(READER, "pb-1");
+    expect(read!.unavailable).toContain("skills");
+    expect(read!.unavailable).not.toContain("when");
+    expect(read!.when.automations).toHaveLength(2);
+  });
+
+  it("when: the automations read failing names `when`", async () => {
+    h.automationsFail = true;
+    const read = await readProcess(READER, "pb-1");
+    expect(read!.unavailable).toContain("when");
+    expect(read!.unavailable).not.toContain("skills");
+  });
+
+  it("preApproval: a failed rules read is named, not read as 'none'", async () => {
+    h.preApprovalFail = true;
+    const read = await readProcess(READER, "pb-1");
+    expect(read!.playbook.preApprovedVersion).toBeNull();
+    expect(read!.unavailable).toEqual(["preApproval"]);
+  });
+
+  it("a card's automation count is null when `when` failed, never 0", async () => {
+    h.automationsFail = true;
+    const {
+      processes: [card],
+    } = await listProcesses(READER, { workspaceId: WS });
+    expect(card!.automationCount).toBeNull();
+    expect(card!.unavailable).toContain("when");
+  });
+});
+
+describe("the visibility floors reach the queries", () => {
+  it("a process's automations are read under the automation floor", async () => {
+    await readProcess(READER, "pb-1");
+    const q = h.queries.find((x) => "role" in x.cols);
+    expect(await whereText(q?.where)).toContain("VISIBLE_automations");
+  });
+
+  it("the automations outside a process: the automation floor, and 'in a process' only counts playbooks the reader can see", async () => {
+    await listProcesses(READER, { workspaceId: WS });
+    const outside = h.queries.find(
+      (x) => "triggerType" in x.cols && "workspaceId" in x.cols
+    );
+    const inAProcess = h.queries.find(
+      (x) => Object.keys(x.cols).join() === "id"
+    );
+    expect(await whereText(outside?.where)).toContain("VISIBLE_automations");
+    expect(await whereText(inAProcess?.where)).toContain("VISIBLE_playbooks");
   });
 });

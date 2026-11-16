@@ -473,21 +473,20 @@ export async function getPlaybookDoor(
 
 /**
  * ONE process, whole (`playbooks.process`, the ONE process read): the Hub door
- * of the Process view (Process wave W2). Same floor as `get`.
+ * of the Process view (Process wave W2). Same floor as `get`: a playbook the
+ * caller cannot see THROWS the procedure's NOT_FOUND (there is no other
+ * outcome, so it returns the read itself).
  */
 export async function getProcessDoor(
   identity: PlaybookDoorIdentity,
   playbookId: string
 ): Promise<
-  PlaybookDoorOutcome<
-    Awaited<
-      ReturnType<ReturnType<typeof playbooksRouter.createCaller>["process"]>
-    >
+  Awaited<
+    ReturnType<ReturnType<typeof playbooksRouter.createCaller>["process"]>
   >
 > {
   const caller = await callerFor(identity, null);
-  const result = await caller.process({ playbookId: playbookId.trim() });
-  return { kind: "result", result };
+  return caller.process({ playbookId: playbookId.trim() });
 }
 
 /**

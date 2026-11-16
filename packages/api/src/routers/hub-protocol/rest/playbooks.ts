@@ -523,12 +523,27 @@ export function registerPlaybooksRoutes(app: HubHono): void {
     tags: ["Playbooks"],
     summary: "List processes",
     description:
-      "A space's processes as cards (health, run counts, step and automation counts, needs), or every visible one when no space is named. Archived playbooks are left out. Same read as tRPC playbooks.processes.",
+      "A space's processes as cards (health, run counts, step and automation counts, needs), or every visible one when no space is named, plus the automations outside any process the caller can see. Archived playbooks are left out. Same read as tRPC playbooks.processes.",
     request: { query: ListProcessesQuerySchema },
     responses: {
       200: {
-        description: "{ processes }",
-        schema: z.object({ processes: z.array(ProcessSummarySchema) }),
+        description:
+          "{ processes, automationsOutsideProcess, unavailable }: `automationsOutsideProcess` is null when that read failed (then `unavailable` names `when`); an empty list means there are none.",
+        schema: z.object({
+          processes: z.array(ProcessSummarySchema),
+          automationsOutsideProcess: z
+            .array(
+              z.object({
+                id: z.string(),
+                name: z.string(),
+                triggerType: z.string(),
+                status: z.string(),
+                workspaceId: z.string().nullable(),
+              })
+            )
+            .nullable(),
+          unavailable: z.array(z.string()),
+        }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -550,17 +565,9 @@ export function registerPlaybooksRoutes(app: HubHono): void {
     const id = requireUuidParam(c, "id");
     if (id instanceof Response) return id;
     try {
-      const outcome = await getProcessDoor(
-        doorIdentity(c, c.get("agentUserId")),
-        id
+      return c.json(
+        await getProcessDoor(doorIdentity(c, c.get("agentUserId")), id)
       );
-      if (outcome.kind !== "result") {
-        return c.json(
-          { error: "error" in outcome ? outcome.error : "Not found" },
-          404
-        );
-      }
-      return c.json(outcome.result);
     } catch (err) {
       return errorResponse(c, err, "playbooks.process failed");
     }
