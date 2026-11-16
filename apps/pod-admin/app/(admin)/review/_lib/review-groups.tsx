@@ -27,6 +27,7 @@ import {
   type ReviewPackage,
 } from "@synap-core/types/proposals/review-package";
 import {
+  resolveActionLabel,
   resolveObjectNoun,
   resolveReviewLayoutLabel,
   resolveReviewPackageLabel,
@@ -38,6 +39,12 @@ import { ResourceRow } from "../../components/resource-row";
 import { SegmentedChoice } from "../../components/segmented-choice";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
 import { Pill } from "../../../_lib/object/provenance-chips";
+import { RequestRowLines } from "../../../_lib/request/request-row-lines";
+import { reviewRowView } from "./review-row-view";
+import { useT } from "../../../../lib/i18n/locale-provider";
+import { en, fr } from "./copy";
+
+const CATALOGS = { en, fr };
 import {
   agentGroups,
   itemCount,
@@ -55,31 +62,27 @@ const ROW_CAP = 8;
 const NAME_CAP = 12;
 
 /**
- * What each package asks of the person — the line under its name. Product
- * copy (a sentence), not vocabulary: the package NAME comes from the door.
+ * The ONE "all" action a package offers, as an action TOKEN (its words come
+ * from the vocabulary door, `resolveActionLabel`); null = decided one at a
+ * time. What each package asks of the person is its catalog line
+ * (`copy.ts`, `package.ask.<package>`), never a hand map here (D9).
  */
-const PACKAGE_ASK: Readonly<Record<ReviewPackage, string>> = {
-  questions: "an agent waits on your answer",
-  access: "who may act or see · one at a time",
-  releases: "go or no-go on a deploy",
-  "how-things-work": "rules and playbooks agents follow · read each",
-  "data-changes": "changes to your records",
-  "hand-offs": "work handed to an agent",
-  knowledge: "what agents learned · skim, keep, reject the odd one",
-  bookkeeping: "agents' notes on their own sessions",
-};
-
-/** The verb of a package's one "all" action. */
-const KEEP_VERB: Readonly<Record<ReviewPackage, string | null>> = {
+const KEEP_ACTION: Readonly<Record<ReviewPackage, string | null>> = {
   questions: null,
   access: null,
   releases: null,
   "how-things-work": null,
-  "data-changes": "Approve",
-  "hand-offs": "Allow",
-  knowledge: "Keep",
-  bookkeeping: "Keep",
+  "data-changes": "approve",
+  "hand-offs": "allow",
+  knowledge: "keep",
+  bookkeeping: "keep",
 };
+
+/** A package's "all" verb, through the vocabulary door. */
+function keepVerb(pkg: ReviewPackage): string | null {
+  const action = KEEP_ACTION[pkg];
+  return action ? resolveActionLabel(action, "imperative") : null;
+}
 
 /** What the page hands the groups: how to draw a row and act on rows. */
 export interface ReviewGroupActions {
@@ -120,7 +123,7 @@ function CappedRows({
   const [all, setAll] = useState(false);
   const shown = all ? rows : rows.slice(0, ROW_CAP);
   return (
-    <div className="divide-y divide-foreground/[0.05]">
+    <div className="flex flex-col gap-2">
       {shown.map(render)}
       {rows.length > ROW_CAP && (
         <div className="px-3 py-2">
@@ -178,7 +181,8 @@ function PackageSection({
   actions: ReviewGroupActions;
 }) {
   const layouts = REVIEW_PACKAGE_LAYOUTS[pkg];
-  const verb = KEEP_VERB[pkg];
+  const t = useT(CATALOGS);
+  const verb = keepVerb(pkg);
   const first = rows[0];
   const oneAction =
     verb && layout !== "by-agent" ? (
@@ -191,7 +195,7 @@ function PackageSection({
   return (
     <SectionCard
       title={resolveReviewPackageLabel(pkg)}
-      hint={metaLine(rows, PACKAGE_ASK[pkg])}
+      hint={metaLine(rows, t(`package.ask.${pkg}`))}
       actions={
         <div className="flex flex-wrap items-center justify-end gap-2">
           {oneAction}
@@ -240,7 +244,7 @@ function PackageBody({
         <FoldedBySession
           rows={rows}
           actions={actions}
-          verb={KEEP_VERB[pkg] ?? "Keep"}
+          verb={keepVerb(pkg) ?? resolveActionLabel("keep", "imperative")}
         />
       );
     case "list":
@@ -248,7 +252,11 @@ function PackageBody({
   }
 }
 
-/** Questions as cards: the question, where it comes from, its one verb. */
+/**
+ * Questions as cards: each card draws the ONE request row (its three lines:
+ * the question, what it holds, who asked and where, every name a door) and
+ * its one verb — the same row the list draws (D4), capped like it (§4).
+ */
 function AskCards({
   rows,
   actions,
@@ -256,51 +264,60 @@ function AskCards({
   rows: ReviewRow[];
   actions: ReviewGroupActions;
 }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? rows : rows.slice(0, ROW_CAP);
   return (
-    <div className="grid grid-cols-1 gap-3 px-1 pb-1 sm:grid-cols-2">
-      {rows.map((row) => {
-        const opens = row.detail !== null && row.detail.kind !== "open";
-        return (
-          <Card
-            key={row.key}
-            data-row-id={row.key}
-            shadow="none"
-            radius="md"
-            className="bg-content1 ring-1 ring-inset ring-foreground/10"
-          >
-            <CardBody className="flex flex-col gap-2 p-4">
-              <p className="text-[13.5px] font-medium leading-5 text-foreground">
-                {row.title}
-              </p>
-              <p className="text-[12px] text-foreground/65">
-                {[
-                  row.reason,
-                  row.sessionTitle ?? row.where,
-                  formatRelative(row.occurredAt, { empty: "" }),
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </p>
-              <div>
-                {opens ? (
-                  <Button
-                    size="sm"
-                    color="primary"
-                    startContent={
-                      <MessageSquare className="h-3.5 w-3.5" aria-hidden />
-                    }
-                    onPress={() => actions.open(row)}
-                  >
-                    {row.detail?.kind === "ask" ? "Answer" : "Review"}
-                  </Button>
-                ) : (
-                  actions.renderRow(row)
-                )}
-              </div>
-            </CardBody>
-          </Card>
-        );
-      })}
+    <div className="flex flex-col gap-2 px-1 pb-1">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {shown.map((row) => {
+          const view = reviewRowView(row);
+          const opens = view.action !== null && view.action.kind !== "exit";
+          return (
+            <Card
+              key={row.key}
+              data-row-id={row.key}
+              shadow="none"
+              radius="md"
+              className="bg-content1 ring-1 ring-inset ring-foreground/10"
+            >
+              <CardBody className="flex flex-col gap-3 p-4">
+                <RequestRowLines
+                  family={view.family}
+                  what={view.what}
+                  holds={view.holds}
+                  who={view.who}
+                />
+                <div>
+                  {opens ? (
+                    <Button
+                      size="sm"
+                      color="primary"
+                      startContent={
+                        <MessageSquare className="h-3.5 w-3.5" aria-hidden />
+                      }
+                      onPress={() => actions.open(row)}
+                    >
+                      {resolveActionLabel(
+                        view.action?.kind === "answer" ? "answer" : "review",
+                        "imperative"
+                      )}
+                    </Button>
+                  ) : (
+                    actions.renderRow(row)
+                  )}
+                </div>
+              </CardBody>
+            </Card>
+          );
+        })}
+      </div>
+      {rows.length > ROW_CAP && (
+        <div>
+          <Button size="sm" variant="light" onPress={() => setAll((v) => !v)}>
+            {all ? "Show fewer" : `Show all ${rows.length}`}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

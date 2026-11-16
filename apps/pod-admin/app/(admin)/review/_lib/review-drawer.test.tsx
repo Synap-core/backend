@@ -137,8 +137,115 @@ const {
     repeatCount: 1,
     target: { kind: "session", id: SESSION_ID },
   });
+  /** The session's newest timeline items, oldest first (`readSessionTimelines`). */
+  const AGENT = { kind: "agent", id: AGENT_ID, name: "Claude-code" };
+  const SYSTEM = { kind: "system", id: null, name: null };
+  let minute = 0;
+  const at = () => new Date(Date.UTC(2026, 10, 16, 9, minute++)).toISOString();
+  const checks = (id: string, result: "passed" | "failed") => ({
+    id,
+    kind: "checks_finished",
+    at: at(),
+    actor: SYSTEM,
+    refs: { sessionId: SESSION_ID },
+    checks: {
+      repo: "o/r",
+      sha: "abc1234",
+      result,
+      status: "success",
+      pr: 7,
+      job: null,
+      workflow: "CI",
+    },
+  });
+  const EVENTS = [
+    {
+      id: "e-start",
+      kind: "session_started",
+      at: at(),
+      actor: AGENT,
+      refs: { sessionId: SESSION_ID },
+      title: "Build wave 2",
+    },
+    checks("e-c1", "failed"),
+    checks("e-c2", "failed"),
+    checks("e-c3", "passed"),
+    {
+      id: "e-pr",
+      kind: "pr_opened",
+      at: at(),
+      actor: AGENT,
+      refs: { sessionId: SESSION_ID, url: "https://github.com/o/r/pull/7" },
+      pr: {
+        repo: "o/r",
+        number: 7,
+        url: "https://github.com/o/r/pull/7",
+        title: null,
+      },
+      intoDefault: null,
+    },
+    {
+      id: "e-asked",
+      kind: "decision_asked",
+      at: at(),
+      actor: AGENT,
+      refs: { sessionId: SESSION_ID, proposalId: PROPOSAL_ID },
+      title: NAME,
+    },
+  ];
+  const WAITER_ID = "88888888-8888-4888-8888-888888888888";
+  const SESSION_PARTS = {
+    timeline: {
+      status: "ok",
+      // Newest first, as the read returns it.
+      value: { events: [...EVENTS].reverse(), olderExist: false },
+    },
+    aiCanDo: { status: "ok", value: { items: [], total: 0 } },
+    waiting: {
+      status: "ok",
+      value: {
+        items: [{ id: WAITER_ID, title: "Ship the gate", status: "active" }],
+        total: 1,
+      },
+    },
+  };
+  /** `signals.needsYou({ include: ["context"] })`: this proposal's row and its story. */
+  const contextOf = (sessionParts: Record<string, unknown> = SESSION_PARTS) =>
+    ok({
+      rows: {
+        needs_you: [
+          {
+            ...cluster(PROPOSAL_ID, NAME),
+            source: { kind: "session", id: SESSION_ID, label: "Build wave 2" },
+          },
+        ],
+      },
+      context: {
+        timelineItems: 4,
+        sessions: { [SESSION_ID]: sessionParts },
+        rows: {
+          [`proposal-cluster:${PROPOSAL_ID}`]: {
+            sessionId: SESSION_ID,
+            slotLabel: null,
+            proposalIds: [PROPOSAL_ID],
+            proposalWaits: {
+              status: "ok",
+              value: { waits: true, reason: "gate" },
+            },
+          },
+        },
+      },
+    });
   const state = {
     status: "pending",
+    /** `signals.needsYou` with its context: the request's story. */
+    context: contextOf() as Q,
+    /** `proposals.repairOptions`: what a proposal still needs from you. */
+    repairOptions: {
+      proposalId: "p",
+      repairable: false,
+      fields: [],
+    } as Record<string, unknown>,
     /** Review's query string (`?session=` narrows it). */
     search: "",
     /** Fields laid over the fixture proposal (a different review). */
@@ -154,7 +261,7 @@ const {
     /** `signals.list` pod-wide — Review's own read. */
     queue: ok({ signals: [cluster(NEXT_ID, "Create Linus")] }) as Q,
   };
-  const reads = { ok, fail, cluster, ask, SESSION };
+  const reads = { ok, fail, cluster, ask, SESSION, SESSION_PARTS, contextOf };
   /** A query hook answering from `state` (disabled ⇒ no data, not loading). */
   const query =
     (
@@ -169,6 +276,7 @@ const {
       return {
         data: r.data,
         error: r.error ?? null,
+        isError: r.error !== undefined,
         isLoading: r.isLoading ?? false,
         refetch() {},
       };
@@ -217,7 +325,7 @@ vi.mock("../../../../lib/trpc", async () => ({
       // The failed-approval card (`FailedApproval.tsx`): nothing to fix here.
       repairOptions: {
         useQuery: () => ({
-          data: { proposalId: "p", repairable: false, fields: [] },
+          data: state.repairOptions,
           isLoading: false,
           isError: false,
           refetch() {},
@@ -234,6 +342,7 @@ vi.mock("../../../../lib/trpc", async () => ({
           input.sessionId ? state.waiting : state.queue
         ),
       },
+      needsYou: { useQuery: query(() => state.context) },
     },
     // The record card's definition reads (`use-record-definitions.ts`).
     useQueries: () => [],
@@ -350,6 +459,212 @@ describe.each([
     expect(seen.indexOf("Advanced")).toBeGreaterThan(
       seen.indexOf("recorded in the Audit log")
     );
+  });
+});
+
+/**
+ * The founder-approved order (who → what the session is for → the change →
+ * why → decide → Advanced) told as ONE story (option B, 16 Nov 2026): who and
+ * what for in BEFORE, the change, why and the decision in NOW, what deciding
+ * moves in NEXT (dashed), Advanced last. Same order, now inside the story.
+ */
+const at = (html: string, marker: string) => {
+  const i = html.indexOf(marker);
+  expect(i, `${marker} is drawn`).toBeGreaterThanOrEqual(0);
+  return i;
+};
+
+describe.each([
+  ["the Review dock", () => dock()],
+  ["the /proposal page", () => page()],
+])("%s — the request as one story", (_host, render) => {
+  it("Before holds who asked and what the session is for; Now the change, why and decision; Next follows; Advanced last", () => {
+    Object.assign(state, { context: reads.contextOf() });
+    const html = render();
+    const before = at(html, 'data-story-node="before"');
+    const provenance = at(html, "data-review-provenance");
+    const purpose = at(html, "data-review-session");
+    const now = at(html, 'data-story-node="now"');
+    const change = at(html, "Changes what it is");
+    const decision = at(html, "data-review-decision");
+    const after = at(html, 'data-story-node="after"');
+    const advanced = html.indexOf("Advanced");
+    expect(before).toBeLessThan(provenance);
+    expect(provenance).toBeLessThan(purpose);
+    expect(purpose).toBeLessThan(now);
+    expect(now).toBeLessThan(change);
+    expect(change).toBeLessThan(decision);
+    expect(decision).toBeLessThan(after);
+    expect(after).toBeLessThan(advanced);
+    // The change still comes first inside Now (in words, before the mark).
+    expect(text(html.slice(now))).toMatch(/Kind Finding Issue/);
+  });
+
+  it("the past: repeats grouped, older steps folded behind a door, the request itself never a past line", () => {
+    Object.assign(state, { context: reads.contextOf() });
+    const html = render();
+    const past = text(
+      html.slice(
+        at(html, 'data-story-node="before"'),
+        at(html, 'data-story-node="now"')
+      )
+    );
+    // Repeats grouped; four lines of past, three shown: the oldest folds
+    // behind its door, said in the oldest shown line's meta.
+    expect(past).toMatch(
+      /Checks failed Automation · 2 times · 1 more event Show/
+    );
+    expect(past).toMatch(/Checks passed/);
+    expect(past).toMatch(/Opened o\/r#7/);
+    expect(past).not.toMatch(/Session started/);
+    // Its own proposal is Now, not "Proposed: …" in the past.
+    expect(past).not.toMatch(/Proposed:/);
+  });
+
+  it("Next: what waits on the decision, each a door", () => {
+    Object.assign(state, { context: reads.contextOf() });
+    const html = render();
+    const next = html.slice(at(html, 'data-story-node="after"'));
+    expect(text(next)).toMatch(/until you decide/);
+    expect(text(next)).toMatch(/1 session waits on this Ship the gate/);
+    expect(next).toContain(
+      'href="/open/session/88888888-8888-4888-8888-888888888888"'
+    );
+  });
+
+  it("a part whose read failed says so where it belongs — never 'nothing waits'", () => {
+    Object.assign(state, {
+      context: reads.contextOf({
+        ...reads.SESSION_PARTS,
+        waiting: { status: "unreadable" },
+      }),
+    });
+    const seen = text(render());
+    expect(seen).toMatch(/Which sessions wait on this could not be read\./);
+    expect(seen).not.toMatch(/Nothing else waits on this/);
+    Object.assign(state, { context: reads.contextOf() });
+  });
+
+  it("a failed context read says so with a retry, and the decision stays", () => {
+    Object.assign(state, { context: reads.fail("INTERNAL_SERVER_ERROR") });
+    const html = render();
+    expect(text(html)).toMatch(
+      /What led here and what comes next could not be read\. Try again/
+    );
+    expect(count(html, /data-review-decision/)).toBe(1);
+    Object.assign(state, { context: reads.contextOf() });
+  });
+});
+
+/** An install that needs its key (finding 91a3bfd3, founder default B5). */
+const SETUP = {
+  blocking: true,
+  params: [
+    {
+      name: "apiKey",
+      label: "Cal.com API key",
+      required: true,
+      secret: true,
+      satisfied: false,
+      obtain: {
+        url: "https://app.cal.com/settings/developer/api-keys",
+        steps: ["Open Settings, then Developer", "Create a key"],
+      },
+    },
+  ],
+};
+
+describe.each([
+  ["the Review dock", () => dock()],
+  ["the /proposal page", () => page()],
+])("%s — a proposal that needs an input (B5)", (_host, render) => {
+  it("Approve waits, with 'Fill in X first' in its place; the hand-over comes before the verbs", () => {
+    Object.assign(state, {
+      proposal: { setup: SETUP },
+      repairOptions: {
+        proposalId: PROPOSAL_ID,
+        repairable: true,
+        fields: [],
+        setup: {
+          ...SETUP,
+          secretChoices: [{ ref: "vault://s1", label: "CAL_KEY" }],
+        },
+      },
+    });
+    const html = render();
+    const seen = text(html);
+    expect(seen).toMatch(/Fill in Cal\.com API key first/);
+    // The Approve button is disabled while the row is empty.
+    const approve = html.slice(
+      html.lastIndexOf("<button", html.indexOf(">Approve<")),
+      html.indexOf(">Approve<")
+    );
+    expect(approve).toMatch(/disabled/);
+    // What it needs: the row, how to get it, the page it starts on.
+    const handOver = at(html, "data-setup-hand-over");
+    expect(handOver).toBeLessThan(at(html, "data-review-decision"));
+    expect(seen).toMatch(/Open Settings, then Developer Create a key/);
+    expect(html).toContain(
+      'href="https://app.cal.com/settings/developer/api-keys"'
+    );
+    Object.assign(state, {
+      proposal: {},
+      repairOptions: { proposalId: "p", repairable: false, fields: [] },
+    });
+  });
+
+  it("a failed approval that needs an input shows the hand-over row, not just the sentence", () => {
+    Object.assign(state, {
+      status: "approval_failed",
+      proposal: { rejectionReason: "Needs setup: Cal.com API key." },
+      repairOptions: {
+        proposalId: PROPOSAL_ID,
+        repairable: true,
+        fields: [],
+        setup: { ...SETUP, secretChoices: [] },
+      },
+    });
+    const html = render();
+    const failed = html.slice(at(html, "data-failed-approval"));
+    expect(failed).toContain("data-setup-hand-over");
+    expect(text(failed)).toMatch(/Needs setup: Cal\.com API key\./);
+    expect(text(failed)).toMatch(/Cal\.com API key/);
+    Object.assign(state, {
+      status: "pending",
+      proposal: {},
+      repairOptions: { proposalId: "p", repairable: false, fields: [] },
+    });
+  });
+
+  it("what it needs cannot be told: Approve waits, and says why", () => {
+    const unreadable = { blocking: true, params: [], unreadable: true };
+    Object.assign(state, {
+      proposal: { setup: unreadable },
+      repairOptions: {
+        proposalId: PROPOSAL_ID,
+        repairable: false,
+        fields: [],
+        setup: { ...unreadable, secretChoices: [] },
+      },
+    });
+    const html = render();
+    const seen = text(html);
+    Object.assign(state, {
+      proposal: {},
+      repairOptions: { proposalId: "p", repairable: false, fields: [] },
+    });
+    expect(count(seen, /Synap cannot tell what this needs/)).toBe(2);
+    const approve = html.slice(
+      html.lastIndexOf("<button", html.indexOf(">Approve<")),
+      html.indexOf(">Approve<")
+    );
+    expect(approve).toMatch(/disabled/);
+  });
+
+  it("nothing to hand over: Approve does not wait", () => {
+    const html = render();
+    expect(text(html)).not.toMatch(/Fill in .* first/);
+    expect(html).not.toContain("data-setup-hand-over");
   });
 });
 

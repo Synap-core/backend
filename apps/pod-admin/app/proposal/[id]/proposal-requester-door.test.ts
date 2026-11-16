@@ -1,5 +1,6 @@
+/** Pod admin reads WHO IS ASKING through the shared door (`@synap-core/types/proposals`, D1). */
 import { describe, expect, it } from "vitest";
-import { proposalRequester } from "./proposal-requester";
+import { proposalRequester } from "@synap-core/types/proposals";
 
 describe("proposalRequester — who is asking, in one line", () => {
   it("an agent acting for a person: the agent, then the person", () => {

@@ -76,7 +76,14 @@ import {
   redirectToLogin,
   redirectToLoginIfUnauthorized,
 } from "../../../../lib/auth-redirect";
-import { humanizeBytes, readableError } from "../../../../lib/format";
+import {
+  formatRelative,
+  humanizeBytes,
+  readableError,
+} from "../../../../lib/format";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
+import { useT } from "../../../../lib/i18n/locale-provider";
+import { REQUEST_CATALOGS } from "../../../_lib/request/copy";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import {
   ExitFallback,
@@ -87,6 +94,7 @@ import {
   usePlacedExit,
 } from "../../../../lib/exit-link";
 import { kindIcon } from "../../../_lib/object/kind-icon";
+import { toneTextClass } from "../../../_lib/tone";
 import { chipColor } from "../../../apps/_lib/app-view";
 import { ErrorNote } from "../../../_lib/copy-button";
 import { ResourceRowSkeleton } from "../../components/resource-row";
@@ -104,6 +112,7 @@ import {
   type AskControlView,
   type AskDraft,
   type AskSlot,
+  type AskView,
   type FormDraft,
   type FormFieldView,
   type LookedAtItem,
@@ -113,6 +122,8 @@ import {
   connectedReceipt,
   provideReceipt,
   provideSheet,
+  secretCard,
+  secretUseView,
   type ConnectionSheet,
   type FileSheet,
   type ProvideReceipt,
@@ -130,6 +141,12 @@ import {
   type ConnectWait,
 } from "./provide-connect";
 import { AskContext } from "./ask-context";
+import type { RequestStory } from "@synap-core/types/needs-you";
+import {
+  RequestStoryView,
+  StoryDepth,
+  type StoryRead,
+} from "../../../_lib/request/request-story-view";
 import { fileProblem, uploadProvidedFile } from "./provide-file";
 
 /** A door's error, as tRPC hands it over. */
@@ -158,6 +175,11 @@ export interface AskAnswerProps {
    * is asked (a criterion's grade under its own statement, in a session's rail).
    */
   showContext?: boolean;
+  /**
+   * The request's story (Review's detail): the ask is drawn inside it, its
+   * asker in the story's head. Absent (a session's own page): the ask alone.
+   */
+  story?: { story: RequestStory | null; read: StoryRead };
 }
 
 /** Every read an answer changes: the rows, the badges, Sessions, Home. */
@@ -180,6 +202,7 @@ export function AskAnswer({
   sessionDoor = true,
   showHeading = true,
   showContext = true,
+  story,
 }: AskAnswerProps) {
   // What the reader sees stays put until they choose to see the new question:
   // a poll must never swap the options under a half-made answer.
@@ -188,6 +211,9 @@ export function AskAnswer({
   const view = askView(seen);
   const [failure, setFailure] = useState<string | null>(null);
   const [asked, setAsked] = useState(false);
+  /** A secret was handed over with a read: show what became of it. */
+  const [handedOver, setHandedOver] = useState(false);
+  const rt = useT(REQUEST_CATALOGS);
 
   const utils = trpc.useUtils();
 
@@ -224,17 +250,40 @@ export function AskAnswer({
   /** Said with a refused provide answer: what already went through stays. */
   const keptIfRefused = useRef<string | null>(null);
   const answer = trpc.focusSessions.answerOutput.useMutation({
-    onSuccess: (data, call) =>
+    onSuccess: (data, call) => {
+      const value = call.value;
+      if (value?.type === "declined") {
+        // The agent reads the same words: the answer's own summary.
+        settled({ title: ASK_COPY.refusedReceipt(value.reason) });
+        return;
+      }
+      const grant = "secretGrant" in data ? data.secretGrant : undefined;
+      if (
+        value?.type === "provide" &&
+        value.ref.kind === "secret" &&
+        grant?.status === "granted"
+      ) {
+        // A secret an agent may now read: the card stays to say what became
+        // of it (read how often, until when) and to take it back.
+        addToast({
+          color: "success",
+          ...provideReceipt("secret", { secretGrant: grant }, Date.now()),
+        });
+        refresh();
+        setHandedOver(true);
+        return;
+      }
       settled(
-        call.value?.type === "provide"
+        value?.type === "provide"
           ? provideReceipt(
-              call.value.ref.kind,
+              value.ref.kind,
               // Only an answered provide carries the grant; a correction never does.
               "secretGrant" in data ? data : {},
               Date.now()
             )
           : { title: "Answer sent" }
-      ),
+      );
+    },
     // A refused file answer leaves the uploaded file where it was saved.
     onError: (err, call) =>
       refused(
@@ -300,41 +349,45 @@ export function AskAnswer({
     )
     .find((exit) => exit.isDesktopLink);
 
-  return (
-    <div className="flex flex-col gap-5 pb-4">
-      <div className="flex flex-col gap-2">
-        {showHeading && (
-          <h3 className="line-clamp-2 text-balance font-heading text-[17px] font-medium leading-snug text-foreground">
-            {view.heading}
-          </h3>
+  const handedOverBlock = handedOver ? (
+    <SecretHandedOver slot={slotCall(seen)} onDone={onSettled} />
+  ) : null;
+  const headBlock = (
+    <div className="flex flex-col gap-2">
+      {showHeading && (
+        <h3 className="line-clamp-2 text-balance font-heading text-[17px] font-medium leading-snug text-foreground">
+          {view.heading}
+        </h3>
+      )}
+      {showContext && view.context && (
+        <Section label={ASK_COPY.whyHeading}>
+          <AskContext context={view.context} />
+        </Section>
+      )}
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-foreground/65">
+        {view.asker && !story && (
+          <>
+            <AskerMark asker={view.asker} sessionDoor={sessionDoor} />
+            <span aria-hidden>·</span>
+          </>
         )}
-        {showContext && view.context && (
-          <Section label={ASK_COPY.whyHeading}>
-            <AskContext context={view.context} />
-          </Section>
-        )}
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-foreground/65">
-          {view.asker && (
-            <>
-              <AskerMark asker={view.asker} sessionDoor={sessionDoor} />
-              <span aria-hidden>·</span>
-            </>
-          )}
-          <span
-            aria-hidden
-            className={`tabular-nums ${TONE_TEXT[view.ageFate.tone] ?? "text-foreground/65"}`}
-          >
-            {view.ageFate.label}
-          </span>
-          <span className="sr-only">{view.ageFate.spoken}</span>
+        <span
+          aria-hidden
+          className={`tabular-nums ${toneTextClass(view.ageFate.tone)}`}
+        >
+          {view.ageFate.label}
+        </span>
+        <span className="sr-only">{view.ageFate.spoken}</span>
+      </p>
+      {view.claimedDone && (
+        <p className="text-[12.5px] text-foreground/65">
+          The agent says it did this after all. Check before you answer.
         </p>
-        {view.claimedDone && (
-          <p className="text-[12.5px] text-foreground/65">
-            The agent says it did this after all. Check before you answer.
-          </p>
-        )}
-      </div>
-
+      )}
+    </div>
+  );
+  const lookedAtBlock = (
+    <>
       {view.lookedAt.length > 0 && (
         <Section label={ASK_COPY.lookedAt}>
           <div className="flex flex-wrap gap-1.5">
@@ -347,7 +400,10 @@ export function AskAnswer({
           )}
         </Section>
       )}
-
+    </>
+  );
+  const decisionBlock = (
+    <>
       {staleness === "changed" && live && (
         <Alert
           color="warning"
@@ -446,42 +502,105 @@ export function AskAnswer({
                 }
                 keptIfRefused.current = extras?.keptIfRefused ?? null;
                 const expectedGranteeId = extras?.expectedGranteeId;
-                send(
-                  expectedGranteeId
-                    ? { ...built.call, expectedGranteeId }
-                    : built.call
-                );
+                send({
+                  ...built.call,
+                  ...(expectedGranteeId ? { expectedGranteeId } : {}),
+                  ...(extras?.secretUses
+                    ? { secretUses: extras.secretUses }
+                    : {}),
+                });
               }}
               onStale={refused}
               onFailure={setFailure}
               onConnected={(serviceName) =>
                 settled(connectedReceipt(serviceName))
               }
+              onAskWhatFor={() =>
+                askAbout.mutate({
+                  ...slotCall(seen),
+                  note: rt("secret.askWhatForNote"),
+                })
+              }
+              askedWhatFor={asked}
             />
           )}
+          {/* Refuse, on EVERY mode (the person may always say no), with
+              what refusing does said before it is pressed. */}
+          <RefuseControl
+            refuse={view.refuse}
+            secret={
+              view.control.mode === "provide" && view.control.kind === "secret"
+            }
+            busy={busy || staleness === "changed"}
+            pending={
+              answer.isPending && answer.variables?.value?.type === "declined"
+            }
+            onRefuse={(reason) => {
+              const built = answerCall(seen, { type: "declined", reason });
+              if (!built.ok) {
+                setFailure(built.message);
+                return;
+              }
+              send(built.call);
+            }}
+          />
         </>
       )}
+    </>
+  );
+  const talkBlock = (
+    <div className="flex flex-col gap-2 border-t border-foreground/[0.06] pt-4">
+      {asked && (
+        <>
+          <p className="text-[12.5px] text-foreground/75">
+            Your message is in the session room, where the agent reads it.
+          </p>
+          <ExitLink exit={roomExit} label="Open the conversation" />
+        </>
+      )}
+      <MessageAgent
+        busy={busy}
+        sending={askAbout.isPending}
+        gone={staleness === "gone"}
+        onSend={(text) => {
+          setFailure(null);
+          askAbout.mutate({ ...slotCall(seen), note: text });
+        }}
+        sent={askAbout.isSuccess ? askAbout.submittedAt : 0}
+      />
+    </div>
+  );
 
-      <div className="flex flex-col gap-2 border-t border-foreground/[0.06] pt-4">
-        {asked && (
-          <>
-            <p className="text-[12.5px] text-foreground/75">
-              Your message is in the session room, where the agent reads it.
-            </p>
-            <ExitLink exit={roomExit} label="Open the conversation" />
-          </>
-        )}
-        <MessageAgent
-          busy={busy}
-          sending={askAbout.isPending}
-          gone={staleness === "gone"}
-          onSend={(text) => {
-            setFailure(null);
-            askAbout.mutate({ ...slotCall(seen), note: text });
-          }}
-          sent={askAbout.isSuccess ? askAbout.submittedAt : 0}
-        />
+  if (story) {
+    // The ask as one story (option B): who asked and what the work is for
+    // in Before, the question, its why and its answer in Now, what the
+    // answer unblocks in Next; what the agent looked at behind Show.
+    return (
+      <div className="pb-4">
+        <RequestStoryView
+          story={story.story}
+          read={story.read}
+          boxed
+          depth={
+            view.lookedAt.length > 0 ? (
+              <StoryDepth>{lookedAtBlock}</StoryDepth>
+            ) : undefined
+          }
+        >
+          {headBlock}
+          {handedOverBlock ?? decisionBlock}
+          {talkBlock}
+        </RequestStoryView>
       </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-5 pb-4">
+      {headBlock}
+      {lookedAtBlock}
+      {handedOverBlock ?? decisionBlock}
+      {talkBlock}
     </div>
   );
 }
@@ -507,7 +626,7 @@ function RelayWaiting({
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1">
         <p
-          className={`text-[12.5px] font-medium ${TONE_TEXT[view.mark.tone] ?? "text-foreground/80"}`}
+          className={`text-[12.5px] font-medium ${toneTextClass(view.mark.tone)}`}
         >
           {view.mark.label}
         </p>
@@ -551,13 +670,6 @@ function RelayWaiting({
     </div>
   );
 }
-
-/** Each age + fate tone, as the console's text colour. */
-const TONE_TEXT: Readonly<Record<string, string>> = {
-  warning: "text-warning-600",
-  textMuted: "text-foreground/55",
-  textSecondary: "text-foreground/65",
-};
 
 /**
  * Who asked, as a mark: the agent by name (its session is the door), or what
@@ -686,13 +798,21 @@ interface ControlsProps {
    */
   onProvide: (
     ref: AskProvideRef,
-    extras?: { expectedGranteeId?: string; keptIfRefused?: string }
+    extras?: {
+      expectedGranteeId?: string;
+      keptIfRefused?: string;
+      secretUses?: "once" | "session";
+    }
   ) => void;
   /** A door refused: stale (moved on, changed) or a failure, as the pod said. */
   onStale: (err: DoorError) => void;
   onFailure: (message: string | null) => void;
   /** The pod answered the slot itself with a new connection. */
   onConnected: (serviceName: string) => void;
+  /** A secret asked with no purpose: ask the agent what it is for (the room). */
+  onAskWhatFor?: () => void;
+  /** That question is in the room. */
+  askedWhatFor?: boolean;
 }
 
 function Controls(props: ControlsProps) {
@@ -1365,69 +1485,174 @@ function OpenInAppLink({ sessionId }: { sessionId: string }) {
   );
 }
 
-/** One of the person's EXISTING secrets; a new one is added in the app. */
+/**
+ * One of the person's EXISTING secrets (a new one is added in the app), on
+ * the HONEST card (plan d717d6ac §4, founder D4): what you give and what it
+ * can do, then For · Used by · On · Who · Until as the agent declared them —
+ * "The agent did not say what it is for" (and Ask what for) when it did not,
+ * never inferred. "This session only" is the recommended default; an agent
+ * that already reads the picked secret is said so, never as an hour.
+ */
 function SecretProvide({
   slot,
   sheet,
   busy,
   pending,
   onProvide,
+  onAskWhatFor,
+  askedWhatFor,
 }: ProvideControlProps & { sheet: SecretSheet }) {
+  const t = useT(REQUEST_CATALOGS);
   const [ref, setRef] = useState(sheet.initialRef ?? "");
+  const [uses, setUses] = useState(sheet.uses);
+  const card = secretCard(sheet, ref || null, uses);
   const has = sheet.choices.length > 0;
+  const pickedName =
+    sheet.choices.find((c) => c.ref === ref)?.name ?? sheet.name;
+  const until =
+    card.until === "standing"
+      ? t("secret.untilStanding")
+      : card.until === "once"
+        ? t("secret.untilOnce")
+        : card.until === "session"
+          ? t("secret.untilSession")
+          : null;
+  const facts: Array<[string, ReactNode]> = [];
+  if (card.purpose) {
+    facts.push([t("secret.for"), card.purpose.for]);
+    facts.push([
+      t("secret.usedBy"),
+      card.purpose.action
+        ? `${card.purpose.tool} (${card.purpose.action})`
+        : card.purpose.tool,
+    ]);
+    if (card.purpose.on) facts.push([t("secret.on"), card.purpose.on]);
+  }
+  if (card.usedBy) facts.push([t("secret.who"), card.usedBy]);
+  if (until) facts.push([t("secret.until"), until]);
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
+      <p
+        data-secret-give=""
+        className="text-[14px] font-semibold text-foreground"
+      >
+        {card.purpose?.action
+          ? t("secret.giveCan", {
+              name: pickedName,
+              action: card.purpose.action,
+            })
+          : t("secret.give", { name: pickedName })}
+      </p>
+      {!card.purpose && (
+        <p
+          data-secret-no-purpose=""
+          className="flex flex-wrap items-center gap-2 text-[13px] text-status-stale"
+        >
+          {ASK_COPY.provideNoPurpose}
+          {onAskWhatFor && (
+            <Button
+              size="sm"
+              variant="flat"
+              isDisabled={busy || askedWhatFor}
+              onPress={onAskWhatFor}
+            >
+              {t("secret.askWhatFor")}
+            </Button>
+          )}
+        </p>
+      )}
+      {facts.length > 0 && (
+        <dl
+          data-secret-card=""
+          className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-3"
+        >
+          {facts.map(([label, value]) => (
+            <div key={label} className="flex min-w-0 flex-col gap-0.5">
+              <dt className="text-[12.5px] text-foreground/55">{label}</dt>
+              <dd className="break-words text-[14px] text-foreground">
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
       {has ? (
         <>
-          <RadioGroup
-            label={ASK_COPY.providePickSecret}
-            value={ref}
-            onValueChange={setRef}
+          <Select
+            label={t("secret.fromVault")}
+            labelPlacement="outside"
+            selectedKeys={ref ? [ref] : []}
+            onSelectionChange={(keys) =>
+              setRef([...(keys as Set<string>)][0] ?? "")
+            }
             isDisabled={busy}
-            classNames={{ label: SECTION_LABEL, wrapper: "gap-2" }}
+            classNames={{ trigger: "min-h-11" }}
           >
             {sheet.choices.map((c) => (
+              <SelectItem key={c.ref} textValue={c.name} description={c.type}>
+                {c.name}
+              </SelectItem>
+            ))}
+          </Select>
+          {card.canPickUses && (
+            <RadioGroup
+              label={t("secret.howLong")}
+              value={uses}
+              onValueChange={(v) => setUses(v === "once" ? "once" : "session")}
+              isDisabled={busy}
+              classNames={{ label: SECTION_LABEL, wrapper: "gap-2" }}
+            >
               <Radio
-                key={c.ref}
-                value={c.ref}
-                description={c.type}
+                value="session"
+                description={t("secret.recommended")}
                 classNames={RADIO_CARD}
               >
-                <span className="break-all text-[13px] text-foreground">
-                  {c.name}
-                </span>
+                <span className="text-[13px]">{t("secret.usesSession")}</span>
               </Radio>
-            ))}
-          </RadioGroup>
-          <p className="text-[12.5px] leading-relaxed text-foreground/75">
-            {sheet.grantNote}
-          </p>
+              <Radio value="once" classNames={RADIO_CARD}>
+                <span className="text-[13px]">{t("secret.usesOnce")}</span>
+              </Radio>
+            </RadioGroup>
+          )}
           <div>
             <Button
               color="primary"
-              className="min-h-10"
+              className="min-h-10 font-semibold"
               startContent={<Check className="h-4 w-4" />}
               isLoading={pending}
               isDisabled={busy || !ref}
               onPress={() =>
                 onProvide(
                   { kind: "secret", vaultRef: ref },
-                  sheet.expectedGranteeId
-                    ? { expectedGranteeId: sheet.expectedGranteeId }
-                    : undefined
+                  {
+                    ...(sheet.expectedGranteeId
+                      ? { expectedGranteeId: sheet.expectedGranteeId }
+                      : {}),
+                    ...(card.canPickUses ? { secretUses: uses } : {}),
+                  }
                 )
               }
             >
-              Hand over this secret
+              {card.until === "standing"
+                ? t("secret.giveStanding")
+                : card.until === "once"
+                  ? t("secret.giveOnce")
+                  : t("secret.giveSession")}
             </Button>
           </div>
+          <p
+            data-secret-grant-note=""
+            className="text-[12.5px] leading-relaxed text-foreground/65"
+          >
+            {card.note} {t("secret.stays")}
+          </p>
         </>
       ) : (
         <p className="text-[13px] text-foreground/85">
           You have no secrets in your vault that you could hand over.
         </p>
       )}
-      <div className="flex flex-col gap-1 border-t border-foreground/[0.06] pt-3">
+      <div className="flex flex-col gap-1">
         <p className="text-[12.5px] text-foreground/65">
           {ASK_COPY.provideAddSecretInApp}
         </p>
@@ -1774,5 +1999,243 @@ function FileProvide({
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Refuse ──────────────────────────────────────────────────────────────────
+
+/** The reasons a person may pick (each with what it means), else type. */
+const REFUSE_REASONS = [
+  "refuse.reason.otherWay",
+  "refuse.reason.notThisWork",
+] as const;
+
+/**
+ * REFUSE (founder D2, 16 Nov 2026): the ask closes as refused for this
+ * request, the reason goes to the agent, the agent picks its next step.
+ * Offered on every mode, as an outlined clay "Refuse…" with what refusing
+ * does under it. Opened: "Why? The agent reads this." with reasons to pick
+ * (a secret ask leads with "Not this secret"), the person's own words, and
+ * the reassurance with its clay mark.
+ */
+export function RefuseControl({
+  refuse,
+  secret = false,
+  busy,
+  pending,
+  onRefuse,
+}: {
+  refuse: AskView["refuse"];
+  /** A secret ask: "Not this secret" leads the reasons. */
+  secret?: boolean;
+  busy: boolean;
+  pending: boolean;
+  onRefuse: (reason: string | undefined) => void;
+}) {
+  const t = useT(REQUEST_CATALOGS);
+  const [open, setOpen] = useState(false);
+  const [picked, setPicked] = useState("");
+  const [words, setWords] = useState("");
+  const reasons = [
+    secret ? "refuse.reason.notThisSecret" : "refuse.reason.notNow",
+    ...REFUSE_REASONS,
+  ] as const;
+  const square = <span aria-hidden className="rq-mark rq-mark-refused mt-1" />;
+  if (!open) {
+    return (
+      <div data-ask-refuse="" className="flex flex-col items-start gap-1.5">
+        <Button
+          size="sm"
+          variant="bordered"
+          className="rq-refuse min-h-9"
+          isDisabled={busy}
+          onPress={() => setOpen(true)}
+        >
+          {t("refuse.open")}
+        </Button>
+        <p className="flex items-start gap-2 text-[12.5px] text-foreground/60">
+          {square}
+          <span>
+            <span className="sr-only">{refuse.label}: </span>
+            {refuse.consequence}
+          </span>
+        </p>
+      </div>
+    );
+  }
+  const reason =
+    [picked ? t(picked as (typeof reasons)[number]) : "", words.trim()]
+      .filter(Boolean)
+      .join(". ") || undefined;
+  return (
+    <fieldset
+      data-ask-refuse="open"
+      className="flex flex-col gap-3 border-t border-foreground/[0.08] pt-3"
+    >
+      <legend className="mb-1 text-[13px] font-medium text-foreground">
+        {t("refuse.reasons")}
+      </legend>
+      <RadioGroup
+        aria-label={t("refuse.reasons")}
+        value={picked}
+        onValueChange={setPicked}
+        isDisabled={busy}
+        classNames={{ wrapper: "gap-2" }}
+      >
+        {reasons.map((key) => (
+          <Radio
+            key={key}
+            value={key}
+            description={t(`${key}.hint`)}
+            classNames={RADIO_CARD}
+          >
+            <span className="text-[13px] text-foreground">{t(key)}</span>
+          </Radio>
+        ))}
+      </RadioGroup>
+      <Textarea
+        size="sm"
+        minRows={2}
+        label={t("refuse.other")}
+        aria-description={refuse.reasonLabel}
+        value={words}
+        onValueChange={setWords}
+        isDisabled={busy}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          variant="bordered"
+          className="rq-refuse min-h-10"
+          isLoading={pending}
+          isDisabled={busy}
+          onPress={() => onRefuse(reason)}
+        >
+          {t("refuse.confirm")}
+        </Button>
+        <Button
+          variant="light"
+          className="min-h-10"
+          isDisabled={pending}
+          onPress={() => setOpen(false)}
+        >
+          {t("refuse.cancel")}
+        </Button>
+      </div>
+      <p className="flex items-start gap-2 text-[12.5px] text-foreground/65">
+        {square}
+        <span>{t("refuse.reassure")}</span>
+      </p>
+    </fieldset>
+  );
+}
+
+// ─── A secret, after it was handed over ─────────────────────────────────────
+
+/**
+ * What became of a secret handed over for this ask (plan d717d6ac §4,
+ * `focusSessions.provideSecretUse`): how often the agent read it, when last,
+ * until when — and Take back, which revokes that grant
+ * (`secretsVault.revokeGrant`). A failed read says so; never "not read".
+ */
+export function SecretHandedOver({
+  slot,
+  onDone,
+}: {
+  /** The slot it was handed over for (`slotCall`): its session and label. */
+  slot: { sessionId: string; expectedLabel: string };
+  onDone: () => void;
+}) {
+  const t = useT(REQUEST_CATALOGS);
+  const { sessionId, expectedLabel } = slot;
+  const use = trpc.focusSessions.provideSecretUse.useQuery(
+    { sessionId, expectedLabel },
+    { retry: 1, refetchInterval: 30_000 }
+  );
+  const utils = trpc.useUtils();
+  const revoke = trpc.secretsVault.revokeGrant.useMutation({
+    onSuccess: () => {
+      addToast({ color: "success", title: t("secret.takenBack") });
+      void utils.focusSessions.provideSecretUse.invalidate({
+        sessionId,
+        expectedLabel,
+      });
+    },
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      addToast({
+        color: "danger",
+        title: t("secret.takeBackFailed"),
+        description: readableError(err.message) ?? undefined,
+      });
+    },
+  });
+  const read = use.data;
+  const view = read?.status === "ok" ? secretUseView(read.use) : null;
+  return (
+    <section
+      data-secret-handed-over=""
+      className="flex flex-col gap-2 rounded-lg bg-foreground/[0.02] p-3 ring-1 ring-inset ring-foreground/10"
+    >
+      {use.isError ? (
+        <p className="flex flex-wrap items-center gap-2 text-[12.5px] text-status-stale">
+          {t("secret.useUnreadable")}
+          <Button size="sm" variant="light" onPress={() => void use.refetch()}>
+            {t("story.retry")}
+          </Button>
+        </p>
+      ) : use.isLoading ? (
+        <Spinner size="sm" />
+      ) : view ? (
+        <>
+          <p className="text-[13px] font-medium text-foreground">
+            {view.secretName}
+          </p>
+          <p
+            data-secret-use=""
+            className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-foreground/75"
+          >
+            <span>{t("secret.used", { n: view.useCount })}</span>
+            {view.lastUsedAt && (
+              <>
+                <span aria-hidden>·</span>
+                <span>
+                  {t("secret.lastAt", {
+                    at: formatRelative(view.lastUsedAt, { empty: "" }),
+                  })}
+                </span>
+              </>
+            )}
+            <span aria-hidden>·</span>
+            <span>
+              {view.until === "standing"
+                ? t("secret.untilStanding")
+                : view.until === "once"
+                  ? t("secret.untilOnce")
+                  : t("secret.untilSession")}
+            </span>
+            {view.takeBack ? (
+              <Button
+                size="sm"
+                variant="flat"
+                color="danger"
+                isLoading={revoke.isPending}
+                onPress={() =>
+                  revoke.mutate({ grantId: view.takeBack!.grantId })
+                }
+              >
+                {t("secret.takeBack")}
+              </Button>
+            ) : (
+              <span className="font-medium">{t("secret.takenBack")}</span>
+            )}
+          </p>
+        </>
+      ) : null}
+      <div>
+        <Button size="sm" variant="light" onPress={onDone}>
+          {resolveActionLabel("close", "imperative")}
+        </Button>
+      </div>
+    </section>
   );
 }

@@ -4,6 +4,8 @@ import {
   connectedReceipt,
   provideReceipt,
   provideSheet,
+  secretCard,
+  secretUseView,
   type ProvideOptions,
 } from "./provide-options";
 
@@ -73,13 +75,34 @@ describe("provideSheet · secret: the person's existing secrets only", () => {
       kind: "secret",
       name: "Stripe key",
       choices: [
-        { ref: "vault://a", name: "Stripe key", type: "api key" },
-        { ref: "vault://b", name: "GitHub token", type: "token" },
+        {
+          ref: "vault://a",
+          name: "Stripe key",
+          type: "api key",
+          standingGrant: null,
+        },
+        {
+          ref: "vault://b",
+          name: "GitHub token",
+          type: "token",
+          standingGrant: null,
+        },
       ],
       initialRef: "vault://a",
       grantNote: ASK_COPY.provideGrantNote("Scout", 60),
       // Sent back on the answer: the read goes to Scout or to no one.
       expectedGranteeId: "agent-scout",
+      grant: {
+        status: "will_grant",
+        agentUserId: "agent-scout",
+        agentName: "Scout",
+        minutes: 60,
+      },
+      agentName: "Scout",
+      // An ask posed before purposes existed: said, never inferred.
+      purpose: null,
+      // The card's default: this session only.
+      uses: "session",
     });
   });
 
@@ -269,5 +292,101 @@ describe("provideReceipt", () => {
       title: "File handed over",
     });
     expect(connectedReceipt("Stripe").title).toBe("Stripe connected");
+  });
+});
+
+describe("secretCard · the honest secret card (plan d717d6ac §4)", () => {
+  const grant = {
+    status: "will_grant" as const,
+    agentUserId: "a1",
+    agentName: "Claude Code",
+    minutes: 60,
+    uses: "session" as const,
+  };
+  const withPurpose = (
+    purpose: unknown,
+    rows = [{ ref: "vault://s1", name: "GITHUB_TOKEN", type: "api_key" }]
+  ) =>
+    provideSheet({
+      ...base,
+      kind: "secret",
+      secret: { name: "GITHUB_TOKEN", rows, grant, purpose },
+    } as unknown as ProvideOptions);
+
+  it("says what the agent declared: for, used by, on, and this session only by default", () => {
+    const sheet = withPurpose({
+      for: "Merging the delivery PR",
+      tool: "GitHub tool",
+      action: "merge",
+      on: "Synap-core/backend",
+    });
+    if (sheet.kind !== "secret") throw new Error("secret sheet");
+    const card = secretCard(sheet, "vault://s1", sheet.uses);
+    expect(card.purpose).toEqual({
+      for: "Merging the delivery PR",
+      tool: "GitHub tool",
+      action: "merge",
+      on: "Synap-core/backend",
+    });
+    expect(card.usedBy).toBe("Claude Code");
+    expect(card.until).toBe("session");
+    expect(card.canPickUses).toBe(true);
+    expect(card.note).toBe(ASK_COPY.provideGrantNote("Claude Code", 60));
+  });
+
+  it("no purpose: nothing inferred, the card says the agent did not say", () => {
+    const sheet = withPurpose(null);
+    if (sheet.kind !== "secret") throw new Error("secret sheet");
+    expect(secretCard(sheet, "vault://s1", "session").purpose).toBeNull();
+  });
+
+  it("one read, when the person picks it", () => {
+    const sheet = withPurpose(null);
+    if (sheet.kind !== "secret") throw new Error("secret sheet");
+    const card = secretCard(sheet, "vault://s1", "once");
+    expect(card.until).toBe("once");
+    expect(card.note).toBe(ASK_COPY.provideGrantOnceNote("Claude Code", 15));
+  });
+
+  it("a standing grant on the picked secret is said as such, never as an hour", () => {
+    const sheet = withPurpose(null, [
+      {
+        ref: "vault://s1",
+        name: "GITHUB_TOKEN",
+        type: "api_key",
+        standingGrant: { grantId: "g1", useCount: 3 },
+      } as never,
+    ]);
+    if (sheet.kind !== "secret") throw new Error("secret sheet");
+    const card = secretCard(sheet, "vault://s1", "session");
+    expect(card.until).toBe("standing");
+    expect(card.canPickUses).toBe(false);
+    expect(card.note).toBe(ASK_COPY.provideStandingGrantNote("Claude Code"));
+  });
+});
+
+describe("secretUseView · what became of a handed-over secret", () => {
+  const use = {
+    secretName: "GITHUB_TOKEN",
+    agentName: "Claude Code",
+    uses: "session" as const,
+    expiresAt: "2026-11-16T15:00:00.000Z",
+    active: true,
+    useCount: 2,
+    lastUsedAt: "2026-11-16T14:02:00.000Z",
+    takeBack: { door: "secretsVault.revokeGrant", grantId: "g1" },
+  };
+  it("reads how often, when last, until when, and offers Take back", () => {
+    expect(secretUseView(use)).toEqual({
+      secretName: "GITHUB_TOKEN",
+      agentName: "Claude Code",
+      useCount: 2,
+      lastUsedAt: "2026-11-16T14:02:00.000Z",
+      until: "session",
+      takeBack: { grantId: "g1" },
+    });
+  });
+  it("nothing left to take back once it ended", () => {
+    expect(secretUseView({ ...use, active: false }).takeBack).toBeNull();
   });
 });

@@ -23,7 +23,8 @@
  * opens that row's decision (a row, its target, or any proposal id);
  * `?session=<id>` narrows every view to one session — the door a proposal's
  * review offers to "what else from this session waits for you". From
- * `lg` up the decision docks beside the list; below, it opens in a drawer.
+ * `lg` up the decision docks beside the list (the list at most 470 px, the
+ * request's story the rest, D7); below, it opens in a drawer.
  * An agent's question is answered in the same place (`ask-answer.tsx`);
  * once it is, the detail closes and focus moves to the next row. What waited
  * more than 7 days sits in a "Review later" fold under the list, out of the
@@ -99,6 +100,8 @@ import { handOffRuleFor } from "./hand-off-rule";
 import { ReviewOnboarding } from "./review-onboarding";
 import { showReviewOnboarding } from "./review-onboarding-model";
 import { HistoryList } from "../../history/_lib/history-list";
+import { useRequestContext } from "../../../_lib/request/use-request-context";
+import { requestFamily } from "./review-row-view";
 import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
 import { useT } from "../../../../lib/i18n/locale-provider";
@@ -205,6 +208,11 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
 
   // ── The drawer, and the `?focus=` receiver ────────────────────────────────
   const [open, setOpen] = useState<OpenReview | null>(null);
+  // Every request's story, read ONCE for the page and only once one is open.
+  const storyContext = useRequestContext({
+    sessionId,
+    enabled: open !== null,
+  });
   const docked = useMediaQuery(LG_UP);
   const handledFocus = useRef<string | null>(null);
   useEffect(() => {
@@ -477,10 +485,13 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         }
       />
 
+      {/* A queue beside its detail (page-grammar, founder default D7): the
+          list at most 470 px, the request's story takes the rest of the width
+          — a timeline needs it. */}
       <div
         className={
           docked && open
-            ? "grid grid-cols-[minmax(0,1fr)_340px] items-start gap-6 xl:grid-cols-[minmax(0,1fr)_420px]"
+            ? "grid grid-cols-[minmax(0,470px)_minmax(0,1fr)] items-start gap-6"
             : undefined
         }
       >
@@ -689,6 +700,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                   return opened ? (
                     <ReviewInline
                       open={opened}
+                      storyContext={storyContext}
                       viewer={viewer}
                       onClose={refresh}
                       liveAsk={null}
@@ -763,7 +775,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                 <section
                   id="review-later"
                   aria-label={FATE_COPY.reviewLaterPile}
-                  className="mt-1 divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10"
+                  className="mt-1 flex flex-col gap-2"
                 >
                   {view.reviewLater.map((row) => (
                     <ReviewListRow
@@ -804,6 +816,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         {docked && (
           <ReviewDock
             open={open}
+            storyContext={storyContext}
             viewer={viewer}
             onClose={closeDrawer}
             liveAsk={liveAsk}
@@ -815,6 +828,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       {!docked && (
         <ReviewDrawer
           open={open}
+          storyContext={storyContext}
           viewer={viewer}
           onClose={closeDrawer}
           liveAsk={liveAsk}
@@ -871,6 +885,12 @@ function openOf(row: ReviewRow): OpenReview | null {
     // An ask's row title is its question (`askCardView`), so the frame
     // names the question once and the detail does not repeat it.
     title: row.title,
+    lens: row.lens,
+    family: requestFamily(row),
+    session: row.sessionTitle,
+    // What it is for, in the agent's words: the ask's why, else what
+    // answering unblocks.
+    sentence: row.lens.detail?.trim() || row.lens.unblocks?.trim() || null,
   };
 }
 

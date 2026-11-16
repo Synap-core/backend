@@ -142,3 +142,114 @@ body {
 .shimmer-pulse {
   animation: pa-shimmer 1.6s ease-in-out infinite;
 }
+
+/* ----------------------------------------------------------------------
+ * One request (Review's rows and the request story, plan d717d6ac §1):
+ * the kind tiles and the story's rail marks, from the shared tokens. One
+ * grammar: colour = state, icon = kind, never a chip alone.
+ *   done        a solid sage dot
+ *   your call   a filled ochre ring (the only loud mark on a page)
+ *   also yours  an open ochre ring
+ *   agent on it a teal ring
+ *   not yet     a dashed muted ring
+ *   refused     a clay square
+ * -------------------------------------------------------------------- */
+.rq-tile {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--synap-radius-control);
+}
+.rq-tile-secret {
+  background: color-mix(in srgb, var(--synap-primary) 16%, transparent);
+  color: var(--synap-primary-ink);
+}
+.rq-tile-change {
+  background: color-mix(in srgb, var(--synap-info) 18%, transparent);
+  color: var(--synap-info-ink);
+}
+.rq-tile-step {
+  background: color-mix(in srgb, var(--synap-success) 20%, transparent);
+  color: var(--synap-success-ink);
+}
+.rq-tile-neutral {
+  background: color-mix(in srgb, var(--synap-muted) 14%, transparent);
+  color: var(--synap-color-secondary);
+}
+.rq-row {
+  border: 1px solid var(--synap-border-color);
+  border-radius: var(--synap-radius-container);
+}
+.rq-row[aria-current="true"] {
+  background: var(--synap-background-surface);
+  border-color: color-mix(in srgb, var(--synap-primary) 55%, transparent);
+}
+.rq-ink {
+  color: var(--synap-primary-ink);
+}
+.rq-mark {
+  display: inline-block;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  border-radius: 9999px;
+}
+.rq-mark-done {
+  width: 10px;
+  height: 10px;
+  background: var(--synap-success);
+}
+.rq-mark-also {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--synap-primary);
+}
+.rq-mark-now {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--synap-primary);
+  background: color-mix(in srgb, var(--synap-primary) 35%, transparent);
+}
+.rq-mark-agent {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--synap-info);
+}
+.rq-mark-next {
+  width: 10px;
+  height: 10px;
+  border: 2px dashed var(--synap-muted);
+}
+.rq-mark-refused {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--synap-error);
+}
+.rq-rail-done {
+  border-left: 2px solid
+    color-mix(in srgb, var(--synap-success) 45%, transparent);
+}
+.rq-rail-next {
+  border-left: 2px dashed
+    color-mix(in srgb, var(--synap-muted) 60%, transparent);
+}
+.rq-now-box {
+  border: 1px solid color-mix(in srgb, var(--synap-primary) 45%, transparent);
+  border-radius: var(--synap-radius-container);
+  background: color-mix(in srgb, var(--synap-primary) 10%, transparent);
+  padding: 16px;
+}
+.rq-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.rq-refuse {
+  border: 1px solid color-mix(in srgb, var(--synap-error) 55%, transparent);
+  background: color-mix(in srgb, var(--synap-error) 8%, transparent);
+  color: var(--synap-error-ink);
+}

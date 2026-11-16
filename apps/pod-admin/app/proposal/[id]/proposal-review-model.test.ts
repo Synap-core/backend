@@ -40,10 +40,13 @@ describe("reasonMark — WHY it waits, as one mark, only when it is particular",
 });
 
 describe("undoMark — undo is the default, so only its absence is marked", () => {
-  it("draws nothing for an undoable or unknown change", () => {
+  it("draws nothing for an undoable change", () => {
     expect(undoMark(true)).toBeNull();
-    expect(undoMark(undefined)).toBeNull();
-    expect(undoMark(null)).toBeNull();
+  });
+
+  it("marks an unknown revertability, as the shared rule does (D6)", () => {
+    expect(undoMark(undefined)?.label).toBe("Can't be undone");
+    expect(undoMark(null)?.label).toBe("Can't be undone");
   });
 
   it("marks the pod's own `revertable: false`", () => {

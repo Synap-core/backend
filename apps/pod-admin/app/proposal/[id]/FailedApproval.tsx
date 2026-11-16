@@ -28,6 +28,7 @@ import { trpc } from "../../../lib/trpc";
 import { useApproveProposal } from "../../_lib/presence/use-approve";
 import { openIn } from "../../../lib/open-in";
 import { proposalPageT } from "./copy";
+import { SetupHandOver } from "./SetupHandOver";
 import {
   kindMissingLine,
   stoppedGraphReport,
@@ -251,8 +252,13 @@ export function FailedApproval({
   });
   const busy = repair.isPending || approve.isPending;
 
+  // A proposal that needs an input (finding 91a3bfd3) hands it over in
+  // its setup rows: repair, reopened as pending, then approved with the
+  // revision the repair made — not just the sentence.
+  const needsInput =
+    (options.data as { setup?: unknown } | undefined)?.setup !== undefined;
   const rows =
-    options.data?.repairable === true
+    options.data?.repairable === true && !needsInput
       ? repairRows(options.data.fields as RepairOptionsField[])
       : [];
 
@@ -283,6 +289,15 @@ export function FailedApproval({
         </div>
       ) : options.isLoading ? (
         <p className="text-[12px] text-foreground/55">{t("repair.checking")}</p>
+      ) : needsInput ? (
+        <SetupHandOver
+          proposalId={proposalId}
+          expectedRevision={expectedRevision}
+          approving={approve.isPending}
+          onHandedOver={(revision) =>
+            approve.mutate({ proposalId, expectedRevision: revision })
+          }
+        />
       ) : rows.length > 0 ? (
         <ul className="flex flex-col gap-3">
           {rows.map((row) => (

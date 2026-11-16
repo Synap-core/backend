@@ -226,6 +226,8 @@ export interface AskView {
   heading: string;
   /** The `why`, only when it adds to the heading. */
   context: string | null;
+  /** Refuse, on every mode: its button, reason field and what it does. */
+  refuse: AskCardView["refuse"];
   /** The asking agent (its session is the door), or the cause; null = unknown. */
   asker: AskCardAsker | null;
   /** Age + fate as one mark ("8d · Stays until you decide"). */
@@ -352,6 +354,7 @@ export function askView(slot: AskSlot, now: number = Date.now()): AskView {
   return {
     heading: card.heading,
     context: card.context,
+    refuse: card.refuse,
     asker: card.asker,
     ageFate: card.ageFate,
     note: card.note,
@@ -451,7 +454,12 @@ export type AskDraft =
   /** A reference to what is handed over — a vault secret, a connection, a file. */
   | { type: "provide"; ref: AskProvideRef }
   /** A slot with no typed ask: the answer in words. */
-  | { type: "text"; text: string };
+  | { type: "text"; text: string }
+  /**
+   * REFUSE, offered on every mode (`askCardView(...).refuse`): the person's
+   * no, with the reason the agent reads (`{ type: "declined" }`).
+   */
+  | { type: "declined"; reason?: string };
 
 /** `focusSessions.answerOutput`'s input. */
 export interface AnswerCall {
@@ -462,6 +470,8 @@ export interface AnswerCall {
   askFingerprint: string;
   /** A secret answer: the agent the person was told will read it. */
   expectedGranteeId?: string;
+  /** A secret answer: one read or this session (the person's pick). */
+  secretUses?: "once" | "session";
 }
 
 /** `attestOutput` / `askAboutSlot` input: the slot, and the ask the reader saw. */
@@ -534,6 +544,13 @@ function valueOf(
       };
     case "provide":
       return { ok: true, value: { type: "provide", ref: draft.ref } };
+    case "declined": {
+      const reason = draft.reason?.trim();
+      return {
+        ok: true,
+        value: reason ? { type: "declined", reason } : { type: "declined" },
+      };
+    }
   }
 }
 
