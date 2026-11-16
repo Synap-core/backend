@@ -3714,12 +3714,26 @@ export const ACTION_RUN_MODE_LABELS: Readonly<Record<ActionRunMode, string>> = {
   never: "Never",
 };
 
+/**
+ * An action that only READS (a read verb): never asks, never acts. Not a mode a
+ * person sets (`ACTION_RUN_MODES` stays auto | ask | never), a fact about the
+ * action, labelled beside the modes so a find row's tier
+ * (`@synap-core/types/find` `FIND_ROW_TIER_RUN_MODE`) reads through this one
+ * resolver.
+ */
+export const ACTION_RUN_READ = "read" as const;
+
+/** The modes' words plus the read-only one. */
+export const ACTION_RUN_LABELS: Readonly<
+  Record<ActionRunMode | typeof ACTION_RUN_READ, string>
+> = { ...ACTION_RUN_MODE_LABELS, [ACTION_RUN_READ]: "Read only" };
+
 /** An action run mode's words; an unknown mode humanizes rather than leaks. */
 export function resolveActionRunModeLabel(
-  mode: ActionRunMode | (string & {})
+  mode: ActionRunMode | typeof ACTION_RUN_READ | (string & {})
 ): string {
   return (
-    (ACTION_RUN_MODE_LABELS as Readonly<Record<string, string>>)[mode] ??
+    (ACTION_RUN_LABELS as Readonly<Record<string, string>>)[mode] ??
     humanizeToken(mode)
   );
 }

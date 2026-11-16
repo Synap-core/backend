@@ -155,6 +155,9 @@ describe("an action's run mode", () => {
     );
     expect(resolveActionRunModeLabel("auto")).toBe("Runs on its own");
     expect(resolveActionRunModeLabel("ask")).toBe("Asks first");
+    // A read-only action: not a settable mode, but labelled by the same door.
+    expect(resolveActionRunModeLabel("read")).toBe("Read only");
+    expect(ACTION_RUN_MODES).not.toContain("read");
   });
 });
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { actionTier, toFindRows, type FindWire } from "./rows.js";
+import {
+  actionTier,
+  resolveFindRowTierLabel,
+  toFindRows,
+  type FindWire,
+} from "./rows.js";
 import { isQuestion } from "./question.js";
 
 const cov = { hit: 1, of: 1 };
@@ -106,6 +111,12 @@ describe("toFindRows", () => {
     expect(r.rows.find((x) => x.id === "pb1")?.noun).toBe("Work template");
   });
 
+  it("a tier reads its words through the vocabulary's one run-mode resolver", () => {
+    expect(resolveFindRowTierLabel("read-only")).toBe("Read only");
+    expect(resolveFindRowTierLabel("auto")).toBe("Runs on its own");
+    expect(resolveFindRowTierLabel("asks-first")).toBe("Asks first");
+  });
+
   it("the tier truth table, with an unknown verb kind NEVER read-only", () => {
     expect(actionTier({ kind: "read", governance: "propose" })).toBe(
       "read-only"
@@ -156,10 +167,10 @@ describe("toFindRows", () => {
     });
     const send = r.rows.find((x) => x.id === "gmail.send")!;
     expect(send.binding?.filled).toEqual([
-      { slot: "attachments", vocabulary: "file", ids: ["f1"] },
+      { name: "attachments", value: ["f1"], source: "file" },
     ]);
     expect(r.rows.find((x) => x.id === "pb1")?.binding?.filled).toEqual([
-      { slot: "subject", vocabulary: "subject", ids: ["p1"] },
+      { name: "subject", value: "p1", source: "subject" },
     ]);
     const none = toFindRows(wire, {
       catalogs: ["capabilities"],

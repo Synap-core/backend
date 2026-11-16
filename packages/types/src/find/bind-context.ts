@@ -59,14 +59,25 @@ export type FindSelectionItem = FindSelection["items"][number];
 
 export type BindVocabulary = "subject" | "param" | "file" | "recipient";
 
+/**
+ * One slot the selection filled. Shaped as a surface's filled input
+ * (the browser palette reads it as `metadata.filledInputs`).
+ */
+export interface FilledSlot {
+  /** The slot: `subject`, a param name, a file parameter, `to`. */
+  name: string;
+  /** The slot's own label, when it declares one. */
+  label?: string;
+  /** The entity id filled; a list for a `file[]` / `many` slot. */
+  value: string | string[];
+  /** Which vocabulary filled it. */
+  source?: BindVocabulary;
+  /** The surface could not check the kind or role: the run door decides. */
+  unverified?: true;
+}
+
 export interface ContextBinding {
-  filled: Array<{
-    slot: string;
-    vocabulary: BindVocabulary;
-    ids: string[];
-    /** The surface could not check the kind or role: the run door decides. */
-    unverified?: true;
-  }>;
+  filled: FilledSlot[];
   /** Required slots still empty, at most {@link OWED_INLINE_MAX}. */
   owed: Array<{ slot: string; label: string; type: string }>;
   /** Required slots beyond those shown (a "more" link to the full form). */
@@ -151,9 +162,9 @@ function fillFiles(
       : left.slice(0, 1);
     next += take.length;
     filled.push({
-      slot: slot.field,
-      vocabulary: "file",
-      ids: take.map((f) => f.id),
+      name: slot.field,
+      value: slot.many ? take.map((f) => f.id) : take[0]!.id,
+      source: "file",
     });
     if (slot.many && left.length > take.length) {
       mismatch = `At most ${POD_FILES_PER_PARAMETER_MAX} files go into ${slot.field}; ${left.length - take.length} left out.`;
@@ -200,16 +211,16 @@ function bindPlaybook(
     const fits = things.find((i) => i.kind === s || i.roles?.includes(s));
     if (fits) {
       subjectId = fits.id;
-      filled.push({ slot: "subject", vocabulary: "subject", ids: [fits.id] });
+      filled.push({ name: "subject", value: fits.id, source: "subject" });
     } else if (things.length > 0) {
       const first = things[0]!;
       if (first.roles === undefined) {
         // The surface does not know its roles: it may wear `s` as a role.
         subjectId = first.id;
         filled.push({
-          slot: "subject",
-          vocabulary: "subject",
-          ids: [first.id],
+          name: "subject",
+          value: first.id,
+          source: "subject",
           unverified: true,
         });
       } else {
@@ -225,7 +236,12 @@ function bindPlaybook(
   for (const p of target.requiredParams) {
     if (p.type === "entity" && p.from) continue; // the run funnel fills it
     if (p.type === "entity" && rest.length === 1) {
-      filled.push({ slot: p.name, vocabulary: "param", ids: [rest[0]!.id] });
+      filled.push({
+        name: p.name,
+        ...(p.label ? { label: p.label } : {}),
+        value: rest[0]!.id,
+        source: "param",
+      });
       continue;
     }
     // None, or two candidates: owed. Never a guess.
@@ -290,9 +306,9 @@ function bindIntent(
     handled.add(RECIPIENT_INPUT_FIELD);
     if (things.length === 1) {
       filled.push({
-        slot: RECIPIENT_INPUT_FIELD,
-        vocabulary: "recipient",
-        ids: [things[0]!.id],
+        name: RECIPIENT_INPUT_FIELD,
+        value: things[0]!.id,
+        source: "recipient",
       });
     } else if (required.has(RECIPIENT_INPUT_FIELD)) {
       owed.push({

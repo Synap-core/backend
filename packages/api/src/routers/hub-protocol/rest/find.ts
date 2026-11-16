@@ -123,8 +123,10 @@ export function registerFindRoutes(app: HubHono): void {
       "capabilities, intents, playbooks, spaces, and the objects that can be opened (records, skills and " +
       "rules, automations, sessions, goals, projects, views, documents), each object with its " +
       "`open` link. A catalog absent from the answer was not searched; `matches: []` was " +
-      "searched and nothing fit; `error` means that catalog's read failed. To recall CONTENT " +
-      "(entities, runbooks, captures) use POST /knowledge/search. Requires hub-protocol.read.",
+      "searched and nothing fit; `error` means that catalog's read failed. Records are found " +
+      "here by their words; to recall CONTENT by meaning (runbooks, captures, bodies, synonyms) " +
+      "use POST /knowledge/search. `depth=instant` skips installed recipes and the marketplace. " +
+      "Requires hub-protocol.read.",
     request: { query: FindQuerySchema },
     responses: {
       200: { description: "What was found", schema: FindResultSchema },
