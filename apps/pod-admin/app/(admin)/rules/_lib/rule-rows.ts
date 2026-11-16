@@ -186,3 +186,18 @@ export function runResultMessage(
     ? `Running “${name}” was proposed for review — it starts once someone approves it.`
     : `“${name}” started a run.`;
 }
+
+/**
+ * `?process=outside` (Processes' door): only the automations that belong to
+ * no process. `outside` is the pod's own list (`playbooks.processes`
+ * `automationsOutsideProcess`); while it is unread (null) nothing passes, and
+ * the page explains the failed read instead of showing an empty list.
+ */
+export function ruleInProcessScope(
+  ruleId: string,
+  processFilter: "outside" | null,
+  outside: ReadonlySet<string> | null
+): boolean {
+  if (processFilter === null) return true;
+  return outside?.has(ruleId) ?? false;
+}

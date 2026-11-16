@@ -21,7 +21,7 @@ import { stripComments } from "../../../scripts/strip-comments.mjs";
 const APP_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const MIGRATED = [
   "app/(admin)/entities/page.tsx",
-  "app/(admin)/templates/page.tsx",
+  "app/(admin)/processes/page.tsx",
 ];
 
 function source(rel: string): string {
