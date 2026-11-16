@@ -77,7 +77,7 @@ export const playbooks = pgTable(
      * nothing else is offered. Each stage may narrow it (`PlaybookStage.tools`).
      *
      * 0419 folded into it the four declarations it replaces: `required_intents`
-     * (the column stays one release for a rollback, unread and unwritten), the
+     * (kept one release for a rollback, then dropped by 0425), the
      * `grants` links' targets, `stages[].grants` and the space's `taskIntents`.
      */
     tools: jsonb("tools").notNull().default([]),
@@ -143,10 +143,12 @@ export const playbooks = pgTable(
      */
     scope: text("scope").$type<"session" | "project">(),
     /**
-     * The automation that drives this playbook's flow.
-     * Process North Star Wave 0: links a playbook to a specific automation
-     * so it can be triggered or governed by that automation.
-     * No hard FK constraint — enforced at the application layer.
+     * DEPRECATED (0425, Process wave W2): the automation that drives this
+     * playbook (its schedule or canvas flow). The ONE store is now its
+     * `playbook_automations` row (role `schedule` / `flow`,
+     * `services/playbooks/playbook-automation-links.ts`); NO backend code reads
+     * this column. It is still WRITTEN beside the join row for one release
+     * because the browser before 0425 reads it; its drop is owed to W5.
      * Added by 0139_process_subject_spine.sql.
      */
     flowAutomationId: uuid("flow_automation_id"),

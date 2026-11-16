@@ -145,7 +145,6 @@ async function compiledRunNode(schedule: { handToAgentId?: string }) {
       workspaceId: WS,
       name: "Weekly account review",
       status: "active",
-      flowAutomationId: null,
       subjectProfile: { profileSlug: "company", filter: "status = active" },
       schedule: { cron: "0 9 * * MON", enabled: true, ...schedule },
     },

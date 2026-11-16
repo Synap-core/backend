@@ -3,8 +3,10 @@
  *
  * A playbook's `schedule { cron, enabled }` field is otherwise orphaned — no
  * worker reads it. The clean model: a scheduled playbook is SUGAR that maintains
- * exactly ONE backing `automations` row (a single `playbook_run` node), stamped
- * onto `playbooks.flow_automation_id`. The EXISTING `automation-cron-scheduler`
+ * exactly ONE backing `automations` row (a single `playbook_run` node), linked
+ * in `playbook_automations` with role `schedule` (0425, the ONE playbook →
+ * automation link: `playbook-automation-links.ts`; `flow_automation_id` is
+ * still written beside it for one release). The EXISTING `automation-cron-scheduler`
  * worker then fires it like any other cron automation — no playbook-specific
  * scheduler is introduced.
  *
@@ -30,7 +32,6 @@ import {
   drizzleSql,
   automations,
   isUniqueViolation,
-  playbooks,
   type FlowDefinition,
 } from "@synap/database";
 import type { Playbook } from "@synap/database/schema";
@@ -42,6 +43,12 @@ import { computeNextRunAt } from "@synap/jobs/workers/automation-cron-scheduler.
 // `automations` directly and would otherwise bypass it entirely.
 import { flowValidationErrorMessage } from "../automations/validate-flow.js";
 import { createLogger } from "@synap-core/core";
+import {
+  SCHEDULE_ROLE,
+  clearDriverAutomation,
+  readDriverAutomationId,
+  setDriverAutomation,
+} from "./playbook-automation-links.js";
 import { playbookRunNodeLabel } from "@synap-core/types/automations";
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
@@ -260,11 +267,11 @@ export interface CronAutomationCtx {
  * Reconcile a playbook's `schedule` into its backing cron automation.
  *
  * - `schedule.enabled === true` AND the playbook is `active` → upsert ONE active
- *   cron automation (idempotent: re-points/updates the SAME row via
- *   `flow_automation_id`, never duplicates), stamp `playbooks.flow_automation_id`.
+ *   cron automation (idempotent: re-points/updates the SAME row, the playbook's
+ *   driving automation in `playbook_automations`, never duplicates) and link it
+ *   with role `schedule`.
  * - `schedule.enabled === false` / schedule cleared / playbook NOT `active` →
- *   deactivate the backing automation (status `paused`) and null out
- *   `flow_automation_id`.
+ *   deactivate the backing automation (status `paused`) and drop the link.
  *
  * The status gate is what makes every lifecycle transition safe, not just one:
  * a playbook that is `draft`, `paused` or `archived` is not live, so its
@@ -279,19 +286,14 @@ export interface CronAutomationCtx {
 export async function materializePlaybookCronAutomation(
   playbook: Pick<
     Playbook,
-    | "id"
-    | "workspaceId"
-    | "name"
-    | "schedule"
-    | "flowAutomationId"
-    | "subjectProfile"
-    | "status"
+    "id" | "workspaceId" | "name" | "schedule" | "subjectProfile" | "status"
   >,
   ctx: CronAutomationCtx
 ): Promise<string | null> {
   const db = await getDb();
   const schedule = readSchedule(playbook.schedule);
-  const existingId = playbook.flowAutomationId ?? null;
+  // The ONE link (0425): the playbook's driving automation is its join row.
+  const existingId = await readDriverAutomationId(db, playbook.id);
   // Only a LIVE playbook may hold a live schedule — see the status gate above.
   const live = playbook.status === "active";
 
@@ -302,10 +304,7 @@ export async function materializePlaybookCronAutomation(
         .update(automations)
         .set({ status: "paused", nextRunAt: null, updatedAt: new Date() })
         .where(eq(automations.id, existingId));
-      await db
-        .update(playbooks)
-        .set({ flowAutomationId: null, updatedAt: new Date() })
-        .where(eq(playbooks.id, playbook.id));
+      await clearDriverAutomation(db, playbook.id);
       logger.info(
         {
           playbookId: playbook.id,
@@ -372,6 +371,12 @@ export async function materializePlaybookCronAutomation(
           updatedAt: new Date(),
         })
         .where(eq(automations.id, existingId));
+      // A canvas flow the schedule now drives is the schedule's (role moves).
+      await setDriverAutomation(db, {
+        playbookId: playbook.id,
+        automationId: existingId,
+        role: SCHEDULE_ROLE,
+      });
       logger.info(
         { playbookId: playbook.id, automationId: existingId },
         "Updated backing cron automation"
@@ -387,8 +392,8 @@ export async function materializePlaybookCronAutomation(
 
   // ── No backing row yet → create one and stamp the playbook. ─────────────────
   // 23505 recovery against automations_workspace_name_active_uq (0230): teardown
-  // PAUSES the backing row (status='paused', NOT archived) and nulls
-  // flow_automation_id, so a disable→re-enable lands here with existingId=null and
+  // PAUSES the backing row (status='paused', NOT archived) and drops its link,
+  // so a disable→re-enable lands here with existingId=null and
   // the INSERT collides with the still-non-archived paused row of the same
   // `<name> (schedule)`. Re-arm that surviving row instead of 500-ing on the dup.
   const insertName = `${playbook.name} (schedule)`;
@@ -443,10 +448,11 @@ export async function materializePlaybookCronAutomation(
   }
 
   if (automationId) {
-    await db
-      .update(playbooks)
-      .set({ flowAutomationId: automationId, updatedAt: new Date() })
-      .where(eq(playbooks.id, playbook.id));
+    await setDriverAutomation(db, {
+      playbookId: playbook.id,
+      automationId,
+      role: SCHEDULE_ROLE,
+    });
   }
   return automationId;
 }

@@ -27,11 +27,30 @@ import type { Playbook } from "@synap/database/schema";
 interface Captured {
   inserted: Record<string, unknown>[];
   updated: Record<string, unknown>[];
+  deleted: number;
 }
 
-/** Minimal db double: records every `.values()` / `.set()` payload. */
-function mockDb(captured: Captured, existingAutomation: unknown = null) {
+/**
+ * Minimal db double: records every `.values()` / `.set()` payload. `driverId`
+ * is the playbook's driving automation in `playbook_automations` (0425: the
+ * ONE link, read through `readDriverAutomationId`).
+ */
+function mockDb(
+  captured: Captured,
+  existingAutomation: unknown = null,
+  driverId: string | null = null
+) {
   return {
+    select: () => {
+      const chain = {
+        from: () => chain,
+        where: () => chain,
+        orderBy: () => chain,
+        limit: () =>
+          Promise.resolve(driverId ? [{ automationId: driverId }] : []),
+      };
+      return chain;
+    },
     insert: () => {
       const chain = {
         values: (v: Record<string, unknown>) => {
@@ -39,6 +58,7 @@ function mockDb(captured: Captured, existingAutomation: unknown = null) {
           return chain;
         },
         returning: () => Promise.resolve([{ id: "auto-1" }]),
+        onConflictDoUpdate: () => Promise.resolve(undefined),
       };
       return chain;
     },
@@ -48,10 +68,21 @@ function mockDb(captured: Captured, existingAutomation: unknown = null) {
           captured.updated.push(v);
           return chain;
         },
-        where: () => Promise.resolve(undefined),
+        // Awaited directly (automations, playbooks), or `.returning()` (the
+        // driver row's role move: one row when the playbook has a driver).
+        where: () =>
+          Object.assign(Promise.resolve(undefined), {
+            returning: () => Promise.resolve(driverId ? [{ id: "pa-1" }] : []),
+          }),
       };
       return chain;
     },
+    delete: () => ({
+      where: () => {
+        captured.deleted += 1;
+        return Promise.resolve(undefined);
+      },
+    }),
     query: {
       automations: { findFirst: () => Promise.resolve(existingAutomation) },
     },
@@ -64,7 +95,6 @@ function playbook(over: Partial<Playbook>): Playbook {
     workspaceId: "ws-1",
     name: "Weekly digest",
     schedule: { cron: "0 9 * * *", enabled: true },
-    flowAutomationId: null,
     subjectProfile: null,
     status: "active",
     ...over,
@@ -77,7 +107,7 @@ describe("materializePlaybookCronAutomation — the playbook status gate", () =>
   beforeEach(() => vi.clearAllMocks());
 
   it("active + schedule.enabled → arms one active automation with a nextRunAt", async () => {
-    const captured: Captured = { inserted: [], updated: [] };
+    const captured: Captured = { inserted: [], updated: [], deleted: 0 };
     mockGetDb.mockResolvedValue(mockDb(captured));
 
     const id = await materializePlaybookCronAutomation(
@@ -86,17 +116,50 @@ describe("materializePlaybookCronAutomation — the playbook status gate", () =>
     );
 
     expect(id).toBe("auto-1");
-    expect(captured.inserted).toHaveLength(1);
     expect(captured.inserted[0]!.status).toBe("active");
     expect(captured.inserted[0]!.nextRunAt).toBeInstanceOf(Date);
-    // …and the playbook was stamped with the backing row.
-    expect(captured.updated[0]!.flowAutomationId).toBe("auto-1");
+    // …linked as the playbook's schedule in the ONE link table (0425)…
+    expect(captured.inserted[1]).toEqual({
+      playbookId: "pb-1",
+      automationId: "auto-1",
+      role: "schedule",
+    });
+    expect(captured.inserted).toHaveLength(2);
+    // …and `flow_automation_id` still written for the old browser (W5 drops it).
+    expect(
+      captured.updated.find((u) => "flowAutomationId" in u)?.flowAutomationId
+    ).toBe("auto-1");
+  });
+
+  it("an existing driver (a canvas flow) is updated in place and becomes the schedule", async () => {
+    const captured: Captured = { inserted: [], updated: [], deleted: 0 };
+    mockGetDb.mockResolvedValue(
+      mockDb(
+        captured,
+        { id: "auto-flow", status: "draft", nextRunAt: null },
+        "auto-flow"
+      )
+    );
+
+    const id = await materializePlaybookCronAutomation(
+      playbook({ status: "active" }),
+      CTX
+    );
+
+    expect(id).toBe("auto-flow");
+    // No second automation and no second link: the row takes the schedule role.
+    expect(captured.inserted).toEqual([]);
+    expect(captured.updated).toContainEqual(
+      expect.objectContaining({ role: "schedule" })
+    );
+    // Any other driver row of the playbook is removed (one driver).
+    expect(captured.deleted).toBe(1);
   });
 
   it.each(["draft", "paused", "archived"] as const)(
     "%s + schedule.enabled → does NOT arm anything",
     async (status) => {
-      const captured: Captured = { inserted: [], updated: [] };
+      const captured: Captured = { inserted: [], updated: [], deleted: 0 };
       mockGetDb.mockResolvedValue(mockDb(captured));
 
       const id = await materializePlaybookCronAutomation(
@@ -110,11 +173,13 @@ describe("materializePlaybookCronAutomation — the playbook status gate", () =>
   );
 
   it("archived with a live backing automation → tears it down (the reported bug)", async () => {
-    const captured: Captured = { inserted: [], updated: [] };
-    mockGetDb.mockResolvedValue(mockDb(captured, { id: "auto-live" }));
+    const captured: Captured = { inserted: [], updated: [], deleted: 0 };
+    mockGetDb.mockResolvedValue(
+      mockDb(captured, { id: "auto-live" }, "auto-live")
+    );
 
     const id = await materializePlaybookCronAutomation(
-      playbook({ status: "archived", flowAutomationId: "auto-live" }),
+      playbook({ status: "archived" }),
       CTX
     );
 
@@ -125,19 +190,21 @@ describe("materializePlaybookCronAutomation — the playbook status gate", () =>
       status: "paused",
       nextRunAt: null,
     });
-    // …and the playbook no longer points at it.
+    // …its link is dropped, and the playbook no longer points at it.
+    expect(captured.deleted).toBe(1);
     expect(captured.updated[1]).toMatchObject({ flowAutomationId: null });
   });
 
   it("active but schedule disabled → still tears down (unchanged behaviour)", async () => {
-    const captured: Captured = { inserted: [], updated: [] };
-    mockGetDb.mockResolvedValue(mockDb(captured, { id: "auto-live" }));
+    const captured: Captured = { inserted: [], updated: [], deleted: 0 };
+    mockGetDb.mockResolvedValue(
+      mockDb(captured, { id: "auto-live" }, "auto-live")
+    );
 
     const id = await materializePlaybookCronAutomation(
       playbook({
         status: "active",
         schedule: { cron: "0 9 * * *", enabled: false },
-        flowAutomationId: "auto-live",
       }),
       CTX
     );
