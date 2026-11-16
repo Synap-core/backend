@@ -66,7 +66,10 @@ describe("a process read's need entry is named, never its token", () => {
 
   it("a need: slug alone, an alias, an intent entry, a capability entry", () => {
     expect(
-      resolveProcessNeedLabels({ slug: "need:ci", kind: "need" }, { locale: "en" })
+      resolveProcessNeedLabels(
+        { slug: "need:ci", kind: "need" },
+        { locale: "en" }
+      )
     ).toEqual({ label: "Gate", intentLabel: null });
     expect(
       resolveProcessNeedLabels(
