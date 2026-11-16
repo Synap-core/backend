@@ -22904,6 +22904,7 @@ declare const SiteConfigV1Schema: z.ZodObject<{
 		}, z.core.$strict>>>;
 		slugField: z.ZodDefault<z.ZodNullable<z.ZodString>>;
 		sort: z.ZodDefault<z.ZodArray<z.ZodString>>;
+		sourceWorkspaceId: z.ZodDefault<z.ZodNullable<z.ZodString>>;
 	}, z.core.$strict>>;
 	version: z.ZodLiteral<1>;
 }, z.core.$strict>;
