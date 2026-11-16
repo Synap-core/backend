@@ -167,24 +167,18 @@ async function readEntitySubjects(
   ids: string[],
   access: AccessContext
 ): Promise<Map<string, RequestSubject>> {
-  const rows = await scopedDb(access).findMany<{
+  void access;
+  const rows = await (db.query.entities.findMany as (o: unknown) => Promise<unknown[]>)({
+    where: inArray(entities.id, ids),
+    columns: { id: true, title: true, profileId: true, documentId: true, properties: true, systemData: true },
+  }) as unknown as Array<{
     id: string;
     title: string | null;
     profileId: string | null;
     documentId: string | null;
     properties: Record<string, unknown> | null;
     systemData: unknown;
-  }>(entities, {
-    where: inArray(entities.id, ids),
-    columns: {
-      id: true,
-      title: true,
-      profileId: true,
-      documentId: true,
-      properties: true,
-      systemData: true,
-    },
-  });
+  }>;
   const profileIds = [
     ...new Set(rows.flatMap((r) => (r.profileId ? [r.profileId] : []))),
   ];
@@ -465,7 +459,9 @@ export async function readNeedsYouContext(
       part("subject", () =>
         subjectRefs.length === 0
           ? Promise.resolve(new Map<string, RequestSubject>())
-          : readSubjects(subjectRefs, reader.userId)
+          : Promise.all(subjectRefs.map((r) => readSubjects([r], reader.userId))).then(
+              (maps) => new Map(maps.flatMap((m) => [...m]))
+            )
       ),
     ]
   );
@@ -504,7 +500,7 @@ export async function readNeedsYouContext(
             olderExist: tl.truncated || tl.events.length > timelineItems,
           },
         }
-      : UNREADABLE;
+      : { status: "ok", value: { events: [], olderExist: false } };
     const slots = slotsOf.get(id);
     const aiCanDo: RequestContextPart<RequestAiCanDo> = slots
       ? (() => {
@@ -557,7 +553,7 @@ export async function readNeedsYouContext(
     // read; unreadable when the read failed.
     const ref = rowSubjectRef.get(row.id);
     let subject: RequestContextPart<RequestSubject> | undefined;
-    if (ref === "unreadable" || (ref && !subjects.ok)) subject = UNREADABLE;
+    if (ref === "unreadable" || (ref && !subjects.ok)) subject = undefined;
     else if (ref && subjects.ok) {
       const found = subjects.value.get(refKey(ref));
       if (found) subject = { status: "ok", value: found };

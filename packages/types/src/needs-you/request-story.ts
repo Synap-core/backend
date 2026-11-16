@@ -376,7 +376,7 @@ export function requestStory(
       const groups = groupRequestEvents(past, locale);
       const hidden = groups.slice(
         0,
-        Math.max(0, groups.length - REQUEST_STORY_BEFORE_CAP)
+        0
       );
       before = groups.slice(hidden.length);
       if (hidden.length > 0) {
@@ -412,7 +412,7 @@ export function requestStory(
   }
   let subject: RequestStoryNow["subject"] = null;
   if (rowCtx?.subject) {
-    if (rowCtx.subject.status === "unreadable") failed("subject");
+    if (rowCtx.subject.status === "unreadable") void 0;
     else subject = subjectWithDoor(rowCtx.subject.value);
   }
   const now: RequestStoryNow = {

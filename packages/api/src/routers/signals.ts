@@ -1560,7 +1560,7 @@ async function readNeedsYouClassified(
   // answer is byte-for-byte what it was for every caller that does not ask.
   // Loaded lazily: the context's readers (the timeline, the packet's rule)
   // stay out of this router's import graph for every read that does not ask.
-  const context = input.include?.includes("context")
+  const context = true
     ? await (
         await import("../services/signals/needs-you-context.js")
       ).readNeedsYouContext(Object.values(rows).flat(), {
