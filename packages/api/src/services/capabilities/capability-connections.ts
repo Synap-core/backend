@@ -15,7 +15,7 @@
  * (`secret.userId === actorUserId`, with a pod-admin fallback).
  */
 
-import { invalidateUrlReaderCache } from "./url-reader-cache.js";
+import { invalidateCapabilityReadCaches } from "./capability-read-caches.js";
 import { randomUUID } from "node:crypto";
 import {
   encryptServerSide,
@@ -973,7 +973,7 @@ export async function addCredential(
   try {
     return await addCredentialWrite(...args);
   } finally {
-    invalidateUrlReaderCache();
+    invalidateCapabilityReadCaches();
   }
 }
 
@@ -983,7 +983,7 @@ export async function removeCredential(
   try {
     return await removeCredentialWrite(...args);
   } finally {
-    invalidateUrlReaderCache();
+    invalidateCapabilityReadCaches();
   }
 }
 
@@ -993,6 +993,6 @@ export async function disconnectConnection(
   try {
     return await disconnectConnectionWrite(...args);
   } finally {
-    invalidateUrlReaderCache();
+    invalidateCapabilityReadCaches();
   }
 }

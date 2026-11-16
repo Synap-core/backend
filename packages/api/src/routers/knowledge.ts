@@ -77,9 +77,9 @@ export const knowledgeRouter = router({
 
   /**
    * FIND — "what is there for this?", by its words: runnable verbs, intents,
-   * playbooks, spaces, and every object that can be OPENED (skills and rules,
-   * automations, sessions, goals, projects, views, documents), each row with
-   * its `open` link. The SAME service `synap_find` (MCP) calls, through the
+   * playbooks, spaces, and every object that can be OPENED (records, skills
+   * and rules, automations, sessions, goals, projects, views, documents),
+   * each row with its `open` link. The SAME service `synap_find` (MCP) calls, through the
    * same read floor (`findForCaller`), so the UI search doors (browser ⌘K,
    * relay) and agents get one answer. `search`/`answer` above recall CONTENT
    * (entities, runbooks, captures, the Library); this finds THINGS.
@@ -98,6 +98,11 @@ export const knowledgeRouter = router({
         catalogs: z.array(z.enum(FIND_CATALOGS)).min(1).optional(),
         /** Max matches per catalog (default 5). */
         limit: z.number().int().min(1).max(25).optional(),
+        /**
+         * `instant` skips installed recipes and the marketplace (ABSENT, not
+         * empty): for a bar asking per settled keystroke. Default `full`.
+         */
+        depth: z.enum(["instant", "full"]).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -108,6 +113,7 @@ export const knowledgeRouter = router({
         ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
         ...(input.catalogs ? { catalogs: input.catalogs } : {}),
         ...(input.limit ? { limit: input.limit } : {}),
+        ...(input.depth ? { depth: input.depth } : {}),
       });
       if (!found.ok) {
         throw new TRPCError({

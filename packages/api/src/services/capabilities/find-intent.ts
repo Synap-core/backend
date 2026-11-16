@@ -71,16 +71,26 @@
  * not tell "the pod cannot do this" from "the index is incomplete".
  *
  * **No index, no embedding, no LLM.** ~35 live verbs and a few hundred rows;
- * in-memory ranking is trivial. `listCapabilities` is a COLD read (6 SQL round
- * trips + one 60s-cached IS manifest fetch) and `matchSessionTemplate` adds a
- * 7th; that is the whole cost, measured, and it is not cached here. If it ever
- * gets hot, cache the ASSEMBLED catalog behind this module's own TTL — never
- * build a second index.
+ * in-memory ranking is trivial. The cost is the reads: the registry
+ * (`listCapabilities`, ~7-9 SQL round trips + a 60 s-cached IS manifest
+ * fetch), the intent vocabulary, the playbooks, the spaces and the object
+ * catalogs. They start TOGETHER (one `Promise.all`); only installed recipes
+ * and the marketplace wait, on the intent ranking they need. The ASSEMBLED
+ * registry (rows, projection, argsSchema map, coverage counts) and the intent
+ * vocabulary are held for 15 s behind `capability-read-caches.ts`, keyed by
+ * user, agent, lens and the calling key's grant, and dropped by the doors that
+ * change which verbs can run — never a second index. `depth: "instant"` skips
+ * the two arms that leave the hot path (installed recipes, marketplace).
  */
 
 import type { CatalogPlacement } from "../installations/request-installation.js";
 import type { InstalledRecipes } from "../host-jobs/hosted-verbs.js";
 import { listIntentRows, type IntentRow } from "./intent-registry.js";
+import { getRequestGrant } from "@synap/database";
+import {
+  findRegistryCacheGet,
+  findRegistryCacheSet,
+} from "./capability-read-caches.js";
 import { intentText, rankIntentRows } from "./intent-ranking.js";
 
 import {
@@ -155,7 +165,16 @@ export interface FindByIntentInput {
   catalogs?: readonly unknown[];
   /** Per-catalog cap. Default {@link CATALOG_LIMIT}. */
   limit?: number;
+  /**
+   * `full` (default): every arm. `instant`: skips the two arms that leave the
+   * database's hot path, installed recipes and the marketplace (both ABSENT
+   * from the answer, never empty), for a bar that asks on every settled
+   * keystroke; ask `full` on Enter or pause.
+   */
+  depth?: FindDepth;
 }
+
+export type FindDepth = "instant" | "full";
 
 /**
  * One runnable action that matched — the projection's own row, plus why it
@@ -192,8 +211,8 @@ export interface AbstractIntentMatch {
   /**
    * "<recipe> on <computer>": the recipes of this intent's tools INSTALLED and
    * checked on the person's computers, run with `computer.run_recipe`
-   * (hosted verbs). ABSENT when none of its tools is installed on a computer;
-   * `error` when that read failed. The catalog side (packages to install) is
+   * (hosted verbs). ABSENT when none of its tools is installed on a computer,
+   * or at `instant` depth (not read); `error` when that read failed. The catalog side (packages to install) is
    * `marketplace`.
    */
   recipes?: InstalledRecipes;
@@ -307,7 +326,7 @@ export interface FindByIntentResult extends Partial<
    * the person's computer (which of their computers can take one, and
    * `synap_list_installations` says which already have it). ABSENT when no
    * intent matched (the lookup did not run), or when a served intent has no
-   * such computer tool.
+   * such computer tool, or at `instant` depth (not read).
    */
   marketplace?: FindMarketplace;
   /** Member spaces to route the work to. ABSENT when not searched. */
@@ -541,6 +560,13 @@ const OBJECT_NOTE =
 
 /** What each object catalog's numbers mean (see `find-objects.ts`). */
 const OBJECT_SCORING: Record<ObjectCatalog, ScaleNote> = {
+  entities: {
+    ranker:
+      "Typesense keyword relevance (the retrieval engine's keyword half: title, aliases, summary, body), kept in its own order over the rows you can read (access floor + key grant + listing rule); not rankByTerms",
+    scale:
+      "confidence = textMatch ÷ the best textMatch in THIS block (textMatch is the engine's opaque integer)",
+    note: `Records: people, companies, tasks… \`profileSlug\` is the kind, \`roles\` its roles. Bodies are matched; meaning (synonyms) is synap_ask's. ${OBJECT_NOTE}`,
+  },
   skills: {
     ranker:
       "searchInstructionSkills (services/skills/search.ts) reads the candidates — SQL rarity over every skill and rule you can see, the space's linked skills first — then rankByTerms over title/slug+topics+tags/description",
@@ -585,6 +611,92 @@ const OBJECT_SCORING: Record<ObjectCatalog, ScaleNote> = {
   },
 };
 
+/** The query-independent half of the registry arms, cached (see the docblock). */
+interface AssembledRegistry {
+  rows: RegistryCapability[];
+  actions: RunnableCapabilityAction[];
+  argsSchemaByVerbId: Map<string, Record<string, unknown>>;
+  verbs: number;
+  verbsDeclaringIntent: number;
+}
+
+/**
+ * The calling key's grant, as a cache-key part: a narrow key's registry must
+ * never serve a wide one. `none` when the request carries no key grant.
+ */
+function grantFingerprint(): string {
+  const grant = getRequestGrant();
+  return grant ? JSON.stringify(grant) : "none";
+}
+
+async function assembledRegistry(
+  input: FindByIntentInput
+): Promise<AssembledRegistry> {
+  const key = [
+    "registry",
+    input.userId,
+    input.agentUserId ?? "",
+    input.workspaceId ?? "",
+    grantFingerprint(),
+  ].join("|");
+  const hit = findRegistryCacheGet<AssembledRegistry>(key);
+  if (hit) return hit;
+  const ctx: CapabilityRegistryContext = {
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+  };
+  // ONE registry read serves BOTH the capability arm and the intent arm — the
+  // intent index deliberately has no query of its own so that the visibility
+  // floor is the registry's. `limit: null` and no `query`: we rank the
+  // PROJECTION, not the raw rows, so slicing (or pre-ranking) here would
+  // decide the answer before the candidate set exists.
+  const rows: RegistryCapability[] = await listCapabilities(ctx, {
+    limit: null,
+  });
+  const actions = projectRunnableActions(rows as ProjectableCapability[]);
+  let verbs = 0;
+  let verbsDeclaringIntent = 0;
+  const argsSchemaByVerbId = new Map<string, Record<string, unknown>>();
+  for (const row of rows) {
+    for (const verb of row.verbs ?? []) {
+      verbs += 1;
+      if (verb.intent) verbsDeclaringIntent += 1;
+      // A lookup, not a second projection rule: the projection already decided
+      // WHICH verbs are launchable; this only carries the declared schema back.
+      if (verb.argsSchema && !argsSchemaByVerbId.has(verb.id)) {
+        argsSchemaByVerbId.set(verb.id, verb.argsSchema);
+      }
+    }
+  }
+  const assembled = {
+    rows,
+    actions,
+    argsSchemaByVerbId,
+    verbs,
+    verbsDeclaringIntent,
+  };
+  findRegistryCacheSet(key, assembled);
+  return assembled;
+}
+
+/** The intent vocabulary: no runtime writer, held with the registry's TTL. */
+async function intentVocabulary(): Promise<IntentRow[]> {
+  const key = "intent-vocabulary";
+  const hit = findRegistryCacheGet<IntentRow[]>(key);
+  if (hit) return hit;
+  const rows = await listIntentRows();
+  findRegistryCacheSet(key, rows);
+  return rows;
+}
+
+const NO_REGISTRY: AssembledRegistry = {
+  rows: [],
+  actions: [],
+  argsSchemaByVerbId: new Map(),
+  verbs: 0,
+  verbsDeclaringIntent: 0,
+};
+
 export async function findByIntent(
   input: FindByIntentInput
 ): Promise<FindByIntentResult> {
@@ -600,61 +712,47 @@ export async function findByIntent(
     Number.isInteger(input.limit) && (input.limit as number) > 0
       ? (input.limit as number)
       : CATALOG_LIMIT;
+  const instant = input.depth === "instant";
   const terms = queryTerms(input.intent);
 
-  // The object catalogs are independent reads: start them now, in parallel
-  // with everything below, and collect them at the end. Each failure is that
-  // catalog's own `{ error }` (searchObjectCatalogs never throws for one).
+  // Every arm that does not need another's answer starts NOW, together. Each
+  // object catalog's failure is its own `{ error }` (searchObjectCatalogs
+  // never throws for one); the spaces arm reports its own `error`.
   const objectCatalogs = OBJECT_CATALOGS.filter((c) => catalogs.has(c));
-  const objectsP = objectCatalogs.length
-    ? searchObjectCatalogs({
-        query: input.intent,
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        catalogs: objectCatalogs,
-        limit,
-      })
-    : Promise.resolve({});
-
-  const vocabulary: IntentRow[] = catalogs.has("intents")
-    ? await listIntentRows()
-    : [];
-
-  const ctx: CapabilityRegistryContext = {
-    workspaceId: input.workspaceId,
-    userId: input.userId,
-  };
-
-  // ONE registry read serves BOTH the capability arm and the intent arm — the
-  // intent index deliberately has no query of its own so that the visibility
-  // floor is the registry's. Reading it twice would be two round trips for one
-  // answer, not two answers.
   const needsRegistry = catalogs.has("capabilities") || catalogs.has("intents");
-  // `limit: null` and no `query`: we rank the PROJECTION below, not the raw
-  // rows, so slicing (or pre-ranking) here would decide the answer before the
-  // candidate set exists.
-  const rows: RegistryCapability[] = needsRegistry
-    ? await listCapabilities(ctx, { limit: null })
-    : [];
-
-  const actions = needsRegistry
-    ? projectRunnableActions(rows as ProjectableCapability[])
-    : [];
-
-  let verbs = 0;
-  let verbsDeclaringIntent = 0;
-  const argsSchemaByVerbId = new Map<string, Record<string, unknown>>();
-  for (const row of rows) {
-    for (const verb of row.verbs ?? []) {
-      verbs += 1;
-      if (verb.intent) verbsDeclaringIntent += 1;
-      // A lookup, not a second projection rule: the projection already decided
-      // WHICH verbs are launchable; this only carries the declared schema back.
-      if (verb.argsSchema && !argsSchemaByVerbId.has(verb.id)) {
-        argsSchemaByVerbId.set(verb.id, verb.argsSchema);
-      }
-    }
-  }
+  const [registry, vocabulary, playbooks, spaces, objects] = await Promise.all([
+    needsRegistry ? assembledRegistry(input) : Promise.resolve(NO_REGISTRY),
+    catalogs.has("intents")
+      ? intentVocabulary()
+      : Promise.resolve([] as IntentRow[]),
+    catalogs.has("playbooks")
+      ? // The SAME call `start_session` makes, returning the SAME wire block —
+        // reused, never forked, so the two doors cannot disagree about what a
+        // playbook candidate is.
+        matchSessionTemplate({
+          userId: input.userId,
+          ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
+          workspaceId: input.workspaceId,
+          goal: input.intent,
+          // The playbooks arm used to ignore `limit` (hard cap 5): ticket a9d88abf.
+          limit,
+        })
+      : Promise.resolve(undefined),
+    catalogs.has("spaces")
+      ? searchSpaces(input.intent, input.userId, terms, limit)
+      : Promise.resolve(undefined),
+    objectCatalogs.length
+      ? searchObjectCatalogs({
+          query: input.intent,
+          userId: input.userId,
+          workspaceId: input.workspaceId,
+          catalogs: objectCatalogs,
+          limit,
+        })
+      : Promise.resolve({} as Partial<Record<ObjectCatalog, FindObjects>>),
+  ]);
+  const { rows, actions, argsSchemaByVerbId, verbs, verbsDeclaringIntent } =
+    registry;
 
   const coverage: FindCoverage = {
     capabilityRows: rows.length,
@@ -723,27 +821,49 @@ export async function findByIntent(
     const ranked = rankIntentRows(input.intent, vocabulary);
     const best = ranked[0]?.score ?? 0;
     const top = ranked.slice(0, limit);
-    // The installed side of each intent: the recipes its tools can run on
-    // the person's computers now (hosted verbs). ONE read for every intent.
-    const { installedRecipesFor } =
-      await import("../host-jobs/hosted-verbs.js");
-    const recipesByIntent = await installedRecipesFor({
-      userId: input.userId,
-      intents: top.map((r) => r.item.slug),
-      query: input.intent,
-      limit,
-    });
+    const matches: AbstractIntentMatch[] = top.map((r) => ({
+      intent: r.item.slug,
+      verbs: byIntent.get(r.item.slug) ?? [],
+      score: r.score,
+      confidence: normalise(r.score, best),
+      match: r.match,
+      termCoverage: coverageOf(r.match, terms),
+    }));
+    // The two arms that leave the hot path, skipped at `instant` depth (both
+    // ABSENT then, never empty). They need the ranking above, then run
+    // together: the recipes installed on the person's computers for these
+    // intents (hosted verbs, ONE read), and the marketplace packages.
+    const pick = instant ? undefined : marketplaceSlugFor(matches);
+    const [recipesByIntent, marketplace] = await Promise.all([
+      instant
+        ? Promise.resolve(undefined)
+        : import("../host-jobs/hosted-verbs.js").then(
+            ({ installedRecipesFor }) =>
+              installedRecipesFor({
+                userId: input.userId,
+                intents: top.map((r) => r.item.slug),
+                query: input.intent,
+                limit,
+              })
+          ),
+      pick
+        ? lookupMarketplace(pick.slug, input.userId, {
+            computerOnly: pick.computerOnly,
+          })
+        : Promise.resolve(undefined),
+    ]);
     result.intents = {
-      matches: top.map((r) => {
-        const recipes = recipesByIntent.get(r.item.slug);
+      matches: matches.map((m) => {
+        const recipes = recipesByIntent?.get(m.intent);
+        // Same key order as before the recipes moved: intent, verbs, recipes…
         return {
-          intent: r.item.slug,
-          verbs: byIntent.get(r.item.slug) ?? [],
+          intent: m.intent,
+          verbs: m.verbs,
           ...(recipes ? { recipes } : {}),
-          score: r.score,
-          confidence: normalise(r.score, best),
-          match: r.match,
-          termCoverage: coverageOf(r.match, terms),
+          score: m.score,
+          confidence: m.confidence,
+          match: m.match,
+          termCoverage: m.termCoverage,
         };
       }),
     };
@@ -753,11 +873,7 @@ export async function findByIntent(
       scale: "confidence = score ÷ the best intent score in THIS result",
       note: `Routing only — an intent resolves to CONCRETE verb ids that synap_run_capability then governs exactly as before. An intent with verbs: [] means nothing visible declares it; ${verbsDeclaringIntent} of ${verbs} verb catalog entries declare an intent at all, so this axis cannot see the rest. When a returned intent has no verbs, or the best intent missed a query term, marketplace lists up to 3 capability packages that serve it; otherwise only those that run on the person's computer (synap_list_installations({capabilityKey}) says which computers have one). marketplace.error means that catalog read failed.`,
     };
-    const pick = marketplaceSlugFor(result.intents.matches);
-    if (pick) {
-      const marketplace = await lookupMarketplace(pick.slug, input.userId, {
-        computerOnly: pick.computerOnly,
-      });
+    if (pick && marketplace) {
       // A served intent with no computer tool for it adds nothing to say:
       // no empty block on every well-served answer.
       const nothingExtra =
@@ -769,18 +885,8 @@ export async function findByIntent(
   }
 
   // ── Catalog 3: the pod's own processes ────────────────────────────────────
-  if (catalogs.has("playbooks")) {
-    // The SAME call `start_session` makes, returning the SAME wire block —
-    // reused, never forked, so the two doors cannot disagree about what a
-    // playbook candidate is.
-    result.playbooks = await matchSessionTemplate({
-      userId: input.userId,
-      ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
-      workspaceId: input.workspaceId,
-      goal: input.intent,
-      // The playbooks arm used to ignore `limit` (hard cap 5): ticket a9d88abf.
-      limit,
-    });
+  if (playbooks) {
+    result.playbooks = playbooks;
     scoring.playbooks = {
       ranker:
         "rankRouteCandidates (services/routing/suggest-routes.ts) — the ranker synap_start_session and capture suggestions use",
@@ -791,13 +897,8 @@ export async function findByIntent(
   }
 
   // ── Catalog 4: the member spaces (WHERE the work belongs) ─────────────────
-  if (catalogs.has("spaces")) {
-    result.spaces = await searchSpaces(
-      input.intent,
-      input.userId,
-      terms,
-      limit
-    );
+  if (spaces) {
+    result.spaces = spaces;
     scoring.spaces = {
       ranker:
         "rankByTerms over the caller's member spaces (name / kinds / purpose+persona); kinds per space by a separate rankByTerms over that space's own kinds",
@@ -807,7 +908,6 @@ export async function findByIntent(
   }
 
   // ── Catalogs 5+: the objects that say how, and where they are ─────────────
-  const objects: Partial<Record<ObjectCatalog, FindObjects>> = await objectsP;
   for (const catalog of objectCatalogs) {
     const block = objects[catalog];
     if (!block) continue;

@@ -45,6 +45,7 @@
  */
 import { z } from "zod";
 import { humanizeToken } from "@synap-core/types/vocabulary";
+import { RECIPIENT_INPUT_FIELD } from "@synap-core/types/find";
 import type {
   SkillInputMap,
   SkillInputMapAccounts,
@@ -87,8 +88,8 @@ export const RECIPIENT_ADDRESSES = [
 ] as const;
 export type RecipientAddress = (typeof RECIPIENT_ADDRESSES)[number];
 
-/** The input field naming the recipient, which `$to` reads from. */
-export const RECIPIENT_INPUT_FIELD = "to";
+/** The input field naming the recipient, which `$to` reads from (`@synap-core/types/find`). */
+export { RECIPIENT_INPUT_FIELD };
 
 const isRecipientPath = (source: string) => source.startsWith("$to.");
 

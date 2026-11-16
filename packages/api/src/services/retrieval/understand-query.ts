@@ -16,6 +16,16 @@
 
 import { COMMON_STOPWORDS, QUESTION_WORDS } from "./stopwords.js";
 
+/**
+ * The question cue (decision 47d56eb0: query understanding is the home of
+ * routing cues). Defined in `@synap-core/types/find` over the SAME
+ * `QUESTION_WORDS` this module strips, so a find surface (browser, relay,
+ * Raycast) reads the identical rule on the device to start the pod's answer
+ * beside its find rows. No field is added to `QueryUnderstanding`: no server
+ * reader needs one (decision 52b5acfc).
+ */
+export { isQuestion } from "@synap-core/types/find";
+
 export interface ProfileCatalogEntry {
   slug: string;
   displayName: string;

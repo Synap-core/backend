@@ -31,6 +31,10 @@
  * Skills and rules reuse `searchInstructionSkills` unchanged (its own SQL
  * rarity over the whole gated set, the space's linked skills first).
  *
+ * Entities (people, companies, tasks… every record) reuse the retrieval
+ * engine's keyword half in its OWN order, floored by `visibleEntityIds`
+ * (`searchEntities` below): find adds no second entity ranker.
+ *
  * ── THE LENS ────────────────────────────────────────────────────────────────
  * Like `spaces`, these catalogs search everything the viewer can read: the
  * `workspaceId` lens is not a filter here (a session or a document filed in
@@ -56,6 +60,7 @@ import {
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
+  explainTermMatch,
   queryTerms,
   rankByTerms,
   sqlTermMatch,
@@ -73,8 +78,14 @@ import { grantReadPredicate } from "../../access/grant-read.js";
 import { AccessContext } from "../../access/context.js";
 import { openLink } from "../../utils/deep-links.js";
 
-/** The object catalogs, in the order they are reported. */
+/**
+ * The object catalogs, in the order they are reported (people and things
+ * before machinery; order is report order only, never a score). Mirrored by
+ * `FIND_WIRE_OBJECT_CATALOGS` (`@synap-core/types/find`), pinned equal by
+ * `find-wire-conformance.test.ts`.
+ */
 export const OBJECT_CATALOGS = [
+  "entities",
   "skills",
   "automations",
   "sessions",
@@ -87,6 +98,7 @@ export type ObjectCatalog = (typeof OBJECT_CATALOGS)[number];
 
 /** What a found row IS. `skill` and `rule` share the skills catalog. */
 export type FoundObjectKind =
+  | "entity"
   | "skill"
   | "rule"
   | "automation"
@@ -107,6 +119,10 @@ export interface FoundObject {
   open: string;
   /** Skills and rules: the slug `synap_load_skill({ ref })` reads. */
   ref?: string;
+  /** Entities: the entity's kind token (`person`, `company`, `task`…). */
+  profileSlug?: string;
+  /** Entities: its live role slugs, when it wears any. */
+  roles?: string[];
   workspaceId: string | null;
   score: number;
   /** `score` ÷ the best score in THIS catalog's block. */
@@ -403,8 +419,111 @@ function readSkills(query: string, workspaceId: string | null): Reader {
   };
 }
 
+/**
+ * The `entities` catalog: the retrieval engine's KEYWORD half, its own order.
+ *
+ * Not the generic `Reader` + `rank()`: those re-rank with `rankByTerms`, and
+ * a second lexical entity ranker here would fork synap_ask's (the exemption
+ * this catalog replaces, `find-coverage.test.ts`). So:
+ *   - `searchCollection("entities", …)`: the THROWING single search (never the
+ *     multi-search that skips a failed sub-search), pod-wide like every object
+ *     catalog, and no `prefix` (the entities schema indexes no field for
+ *     infix; the default already prefix-matches the last word);
+ *   - the REAL floor over the hits (`visibleEntityIds`: access scope with the
+ *     role lens, the key's grant, the listing rule), the same helper hybrid
+ *     recall uses;
+ *   - Typesense's order kept over the survivors; `confidence` = textMatch ÷
+ *     the best textMatch in this block; `match` / `termCoverage` explained
+ *     over title, aliases and summary.
+ * Gap accepted: an entity visible ONLY through the exposure axis is not in
+ * the index floor, so this lane cannot find it (as Cmd-K today).
+ */
+/** How long the entities catalog waits for the record index. */
+export const ENTITY_SEARCH_TIMEOUT_MS = 2_000;
+
+async function searchEntities(
+  query: string,
+  userId: string,
+  terms: string[],
+  limit: number
+): Promise<FoundObject[]> {
+  const { searchService } = await import("@synap/search");
+  const { visibleEntityIds } =
+    await import("../retrieval/visible-entity-ids.js");
+  // Bounded: the index client retries a dead node for many seconds, and this
+  // catalog runs beside every other find arm. Too slow is an `error` (the
+  // read did not answer), never an empty block.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const resp = await Promise.race([
+    searchService.searchCollection("entities", query, {
+      userId,
+      limit: CANDIDATE_CAP,
+    }),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new Error(
+              `the record index did not answer within ${ENTITY_SEARCH_TIMEOUT_MS} ms`
+            )
+          ),
+        ENTITY_SEARCH_TIMEOUT_MS
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+  const hits = resp.results.filter(
+    (r) => typeof r.document?.id === "string" && r.document.id.length > 0
+  );
+  const visible = await visibleEntityIds(
+    hits.map((r) => r.document.id as string),
+    userId
+  );
+  const kept = hits.filter((r) => visible.has(r.document.id)).slice(0, limit);
+  const best = kept.reduce((m, r) => Math.max(m, r.textMatch || 0), 0);
+  const weights = terms.map(() => 1);
+  return kept.map((r) => {
+    const d = r.document as Record<string, unknown>;
+    const title =
+      typeof d.title === "string" && d.title.trim() ? d.title : "Untitled";
+    const description =
+      typeof d.description === "string" ? d.description : null;
+    const aliases = Array.isArray(d.searchAliases)
+      ? d.searchAliases.filter((a): a is string => typeof a === "string")
+      : [];
+    const roles = Array.isArray(d.facetSlugs)
+      ? d.facetSlugs.filter((a): a is string => typeof a === "string")
+      : [];
+    const match = explainTermMatch(
+      terms,
+      weights,
+      { primary: title, secondary: aliases, tertiary: description },
+      { primary: "title", secondary: "aliases", tertiary: "summary" }
+    );
+    const score = r.textMatch || 0;
+    return {
+      kind: "entity" as const,
+      id: d.id as string,
+      title,
+      why: oneLine(description),
+      open: openLink(d.id as string),
+      workspaceId:
+        typeof d.workspaceId === "string" && d.workspaceId
+          ? d.workspaceId
+          : null,
+      ...(typeof d.entityType === "string" && d.entityType
+        ? { profileSlug: d.entityType }
+        : {}),
+      ...(roles.length ? { roles } : {}),
+      score,
+      confidence: best > 0 ? Math.round((score / best) * 100) / 100 : 0,
+      match,
+      termCoverage: { hit: match.terms.length, of: terms.length },
+    };
+  });
+}
+
 function readerFor(
-  catalog: ObjectCatalog,
+  catalog: Exclude<ObjectCatalog, "entities">,
   query: string,
   workspaceId: string | null
 ): Reader {
@@ -476,6 +595,19 @@ export async function searchObjectCatalogs(
       async (catalog): Promise<[ObjectCatalog, FindObjects]> => {
         if (terms.length === 0) return [catalog, { matches: [] }];
         try {
+          if (catalog === "entities") {
+            return [
+              catalog,
+              {
+                matches: await searchEntities(
+                  input.query,
+                  input.userId,
+                  terms,
+                  input.limit
+                ),
+              },
+            ];
+          }
           const candidates = await readerFor(
             catalog,
             input.query,

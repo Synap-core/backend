@@ -97,6 +97,9 @@ vi.mock("../host-jobs/hosted-verbs.js", () => ({
 }));
 
 const { findByIntent } = await import("./find-intent.js");
+const { invalidateCapabilityReadCaches, FIND_REGISTRY_TTL_MS } =
+  await import("./capability-read-caches.js");
+const { runWithGrant } = await import("@synap/database");
 
 const GMAIL_SEND_ARGS = {
   type: "object",
@@ -182,6 +185,9 @@ const CATALOG: RegistryCapability[] = [
 const NO_PLAYBOOKS = { candidates: [], optOut: TEMPLATE_OPT_OUT };
 
 beforeEach(() => {
+  // The assembled registry is held 15 s: every test starts from a cold read.
+  invalidateCapabilityReadCaches();
+  vi.useRealTimers();
   installedRecipesFor.mockReset().mockResolvedValue(new Map());
   listCapabilities.mockReset().mockResolvedValue(CATALOG);
   matchSessionTemplate.mockReset().mockResolvedValue(NO_PLAYBOOKS);
@@ -825,5 +831,119 @@ describe("findByIntent — the recipes installed on the person's computers", () 
     const r = await findByIntent({ intent: "send a message", ...lens });
     const send = r.intents!.matches.find((m) => m.intent === "send_message")!;
     expect(send.recipes).toEqual({ error: "could not be read" });
+  });
+});
+
+describe("findByIntent — the assembled registry is cached, keyed by caller, lens and grant", () => {
+  const grant = (workspaceIds: string[] | null) => ({
+    scopes: [
+      {
+        permissions: ["tool.read"],
+        workspaceIds,
+        projectIds: null,
+        entityIds: null,
+      },
+    ],
+    clientId: null,
+  });
+
+  it("a second identical call reads the registry and the vocabulary 0 times", async () => {
+    await findByIntent({ intent: "send an email", ...lens });
+    await findByIntent({ intent: "dedupe contacts", ...lens });
+    expect(listCapabilities).toHaveBeenCalledTimes(1);
+    expect(listIntentRows).toHaveBeenCalledTimes(1);
+  });
+
+  it("a different key grant reads it again: a narrow key's rows never serve a wide one", async () => {
+    await runWithGrant(grant(null), () =>
+      findByIntent({ intent: "send an email", ...lens })
+    );
+    await runWithGrant(grant(["ws-a"]), () =>
+      findByIntent({ intent: "send an email", ...lens })
+    );
+    await findByIntent({ intent: "send an email", ...lens });
+    expect(listCapabilities).toHaveBeenCalledTimes(3);
+  });
+
+  it("another person or another lens reads it again", async () => {
+    await findByIntent({ intent: "send an email", ...lens });
+    await findByIntent({ intent: "send an email", ...lens, userId: "u2" });
+    await findByIntent({
+      intent: "send an email",
+      ...lens,
+      workspaceId: "ws-1",
+    });
+    expect(listCapabilities).toHaveBeenCalledTimes(3);
+  });
+
+  it("the one invalidation call drops it (the doors that change which verbs run call it)", async () => {
+    await findByIntent({ intent: "send an email", ...lens });
+    invalidateCapabilityReadCaches();
+    await findByIntent({ intent: "send an email", ...lens });
+    expect(listCapabilities).toHaveBeenCalledTimes(2);
+  });
+
+  it("the TTL bounds what no door invalidated", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-16T10:00:00Z"));
+    await findByIntent({ intent: "send an email", ...lens });
+    vi.setSystemTime(Date.now() + FIND_REGISTRY_TTL_MS - 1);
+    await findByIntent({ intent: "send an email", ...lens });
+    expect(listCapabilities).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(Date.now() + 2);
+    await findByIntent({ intent: "send an email", ...lens });
+    expect(listCapabilities).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("findByIntent — depth", () => {
+  it("`instant` reads no installed recipes and no marketplace: both ABSENT, not empty", async () => {
+    // An intent that nothing serves would offer marketplace packages at full depth.
+    queryCatalogCache.mockResolvedValue([
+      {
+        slug: "find-people-pack",
+        name: "Find people",
+        description: "find people anywhere",
+        kind: "capability",
+      },
+    ]);
+    const full = await findByIntent({ intent: "find people", ...lens });
+    expect(full.marketplace).toBeDefined();
+    expect(installedRecipesFor).toHaveBeenCalledTimes(1);
+
+    queryCatalogCache.mockClear();
+    installedRecipesFor.mockClear();
+    const instant = await findByIntent({
+      intent: "find people",
+      ...lens,
+      depth: "instant",
+    });
+    expect(instant).not.toHaveProperty("marketplace");
+    expect(queryCatalogCache).not.toHaveBeenCalled();
+    expect(installedRecipesFor).not.toHaveBeenCalled();
+    // The intent rows themselves are still there.
+    expect(instant.intents!.matches.map((m) => m.intent)).toContain(
+      "find_people"
+    );
+  });
+});
+
+describe("findByIntent — the arms start together", () => {
+  it("playbooks, spaces and objects are asked before the registry answers", async () => {
+    searchObjectCatalogs.mockClear();
+    let release!: (rows: RegistryCapability[]) => void;
+    listCapabilities.mockReturnValue(
+      new Promise<RegistryCapability[]>((r) => {
+        release = r;
+      })
+    );
+    const pending = findByIntent({ intent: "send an email", ...lens });
+    // Let every arm that does not wait on the registry start.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(matchSessionTemplate).toHaveBeenCalledTimes(1);
+    expect(searchObjectCatalogs).toHaveBeenCalled();
+    release(CATALOG);
+    const r = await pending;
+    expect(r.capabilities?.matches[0]?.action.verbId).toBe("gmail_send");
   });
 });

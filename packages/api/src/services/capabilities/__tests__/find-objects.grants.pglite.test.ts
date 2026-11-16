@@ -22,7 +22,7 @@
  *    it names something (non-vacuity). A catalog that cannot be bounded yet
  *    sits in a SHRINK-ONLY exemption that is itself checked to still leak.
  */
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => {
@@ -58,6 +58,50 @@ const h = vi.hoisted(() => {
   };
   return state;
 });
+
+/**
+ * The keyword index, stubbed at `searchCollection` (Typesense is not here):
+ * it answers EVERY seeded entity, in a fixed order, as the index would for a
+ * person whose index floor is wider than the real floor (no grant, no
+ * listing rule, no exposure axis). What survives is the real floor's call.
+ */
+const search = vi.hoisted(() => ({
+  hits: [] as Array<{
+    id: string;
+    title: string;
+    type: string;
+    workspaceId: string | null;
+    textMatch: number;
+    facetSlugs?: string[];
+  }>,
+  fail: null as null | Error,
+  calls: [] as unknown[][],
+}));
+vi.mock("@synap/search", () => ({
+  searchService: {
+    searchCollection: async (...args: unknown[]) => {
+      search.calls.push(args);
+      if (search.fail) throw search.fail;
+      return {
+        results: search.hits.map((h) => ({
+          id: h.id,
+          collection: "entities",
+          document: {
+            id: h.id,
+            title: h.title,
+            entityType: h.type,
+            workspaceId: h.workspaceId ?? "",
+            description: `${h.title} summary`,
+            ...(h.facetSlugs ? { facetSlugs: h.facetSlugs } : {}),
+          },
+          textMatch: h.textMatch,
+        })),
+        found: search.hits.length,
+        searchTimeMs: 1,
+      };
+    },
+  },
+}));
 
 vi.mock("../../../../../database/dist/client-pg.js", () => h.clientPgModule());
 vi.mock("../../../../../database/src/client-pg.js", () => h.clientPgModule());
@@ -104,6 +148,17 @@ const rows = {
   },
 };
 const SKILL = randomUUID();
+
+/** Someone else, and a space the owner is NOT a member of. */
+const OTHER = randomUUID();
+const WS_C = randomUUID();
+/** Entities: one per space, a probe row, one in a space the owner cannot read. */
+const ENT = {
+  A: randomUUID(),
+  B: randomUUID(),
+  probe: randomUUID(),
+  foreign: randomUUID(),
+};
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -184,6 +239,29 @@ beforeAll(async () => {
     );
   }
   await q(
+    `insert into users (id, email, name, user_type) values ($1, 'other@x.test', 'Other', 'human')`,
+    [OTHER]
+  );
+  await q(
+    `insert into workspaces (id, name, owner_id) values ($1, 'Theirs', $2)`,
+    [WS_C, OTHER]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+    [randomUUID(), WS_C, OTHER]
+  );
+  for (const [id, ws, owner, title, systemData] of [
+    [ENT.A, WS_A, OWNER, "Ada deploy lead", "{}"],
+    [ENT.B, WS_B, OWNER, "Ben deploy finance", "{}"],
+    [ENT.probe, WS_A, OWNER, "Probe deploy row", '{"probe": true}'],
+    [ENT.foreign, WS_C, OTHER, "Zed deploy theirs", "{}"],
+  ] as const) {
+    await q(
+      `insert into entities (id, user_id, workspace_id, type, title, system_data) values ($1, $2, $3, 'person', $4, $5::jsonb)`,
+      [id, owner, ws, title, systemData]
+    );
+  }
+  await q(
     `insert into skills (id, workspace_id, user_id, kind, scope, name, slug, description, status, approved, tags, topics) values
       ($1, null, null, 'instruction', 'pod', 'Deploy runbook', 'team/deploy', 'How we deploy', 'active', true, '{}', '{}')`,
     [SKILL]
@@ -196,6 +274,42 @@ function matchIds(block: FindObjects | undefined): string[] {
     throw new Error(`catalog read failed: ${JSON.stringify(block)}`);
   }
   return block.matches.map((m) => m.id);
+}
+
+/** The index's answer: every seeded entity, NOT in title order. */
+function indexAnswersEverything(): void {
+  search.fail = null;
+  search.hits = [
+    {
+      id: ENT.foreign,
+      title: "Zed deploy theirs",
+      type: "person",
+      workspaceId: WS_C,
+      textMatch: 900,
+    },
+    {
+      id: ENT.B,
+      title: "Ben deploy finance",
+      type: "person",
+      workspaceId: WS_B,
+      textMatch: 800,
+      facetSlugs: ["client"],
+    },
+    {
+      id: ENT.probe,
+      title: "Probe deploy row",
+      type: "person",
+      workspaceId: WS_A,
+      textMatch: 700,
+    },
+    {
+      id: ENT.A,
+      title: "Ada deploy lead",
+      type: "person",
+      workspaceId: WS_A,
+      textMatch: 400,
+    },
+  ];
 }
 
 const find = (catalogs: readonly ObjectCatalog[] = OBJECT_CATALOGS) =>
@@ -225,6 +339,7 @@ const SPACE_A_KEY = scope(
     "view.read",
     "document.read",
     "skill.read",
+    "entity.read",
   ],
   [WS_A]
 );
@@ -250,6 +365,8 @@ const READS_NO_CATALOG_KEY = scope(["event.read"]);
  */
 const NOT_YET_BOUNDED: ReadonlySet<ObjectCatalog> = new Set(["skills"]);
 
+beforeEach(() => indexAnswersEverything());
+
 describe("synap_find object catalogs under a key's grant", () => {
   it("a key granted space A never names a row stamped in space B", async () => {
     const ungranted = await find();
@@ -258,8 +375,8 @@ describe("synap_find object catalogs under a key's grant", () => {
       if (catalog === "skills") continue; // pod-wide rows only: no space B row
       const all = matchIds(ungranted[catalog]);
       const narrowed = matchIds(granted[catalog]);
-      const inA: string[] = Object.values(rows.A);
-      const inB: string[] = Object.values(rows.B);
+      const inA: string[] = [...Object.values(rows.A), ENT.A];
+      const inB: string[] = [...Object.values(rows.B), ENT.B];
       // Non-vacuity: without the grant the person reads both spaces.
       expect(
         all.some((id) => inB.includes(id)),
@@ -293,6 +410,7 @@ describe("synap_find object catalogs under a key's grant", () => {
     expect(matchIds(r.sessions)).toEqual([]);
     expect(matchIds(r.views)).toEqual([]);
     expect(matchIds(r.documents)).toEqual([]);
+    expect(matchIds(r.entities)).toEqual([]);
     // Non-vacuity: the subject it DOES hold is still read, in both spaces.
     expect(matchIds(r.automations).sort()).toEqual(
       [rows.A.automation, rows.B.automation].sort()
@@ -321,6 +439,65 @@ describe("synap_find object catalogs under a key's grant", () => {
       [...NOT_YET_BOUNDED].filter((c) => !unbounded.includes(c)),
       "an exempt catalog is now bounded: remove it from NOT_YET_BOUNDED"
     ).toEqual([]);
+  });
+});
+
+describe("the entities catalog: the index's hits, through the REAL floor", () => {
+  const entityBlock = async () => (await find(["entities"])).entities;
+
+  it("keeps a hit the person reads, with its kind and roles, and drops a space they are not in", async () => {
+    const ids = matchIds(await entityBlock());
+    expect(ids).toContain(ENT.A);
+    expect(ids).toContain(ENT.B);
+    expect(ids, "a hit in a space the person is not a member of").not.toContain(
+      ENT.foreign
+    );
+    const block = (await entityBlock()) as {
+      matches: Array<Record<string, unknown>>;
+    };
+    const b = block.matches.find((m) => m.id === ENT.B)!;
+    expect(b).toMatchObject({
+      kind: "entity",
+      profileSlug: "person",
+      roles: ["client"],
+      open: expect.stringContaining(`/open/${ENT.B}`),
+      why: "Ben deploy finance summary",
+      termCoverage: { hit: 1, of: 1 },
+    });
+  });
+
+  it("drops a probe row (the listing rule)", async () => {
+    expect(matchIds(await entityBlock())).not.toContain(ENT.probe);
+  });
+
+  it("keeps the index's own order (no second ranker), confidence relative to the best survivor", async () => {
+    const block = (await entityBlock()) as {
+      matches: Array<{ id: string; confidence: number }>;
+    };
+    // Title order would be Ada, Ben; the index said Ben (800) before Ada (400).
+    expect(block.matches.map((m) => m.id)).toEqual([ENT.B, ENT.A]);
+    expect(block.matches.map((m) => m.confidence)).toEqual([1, 0.5]);
+  });
+
+  it("asks the throwing single search, pod-wide, with no prefix (no infix field on entities)", async () => {
+    search.calls.length = 0;
+    await entityBlock();
+    expect(search.calls).toHaveLength(1);
+    const [collection, , opts] = search.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(collection).toBe("entities");
+    expect(opts).not.toHaveProperty("prefix");
+    expect(opts).not.toHaveProperty("workspaceId");
+  });
+
+  it("a failed index read is `error`, never `matches: []`, and the other catalogs answer", async () => {
+    search.fail = new Error("typesense down");
+    const r = await find(["entities", "automations"]);
+    expect(r.entities).toEqual({ error: "typesense down" });
+    expect(matchIds(r.automations).length).toBeGreaterThan(0);
   });
 });
 

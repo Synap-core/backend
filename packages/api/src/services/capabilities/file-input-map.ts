@@ -17,28 +17,18 @@
  * Checked where a map is installed (`createCapabilityFromDefinition`, official
  * definitions), beside `definitionInputMapProblems`. Pure.
  */
-import { parseFileParameterType } from "./file-parameters.js";
+import {
+  parseFileParameterType,
+  podFileInputFields,
+  POD_FILE_INPUT_KEYWORD,
+} from "@synap-core/types/find";
 
-/** The JSON Schema annotation marking an intent input field as pod file ids. */
-export const POD_FILE_INPUT_KEYWORD = "x-synap-pod-file";
+// The pod-file field readers live in `@synap-core/types/find` (one copy for
+// every surface's `bindContext` and this install check).
+export { podFileInputFields, POD_FILE_INPUT_KEYWORD };
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
-
-/** The intent input's pod-file fields: name → a list (`array`) or one id. */
-export function podFileInputFields(
-  intentSchema: Record<string, unknown> | null
-): Map<string, { many: boolean }> {
-  const out = new Map<string, { many: boolean }>();
-  const properties = isRecord(intentSchema?.properties)
-    ? intentSchema.properties
-    : {};
-  for (const [field, schema] of Object.entries(properties)) {
-    if (isRecord(schema) && schema[POD_FILE_INPUT_KEYWORD] === true)
-      out.set(field, { many: schema.type === "array" });
-  }
-  return out;
-}
 
 /**
  * Every problem with how a map moves pod files, one sentence each (empty =

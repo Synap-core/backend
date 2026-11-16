@@ -5,22 +5,6 @@
  * without pulling the builtin verb registry into every importer.
  */
 
-/**
- * Is this bag JSON Schema rather than the shorthand type map?
- *
- * DISCRIMINATE ON `properties`, NOT ON `type`. A type map may legitimately
- * declare a FIELD named `type` — `exa_search` does (`"type": "string?"`) — so
- * keying on `type` alone would misread a real type map as a schema. Only the
- * pairing of `type: "object"` with a `properties` OBJECT identifies the
- * dialect.
- */
-export function looksLikeJsonSchema(
-  declared: Record<string, unknown>
-): boolean {
-  return (
-    declared.type === "object" &&
-    typeof declared.properties === "object" &&
-    declared.properties !== null &&
-    !Array.isArray(declared.properties)
-  );
-}
+// The rule itself lives in `@synap-core/types/find` (pure, read by every
+// surface's `bindContext` too); re-exported so this leaf stays the api's door.
+export { looksLikeJsonSchema } from "@synap-core/types/find";

@@ -21,18 +21,13 @@ export const COMMON_STOPWORDS = new Set([
   "and",
 ]);
 
-/** Interrogatives — stripped when reducing a query to content keywords. */
-export const QUESTION_WORDS = new Set([
-  "who",
-  "what",
-  "when",
-  "where",
-  "which",
-  "whose",
-  "whom",
-  "why",
-  "how",
-]);
+/**
+ * Interrogatives — stripped when reducing a query to content keywords. The ONE
+ * list lives in `@synap-core/types/find` beside `isQuestion`, the cue every
+ * find surface reads to start an answer in parallel (decision D2 of the intent
+ * bar W1 spec): one list, one rule.
+ */
+export { QUESTION_WORDS } from "@synap-core/types/find";
 
 /**
  * The conversational frame of a question — pronouns, auxiliary and modal verbs,

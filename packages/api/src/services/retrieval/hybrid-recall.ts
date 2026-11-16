@@ -20,14 +20,13 @@ import {
   drizzleSql,
   resolveSlugKind,
   loadFacetSlugsBatch,
-  listableEntityWhere,
   type FacetVisibilityScope,
 } from "@synap/database";
 import { searchService } from "@synap/search";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
-import { accessScopeWhere } from "../../utils/project-scope.js";
+import { visibleEntityIds } from "./visible-entity-ids.js";
 
 // Degradation is graceful but not invisible: the `source` flag signals a
 // vector-skip at the API boundary, and these debug logs let a pod operator see
@@ -276,30 +275,13 @@ export async function hybridRecall(
   // exposure via belongs_to_project/visible_to). EXACT floor reuse — no
   // `entity_vectors` schema change; RRF fuses only the visible survivors. This
   // also gives the keyword half exposure-axis coverage the index alone lacks.
+  // The floor itself is ONE helper (`visible-entity-ids.ts`), shared with
+  // find's `entities` catalog, so the floor over search hits has one copy.
   const floorUnion = [...new Set([...vectorIds, ...keywordIds])];
   if (floorUnion.length > 0) {
-    const visibleRows = await db
-      .select({ id: entities.id })
-      .from(entities)
-      .where(
-        and(
-          inArray(entities.id, floorUnion),
-          accessScopeWhere({
-            workspaceIdColumn: entities.workspaceId,
-            entityIdColumn: entities.id,
-            ownerColumn: entities.userId,
-            userId,
-            facetLens: true,
-          }),
-          // THE listing rule, once for BOTH halves: no probe rows, no demo
-          // (sample-project) rows — unless a project lens is set (the lens is
-          // the demo toggle; `projectIds` is that lens, already resolved).
-          listableEntityWhere({
-            projectLens: projectIds ? [...projectIds] : undefined,
-          })
-        )
-      );
-    const visible = new Set(visibleRows.map((r) => r.id));
+    const visible = await visibleEntityIds(floorUnion, userId, {
+      projectLens: projectIds ? [...projectIds] : undefined,
+    });
     vectorIds = vectorIds.filter((id) => visible.has(id));
     keywordIds = keywordIds.filter((id) => visible.has(id));
   } else {
