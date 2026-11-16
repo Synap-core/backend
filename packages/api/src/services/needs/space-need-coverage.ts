@@ -28,6 +28,17 @@
  */
 import { createLogger } from "@synap-core/core";
 import {
+  and,
+  automations,
+  capabilities,
+  db,
+  eq,
+  isNull,
+  ne,
+  or,
+  playbooks,
+} from "@synap/database";
+import {
   canonicalNeedSlug,
   declaredNeedsOf,
   needOf,
@@ -140,8 +151,6 @@ export function foldNeedCoverage(input: {
 export async function readSpaceDeclaredNeeds(
   workspaceId: string
 ): Promise<string[]> {
-  const { db, playbooks, automations, and, eq, ne } =
-    await import("@synap/database");
   const [pbs, autos] = await Promise.all([
     db
       .select({
@@ -178,7 +187,6 @@ export async function readSpaceDeclaredNeeds(
 export async function readInstalledNeedProviders(
   workspaceId: string
 ): Promise<InstalledNeedProvider[]> {
-  const { db, capabilities, eq, isNull, or } = await import("@synap/database");
   return db
     .select({
       id: capabilities.id,
