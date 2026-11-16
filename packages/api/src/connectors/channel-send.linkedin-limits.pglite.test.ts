@@ -259,20 +259,6 @@ async function approve(proposalId: string) {
   });
 }
 
-async function proposalsOn(channelId: string) {
-  return (
-    await q<{
-      id: string;
-      proposal_type: string;
-      target_id: string;
-      data: Record<string, unknown>;
-    }>(
-      `select id, proposal_type, target_id, data from proposals where data->>'channelId' = $1`,
-      [channelId]
-    )
-  ).rows;
-}
-
 beforeAll(async () => {
   await h.init();
   const tables = (Object.values(schema) as unknown[]).filter(

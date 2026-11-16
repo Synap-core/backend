@@ -190,7 +190,7 @@ const KEYS = {
   owner: {
     id: randomUUID(),
     permissions: ["*"],
-    workspaceIds: null,
+    workspaceIds: null as string[] | null,
     principal: OWNER,
     person: OWNER,
   },

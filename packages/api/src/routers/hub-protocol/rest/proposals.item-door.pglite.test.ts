@@ -138,7 +138,6 @@ import "../../../access/grant-read.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
 import { registerProposalsRoutes } from "./proposals.js";
 import { registerCapabilityExecutors } from "../../proposals/executors/capability.js";
-import { proposalExecRegistry } from "../../proposals/execution-registry.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const BASIC =

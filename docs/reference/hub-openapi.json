@@ -5429,9 +5429,22 @@
           "status": {
             "type": "string",
             "enum": ["connected", "reconnection_required", "disconnected"]
+          },
+          "pausedUntil": { "type": ["string", "null"] },
+          "pausedReason": {
+            "type": ["string", "null"],
+            "enum": ["rate_limited", "cannot_resend_yet", "restricted", null]
           }
         },
-        "required": ["id", "externalId", "provider", "displayName", "status"]
+        "required": [
+          "id",
+          "externalId",
+          "provider",
+          "displayName",
+          "status",
+          "pausedUntil",
+          "pausedReason"
+        ]
       },
       "MessagingNotConfigured": {
         "type": "object",
@@ -13742,6 +13755,199 @@
           },
           "404": {
             "description": "Proposal not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/proposals/{id}/items/{itemRef}/reject": {
+      "post": {
+        "tags": ["Proposals"],
+        "summary": "Drop one item of a pending proposal",
+        "description": "Drops ONE item of a pending proposal (a candidate of a prospect list, one entity of a capture), at once and durably: the rest of the proposal stays pending, and approving it later leaves this item out. Delegates to the canonical `proposals.rejectItem` tRPC mutation (same review authority and key fences as rejecting the whole proposal).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The item's ref in the proposal: `$opN` / an op `ref` for an entity, `$relN` for a relation, or an item pack's `items[].ref`."
+            },
+            "required": true,
+            "description": "The item's ref in the proposal: `$opN` / an op `ref` for an entity, `$relN` for a relation, or an item pack's `items[].ref`.",
+            "name": "itemRef",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": { "type": "string" },
+                  "reasonCode": {
+                    "type": "string",
+                    "enum": [
+                      "wrong_entity",
+                      "duplicate",
+                      "wrong_kind_or_facet",
+                      "wrong_link_type",
+                      "wrong_workspace",
+                      "bad_data",
+                      "not_relevant",
+                      "other"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Item decision recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "proposalId": { "type": "string" },
+                    "itemRef": { "type": "string" }
+                  },
+                  "required": ["success", "proposalId", "itemRef"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Proposal not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The proposal is no longer pending, or names no such item",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/proposals/{id}/items/{itemRef}/restore": {
+      "post": {
+        "tags": ["Proposals"],
+        "summary": "Restore one dropped item of a pending proposal",
+        "description": "Undoes a drop: the item is part of the pending proposal again. Delegates to the canonical `proposals.restoreItem` tRPC mutation.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The item's ref in the proposal: `$opN` / an op `ref` for an entity, `$relN` for a relation, or an item pack's `items[].ref`."
+            },
+            "required": true,
+            "description": "The item's ref in the proposal: `$opN` / an op `ref` for an entity, `$relN` for a relation, or an item pack's `items[].ref`.",
+            "name": "itemRef",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item decision recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "proposalId": { "type": "string" },
+                    "itemRef": { "type": "string" }
+                  },
+                  "required": ["success", "proposalId", "itemRef"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Proposal not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The proposal is no longer pending, or names no such item",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
