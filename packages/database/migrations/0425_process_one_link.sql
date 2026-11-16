@@ -11,9 +11,11 @@
 -- reads (`services/playbooks/playbook-automation-links.ts`):
 --   1. each `flow_automation_id` becomes its join row: role `schedule` when the
 --      automation is a cron one (the schedule's backing row), else `flow` (the
---      canvas). A row that already composes the same automation without a role
---      takes it; a dangling id (its automation is gone) is not copied: every
---      reader already ignored it.
+--      canvas). A row that already composes the same automation takes it when
+--      its role is NULL or not a canonical one (`schedule`, `flow`, `activator`,
+--      `member`; e.g. a hand-tagged `driver`), so the canvas reads its flow; a
+--      canonical role is kept. A dangling id (its automation is gone) is not
+--      copied: every reader already ignored it.
 --   2. every legacy `member_of` link not yet in the join table is copied (the
 --      0179 backfill, again, for the links written since; role NULL, read as a
 --      plain member).
@@ -30,8 +32,8 @@
 -- migration carrying `-- synap:contract-of 0419_playbook_tools.sql`, once 0419
 -- is in a release tag (deploy/__tests__/migration-forward-only.test.sh).
 --
--- Re-runnable: every insert is ON CONFLICT, the role update only fills a NULL,
--- the drop is IF EXISTS. Fresh installs: the baseline no longer adds the column.
+-- Re-runnable: every insert is ON CONFLICT, and the role update takes over only
+-- a NULL or non-canonical role, so a second run changes nothing.
 
 INSERT INTO "playbook_automations" ("playbook_id", "automation_id", "role")
 SELECT p."id",
@@ -42,7 +44,8 @@ SELECT p."id",
  WHERE p."flow_automation_id" IS NOT NULL
 ON CONFLICT ("playbook_id", "automation_id")
 DO UPDATE SET "role" = EXCLUDED."role", "updated_at" = now()
- WHERE "playbook_automations"."role" IS NULL;
+ WHERE "playbook_automations"."role" IS NULL
+    OR "playbook_automations"."role" NOT IN ('schedule', 'flow', 'activator', 'member');
 
 INSERT INTO "playbook_automations" ("playbook_id", "automation_id")
 SELECT l."to_id"::uuid, l."from_id"::uuid

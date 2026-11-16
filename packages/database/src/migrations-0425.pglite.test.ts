@@ -3,8 +3,9 @@
  * playbook's automations (Process wave plan 0adf8352, W2):
  *   - a `flow_automation_id` naming a cron automation becomes its join row with
  *     role `schedule`, one naming a manual (canvas) automation role `flow`;
- *   - a row that already composes that automation WITHOUT a role takes the
- *     role; one WITH a role keeps it;
+ *   - a row that already composes that automation with NO role or a
+ *     non-canonical one (a hand-tagged `driver`) takes the role; one with a
+ *     canonical role (`activator`) keeps it;
  *   - a dangling `flow_automation_id` (its automation is gone) is not copied;
  *   - every legacy `automation --member_of--> playbook` link lands in the join
  *     table (once), a malformed id is skipped;
@@ -30,11 +31,13 @@ const PB_FLOW = "22222222-2222-4222-8222-222222222222";
 const PB_DANGLING = "33333333-3333-4333-8333-333333333333";
 const PB_MEMBER = "44444444-4444-4444-8444-444444444444";
 const PB_ROLED = "55555555-5555-4555-8555-555555555555";
+const PB_DRIVER = "66666666-6666-4666-8666-666666666666";
 const A_CRON = "a1111111-1111-4111-8111-111111111111";
 const A_MANUAL = "a2222222-2222-4222-8222-222222222222";
 const A_GONE = "a3333333-3333-4333-8333-333333333333";
 const A_MEMBER = "a4444444-4444-4444-8444-444444444444";
 const A_ROLED = "a5555555-5555-4555-8555-555555555555";
+const A_DRIVER = "a6666666-6666-4666-8666-666666666666";
 
 let pg: PGlite;
 beforeAll(async () => {
@@ -67,19 +70,22 @@ beforeAll(async () => {
 
     INSERT INTO "automations" VALUES
       ('${A_CRON}', 'cron'), ('${A_MANUAL}', 'manual'),
-      ('${A_MEMBER}', 'event'), ('${A_ROLED}', 'cron');
+      ('${A_MEMBER}', 'event'), ('${A_ROLED}', 'cron'), ('${A_DRIVER}', 'manual');
     INSERT INTO "playbooks" ("id", "flow_automation_id") VALUES
       ('${PB_CRON}', '${A_CRON}'),
       ('${PB_FLOW}', '${A_MANUAL}'),
       ('${PB_DANGLING}', '${A_GONE}'),
       ('${PB_MEMBER}', NULL),
-      ('${PB_ROLED}', '${A_ROLED}');
+      ('${PB_ROLED}', '${A_ROLED}'),
+      ('${PB_DRIVER}', '${A_DRIVER}');
     -- The cron one was already composed by a dual write, with no role.
     INSERT INTO "playbook_automations" ("playbook_id", "automation_id") VALUES
       ('${PB_CRON}', '${A_CRON}');
-    -- This one already carries a role: it keeps it.
+    -- This one already carries a canonical role: it keeps it. The 'driver'
+    -- one is a hand tag, not a role any reader knows: it becomes the flow.
     INSERT INTO "playbook_automations" ("playbook_id", "automation_id", "role") VALUES
-      ('${PB_ROLED}', '${A_ROLED}', 'activator');
+      ('${PB_ROLED}', '${A_ROLED}', 'activator'),
+      ('${PB_DRIVER}', '${A_DRIVER}', 'driver');
     INSERT INTO "links" ("from_type", "from_id", "to_type", "to_id", "link_type") VALUES
       ('automation', '${A_MEMBER}', 'playbook', '${PB_MEMBER}', 'member_of'),
       ('automation', 'not-a-uuid', 'playbook', '${PB_MEMBER}', 'member_of'),
@@ -104,12 +110,13 @@ const rows = async () =>
   ).rows;
 
 describe("migration 0425 — one link per relation", () => {
-  it("copies each flow_automation_id as schedule (cron) or flow (canvas), fills a NULL role, keeps a set one", async () => {
+  it("copies each flow_automation_id as schedule (cron) or flow (canvas), takes over a NULL or non-canonical role, keeps a canonical one", async () => {
     expect(await rows()).toEqual([
       { playbook_id: PB_CRON, automation_id: A_CRON, role: "schedule" },
       { playbook_id: PB_FLOW, automation_id: A_MANUAL, role: "flow" },
       { playbook_id: PB_MEMBER, automation_id: A_MEMBER, role: null },
       { playbook_id: PB_ROLED, automation_id: A_ROLED, role: "activator" },
+      { playbook_id: PB_DRIVER, automation_id: A_DRIVER, role: "flow" },
     ]);
   });
 
