@@ -95,6 +95,31 @@ _pgs_fingerprint() {
     _pgs_psql "$1" synap "select (select count(*) from users)||'|'||(select count(*) from entities)||'|'||(select count(*) from api_keys)" 2>/dev/null
 }
 
+# Does the live-or-restored count $2 agree with the dump in directory $1?
+# A dump is taken while the pod keeps writing: pg_dump of one database is a
+# snapshot at ITS start, so the restored count can be anywhere between the count
+# read before the first dump (fingerprint.before) and the one read after the
+# last (fingerprint). An exact match always passes; otherwise each of the three
+# counts must lie within that range. A dump with no fingerprint.before (written
+# by an older script) is held to an exact match, as it always was.
+_pgs_fp_accepts() {
+    local dir="$1" got="$2" want before
+    [ -n "$got" ] || return 1
+    want="$(cat "$dir/fingerprint" 2>/dev/null || true)"
+    [ "$got" = "$want" ] && return 0
+    before="$(cat "$dir/fingerprint.before" 2>/dev/null || true)"
+    [ -n "$want" ] && [ -n "$before" ] || return 1
+    awk -v a="$want" -v b="$before" -v g="$got" 'BEGIN {
+        n = split(a, A, "|"); m = split(b, B, "|"); k = split(g, G, "|")
+        if (n != 3 || m != 3 || k != 3) exit 1
+        for (i = 1; i <= n; i++) {
+            lo = (A[i] + 0 < B[i] + 0) ? A[i] + 0 : B[i] + 0
+            hi = (A[i] + 0 < B[i] + 0) ? B[i] + 0 : A[i] + 0
+            if (G[i] !~ /^[0-9]+$/ || G[i] + 0 < lo || G[i] + 0 > hi) exit 1
+        }
+        exit 0 }'
+}
+
 _pgs_wait_ready() {
     local c="$1" i
     for i in $(seq 1 60); do
@@ -179,13 +204,16 @@ _pgs_dump_stderr_shown() {
 # Dump every non-template database of $1 into dir $2 as <db>.dump, read each
 # dump's table of contents back (an unreadable dump is a failure), and record
 # the users|entities|api_keys fingerprint in $2/fingerprint — the number a
-# drill or a restore later compares against. pg_dump's stderr is kept beside
+# drill or a restore later compares against — plus the same count read BEFORE
+# the first dump in $2/fingerprint.before: the pod keeps writing while the
+# dumps run, so a restore is checked against the range (_pgs_fp_accepts). pg_dump's stderr is kept beside
 # each dump (<db>.dump.log): all of it is shown when the dump fails, and
 # without the known TimescaleDB catalog warnings when it succeeds
 # (_pgs_dump_stderr_shown). Non-zero on any failure; the caller removes $2.
 _pgs_dump_into() {
     local c="$1" tmp="$2" db dbs
     mkdir -p "$tmp" || return 1
+    _pgs_fingerprint "$c" > "$tmp/fingerprint.before" 2>/dev/null || : > "$tmp/fingerprint.before"
     # An aside copy left by an interrupted restore is not a database of this pod.
     dbs="$(_pgs_psql "$c" postgres "select datname from pg_database where not datistemplate and datname <> 'postgres' and right(datname, 13) <> '__pre_restore' order by 1")" || {
         _pgs_err "cannot list databases"; return 1; }
@@ -976,7 +1004,7 @@ backup_drill() {
                     PGHOST="$work/sock" PGPORT=$port pg_restore -U synap -d "$db" --no-owner < "$f" >/dev/null 2>&1 || true
                 done
                 got="$(PGHOST="$work/sock"; PGPORT=$port; export PGHOST PGPORT; _pgs_fingerprint direct)"
-                [ "$got" = "$expected" ] || detail="fingerprint mismatch: recorded $expected, restored ${got:-<unreadable>}"
+                _pgs_fp_accepts "$d" "$got" || detail="fingerprint mismatch: recorded $expected$([ -s "$d/fingerprint.before" ] && printf ' (before the dump %s)' "$(cat "$d/fingerprint.before")"), restored ${got:-<unreadable>}"
                 _bk_as_pg pg_ctl -D "$work/pg" -m immediate stop >/dev/null 2>&1 || true
             fi
         fi
@@ -1387,7 +1415,7 @@ backup_restore_snapshot() {
 
     _pgs_log "5/5 fingerprint"
     got="$(_pgs_fingerprint "$c")"
-    if [ "$got" != "$expected" ]; then
+    if ! _pgs_fp_accepts "$d" "$got"; then
         _pgs_err "MISMATCH: the snapshot recorded users|entities|api_keys=$expected, this pod now has ${got:-<unreadable>}. The stack was NOT started; staging kept at $stage."
         return 1
     fi
