@@ -131,6 +131,12 @@ import {
   type ConnectWait,
 } from "./provide-connect";
 import { AskContext } from "./ask-context";
+import type { RequestStory } from "@synap-core/types/needs-you";
+import {
+  RequestStoryView,
+  StoryDepth,
+  type StoryRead,
+} from "../../../_lib/request/request-story-view";
 import { fileProblem, uploadProvidedFile } from "./provide-file";
 
 /** A door's error, as tRPC hands it over. */
@@ -159,6 +165,11 @@ export interface AskAnswerProps {
    * is asked (a criterion's grade under its own statement, in a session's rail).
    */
   showContext?: boolean;
+  /**
+   * The request's story (Review's detail): the ask is drawn inside it, its
+   * asker in the story's head. Absent (a session's own page): the ask alone.
+   */
+  story?: { story: RequestStory | null; read: StoryRead };
 }
 
 /** Every read an answer changes: the rows, the badges, Sessions, Home. */
@@ -181,6 +192,7 @@ export function AskAnswer({
   sessionDoor = true,
   showHeading = true,
   showContext = true,
+  story,
 }: AskAnswerProps) {
   // What the reader sees stays put until they choose to see the new question:
   // a poll must never swap the options under a half-made answer.
@@ -301,41 +313,42 @@ export function AskAnswer({
     )
     .find((exit) => exit.isDesktopLink);
 
-  return (
-    <div className="flex flex-col gap-5 pb-4">
-      <div className="flex flex-col gap-2">
-        {showHeading && (
-          <h3 className="line-clamp-2 text-balance font-heading text-[17px] font-medium leading-snug text-foreground">
-            {view.heading}
-          </h3>
+  const headBlock = (
+    <div className="flex flex-col gap-2">
+      {showHeading && (
+        <h3 className="line-clamp-2 text-balance font-heading text-[17px] font-medium leading-snug text-foreground">
+          {view.heading}
+        </h3>
+      )}
+      {showContext && view.context && (
+        <Section label={ASK_COPY.whyHeading}>
+          <AskContext context={view.context} />
+        </Section>
+      )}
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-foreground/65">
+        {view.asker && !story && (
+          <>
+            <AskerMark asker={view.asker} sessionDoor={sessionDoor} />
+            <span aria-hidden>·</span>
+          </>
         )}
-        {showContext && view.context && (
-          <Section label={ASK_COPY.whyHeading}>
-            <AskContext context={view.context} />
-          </Section>
-        )}
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-foreground/65">
-          {view.asker && (
-            <>
-              <AskerMark asker={view.asker} sessionDoor={sessionDoor} />
-              <span aria-hidden>·</span>
-            </>
-          )}
-          <span
-            aria-hidden
-            className={`tabular-nums ${toneTextClass(view.ageFate.tone)}`}
-          >
-            {view.ageFate.label}
-          </span>
-          <span className="sr-only">{view.ageFate.spoken}</span>
+        <span
+          aria-hidden
+          className={`tabular-nums ${toneTextClass(view.ageFate.tone)}`}
+        >
+          {view.ageFate.label}
+        </span>
+        <span className="sr-only">{view.ageFate.spoken}</span>
+      </p>
+      {view.claimedDone && (
+        <p className="text-[12.5px] text-foreground/65">
+          The agent says it did this after all. Check before you answer.
         </p>
-        {view.claimedDone && (
-          <p className="text-[12.5px] text-foreground/65">
-            The agent says it did this after all. Check before you answer.
-          </p>
-        )}
-      </div>
-
+      )}
+    </div>
+  );
+  const lookedAtBlock = (
+    <>
       {view.lookedAt.length > 0 && (
         <Section label={ASK_COPY.lookedAt}>
           <div className="flex flex-wrap gap-1.5">
@@ -348,7 +361,10 @@ export function AskAnswer({
           )}
         </Section>
       )}
-
+    </>
+  );
+  const decisionBlock = (
+    <>
       {staleness === "changed" && live && (
         <Alert
           color="warning"
@@ -462,27 +478,60 @@ export function AskAnswer({
           )}
         </>
       )}
+    </>
+  );
+  const talkBlock = (
+    <div className="flex flex-col gap-2 border-t border-foreground/[0.06] pt-4">
+      {asked && (
+        <>
+          <p className="text-[12.5px] text-foreground/75">
+            Your message is in the session room, where the agent reads it.
+          </p>
+          <ExitLink exit={roomExit} label="Open the conversation" />
+        </>
+      )}
+      <MessageAgent
+        busy={busy}
+        sending={askAbout.isPending}
+        gone={staleness === "gone"}
+        onSend={(text) => {
+          setFailure(null);
+          askAbout.mutate({ ...slotCall(seen), note: text });
+        }}
+        sent={askAbout.isSuccess ? askAbout.submittedAt : 0}
+      />
+    </div>
+  );
 
-      <div className="flex flex-col gap-2 border-t border-foreground/[0.06] pt-4">
-        {asked && (
-          <>
-            <p className="text-[12.5px] text-foreground/75">
-              Your message is in the session room, where the agent reads it.
-            </p>
-            <ExitLink exit={roomExit} label="Open the conversation" />
-          </>
-        )}
-        <MessageAgent
-          busy={busy}
-          sending={askAbout.isPending}
-          gone={staleness === "gone"}
-          onSend={(text) => {
-            setFailure(null);
-            askAbout.mutate({ ...slotCall(seen), note: text });
-          }}
-          sent={askAbout.isSuccess ? askAbout.submittedAt : 0}
-        />
+  if (story) {
+    // The ask as one story (option B): who asked and what the work is for
+    // in Before, the question, its why and its answer in Now, what the
+    // answer unblocks in Next; what the agent looked at behind Show.
+    return (
+      <div className="pb-4">
+        <RequestStoryView
+          story={story.story}
+          read={story.read}
+          depth={
+            view.lookedAt.length > 0 ? (
+              <StoryDepth>{lookedAtBlock}</StoryDepth>
+            ) : undefined
+          }
+        >
+          {headBlock}
+          {decisionBlock}
+          {talkBlock}
+        </RequestStoryView>
       </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-5 pb-4">
+      {headBlock}
+      {lookedAtBlock}
+      {decisionBlock}
+      {talkBlock}
     </div>
   );
 }

@@ -118,6 +118,18 @@ import {
   RecordGroupList,
 } from "./ProposedRecordCard";
 import { ProposalSessionContext } from "./ProposalSessionContext";
+import type { RequestStory } from "@synap-core/types/needs-you";
+import {
+  RequestStoryView,
+  type StoryRead,
+} from "../../_lib/request/request-story-view";
+import { useProposalStory } from "../../_lib/request/use-proposal-story";
+import { REQUEST_CATALOGS } from "../../_lib/request/copy";
+import { useT } from "../../../lib/i18n/locale-provider";
+import {
+  proposalSetupBlock,
+  type ProposalSetupView,
+} from "./proposal-setup-model";
 import {
   compositeItems,
   turnOnRecords,
@@ -607,8 +619,15 @@ function DecisionButtons({
   onDecided,
   resume = false,
   stopTwins = null,
+  setupBlock = null,
 }: {
   proposal: ProposalReviewData;
+  /**
+   * What must be handed over before it can apply (founder default B5): the
+   * label of the first required setup row still empty. Approve waits, with
+   * "Fill in X first" in its place; Reject stays.
+   */
+  setupBlock?: string | null;
   mode: DecisionMode;
   undo: ReviewMark | null;
   onDecided: () => void;
@@ -633,6 +652,7 @@ function DecisionButtons({
   });
   const busy = decision.busy || ruleRunning;
   const t = proposalPageT();
+  const rt = useT(REQUEST_CATALOGS);
   // A rule is a pod admin's to set (`assertCanManageRule`): anyone else would
   // decide, then be refused the rule they chose, so the menus are not offered.
   const mayRule = useConsoleRole() === "admin";
@@ -749,7 +769,8 @@ function DecisionButtons({
         className="min-h-10"
         startContent={<Check size={16} />}
         isLoading={decision.approving}
-        isDisabled={busy || waiting}
+        isDisabled={busy || waiting || setupBlock !== null}
+        aria-describedby={setupBlock ? "review-setup-block" : undefined}
         onPress={() => decision.approve(choice)}
       >
         {resolveActionLabel(resume ? "resume" : "approve")}
@@ -780,6 +801,15 @@ function DecisionButtons({
       {waiting && (
         <span className="text-[12px] text-foreground/60">
           {t("decide.pickFirst")}
+        </span>
+      )}
+      {setupBlock && (
+        <span
+          id="review-setup-block"
+          data-setup-block=""
+          className="text-[12px] text-foreground/70"
+        >
+          {rt("setup.fillFirst", { name: setupBlock })}
         </span>
       )}
     </div>
@@ -871,8 +901,14 @@ export function ProposalReviewBody({
   onDecided,
   barClassName = "",
   afterDecision,
+  story: hostStory,
 }: {
   proposal: ProposalReviewData;
+  /**
+   * The request's story when the host already read it (Review's page-wide
+   * context read); absent, the body reads its own (`useProposalStory`).
+   */
+  story?: { story: RequestStory | null; read: StoryRead };
   sourceExits: ProposalSourceExit[];
   workspaceName: string | null;
   /** Who the reader is signed in as, when the host knows it. */
@@ -1036,6 +1072,22 @@ export function ProposalReviewBody({
     (c) => !(c.ref === "record" && c.forRef && itemByRef.has(c.forRef))
   );
 
+  // Present only when `proposals.source` named it: a session the reader may
+  // read (the session floor, decision D1).
+  const session = sourceExits.find((s) => s.target.kind === "session");
+  const ownStory = useProposalStory({
+    proposalId: p.id,
+    sessionId: session?.target.id ?? null,
+    sessionTitle: session?.target.label ?? null,
+    enabled: actionable && hostStory === undefined,
+  });
+  const story = hostStory ?? ownStory;
+  const rt = useT(REQUEST_CATALOGS);
+  // What it still needs before it can apply (B5): the first required row.
+  const setupBlock = proposalSetupBlock(
+    (p as { setup?: ProposalSetupView }).setup
+  );
+
   const why = proposalWhy({
     governanceReason: p.governanceReason,
     reasoning: p.review.reasoning,
@@ -1044,9 +1096,6 @@ export function ProposalReviewBody({
   const reasonComputer = askingComputer(p);
   const undo = undoMark(p.revertable);
   const { actor } = proposalRequesterParts(p);
-  // Present only when `proposals.source` named it: a session the reader may
-  // read (the session floor, decision D1).
-  const session = sourceExits.find((s) => s.target.kind === "session");
 
   /* A single create's twins sit under its own card; a graph item's sit inside
      that item's card, with its choice. */
@@ -1085,267 +1134,297 @@ export function ProposalReviewBody({
       className="flex flex-col gap-5"
       {...(readsWide ? { [READS_WIDE_ATTR]: "" } : {})}
     >
-      <ProvenanceLine
-        proposal={p}
-        sourceExits={sourceExits}
-        workspaceName={workspaceName}
-      />
-      {session && (
-        <ProposalSessionContext
-          sessionId={session.target.id}
-          proposalId={p.id}
-        />
-      )}
-
-      {updated && (
-        <UpdatedDoor
-          updated={updated}
-          applied={status === "approved" || status === "auto_approved"}
-        />
-      )}
-
-      {/* The change first. */}
-      {appConnect ? (
-        <Section label="What it asks for">
-          {/* The ONE access sentence: what approving lets it do, as its
-              page will say it once approved (access model B). */}
-          <p className="text-[13px] text-foreground/90">{appConnect.access}</p>
-          <ul className="flex flex-col gap-1">
-            {appConnect.lines.map((line) => (
-              <li
-                key={line.workspaceId}
-                className="text-[13px] text-foreground/80"
-              >
-                {line.text}
-              </li>
-            ))}
-          </ul>
-          <p className="text-[12px] text-foreground/65">
-            It gets a key only after you approve, and its writes still follow
-            your review rules.
-          </p>
-        </Section>
-      ) : deferredWrites ? (
-        <DeferredWritesList review={deferredWrites} />
-      ) : docChanges ? (
-        <Section label="What changes">
-          <DocumentUpdateChanges
-            payload={payload}
-            envelope={p.data}
-            documentId={p.targetType === "document" ? p.targetId : null}
-            workspaceId={p.workspaceId ? String(p.workspaceId) : null}
-            status={status}
-            fallback={<DocumentChanges changes={docChanges} />}
-          />
-        </Section>
-      ) : toolRun ? (
-        <ToolRunArguments run={toolRun} />
-      ) : records.length > 0 ? (
-        <div className="flex flex-col gap-3">
-          {groups.map((group) => (
-            <RecordGroupList
-              key={group.kind ?? ""}
-              group={group}
-              render={(record) => {
-                const item = itemByRef.get(record.ref);
-                return (
-                  <ProposedRecordCard
-                    key={record.ref}
-                    record={record}
-                    media={recordMedia}
-                    mediaAlt={recordMediaAlt}
-                  >
-                    {twinsUnderCard && (
-                      <div className="border-t border-foreground/[0.06] pt-3">
-                        <TwinDoors
-                          candidates={flatTwins}
-                          truncated={duplicate?.check.truncated}
-                        />
-                      </div>
-                    )}
-                    {item &&
-                      (actionable ? (
-                        <ItemTwinChoice
-                          item={item}
-                          choice={itemChoices[item.forRef]}
-                          onChoice={(choice) =>
-                            setItemChoices((prev) => ({
-                              ...prev,
-                              [item.forRef]: choice,
-                            }))
-                          }
-                          busy={false}
-                        />
-                      ) : (
-                        <div className="border-t border-foreground/[0.06] pt-3">
-                          <TwinDoors
-                            candidates={item.resolvable}
-                            withFor={false}
-                          />
-                        </div>
-                      ))}
-                  </ProposedRecordCard>
-                );
-              }}
-            />
-          ))}
-        </div>
-      ) : null}
-      {turnsOn && turnsOn.unreadSkills > 0 && (
-        <p className="text-[13px] text-foreground/80">
-          {`It also turns on ${turnsOn.unreadSkills} ${
-            turnsOn.unreadSkills === 1 ? "skill" : "skills"
-          } you cannot read.`}
-        </p>
-      )}
-      {edges.length > 0 && <PartEdgeList edges={edges} />}
-      {/* A graph item whose card is not drawn still owes its choice: it is
-          never sent on a default nobody saw. */}
-      {orphanItems.map((item) => (
-        <ProposedRecordCard
-          key={item.forRef}
-          record={{
-            ref: item.forRef,
-            title: item.forTitle,
-            kind: item.resolvable[0]?.kind ?? null,
-            op: "create",
-            fields: [],
-          }}
-        >
-          {actionable ? (
-            <ItemTwinChoice
-              item={item}
-              choice={itemChoices[item.forRef]}
-              onChoice={(choice) =>
-                setItemChoices((prev) => ({ ...prev, [item.forRef]: choice }))
-              }
-              busy={false}
-            />
-          ) : (
-            <TwinDoors candidates={item.resolvable} withFor={false} />
-          )}
-        </ProposedRecordCard>
-      ))}
-      {flatTwins.length > 0 && !twinsUnderCard && (
-        <TwinDoors
-          candidates={flatTwins}
-          truncated={duplicate?.check.truncated}
-        />
-      )}
-
-      {/* Why: ONE mark (its sentence on press), then the requester's own
-          words, as theirs. Worded for every status: an approved proposal
-          still needed approval. */}
-      {(reason || why.proposer || duplicate?.check.status === "unchecked") && (
-        <section aria-label="Why" className="flex flex-col gap-3">
-          {(reason || duplicate?.check.status === "unchecked") && (
-            <div className="flex flex-wrap items-center gap-2">
-              {reason && (
-                <DisclosedMark
-                  mark={reason}
-                  icon={reason.tone === "warning" ? ShieldAlert : ShieldCheck}
-                />
-              )}
-              {reason && reasonComputer && (
-                <Link
-                  href={computerHref(reasonComputer.id)}
-                  className="text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
-                >
-                  {reasonComputer.name}
-                </Link>
-              )}
-              {duplicate?.check.status === "unchecked" && (
-                <DuplicateUnchecked />
-              )}
-            </div>
-          )}
-          {why.proposer && (
-            <RequesterNote who={actor?.name ?? null} text={why.proposer} />
-          )}
-        </section>
-      )}
-
-      {/* A failed approval says why, and offers the fix the pod found
-          (decision fa6c8833), before the verbs. */}
-      {status === "approval_failed" && (
-        <FailedApproval
-          proposalId={p.id}
-          expectedRevision={renderedRevision(p) ?? 0}
-          reason={
-            typeof (p as { rejectionReason?: unknown }).rejectionReason ===
-            "string"
-              ? (p as { rejectionReason: string }).rejectionReason
-              : null
-          }
-          onDecided={onDecided}
-          data={p.data}
-          graph={reviewGraph}
-        />
-      )}
-
-      <div
-        data-review-decision=""
-        className={`flex flex-col gap-2 border-t border-foreground/[0.06] ${
-          actionable ? "sticky z-10" : ""
-        } ${barClassName}`}
-      >
-        {applying && run ? (
+      <RequestStoryView
+        story={story.story}
+        read={story.read}
+        // A proposal's change IS what is decided: drawn first in Now, it is
+        // the subject (`UpdatedDoor` opens the object an update changes).
+        showSubject={false}
+        head={
           <>
-            <ApplyingNow run={run} />
-            {afterDecision}
-          </>
-        ) : actionable ? (
-          <>
-            {/* A failed READ of progress is said, never read as "nothing
-                running"; the approve door itself still refuses or joins a
-                run that is in fact applying. */}
-            {progress.isError && (
-              <ApprovalProgressLines
-                copy={progressUnavailable()}
-                onRetry={() => void progress.refetch()}
+            <ProvenanceLine
+              proposal={p}
+              sourceExits={sourceExits}
+              workspaceName={workspaceName}
+            />
+            {session && (
+              <ProposalSessionContext
+                sessionId={session.target.id}
+                proposalId={p.id}
               />
             )}
-            {stopped && run && <ApplyingNow run={run} />}
-            <DecisionButtons
-              proposal={p}
-              mode={mode}
-              undo={undo}
-              onDecided={onDecided}
-              resume={stopped}
-              stopTwins={stoppedOnTwins(run) ? run.twins : null}
-            />
           </>
-        ) : (
-          <>
-            <Outcome
-              status={status}
-              created={createdObject({
-                status,
-                action,
-                targetType: p.targetType ? String(p.targetType) : null,
-                targetId: p.targetId ?? null,
-                title:
-                  records[0]?.title ??
-                  (p.targetName ? String(p.targetName) : null),
-                graph,
-              })}
-            />
-            {afterDecision}
-          </>
+        }
+        depth={
+          /* The ONE Advanced: ids and the raw request, collapsed, last —
+             the reader decides on the change, not on the JSON. */
+          <AdvancedPanel
+            ids={[
+              { label: "Proposal id", value: p.id },
+              { label: "Change", value: `${p.targetType} · ${p.proposalType}` },
+              ...(p.targetId
+                ? [{ label: "Target id", value: p.targetId }]
+                : []),
+            ]}
+            raw={p.request}
+          />
+        }
+      >
+        {updated && (
+          <UpdatedDoor
+            updated={updated}
+            applied={status === "approved" || status === "auto_approved"}
+          />
         )}
-        <WhoDecides identity={identity} />
-      </div>
 
-      {/* The ONE Advanced: ids and the raw request, collapsed, under the
-          decision — the reader decides on the change, not on the JSON. */}
-      <AdvancedPanel
-        ids={[
-          { label: "Proposal id", value: p.id },
-          { label: "Change", value: `${p.targetType} · ${p.proposalType}` },
-          ...(p.targetId ? [{ label: "Target id", value: p.targetId }] : []),
-        ]}
-        raw={p.request}
-      />
+        {/* The change first. */}
+        {appConnect ? (
+          <Section label="What it asks for">
+            {/* The ONE access sentence: what approving lets it do, as its
+              page will say it once approved (access model B). */}
+            <p className="text-[13px] text-foreground/90">
+              {appConnect.access}
+            </p>
+            <ul className="flex flex-col gap-1">
+              {appConnect.lines.map((line) => (
+                <li
+                  key={line.workspaceId}
+                  className="text-[13px] text-foreground/80"
+                >
+                  {line.text}
+                </li>
+              ))}
+            </ul>
+            <p className="text-[12px] text-foreground/65">
+              It gets a key only after you approve, and its writes still follow
+              your review rules.
+            </p>
+          </Section>
+        ) : deferredWrites ? (
+          <DeferredWritesList review={deferredWrites} />
+        ) : docChanges ? (
+          <Section label="What changes">
+            <DocumentUpdateChanges
+              payload={payload}
+              envelope={p.data}
+              documentId={p.targetType === "document" ? p.targetId : null}
+              workspaceId={p.workspaceId ? String(p.workspaceId) : null}
+              status={status}
+              fallback={<DocumentChanges changes={docChanges} />}
+            />
+          </Section>
+        ) : toolRun ? (
+          <ToolRunArguments run={toolRun} />
+        ) : records.length > 0 ? (
+          <div className="flex flex-col gap-3">
+            {groups.map((group) => (
+              <RecordGroupList
+                key={group.kind ?? ""}
+                group={group}
+                render={(record) => {
+                  const item = itemByRef.get(record.ref);
+                  return (
+                    <ProposedRecordCard
+                      key={record.ref}
+                      record={record}
+                      media={recordMedia}
+                      mediaAlt={recordMediaAlt}
+                    >
+                      {twinsUnderCard && (
+                        <div className="border-t border-foreground/[0.06] pt-3">
+                          <TwinDoors
+                            candidates={flatTwins}
+                            truncated={duplicate?.check.truncated}
+                          />
+                        </div>
+                      )}
+                      {item &&
+                        (actionable ? (
+                          <ItemTwinChoice
+                            item={item}
+                            choice={itemChoices[item.forRef]}
+                            onChoice={(choice) =>
+                              setItemChoices((prev) => ({
+                                ...prev,
+                                [item.forRef]: choice,
+                              }))
+                            }
+                            busy={false}
+                          />
+                        ) : (
+                          <div className="border-t border-foreground/[0.06] pt-3">
+                            <TwinDoors
+                              candidates={item.resolvable}
+                              withFor={false}
+                            />
+                          </div>
+                        ))}
+                    </ProposedRecordCard>
+                  );
+                }}
+              />
+            ))}
+          </div>
+        ) : null}
+        {turnsOn && turnsOn.unreadSkills > 0 && (
+          <p className="text-[13px] text-foreground/80">
+            {`It also turns on ${turnsOn.unreadSkills} ${
+              turnsOn.unreadSkills === 1 ? "skill" : "skills"
+            } you cannot read.`}
+          </p>
+        )}
+        {edges.length > 0 && <PartEdgeList edges={edges} />}
+        {/* A graph item whose card is not drawn still owes its choice: it is
+          never sent on a default nobody saw. */}
+        {orphanItems.map((item) => (
+          <ProposedRecordCard
+            key={item.forRef}
+            record={{
+              ref: item.forRef,
+              title: item.forTitle,
+              kind: item.resolvable[0]?.kind ?? null,
+              op: "create",
+              fields: [],
+            }}
+          >
+            {actionable ? (
+              <ItemTwinChoice
+                item={item}
+                choice={itemChoices[item.forRef]}
+                onChoice={(choice) =>
+                  setItemChoices((prev) => ({ ...prev, [item.forRef]: choice }))
+                }
+                busy={false}
+              />
+            ) : (
+              <TwinDoors candidates={item.resolvable} withFor={false} />
+            )}
+          </ProposedRecordCard>
+        ))}
+        {flatTwins.length > 0 && !twinsUnderCard && (
+          <TwinDoors
+            candidates={flatTwins}
+            truncated={duplicate?.check.truncated}
+          />
+        )}
+
+        {/* Why: ONE mark (its sentence on press), then the requester's own
+          words, as theirs. Worded for every status: an approved proposal
+          still needed approval. */}
+        {(reason ||
+          why.proposer ||
+          duplicate?.check.status === "unchecked") && (
+          <section aria-label="Why" className="flex flex-col gap-3">
+            {(reason || duplicate?.check.status === "unchecked") && (
+              <div className="flex flex-wrap items-center gap-2">
+                {reason && (
+                  <DisclosedMark
+                    mark={reason}
+                    icon={reason.tone === "warning" ? ShieldAlert : ShieldCheck}
+                  />
+                )}
+                {reason && reasonComputer && (
+                  <Link
+                    href={computerHref(reasonComputer.id)}
+                    className="text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    {reasonComputer.name}
+                  </Link>
+                )}
+                {duplicate?.check.status === "unchecked" && (
+                  <DuplicateUnchecked />
+                )}
+              </div>
+            )}
+            {why.proposer && (
+              <RequesterNote who={actor?.name ?? null} text={why.proposer} />
+            )}
+          </section>
+        )}
+
+        {/* A failed approval says why, and offers the fix the pod found
+          (decision fa6c8833), before the verbs. */}
+        {status === "approval_failed" && (
+          <FailedApproval
+            proposalId={p.id}
+            expectedRevision={renderedRevision(p) ?? 0}
+            reason={
+              typeof (p as { rejectionReason?: unknown }).rejectionReason ===
+              "string"
+                ? (p as { rejectionReason: string }).rejectionReason
+                : null
+            }
+            onDecided={onDecided}
+            data={p.data}
+            graph={reviewGraph}
+          />
+        )}
+
+        <div
+          data-review-decision=""
+          className={`flex flex-col gap-2 border-t border-foreground/[0.06] ${
+            actionable ? "sticky z-10" : ""
+          } ${barClassName}`}
+        >
+          {applying && run ? (
+            <>
+              <ApplyingNow run={run} />
+              {afterDecision}
+            </>
+          ) : actionable ? (
+            <>
+              {/* A failed READ of progress is said, never read as "nothing
+                running"; the approve door itself still refuses or joins a
+                run that is in fact applying. */}
+              {progress.isError && (
+                <ApprovalProgressLines
+                  copy={progressUnavailable()}
+                  onRetry={() => void progress.refetch()}
+                />
+              )}
+              {stopped && run && <ApplyingNow run={run} />}
+              <DecisionButtons
+                proposal={p}
+                mode={mode}
+                undo={undo}
+                onDecided={onDecided}
+                resume={stopped}
+                stopTwins={stoppedOnTwins(run) ? run.twins : null}
+                setupBlock={status === "pending" ? setupBlock : null}
+              />
+            </>
+          ) : (
+            <>
+              <Outcome
+                status={status}
+                created={createdObject({
+                  status,
+                  action,
+                  targetType: p.targetType ? String(p.targetType) : null,
+                  targetId: p.targetId ?? null,
+                  title:
+                    records[0]?.title ??
+                    (p.targetName ? String(p.targetName) : null),
+                  graph,
+                })}
+              />
+              {afterDecision}
+            </>
+          )}
+          {actionable && !applying && (
+            <p
+              data-review-refusing=""
+              className="text-[12px] text-foreground/60"
+            >
+              <span className="font-medium text-foreground/70">
+                {rt("story.refusing")}
+              </span>{" "}
+              {rt("refuse.proposalConsequence")}
+            </p>
+          )}
+          <WhoDecides identity={identity} />
+        </div>
+      </RequestStoryView>
     </div>
   );
 }

@@ -45,6 +45,8 @@ export const en = {
   "refuse.other": "In your words",
   "refuse.cancel": "Keep it open",
   "refuse.confirm": "Refuse it",
+  "refuse.proposalConsequence":
+    "Nothing it proposes is applied. Whoever asked sees your reason.",
   // ── A secret handed over ───────────────────────────────────────────────
   "secret.for": "For",
   "secret.usedBy": "Used by",
@@ -113,6 +115,8 @@ export const fr: Catalog<typeof en> = {
   "refuse.other": "Avec vos mots",
   "refuse.cancel": "Laisser ouvert",
   "refuse.confirm": "Refuser",
+  "refuse.proposalConsequence":
+    "Rien de ce qui est proposé n’est appliqué. Le demandeur voit votre raison.",
   "secret.for": "Pour",
   "secret.usedBy": "Utilisé par",
   "secret.on": "Sur",

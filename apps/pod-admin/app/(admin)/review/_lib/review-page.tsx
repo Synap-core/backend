@@ -100,6 +100,7 @@ import { handOffRuleFor } from "./hand-off-rule";
 import { ReviewOnboarding } from "./review-onboarding";
 import { showReviewOnboarding } from "./review-onboarding-model";
 import { HistoryList } from "../../history/_lib/history-list";
+import { useRequestContext } from "../../../_lib/request/use-request-context";
 import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
 import { useT } from "../../../../lib/i18n/locale-provider";
@@ -206,6 +207,11 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
 
   // ── The drawer, and the `?focus=` receiver ────────────────────────────────
   const [open, setOpen] = useState<OpenReview | null>(null);
+  // Every request's story, read ONCE for the page and only once one is open.
+  const storyContext = useRequestContext({
+    sessionId,
+    enabled: open !== null,
+  });
   const docked = useMediaQuery(LG_UP);
   const handledFocus = useRef<string | null>(null);
   useEffect(() => {
@@ -693,6 +699,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                   return opened ? (
                     <ReviewInline
                       open={opened}
+                      storyContext={storyContext}
                       viewer={viewer}
                       onClose={refresh}
                       liveAsk={null}
@@ -808,6 +815,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         {docked && (
           <ReviewDock
             open={open}
+            storyContext={storyContext}
             viewer={viewer}
             onClose={closeDrawer}
             liveAsk={liveAsk}
@@ -819,6 +827,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       {!docked && (
         <ReviewDrawer
           open={open}
+          storyContext={storyContext}
           viewer={viewer}
           onClose={closeDrawer}
           liveAsk={liveAsk}
@@ -875,6 +884,7 @@ function openOf(row: ReviewRow): OpenReview | null {
     // An ask's row title is its question (`askCardView`), so the frame
     // names the question once and the detail does not repeat it.
     title: row.title,
+    lens: row.lens,
   };
 }
 

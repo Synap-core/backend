@@ -67,6 +67,14 @@ import {
   type TrustedIssuerScope,
 } from "./issuer-review";
 import { AskAnswer } from "./ask-answer";
+import type { LensRow } from "@synap-core/types/lens";
+import {
+  requestStory,
+  type NeedsYouContextRead,
+  type RequestStory,
+} from "@synap-core/types/needs-you";
+import type { StoryRead } from "../../../_lib/request/request-story-view";
+import { useConsoleLocale } from "../../../../lib/i18n/locale-provider";
 import type { AskSlot } from "./ask-detail";
 import type { ReviewDetail } from "./review-rows";
 
@@ -82,6 +90,18 @@ export interface OpenReview {
   detail: DrawerDetail;
   /** The decision's title; for an ask, the question (`askCardView`). */
   title: string;
+  /**
+   * The row's shared lens row, when a Review row opened it: what its story
+   * (`requestStory`) is told from. Absent for a `?focus=` on a request no
+   * longer waiting: the review then reads its own (a proposal) or none.
+   */
+  lens?: LensRow;
+}
+
+/** The page's request context read (`useRequestContext`), shared by every open request. */
+export interface ReviewStoryContext {
+  context: NeedsYouContextRead | null;
+  read: StoryRead;
 }
 
 interface ReviewFrameProps {
@@ -92,6 +112,8 @@ interface ReviewFrameProps {
   liveAsk: AskSlot | null;
   /** An open ask was answered, done or handed back. */
   onAskSettled: () => void;
+  /** The page's context read; absent where no page read it (a test, a host). */
+  storyContext?: ReviewStoryContext;
 }
 
 export type DetailProps = Omit<ReviewFrameProps, "open"> & { open: OpenReview };
@@ -162,8 +184,20 @@ function ReviewDetail({
   onClose,
   liveAsk,
   onAskSettled,
+  storyContext,
 }: DetailProps) {
   const { detail } = open;
+  const locale = useConsoleLocale();
+  // The request's story, from the row it was opened on and the page's one
+  // context read. While the read is in flight (or failed) the story still
+  // has its Now and what the row itself says comes next.
+  const story =
+    open.lens && storyContext
+      ? {
+          story: requestStory(open.lens, storyContext.context, { locale }),
+          read: storyContext.read,
+        }
+      : undefined;
   return (
     <>
       {detail.kind === "ask" && (
@@ -175,6 +209,7 @@ function ReviewDetail({
           onClose={onClose}
           // The frame's title IS the question: read once.
           showHeading={false}
+          story={story}
         />
       )}
       {detail.kind === "proposal" && (
@@ -183,6 +218,7 @@ function ReviewDetail({
           proposalId={detail.proposalId}
           viewer={viewer}
           onClose={onClose}
+          story={story}
         />
       )}
       {detail.kind === "issuer" && (
@@ -441,10 +477,12 @@ function ProposalBody({
   proposalId,
   viewer,
   onClose,
+  story,
 }: {
   proposalId: string;
   viewer: ReviewViewer;
   onClose: () => void;
+  story?: { story: RequestStory | null; read: StoryRead };
 }) {
   const { query, sourceExits, workspaceName } = useProposalReview(proposalId);
   const afterDecision = useAfterDecision();
@@ -510,6 +548,7 @@ function ProposalBody({
         void query.refetch();
       }}
       barClassName={DECISION_BAR_PIN}
+      story={story}
     />
   );
 }
