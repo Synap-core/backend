@@ -25,6 +25,8 @@
  * The read is advisory; the index is the floor. Two clicks that both read
  * "nothing live" race to the insert, and the loser's unique violation is
  * answered with this same read (`run-playbook.ts`).
+ *
+ * SESSION-KIND-LENS-EXEMPT: reads ONE session (limit 1) for the run door's already_running answer, never a page of sessions; its draft state is said by `reason`.
  */
 import {
   getDb,
