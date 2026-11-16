@@ -11376,6 +11376,53 @@ declare const PRE_APPROVAL_HELD_REASONS: readonly [
 export type PreApprovalHeldReason = (typeof PRE_APPROVAL_HELD_REASONS)[number];
 /** Why a playbook cannot be pre-approved for agents, whatever its rules. */
 export type PreApprovalIneligibleReason = Exclude<PreApprovalHeldReason, "version_changed">;
+declare const PROCESS_HEALTH_STATES: readonly [
+	"config-error",
+	"unresolved-failure",
+	"blocked-by-policy",
+	"waiting-on-you",
+	"running",
+	"draft",
+	"paused",
+	"healthy",
+	"never-run",
+	"unknown"
+];
+export type ProcessHealthState = (typeof PROCESS_HEALTH_STATES)[number];
+declare const PROCESS_HEALTH_REASONS: readonly [
+	"config_invalid",
+	"running",
+	"running_after_failure",
+	"waiting_on_you",
+	"blocked_by_policy",
+	"latest_failed",
+	"draft",
+	"paused",
+	"archived",
+	"healthy",
+	"latest_unresolved",
+	"never_run",
+	"not_enough_activity"
+];
+export type ProcessHealthReason = (typeof PROCESS_HEALTH_REASONS)[number];
+export interface ProcessHealth {
+	state: ProcessHealthState;
+	/** Why: the code a surface resolves to words (see PROCESS_HEALTH_REASONS). */
+	reason: ProcessHealthReason;
+	/**
+	 * `latest_unresolved` only: the latest run's status the reason names (a
+	 * token; the vocabulary resolves it). Absent otherwise.
+	 */
+	latestStatus?: string | null;
+	/** Run that explains the state, when the state is activity-derived. */
+	runId: string | null;
+	/**
+	 * `waiting-on-you` only: the focus session the waiting run drives — where
+	 * the owed slot lives, so the row's door opens it. Null when the pod did not
+	 * say (an automation run with no session, or a pod older than the field).
+	 */
+	sessionId?: string | null;
+}
 declare const PACKAGE_FIELD_STATES: readonly [
 	"updates",
 	"yours",
@@ -25404,32 +25451,6 @@ export interface PlaybookScorecard {
 	overrides: number;
 	criteria: CriterionScore[];
 }
-declare const PROCESS_HEALTH_STATES: readonly [
-	"config-error",
-	"unresolved-failure",
-	"blocked-by-policy",
-	"waiting-on-you",
-	"running",
-	"draft",
-	"paused",
-	"healthy",
-	"never-run",
-	"unknown"
-];
-export type ProcessHealthState = (typeof PROCESS_HEALTH_STATES)[number];
-export interface ProcessHealth {
-	state: ProcessHealthState;
-	label: string;
-	reason: string;
-	/** Run that explains the state, when the state is activity-derived. */
-	runId: string | null;
-	/**
-	 * `waiting-on-you` only: the focus session the waiting run drives — where
-	 * the owed slot lives, so the row's door opens it. Null when the pod did not
-	 * say (an automation run with no session, or a pod older than the field).
-	 */
-	sessionId?: string | null;
-}
 declare const PROCESS_STEP_RUNNER_KINDS: readonly [
 	"ai",
 	"person",
@@ -25606,7 +25627,10 @@ export interface ProcessDefinition {
 	/** session | project. */
 	scope: string;
 	subjectProfileSlug: string | null;
-	/** The version the person pre-approved agents to run without asking; null = none. */
+	/**
+	 * The version the person pre-approved agents to run without asking; null =
+	 * none, or unread (then `unavailable` names `preApproval`).
+	 */
 	preApprovedVersion: number | null;
 	installedFrom: ProcessInstalledFrom | null;
 	/** true / false when compared with the catalog; null when not compared. */
@@ -25619,7 +25643,8 @@ declare const PROCESS_READ_PARTS: readonly [
 	"moves",
 	"runs",
 	"health",
-	"updateAvailable"
+	"updateAvailable",
+	"preApproval"
 ];
 export type ProcessReadPart = (typeof PROCESS_READ_PARTS)[number];
 /** One card of a space's processes. */
@@ -25632,7 +25657,8 @@ export interface ProcessSummary {
 	health: ProcessHealth;
 	counts: ProcessRunCounts;
 	stepCount: number;
-	automationCount: number;
+	/** Its automations; null when the `when` read failed (never a 0 for unmeasured). */
+	automationCount: number | null;
 	needs: ProcessNeedSummary[];
 	/** Parts that could not be read (their fields are null / unknown). */
 	unavailable: ProcessReadPart[];

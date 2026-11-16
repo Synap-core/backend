@@ -32683,7 +32683,7 @@
       "get": {
         "tags": ["Playbooks"],
         "summary": "List processes",
-        "description": "A space's processes as cards (health, run counts, step and automation counts, needs), or every visible one when no space is named. Archived playbooks are left out. Same read as tRPC playbooks.processes.",
+        "description": "A space's processes as cards (health, run counts, step and automation counts, needs), or every visible one when no space is named, plus the automations outside any process the caller can see. Archived playbooks are left out. Same read as tRPC playbooks.processes.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -32695,7 +32695,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{ processes }",
+            "description": "{ processes, automationsOutsideProcess, unavailable }: `automationsOutsideProcess` is null when that read failed (then `unavailable` names `when`); an empty list means there are none.",
             "content": {
               "application/json": {
                 "schema": {
@@ -32742,9 +32742,37 @@
                         ],
                         "additionalProperties": {}
                       }
+                    },
+                    "automationsOutsideProcess": {
+                      "type": ["array", "null"],
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "name": { "type": "string" },
+                          "triggerType": { "type": "string" },
+                          "status": { "type": "string" },
+                          "workspaceId": { "type": ["string", "null"] }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "triggerType",
+                          "status",
+                          "workspaceId"
+                        ]
+                      }
+                    },
+                    "unavailable": {
+                      "type": "array",
+                      "items": { "type": "string" }
                     }
                   },
-                  "required": ["processes"]
+                  "required": [
+                    "processes",
+                    "automationsOutsideProcess",
+                    "unavailable"
+                  ]
                 }
               }
             }
