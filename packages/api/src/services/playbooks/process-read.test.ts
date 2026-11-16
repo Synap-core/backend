@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
   automationsFail: false,
   skillsFail: false,
   preApprovalFail: false,
+  updateFail: false,
   /** Every select: the columns asked and the WHERE it got. */
   queries: [] as Array<{ cols: Record<string, unknown>; where: unknown }>,
 }));
@@ -105,6 +106,12 @@ vi.mock("./playbook-skills.js", () => ({
         approved: true,
       },
     ];
+  },
+}));
+vi.mock("../package-updates/standing.js", () => ({
+  listInstalledPackages: async () => {
+    if (h.updateFail) throw new Error("catalog cache read failed");
+    return [{ slug: "builder", hasUpdate: true }];
   },
 }));
 vi.mock("./pre-approved-run.js", () => ({
@@ -287,6 +294,7 @@ beforeEach(() => {
   h.automationsFail = false;
   h.skillsFail = false;
   h.preApprovalFail = false;
+  h.updateFail = false;
   h.queries = [];
 });
 
@@ -342,8 +350,22 @@ describe("the pure folds", () => {
 
   it("coverage: filled by a provider, empty when the registry names none, unknown when unread or a requires key", () => {
     const declared = declaredNeeds(PLAYBOOK as never);
+    // A registry row as `listCapabilities` returns it: the verb declares the
+    // intent it serves (the real fold reads `verbs[].intent`).
     const caps = [
-      { id: "cap-gh", name: "github", verbs: [{ id: "github_pr_checks" }] },
+      {
+        id: "cap-gh",
+        name: "github",
+        kind: "tool",
+        verbs: [
+          {
+            id: "github_pr_checks",
+            intent: "fetch_record",
+            kind: "read",
+            granted: true,
+          },
+        ],
+      },
     ] as never;
     const covered = coverNeeds(declared, caps, "ws-1");
     expect(covered.map((n) => [n.slug, n.state])).toEqual([
@@ -374,6 +396,7 @@ describe("readProcess — composed from the existing reads", () => {
       subjectProfileSlug: "change",
       preApprovedVersion: 3,
       installedFrom: { packageSlug: "builder", packageVersion: "h-abc" },
+      updateAvailable: true,
     });
     expect(read!.when.automations.map((a) => [a.id, a.role])).toEqual([
       ["a-sched", "schedule"],
@@ -527,6 +550,14 @@ describe("a failed part is named, never read as empty", () => {
     const read = await readProcess(READER, "pb-1");
     expect(read!.playbook.preApprovedVersion).toBeNull();
     expect(read!.unavailable).toEqual(["preApproval"]);
+  });
+
+  it("updateAvailable: unavailable only when the catalog standing read fails", async () => {
+    expect((await readProcess(READER, "pb-1"))!.unavailable).toEqual([]);
+    h.updateFail = true;
+    const read = await readProcess(READER, "pb-1");
+    expect(read!.playbook.updateAvailable).toBeNull();
+    expect(read!.unavailable).toEqual(["updateAvailable"]);
   });
 
   it("a card's automation count is null when `when` failed, never 0", async () => {
