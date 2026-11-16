@@ -5051,7 +5051,7 @@ CREATE TABLE IF NOT EXISTS "session_stage_runs" (
 );
 CREATE INDEX IF NOT EXISTS "session_stage_runs_session_stage_idx"
   ON "session_stage_runs" ("session_id", "stage_key");
--- 0421: a `forEach` step's batches and child runs.
+-- 0424: a `forEach` step's batches and child runs.
 ALTER TABLE "session_stage_runs" ADD COLUMN IF NOT EXISTS "fan_out" jsonb;
 -- 0270: a session's OWN phases. `expected_outputs` and `criteria` above are
 -- both seeded from the playbook and authorable afterwards; `stages` was the

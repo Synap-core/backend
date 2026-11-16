@@ -86,7 +86,7 @@ export interface StageFanOutChild {
 }
 
 /**
- * A `forEach` step's fan-out (0421): the collection it was cut from, the
+ * A `forEach` step's fan-out (0424): the collection it was cut from, the
  * batches, and each child run. Written only by `stage-for-each.ts`, under a
  * row lock.
  */
@@ -126,7 +126,7 @@ export const sessionStageRuns = pgTable(
     status: text("status", { enum: SESSION_STAGE_RUN_STATUSES })
       .notNull()
       .default("running"),
-    /** A `forEach` step's batches and child runs (0421); NULL for any other step. */
+    /** A `forEach` step's batches and child runs (0424); NULL for any other step. */
     fanOut: jsonb("fan_out").$type<StageFanOut>(),
     /** Per required tool: installed | missing | unverified, + the install ask. */
     requiresReport: jsonb("requires_report"),

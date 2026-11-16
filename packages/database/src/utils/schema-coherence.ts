@@ -811,12 +811,12 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "runner_via",
     addedBy: "0422_session_stage_runs.sql",
   },
-  // A `forEach` step's batches and child runs (0421): every step entry
+  // A `forEach` step's batches and child runs (0424): every step entry
   // selects the row, so its absence fails every stage advance.
   {
     table: "session_stage_runs",
     column: "fan_out",
-    addedBy: "0421_session_stage_runs_fan_out.sql",
+    addedBy: "0424_session_stage_runs_fan_out.sql",
   },
 
   // Backup run ledger (0295). The backup container writes it with psql and
