@@ -12,7 +12,7 @@
  * All steps run inside a single transaction so a crash leaves the DB consistent.
  */
 
-import { invalidateUrlReaderCache } from "./url-reader-cache.js";
+import { invalidateCapabilityReadCaches } from "./capability-read-caches.js";
 import { db, eq, and, or, inArray } from "@synap/database";
 import {
   capabilities as capabilitiesTable,
@@ -41,7 +41,7 @@ export async function uninstallCapability(
   try {
     return await uninstallInTx(containerId);
   } finally {
-    invalidateUrlReaderCache(); // its reader verbs are gone
+    invalidateCapabilityReadCaches(); // its reader verbs are gone
   }
 }
 

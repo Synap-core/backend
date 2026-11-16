@@ -186,6 +186,7 @@ import {
   encodeDefinitionCursor,
 } from "../utils/keyset-cursor.js";
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
+import { invalidateCapabilityReadCaches } from "../services/capabilities/capability-read-caches.js";
 
 const logger = createLogger({ module: "playbooks-router" });
 
@@ -648,6 +649,9 @@ const capabilityGrantsRouter = router({
           workspaceId: grant.workspaceId ?? undefined,
           data: { grantId: input.grantId, grantableType: grant.grantableType },
         });
+        // A tool grant is a verb's run posture (`effectiveExecMode`): find's
+        // cached registry must not keep reading it as granted.
+        invalidateCapabilityReadCaches();
       }
 
       return { success: true };

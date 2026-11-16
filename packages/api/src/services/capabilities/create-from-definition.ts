@@ -52,7 +52,7 @@ import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import { ABSTRACT_VERBS, isAbstractVerb } from "@synap/database/schema";
 import { knownIntentSetFor } from "./intent-registry.js";
 import { invalidateMcpCache } from "../../routers/channels.js";
-import { invalidateUrlReaderCache } from "./url-reader-cache.js";
+import { invalidateCapabilityReadCaches } from "./capability-read-caches.js";
 import type {
   CapabilityDefinition,
   CapabilitySkillDef,
@@ -1763,7 +1763,7 @@ export async function createCapabilityFromDefinition(
     }
   }
 
-  invalidateUrlReaderCache(); // its reader verbs (and their url patterns) exist now
+  invalidateCapabilityReadCaches(); // its reader verbs (and their url patterns) exist now
   return {
     capabilityKey: def.key,
     created: {

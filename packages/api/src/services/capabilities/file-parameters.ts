@@ -61,7 +61,20 @@ import {
   type ProviderFileRef,
 } from "../../connectors/provider-file-body.js";
 import { declaredReadOnly } from "./capability-drift.js";
-import { looksLikeJsonSchema } from "./parameter-dialect.js";
+// The pure readers of a file declaration live in `@synap-core/types/find`
+// (one copy for every surface's `bindContext` and these run doors).
+import {
+  declaredFileParameters,
+  parseFileParameterType,
+  POD_FILES_PER_PARAMETER_MAX,
+  type PodFileParameter,
+} from "@synap-core/types/find";
+export {
+  declaredFileParameters,
+  parseFileParameterType,
+  POD_FILES_PER_PARAMETER_MAX,
+  type PodFileParameter,
+};
 import type {
   ParameterRepair,
   PodFileProblem,
@@ -72,16 +85,6 @@ const logger = createLogger({ module: "file-parameters" });
 
 /** How a tool takes a pod file. Only `url` is wired (phase 1). */
 export type PodFileDelivery = "url" | "bytes";
-
-/** One declared file parameter of a verb. */
-export interface PodFileParameter {
-  field: string;
-  /** `file[]`: a list of file ids; `file`: one. */
-  many: boolean;
-  /** As declared after the `:` — null when the declaration names none. */
-  delivery: string | null;
-  optional: boolean;
-}
 
 /** A file named by a call, as the ask check read it. Ids only, never a URL. */
 export interface PodFileRef {
@@ -94,8 +97,6 @@ export interface PodFileRef {
 
 /** Most bytes a tool may be sent by URL (Instagram reels top out at 300 MB). */
 export const POD_FILE_URL_MAX_BYTES = 300 * 1024 * 1024;
-/** Most files one `file[]` parameter may carry (an Instagram carousel's 20). */
-export const POD_FILES_PER_PARAMETER_MAX = 20;
 /** The signed URL's lifetime: a sync verb fetches during its request. */
 export const POD_FILE_URL_TTL_SYNC_SECONDS = 15 * 60;
 /** A queued provider (async verb, box script) may fetch it hours later. */
@@ -130,43 +131,6 @@ export interface PodFileHandles {
 
 /** The event one file handed to a tool writes. */
 export const FILE_SENT_EVENT = "file.sent";
-
-const FILE_TYPE = /^file(\[\])?(?::([a-z]+))?(\?)?$/;
-
-/**
- * Read one type-map entry as a file parameter, or null when it is not one.
- * `file`, `file[]`, each with an optional `:<delivery>` and an optional `?`.
- */
-export function parseFileParameterType(
-  raw: unknown
-): Omit<PodFileParameter, "field"> | null {
-  if (typeof raw !== "string") return null;
-  const m = FILE_TYPE.exec(raw);
-  if (!m) return null;
-  return { many: !!m[1], delivery: m[2] ?? null, optional: !!m[3] };
-}
-
-/** The file parameters a verb's `parameters` declare (type-map dialect only). */
-export function declaredFileParameters(
-  parameters: unknown
-): PodFileParameter[] {
-  if (
-    !parameters ||
-    typeof parameters !== "object" ||
-    Array.isArray(parameters) ||
-    looksLikeJsonSchema(parameters as Record<string, unknown>)
-  ) {
-    return [];
-  }
-  const out: PodFileParameter[] = [];
-  for (const [field, raw] of Object.entries(
-    parameters as Record<string, unknown>
-  )) {
-    const parsed = parseFileParameterType(raw);
-    if (parsed) out.push({ field, ...parsed });
-  }
-  return out;
-}
 
 /**
  * Why a verb's file declaration cannot be installed, one sentence per problem

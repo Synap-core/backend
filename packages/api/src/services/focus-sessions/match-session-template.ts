@@ -31,6 +31,7 @@ import { db, playbooks, eq, and, desc } from "@synap/database";
 import { scopedDb } from "../../access/scoped-db.js";
 import { AccessContext } from "../../access/context.js";
 import { rankRouteCandidates } from "../routing/suggest-routes.js";
+import { readPlaybookParams } from "@synap/playbooks";
 import {
   templateKindFields,
   type PlaybookScope,
@@ -62,6 +63,45 @@ export interface PlaybookCandidate {
    * playbook has none. What tells two similar names apart.
    */
   description?: string;
+  /**
+   * The kind (or role) slug this playbook works ON (`subject_profile`), or
+   * `null` for a subject-less one. What a surface binds the selected record
+   * to (`bindContext`, `@synap-core/types/find`); the run door re-checks it
+   * (`assertSubjectKind`).
+   */
+  subject: string | null;
+  /**
+   * Its REQUIRED params (`readPlaybookParams`), so a surface can say what is
+   * still owed before it runs. An `entity` param with `from` is filled by the
+   * run funnel from the subject.
+   */
+  requiredParams: PlaybookRequiredParam[];
+}
+
+/** A required playbook param, as the find and start doors carry it. */
+export interface PlaybookRequiredParam {
+  name: string;
+  label?: string;
+  type: string;
+  from?: string;
+}
+
+/** `subject_profile.profileSlug`, or null when absent or malformed. */
+function subjectSlugOf(subjectProfile: unknown): string | null {
+  if (!subjectProfile || typeof subjectProfile !== "object") return null;
+  const slug = (subjectProfile as { profileSlug?: unknown }).profileSlug;
+  return typeof slug === "string" && slug.trim() ? slug : null;
+}
+
+function requiredParamsOf(raw: unknown): PlaybookRequiredParam[] {
+  return readPlaybookParams(raw)
+    .filter((p) => p.required === true)
+    .map((p) => ({
+      name: p.name,
+      ...(p.label ? { label: p.label } : {}),
+      type: p.type,
+      ...(p.from ? { from: p.from } : {}),
+    }));
 }
 
 /**
@@ -130,6 +170,7 @@ export async function matchSessionTemplate(
         scope: p.scope,
       })),
   }).filter((r) => r.signals.some((s) => s.type === "intent"));
+  const byId = new Map(rows.map((p) => [p.id, p]));
 
   return {
     candidates: matched.slice(0, input.limit ?? CANDIDATES_MAX).map((r) => ({
@@ -138,6 +179,8 @@ export async function matchSessionTemplate(
       score: r.score,
       reason: r.reason,
       ...templateKindFields(r.candidate.scope),
+      subject: subjectSlugOf(byId.get(r.candidate.id)?.subjectProfile),
+      requiredParams: requiredParamsOf(byId.get(r.candidate.id)?.params),
       ...(() => {
         const description = playbookDescriptionPreview(r.candidate.description);
         return description ? { description } : {};

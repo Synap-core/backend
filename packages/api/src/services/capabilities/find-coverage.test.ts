@@ -19,7 +19,8 @@
  *
  * WHAT IS REAL: `findByIntent`, `searchObjectCatalogs` and every object
  * catalog reader (their selects, floors and the JS ranker), `rankByTerms`.
- * WHAT IS STUBBED: `db` (rows per TABLE, whatever the predicate — so this
+ * WHAT IS STUBBED: the record index (`searchService.searchCollection`; its
+ * floor is proven on PGlite in `find-objects.grants.pglite.test.ts`), `db` (rows per TABLE, whatever the predicate — so this
  * proves the reader reaches its table and shapes the row, NOT the floor SQL;
  * `find-objects.pglite.test.ts` proves the floors on a real Postgres), the
  * skills door (`searchInstructionSkills`, which has its own PGlite suites), and
@@ -87,6 +88,12 @@ vi.mock("../focus-sessions/match-session-template.js", async (orig) => ({
   matchSessionTemplate: (...a: unknown[]) => matchSessionTemplate(...a),
 }));
 const listSpaceCandidates = vi.fn();
+const searchCollection = vi.fn();
+vi.mock("@synap/search", () => ({
+  searchService: {
+    searchCollection: (...a: unknown[]) => searchCollection(...a),
+  },
+}));
 vi.mock("../discover/space-catalog.js", () => ({
   listSpaceCandidates: (...a: unknown[]) => listSpaceCandidates(...a),
 }));
@@ -94,6 +101,7 @@ vi.mock("../discover/space-catalog.js", () => ({
 import {
   automations,
   documents,
+  entities,
   focusSessions,
   projects,
   projectTracks,
@@ -101,6 +109,7 @@ import {
 } from "@synap/database";
 import type { ObjectKind } from "../diagnose/types.js";
 import { PROBE_ORDER } from "../diagnose/resolve-object-kind.js";
+import { invalidateCapabilityReadCaches } from "./capability-read-caches.js";
 import {
   FIND_CATALOGS,
   findByIntent,
@@ -290,8 +299,28 @@ const COVERAGE: Record<ObjectKind, Coverage> = {
     hit: objectHit("documents"),
   },
   entity: {
-    exempt:
-      "Entity search is synap_ask's semantic backbone (the retrieval engine: Typesense + pgvector, query understanding, CRAG) and synap_get_entities by kind; a second, lexical entity ranker here would fork it.",
+    // Was exempt ("a second, lexical entity ranker here would fork synap_ask's
+    // engine"). The catalog answers that reason instead of overriding it: it
+    // reads the engine's own keyword half in its own order (no rankByTerms),
+    // floored by the helper hybrid recall uses (intent bar W1, decision D4).
+    catalog: "entities",
+    seed: () => {
+      searchCollection.mockResolvedValue({
+        results: [
+          {
+            id: ID,
+            collection: "entities",
+            document: { id: ID, title: TITLE, entityType: "person" },
+            textMatch: 100,
+          },
+        ],
+        found: 1,
+        searchTimeMs: 1,
+      });
+      // The floor read (`visibleEntityIds`) reaches the entities table.
+      h.rows.set(entities, [{ id: ID }]);
+    },
+    hit: objectHit("entities"),
   },
   external_send: {
     exempt:
@@ -301,6 +330,10 @@ const COVERAGE: Record<ObjectKind, Coverage> = {
 
 beforeEach(() => {
   h.rows.clear();
+  invalidateCapabilityReadCaches();
+  searchCollection
+    .mockReset()
+    .mockResolvedValue({ results: [], found: 0, searchTimeMs: 0 });
   searchInstructionSkills.mockReset().mockResolvedValue({
     rows: [],
     total: 0,
@@ -334,10 +367,10 @@ describe("tripwire: every openable kind has a find catalog or a reasoned exempti
   });
 
   it("most openable kinds are findable (a floor, so exemptions cannot quietly take over)", () => {
-    // 9 of the 15 probed kinds when this was written; the floor stops a
+    // 10 of the 15 probed kinds (entity joined in W1); the floor stops a
     // catalog being swapped for an exemption without this line moving.
     const covered = PROBE_ORDER.filter((k) => "catalog" in COVERAGE[k]);
-    expect(covered.length).toBeGreaterThanOrEqual(9);
+    expect(covered.length).toBeGreaterThanOrEqual(10);
   });
 
   it.each(PROBE_ORDER.filter((k) => "catalog" in COVERAGE[k]))(
