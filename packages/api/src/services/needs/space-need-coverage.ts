@@ -17,9 +17,10 @@
  * the person picks one.
  *
  * {@link reconcileSpaceNeeds} runs at template install. For each EMPTY need:
- *   - exactly ONE installed provider fills it → bound to it (the one choice
- *     the pod makes alone: there is nothing to choose; named default, the
- *     person can rebind);
+ *   - exactly ONE installed provider fills it → it already fills the need
+ *     IMPLICITLY (`withImplicitBindings`, so a converted playbook keeps
+ *     running on upgrade); the reconcile RECORDS it as a row (named default:
+ *     nothing to choose; the person can rebind);
  *   - none → an install proposal for a catalog pack whose `fills` names it
  *     (the existing `capability.install` proposal seam, never an install);
  *   - several → left empty: the person chooses (the needs read shows them).
@@ -30,12 +31,10 @@ import { createLogger } from "@synap-core/core";
 import {
   and,
   automations,
-  capabilities,
   db,
   eq,
   isNull,
   ne,
-  or,
   playbooks,
 } from "@synap/database";
 import {
@@ -48,19 +47,13 @@ import {
 import {
   applySpaceNeedBinding,
   declaresFill,
+  readInstalledNeedProviders,
   readSpaceNeedBindings,
-  type SpaceNeedBinding,
+  type InstalledNeedProvider,
   type SpaceNeedBindings,
 } from "./space-needs.js";
 
 const logger = createLogger({ module: "space-need-coverage" });
-
-/** An installed capability visible in the space, with what it declares to fill. */
-export interface InstalledNeedProvider {
-  id: string;
-  name: string;
-  metadata: unknown;
-}
 
 /** One declared need of a space and its state. */
 export interface SpaceNeedCoverage {
@@ -70,8 +63,13 @@ export interface SpaceNeedCoverage {
   known: boolean;
   state: "filled" | "empty";
   provider: { capabilityId: string; name: string | null } | null;
-  /** When filled: who set it, and when. */
-  binding: Pick<SpaceNeedBinding, "bindingId" | "setBy" | "updatedAt"> | null;
+  /**
+   * True when no binding row exists and the space's ONE filling provider
+   * stands in (an implicit binding: the run uses it; the reconcile records it).
+   */
+  implicit: boolean;
+  /** When filled by a row: who set it, and when. Null for an implicit binding. */
+  binding: { bindingId: string; setBy: string; updatedAt: Date } | null;
   /** Installed capabilities that declare they fill it (the person's choices). */
   candidates: Array<{ capabilityId: string; name: string }>;
 }
@@ -120,24 +118,27 @@ export function foldNeedCoverage(input: {
       .filter((c) => declaresFill(c.metadata, slug))
       .map((c) => ({ capabilityId: c.id, name: c.name }));
     if (!filled) empty.push(slug);
+    const implicit = filled && binding!.implicit === true;
     needs.push({
       need: slug,
       label: def?.label ?? null,
       known: !!def,
       state: filled ? "filled" : "empty",
+      implicit,
       provider: filled
         ? {
             capabilityId: binding!.providerCapabilityId!,
             name: binding!.providerName,
           }
         : null,
-      binding: filled
-        ? {
-            bindingId: binding!.bindingId,
-            setBy: binding!.setBy,
-            updatedAt: binding!.updatedAt,
-          }
-        : null,
+      binding:
+        filled && !implicit && binding!.bindingId && binding!.setBy
+          ? {
+              bindingId: binding!.bindingId,
+              setBy: binding!.setBy,
+              updatedAt: binding!.updatedAt ?? new Date(0),
+            }
+          : null,
       candidates,
     });
   }
@@ -183,34 +184,13 @@ export async function readSpaceDeclaredNeeds(
   return declaredNeedsOf(declaring);
 }
 
-/** The capabilities installed in the space (its own, and pod-wide). */
-export async function readInstalledNeedProviders(
-  workspaceId: string
-): Promise<InstalledNeedProvider[]> {
-  return db
-    .select({
-      id: capabilities.id,
-      name: capabilities.name,
-      metadata: capabilities.metadata,
-    })
-    .from(capabilities)
-    .where(
-      or(
-        eq(capabilities.workspaceId, workspaceId),
-        isNull(capabilities.workspaceId)
-      )
-    );
-}
-
 /** A space's needs and their state. Throws when a read fails. */
 export async function workspaceNeedCoverage(
   workspaceId: string
 ): Promise<SpaceNeedCoverageResult> {
-  const [declared, bindings, installed] = await Promise.all([
-    readSpaceDeclaredNeeds(workspaceId),
-    readSpaceNeedBindings(workspaceId),
-    readInstalledNeedProviders(workspaceId),
-  ]);
+  const declared = await readSpaceDeclaredNeeds(workspaceId);
+  const installed = await readInstalledNeedProviders(workspaceId);
+  const bindings = await readSpaceNeedBindings(workspaceId, { installed });
   return foldNeedCoverage({ workspaceId, declared, bindings, installed });
 }
 
@@ -218,7 +198,7 @@ export async function workspaceNeedCoverage(
 export type NeedReconcileStep =
   | {
       need: string;
-      action: "bound";
+      action: "recorded";
       providerCapabilityId: string;
       providerName: string;
     }
@@ -230,7 +210,7 @@ export type NeedReconcileStep =
 
 export interface NeedReconcileReport {
   workspaceId: string;
-  /** Needs already filled before the reconcile. */
+  /** Needs already filled by a row before the reconcile. */
   filled: string[];
   steps: NeedReconcileStep[];
 }
@@ -246,35 +226,51 @@ export async function reconcileSpaceNeeds(input: {
   userId: string;
   agentUserId?: string | null;
   sessionId?: string | null;
+  /**
+   * File an install proposal for a need nothing installed fills (default
+   * true). The boot backfill passes false: it only records, never asks.
+   */
+  proposeInstalls?: boolean;
 }): Promise<NeedReconcileReport> {
   const coverage = await workspaceNeedCoverage(input.workspaceId);
   const filled = coverage.needs
-    .filter((n) => n.state === "filled")
+    .filter((n) => n.state === "filled" && !n.implicit)
     .map((n) => n.need);
   const steps: NeedReconcileStep[] = [];
   for (const n of coverage.needs) {
+    // An implicit binding (the space's one filling provider) is recorded as a
+    // row, so the pages show who fills it and a later second provider does
+    // not silently un-fill it.
+    if (n.state === "filled" && n.implicit && n.provider) {
+      try {
+        const r = await applySpaceNeedBinding({
+          workspaceId: input.workspaceId,
+          need: n.need,
+          providerCapabilityId: n.provider.capabilityId,
+          userId: input.userId,
+        });
+        steps.push({
+          need: n.need,
+          action: "recorded",
+          providerCapabilityId: n.provider.capabilityId,
+          providerName:
+            r.status === "bound" ? r.providerName : (n.provider.name ?? ""),
+        });
+      } catch (err) {
+        steps.push({
+          need: n.need,
+          action: "failed",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      continue;
+    }
     if (n.state === "filled") continue;
     if (!n.known) {
       steps.push({ need: n.need, action: "unknown_need" });
       continue;
     }
     try {
-      if (n.candidates.length === 1) {
-        const only = n.candidates[0]!;
-        const r = await applySpaceNeedBinding({
-          workspaceId: input.workspaceId,
-          need: n.need,
-          providerCapabilityId: only.capabilityId,
-          userId: input.userId,
-        });
-        steps.push({
-          need: n.need,
-          action: "bound",
-          providerCapabilityId: only.capabilityId,
-          providerName: r.status === "bound" ? r.providerName : only.name,
-        });
-        continue;
-      }
       if (n.candidates.length > 1) {
         steps.push({
           need: n.need,
@@ -283,6 +279,7 @@ export async function reconcileSpaceNeeds(input: {
         });
         continue;
       }
+      if (input.proposeInstalls === false) continue;
       const { resolveNeedGap } =
         await import("../capabilities/propose-intent-gap-install.js");
       const offer = await resolveNeedGap({
@@ -321,4 +318,50 @@ export async function reconcileSpaceNeeds(input: {
     }
   }
   return { workspaceId: input.workspaceId, filled, steps };
+}
+
+/**
+ * BOOT BACKFILL (0426): for every live space whose processes name a need,
+ * record the implicit bindings (the one installed provider that fills each
+ * need) as rows, as the space's owner. Never proposes an install and never
+ * picks between providers. Runs after the boot capability reconcile, which
+ * stamps `metadata.fills`. Never throws: one space's failure is logged and
+ * the next goes on.
+ */
+export async function backfillSpaceNeedBindings(): Promise<{
+  spaces: number;
+  recorded: number;
+  failed: number;
+}> {
+  const { workspaces } = await import("@synap/database/schema");
+  const rows = await db
+    .select({ id: workspaces.id, ownerId: workspaces.ownerId })
+    .from(workspaces)
+    .where(isNull(workspaces.archivedAt));
+  let spaces = 0;
+  let recorded = 0;
+  let failed = 0;
+  for (const ws of rows) {
+    try {
+      const declared = await readSpaceDeclaredNeeds(ws.id);
+      if (declared.length === 0) continue;
+      spaces += 1;
+      const report = await reconcileSpaceNeeds({
+        workspaceId: ws.id,
+        userId: ws.ownerId,
+        proposeInstalls: false,
+      });
+      for (const step of report.steps) {
+        if (step.action === "recorded") recorded += 1;
+        if (step.action === "failed") failed += 1;
+      }
+    } catch (err) {
+      failed += 1;
+      logger.warn(
+        { err, workspaceId: ws.id },
+        "backfillSpaceNeedBindings: a space's needs could not be backfilled"
+      );
+    }
+  }
+  return { spaces, recorded, failed };
 }

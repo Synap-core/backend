@@ -65,10 +65,12 @@ import { pgliteAllTablesDdl } from "../../__tests__/pglite-ddl.js";
 import {
   applySpaceNeedBinding,
   readSpaceNeedBindings,
+  resolveNeedRefVerbs,
   resolveRequiresNeeds,
   SpaceNeedBindError,
 } from "./space-needs.js";
 import {
+  backfillSpaceNeedBindings,
   reconcileSpaceNeeds,
   workspaceNeedCoverage,
 } from "./space-need-coverage.js";
@@ -136,7 +138,7 @@ beforeAll(async () => {
 }, 60_000);
 
 describe("a space's declared needs and their state", () => {
-  it("are the active processes' need refs, each empty with its candidates", async () => {
+  it("are the active processes' need refs; one filling provider fills a need implicitly, several leave it empty", async () => {
     const r = await workspaceNeedCoverage(WS);
     expect(r.needs.map((n) => n.need)).toEqual([
       "code-host",
@@ -145,8 +147,22 @@ describe("a space's declared needs and their state", () => {
     ]);
     // An archived playbook declares nothing.
     expect(r.needs.map((n) => n.need)).not.toContain("analytics");
-    expect(r.empty).toEqual(["code-host", "payments", "deploy-target"]);
+    // No binding row anywhere yet. GitHub is the ONE installed filler of
+    // code-host here (GitLab is another space's): it fills it implicitly, so
+    // a playbook converted to need:code-host keeps running on upgrade.
+    // Payments has two fillers (the person chooses); nothing fills deploy-target.
+    expect(r.empty).toEqual(["payments", "deploy-target"]);
     const byNeed = Object.fromEntries(r.needs.map((n) => [n.need, n]));
+    expect(byNeed["code-host"]).toMatchObject({
+      state: "filled",
+      implicit: true,
+      provider: { capabilityId: GH, name: "GitHub" },
+      binding: null,
+    });
+    expect(byNeed["payments"]).toMatchObject({
+      state: "empty",
+      implicit: false,
+    });
     // A provider of another space is never a candidate.
     expect(byNeed["code-host"]!.candidates).toEqual([
       { capabilityId: GH, name: "GitHub" },
@@ -177,8 +193,14 @@ describe("applySpaceNeedBinding — once per space, shared, governed by its own 
       providerName: "GitHub",
       setBy: PERSON,
     });
-    // The binding is the SPACE's: another space reads nothing.
-    expect((await readSpaceNeedBindings(OTHER_WS)).size).toBe(0);
+    // The binding is the SPACE's: another space has no row (its own GitLab
+    // fills its code-host implicitly, and nothing else).
+    const other = await readSpaceNeedBindings(OTHER_WS);
+    expect([...other.values()].filter((b) => !b.implicit)).toEqual([]);
+    expect(other.get("code-host")).toMatchObject({
+      providerCapabilityId: ELSEWHERE,
+      implicit: true,
+    });
     // An alias names the same seat.
     expect(
       await applySpaceNeedBinding({
@@ -198,7 +220,12 @@ describe("applySpaceNeedBinding — once per space, shared, governed by its own 
       status: "cleared",
       replaced: first.status === "bound" ? first.bindingId : null,
     });
-    expect((await readSpaceNeedBindings(WS)).has("gate")).toBe(false);
+    // Cleared: no row; GitHub, the space's one gate filler, stands in again.
+    expect((await readSpaceNeedBindings(WS)).get("gate")).toMatchObject({
+      implicit: true,
+      bindingId: null,
+      providerCapabilityId: GH,
+    });
     const rows = await q<{ state: string }>(
       `SELECT state FROM installation_bindings WHERE workspace_id = $1 AND need_key = 'gate' ORDER BY created_at`,
       [WS]
@@ -301,7 +328,10 @@ describe("the governed door", () => {
       status: "proposed",
       reviewUrl: expect.any(String),
     });
-    expect((await readSpaceNeedBindings(WS)).has("code-host")).toBe(false);
+    // Proposed: no row was written (code-host is still only implicit).
+    expect((await readSpaceNeedBindings(WS)).get("code-host")?.implicit).toBe(
+      true
+    );
 
     const viaPerson = await put(app(), "code-host", GH);
     expect(viaPerson.status).toBe(200);
@@ -380,7 +410,7 @@ function execArgs(
 }
 
 describe("the template-install reconcile and requires", () => {
-  it("leaves filled needs, binds the one candidate, leaves a choice, says when none exists", async () => {
+  it("records the implicit binding, leaves a choice, says when none exists", async () => {
     // Start from a space whose code-host is empty again and payments has two candidates.
     await applySpaceNeedBinding({
       workspaceId: WS,
@@ -400,15 +430,73 @@ describe("the template-install reconcile and requires", () => {
     });
     const step = (need: string) => report.steps.find((s) => s.need === need);
     expect(step("code-host")).toMatchObject({
-      action: "bound",
+      action: "recorded",
       providerCapabilityId: GH,
     });
     expect(step("payments")).toMatchObject({ action: "choose" });
     // No catalog pack fills deploy-target (the cache is empty): said plainly.
     expect(step("deploy-target")?.action).toMatch(/no_provider|failed/);
-    expect(
-      (await readSpaceNeedBindings(WS)).get("code-host")?.providerCapabilityId
-    ).toBe(GH);
+    expect((await readSpaceNeedBindings(WS)).get("code-host")).toMatchObject({
+      providerCapabilityId: GH,
+      implicit: false,
+      setBy: PERSON,
+    });
+  });
+
+  it("the boot backfill records single-filler needs and proposes nothing", async () => {
+    await applySpaceNeedBinding({
+      workspaceId: WS,
+      need: "code-host",
+      providerCapabilityId: null,
+      userId: PERSON,
+    });
+    const before = await q<{ n: number }>(
+      `SELECT count(*)::int AS n FROM proposals`
+    );
+    const report = await backfillSpaceNeedBindings();
+    expect(report.recorded).toBeGreaterThanOrEqual(1);
+    expect((await readSpaceNeedBindings(WS)).get("code-host")).toMatchObject({
+      implicit: false,
+      setBy: PERSON,
+    });
+    const after = await q<{ n: number }>(
+      `SELECT count(*)::int AS n FROM proposals`
+    );
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
+  });
+
+  it("a converted playbook's need resolves with NO binding row when one provider fills it", async () => {
+    const SPACE = randomUUID();
+    const PROVIDER = randomUUID();
+    await q(
+      `INSERT INTO workspaces (id, owner_id, name) VALUES ($1, $2, 'Fresh')`,
+      [SPACE, PERSON]
+    );
+    await q(
+      `INSERT INTO capabilities (id, workspace_id, created_by, name, template_key, metadata)
+       VALUES ($1, $2, $3, 'Vercel', 'vercel', '{"fills":["deploy-target"]}'::jsonb)`,
+      [PROVIDER, SPACE, PERSON]
+    );
+    const rows = await q<{ n: number }>(
+      `SELECT count(*)::int AS n FROM installation_bindings WHERE workspace_id = $1`,
+      [SPACE]
+    );
+    expect(rows.rows[0]!.n).toBe(0);
+    expect(await resolveRequiresNeeds(["need:deploy-target"], SPACE)).toEqual([
+      "vercel",
+    ]);
+    const verbs = resolveNeedRefVerbs(
+      "need:deploy-target",
+      await readSpaceNeedBindings(SPACE),
+      [
+        {
+          id: PROVIDER,
+          name: "Vercel",
+          verbs: [{ id: "vercel_deploy", intent: "run_external_job" }],
+        },
+      ]
+    );
+    expect(verbs).toMatchObject({ status: "ok", verbs: ["vercel_deploy"] });
   });
 
   it("a requires need becomes the bound provider's key; an unfilled one stays as written", async () => {

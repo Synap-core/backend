@@ -580,6 +580,8 @@ export {
 } from "./services/capabilities/execute-capability.js";
 // A need ref → the verb its space's bound provider runs (0426): the jobs slot.
 export { resolveNeedVerb } from "./services/needs/space-needs.js";
+// The boot backfill of the spaces' need bindings (0426).
+export { backfillSpaceNeedBindings } from "./services/needs/space-need-coverage.js";
 // Exported for @synap/jobs' `registerSessionCloser` IoC slot. A session's
 // TERMINAL status has ONE door (@synap-core/types/focus-sessions) — three job
 // workers stamped `status:'closed'` with a raw UPDATE and skipped the review

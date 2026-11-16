@@ -7,6 +7,8 @@
 import { describe, it, expect } from "vitest";
 import {
   chooseNeedVerb,
+  implicitNeedProviders,
+  withImplicitBindings,
   declaresFill,
   needRequiresKey,
   needResolutionReason,
@@ -248,5 +250,54 @@ describe("needRefsOfFlow — an automation's capability nodes name needs", () =>
       })
     ).toEqual(["need:deploy-target"]);
     expect(needRefsOfFlow(null)).toEqual([]);
+  });
+});
+
+describe("implicit bindings — the space's ONE filling provider stands in (no regression on upgrade)", () => {
+  const gh = {
+    id: "cap-gh",
+    name: "GitHub",
+    metadata: { fills: ["code-host", "ci"] },
+  };
+  const gl = {
+    id: "cap-gl",
+    name: "GitLab",
+    metadata: { fills: ["code-host"] },
+  };
+  const vercel = {
+    id: "cap-vercel",
+    name: "Vercel",
+    metadata: { fills: ["deploy-target"] },
+  };
+
+  it("one filler: it fills the need implicitly (an alias in fills reads as its slug)", () => {
+    const b = withImplicitBindings(new Map(), [gh, vercel]);
+    expect(b.get("code-host")).toMatchObject({
+      providerCapabilityId: "cap-gh",
+      implicit: true,
+      bindingId: null,
+    });
+    expect(b.get("gate")?.providerCapabilityId).toBe("cap-gh");
+    expect(b.get("deploy-target")?.providerCapabilityId).toBe("cap-vercel");
+  });
+
+  it("two fillers: none, the person chooses; no filler: none", () => {
+    const b = withImplicitBindings(new Map(), [gh, gl]);
+    expect(b.has("code-host")).toBe(false);
+    expect(implicitNeedProviders([]).size).toBe(0);
+  });
+
+  it("an explicit row wins; a row whose provider was deleted falls back to the one filler", () => {
+    const explicit = new Map([binding("code-host", "cap-gl", "GitLab")]);
+    expect(withImplicitBindings(explicit, [gh]).get("code-host")).toMatchObject(
+      {
+        providerCapabilityId: "cap-gl",
+      }
+    );
+    const gone = new Map([binding("code-host", null)]);
+    expect(withImplicitBindings(gone, [gh]).get("code-host")).toMatchObject({
+      providerCapabilityId: "cap-gh",
+      implicit: true,
+    });
   });
 });

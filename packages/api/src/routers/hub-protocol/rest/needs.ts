@@ -37,6 +37,7 @@ const NeedCoverageSchema = zOpenapi.object({
   label: zOpenapi.string().nullable(),
   known: zOpenapi.boolean(),
   state: zOpenapi.enum(["filled", "empty"]),
+  implicit: zOpenapi.boolean(),
   provider: zOpenapi
     .object({
       capabilityId: zOpenapi.string(),

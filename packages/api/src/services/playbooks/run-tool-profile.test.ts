@@ -431,3 +431,45 @@ describe("resolveRunToolProfile — a need ref resolves through the run's space 
     expect(p.verbs).toEqual([]);
   });
 });
+
+describe("a playbook converted from a named verb to need: still resolves on upgrade (0426)", () => {
+  it("with NO binding row, the space's one filling provider's verbs are offered", async () => {
+    const { withImplicitBindings } = await import("../needs/space-needs.js");
+    // "Ship a change" named github_pr_checks; it now names need:code-host. The
+    // pod has no binding yet; GitHub is the only installed code-host filler.
+    const registryWithGh: Registry = {
+      index,
+      capabilities: [
+        ...capabilities,
+        {
+          kind: "tool",
+          id: "cap-gh",
+          name: "GitHub",
+          verbs: [
+            { id: "github_pr_checks", kind: "read", intent: "fetch_record" },
+          ],
+        },
+      ],
+    };
+    const p = await resolveRunToolProfile(
+      input,
+      deps(
+        { tools: ["need:code-host/fetch_record"] },
+        {
+          readRegistry: vi.fn(async () => registryWithGh),
+          readSpaceNeeds: vi.fn(async () =>
+            withImplicitBindings(new Map(), [
+              {
+                id: "cap-gh",
+                name: "GitHub",
+                metadata: { fills: ["code-host"] },
+              },
+            ])
+          ),
+        }
+      )
+    );
+    expect(p.verbs).toEqual(["github_pr_checks"]);
+    expect(p.missing).toBeUndefined();
+  });
+});

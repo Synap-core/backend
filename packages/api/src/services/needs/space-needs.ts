@@ -34,27 +34,118 @@ import {
 
 const logger = createLogger({ module: "space-needs" });
 
-/** One live binding of a space's need. */
+/**
+ * One binding of a space's need: an EXPLICIT row (`installation_bindings`, set
+ * by a person, an approved proposal or the install reconcile), or an IMPLICIT
+ * one: no row, and exactly ONE capability installed in the space declares it
+ * fills the need (`metadata.fills`). The implicit one keeps a converted
+ * playbook running on a pod that has no binding yet (no regression on
+ * upgrade); the install reconcile and the boot backfill record it as a row.
+ */
 export interface SpaceNeedBinding {
-  bindingId: string;
+  /** The row's id; null for an implicit binding. */
+  bindingId: string | null;
   need: string;
   /** Null once the provider capability was deleted (FK SET NULL): the need reads empty. */
   providerCapabilityId: string | null;
   providerName: string | null;
-  setBy: string;
-  updatedAt: Date;
+  /** Who set the row; null for an implicit binding. */
+  setBy: string | null;
+  updatedAt: Date | null;
+  /** True when no row exists and the space's one filling provider stands in. */
+  implicit: boolean;
 }
 
-/** need slug → its live binding. A need with no row is absent. */
+/** need slug → its binding (explicit, else implicit). A need with neither is absent. */
 export type SpaceNeedBindings = ReadonlyMap<string, SpaceNeedBinding>;
 
+/** An installed capability visible in a space, with what it declares to fill. */
+export interface InstalledNeedProvider {
+  id: string;
+  name: string;
+  metadata: unknown;
+}
+
 /**
- * The live bindings of one space. Service read: the caller has already fixed
+ * The implicit bindings: for each need, the ONE installed provider whose
+ * `metadata.fills` names it. A need two or more providers fill gets none: the
+ * person chooses. PURE.
+ */
+export function implicitNeedProviders(
+  installed: readonly InstalledNeedProvider[]
+): Map<string, InstalledNeedProvider> {
+  const byNeed = new Map<string, InstalledNeedProvider[]>();
+  for (const cap of installed) {
+    const fills = (cap.metadata as { fills?: unknown } | null)?.fills;
+    if (!Array.isArray(fills)) continue;
+    for (const f of fills) {
+      const slug = canonicalNeedSlug(f);
+      if (!slug) continue;
+      const list = byNeed.get(slug) ?? [];
+      if (!list.some((c) => c.id === cap.id)) list.push(cap);
+      byNeed.set(slug, list);
+    }
+  }
+  const out = new Map<string, InstalledNeedProvider>();
+  for (const [need, list] of byNeed)
+    if (list.length === 1) out.set(need, list[0]!);
+  return out;
+}
+
+/**
+ * Explicit bindings first; each need with no usable row (none, or its
+ * provider was deleted) takes the space's one filling provider. PURE.
+ */
+export function withImplicitBindings(
+  explicit: ReadonlyMap<string, SpaceNeedBinding>,
+  installed: readonly InstalledNeedProvider[]
+): Map<string, SpaceNeedBinding> {
+  const out = new Map(explicit);
+  for (const [need, cap] of implicitNeedProviders(installed)) {
+    if (explicit.get(need)?.providerCapabilityId) continue;
+    out.set(need, {
+      bindingId: null,
+      need,
+      providerCapabilityId: cap.id,
+      providerName: cap.name,
+      setBy: null,
+      updatedAt: null,
+      implicit: true,
+    });
+  }
+  return out;
+}
+
+/** The capabilities installed in a space: its own, and pod-wide ones. */
+export async function readInstalledNeedProviders(
+  workspaceId: string
+): Promise<InstalledNeedProvider[]> {
+  const { db, capabilities, eq, isNull, or } = await import("@synap/database");
+  return db
+    .select({
+      id: capabilities.id,
+      name: capabilities.name,
+      metadata: capabilities.metadata,
+    })
+    .from(capabilities)
+    .where(
+      or(
+        eq(capabilities.workspaceId, workspaceId),
+        isNull(capabilities.workspaceId)
+      )
+    );
+}
+
+/**
+ * The bindings of one space: its explicit rows, then the implicit ones
+ * ({@link withImplicitBindings}). Service read: the caller has already fixed
  * the space (a run's lens, a door that checked membership). Throws on a failed
- * read: "no binding" and "could not read" are different facts.
+ * read: "no binding" and "could not read" are different facts. The installed
+ * providers may be passed in when the caller already read them.
  */
 export async function readSpaceNeedBindings(
-  workspaceId: string
+  workspaceId: string,
+  opts: { installed?: readonly InstalledNeedProvider[] } = {}
 ): Promise<Map<string, SpaceNeedBinding>> {
   const { db, installationBindings, capabilities, and, eq, isNull, ne } =
     await import("@synap/database");
@@ -79,18 +170,21 @@ export async function readSpaceNeedBindings(
         ne(installationBindings.state, "revoked")
       )
     );
-  const out = new Map<string, SpaceNeedBinding>();
+  const explicit = new Map<string, SpaceNeedBinding>();
   for (const r of rows) {
-    out.set(r.need, {
+    explicit.set(r.need, {
       bindingId: r.bindingId,
       need: r.need,
       providerCapabilityId: r.providerCapabilityId,
       providerName: r.providerName ?? null,
       setBy: r.setBy,
       updatedAt: r.updatedAt,
+      implicit: false,
     });
   }
-  return out;
+  const installed =
+    opts.installed ?? (await readInstalledNeedProviders(workspaceId));
+  return withImplicitBindings(explicit, installed);
 }
 
 /** What the registry says about one capability row, as far as a need reads it. */
