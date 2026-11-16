@@ -10,6 +10,7 @@
  * each query's WHERE is rendered so a dropped floor is seen.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SQL } from "drizzle-orm";
 
 const h = vi.hoisted(() => ({
   row: null as Record<string, unknown> | null,
@@ -302,9 +303,7 @@ beforeEach(() => {
 async function whereText(where: unknown): Promise<string> {
   const { PgDialect } = await import("drizzle-orm/pg-core");
   return where
-    ? new PgDialect().sqlToQuery(
-        where as Parameters<PgDialect["sqlToQuery"]>[0]
-      ).sql
+    ? new PgDialect().sqlToQuery(where as SQL).sql
     : "";
 }
 
