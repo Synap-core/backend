@@ -50,20 +50,37 @@ describe("processHealthUnitInput — the one tone of a process health", () => {
 });
 
 describe("classifyStepRunner — who moves a step on", () => {
-  it("a human gate waits on a person; a check gate clears automatically", () => {
+  it("a human gate waits on a person; a check gate is not a runner", () => {
     expect(classifyStepRunner({ gate: "human" })).toBe("person");
     expect(classifyStepRunner({ gate: { kind: "human" } })).toBe("person");
-    expect(classifyStepRunner({ gate: "check" })).toBe("automatic");
-    expect(classifyStepRunner({ gate: { kind: "check" } })).toBe("automatic");
+    // A check judges the stage being LEFT: someone still works the step.
+    expect(classifyStepRunner({ gate: "check" })).toBe("ai");
+    expect(classifyStepRunner({ gate: { kind: "check" } })).toBe("ai");
   });
 
-  it("the gate decides before the runner (a gated agent step is the gate's)", () => {
+  it("a human gate decides before the runner; a check gate follows it", () => {
     expect(classifyStepRunner({ gate: "human", runner: "synap_ai" })).toBe(
       "person"
     );
     expect(
       classifyStepRunner({ gate: "check", runner: { agentId: "a-1" } })
-    ).toBe("automatic");
+    ).toBe("ai");
+    // Ship a change's dogfood step: an AI walk behind a check gate.
+    expect(
+      classifyStepRunner({
+        gate: { kind: "check" },
+        runner: { engine: "claude-code" },
+      })
+    ).toBe("ai");
+  });
+
+  it("`automatic` is declared but unreachable until W2b declares it", () => {
+    expect(PROCESS_STEP_RUNNER_KINDS).toContain("automatic");
+    for (const gate of [null, "human", "check", "awaits", { kind: "check" }]) {
+      for (const runner of [null, "self", { agentId: "a-1" }, ["self"]]) {
+        expect(classifyStepRunner({ gate, runner })).not.toBe("automatic");
+      }
+    }
   });
 
   it("every runner shape is an agent; no runner is the run's own agent", () => {

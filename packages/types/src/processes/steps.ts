@@ -6,20 +6,27 @@
  * Read from BOTH the step's entry gate and its runner (`PlaybookStage.gate`,
  * `PlaybookStage.runner`, spec 7111934d §2.1), in this order:
  *   1. a `human` gate → `person`: the step waits for a person to let it in;
- *   2. a `check` gate → `automatic`: a check clears it, nobody works it;
- *   3. a runner → `ai`: every runner shape names an AGENT — `"self"` (the run's
- *      own agent), `"synap_ai"` / `{ synapAi }` (the pod's AI), `{ agentId }`,
+ *   2. otherwise the runner decides → `ai`: every runner shape names an
+ *      AGENT — `"self"` (the run's own agent), `"synap_ai"` / `{ synapAi }`
+ *      (the pod's AI), `{ agentId }`,
  *      `{ role }` (any of the person's agents holding that role) and
  *      `{ engine }` (any of the person's agents of that engine, e.g.
  *      `claude-code`: an agent runtime, not a machine step);
- *   4. no runner, no gate → `ai`: the run's own agent works it (`"self"` is
+ *   3. no runner, no gate → `ai`: the run's own agent works it (`"self"` is
  *      the declared default).
+ *
+ * A `check` gate is NOT a runner kind: it judges the stage being LEFT (someone
+ * works the step, then its criteria are checked; `stage-gate.ts`), so a
+ * check-gated step is drawn by its runner, and surfaces render the check as its
+ * own mark from `step.gate`. `automatic` stays in PROCESS_STEP_RUNNER_KINDS but
+ * is UNREACHABLE today: nothing declares "an automation moves this step" yet
+ * (Process wave W2b); when that declaration exists, it is read here.
  *
  * TOTAL over every stored shape: a gate given as a string (`"human"`, the read
  * contract) or as the stored object (`{ kind: "human" }`), a runner given as
  * one choice or as an ordered fallback list (the FIRST choice decides), and an
- * unknown runner shape (read as an agent, never thrown on). `awaits` gates and
- * any other value fall through to the runner. Pure, dependency-free.
+ * unknown runner shape (read as an agent, never thrown on). `check`, `awaits`
+ * and any other gate value fall through to the runner. Pure, dependency-free.
  */
 
 /**
@@ -56,8 +63,7 @@ export function classifyStepRunner(
 ): ProcessStepRunnerKind {
   const gate = gateKind(step.gate);
   if (gate === "human") return "person";
-  if (gate === "check") return "automatic";
-  // Every runner choice is an agent (see the header); the first choice of a
+  // A `check` gate is a mark, not a runner (see the header). Every runner choice is an agent (see the header); the first choice of a
   // fallback list is the one that runs when it can, and none is a machine step.
   return "ai";
 }
