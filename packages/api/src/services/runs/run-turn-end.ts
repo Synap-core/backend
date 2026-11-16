@@ -36,20 +36,6 @@
  * threw, or its first call did not fit its budget) ends the run the same way,
  * with the IS's reason (`endFailedRun`).
  *
- * STAGES LEFT (plan 7d71ddcc wave 0, founder decision D4, 16 Nov 2026). A
- * `completed` turn of a STAGED run that has not reached its last stage
- * (`stages-left.ts`) does not complete the run: it is a STOP
- * (`stages_left`), settled by the same stop path — continued on its own up
- * to N times, then the person is asked "Continue at <stage>?", or, with no
- * person in the loop, the run ends `failed` with a notice (`stop_reason =
- * 'stages_left'`, which the breakers count: only `budget` is exempt). Before
- * it, ONE completed turn completed the whole run however many stages were
- * left (session 12dbd086: one turn, still on `brief`, run completed, session
- * swept closed). Not a stop, and why: a session that is not active (a gate or
- * a hold waits; the run stays live), a run with no tool to advance its stage
- * (`update_run`: it could never get there), and a run whose person answered
- * NO to keeping it going (they stopped it).
- *
  * NO PERSON IN THE LOOP (founder decision E3, 2026-10-27). A run an automation
  * started (its schedule included) has nobody watching it, so step 2 never
  * happens there: once its continuations are spent it ENDS, `failed` with the
@@ -87,16 +73,8 @@ import type {
   SlotAnswerValue,
   SlotAsk,
 } from "@synap/playbooks";
-import {
-  activeToolsList,
-  readToolsList,
-  runClassOf,
-  runTurnToolNames,
-} from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
-import { isDeclinedValue } from "@synap-core/types/ask";
-import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import type { RunToolProfile } from "@synap/intelligence-client";
 import { applyRunCapture } from "./apply-run-capture.js";
 import { addTurnToCost, ledgerCost, type RunCost } from "./run-cost.js";
@@ -109,12 +87,6 @@ import {
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import { raiseRunAsk } from "./run-ask.js";
 import { settleStageEndAsk, stageAskTurnEntries } from "./stage-end-ask.js";
-import {
-  stagesLeft,
-  stagesLeftWords,
-  stoppedWhere,
-  type StagesLeft,
-} from "./stages-left.js";
 import { startedByAutomation } from "../focus-sessions/session-kind.js";
 import { closeStagelessRunSessionAtTurnEnd } from "../focus-sessions/session-lifecycle-sweep.js";
 import { completeFocusSession } from "../focus-sessions/complete-session.js";
@@ -328,17 +300,6 @@ export type CompleteRunBody = z.infer<typeof completeRunBodySchema>;
 /** Why a turn stopped before the run was finished. */
 export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
 
-/**
- * Why the POD made a `completed` turn a stop: the run has stages left. Never
- * reported by the IS (not in the body's enum): the pod reads it off the run.
- */
-export const STAGES_LEFT_STOP_REASON = "stages_left";
-
-/** What a stop stopped on: a limit the IS reported, or stages left. */
-type StopCause =
-  | { kind: "limit"; reason: RunStopReason | undefined }
-  | { kind: "stages_left"; stages: StagesLeft };
-
 function isRunStopReason(r: string | undefined): r is RunStopReason {
   return (RUN_STOP_REASONS as readonly string[]).includes(r ?? "");
 }
@@ -372,8 +333,7 @@ export type CompleteRunStatus =
 export interface RunTurnRecord {
   at: string;
   outcome: CompleteRunBody["outcome"];
-  reason?:
-    RunStopReason | RunTurnFailureReason | typeof STAGES_LEFT_STOP_REASON;
+  reason?: RunStopReason | RunTurnFailureReason;
   agentType?: string;
   /** The IS's id for the turn (`CompleteRunBody.turnKey`). */
   turnKey?: string;
@@ -608,88 +568,6 @@ async function resetAfterAsk(sessionId: string, runId: string): Promise<void> {
   });
 }
 
-/**
- * A `completed` turn of a run with stages left becomes a STOP, under the
- * session row lock: its record (already written by {@link recordTurnEnd})
- * now reads `stopped` / `stages_left`, and the ledger takes the decision a
- * stopped turn takes ({@link nextAfterStop}), in the same write. A second
- * write rather than a decision inside `recordTurnEnd`: what makes it a stop
- * is read AFTER the record (a step held elsewhere and a stage-end ask come
- * first, and the ask's door writes this ledger under the same lock).
- *
- * `duplicate` ⇒ this turn was already made a stop (a retried report): nothing
- * written. `null` ⇒ the row is gone, or its ledger is another run's.
- */
-async function recordStagesLeftStop(
-  sessionId: string,
-  runId: string,
-  turnKey: string | undefined
-): Promise<{
-  decision: ReturnType<typeof nextAfterStop>;
-  state: RunTurnsState;
-  duplicate: boolean;
-  unattended: boolean;
-} | null> {
-  return db.transaction(async (tx) => {
-    const [locked] = await tx
-      .select({
-        metadata: focusSessions.metadata,
-        origin: focusSessions.origin,
-      })
-      .from(focusSessions)
-      .where(eq(focusSessions.id, sessionId))
-      .for("update");
-    if (!locked) return null;
-    const raw =
-      locked.metadata && typeof locked.metadata === "object"
-        ? (locked.metadata as Record<string, unknown>)[RUN_TURNS_META_KEY]
-        : undefined;
-    if ((raw as Partial<RunTurnsState> | undefined)?.runId !== runId) {
-      return null;
-    }
-    const unattended = hasNoPersonInTheLoop(locked);
-    const state = readRunTurns(locked.metadata, runId);
-    // This turn's record: by its key, else (an older IS) the newest one.
-    const record = turnKey
-      ? ([...state.turns].reverse().find((t) => t.turnKey === turnKey) ??
-        (state.firstTurn?.turnKey === turnKey ? state.firstTurn : undefined))
-      : state.turns.at(-1);
-    const decision = nextAfterStop(state);
-    if (record?.reason === STAGES_LEFT_STOP_REASON) {
-      return { decision, state, duplicate: true, unattended };
-    }
-    const asStop = (t: RunTurnRecord): RunTurnRecord => ({
-      ...t,
-      outcome: "stopped",
-      reason: STAGES_LEFT_STOP_REASON,
-      next: decision.next,
-    });
-    const sameTurn = (t: RunTurnRecord | undefined): boolean =>
-      !!t && !!record && t.at === record.at && t.turnKey === record.turnKey;
-    const next: RunTurnsState = {
-      ...state,
-      stops: state.stops + 1,
-      autoContinues:
-        decision.next === "continue"
-          ? decision.continuation
-          : state.autoContinues,
-      turns: state.turns.map((t) => (sameTurn(t) ? asStop(t) : t)),
-      ...(state.firstTurn
-        ? {
-            firstTurn: sameTurn(state.firstTurn)
-              ? asStop(state.firstTurn)
-              : state.firstTurn,
-          }
-        : {}),
-    };
-    await tx
-      .update(focusSessions)
-      .set({ metadata: mergeSessionMetadata({ [RUN_TURNS_META_KEY]: next }) })
-      .where(eq(focusSessions.id, sessionId));
-    return { decision, state: next, duplicate: false, unattended };
-  });
-}
-
 type RunRow = Pick<
   PlaybookRun,
   | "id"
@@ -738,26 +616,20 @@ async function endUnattendedRun(p: {
   session: SessionRoom;
   stops: number;
   turnRef: string;
-  cause: StopCause;
+  reason: RunStopReason | undefined;
 }): Promise<CompleteRunStatus> {
+  const limit = stopLimitWords(p.reason);
   const why =
-    p.cause.kind === "stages_left"
-      ? `Stopped ${stoppedWhere(p.cause.stages)} with ${stagesLeftWords(p.cause.stages)}: ` +
-        `its turns ended ${p.stops} times before it reached its last stage, ` +
-        `and it continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
-        "An automation started it, so nobody was asked to keep it going."
-      : `Stopped at its ${stopLimitWords(p.cause.reason)}: the run stopped before it was finished ${p.stops} times ` +
-        `and continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
-        "An automation started it, so nobody was asked to keep it going.";
+    `Stopped at its ${limit}: the run stopped before it was finished ${p.stops} times ` +
+    `and continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
+    "An automation started it, so nobody was asked to keep it going.";
   const ended = await applyRunCapture({
     run: p.run,
     status: "failed",
     error: why,
-    // The parent automation run and its breakers read this
-    // (`automation-parent-settle.ts`): a budget stop is not a fault and never
-    // turns a rule off; a run that keeps ending with stages left IS one, and
-    // the breakers count it (only `budget` is exempt).
-    stopReason: p.cause.kind === "stages_left" ? "stages_left" : "budget",
+    // Not a fault: the parent automation run and its breakers read this
+    // (`automation-parent-settle.ts`), so a budget stop never turns a rule off.
+    stopReason: "budget",
   });
   if (!ended) return "no-running-run";
   if (p.session.channelId) {
@@ -873,18 +745,11 @@ export function continuationNotice(p: {
   continuation: number;
   reason: RunStopReason | undefined;
   checkpoint: CompleteRunBody["checkpoint"];
-  /** Set when the turn ended with stages left: the notice names them. */
-  stages?: StagesLeft;
 }): string {
-  const head = p.stages
-    ? `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
-      `the last turn ended ${stoppedWhere(p.stages)}, but this run has ${stagesLeftWords(p.stages)} ` +
-      `(${p.stages.left.map((s) => s.name).join(", ")}). ` +
-      "Pick up from where it stopped; do not start over. " +
-      "Finish the current stage, then move the run to its next stage (update_run), until its last stage is done."
-    : `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
-      `the last turn stopped at its ${stopLimitWords(p.reason)} before this run was finished. ` +
-      "Pick up from where it stopped; do not start over.";
+  const head =
+    `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
+    `the last turn stopped at its ${stopLimitWords(p.reason)} before this run was finished. ` +
+    "Pick up from where it stopped; do not start over.";
   if (!p.checkpoint) return head;
   return (
     `${head} Its checkpoint follows: the records it already touched, by full ` +
@@ -1070,16 +935,11 @@ async function continueRun(p: {
   continuation: number;
   /** The turn's id for idempotency (see `settleRunTurnEnd`). */
   turnRef: string;
-  cause: StopCause;
+  reason: RunStopReason | undefined;
   checkpoint: CompleteRunBody["checkpoint"];
 }): Promise<boolean> {
   if (!p.session.channelId) return false;
-  const content = continuationNotice({
-    continuation: p.continuation,
-    reason: p.cause.kind === "limit" ? p.cause.reason : undefined,
-    checkpoint: p.checkpoint,
-    ...(p.cause.kind === "stages_left" ? { stages: p.cause.stages } : {}),
-  });
+  const content = continuationNotice(p);
   // The continuation is a run turn too: the same declared tools as the
   // kickoff (founder, 2026-11-05). Never throws (a failed read says so).
   const run = p.run.playbookId
@@ -1132,20 +992,15 @@ async function askToKeepGoing(p: {
   askingAgentUserId: string | null;
   stops: number;
   turnRef: string;
-  cause: StopCause;
+  reason: RunStopReason | undefined;
 }): Promise<boolean> {
   // Said once: the facts are the slot's `why`, the question is the prompt.
   // The room post carries both, as a message reads.
-  const staged = p.cause.kind === "stages_left" ? p.cause.stages : null;
-  const facts = staged
-    ? `The run stopped ${stoppedWhere(staged)}, with ${stagesLeftWords(staged)} ` +
-      `(it continued on its own ${MAX_AUTO_CONTINUATIONS} times).`
-    : `This run stopped before it was finished ${p.stops} times ` +
-      `(the last turn hit its ${stopLimitWords(p.cause.kind === "limit" ? p.cause.reason : undefined)}; ` +
-      `it continued on its own ${MAX_AUTO_CONTINUATIONS} times).`;
-  const prompt = staged
-    ? `Continue ${staged.at ? `at ${staged.at.name}` : `from ${staged.left[0]!.name}`}?`
-    : "Keep it going?";
+  const facts =
+    `This run stopped before it was finished ${p.stops} times ` +
+    `(the last turn hit its ${stopLimitWords(p.reason)}; ` +
+    `it continued on its own ${MAX_AUTO_CONTINUATIONS} times).`;
+  const prompt = "Keep it going?";
   const question = `${facts} ${prompt}`;
   const ask: SlotAsk = {
     mode: "confirm",
@@ -1165,9 +1020,7 @@ async function askToKeepGoing(p: {
       status: "pending",
       // What the answer unblocks (decision E): the room question is refused
       // for a slot that does not say it.
-      unblocks: staged
-        ? `The run goes on ${staged.at ? `at ${staged.at.name}` : `from ${staged.left[0]!.name}`}`
-        : "The run goes on",
+      unblocks: "The run goes on",
     } satisfies ExpectedOutput,
     blockedReason: "decision",
     why: facts,
@@ -1234,173 +1087,6 @@ async function closeOneTurnRun(sessionId: string): Promise<void> {
   }
 }
 
-/**
- * Where a staged run stands when its turn reports `completed` (wave 0, plan
- * 7d71ddcc — see the file header):
- *   - `none`: nothing keeps the run from completing, as before — no declared
- *     stages, its last stage reached (`stages-left.ts`), a session that
- *     already ended, a run with no tool to advance its stage (`update_run`,
- *     read off its frozen definition as `resolveRunToolProfile` reads the
- *     live one: a short run cannot move its stage, so asking it to would
- *     loop), or the person answered NO (or refused) "Keep the run going";
- *   - `waits`: the session is not active (paused at a gate or on a hold,
- *     forming, scheduled, stale). Something other than this turn moves it
- *     next, so the run stays LIVE; the reaper parks it `waiting_on_you` while
- *     the session waits on the person. A read that failed lands here too:
- *     never a false `completed`;
- *   - `stages_left`: an active session whose run has not reached its last
- *     stage. Never throws.
- */
-async function stagesAtTurnEnd(
-  run: RunRow,
-  sessionId: string
-): Promise<
-  | { kind: "none" }
-  | { kind: "waits" }
-  | { kind: "stages_left"; stages: StagesLeft }
-> {
-  try {
-    const [session] = await db
-      .select({
-        status: focusSessions.status,
-        currentStage: focusSessions.currentStage,
-        stages: focusSessions.stages,
-        expectedOutputs: focusSessions.expectedOutputs,
-      })
-      .from(focusSessions)
-      .where(eq(focusSessions.id, sessionId))
-      .limit(1);
-    const [row] = await db
-      .select({
-        executor: playbookRuns.executor,
-        snapshot: playbookRuns.definitionSnapshot,
-      })
-      .from(playbookRuns)
-      .where(eq(playbookRuns.id, run.id))
-      .limit(1);
-    if (!session || !row) return { kind: "none" };
-    if (isTerminalSessionStatus(session.status)) return { kind: "none" };
-    // The stages this run follows: its frozen definition, else the session's
-    // (as `stage-end-ask.ts` reads them).
-    const snap = (row.snapshot ?? {}) as { stages?: unknown; tools?: unknown };
-    const stages =
-      Array.isArray(snap.stages) && snap.stages.length > 0
-        ? snap.stages
-        : session.stages;
-    const left = stagesLeft(stages, session.currentStage);
-    if (!left) return { kind: "none" };
-    const runClass = runClassOf({ executor: row.executor, stages });
-    const canAdvance =
-      runClass !== "one-shot" &&
-      runTurnToolNames(
-        runClass,
-        activeToolsList(
-          readToolsList(snap.tools),
-          stages,
-          session.currentStage ?? null
-        )
-      ).includes("update_run");
-    if (!canAdvance) return { kind: "none" };
-    const keepGoing = (
-      (session.expectedOutputs as ExpectedOutput[] | null) ?? []
-    ).find(
-      (o) =>
-        normalizeExpectedLabel(o?.label) ===
-        normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL)
-    );
-    const said = keepGoing?.answer?.value;
-    if (
-      said &&
-      ((said.type === "confirm" && !said.confirmed) || isDeclinedValue(said))
-    ) {
-      return { kind: "none" };
-    }
-    if (session.status !== "active") return { kind: "waits" };
-    return { kind: "stages_left", stages: left };
-  } catch (err) {
-    logger.error(
-      { err, runId: run.id, sessionId },
-      "run-turn-end: where the staged run stands could not be read; the run stays live"
-    );
-    return { kind: "waits" };
-  }
-}
-
-/**
- * A stop, settled: the run stays LIVE while it continues on its own (up to
- * {@link MAX_AUTO_CONTINUATIONS} times), then the person is asked; with no
- * person in the loop it ends with a notice instead. A stop the IS reported
- * (its token budget, its step limit) and a completed turn with stages left
- * take this ONE path; only the words differ (`cause`).
- */
-async function settleStop(p: {
-  run: RunRow;
-  session: SessionRoom;
-  body: CompleteRunBody;
-  askingAgentUserId: string | null;
-  decision: ReturnType<typeof nextAfterStop>;
-  state: RunTurnsState;
-  unattended: boolean;
-  cause: StopCause;
-}): Promise<CompleteRunStatus> {
-  const { run, session, body, decision, state, unattended, cause } = p;
-  // Idempotency for the room posts: the IS's turn id, else (an older IS) the
-  // stop count — which a retried report re-increments, so only `turnKey`
-  // makes a retry recognisable.
-  const turnRef = body.turnKey ?? String(state.stops);
-  if (decision.next === "continue") {
-    if (run.status !== "running") {
-      await applyRunCapture({ run, status: "running" });
-    }
-    const continued = await continueRun({
-      run,
-      session,
-      agentType: body.agentType ?? "meta",
-      continuation: decision.continuation,
-      turnRef,
-      cause,
-      checkpoint: body.checkpoint,
-    });
-    if (continued) return "continued";
-    // No person to ask: a continuation that could not be dispatched ends the
-    // run now, instead of leaving it live for the reaper.
-    if (unattended) {
-      return endFailedRun({
-        run,
-        session,
-        reason: "could_not_continue",
-        turnRef,
-      });
-    }
-  }
-  if (unattended) {
-    return endUnattendedRun({
-      run,
-      session,
-      stops: state.stops,
-      turnRef,
-      cause,
-    });
-  }
-
-  const asked = await askToKeepGoing({
-    run,
-    session,
-    askingAgentUserId: p.askingAgentUserId,
-    stops: state.stops,
-    turnRef,
-    cause,
-  });
-  if (asked) {
-    await resetAfterAsk(session.id, run.id);
-    const parked = await applyRunCapture({ run, status: "waiting_on_you" });
-    if (parked) return "waiting_on_you";
-  }
-  // Neither continued nor asked: nothing will move this run again, so it
-  // ends now instead of waiting for the reaper.
-  return endFailedRun({ run, session, reason: "could_not_continue", turnRef });
-}
-
 /** Settle one IS turn's end on the session's live run. */
 export async function settleRunTurnEnd(p: {
   run: RunRow;
@@ -1448,30 +1134,6 @@ export async function settleRunTurnEnd(p: {
       }
       return "left_running";
     }
-    // A staged run with stages left is not done: its turn's end is a STOP
-    // (`stagesAtTurnEnd`), never the run's completion.
-    const stand = await stagesAtTurnEnd(run, session.id);
-    if (stand.kind === "waits") {
-      if (run.status !== "running") {
-        await applyRunCapture({ run, status: "running" });
-      }
-      return "left_running";
-    }
-    if (stand.kind === "stages_left") {
-      const stop = await recordStagesLeftStop(session.id, run.id, body.turnKey);
-      if (!stop) return "left_running";
-      if (stop.duplicate) return "duplicate";
-      return settleStop({
-        run,
-        session,
-        body,
-        askingAgentUserId: p.askingAgentUserId,
-        decision: stop.decision,
-        state: stop.state,
-        unattended: stop.unattended,
-        cause: { kind: "stages_left", stages: stand.stages },
-      });
-    }
     const updated = await applyRunCapture({ run, status: "completed" });
     if (!updated) return "no-running-run";
     await closeOneTurnRun(session.id);
@@ -1494,17 +1156,61 @@ export async function settleRunTurnEnd(p: {
   // below — even when the turn could not be recorded (row gone mid-call).
   if (recorded?.duplicate) return "duplicate";
   if (!recorded?.decision) return "left_running";
-  return settleStop({
+  const { decision, state, unattended } = recorded;
+  const reason = isRunStopReason(body.reason) ? body.reason : undefined;
+  // Idempotency for the room posts: the IS's turn id, else (an older IS) the
+  // stop count — which a retried report re-increments, so only `turnKey`
+  // makes a retry recognisable.
+  const turnRef = body.turnKey ?? String(state.stops);
+  if (decision.next === "continue") {
+    if (run.status !== "running") {
+      await applyRunCapture({ run, status: "running" });
+    }
+    const continued = await continueRun({
+      run,
+      session,
+      agentType: body.agentType ?? "meta",
+      continuation: decision.continuation,
+      turnRef,
+      reason,
+      checkpoint: body.checkpoint,
+    });
+    if (continued) return "continued";
+    // No person to ask: a continuation that could not be dispatched ends the
+    // run now, instead of leaving it live for the reaper.
+    if (unattended) {
+      return endFailedRun({
+        run,
+        session,
+        reason: "could_not_continue",
+        turnRef,
+      });
+    }
+  }
+  if (unattended) {
+    return endUnattendedRun({
+      run,
+      session,
+      stops: state.stops,
+      turnRef,
+      reason,
+    });
+  }
+
+  const asked = await askToKeepGoing({
     run,
     session,
-    body,
     askingAgentUserId: p.askingAgentUserId,
-    decision: recorded.decision,
-    state: recorded.state,
-    unattended: recorded.unattended,
-    cause: {
-      kind: "limit",
-      reason: isRunStopReason(body.reason) ? body.reason : undefined,
-    },
+    stops: state.stops,
+    turnRef,
+    reason,
   });
+  if (asked) {
+    await resetAfterAsk(session.id, run.id);
+    const parked = await applyRunCapture({ run, status: "waiting_on_you" });
+    if (parked) return "waiting_on_you";
+  }
+  // Neither continued nor asked: nothing will move this run again, so it
+  // ends now instead of waiting for the reaper.
+  return endFailedRun({ run, session, reason: "could_not_continue", turnRef });
 }
