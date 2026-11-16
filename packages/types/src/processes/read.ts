@@ -77,6 +77,17 @@ export interface ProcessNeed {
   providers: ProcessNeedProvider[];
   /** The step keys that declare it (a step narrows its playbook's list); `[]` = the playbook itself. */
   steps: string[];
+  /**
+   * The entry's name in a person's words, never its raw token
+   * (`resolveProcessNeedLabels`, `@synap-core/types/vocabulary`): a `need:`
+   * entry → the need's name ("Code host"), an intent → its name, a capability
+   * → its name when the read found it. The pod fills it in English; a surface
+   * in another locale calls the resolver with its locale. Null when there is
+   * no name to give (an unfound capability). Absent on an older pod.
+   */
+  label?: string | null;
+  /** A `need:<slug>/<intent>` entry's intent, named ("Fetch a record"); null otherwise. */
+  intentLabel?: string | null;
 }
 
 // ── When (what starts and moves it) ──────────────────────────────────────────

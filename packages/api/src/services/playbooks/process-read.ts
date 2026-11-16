@@ -69,6 +69,7 @@ import {
   type SpaceNeedBindings,
 } from "../needs/space-needs.js";
 import { canonicalNeedSlug, parseNeedRef } from "@synap-core/types/needs";
+import { resolveProcessNeedLabels } from "@synap-core/types/vocabulary";
 import {
   classifyStepRunner,
   deriveProcessHealth,
@@ -329,7 +330,16 @@ export function coverNeeds(
     caps === null
       ? null
       : foldIntentCoverage({ declared: intents, caps: [...caps], workspaceId });
-  return declared.map((d): ProcessNeed => {
+  return declared
+    .map((d): ProcessNeed => coverOne(d))
+    .map((n) => ({
+      ...n,
+      // The entry's words, never its token (the pod answers in English; a
+      // surface in another locale calls the same resolver with its locale).
+      ...resolveProcessNeedLabels(n, { locale: "en" }),
+    }));
+
+  function coverOne(d: DeclaredNeed): ProcessNeed {
     if (d.kind === "need") return coverNeedRef(d, caps, bindings);
     if (d.source === "requires" || caps === null) {
       return { ...d, state: "unknown", providers: [] };
@@ -372,7 +382,7 @@ export function coverNeeds(
       state: providers.length > 0 ? "filled" : "empty",
       providers,
     };
-  });
+  }
 }
 
 /** The health of a process from its ledger facts. PURE. */

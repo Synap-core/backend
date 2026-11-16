@@ -58,6 +58,8 @@ import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
 import type { ProcessStepRunnerKind } from "../processes/steps.js";
+import type { ProcessNeed } from "../processes/read.js";
+import { canonicalNeedSlug, parseNeedRef } from "../needs/index.js";
 import type {
   ProcessHealth,
   ProcessHealthReason,
@@ -2514,6 +2516,62 @@ export const STEP_RUNNER_KIND_LABELS = {
 export type StepRunnerKindLabelRows = typeof STEP_RUNNER_KIND_LABELS;
 
 /**
+ * A NEED's name (0426, `NEEDS` in `@synap-core/types/needs`): what a process
+ * read, the need picker and a run's "missing" line call it. Keyed by EVERY
+ * need slug; `needs-labels.test.ts` pins each English word to `NEEDS`' own
+ * label, so the two never drift.
+ */
+export const NEED_LABELS = {
+  "code-host": "Code host",
+  "deploy-target": "Deploy target",
+  gate: "Gate",
+  payments: "Payments",
+  messaging: "Messaging",
+  email: "Email",
+  calendar: "Calendar",
+  "file-store": "File store",
+  "media-generation": "Media generation",
+  "social-publishing": "Social publishing",
+  "linkedin-reach": "LinkedIn reach",
+  analytics: "Analytics",
+} as const;
+
+/** The need rows, exactly typed: the keys of the `need.*` catalog. */
+export type NeedLabelRows = typeof NEED_LABELS;
+
+/**
+ * A capability INTENT's short name (`CAPABILITY_INTENTS`), for a process
+ * read's need entry and a need ref's `/<intent>`: a noun phrase, never the
+ * consent sentence (`intentRunLabel`). Keyed by EVERY intent
+ * (`needs-labels.test.ts`).
+ */
+export const INTENT_LABELS = {
+  search_external: "Search outside sources",
+  find_people: "Find people",
+  enrich_entity: "Enrich records",
+  fetch_record: "Fetch a record",
+  list_records: "List records",
+  send_message: "Send a message",
+  request_connection: "Request a connection",
+  schedule_event: "Schedule an event",
+  manage_file: "Manage files",
+  generate_media: "Generate media",
+  capture_into_pod: "Bring data into the pod",
+  run_external_job: "Run an outside job",
+  connect_account: "Connect an account",
+  publish_post: "Publish a post",
+  delegate_agent_task: "Hand a task to an agent",
+  read_webpage: "Read a web page",
+  search_web: "Search the web",
+  edit_video: "Edit a video",
+  transcribe_media: "Transcribe media",
+  download_media: "Download media",
+} as const;
+
+/** The intent rows, exactly typed: the keys of the `intent.*` catalog. */
+export type IntentLabelRows = typeof INTENT_LABELS;
+
+/**
  * What a session's runner says it is doing (0384, `RUNNER_STATES`), in a
  * person's words: the mark a session page and a needs-you row wear (decision
  * D-R1). Keyed by EVERY state: a word with no label stops the build.
@@ -2633,6 +2691,78 @@ export function resolveStepRunnerLabel(
     translatedWord(`stepRunner.${key}`, catalogLocaleOf(opts?.locale)) ??
     STEP_RUNNER_KIND_LABELS[key as keyof StepRunnerKindLabelRows]
   );
+}
+
+/**
+ * A need's name (`code-host` → "Code host"), in `opts.locale` (else the
+ * ambient catalog locale), through `need.<slug>`. An alias reads as its need;
+ * an unknown slug humanizes; none is "".
+ */
+export function resolveNeedLabel(
+  slug: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!slug) return "";
+  const key = canonicalNeedSlug(slug);
+  if (!key || !Object.hasOwn(NEED_LABELS, key)) return humanizeToken(slug);
+  return (
+    translatedWord(`need.${key}`, catalogLocaleOf(opts?.locale)) ??
+    NEED_LABELS[key as keyof NeedLabelRows]
+  );
+}
+
+/**
+ * An intent's short name (`fetch_record` → "Fetch a record"), in
+ * `opts.locale` (else the ambient catalog locale), through `intent.<slug>`.
+ * An unknown slug humanizes; none is "".
+ */
+export function resolveIntentLabel(
+  intent: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!intent) return "";
+  const key = intent.trim();
+  if (!Object.hasOwn(INTENT_LABELS, key)) return humanizeToken(intent);
+  return (
+    translatedWord(`intent.${key}`, catalogLocaleOf(opts?.locale)) ??
+    INTENT_LABELS[key as keyof IntentLabelRows]
+  );
+}
+
+/**
+ * The words a process read's need entry wears (`ProcessNeed`), never its raw
+ * token: a `need:` entry → the need's name, and its `/<intent>` as
+ * `intentLabel`; an intent entry → the intent's name; a capability entry →
+ * the capability's name when the read found it, else null (the surface then
+ * says "a tool it names"). The pod fills `label`/`intentLabel` in English; a
+ * surface in another locale calls this with its locale. PURE.
+ */
+export function resolveProcessNeedLabels(
+  need: Pick<ProcessNeed, "slug" | "kind"> & {
+    providers?: ProcessNeed["providers"];
+  },
+  opts?: { locale?: Locale }
+): { label: string | null; intentLabel: string | null } {
+  if (need.kind === "need") {
+    const ref = parseNeedRef(need.slug);
+    if (!ref) {
+      return {
+        label: humanizeToken(need.slug.replace(/^need:/, "")),
+        intentLabel: null,
+      };
+    }
+    return {
+      label: resolveNeedLabel(ref.need, opts),
+      intentLabel: ref.intent ? resolveIntentLabel(ref.intent, opts) : null,
+    };
+  }
+  if (need.kind === "intent") {
+    return { label: resolveIntentLabel(need.slug, opts), intentLabel: null };
+  }
+  return {
+    label: need.providers?.[0]?.capabilityName ?? null,
+    intentLabel: null,
+  };
 }
 
 /**
@@ -4256,6 +4386,8 @@ export const vocabularyEn = buildVocabularyEn({
   runnerStates: RUNNER_STATE_LABELS,
   waitKinds: WAIT_KIND_LABELS,
   stepRunners: STEP_RUNNER_KIND_LABELS,
+  needs: NEED_LABELS,
+  intents: INTENT_LABELS,
 });
 
 /** Every locale's vocabulary catalog, for `createT` and the parity test. */
