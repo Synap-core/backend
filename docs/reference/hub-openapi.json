@@ -6980,6 +6980,13 @@
           "unreadable"
         ]
       },
+      "InstallationRequestApplied": {
+        "anyOf": [
+          { "$ref": "#/components/schemas/InstallationRequested" },
+          { "$ref": "#/components/schemas/InstallationInstalledOnPod" },
+          { "$ref": "#/components/schemas/InstallationAlreadyOnPod" }
+        ]
+      },
       "InstallationRequested": {
         "type": "object",
         "properties": {
@@ -6988,6 +6995,19 @@
           "jobId": { "type": ["string", "null"] }
         },
         "required": ["status", "installationId", "jobId"]
+      },
+      "InstallationInstalledOnPod": {
+        "type": "object",
+        "properties": { "status": { "type": "string", "enum": ["installed"] } },
+        "required": ["status"]
+      },
+      "InstallationAlreadyOnPod": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["already_on_pod"] },
+          "capabilityKey": { "type": "string" }
+        },
+        "required": ["status", "capabilityKey"]
       },
       "InstallationRequestProposed": {
         "type": "object",
@@ -54269,7 +54289,7 @@
     "/installations/request": {
       "post": {
         "tags": ["Installations"],
-        "summary": "Ask for a capability on one of your computers: install, update to a version, check or remove. An agent's install, update or removal becomes a proposal",
+        "summary": "Ask for a capability on one of your computers (install, update to a version, check or remove), or on the pod itself (`computer: \"pod\"`, install only, from Synap's catalog). An agent's install, update or removal becomes a proposal",
         "requestBody": {
           "content": {
             "application/json": {
@@ -54279,11 +54299,11 @@
         },
         "responses": {
           "200": {
-            "description": "Applied (`approved`): the asked state is recorded and the job, when one is due, is queued",
+            "description": "Applied. On a computer (`approved`): the asked state is recorded and the job, when one is due, is queued. On the pod (`computer: \"pod\"`): `installed` (added from Synap's catalog), or `already_on_pod`",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InstallationRequested"
+                  "$ref": "#/components/schemas/InstallationRequestApplied"
                 }
               }
             }
@@ -54323,7 +54343,7 @@
             }
           },
           "409": {
-            "description": "The computer cannot take it (\"Installs from the pod\" is off, or its placement refuses it), or nothing is installed to check or remove",
+            "description": "The computer cannot take it (\"Installs from the pod\" is off, or its placement refuses it), or nothing is installed to check or remove. On the pod (`computer: \"pod\"`): an action other than install, or a capability that runs only on a computer (`code: CANNOT_INSTALL`)",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
