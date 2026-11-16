@@ -39,12 +39,12 @@
  * `AssertExact` guard below binding its arrays to the `@synap/database` unions).
  */
 
-// `import { needRefProblem } from "@synap-core/types/needs";
-import type` — erased at compile time, so this file stays runtime pure/DB-free.
+// `import type` — erased at compile time, so this file stays runtime pure/DB-free.
 // It exists only to bind the runtime arrays below to the schema union at compile
 // time (the drift guard after the constants).
 import type { AutomationNodeBase, OutputNodeDef } from "@synap/database";
 import { PLAYBOOK_RUN_MODES } from "@synap-core/types/automations";
+import { needRefProblem } from "@synap-core/types/needs";
 
 // ── Contract constants (mirror schema/automations.ts — keep in sync) ──────────
 

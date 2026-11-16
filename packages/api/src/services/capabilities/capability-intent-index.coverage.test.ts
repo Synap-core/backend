@@ -53,7 +53,6 @@ import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 import {
   BACKEND_ROOT,
   siblingCheckout,
-  siblingSkipReason,
 } from "../../../../../scripts/sibling-checkout.mjs";
 
 /**
@@ -441,93 +440,36 @@ describe("TRIPWIRE — Phase 4 stays inert and governed", () => {
   });
 });
 
-describe("TRIPWIRE — the declared-intent sink is wired end to end", () => {
+describe("TRIPWIRE — the declared-intent sink is RETIRED; a space's needs are derived (0426)", () => {
   /**
-   * A declaration that is validated, guarded and typed but never PERSISTED is
-   * the Phase-1 limitation this work was meant to close. Each link below is a
-   * separate edit that could silently re-break the chain; this asserts all four
-   * are present at once, and derives its own file list (no hand-maintained DOORS
-   * array — a new link joins the scan by existing).
+   * `settings.taskIntents` was written at install and read by no runtime path
+   * since 0419. Founder decisions D2 and D3 (16 Nov 2026) replaced it: a
+   * space's needs are the `need:` refs of its processes, derived on read
+   * (`services/needs/space-need-coverage.ts`, `declaredNeedsOf`). This pins
+   * both halves: nothing persists taskIntents again (a second, drifting
+   * declaration), and the needs read derives from the processes.
    */
-  const LINKS: Array<{
-    repo: keyof typeof REPO_ROOTS;
-    file: string;
-    must: string;
-    what: string;
-  }> = [
-    {
-      repo: "synap-backend",
-      file: "packages/database/src/utils/create-workspace-from-definition.ts",
-      must: "settings.taskIntents = definition.taskIntents",
-      what: "the pod persists the declaration to settings",
-    },
-    {
-      repo: "synap-backend",
-      file: "packages/database/src/utils/create-workspace-from-definition.ts",
-      must: "taskIntents: z.array(z.string()).optional()",
-      what: "the door's zod accepts the field (a strict zod would reject it)",
-    },
-    {
-      repo: "synap-backend",
-      file: "packages/types/src/workspaces/settings.ts",
-      must: "taskIntents?: string[]",
-      what: "WorkspaceSettings declares the key the resolver reads",
-    },
-    {
-      repo: "synap-app",
-      file: "packages/workspace-templates/src/define.ts",
-      must: "taskIntents: tpl.taskIntents",
-      what: "the converter forwards it (both doors: workspace + package)",
-    },
-  ];
-  /** The links whose repo is checked out here, read once. */
-  const READ = LINKS.flatMap((link) => {
-    const root = REPO_ROOTS[link.repo];
-    if (root === null) return [];
-    return [{ ...link, text: readFileSync(join(root, link.file), "utf8") }];
-  });
-  if (REPO_ROOTS["synap-app"] === null) {
-    console.warn(siblingSkipReason("synap-app", "intent-chain"));
-  }
+  const CREATOR = join(
+    REPO_ROOTS["synap-backend"]!,
+    "packages/database/src/utils/create-workspace-from-definition.ts"
+  );
+  const COVERAGE = join(HERE, "../needs/space-need-coverage.ts");
 
-  it("NON-VACUITY: every scanned file exists and was actually read", () => {
-    // A missing file makes readFileSync throw, but a file that exists with the
-    // wrong path shape would silently satisfy nothing — assert the scan found a
-    // plausible number of REAL files with content. The backend links are
-    // always present, so the scan can never shrink to nothing.
-    expect(LINKS.length).toBeGreaterThanOrEqual(4);
-    expect(
-      READ.filter((l) => l.repo === "synap-backend").length
-    ).toBeGreaterThanOrEqual(3);
-    for (const link of READ) {
-      expect(
-        link.text.length,
-        `${link.repo}/${link.file} is suspiciously short — the scan may be reading the wrong path`
-      ).toBeGreaterThan(500);
-    }
+  it("NON-VACUITY: both files are read", () => {
+    expect(readFileSync(CREATOR, "utf8").length).toBeGreaterThan(5000);
+    expect(readFileSync(COVERAGE, "utf8").length).toBeGreaterThan(2000);
   });
 
-  it("no link in the declaration → settings → resolver chain is missing", () => {
-    const missing = READ.filter((l) => !l.text.includes(l.must)).map(
-      (l) => `${l.repo}/${l.file}: ${l.what} (expected \`${l.must}\`)`
-    );
-    expect(
-      missing,
-      "The declared-intent chain is broken. Phase 3 reads settings.taskIntents " +
-        "but the declaration would never arrive there, so every workspace would " +
-        "report 'declares nothing' — a calm, confident, empty answer:\n" +
-        missing.join("\n")
-    ).toEqual([]);
+  it("the pod no longer persists settings.taskIntents", () => {
+    const src = readFileSync(CREATOR, "utf8");
+    expect(src).not.toMatch(/settings\.taskIntents\s*=/);
+    // Self-check: the scan sees a live settings write in the same file.
+    expect(src).toMatch(/settings\.workspaceCapabilities\s*=/);
   });
 
-  it("the resolver reads the SAME key it persists (no silent rename)", () => {
-    const resolver = readFileSync(
-      join(HERE, "capability-intent-index.ts"),
-      "utf8"
-    );
-    expect(resolver).toContain("taskIntents");
-    // It must be the settings KEY, not a column — a column would imply a
-    // migration this design deliberately avoids.
-    expect(resolver).not.toMatch(/columns:\s*\{\s*taskIntents/);
+  it("a space's needs are derived from its processes", () => {
+    const src = readFileSync(COVERAGE, "utf8");
+    expect(src).toContain("declaredNeedsOf(");
+    expect(src).not.toContain("taskIntents\")");
   });
 });

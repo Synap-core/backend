@@ -49,6 +49,11 @@ const REGISTRY = [
     verbs: [{ id: "github_pr_checks", kind: "read", intent: "fetch_record" }],
   },
   {
+    id: "cap-vercel",
+    name: "Vercel",
+    verbs: [{ id: "vercel_deploy", kind: "action", intent: "run_external_job" }],
+  },
+  {
     id: "cap-stripe",
     name: "Stripe",
     verbs: [{ id: "stripe_list", kind: "read", intent: "list_records" }],
@@ -95,15 +100,16 @@ describe("resolveNeedRefVerbs — a need ref → the bound provider's verbs, or 
       status: "provider_gone",
       need: "gate",
     });
+    // A provider that offers nothing for the need's intents (Vercel runs jobs).
     const noVerb = resolveNeedRefVerbs(
       "need:payments",
-      new Map([binding("payments", "cap-gh")]),
+      new Map([binding("payments", "cap-vercel", "Vercel")]),
       REGISTRY
     );
     expect(noVerb).toEqual({
       status: "no_verb",
       need: "payments",
-      providerName: "GitHub",
+      providerName: "Vercel",
       intents: ["list_records", "fetch_record"],
     });
     // ...and fixing the binding fixes it: the reason was about the binding.
