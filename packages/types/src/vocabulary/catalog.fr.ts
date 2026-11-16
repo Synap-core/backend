@@ -175,8 +175,6 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "kind.review.other": "Revues",
   "kind.test_run.one": "Série de tests",
   "kind.test_run.other": "Séries de tests",
-  "kind.branch.one": "Branche",
-  "kind.branch.other": "Branches",
   // ── Verbs: `action.<token>.imperative` (infinitive) / `.past` (masculine
   // participle, D4) / `.progressive` / `.present` ──
   "action.create.imperative": "Créer",
@@ -696,6 +694,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
     "Ajouter des packs et des modèles à votre pod",
   "vocabulary.needsYou.count.uncurated":
     "{n, plural, one {# {noun}} many {# de {nouns}} other {# {nouns}}}",
+  "vocabulary.job.startedHere":
+    "{n, plural, one {# travail lancé d’ici} many {# de travaux lancés d’ici} other {# travaux lancés d’ici}}",
 };
 
 /** A noun's grammar in French: what a sentence agrees with. */
@@ -790,5 +790,4 @@ export const vocabularyFrNouns: Readonly<Record<NounSlug, FrenchNounGrammar>> =
     room: { gender: "m", elides: false },
     review: { gender: "f", elides: false },
     test_run: { gender: "f", elides: false },
-    branch: { gender: "f", elides: false },
   };

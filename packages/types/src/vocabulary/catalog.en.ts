@@ -150,6 +150,11 @@ export const vocabularySentencesEn = {
   // humanized token, counted with English plural rules.
   "vocabulary.needsYou.count.uncurated":
     "{n, plural, one {# {noun}} other {# {nouns}}}",
+  // `resolveJobsStartedHereLabel`: a job's folded child jobs on its Activity
+  // line (plan 5207fbb6: a child job is drawn as a fork, never named a
+  // "branch"), counted with the Job word.
+  "vocabulary.job.startedHere":
+    "{n, plural, one {# job started from here} other {# jobs started from here}}",
 } as const;
 
 export type VocabularySentencesEn = typeof vocabularySentencesEn;

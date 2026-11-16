@@ -83,3 +83,23 @@ describe("jobBranches", () => {
     expect(parentOf("wave")).toBeNull();
   });
 });
+
+describe("jobBranches: a cut graph", () => {
+  it("is partial when the window left sessions out", () => {
+    expect(jobBranches({ ...graph, window: { truncated: true } }).partial).toBe(
+      true
+    );
+    expect(
+      jobBranches({ ...graph, window: { truncated: false } }).partial
+    ).toBe(false);
+  });
+
+  it("is partial, and says so, when the far ends could not be read", () => {
+    const out = jobBranches({
+      ...graph,
+      sections: { farEnds: { status: "unavailable", reason: "timeout" } },
+    });
+    expect(out.partial).toBe(true);
+    expect(out.unavailable).toEqual(["farEnds"]);
+  });
+});

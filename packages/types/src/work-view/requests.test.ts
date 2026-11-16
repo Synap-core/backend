@@ -9,8 +9,6 @@ import { describe, expect, it } from "vitest";
 import { needsYouBuckets } from "../needs-you/index.js";
 import {
   REQUESTS_HEADLINE_CAP,
-  isBookkeeping,
-  requestActionOf,
   requestsOf,
   type RequestSignal,
 } from "./requests.js";
@@ -212,8 +210,8 @@ describe("requestsOf", () => {
       cluster(55, "capability.run", "Run Tool"),
       slot(56, "Choose the launch date"),
     ];
-    const out = requestsOf(rows, { cap: 10 });
-    const keys = out.headline
+    const out = requestsOf(rows);
+    const keys = [...out.headline, ...out.waiting]
       .map((r) => r.batchKey)
       .filter(Boolean)
       .sort();
@@ -262,21 +260,52 @@ describe("requestsOf", () => {
   });
 });
 
-describe("request helpers", () => {
-  it("reads the action from a cluster id, and nothing from another kind", () => {
-    expect(requestActionOf(cluster(1, "capability.run", "Run Tool"))).toBe(
-      "capability.run"
-    );
-    expect(requestActionOf(slot(1, "x"))).toBeNull();
+describe("requestsOf: roll-up before twins", () => {
+  const P = S(20);
+  const graph = {
+    nodes: [P, S(21), S(22)].map((id) => ({ id, status: "active" })),
+    edges: [
+      { kind: "spawned_from", from: S(21), to: P },
+      { kind: "spawned_from", from: S(22), to: P },
+    ],
+  };
+
+  it("two child jobs asking the same words are two asks of their parent job", () => {
+    const rows = [slot(21, "Approve the merge"), slot(22, "Approve the merge")];
+    const out = requestsOf(rows, { parentOf: parentOfGraph(graph) });
+    expect(out.counts.requests).toBe(1);
+    const [job] = out.headline;
+    expect(job!.kind).toBe("job");
+    expect(job!.jobId).toBe(P);
+    expect(job!.twins).toBe(0);
+    expect(ids(job!.items).sort()).toEqual(ids(rows).sort());
   });
-  it("calls a review, a stage gate and a criterion bookkeeping, and an ask not", () => {
-    expect(isBookkeeping(review(1))).toBe(true);
-    expect(
-      isBookkeeping(cluster(1, "playbook.stage_gate", "Approve stage"))
-    ).toBe(true);
-    expect(isBookkeeping(slot(1, "Check: x", { slotKind: "criterion" }))).toBe(
-      true
-    );
-    expect(isBookkeeping(slot(1, "Pick one"))).toBe(false);
+
+  it("a twin in another job never splits a job: the job's asks stay one request", () => {
+    const lead = S(900);
+    const a = slot(51, "Send it", { subjectEntityId: lead });
+    const b = slot(52, "Send it", { subjectEntityId: lead });
+    const c = slot(52, "Other");
+    const out = requestsOf([a, b, c]);
+    expect(out.counts.requests).toBe(1);
+    const [job] = out.headline;
+    expect(job!.kind).toBe("job");
+    expect(job!.jobId).toBe(S(52));
+    expect(ids(job!.items).sort()).toEqual(ids([a, b, c]).sort());
+    expect(job!.twins).toBe(1);
+  });
+
+  it("rolls up only to a parent the caller can see", () => {
+    const hidden = {
+      nodes: [S(41), S(42)].map((id) => ({ id, status: "active" })),
+      edges: [
+        { kind: "spawned_from", from: S(41), to: S(40) },
+        { kind: "spawned_from", from: S(42), to: S(40) },
+      ],
+    };
+    const out = requestsOf([slot(41, "A"), slot(42, "B")], {
+      parentOf: parentOfGraph(hidden),
+    });
+    expect(out.headline.map((r) => r.jobId).sort()).toEqual([S(41), S(42)]);
   });
 });

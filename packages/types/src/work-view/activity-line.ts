@@ -27,11 +27,12 @@
  * Pure. No words: a surface names an entry through the vocabulary door.
  */
 
-import type { ActivityRow } from "../activity/index.js";
-import type { ActivityActor } from "../activity/index.js";
+import type { ActivityActor, ActivityRow } from "../activity/index.js";
 import type { LifecycleCategory } from "../lifecycle/option.js";
-import { isTrackHistoryFailure } from "../units/track-history.js";
-import type { TrackHistoryEvent } from "../units/track-history.js";
+import {
+  isTrackHistoryFailure,
+  type TrackHistoryEvent,
+} from "../units/track-history.js";
 import type { DevTimelineEvent, TimelineWire } from "../units/timeline.js";
 
 export const ACTIVITY_DENSITIES = ["summary", "milestones", "trace"] as const;
@@ -78,6 +79,12 @@ export interface ActivityLine {
   hidden: Record<ActivityWeight, number>;
   /** The timeline hit a scan cap: older events exist and are not listed. */
   truncated: boolean;
+  /**
+   * Reads that FAILED: `activity` when the Activity rows could not be read
+   * (passed as `null`). Their entries are missing, not absent: a surface says
+   * so, never draws the timeline alone as the whole story.
+   */
+  unavailable: Array<"activity">;
 }
 
 type AnyEvent = DevTimelineEvent | TrackHistoryEvent;
@@ -104,6 +111,11 @@ function closesAddress(e: AnyEvent): string | null {
     default:
       return null;
   }
+}
+
+/** The ask an event gives back to the person ("Not what I said"), if any. */
+function reopensAddress(e: AnyEvent): string | null {
+  return e.kind === "relay_corrected" && e.slot ? `slot:${e.slot}` : null;
 }
 
 function eventFailed(e: AnyEvent): boolean {
@@ -146,24 +158,27 @@ function timeOf(at: string): number {
 
 /**
  * One Activity line from a subject's timeline and Activity rows. See the module
- * rule. `activity` may be empty (a surface that has not read it); the timeline
- * alone is a complete line.
+ * rule. `activity` is the subject's rows (`[]` when it has none), or `null`
+ * when their read FAILED: the line is then drawn from the timeline and says
+ * `unavailable: ["activity"]`. Equal times keep the pods' order: the
+ * timeline's wire order, then the Activity rows' page order.
  */
 export function activityLine(
   timeline: Pick<TimelineWire, "events" | "truncated">,
-  activity: readonly ActivityRow[],
+  activity: readonly ActivityRow[] | null,
   density: ActivityDensity
 ): ActivityLine {
   const events = timeline.events as readonly AnyEvent[];
   // The wire is newest first; replay it oldest first (ties keep the pod's
-  // order): an ask is open unless a later event closes it.
+  // order): an ask is open unless a later event closes it, and open again
+  // when a later correction gives it back.
   const openAsk = new Set<string>();
   const byTime = [...events].reverse();
   for (const e of byTime) {
     const closes = closesAddress(e);
     if (closes) openAsk.delete(closes);
-    const asks = askAddress(e);
-    if (asks) openAsk.add(asks);
+    const opens = askAddress(e) ?? reopensAddress(e);
+    if (opens) openAsk.add(opens);
   }
   // The open ask is the LATEST ask event of each open address.
   const latestAsk = new Map<string, string>();
@@ -175,6 +190,8 @@ export function activityLine(
 
   const decided = new Set<string>();
   const entries: ActivityLineEntry[] = [];
+  /** Wire position: the tie-break on equal times. */
+  const order = new Map<ActivityLineEntry, number>();
   for (const e of events) {
     const failed = eventFailed(e);
     const ask = askAddress(e);
@@ -193,8 +210,9 @@ export function activityLine(
       category: e.kind === "status_moved" ? e.category : null,
       event: e,
     });
+    order.set(entries[entries.length - 1]!, order.size);
   }
-  for (const row of activity) {
+  for (const row of activity ?? []) {
     if (row.proposalId && decided.has(row.proposalId)) continue;
     const failed = row.outcome === "failed";
     entries.push({
@@ -208,11 +226,10 @@ export function activityLine(
       category: null,
       row,
     });
+    order.set(entries[entries.length - 1]!, order.size);
   }
   entries.sort(
-    (a, b) =>
-      timeOf(b.at) - timeOf(a.at) ||
-      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+    (a, b) => timeOf(b.at) - timeOf(a.at) || order.get(a)! - order.get(b)!
   );
 
   const now = entries.find((e) => e.weight === "ask") ?? null;
@@ -236,5 +253,11 @@ export function activityLine(
   }
   const shownSet = new Set(shown);
   for (const e of rest) if (!shownSet.has(e)) hidden[e.weight] += 1;
-  return { now, entries: shown, hidden, truncated: timeline.truncated };
+  return {
+    now,
+    entries: shown,
+    hidden,
+    truncated: timeline.truncated,
+    unavailable: activity === null ? ["activity"] : [],
+  };
 }

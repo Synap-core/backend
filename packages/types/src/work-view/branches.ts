@@ -10,6 +10,9 @@
  * A FAILED READ IS NOT AN EMPTY ONE: the graph says per section whether its
  * read answered. A section that did not answer is listed in `unavailable`, so
  * a surface says "could not read the pull requests", never "no pull request".
+ * A CUT READ IS NOT A WHOLE ONE: when the graph's window left sessions out
+ * (`window.truncated`) or its far ends could not be read (`farEnds`), a fork's
+ * "(+N)" may be low, so `partial` is true and a surface says "at least N".
  *
  * Pure. Order is the graph's node order (the pod's: open first), so two reads
  * of one graph draw the same tree.
@@ -44,8 +47,12 @@ export interface BranchGraph {
   nodes: readonly BranchGraphNode[];
   edges: readonly BranchGraphEdge[];
   pullRequests?: readonly BranchGraphPullRequest[];
-  sections?: Partial<Record<"blockedBy" | "pullRequests", BranchGraphSection>>;
+  sections?: Partial<Record<GraphSection, BranchGraphSection>>;
+  /** `WorkGraphWindow`: `truncated` = sessions were left out. */
+  window?: { truncated: boolean };
 }
+
+type GraphSection = "blockedBy" | "pullRequests" | "farEnds";
 
 /** A mark on a job's line. */
 export type JobMark =
@@ -82,27 +89,41 @@ export interface JobBranch {
 export interface JobBranches {
   /** The roots asked for, or every job with no parent in the graph. */
   roots: JobBranch[];
-  /** Sections whose read FAILED: their marks are missing, not absent. */
-  unavailable: Array<"blockedBy" | "pullRequests">;
+  /** Sections whose read FAILED: their marks or jobs are missing, not absent. */
+  unavailable: GraphSection[];
+  /**
+   * The graph is not whole (its window left sessions out, or its far ends
+   * could not be read): `descendants` is a floor, never the count.
+   */
+  partial: boolean;
 }
 
-/** child → parent, from the `spawned_from` edges. */
-function parentMap(graph: Pick<BranchGraph, "edges">): Map<string, string> {
+/**
+ * child → parent, from the `spawned_from` edges. With `nodes`, only a parent
+ * the graph carries (one the caller can see): a parent off the graph is no
+ * parent, so the child is a root here as it is in {@link jobBranches}.
+ */
+function parentMap(
+  graph: Pick<BranchGraph, "edges"> & { nodes?: BranchGraph["nodes"] }
+): Map<string, string> {
+  const seen = graph.nodes ? new Set(graph.nodes.map((n) => n.id)) : null;
   const up = new Map<string, string>();
   for (const e of graph.edges) {
-    if (e.kind === "spawned_from" && e.from !== e.to && !up.has(e.from)) {
-      up.set(e.from, e.to);
-    }
+    if (e.kind !== "spawned_from" || e.from === e.to || up.has(e.from))
+      continue;
+    if (seen && !seen.has(e.to)) continue;
+    up.set(e.from, e.to);
   }
   return up;
 }
 
 /**
  * A job's parent job in the graph, or null at a root: the roll-up
- * `requestsOf` reads (`parentOf`).
+ * `requestsOf` reads (`parentOf`). Pass the nodes too, so a job rolls up only
+ * to a job the caller can see.
  */
 export function parentOfGraph(
-  graph: Pick<BranchGraph, "edges">
+  graph: Pick<BranchGraph, "edges"> & { nodes?: BranchGraph["nodes"] }
 ): (jobId: string) => string | null {
   const up = parentMap(graph);
   return (jobId) => up.get(jobId) ?? null;
@@ -157,15 +178,17 @@ export function jobBranches(
   }
 
   const build = (id: string, depth: number, seen: Set<string>): JobBranch => {
-    const node = nodes.get(id);
+    // Every id built is a node: a root is filtered to nodes, a child comes
+    // from `graph.nodes`.
+    const node = nodes.get(id)!;
     const next = new Set(seen).add(id);
     const branches = (children.get(id) ?? [])
       .filter((c) => !next.has(c))
       .map((c) => build(c, depth + 1, next));
     return {
       id,
-      title: node?.title ?? null,
-      status: node?.status ?? "unknown",
+      title: node.title ?? null,
+      status: node.status,
       depth,
       branches,
       descendants: branches.reduce((n, b) => n + 1 + b.descendants, 0),
@@ -175,11 +198,14 @@ export function jobBranches(
 
   const roots = rootIds
     ? rootIds.filter((id) => nodes.has(id))
-    : graph.nodes
-        .filter((n) => !up.has(n.id) || !nodes.has(up.get(n.id)!))
-        .map((n) => n.id);
-  const unavailable = (["blockedBy", "pullRequests"] as const).filter(
-    (s) => graph.sections?.[s]?.status === "unavailable"
-  );
-  return { roots: roots.map((id) => build(id, 0, new Set())), unavailable };
+    : graph.nodes.filter((n) => !up.has(n.id)).map((n) => n.id);
+  const unavailable = (
+    ["blockedBy", "pullRequests", "farEnds"] as const
+  ).filter((s) => graph.sections?.[s]?.status === "unavailable");
+  return {
+    roots: roots.map((id) => build(id, 0, new Set())),
+    unavailable,
+    partial:
+      graph.window?.truncated === true || unavailable.includes("farEnds"),
+  };
 }

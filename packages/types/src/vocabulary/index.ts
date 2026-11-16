@@ -1009,11 +1009,6 @@ const OBJECT_NOUN_ROWS = {
   // backend#637): what a person reads as "its test runs", never a job's name
   // (D-R4). Humanized it read "Test run" in every locale.
   test_run: "Test run",
-  // A child job drawn as a fork in its parent job's Activity (`spawned_from`,
-  // `@synap-core/types/work-view` `jobBranches`). Not a registry kind: a
-  // branch is a session seen from its parent. A pull request or a blocked-by
-  // is a mark on the line, never a branch (plan 5207fbb6, 16 Nov 2026).
-  branch: "Branch",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -1055,7 +1050,6 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   room: "Rooms",
   review: "Reviews",
   test_run: "Test runs",
-  branch: "Branches",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in
@@ -3555,6 +3549,20 @@ export function resolveHandedToLabel(
 ): string {
   const name = displayName?.trim() || humanizeToken(agentType);
   return sentences(catalogLocaleOf(locale))("vocabulary.handedTo", { name });
+}
+
+/**
+ * A job's child jobs folded on its Activity line: "3 jobs started from here"
+ * (plan 5207fbb6, `@synap-core/types/work-view` `jobBranches`
+ * `descendants`). A child job is a Job, never a "branch" on screen.
+ */
+export function resolveJobsStartedHereLabel(
+  n: number,
+  locale?: Locale
+): string {
+  return sentences(catalogLocaleOf(locale))("vocabulary.job.startedHere", {
+    n,
+  });
 }
 
 // ─── The one-line aim of a sitting (decision D3, 2026-10-23) ────────────────

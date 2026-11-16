@@ -217,3 +217,65 @@ describe("activityLine", () => {
     expect(line.truncated).toBe(true);
   });
 });
+
+describe("activityLine: asks, order and failed reads", () => {
+  it("gives an ask back at Now when the person corrects a relayed answer", () => {
+    const corrected: DevTimelineEvent = {
+      id: "history:corrected",
+      kind: "relay_corrected",
+      at: at(),
+      actor: YOU,
+      refs: { sessionId: "s1" },
+      slot: "pick",
+    };
+    const relayed: DevTimelineEvent = { ...answered("pick"), relayed: true };
+    const ask = asked("pick");
+    const line = activityLine(
+      session([corrected, relayed, ask]),
+      [],
+      "summary"
+    );
+    expect(line.now?.key).toBe(`timeline:${ask.id}`);
+  });
+
+  it("pins the NEWEST open ask; Summary counts the other in the fold, never draws it", () => {
+    const newer = asked("b");
+    const older = asked("a");
+    const line = activityLine(session([newer, older]), [], "summary");
+    expect(line.now?.key).toBe(`timeline:${newer.id}`);
+    expect(line.entries).toEqual([]);
+    expect(line.hidden.ask).toBe(1);
+  });
+
+  it("keeps the pod's order on equal times", () => {
+    const same = "2026-11-16T10:00:00.000Z";
+    const m: DevTimelineEvent = {
+      ...merged(7),
+      id: "event:a-merged",
+      at: same,
+    };
+    const o: DevTimelineEvent = {
+      ...merged(7),
+      id: "event:z-opened",
+      kind: "pr_opened",
+      intoDefault: null,
+      at: same,
+    };
+    // The wire says merged (newer) before opened; ids sort the other way.
+    expect(
+      activityLine(session([m, o]), [], "trace").entries.map((e) => e.kind)
+    ).toEqual(["pr_merged", "pr_opened"]);
+    expect(
+      activityLine(session([o, m]), [], "trace").entries.map((e) => e.kind)
+    ).toEqual(["pr_opened", "pr_merged"]);
+  });
+
+  it("says when the Activity read failed, unlike an empty one", () => {
+    expect(
+      activityLine(session([merged(1)]), null, "trace").unavailable
+    ).toEqual(["activity"]);
+    expect(activityLine(session([merged(1)]), [], "trace").unavailable).toEqual(
+      []
+    );
+  });
+});
