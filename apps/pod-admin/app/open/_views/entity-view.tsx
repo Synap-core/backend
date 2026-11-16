@@ -143,6 +143,16 @@ export function EntityView({ id }: { id: string }) {
   const summaryShownBelow =
     summary.propertySlug !== null && proseKeys.includes(summary.propertySlug);
   const openInApp = <OpenInAppLink type="entity" id={id} />;
+  const hasBody = Boolean(entity.documentId) && !bodyIsMedia;
+  // With a body of its own, what it is connected to follows the body.
+  const connected = (
+    <ConnectedObjects
+      key={id}
+      entityId={id}
+      kind={profileSlug}
+      definitions={data.effectiveProperties}
+    />
+  );
 
   return (
     <OpenObject
@@ -211,8 +221,8 @@ export function EntityView({ id }: { id: string }) {
           openInApp={openInApp}
         />
       ))}
-      <ConnectedObjects entityId={id} />
-      {entity.documentId && !bodyIsMedia && (
+      {!hasBody && connected}
+      {hasBody && (
         <DocumentContentSection
           title="Content"
           content={body.content}
@@ -220,6 +230,7 @@ export function EntityView({ id }: { id: string }) {
           onRetry={body.retry}
         />
       )}
+      {hasBody && connected}
     </OpenObject>
   );
 }
