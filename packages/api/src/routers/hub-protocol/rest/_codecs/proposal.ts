@@ -170,6 +170,16 @@ const ProposalSetupParamSchema = z
     secret: z
       .boolean()
       .describe("Prompt masked. The VALUE is never on the wire."),
+    obtain: z
+      .object({
+        url: z.string().optional(),
+        steps: z.array(z.string()),
+      })
+      .optional()
+      .describe(
+        "How a person gets this value: numbered steps (at most 7) and the " +
+          "https page they start on, from the capability manifest."
+      ),
     satisfied: z
       .boolean()
       .describe(
@@ -233,6 +243,15 @@ export const ProposalSetupSchema = z
       })
       .passthrough()
       .optional(),
+    unreadable: z
+      .literal(true)
+      .optional()
+      .describe(
+        "The pod could not read this pending proposal's manifest (not in the " +
+          "catalog cache, and the by-key catalog read failed): what it needs is " +
+          "UNKNOWN. `params` is then empty and `blocking` true; never read it as " +
+          "'nothing needed'."
+      ),
   })
   .openapi("ProposalSetup");
 

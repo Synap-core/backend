@@ -2070,6 +2070,12 @@ export interface RunMarketInstallInput {
   workspaceId: string | null;
   /** The acting AGENT (agent-user id), when this call originates from an agent. */
   agentUserId?: string | null;
+  /**
+   * The outer capability gate asked for review (`market.install` is a
+   * self-gated builtin): decide as an agent's request, so it PROPOSES a
+   * `capability.install` (or is refused), and never installs here.
+   */
+  mustPropose?: boolean;
   projectId?: string;
   projectName?: string;
 }
@@ -2105,7 +2111,7 @@ export async function runMarketInstall(
   // opt-in / just-authored package the cache never saw re-resolves by key from
   // the CP instead of dead-ending here. Official source only: an added source
   // serves nothing it did not sign.
-  const actor = input.agentUserId ? "agent" : "person";
+  const actor = input.agentUserId || input.mustPropose ? "agent" : "person";
   const decision = decideMarketInstall(await marketSourceGate(source), actor);
   if (decision.allow === "open_site") {
     throw new TRPCError({

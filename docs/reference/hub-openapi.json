@@ -2858,6 +2858,11 @@
             },
             "required": ["kind", "hint"],
             "additionalProperties": {}
+          },
+          "unreadable": {
+            "type": "boolean",
+            "enum": [true],
+            "description": "The pod could not read this pending proposal's manifest (not in the catalog cache, and the by-key catalog read failed): what it needs is UNKNOWN. `params` is then empty and `blocking` true; never read it as 'nothing needed'."
           }
         },
         "required": ["params", "blocking"]
@@ -2873,6 +2878,15 @@
           "secret": {
             "type": "boolean",
             "description": "Prompt masked. The VALUE is never on the wire."
+          },
+          "obtain": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string" },
+              "steps": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["steps"],
+            "description": "How a person gets this value: numbered steps (at most 7) and the https page they start on, from the capability manifest."
           },
           "satisfied": {
             "type": "boolean",
@@ -15899,7 +15913,25 @@
                             },
                             "required": { "type": "boolean" },
                             "default": {},
-                            "description": { "type": "string" }
+                            "description": { "type": "string" },
+                            "obtain": {
+                              "type": "object",
+                              "properties": {
+                                "url": { "type": "string", "maxLength": 2000 },
+                                "steps": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 7
+                                }
+                              },
+                              "required": ["steps"],
+                              "additionalProperties": false
+                            }
                           },
                           "required": ["name"]
                         }
@@ -20469,7 +20501,19 @@
                                 "type": { "type": "string" },
                                 "required": { "type": "boolean" },
                                 "description": { "type": "string" },
-                                "secret": { "type": "boolean" }
+                                "secret": { "type": "boolean" },
+                                "obtain": {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": { "type": "string" },
+                                    "steps": {
+                                      "type": "array",
+                                      "items": { "type": "string" }
+                                    }
+                                  },
+                                  "required": ["steps"],
+                                  "description": "How a person gets this value: numbered steps (at most 7) and the https page they start on, from the capability manifest."
+                                }
                               },
                               "required": ["name"]
                             }

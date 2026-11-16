@@ -15478,6 +15478,19 @@ export interface CapabilityVerbState extends ToolVerb {
 	}>;
 }
 /**
+ * How a PERSON gets a param's value (a key, a token): the numbered steps and
+ * the page they start on. Read by the install proposal's setup row (finding
+ * 91a3bfd3), never by the applier. Same bounds as an `act` ask (at most 7
+ * steps of at most 200 characters; an https `url`), validated by the Hub
+ * door's `ParamObtainSchema` (`services/capabilities/param-obtain.ts`).
+ */
+export interface CapabilityParamObtain {
+	/** Where the steps start, e.g. the provider's API keys page. https only. */
+	url?: string;
+	/** What to do there, in order. 1 to 7 steps. */
+	steps: string[];
+}
+/**
  * Acknowledgment integrity for the single-write MCP doors (C1).
  *
  * THE BUG CLASS THIS CLOSES: a write LANDS on the server, but the CLIENT perceives
@@ -16365,6 +16378,8 @@ export interface CapabilityCardInstallParam {
 	required?: boolean;
 	description?: string;
 	secret?: boolean;
+	/** How a person gets this value (manifest `obtain`, `param-obtain.ts`). */
+	obtain?: CapabilityParamObtain;
 }
 export interface CapabilityCard {
 	/** Container id; null for an available-only template. */
@@ -16435,6 +16450,12 @@ export interface ProposalSetupParam {
 	description?: string;
 	/** Prompt masked and NEVER echo. Derived by `extractInstallParams`. */
 	secret: boolean;
+	/**
+	 * How a person gets this value: numbered steps and the https page they
+	 * start on, from the manifest's `obtain` (`param-obtain.ts`). Absent when
+	 * the manifest declares none, or an invalid one.
+	 */
+	obtain?: CapabilityParamObtain;
 	/** A non-blank value is present, OR a resolvable `vault://` ref is. */
 	satisfied: boolean;
 	/** `vault://<id>` when this param points at a vault secret. Never a value. */
@@ -16474,6 +16495,16 @@ export interface ProposalSetup {
 	 * exactly the fork this codebase keeps paying for.
 	 */
 	nextAction?: CapabilityNextAction;
+	/**
+	 * The pod could NOT read the manifest of a proposal that is still to be
+	 * decided (not in the catalog cache, and the by-key read from the catalog
+	 * failed or found nothing): what it needs is UNKNOWN. `params` is then empty
+	 * and `blocking` true, never an invented "nothing needed". Proposal eaa77f7d
+	 * (github-merge, an opt-in capability the cache never holds) read as no
+	 * setup at all while its approval, which re-resolves by key, said "Needs
+	 * setup: GitHub token". Absent whenever the manifest was read.
+	 */
+	unreadable?: true;
 }
 /**
  * `objectRefs` — every id a proposal payload names, resolved to the OBJECT it
@@ -17126,6 +17157,19 @@ export interface AllowedToday {
 	/** True when an earlier "allow today" had already raised it for today. */
 	alreadyAllowed: boolean;
 }
+/** One of the person's own vault secrets a secret row may take. Labels only. */
+export interface SetupSecretChoice {
+	/** `vault://<id>`. A pointer, never a value. */
+	ref: string;
+	label: string;
+	/** The secret's category ("Stripe"), when it has one. */
+	service?: string;
+}
+/** What `proposals.repairOptions` returns for a proposal that needs an input. */
+export interface ProposalRepairSetup extends ProposalSetup {
+	/** The person's own vault secrets, for every secret row's picker. */
+	secretChoices: SetupSecretChoice[];
+}
 /** Why a value cannot join a field's closed set (`addEnumOptionRefusal`). */
 export type AddOptionRefusal = "already_allowed" | "close_match" | "lifecycle" | "not_a_closed_set";
 /** One field the proposal cannot carry as it stands. */
@@ -17162,6 +17206,14 @@ export interface ProposalRepair {
 	fields: ProposalRepairField[];
 	/** The kind the proposal names, when it no longer resolves. */
 	missingKind?: string;
+	/**
+	 * What the proposal still needs from the person before it can apply (an
+	 * install's key, a requested secret), one row per input with how to get it
+	 * (`obtain`) and, for a secret row, the person's own vault secrets to pick
+	 * from. Handed over through `proposals.repair` `setup` (`repair-setup.ts`).
+	 * Absent for a proposal that takes no input.
+	 */
+	setup?: ProposalRepairSetup;
 }
 /** Who may rewrite a section. Absent or unknown reads as `human` — see `sectionOwner`. */
 export type SectionOwner = "ai" | "human";
@@ -54180,9 +54232,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedRevision: number;
 				proposalId: string;
 				set?: Record<string, unknown> | undefined;
+				setup?: Record<string, {
+					kind: "existing";
+					ref: string;
+				} | {
+					kind: "new";
+					value: string;
+				} | {
+					kind: "value";
+					value: string | number | boolean;
+				}> | undefined;
 			};
 			meta: object;
 			output: {
+				revision: number;
+				secretsCreated: number;
+			} | {
 				revision: number;
 			};
 		}>;
