@@ -15,9 +15,9 @@
  *                      issuers are decisions: they wait in Review. The review
  *                      backlog is left to the requests card (`homeSections`).
  *   3. Requests      — Review's count (`signals.count`) as one door into
- *                      `/review`, and one link to Work in the desktop app. No
- *                      rows: pod admin runs the pod, the work is done in the
- *                      apps (founder, 16 Nov 2026).
+ *                      `/review` (loading, none and a failed count each said
+ *                      apart) and, on a desktop, one link to Work in the
+ *                      desktop app (`_lib/requests-card.tsx`).
  *   4. Pod at a glance — sync, backups and contents as three compact rows;
  *                      the operator's, shown with "All tools" on.
  *
@@ -61,6 +61,7 @@ import {
   ExitFallback,
   rowHref,
   useAppOpenAttempt,
+  useIsPhone,
   usePlacedExit,
 } from "../../../lib/exit-link";
 import {
@@ -68,9 +69,8 @@ import {
   humanizeBytes,
   truncateMiddle,
 } from "../../../lib/format";
-import { navHref, WORK_APP_ID } from "../../../lib/console-nav";
 import { useConsoleLocale, useT } from "../../../lib/i18n/locale-provider";
-import { openIn, type Exit } from "../../../lib/open-in";
+import { WORK_EXIT, type Exit } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { PageHeader, PageShell } from "../components/page-header";
 import { SecurityNudge } from "../components/recovery-codes-nudge";
@@ -81,11 +81,12 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { DIAGNOSE_QUERY_OPTIONS } from "../../../lib/diagnose-query";
-import { useConsoleBadges } from "../components/side-nav-badges";
+import { useNeedsYouCount } from "../components/side-nav-badges";
 import { useConsoleRole } from "../components/side-nav-role";
 import { useAllTools } from "../components/all-tools";
 import { en, fr } from "./_lib/copy";
 import { MorningBriefCard } from "./_lib/morning-brief";
+import { RequestsCardView, requestsCount } from "./_lib/requests-card";
 import { StatusPill, type StatusKind } from "../components/status-pill";
 import { HEALTH_PILL } from "../components/status-tone";
 import {
@@ -524,49 +525,28 @@ function PassingChecks({
   );
 }
 
-// ─── 3. Requests (a count door, and Work in the app) ──────────────────
+// ─── 3. Requests (a count door, and Work in the desktop app) ──────────
 
-/**
- * Not a list: pod admin runs the pod, the work is done in the apps (founder,
- * 16 Nov 2026). The card keeps Review's count as its one door and hands the
- * work itself to the desktop app's Work.
- */
 function RequestsCard() {
   const t = useT(CATALOGS);
-  // The count is Review's own (`signals.count`, via the nav's badge read), so
-  // "See all N" always equals the number on the Requests badge.
-  const reviewCount = useConsoleBadges().review;
-
+  // Review's own count (`signals.count`, the nav badge's read): "See all N"
+  // always equals the number on the Requests badge.
+  const count = useNeedsYouCount();
+  // On a phone the desktop app is not there to open (`placeExit` says
+  // "nowhere"): no link, rather than an empty slot.
+  const onPhone = useIsPhone();
   return (
-    <SectionCard
-      title={t("requests.title")}
-      hint={t("requests.hint")}
-      actions={
-        <Button
-          as={Link}
-          href={navHref("review")}
-          size="sm"
-          variant="flat"
-          radius="md"
-          endContent={<ChevronRight className="h-3 w-3" />}
-        >
-          {!reviewCount
-            ? t("requests.open")
-            : reviewCount.text.endsWith("+")
-              ? t("requests.seeAllFloor", { n: reviewCount.count })
-              : t("requests.seeAll", { n: reviewCount.count })}
-        </Button>
+    <RequestsCardView
+      state={requestsCount(count)}
+      onRetry={() => void count.refetch()}
+      workLink={
+        onPhone ? null : (
+          <ActionLink exit={WORK_EXIT.all} label={t("requests.work")} />
+        )
       }
-    >
-      <div className="flex justify-start">
-        <ActionLink exit={WORK_EXIT} label={t("requests.work")} />
-      </div>
-    </SectionCard>
+    />
   );
 }
-
-/** Work, in the desktop app (`WORK_MOVED_TO_APP` sends Jobs and Runs here). */
-const WORK_EXIT = openIn({ kind: "app", appId: WORK_APP_ID });
 
 // ─── 4. Pod at a glance ───────────────────────────────────────────────
 

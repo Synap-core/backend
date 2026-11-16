@@ -14,15 +14,15 @@
  *   Providers — AI provider registry, provider health, IS instances
  *   Models    — pod-wide default models, proactive AI defaults
  *
- * Failed AI turns are read in the desktop app's Work (Runs left the console,
- * `WORK_MOVED_TO_APP`); the line under the header points there.
+ * Failed AI turns are read in the desktop app's Work › Activity, Failed
+ * (Runs left the console, `WORK_MOVED_TO_APP`); the line under the header
+ * points there.
  */
 
 import { Sparkles } from "lucide-react";
 import { Suspense } from "react";
-import { WORK_APP_ID } from "../../../lib/console-nav";
 import { ExitLink } from "../../../lib/exit-link";
-import { openIn } from "../../../lib/open-in";
+import { WORK_EXIT } from "../../../lib/open-in";
 import { UrlTabs, type UrlTab } from "../components/url-tabs";
 import { DefaultModelsSection } from "./_lib/default-models-section";
 import { ProactiveDefaultsSection } from "./_lib/proactive-section";
@@ -30,9 +30,6 @@ import { ProviderHealthSection } from "./_lib/provider-health-section";
 import { AIProvidersSection } from "./_lib/provider-registry-section";
 import { IntelligenceServicesSection } from "./_lib/services-section";
 import { PageShell } from "../components/page-header";
-
-/** Work, in the desktop app: where a failed run is read now. */
-const WORK_EXIT = openIn({ kind: "app", appId: WORK_APP_ID });
 
 const SECTIONS: UrlTab[] = [
   {
@@ -82,8 +79,8 @@ export default function IntelligencePage() {
           </p>
           <p className="text-[12.5px] text-foreground/65">
             <ExitLink
-              exit={WORK_EXIT}
-              label="Failed AI turns → Work, in the app"
+              exit={WORK_EXIT.failed}
+              label="Failed AI turns → Work, in the desktop app"
             />
           </p>
         </div>

@@ -2,8 +2,9 @@
 
 /**
  * A tool page's runs: "Running now" (only while something runs) and
- * "History" (its last runs, each opening its own page; the full list is in
- * the desktop app since Runs left the console, `WORK_MOVED_TO_APP`). Drawn
+ * "History" (its last runs, each opening its own page; a full list ends with
+ * "Show all" on the tool in the desktop app, since Runs left the console,
+ * `WORK_MOVED_TO_APP`). Drawn
  * by the capability page and a code skill's page; an instruction skill does
  * not run, and its page says so instead (`skill-object.tsx`).
  *
@@ -17,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { Play } from "lucide-react";
 import { trpc } from "../../../../lib/trpc";
 import { formatRelative } from "../../../../lib/format";
+import { ExitLink } from "../../../../lib/exit-link";
 import { openIn } from "../../../../lib/open-in";
 import { useT } from "../../../../lib/i18n/locale-provider";
 import { kindIcon } from "../kind-icon";
@@ -39,6 +41,17 @@ const HISTORY = 10;
 const READ = { retry: false, staleTime: 15_000 } as const;
 
 export type ToolLens = { capabilityId: string } | { skillId: string };
+
+/** The tool's own page in the desktop app, where all of its runs are. */
+export function toolInApp(tool: ToolLens) {
+  return "capabilityId" in tool
+    ? openIn({
+        kind: "objectInApp",
+        objectKind: "capability",
+        id: tool.capabilityId,
+      })
+    : openIn({ kind: "objectInApp", objectKind: "skill", id: tool.skillId });
+}
 
 export function ToolRuns({
   tool,
@@ -161,6 +174,11 @@ export function ToolRuns({
               />
             ))}
           </div>
+        )}
+        {/* Capped: a full page may not be all of it (ui-composition: a
+            capped list gets "Show all"), and the full list is the app's. */}
+        {runs.length >= HISTORY && (
+          <ExitLink exit={toolInApp(tool)} label={t("history.showAll")} />
         )}
       </section>
     </>

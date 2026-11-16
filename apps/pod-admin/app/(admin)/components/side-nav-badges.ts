@@ -37,7 +37,7 @@ export interface NavBadge {
 
 export type NavBadges = Partial<Record<NavId, NavBadge>>;
 
-/** PURE: every badge from the two reads. Members only get Home + Review. */
+/** PURE: every badge from the two reads: Home and Review, for every role. */
 export function buildNavBadges({
   sections,
   review,

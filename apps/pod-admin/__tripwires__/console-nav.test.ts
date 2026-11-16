@@ -22,7 +22,6 @@ import {
   navHref,
   pendingIssuerHref,
   SEARCH_DESTINATION,
-  WORK_APP_ID,
   WORK_MOVED_TO_APP,
   type NavId,
 } from "../lib/console-nav";
@@ -157,16 +156,15 @@ describe("every door has a nav home", () => {
     }
     expect(keys.size).toBeGreaterThan(5);
     const unplaced = [...keys].filter(
-      (k) => !(k in DIAGNOSE_DESTINATION) && !(k in DIAGNOSE_IN_APP)
+      (k) => !(k in DIAGNOSE_DESTINATION) && !DIAGNOSE_IN_APP.has(k)
     );
     expect(unplaced).toEqual([]);
     for (const [key, nav] of Object.entries(DIAGNOSE_DESTINATION)) {
       expect(NAV_IDS.has(nav), key).toBe(true);
-      expect(key in DIAGNOSE_IN_APP, `${key} placed twice`).toBe(false);
+      expect(DIAGNOSE_IN_APP.has(key), `${key} placed twice`).toBe(false);
     }
-    for (const [key, place] of Object.entries(DIAGNOSE_IN_APP)) {
+    for (const key of DIAGNOSE_IN_APP) {
       expect(keys.has(key), `${key} is not a server section`).toBe(true);
-      expect(place.appId, key).toBe(WORK_APP_ID);
     }
   });
 });
@@ -180,49 +178,23 @@ describe("every door has a nav home", () => {
 describe("the client link contract (@synap-core/types/console)", () => {
   const appDir = fileURLToPath(new URL("../app", import.meta.url));
   const navByHref = new Map(NAV_ITEMS.map((i) => [i.href, i]));
-  const allPages = Object.entries(CONSOLE_PAGES) as Array<
+  const pages = Object.entries(CONSOLE_PAGES) as Array<
     [
       keyof typeof CONSOLE_PAGES,
       (typeof CONSOLE_PAGES)[keyof typeof CONSOLE_PAGES],
     ]
   >;
-  /**
-   * Pages that left the console for the app (`WORK_MOVED_TO_APP`): a client
-   * link to one still lands, through its redirect, which the test below pins.
-   */
-  const movedPaths = new Set(
-    WORK_MOVED_TO_APP.filter((r) => !r.has).map((r) => r.source)
-  );
-  const pages = allPages.filter(([, p]) => !movedPaths.has(p.path));
 
-  it("redirects every client link to a page that moved to the app", () => {
-    const rules = consoleRedirects();
-    const moved = allPages.filter(([, p]) => movedPaths.has(p.path));
-    // Non-vacuity: Jobs and Runs are both in the client table today.
-    expect(moved.map(([id]) => id).sort()).toEqual(["runs", "sessions"]);
-    for (const [id, p] of moved) {
-      // The page itself is gone, so nothing renders under the redirect.
-      expect(existsSync(join(appDir, "(admin)", p.path, "page.tsx")), id).toBe(
+  it("names no page that left the console for the app", () => {
+    // Jobs and Runs (`WORK_MOVED_TO_APP`): a client link to one would only
+    // ever reach a redirect. Their pages are gone, too.
+    const moved = WORK_MOVED_TO_APP.filter((r) => !r.has).map((r) => r.source);
+    expect(moved).toEqual(expect.arrayContaining(["/sessions", "/runs"]));
+    expect(pages.filter(([, p]) => moved.includes(p.path))).toEqual([]);
+    for (const path of moved.filter((m) => !m.includes(":"))) {
+      expect(existsSync(join(appDir, "(admin)", path, "page.tsx")), path).toBe(
         false
       );
-      expect(
-        rules.some((r) => r.source === p.path && !r.has),
-        `${id} bare`
-      ).toBe(true);
-      // `?focus=<id>` lands on the object's own `/open` page.
-      if (p.focus) {
-        const focused = rules.find(
-          (r) => r.source === p.path && r.has?.[0]?.key === "focus"
-        );
-        expect(focused?.destination, `${id} focus`).toMatch(
-          /^\/open\/[a-z]+\/:id$/
-        );
-        expect(
-          new RegExp(`^${focused?.has?.[0]?.value}$`).exec("abc-1_2")?.groups
-            ?.id,
-          `${id} focus capture`
-        ).toBe("abc-1_2");
-      }
     }
   });
 

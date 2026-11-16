@@ -131,7 +131,7 @@ describe("consoleRedirects", () => {
         "/open/session/:id",
         false,
       ],
-      ["/runs", "focus=(?<id>[A-Za-z0-9_-]{1,64})", "/open/run/:id", false],
+      ["/runs", "focus=(?<id>[A-Za-z0-9_-]{1,64})", "/open/:id", false],
       ["/overview", null, "/home", false],
       ["/origins", null, "/applications", false],
       ["/people", null, "/members", false],
@@ -155,6 +155,15 @@ describe("consoleRedirects", () => {
     const capture = new RegExp(`^${focus?.has?.[0]?.value}$`);
     expect(capture.exec("4f1c-aa_9")?.groups?.id).toBe("4f1c-aa_9");
     expect(capture.exec("a/b")).toBeNull();
+  });
+
+  it("sends a Runs focus, which named a FLOW, to the resolver, never to a run page", () => {
+    // `/runs?focus=` was a rule's or a template's id (runs/page.tsx at
+    // 16 Nov 2026): `/open/<id>` types it and opens that flow.
+    const runs = rules.find(
+      (r) => r.source === "/runs" && r.has?.[0]?.key === "focus"
+    );
+    expect(runs?.destination).toBe("/open/:id");
   });
 
   it("puts every query-narrowed rule before any bare-path rule", () => {

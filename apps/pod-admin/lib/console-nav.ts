@@ -439,7 +439,7 @@ export function navVisibleTo(item: NavItem, role: NavAudience): boolean {
  * The CLIENT SCOPE of the same table (audit a48761f2 PA-G-06): the six places a company's
  * founder and team use, in their order. A scope, not a fork: these are
  * {@link CONSOLE_NAV}'s own items, and every other page keeps its route (a
- * link to `/runs` still opens); only the navigation is scoped.
+ * link to `/rules` still opens); only the navigation is scoped.
  */
 export const CLIENT_NAV = [
   "home",
@@ -610,11 +610,11 @@ export const SEARCH_DESTINATION: Readonly<
 };
 
 /**
- * `diagnose.global` section key → the console page that owns it. Home's row
- * exits and the nav's badges both read this, so a section's row and the badge
- * it raises always point at the same place. Keys are the server's
- * (`packages/api/src/services/diagnose`); the tripwire fails when the server
- * grows one this table does not place.
+ * `diagnose.global` section key → the console page that owns it: where Home's
+ * row for that section leads, and whether a member may see the row (the
+ * page's audience). Keys are the server's (`packages/api/src/services/diagnose`);
+ * the tripwire fails when the server grows one this table and
+ * {@link DIAGNOSE_IN_APP} do not place.
  */
 export const DIAGNOSE_DESTINATION: Readonly<Record<string, NavId>> = {
   review_backlog: "review",
@@ -639,15 +639,13 @@ export const WORK_APP_ID = "sessions";
 
 /**
  * `diagnose.global` sections whose page left the console with Jobs and Runs:
- * Home's row hands them to the desktop app's Work, and only an admin sees
- * them, as when they led to the admin pages. No nav badge (no nav item).
+ * Home's row hands them to the desktop app's Work (`WORK_EXIT`, lib/open-in.ts),
+ * and only an admin sees them, as when they led to the admin pages.
  */
-export const DIAGNOSE_IN_APP: Readonly<
-  Record<string, { appId: string; audience: NavAudience }>
-> = {
-  failed_flows: { appId: WORK_APP_ID, audience: "admin" },
-  stuck_runs: { appId: WORK_APP_ID, audience: "admin" },
-};
+export const DIAGNOSE_IN_APP: ReadonlySet<string> = new Set([
+  "failed_flows",
+  "stuck_runs",
+]);
 
 // ─── next.config.ts ──────────────────────────────────────────────────────────
 
@@ -658,12 +656,6 @@ export interface ConsoleRedirect {
   has?: Array<{ type: "query"; key: string; value: string }>;
 }
 
-/**
- * Every `legacy` entry as a Next redirect. Query-narrowed rules come first:
- * Next applies the first matching rule, and `/trust-keys?section=secrets` must
- * not be swallowed by the bare `/trust-keys` rule. The request's own query
- * string (`?focus=…`) is passed through by Next.
- */
 /** One id, in the charset `/open/:type/:id` accepts (open-params `SAFE_ID_RE`). */
 const FOCUS_ID = {
   type: "query",
@@ -673,11 +665,11 @@ const FOCUS_ID = {
 
 /**
  * Jobs and Runs left the console (founder, 16 Nov 2026: pod admin runs the
- * pod; the work is done in the apps). One job or run lands on its `/open`
- * page, the same read-only body the console drew and the door into the app;
- * a list lands on Home, whose one link opens Work in the app. A client link
- * built from `@synap-core/types/console` (`/sessions?focus=<id>`) keeps
- * landing on its object.
+ * pod; the work is done in the apps). One job, or the flow a Runs link
+ * focused, lands on its `/open` page, the same read-only body and the door
+ * into the desktop app; a list lands on Home, whose one link opens Work in
+ * the desktop app. An old bookmark (`/sessions?focus=<id>`) keeps landing on
+ * its object.
  */
 export const WORK_MOVED_TO_APP: readonly ConsoleRedirect[] = [
   {
@@ -686,10 +678,12 @@ export const WORK_MOVED_TO_APP: readonly ConsoleRedirect[] = [
     destination: "/open/session/:id",
     permanent: false,
   },
+  // Runs' `?focus=` named a FLOW (a rule or a template), not a run: the
+  // resolver page types the id and opens it (`/open/automation|playbook/<id>`).
   {
     source: "/runs",
     has: [FOCUS_ID],
-    destination: "/open/run/:id",
+    destination: "/open/:id",
     permanent: false,
   },
   {
@@ -701,6 +695,13 @@ export const WORK_MOVED_TO_APP: readonly ConsoleRedirect[] = [
   { source: "/runs", destination: "/home", permanent: false },
 ];
 
+/**
+ * Every `legacy` entry and {@link WORK_MOVED_TO_APP} rule as a Next redirect.
+ * Query-narrowed rules come first: Next applies the first matching rule, and
+ * `/trust-keys?section=secrets` must not be swallowed by the bare
+ * `/trust-keys` rule. The request's own query string (`?focus=…`) is passed
+ * through by Next.
+ */
 export function consoleRedirects(): ConsoleRedirect[] {
   const legacy = NAV_ITEMS.flatMap((item) =>
     (item.legacy ?? []).map((legacy): ConsoleRedirect => ({

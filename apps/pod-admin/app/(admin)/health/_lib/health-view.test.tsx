@@ -110,7 +110,7 @@ describe("HealthBody states", () => {
     expect(out).toContain("Memory pressure is high since 22:40");
     // Runs left the console: the door opens Work in the app.
     expect(out).not.toContain('href="/runs"');
-    expect(out).toContain('href="synap://open/app/sessions"');
+    expect(out).toContain('href="synap://open/app/sessions?view=moving"');
     expect(out).toContain('href="/rules"');
     expect(out).toContain('href="/agents"');
     expect(out).toContain("Restart a service");

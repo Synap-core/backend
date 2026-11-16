@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { openIn } from "../../../../lib/open-in";
+import { openIn, WORK_EXIT } from "../../../../lib/open-in";
 import {
   buildNeedsYou,
   formatAgeHours,
@@ -284,14 +284,27 @@ describe("buildNeedsYou link building", () => {
     }).rows;
     expect(row.headline).toBe("2 flows failing in the last 7 days");
     expect(row.secondary).toBe("“AI Dev Session” failed 10 times");
-    // Runs left the console (`WORK_MOVED_TO_APP`): Work in the app.
+    // Runs left the console (`WORK_MOVED_TO_APP`): Work › Activity's
+    // Failed list, in the desktop app — not Work's default reading.
     expect(row.action).toEqual({
       kind: "link",
-      label: "Open in the app",
-      exit: openIn({ kind: "app", appId: "sessions" }),
+      label: "Open in the desktop app",
+      exit: WORK_EXIT.failed,
     });
     expect(row.action.kind === "link" && row.action.exit.href).toBe(
-      "synap://open/app/sessions"
+      "synap://open/app/sessions?view=activity&filter=failed"
+    );
+  });
+
+  it("keeps the desktop link when a moved section's detail drifted", () => {
+    // `failed_flows` with no `failingFlows` falls back to the server headline,
+    // still linked to its reading in the desktop app.
+    const [row] = buildNeedsYou({
+      sections: [section("failed_flows", "degraded", {}, "Flows are failing")],
+    }).rows;
+    expect(row.headline).toBe("Flows are failing");
+    expect(row.action.kind === "link" && row.action.exit).toEqual(
+      WORK_EXIT.failed
     );
   });
 
@@ -328,9 +341,12 @@ describe("buildNeedsYou link building", () => {
     expect(row.secondary).toBe("Oldest: “Sync”, 30h");
     expect(row.action).toEqual({
       kind: "link",
-      label: "Open in the app",
-      exit: openIn({ kind: "app", appId: "sessions" }),
+      label: "Open in the desktop app",
+      exit: WORK_EXIT.moving,
     });
+    expect(row.action.kind === "link" && row.action.exit.href).toBe(
+      "synap://open/app/sessions?view=moving"
+    );
   });
 
   it("sends agents at their proposal cap to Agents", () => {

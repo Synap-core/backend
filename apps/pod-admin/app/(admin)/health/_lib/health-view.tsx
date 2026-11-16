@@ -30,9 +30,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { CommandLine } from "../../../_lib/command-line";
-import { navHref, WORK_APP_ID } from "../../../../lib/console-nav";
+import { navHref } from "../../../../lib/console-nav";
 import { ExitLink } from "../../../../lib/exit-link";
-import { openIn } from "../../../../lib/open-in";
+import { WORK_EXIT } from "../../../../lib/open-in";
 import { useConsoleLocale, useT } from "../../../../lib/i18n/locale-provider";
 import { ConfirmModal } from "../../components/confirm-modal";
 import {
@@ -63,9 +63,6 @@ import {
   type ThresholdMetric,
   type Thresholds,
 } from "./health-model";
-
-/** Work, in the desktop app: where a run is cancelled now. */
-const WORK_EXIT = openIn({ kind: "app", appId: WORK_APP_ID });
 
 const READING_ICONS: Record<string, LucideIcon> = {
   readings: RadioTower,
@@ -283,8 +280,9 @@ function ActionCardView({
           >
             {t("action.pause.agents")}
           </Button>
-          {/* Runs left the console (`WORK_MOVED_TO_APP`): Work in the app. */}
-          <ExitLink exit={WORK_EXIT} label={t("action.pause.runs")} />
+          {/* Runs left the console (`WORK_MOVED_TO_APP`): what is running
+              now is Work › Moving now, in the desktop app. */}
+          <ExitLink exit={WORK_EXIT.moving} label={t("action.pause.runs")} />
         </div>
       </ActionBlock>
     );

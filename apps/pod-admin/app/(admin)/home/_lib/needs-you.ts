@@ -13,9 +13,9 @@
  * — headline, no link — because a link we have not verified is worse than none.
  *
  * Where a row goes is decided by `DIAGNOSE_DESTINATION` (lib/console-nav.ts),
- * the same table the nav's badges read, so a row and the badge it raises can
- * never point at different pages; a section whose work moved to the desktop
- * app (`DIAGNOSE_IN_APP`) opens Work there.
+ * the one table that places a section on a console page; a section whose work
+ * moved to the desktop app (`DIAGNOSE_IN_APP`) opens Work there, on the
+ * reading it names.
  */
 
 import {
@@ -27,9 +27,8 @@ import {
   navVisibleTo,
   type NavAudience,
   type NavId,
-  WORK_APP_ID,
 } from "../../../../lib/console-nav";
-import { openIn, type Exit } from "../../../../lib/open-in";
+import { openIn, WORK_EXIT, type Exit } from "../../../../lib/open-in";
 import type { UpdateIssue } from "../../updates/_lib/updates-model";
 
 export type HealthStatus = "ok" | "attention" | "degraded";
@@ -138,15 +137,24 @@ function openPage(
 }
 
 /**
- * Jobs and Runs left the console (`WORK_MOVED_TO_APP`): a failing flow or a
- * stuck run is worked in the desktop app's Work.
+ * Jobs and Runs left the console (`WORK_MOVED_TO_APP`): a failing flow opens
+ * Work › Activity's Failed list, a stuck run Moving now, in the desktop app.
  */
-function openWork(): NeedsYouAction {
-  return {
+const IN_APP_ACTION = {
+  failed_flows: {
     kind: "link",
-    label: "Open in the app",
-    exit: openIn({ kind: "app", appId: WORK_APP_ID }),
-  };
+    label: "Open in the desktop app",
+    exit: WORK_EXIT.failed,
+  },
+  stuck_runs: {
+    kind: "link",
+    label: "Open in the desktop app",
+    exit: WORK_EXIT.moving,
+  },
+} as const satisfies Record<string, NeedsYouAction>;
+
+function inAppAction(key: string): NeedsYouAction | undefined {
+  return (IN_APP_ACTION as Record<string, NeedsYouAction | undefined>)[key];
 }
 
 // ── Narrowing readers for `detail` ──────────────────────────────────────────
@@ -261,7 +269,7 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
           : failedTotal !== null
             ? plural(failedTotal, "failed run")
             : undefined,
-      action: openWork(),
+      action: IN_APP_ACTION.failed_flows,
       items: [],
     };
   },
@@ -285,7 +293,7 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
         oldestName && oldestAge !== null
           ? `Oldest: “${oldestName}”, ${formatAgeHours(oldestAge)}`
           : undefined,
-      action: openWork(),
+      action: IN_APP_ACTION.stuck_runs,
       items: [],
     };
   },
@@ -399,9 +407,7 @@ function sectionRow(s: DiagnoseSection): NeedsYouRow {
     headline: s.headline,
     action: page
       ? openPage(page)
-      : DIAGNOSE_IN_APP[s.key]
-        ? openWork()
-        : ({ kind: "none" } as const),
+      : (inAppAction(s.key) ?? ({ kind: "none" } as const)),
     items: [],
   };
   return { key: s.key, tone, ...body };
@@ -409,8 +415,7 @@ function sectionRow(s: DiagnoseSection): NeedsYouRow {
 
 /** Whether a viewer may open the page this section's row would lead to. */
 function sectionVisibleTo(key: string, audience: NavAudience): boolean {
-  const inApp = DIAGNOSE_IN_APP[key];
-  if (inApp) return audience === "admin" || inApp.audience === "member";
+  if (DIAGNOSE_IN_APP.has(key)) return audience === "admin";
   const page = DIAGNOSE_DESTINATION[key];
   // A key the nav does not place has no link, so any viewer may read it.
   return !page || navVisibleTo(navItem(page), audience);
