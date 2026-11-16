@@ -5642,7 +5642,7 @@
           "pausedUntil": { "type": ["string", "null"] },
           "pausedReason": {
             "type": ["string", "null"],
-            "enum": ["rate_limited", "cannot_resend_yet", "restricted", null]
+            "enum": ["rate_limited", "restricted", null]
           }
         },
         "required": [

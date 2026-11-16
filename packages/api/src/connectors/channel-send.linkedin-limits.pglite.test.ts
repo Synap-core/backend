@@ -14,9 +14,11 @@
  *   - a connection request counted only as an action (or not at all), and a
  *     message counted against the 20 connection requests;
  *   - a per-account ceiling row being ignored;
- *   - a LinkedIn 429 / cannot_resend_yet not pausing the account, or the send
+ *   - a LinkedIn 429 / checkpoint not pausing the account, or the send
  *     that met it being retried or failed instead of held;
- *   - another provider's 429 pausing anything (its classification unchanged).
+ *   - another provider's 429 pausing anything (its classification unchanged);
+ *   - a 422 cannot_resend_yet (one person, re-invited too soon) pausing the
+ *     whole account.
  *
  * Harness copied from `channel-send.pglite.test.ts` (same stubs, same reasons),
  * plus the vault secret resolver and the HTTP transport of a verb's call.
@@ -631,7 +633,26 @@ describe("a verb's provider call (a code skill's connection request) is counted 
     });
   });
 
-  it("LinkedIn answers 422 cannot_resend_yet: the account is paused for the day and the next request is not sent", async () => {
+  it("LinkedIn answers a checkpoint: the account is paused for the day and the next request is not sent", async () => {
+    h.providerStatus = 403;
+    h.providerBody = {
+      status: 403,
+      type: "errors/checkpoint_error",
+      detail: "A checkpoint is required on this account.",
+    };
+    const out = await invite();
+    expect(out.success).toBe(false);
+    expect((await accountMeta()).linkedinPause).toMatchObject({
+      reason: "restricted",
+      until: NEXT_UTC_MIDNIGHT(),
+    });
+    h.providerStatus = 201;
+    const next = await invite();
+    expect(next).toMatchObject({ success: false, status: 429 });
+    expect(h.providerCalls).toHaveLength(1);
+  });
+
+  it("LinkedIn answers 422 cannot_resend_yet: that one request fails with LinkedIn's reason, the account is not paused and the next request goes", async () => {
     h.providerStatus = 422;
     h.providerBody = {
       status: 422,
@@ -639,15 +660,14 @@ describe("a verb's provider call (a code skill's connection request) is counted 
       detail: "You cannot resend this invitation yet.",
     };
     const out = await invite();
-    expect(out.success).toBe(false);
-    expect((await accountMeta()).linkedinPause).toMatchObject({
-      reason: "cannot_resend_yet",
-      until: NEXT_UTC_MIDNIGHT(),
-    });
+    expect(out).toMatchObject({ success: false, status: 422 });
+    expect(out.error).toMatch(/cannot resend this invitation yet/i);
+    expect(await accountMeta()).not.toHaveProperty("linkedinPause");
     h.providerStatus = 201;
+    h.providerBody = {};
     const next = await invite();
-    expect(next).toMatchObject({ success: false, status: 429 });
-    expect(h.providerCalls).toHaveLength(1);
+    expect(next.success).toBe(true);
+    expect(h.providerCalls).toHaveLength(2);
   });
 
   it("another 4xx (a bad request) pauses nothing", async () => {

@@ -110,10 +110,10 @@ const MessagingAccountSchema = z
     displayName: z.string(),
     status: z.enum(["connected", "reconnection_required", "disconnected"]),
     /**
-     * A LinkedIn account LinkedIn told to slow down (a 429, a 422
-     * `cannot_resend_yet`, a checkpoint or restriction): its messages and
-     * connection requests wait until this time (ISO, the next UTC midnight),
-     * then go on. Null when the account is not paused.
+     * A LinkedIn account LinkedIn told to slow down (a 429, a checkpoint or
+     * a restriction): its messages and connection requests wait until this
+     * time (ISO, the next UTC midnight), then go on. Null when the account is
+     * not paused.
      */
     pausedUntil: z.string().nullable(),
     /** Why it is paused (a code to word), null when not paused. */
