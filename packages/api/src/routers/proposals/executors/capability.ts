@@ -39,6 +39,12 @@ import type { ProposalExecutorArgs } from "../execution-registry.js";
 import { recordApprovedAgentStart } from "../../../services/agent-dispatch/approved-start.js";
 import { answeringSkillsWhere } from "../../../services/capabilities/verb-skill.js";
 import { approvalRefusesRun } from "@synap/capability-gate";
+import { keepRowAsRecorded } from "../failure-classification.js";
+import {
+  holdPendingSend,
+  type HeldSend,
+} from "../../../services/channels/held-sends.js";
+import { linkedinRunHold } from "../../../services/channels/linkedin-account-limits.js";
 
 const logger = createLogger({
   module: "proposal-approve-executors-capability",
@@ -93,6 +99,53 @@ async function loadApprovedRunnableSkill(
     });
   }
   return skillRow;
+}
+
+/**
+ * The at-most-once dispatch of an approved verb run (`dispatchExternalOnce`),
+ * plus one case: a run that did NOT go out because the LinkedIn account it
+ * acts as may not act today (its day's limit, or LinkedIn paused it) stays
+ * PENDING and HELD until the next day, never APPROVAL_FAILED
+ * (`linkedin-account-limits.ts`, `held-sends.ts`). Only a definite
+ * not-delivered is held; an ambiguous throw keeps its claim as before.
+ */
+async function dispatchHoldingLinkedin(
+  run: {
+    proposalId: string;
+    userId: string;
+    intent: string | null;
+    params: Record<string, unknown>;
+  },
+  send: Parameters<typeof dispatchExternalOnce>[1]
+): Promise<void> {
+  const state = { notDelivered: false };
+  try {
+    await dispatchExternalOnce(run.proposalId, async () => {
+      const result = await send();
+      if (!result.delivered) state.notDelivered = true;
+      return result;
+    });
+  } catch (err) {
+    if (!state.notDelivered) throw err;
+    let held: HeldSend | null = null;
+    try {
+      held = await linkedinRunHold({
+        userId: run.userId,
+        intent: run.intent,
+        params: run.params,
+      });
+    } catch (readErr) {
+      logger.warn(
+        { err: readErr, proposalId: run.proposalId },
+        "capability run: the LinkedIn account's day could not be read; the failure stands"
+      );
+    }
+    if (!held) throw err;
+    await holdPendingSend(run.proposalId, held);
+    throw keepRowAsRecorded(
+      err instanceof Error ? err : new Error(String(err))
+    );
+  }
 }
 
 /** Register the capability.run / capability.install / capability.enable / capability/run approve executors. */
@@ -226,49 +279,59 @@ export function registerCapabilityExecutors(): void {
       );
 
       // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
-      await dispatchExternalOnce(input.proposalId, async () => {
-        const runOutcome = await runResolvedSkill(
-          skillRow,
-          (data.input as Record<string, unknown> | undefined) ?? {},
-          {
-            userId,
-            workspaceId: (data.workspaceId as string | undefined) ?? null,
-            sessionId: proposal.sessionId ?? null,
-            provenance: {
-              agentUserId: proposal.agentUserId ?? null,
-              proposalId: input.proposalId,
-            },
-          }
-        );
-        if (runOutcome.kind !== "run") {
-          const reason =
-            runOutcome.kind === "deny"
-              ? runOutcome.reason
-              : runOutcome.kind === "error" || runOutcome.kind === "not_found"
-                ? runOutcome.message
-                : "unknown";
-          logger.warn(
+      await dispatchHoldingLinkedin(
+        {
+          proposalId: input.proposalId,
+          userId,
+          intent: skillRow.intent,
+          params: (data.input as Record<string, unknown> | undefined) ?? {},
+        },
+        async () => {
+          const runOutcome = await runResolvedSkill(
+            skillRow,
+            (data.input as Record<string, unknown> | undefined) ?? {},
             {
-              proposalId: input.proposalId,
-              capabilityKind,
-              capabilityId,
-              reason,
-            },
-            "capability/run executor: skill/command run not delivered"
+              userId,
+              workspaceId: (data.workspaceId as string | undefined) ?? null,
+              sessionId: proposal.sessionId ?? null,
+              provenance: {
+                agentUserId: proposal.agentUserId ?? null,
+                proposalId: input.proposalId,
+              },
+            }
           );
-          return {
-            delivered: false,
-            reason,
-            // P1: an `error` outcome from a provider verb carries the scalars.
-            errorClass:
-              runOutcome.kind === "error" ? runOutcome.errorClass : undefined,
-            providerRef:
-              runOutcome.kind === "error" ? runOutcome.providerRef : undefined,
-          };
+          if (runOutcome.kind !== "run") {
+            const reason =
+              runOutcome.kind === "deny"
+                ? runOutcome.reason
+                : runOutcome.kind === "error" || runOutcome.kind === "not_found"
+                  ? runOutcome.message
+                  : "unknown";
+            logger.warn(
+              {
+                proposalId: input.proposalId,
+                capabilityKind,
+                capabilityId,
+                reason,
+              },
+              "capability/run executor: skill/command run not delivered"
+            );
+            return {
+              delivered: false,
+              reason,
+              // P1: an `error` outcome from a provider verb carries the scalars.
+              errorClass:
+                runOutcome.kind === "error" ? runOutcome.errorClass : undefined,
+              providerRef:
+                runOutcome.kind === "error"
+                  ? runOutcome.providerRef
+                  : undefined,
+            };
+          }
+          skillRunResult = runOutcome.result;
+          return { delivered: true };
         }
-        skillRunResult = runOutcome.result;
-        return { delivered: true };
-      });
+      );
     }
     // Only the "skill"/"command" branch materializes a result (the "tool"
     // branch's own result handling is unchanged, pre-existing behavior).
@@ -378,64 +441,72 @@ export function registerCapabilityExecutors(): void {
       // claim so Retry re-runs; a throw from runResolvedSkill is ambiguous → the
       // claim is kept (no resend).
       let runResult: unknown;
-      await dispatchExternalOnce(input.proposalId, async () => {
-        const runOutcome = await runResolvedSkill(skillRow, parameters, {
+      await dispatchHoldingLinkedin(
+        {
+          proposalId: input.proposalId,
           userId,
-          workspaceId: proposal.workspaceId ?? null,
-          connectionSelector:
-            (data.connectionSelector as ConnectionSelector | null) ?? null,
-          sessionId: proposal.sessionId ?? null,
-          provenance: {
-            agentUserId: proposal.agentUserId ?? null,
-            proposalId: input.proposalId,
-          },
-        });
-        if (runOutcome.kind === "not_found") {
-          logger.warn(
-            {
+          intent: skillRow.intent,
+          params: parameters,
+        },
+        async () => {
+          const runOutcome = await runResolvedSkill(skillRow, parameters, {
+            userId,
+            workspaceId: proposal.workspaceId ?? null,
+            connectionSelector:
+              (data.connectionSelector as ConnectionSelector | null) ?? null,
+            sessionId: proposal.sessionId ?? null,
+            provenance: {
+              agentUserId: proposal.agentUserId ?? null,
               proposalId: input.proposalId,
-              skillId,
+            },
+          });
+          if (runOutcome.kind === "not_found") {
+            logger.warn(
+              {
+                proposalId: input.proposalId,
+                skillId,
+                reason: runOutcome.message,
+              },
+              "capability.run executor: skill not found"
+            );
+            return { delivered: false, reason: runOutcome.message };
+          }
+          if (runOutcome.kind === "deny") {
+            logger.warn(
+              {
+                proposalId: input.proposalId,
+                skillId,
+                reason: runOutcome.reason,
+              },
+              "capability.run executor: run denied"
+            );
+            return { delivered: false, reason: runOutcome.reason };
+          }
+          if (runOutcome.kind === "error") {
+            // The run REACHED its handler and FAILED (code sandbox success:false, or
+            // a provider verb error envelope). This is a DEFINITE not-delivered →
+            // release the at-most-once claim so Retry re-runs. Previously this rode
+            // through as a `kind:"run"` carrying success:false, which BURNED the claim
+            // (delivered:true) and left the failed send stuck as "delivered".
+            logger.warn(
+              {
+                proposalId: input.proposalId,
+                skillId,
+                reason: runOutcome.message,
+              },
+              "capability.run executor: run failed"
+            );
+            return {
+              delivered: false,
               reason: runOutcome.message,
-            },
-            "capability.run executor: skill not found"
-          );
-          return { delivered: false, reason: runOutcome.message };
+              errorClass: runOutcome.errorClass,
+              providerRef: runOutcome.providerRef,
+            };
+          }
+          runResult = runOutcome.result;
+          return { delivered: true };
         }
-        if (runOutcome.kind === "deny") {
-          logger.warn(
-            {
-              proposalId: input.proposalId,
-              skillId,
-              reason: runOutcome.reason,
-            },
-            "capability.run executor: run denied"
-          );
-          return { delivered: false, reason: runOutcome.reason };
-        }
-        if (runOutcome.kind === "error") {
-          // The run REACHED its handler and FAILED (code sandbox success:false, or
-          // a provider verb error envelope). This is a DEFINITE not-delivered →
-          // release the at-most-once claim so Retry re-runs. Previously this rode
-          // through as a `kind:"run"` carrying success:false, which BURNED the claim
-          // (delivered:true) and left the failed send stuck as "delivered".
-          logger.warn(
-            {
-              proposalId: input.proposalId,
-              skillId,
-              reason: runOutcome.message,
-            },
-            "capability.run executor: run failed"
-          );
-          return {
-            delivered: false,
-            reason: runOutcome.message,
-            errorClass: runOutcome.errorClass,
-            providerRef: runOutcome.providerRef,
-          };
-        }
-        runResult = runOutcome.result;
-        return { delivered: true };
-      });
+      );
 
       // Workstream 1 (capability-run observability contract): a delivered run
       // reaching this point was, until now, unobservable — no correlationId,
