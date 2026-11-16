@@ -47,8 +47,10 @@ import {
 } from "../needs/space-needs.js";
 
 /** The reads the check makes; the space's needs default to the real read. */
-type RunToolsMissingDeps = Pick<RunToolProfileDeps, "readRegistry"> &
-  Partial<Pick<RunToolProfileDeps, "readSpaceNeeds">>;
+type RunToolsMissingDeps = Pick<
+  RunToolProfileDeps,
+  "readRegistry" | "readSpaceNeeds"
+>;
 
 const logger = createLogger({ module: "run-tools-missing" });
 
@@ -146,7 +148,7 @@ export async function findRunToolsMissing(
       });
       // A run with no space has no binding: every need it names is unfilled.
       if (declaresNeed && input.workspaceId) {
-        bindings = await (deps.readSpaceNeeds ?? defaultDeps.readSpaceNeeds)(
+        bindings = await (deps.readSpaceNeeds ?? defaultDeps.readSpaceNeeds!)(
           input.workspaceId
         );
       }

@@ -93,8 +93,11 @@ export interface RunToolProfileDeps {
     index: ReadonlyMap<string, readonly IntentVerbMatch[]>;
     capabilities: readonly GrantableCapability[];
   }>;
-  /** The space's live need bindings (`space-needs.ts`); throws when unread. */
-  readSpaceNeeds(workspaceId: string): Promise<SpaceNeedBindings>;
+  /**
+   * The space's need bindings (`space-needs.ts`); throws when unread. Absent:
+   * the real read (`defaultDeps`).
+   */
+  readSpaceNeeds?(workspaceId: string): Promise<SpaceNeedBindings>;
 }
 
 /** The real reads (exported so a test can swap ONE of them). */
@@ -325,7 +328,9 @@ export async function resolveRunToolProfile(
           userId: input.userId,
         }),
         needs.length > 0 && input.workspaceId
-          ? deps.readSpaceNeeds(input.workspaceId)
+          ? (deps.readSpaceNeeds ?? defaultDeps.readSpaceNeeds!)(
+              input.workspaceId
+            )
           : (new Map() as SpaceNeedBindings),
       ]);
       const index = trial ? readVerbsOnly(registry.index) : registry.index;

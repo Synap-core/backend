@@ -5962,7 +5962,7 @@ ALTER TABLE "presence_challenges"
 
 -- 0409: installations — capabilities installed on the person's own computers,
 -- of kind service or tool (installations, installation_bindings, host_jobs).
--- Read floor = the owner. Mirrors 0409_installations.sql; 0426 dropped
+-- Read floor = the owner. Mirrors 0409_installations.sql; 0426 retired
 -- intent_defaults and widened installation_bindings to a space's need binding.
 CREATE TABLE IF NOT EXISTS "installations" (
   "id"                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -6166,3 +6166,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_host_jobs_one_open_lifecycle_per_installat
 
 CREATE INDEX IF NOT EXISTS "idx_host_jobs_user_queued"
   ON "host_jobs" ("user_id", "queued_at" DESC);
+
+-- intent_defaults (0409): retired by 0426 (no code declares it); dropped by a
+-- later contract-step migration once 0426 has shipped (forward-only).
+CREATE TABLE IF NOT EXISTS "intent_defaults" (
+  "id"                     uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"                text        NOT NULL,
+  "workspace_id"           uuid,
+  "intent"                 text        NOT NULL,
+  "constraints_hash"       text        NOT NULL DEFAULT '',
+  "constraints"            jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "provider_capability_id" uuid        NOT NULL REFERENCES "capabilities"("id") ON DELETE CASCADE,
+  "created_at"             timestamptz NOT NULL DEFAULT now(),
+  "updated_at"             timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "intent_defaults_scope_unique" UNIQUE NULLS NOT DISTINCT
+    ("user_id", "workspace_id", "intent", "constraints_hash")
+);
+
+-- `public` is never a remembered choice (addendum §7 rule 1): refuse
+-- constraints whose `auth` is, lists, or allows (anyOf) `public`.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'intent_defaults_never_public_check'
+  ) THEN
+    ALTER TABLE "intent_defaults" ADD CONSTRAINT "intent_defaults_never_public_check"
+      CHECK (
+        NOT coalesce(("constraints" -> 'auth') ? 'public', false)
+        AND NOT coalesce(("constraints" -> 'auth' -> 'anyOf') ? 'public', false)
+      );
+  END IF;
+END $$;

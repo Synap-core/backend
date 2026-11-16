@@ -10,10 +10,10 @@
  * remembered default with it while an installation keeps its history; and
  * schema-coherence names every table.
  *
- * 0426 dropped `intent_defaults` (never wired; the space's need binding
- * replaces it) and widened `installation_bindings` to a space's need binding:
- * the drizzle schema checks below run with 0426 applied, and the
- * intent_defaults checks read the 0409 SQL alone (its history).
+ * 0426 retired `intent_defaults` (never wired; the space's need binding
+ * replaces it: the drizzle schema no longer declares it, the table stays until
+ * its contract-step drop) and widened `installation_bindings` to a space's
+ * need binding: the drizzle schema checks below run with 0426 applied.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -387,12 +387,10 @@ describe("migration 0409 — installations", () => {
       "installation_bindings_state_check",
       "host_jobs_kind_check",
       "host_jobs_status_check",
+      "intent_defaults_never_public_check",
     ]) {
       expect(M0409).toContain(`"${check}"`);
       expect(BASELINE).toContain(`"${check}"`);
     }
-    // Dropped by 0426: in the 0409 history, never in the baseline.
-    expect(M0409).toContain(`"intent_defaults_never_public_check"`);
-    expect(BASELINE).not.toContain(`"intent_defaults"`);
   });
 });

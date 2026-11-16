@@ -8,7 +8,8 @@
  *     need), a revoked row makes room, and a deleted provider leaves the need
  *     empty (SET NULL), never a dangling id;
  *   - an installation's binding keeps its 0409 shape (installation + intent);
- *   - `intent_defaults` is gone;
+ *   - `intent_defaults` is kept (forward-only: its drop is a later contract
+ *     step), the code no longer declares it;
  *   - the baseline carries the same lines; the boot coherence list names it.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -135,11 +136,12 @@ describe("migration 0426 — needs filled once per space", () => {
     expect(b.rows).toEqual([{ p: null }]);
   });
 
-  it("drops intent_defaults", async () => {
+  it("keeps intent_defaults: its drop is a later contract step (forward-only)", async () => {
     const t = await pg.query(
       `SELECT 1 FROM information_schema.tables WHERE table_name = 'intent_defaults'`
     );
-    expect(t.rows).toHaveLength(0);
+    expect(t.rows).toHaveLength(1);
+    expect(M0426).not.toMatch(/DROP TABLE[^;]*intent_defaults/);
   });
 
   it("the baseline carries the same lines and the boot check names the table", () => {
@@ -158,9 +160,6 @@ describe("migration 0426 — needs filled once per space", () => {
       expect(M0426).toContain(line);
       expect(BASELINE).toContain(line);
     }
-    expect(BASELINE).not.toContain(
-      `CREATE TABLE IF NOT EXISTS "intent_defaults"`
-    );
     expect(REQUIRED_COLUMNS.some((c) => c.table === "needs")).toBe(true);
     expect(REQUIRED_COLUMNS.some((c) => c.table === "intent_defaults")).toBe(
       false

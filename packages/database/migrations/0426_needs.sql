@@ -26,9 +26,14 @@
 -- and writes a new one in one transaction. An installation's binding keeps
 -- its 0409 shape (installation and intent required).
 --
--- `intent_defaults` (0409) is DROPPED: the per-person remembered provider was
+-- `intent_defaults` (0409) is RETIRED: the per-person remembered provider was
 -- never wired (no writer, no reader outside the access floor), and the space
--- binding replaces it (D3). No pod holds a row: nothing ever wrote one.
+-- binding replaces it (D3). The code no longer declares it; the table stays
+-- until a later migration drops it as the CONTRACT step of this one (marked
+-- as such, per scripts/check-migrations-forward-only.mjs) once this release
+-- has shipped, so
+-- an image rolled back to the previous release still finds what its boot
+-- coherence check names (migrations are forward-only).
 
 CREATE TABLE IF NOT EXISTS "needs" (
   "slug"        text        PRIMARY KEY,
@@ -91,4 +96,3 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_installation_bindings_space_need"
   ON "installation_bindings" ("workspace_id", "need_key")
   WHERE "installation_id" IS NULL AND "state" <> 'revoked';
 
-DROP TABLE IF EXISTS "intent_defaults";

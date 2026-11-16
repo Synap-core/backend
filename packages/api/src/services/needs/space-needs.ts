@@ -52,8 +52,8 @@ export interface SpaceNeedBinding {
   /** Who set the row; null for an implicit binding. */
   setBy: string | null;
   updatedAt: Date | null;
-  /** True when no row exists and the space's one filling provider stands in. */
-  implicit: boolean;
+  /** True when no row exists and the space's one filling provider stands in (absent = false). */
+  implicit?: boolean;
 }
 
 /** need slug → its binding (explicit, else implicit). A need with neither is absent. */
