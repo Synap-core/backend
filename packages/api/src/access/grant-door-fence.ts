@@ -119,6 +119,30 @@ const REFUSED = (reason: string): FencedReadDoor => ({
 const FLOW_OF = NARROWED("entity", []);
 
 /**
+ * THE PROCESS READ (`services/playbooks/process-read.ts`, Process wave W2):
+ * one playbook seen whole composes its automations, its run sessions, its
+ * skills and the tools covering its needs, beside the playbook. Hub
+ * `GET /playbooks/:id/process` and `GET /processes` declare those subjects;
+ * MCP `synap_list_playbooks({ playbookId })` (classified `playbook`) attaches
+ * the process only for a key this door bounds, and says `processWithheld`
+ * otherwise (`processReadableByGrant`).
+ */
+export const PROCESS_READ = READS(
+  "playbook",
+  "automation",
+  "session",
+  "skill",
+  "tool"
+);
+
+/** May this request's key read a whole process (null grant = a person, always)? */
+export function processReadableByGrant(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return !isFencedGrant(grant) || grantBoundsDoor(PROCESS_READ, grant!);
+}
+
+/**
  * The board read (`readBoardScene`): Hub `GET /whiteboards/:viewId/scene` and
  * MCP `synap_read_board` call the same function, so they share this one
  * declaration.
@@ -769,6 +793,10 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // runs: `scopedDb`, subject `playbook`); flows without `playbook.read`
   // and the workers (no seam) come back `withheld`. Same as MCP `synap_get_flow`.
   [/^\/flow\/?$/, FLOW_OF],
+  // THE PROCESS READ (one playbook whole, or a space's process cards): see
+  // `PROCESS_READ` for the subjects it composes.
+  [route("/playbooks/:id/process"), PROCESS_READ],
+  [/^\/processes\/?$/, PROCESS_READ],
   // `readWorkRelease` (services/dev-loop/work-release.ts), narrowed by the
   // read itself (`workReleaseReach`): a key reading every subject unbounded
   // gets it whole; one pinned to spaces gets the snapshots and sessions its

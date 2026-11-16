@@ -91,6 +91,14 @@ vi.mock("../../hub-protocol/playbook-doors.js", async (importOriginal) => {
   return {
     ...actual,
     listPlaybooksDoor: async () => ({ playbooks, nextCursor: null }),
+    getProcessDoor: async (_identity: unknown, id: string) => ({
+      kind: "result",
+      result: {
+        playbook: { id },
+        health: { state: "never-run" },
+        unavailable: [],
+      },
+    }),
     getPlaybookDoor: async (_identity: unknown, id: string) => {
       h.gets.push(id);
       const row = playbooks.find((p) => p.id === id);
@@ -176,5 +184,10 @@ describe("synap_list_playbooks — the default call is a digest", () => {
     expect(body).toMatchObject({ id, name: "Process 2" });
     expect(body).toHaveProperty("stages");
     expect(body).toHaveProperty("goalTemplate");
+    // …and the playbook seen whole: the ONE process read (Process wave W2).
+    expect(body.process).toMatchObject({
+      playbook: { id },
+      health: { state: "never-run" },
+    });
   });
 });

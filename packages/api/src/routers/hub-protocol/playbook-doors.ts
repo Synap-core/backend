@@ -472,6 +472,43 @@ export async function getPlaybookDoor(
 }
 
 /**
+ * ONE process, whole (`playbooks.process`, the ONE process read): the Hub door
+ * of the Process view (Process wave W2). Same floor as `get`.
+ */
+export async function getProcessDoor(
+  identity: PlaybookDoorIdentity,
+  playbookId: string
+): Promise<
+  PlaybookDoorOutcome<
+    Awaited<
+      ReturnType<ReturnType<typeof playbooksRouter.createCaller>["process"]>
+    >
+  >
+> {
+  const caller = await callerFor(identity, null);
+  const result = await caller.process({ playbookId: playbookId.trim() });
+  return { kind: "result", result };
+}
+
+/**
+ * A space's processes as cards (`playbooks.processes`), or every visible one
+ * (`workspaceId` omitted; `null` = pod-wide playbooks only).
+ */
+export async function listProcessesDoor(
+  identity: PlaybookDoorIdentity,
+  input: { workspaceId?: string | null }
+): Promise<
+  Awaited<
+    ReturnType<ReturnType<typeof playbooksRouter.createCaller>["processes"]>
+  >
+> {
+  const caller = await callerFor(identity, null);
+  return caller.processes(
+    input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}
+  );
+}
+
+/**
  * "Who runs it" for the caller (`playbooks.runChoice`): the Hub door of the
  * read a launch asks before it runs (slice 5a). Same floor as `get`.
  */

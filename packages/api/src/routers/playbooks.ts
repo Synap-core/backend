@@ -180,6 +180,11 @@ import {
   setDriverAutomation,
 } from "../services/playbooks/playbook-automation-links.js";
 import {
+  listProcesses,
+  processReaderOf,
+  readProcess,
+} from "../services/playbooks/process-read.js";
+import {
   describeGoalPlaceholderProblems,
   findGoalPlaceholderProblems,
   findUnresolvedGoalReferences,
@@ -1905,6 +1910,47 @@ export const playbooksRouter = router({
         userId: ctx.userId,
       });
     }),
+
+  /**
+   * ONE process, whole (Process wave plan 0adf8352, W2): the playbook seen as
+   * a Process — definition, what starts it, steps, checks, what it moves, its
+   * needs with coverage, its skills, its runs and health — composed by the ONE
+   * process read (`services/playbooks/process-read.ts`), the same read the Hub
+   * REST door and MCP `synap_list_playbooks({ playbookId })` return. A part
+   * that could not be read is named in `unavailable`, never answered empty.
+   * Contract: `@synap-core/types/processes` `ProcessRead`.
+   */
+  process: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const read = await readProcess(processReaderOf(ctx), input.playbookId);
+      if (!read) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+      return read;
+    }),
+
+  /**
+   * A space's processes as cards (`ProcessSummary`), or every visible one
+   * when no space is named (`null` = pod-wide playbooks only). Archived
+   * playbooks are left out.
+   */
+  processes: protectedProcedure
+    .input(
+      z
+        .object({ workspaceId: z.string().uuid().nullable().optional() })
+        .optional()
+    )
+    .query(async ({ ctx, input }) =>
+      listProcesses(processReaderOf(ctx), {
+        ...(input?.workspaceId !== undefined
+          ? { workspaceId: input.workspaceId }
+          : {}),
+      })
+    ),
 
   /**
    * Create a new playbook. Governance-gated: AI callers (agentUserId set) route

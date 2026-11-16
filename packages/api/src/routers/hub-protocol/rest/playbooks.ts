@@ -27,7 +27,9 @@ import {
   createPlaybookDoor,
   getPlaybookDoor,
   getPlaybookRunChoiceDoor,
+  getProcessDoor,
   listPlaybooksDoor,
+  listProcessesDoor,
   playbookDoorContext,
   runPlaybookDoor,
   type PlaybookDoorIdentity,
@@ -55,6 +57,41 @@ import { setPlaybookRunChoiceGoverned } from "../../../services/playbooks/set-ru
 type HubContext = Context<{ Variables: HubVariables }>;
 
 const PlaybookStatusSchema = z.enum(["draft", "active", "paused", "archived"]);
+
+/**
+ * The process read on the wire (`@synap-core/types/processes`, the contract
+ * every door returns). The OpenAPI shape names the top-level blocks; each
+ * block's full shape is the TS contract.
+ */
+const ProcessReadSchema = z
+  .object({
+    playbook: z.object({ id: z.string(), name: z.string() }).passthrough(),
+    when: z.object({}).passthrough(),
+    steps: z.array(z.object({}).passthrough()),
+    checks: z.object({}).passthrough(),
+    moves: z.object({}).passthrough().nullable(),
+    needs: z.array(z.object({}).passthrough()),
+    skills: z.array(z.object({}).passthrough()),
+    runs: z.object({}).passthrough(),
+    health: z.object({ state: z.string() }).passthrough(),
+    unavailable: z.array(z.string()),
+  })
+  .passthrough();
+
+const ProcessSummarySchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    health: z.object({ state: z.string() }).passthrough(),
+    counts: z.object({}).passthrough(),
+    needs: z.array(z.object({}).passthrough()),
+    unavailable: z.array(z.string()),
+  })
+  .passthrough();
+
+const ListProcessesQuerySchema = z.object({
+  workspaceId: z.string().uuid().optional(),
+});
 
 const ListPlaybooksQuerySchema = z.object({
   workspaceId: z
@@ -462,6 +499,97 @@ export function registerPlaybooksRoutes(app: HubHono): void {
       },
       500: { description: "Internal error", schema: ErrorSchema },
     },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/playbooks/{id}/process",
+    tags: ["Playbooks"],
+    summary: "One process, whole",
+    description:
+      "The playbook seen as a Process: its definition and version, what starts it (its automations, from the one playbook → automation link, and its enabled workers), its steps, checks (criteria and gates), what it moves (the subject kind's lifecycle and the step owning each state), its needs (its `tools` and `requires` entries, each `filled`, `empty` or `unknown` against the space's tools), its skills, its runs (counts and recent sessions) and its health. A part the pod could not read is named in `unavailable`; its fields read null or `unknown`, never empty. Same read as tRPC playbooks.process and MCP synap_list_playbooks({playbookId}) → `process`.",
+    request: { params: z.object({ id: z.string().uuid() }) },
+    responses: {
+      200: { description: "The process", schema: ProcessReadSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Playbook not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/processes",
+    tags: ["Playbooks"],
+    summary: "List processes",
+    description:
+      "A space's processes as cards (health, run counts, step and automation counts, needs), or every visible one when no space is named. Archived playbooks are left out. Same read as tRPC playbooks.processes.",
+    request: { query: ListProcessesQuerySchema },
+    responses: {
+      200: {
+        description: "{ processes }",
+        schema: z.object({ processes: z.array(ProcessSummarySchema) }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  /**
+   * GET /playbooks/:id/process — one process, whole (`playbooks.process`, the
+   * ONE process read). Before `/playbooks/:id`.
+   */
+  app.get("/playbooks/:id/process", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
+    try {
+      const outcome = await getProcessDoor(
+        doorIdentity(c, c.get("agentUserId")),
+        id
+      );
+      if (outcome.kind !== "result") {
+        return c.json(
+          { error: "error" in outcome ? outcome.error : "Not found" },
+          404
+        );
+      }
+      return c.json(outcome.result);
+    } catch (err) {
+      return errorResponse(c, err, "playbooks.process failed");
+    }
+  });
+
+  /**
+   * GET /processes?workspaceId= — a space's processes as cards
+   * (`playbooks.processes`).
+   */
+  app.get("/processes", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const parsed = ListProcessesQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) return c.json({ error: zodError(parsed.error) }, 400);
+    const confined = confineWorkspaceOrForbidden(c, parsed.data.workspaceId);
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    try {
+      const processes = await listProcessesDoor(
+        doorIdentity(c, c.get("agentUserId")),
+        confined.workspaceId ? { workspaceId: confined.workspaceId } : {}
+      );
+      return c.json({ processes });
+    } catch (err) {
+      return errorResponse(c, err, "playbooks.processes failed");
+    }
   });
 
   /**
