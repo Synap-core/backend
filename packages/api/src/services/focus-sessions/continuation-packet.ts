@@ -68,7 +68,11 @@ import {
   listHolds,
   sessionStageRuns,
 } from "@synap/database";
-import { questionDisposition } from "@synap-core/types/ask";
+import {
+  declinedReasonOf,
+  isDeclinedValue,
+  questionDisposition,
+} from "@synap-core/types/ask";
 import {
   questionShortId,
   readRoomPostMeta,
@@ -2666,6 +2670,19 @@ export function deriveNextMove(input: {
       : [];
   if (ownSlots[0]) {
     const s = ownSlots[0];
+    // The person REFUSED the ask: the next move is a new plan, never the
+    // same question again (the ask doors refuse an identical re-ask).
+    if (s.answer && isDeclinedValue(s.answer.value)) {
+      const reason = declinedReasonOf(s.answer);
+      return {
+        kind: "agent_slot",
+        actor: "ai",
+        label: `Re-plan "${s.label}"`,
+        reason:
+          `The person refused your ask${reason ? `: "${reason.length > 140 ? `${reason.slice(0, 140)}…` : reason}"` : ""}. ` +
+          "Do it another way, ask something new, withdraw the slot (retireOutput), or close the session failed.",
+      };
+    }
     if (s.answer) {
       const said =
         s.answer.text.length > 140

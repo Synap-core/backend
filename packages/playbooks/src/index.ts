@@ -1047,7 +1047,12 @@ export type SlotAnswerValue =
       then?: SlotAskOption;
     }
   | { type: "form"; values: Record<string, unknown> }
-  | { type: "provide"; ref: SlotProvideRef };
+  | { type: "provide"; ref: SlotProvideRef }
+  /**
+   * The person REFUSED the ask (`@synap-core/types/ask` `./declined.ts`):
+   * taken on every mode, grants nothing, keeps the slot's blocker.
+   */
+  | { type: "declined"; reason?: string };
 
 /**
  * WHERE an answer came from — STRUCTURAL MIRROR of `AnswerProvenance`
@@ -1122,6 +1127,14 @@ export interface SlotAnswer extends SlotAnswerProvenance {
    * carried no ask, and on every answer recorded before snapshots existed.
    */
   askSnapshot?: SlotAskSnapshot;
+  /**
+   * A REFUSAL only (`value.type === "declined"`): `askFingerprint` of the ask
+   * the person refused (the slot's effective ask, as shown). The block doors
+   * refuse an identical re-ask while this answer stands (api
+   * `declined-reask.ts`); the hand-back clears the ask itself, so this is the
+   * only record of WHICH ask was refused. Server-stamped with the answer.
+   */
+  askFingerprint?: string;
 }
 
 /** How many prior answers a slot keeps on `answerHistory`. */

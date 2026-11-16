@@ -1238,7 +1238,13 @@ export type HubSlotAnswerValue =
         | { kind: "secret"; vaultRef: string }
         | { kind: "connection"; connectionId: string }
         | { kind: "file"; fileId: string };
-    };
+    }
+  /**
+   * The person REFUSED the ask (mirrors the `declined` arm of
+   * `AskAnswerValue`): nothing was handed over; `reason` is theirs, for you.
+   * Do not ask the same again: re-plan, withdraw the slot, or close failed.
+   */
+  | { type: "declined"; reason?: string };
 
 /** A person's answer to an agent's question about one slot (pod-stamped). */
 export interface HubSlotAnswer {

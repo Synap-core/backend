@@ -160,6 +160,11 @@ const ROWS: Row[] = [
   ],
   ["focus_session.slot_answered.completed", undefined, "Answered question"],
   [
+    "focus_session.slot_answered.completed",
+    { label: "Budget", value: { type: "declined", reason: "Not now" } },
+    'Refused question "Budget"',
+  ],
+  [
     "focus_session.slot_attested.completed",
     { label: "Deck" },
     'Marked done "Deck"',

@@ -29,6 +29,7 @@ import {
   sentenceCaseLabel,
 } from "../vocabulary/index.js";
 import { resolveServiceName } from "../service-marks/index.js";
+import { isDeclinedValue } from "../ask/declined.js";
 
 /** One lifecycle event, as a line. */
 export interface ConnectionEventLine {
@@ -276,6 +277,17 @@ function sessionOrTrackLine(
         name: label,
       });
     case "slot_answered":
+      // A refusal is an answer on the wire, and its own act in the history.
+      if (isDeclinedValue(data?.value)) {
+        return line(
+          "refuse",
+          "question",
+          verbNoun("refuse", "question", label),
+          {
+            name: label,
+          }
+        );
+      }
       return line("answer", "question", verbNoun("answer", "question", label), {
         name: label,
       });

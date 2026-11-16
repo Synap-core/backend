@@ -144,6 +144,8 @@ export function paramValueFromAnswer(
 ): ParamAnswer {
   if (slot.kind !== PARAM_SLOT_KIND || !slot.paramName)
     return { status: "none" };
+  // A REFUSAL gives no value: the param stays unset (never `false`, never "").
+  if (value?.type === "declined") return { status: "none" };
   const name = slot.paramName;
   // A credential param has no ask (`playbookParamAsk` → null): typing the
   // secret here would store it as words in the slot, the room and the params.
