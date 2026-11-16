@@ -287,7 +287,7 @@ export async function evaluateSession(
       // session's space bound to it. Not filled (or no single verb): the
       // criterion is not graded, and the reason is said, never a silent pass.
       let verbId = c.check.capability;
-      if (looksLikeNeedRef(verbId)) {
+      if (verbId && looksLikeNeedRef(verbId)) {
         const resolved = await resolveNeedVerb({
           need: verbId,
           workspaceId: session.workspaceId,
