@@ -25430,6 +25430,12 @@ export interface ProcessHealth {
 	 */
 	sessionId?: string | null;
 }
+declare const PROCESS_STEP_RUNNER_KINDS: readonly [
+	"ai",
+	"person",
+	"automatic"
+];
+export type ProcessStepRunnerKind = (typeof PROCESS_STEP_RUNNER_KINDS)[number];
 declare const PROCESS_NEED_KINDS: readonly [
 	"intent",
 	"capability"
@@ -25502,6 +25508,8 @@ export interface ProcessStep {
 	category: string;
 	/** Who works it, as declared (`PlaybookRunner` | null = the playbook's). */
 	runner: unknown | null;
+	/** Who moves it on, for its mark (`classifyStepRunner`, the one classifier). */
+	runnerKind: ProcessStepRunnerKind;
 	/** The step's `tools` (narrows the playbook's list); `[]` = the playbook's. */
 	tools: string[];
 	/** The step's own `requires` (capability keys). */
@@ -25627,6 +25635,33 @@ export interface ProcessSummary {
 	automationCount: number;
 	needs: ProcessNeedSummary[];
 	/** Parts that could not be read (their fields are null / unknown). */
+	unavailable: ProcessReadPart[];
+}
+/**
+ * An automation that belongs to no live process (no `playbook_automations`
+ * row to a playbook that is not archived): the "Automations outside a
+ * process" list. The read decides membership once,
+ * so no surface re-derives it.
+ */
+export interface ProcessOutsideAutomation {
+	id: string;
+	name: string;
+	/** event | cron | webhook | manual. */
+	triggerType: string;
+	/** draft | active | paused | error (archived ones are left out). */
+	status: string;
+	workspaceId: string | null;
+}
+/**
+ * The index of a space's processes (`listProcesses`, `playbooks.processes`,
+ * Hub REST `GET /processes`): the cards, plus the automations outside any
+ * process. `automationsOutsideProcess` is `null` when that read failed (then
+ * `unavailable` names `"when"`); an empty list means there are none.
+ */
+export interface ProcessIndex {
+	processes: ProcessSummary[];
+	automationsOutsideProcess: ProcessOutsideAutomation[] | null;
+	/** Index-level parts that could not be read. */
 	unavailable: ProcessReadPart[];
 }
 export interface ProcessNeedSummary {
@@ -49579,7 +49614,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 			} | undefined;
 			meta: object;
-			output: ProcessSummary[];
+			output: ProcessIndex;
 		}>;
 		promote: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
