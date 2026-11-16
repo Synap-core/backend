@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { askFingerprint, type Ask } from "@synap-core/types/ask";
+import { ASK_COPY, askFingerprint, type Ask } from "@synap-core/types/ask";
 
 const {
   SESSION_ID,
@@ -142,6 +142,8 @@ const {
     buttons: [] as Array<{ children?: unknown; onPress?: () => void }>,
     /** What the reads return, per test. */
     seen: {
+      /** `focusSessions.provideOptions`: null = still loading. */
+      provide: null as unknown,
       signals: [] as unknown[],
       proposals: [] as unknown[],
       /** A read that failed: with no data yet, or a poll after a good read. */
@@ -250,6 +252,14 @@ vi.mock("../../../../lib/trpc", () => {
           }),
         },
         answerOutput: door("focusSessions.answerOutput"),
+        provideOptions: {
+          useQuery: () => ({
+            data: seen.provide ?? undefined,
+            isLoading: seen.provide === null,
+            error: null,
+            refetch() {},
+          }),
+        },
         attestOutput: door("focusSessions.attestOutput"),
         unblockOutput: door("focusSessions.unblockOutput"),
         askAboutSlot: door("focusSessions.askAboutSlot"),
@@ -619,5 +629,103 @@ describe("A criterion's grade — once, in the rail", () => {
         />
       )
     ).toBe("");
+  });
+});
+
+describe("Refuse — on every ask mode, with what refusing does (founder D2)", () => {
+  const SLOT = {
+    count: 1,
+    groupKey: null,
+    ageBucket: "recent",
+    repeatCount: 1,
+    occurredAt: "2026-10-24T09:00:00.000Z",
+    category: "ai",
+    kind: "owed-slot",
+    target: { kind: "session", id: SESSION_ID },
+  };
+  const modes: Array<[string, Ask | null]> = [
+    ["confirm", { mode: "confirm", prompt: "Ship it on Friday?" }],
+    ["choose", ASK as unknown as Ask],
+    [
+      "form",
+      {
+        mode: "form",
+        form: { fields: [{ key: "seats", label: "Seats", type: "number" }] },
+      },
+    ],
+    ["act", { mode: "act", steps: ["Rotate the key"] }],
+    ["provide", { mode: "provide", provide: { kind: "secret", name: "KEY" } }],
+    ["no ask", null],
+  ];
+  it.each(modes)(
+    "%s: Refuse is offered, and says what it does",
+    (mode, ask) => {
+      const [row] = reviewRows(
+        [
+          { ...SLOT, id: `owed:${mode}`, title: "Hand me the key", ask },
+        ] as never,
+        new Map()
+      );
+      if (row?.detail?.kind !== "ask") throw new Error("expected an ask row");
+      const html = render(
+        <AskAnswer
+          slot={row.detail.slot}
+          live={row.detail.slot}
+          onSettled={() => {}}
+          onClose={() => {}}
+        />
+      );
+      const seenText = text(html);
+      expect(html).toContain("data-ask-refuse");
+      expect(buttons.some((b) => b.children === ASK_COPY.refuse)).toBe(true);
+      expect(seenText).toContain(ASK_COPY.refuseConsequence);
+    }
+  );
+
+  it("a secret asked with no purpose: the card says so, nothing is inferred", () => {
+    seen.provide = {
+      kind: "secret",
+      sessionId: SESSION_ID,
+      expectedLabel: "Hand me the key",
+      askFingerprint: "fp",
+      secret: {
+        name: "KEY",
+        rows: [{ ref: "vault://k", name: "KEY", type: "api_key" }],
+        grant: {
+          status: "will_grant",
+          agentUserId: "a1",
+          agentName: "Claude-code",
+          minutes: 60,
+          uses: "session",
+        },
+      },
+    };
+    const [row] = reviewRows(
+      [
+        {
+          ...SLOT,
+          id: "owed:secret",
+          title: "Hand me the key",
+          ask: { mode: "provide", provide: { kind: "secret", name: "KEY" } },
+        },
+      ] as never,
+      new Map()
+    );
+    if (row?.detail?.kind !== "ask") throw new Error("expected an ask row");
+    const seenText = text(
+      render(
+        <AskAnswer
+          slot={row.detail.slot}
+          live={row.detail.slot}
+          onSettled={() => {}}
+          onClose={() => {}}
+        />
+      )
+    );
+    seen.provide = null;
+    expect(seenText).toContain(ASK_COPY.provideNoPurpose);
+    expect(seenText).toMatch(/Used by Claude-code/);
+    expect(seenText).toMatch(/Until This session only/);
+    expect(seenText).toContain(ASK_COPY.provideGrantNote("Claude-code", 60));
   });
 });

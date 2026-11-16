@@ -76,7 +76,14 @@ import {
   redirectToLogin,
   redirectToLoginIfUnauthorized,
 } from "../../../../lib/auth-redirect";
-import { humanizeBytes, readableError } from "../../../../lib/format";
+import {
+  formatRelative,
+  humanizeBytes,
+  readableError,
+} from "../../../../lib/format";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
+import { useT } from "../../../../lib/i18n/locale-provider";
+import { REQUEST_CATALOGS } from "../../../_lib/request/copy";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import {
   ExitFallback,
@@ -105,6 +112,7 @@ import {
   type AskControlView,
   type AskDraft,
   type AskSlot,
+  type AskView,
   type FormDraft,
   type FormFieldView,
   type LookedAtItem,
@@ -114,6 +122,8 @@ import {
   connectedReceipt,
   provideReceipt,
   provideSheet,
+  secretCard,
+  secretUseView,
   type ConnectionSheet,
   type FileSheet,
   type ProvideReceipt,
@@ -201,6 +211,8 @@ export function AskAnswer({
   const view = askView(seen);
   const [failure, setFailure] = useState<string | null>(null);
   const [asked, setAsked] = useState(false);
+  /** A secret was handed over with a read: show what became of it. */
+  const [handedOver, setHandedOver] = useState(false);
 
   const utils = trpc.useUtils();
 
@@ -237,17 +249,40 @@ export function AskAnswer({
   /** Said with a refused provide answer: what already went through stays. */
   const keptIfRefused = useRef<string | null>(null);
   const answer = trpc.focusSessions.answerOutput.useMutation({
-    onSuccess: (data, call) =>
+    onSuccess: (data, call) => {
+      const value = call.value;
+      if (value?.type === "declined") {
+        // The agent reads the same words: the answer's own summary.
+        settled({ title: ASK_COPY.refusedReceipt(value.reason) });
+        return;
+      }
+      const grant = "secretGrant" in data ? data.secretGrant : undefined;
+      if (
+        value?.type === "provide" &&
+        value.ref.kind === "secret" &&
+        grant?.status === "granted"
+      ) {
+        // A secret an agent may now read: the card stays to say what became
+        // of it (read how often, until when) and to take it back.
+        addToast({
+          color: "success",
+          ...provideReceipt("secret", { secretGrant: grant }, Date.now()),
+        });
+        refresh();
+        setHandedOver(true);
+        return;
+      }
       settled(
-        call.value?.type === "provide"
+        value?.type === "provide"
           ? provideReceipt(
-              call.value.ref.kind,
+              value.ref.kind,
               // Only an answered provide carries the grant; a correction never does.
               "secretGrant" in data ? data : {},
               Date.now()
             )
           : { title: "Answer sent" }
-      ),
+      );
+    },
     // A refused file answer leaves the uploaded file where it was saved.
     onError: (err, call) =>
       refused(
@@ -313,6 +348,9 @@ export function AskAnswer({
     )
     .find((exit) => exit.isDesktopLink);
 
+  const handedOverBlock = handedOver ? (
+    <SecretHandedOver slot={slotCall(seen)} onDone={onSettled} />
+  ) : null;
   const headBlock = (
     <div className="flex flex-col gap-2">
       {showHeading && (
@@ -463,11 +501,13 @@ export function AskAnswer({
                 }
                 keptIfRefused.current = extras?.keptIfRefused ?? null;
                 const expectedGranteeId = extras?.expectedGranteeId;
-                send(
-                  expectedGranteeId
-                    ? { ...built.call, expectedGranteeId }
-                    : built.call
-                );
+                send({
+                  ...built.call,
+                  ...(expectedGranteeId ? { expectedGranteeId } : {}),
+                  ...(extras?.secretUses
+                    ? { secretUses: extras.secretUses }
+                    : {}),
+                });
               }}
               onStale={refused}
               onFailure={setFailure}
@@ -476,6 +516,23 @@ export function AskAnswer({
               }
             />
           )}
+          {/* Refuse, on EVERY mode (the person may always say no), with
+              what refusing does said before it is pressed. */}
+          <RefuseControl
+            refuse={view.refuse}
+            busy={busy || staleness === "changed"}
+            pending={
+              answer.isPending && answer.variables?.value?.type === "declined"
+            }
+            onRefuse={(reason) => {
+              const built = answerCall(seen, { type: "declined", reason });
+              if (!built.ok) {
+                setFailure(built.message);
+                return;
+              }
+              send(built.call);
+            }}
+          />
         </>
       )}
     </>
@@ -519,7 +576,7 @@ export function AskAnswer({
           }
         >
           {headBlock}
-          {decisionBlock}
+          {handedOverBlock ?? decisionBlock}
           {talkBlock}
         </RequestStoryView>
       </div>
@@ -530,7 +587,7 @@ export function AskAnswer({
     <div className="flex flex-col gap-5 pb-4">
       {headBlock}
       {lookedAtBlock}
-      {decisionBlock}
+      {handedOverBlock ?? decisionBlock}
       {talkBlock}
     </div>
   );
@@ -729,7 +786,11 @@ interface ControlsProps {
    */
   onProvide: (
     ref: AskProvideRef,
-    extras?: { expectedGranteeId?: string; keptIfRefused?: string }
+    extras?: {
+      expectedGranteeId?: string;
+      keptIfRefused?: string;
+      secretUses?: "once" | "session";
+    }
   ) => void;
   /** A door refused: stale (moved on, changed) or a failure, as the pod said. */
   onStale: (err: DoorError) => void;
@@ -1408,7 +1469,13 @@ function OpenInAppLink({ sessionId }: { sessionId: string }) {
   );
 }
 
-/** One of the person's EXISTING secrets; a new one is added in the app. */
+/**
+ * One of the person's EXISTING secrets (a new one is added in the app), on
+ * the HONEST card (plan d717d6ac §4, founder D4): For · Used by · On ·
+ * Until, as the agent declared them — "The agent did not say what it is
+ * for" when it did not, never inferred. "This session only" is the default;
+ * an agent that already reads the picked secret is said so, not an hour.
+ */
 function SecretProvide({
   slot,
   sheet,
@@ -1416,10 +1483,76 @@ function SecretProvide({
   pending,
   onProvide,
 }: ProvideControlProps & { sheet: SecretSheet }) {
+  const t = useT(REQUEST_CATALOGS);
   const [ref, setRef] = useState(sheet.initialRef ?? "");
+  const [uses, setUses] = useState(sheet.uses);
+  const card = secretCard(sheet, ref || null, uses);
   const has = sheet.choices.length > 0;
+  const until =
+    card.until === "standing"
+      ? t("secret.untilStanding")
+      : card.until === "once"
+        ? t("secret.untilOnce")
+        : card.until === "session"
+          ? t("secret.untilSession")
+          : null;
   return (
     <div className="flex flex-col gap-3">
+      <dl
+        data-secret-card=""
+        className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-lg bg-foreground/[0.02] p-3 text-[12.5px] ring-1 ring-inset ring-foreground/10"
+      >
+        {card.purpose ? (
+          <>
+            <dt className="text-foreground/55">{t("secret.for")}</dt>
+            <dd className="break-words text-foreground/90">
+              {card.purpose.for}
+            </dd>
+            <dt className="text-foreground/55">{t("secret.usedBy")}</dt>
+            <dd className="break-words text-foreground/90">
+              {card.purpose.tool}
+              {card.purpose.action && (
+                <span className="text-foreground/60">
+                  {" "}
+                  {card.purpose.action}
+                </span>
+              )}
+              {card.usedBy && (
+                <span className="text-foreground/60"> · {card.usedBy}</span>
+              )}
+            </dd>
+            {card.purpose.on && (
+              <>
+                <dt className="text-foreground/55">{t("secret.on")}</dt>
+                <dd className="break-words text-foreground/90">
+                  {card.purpose.on}
+                </dd>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <dd
+              data-secret-no-purpose=""
+              className="col-span-2 text-status-stale"
+            >
+              {ASK_COPY.provideNoPurpose}
+            </dd>
+            {card.usedBy && (
+              <>
+                <dt className="text-foreground/55">{t("secret.usedBy")}</dt>
+                <dd className="text-foreground/90">{card.usedBy}</dd>
+              </>
+            )}
+          </>
+        )}
+        {until && (
+          <>
+            <dt className="text-foreground/55">{t("secret.until")}</dt>
+            <dd className="text-foreground/90">{until}</dd>
+          </>
+        )}
+      </dl>
       {has ? (
         <>
           <RadioGroup
@@ -1442,8 +1575,24 @@ function SecretProvide({
               </Radio>
             ))}
           </RadioGroup>
-          <p className="text-[12.5px] leading-relaxed text-foreground/75">
-            {sheet.grantNote}
+          {card.canPickUses && (
+            <RadioGroup
+              orientation="horizontal"
+              label={t("secret.until")}
+              value={uses}
+              onValueChange={(v) => setUses(v === "once" ? "once" : "session")}
+              isDisabled={busy}
+              classNames={{ label: SECTION_LABEL }}
+            >
+              <Radio value="session">{t("secret.usesSession")}</Radio>
+              <Radio value="once">{t("secret.usesOnce")}</Radio>
+            </RadioGroup>
+          )}
+          <p
+            data-secret-grant-note=""
+            className="text-[12.5px] leading-relaxed text-foreground/75"
+          >
+            {card.note}
           </p>
           <div>
             <Button
@@ -1455,9 +1604,12 @@ function SecretProvide({
               onPress={() =>
                 onProvide(
                   { kind: "secret", vaultRef: ref },
-                  sheet.expectedGranteeId
-                    ? { expectedGranteeId: sheet.expectedGranteeId }
-                    : undefined
+                  {
+                    ...(sheet.expectedGranteeId
+                      ? { expectedGranteeId: sheet.expectedGranteeId }
+                      : {}),
+                    ...(card.canPickUses ? { secretUses: uses } : {}),
+                  }
                 )
               }
             >
@@ -1817,5 +1969,233 @@ function FileProvide({
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Refuse ──────────────────────────────────────────────────────────────────
+
+/** The reasons a person may pick (their words for the agent), else type. */
+const REFUSE_REASONS = [
+  "refuse.reason.notNow",
+  "refuse.reason.notNeeded",
+  "refuse.reason.notThisWay",
+  "refuse.reason.noAccess",
+] as const;
+
+/**
+ * REFUSE (founder D2, 16 Nov 2026): the ask closes as refused for this
+ * request, the reason goes to the agent, the agent picks its next step.
+ * Offered on every mode. What refusing does is said BEFORE the press; the
+ * reason is picked or typed, and optional.
+ */
+export function RefuseControl({
+  refuse,
+  busy,
+  pending,
+  onRefuse,
+}: {
+  refuse: AskView["refuse"];
+  busy: boolean;
+  pending: boolean;
+  onRefuse: (reason: string | undefined) => void;
+}) {
+  const t = useT(REQUEST_CATALOGS);
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  if (!open) {
+    return (
+      <div
+        data-ask-refuse=""
+        className="flex flex-col items-start gap-1 border-t border-foreground/[0.06] pt-3"
+      >
+        <Button
+          size="sm"
+          variant="flat"
+          color="danger"
+          startContent={<X className="h-3.5 w-3.5" aria-hidden />}
+          isDisabled={busy}
+          onPress={() => setOpen(true)}
+        >
+          {refuse.label}
+        </Button>
+        <p className="text-[12px] text-foreground/60">
+          <span className="font-medium text-foreground/70">
+            {t("story.refusing")}
+          </span>{" "}
+          {refuse.consequence}
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div
+      data-ask-refuse="open"
+      className="flex flex-col gap-2.5 rounded-lg bg-danger/[0.04] p-3 ring-1 ring-inset ring-danger/20"
+    >
+      <p className="text-[12.5px] text-foreground/80">{refuse.consequence}</p>
+      <div
+        role="group"
+        aria-label={t("refuse.reasons")}
+        className="flex flex-wrap gap-1.5"
+      >
+        {REFUSE_REASONS.map((key) => {
+          const words = t(key);
+          const picked = reason.trim() === words;
+          return (
+            <Button
+              key={key}
+              size="sm"
+              radius="full"
+              variant={picked ? "solid" : "flat"}
+              color={picked ? "primary" : "default"}
+              aria-pressed={picked}
+              isDisabled={busy}
+              onPress={() => setReason(picked ? "" : words)}
+            >
+              {words}
+            </Button>
+          );
+        })}
+      </div>
+      <Textarea
+        size="sm"
+        minRows={2}
+        label={refuse.reasonLabel}
+        placeholder={t("refuse.other")}
+        value={reason}
+        onValueChange={setReason}
+        isDisabled={busy}
+      />
+      <div className="flex items-center gap-2">
+        <Button
+          color="danger"
+          className="min-h-10"
+          isLoading={pending}
+          isDisabled={busy}
+          onPress={() => onRefuse(reason.trim() || undefined)}
+        >
+          {t("refuse.confirm")}
+        </Button>
+        <Button
+          variant="light"
+          className="min-h-10"
+          isDisabled={pending}
+          onPress={() => setOpen(false)}
+        >
+          {t("refuse.cancel")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── A secret, after it was handed over ─────────────────────────────────────
+
+/**
+ * What became of a secret handed over for this ask (plan d717d6ac §4,
+ * `focusSessions.provideSecretUse`): how often the agent read it, when last,
+ * until when — and Take back, which revokes that grant
+ * (`secretsVault.revokeGrant`). A failed read says so; never "not read".
+ */
+export function SecretHandedOver({
+  slot,
+  onDone,
+}: {
+  /** The slot it was handed over for (`slotCall`): its session and label. */
+  slot: { sessionId: string; expectedLabel: string };
+  onDone: () => void;
+}) {
+  const t = useT(REQUEST_CATALOGS);
+  const { sessionId, expectedLabel } = slot;
+  const use = trpc.focusSessions.provideSecretUse.useQuery(
+    { sessionId, expectedLabel },
+    { retry: 1, refetchInterval: 30_000 }
+  );
+  const utils = trpc.useUtils();
+  const revoke = trpc.secretsVault.revokeGrant.useMutation({
+    onSuccess: () => {
+      addToast({ color: "success", title: t("secret.takenBack") });
+      void utils.focusSessions.provideSecretUse.invalidate({
+        sessionId,
+        expectedLabel,
+      });
+    },
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      addToast({
+        color: "danger",
+        title: t("secret.takeBackFailed"),
+        description: readableError(err.message) ?? undefined,
+      });
+    },
+  });
+  const read = use.data;
+  const view = read?.status === "ok" ? secretUseView(read.use) : null;
+  return (
+    <section
+      data-secret-handed-over=""
+      className="flex flex-col gap-2 rounded-lg bg-foreground/[0.02] p-3 ring-1 ring-inset ring-foreground/10"
+    >
+      {use.isError ? (
+        <p className="flex flex-wrap items-center gap-2 text-[12.5px] text-status-stale">
+          {t("secret.useUnreadable")}
+          <Button size="sm" variant="light" onPress={() => void use.refetch()}>
+            {t("story.retry")}
+          </Button>
+        </p>
+      ) : use.isLoading ? (
+        <Spinner size="sm" />
+      ) : view ? (
+        <>
+          <p className="text-[13px] font-medium text-foreground">
+            {view.secretName}
+          </p>
+          <p
+            data-secret-use=""
+            className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-foreground/75"
+          >
+            <span>{t("secret.used", { n: view.useCount })}</span>
+            {view.lastUsedAt && (
+              <>
+                <span aria-hidden>·</span>
+                <span>
+                  {t("secret.lastAt", {
+                    at: formatRelative(view.lastUsedAt, { empty: "" }),
+                  })}
+                </span>
+              </>
+            )}
+            <span aria-hidden>·</span>
+            <span>
+              {view.until === "standing"
+                ? t("secret.untilStanding")
+                : view.until === "once"
+                  ? t("secret.untilOnce")
+                  : t("secret.untilSession")}
+            </span>
+            {view.takeBack ? (
+              <Button
+                size="sm"
+                variant="flat"
+                color="danger"
+                isLoading={revoke.isPending}
+                onPress={() =>
+                  revoke.mutate({ grantId: view.takeBack!.grantId })
+                }
+              >
+                {t("secret.takeBack")}
+              </Button>
+            ) : (
+              <span className="font-medium">{t("secret.takenBack")}</span>
+            )}
+          </p>
+        </>
+      ) : null}
+      <div>
+        <Button size="sm" variant="light" onPress={onDone}>
+          {resolveActionLabel("close", "imperative")}
+        </Button>
+      </div>
+    </section>
   );
 }

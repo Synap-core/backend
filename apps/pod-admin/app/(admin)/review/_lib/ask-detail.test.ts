@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ASK_COPY,
   askFingerprint,
   classifyAskRefusal,
   type Ask,
@@ -687,5 +688,47 @@ describe("a relayed answer waiting for the tap", () => {
       expectedLabel: s.label,
       rejectRelayed: true,
     });
+  });
+});
+
+describe("answerCall — Refuse, on every mode (founder D2, 16 Nov 2026)", () => {
+  const modes: Array<[string, Ask | null]> = [
+    ["confirm", { mode: "confirm", prompt: "Ship it?" }],
+    ["choose", choose],
+    ["form", form],
+    ["act", { mode: "act", steps: ["Rotate the key"] }],
+    ["provide", { mode: "provide", provide: { kind: "secret", name: "KEY" } }],
+    ["no ask", null],
+  ];
+  it.each(modes)(
+    "%s: the declined answer goes to the answer door with the reason the agent reads",
+    (_mode, ask) => {
+      const built = answerCall(slot(ask), {
+        type: "declined",
+        reason: "  Not this sprint  ",
+      });
+      expect(built).toEqual({
+        ok: true,
+        call: {
+          sessionId: slot(ask).sessionId,
+          expectedLabel: slot(ask).label,
+          value: { type: "declined", reason: "Not this sprint" },
+          askFingerprint: askFingerprint(ask),
+        },
+      });
+    }
+  );
+
+  it("the reason is optional", () => {
+    const built = answerCall(slot(choose), { type: "declined" });
+    expect(built.ok && built.call.value).toEqual({ type: "declined" });
+  });
+
+  it("every card offers it, with what refusing does", () => {
+    for (const [, ask] of modes) {
+      const view = askView(slot(ask));
+      expect(view.refuse.label).toBe(ASK_COPY.refuse);
+      expect(view.refuse.consequence).toBe(ASK_COPY.refuseConsequence);
+    }
   });
 });
