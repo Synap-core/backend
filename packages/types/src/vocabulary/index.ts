@@ -57,7 +57,10 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
-import type { ProcessGateKind } from "../processes/steps.js";
+import type {
+  ProcessGateKind,
+  ProcessStepRunnerKind,
+} from "../processes/steps.js";
 import type { SessionVerdict } from "../focus-sessions/verdict.js";
 import type { RunnerState } from "../units/runner-state.js";
 import type {
@@ -2506,6 +2509,21 @@ export const GATE_KIND_LABELS = {
 export type GateKindLabelRows = typeof GATE_KIND_LABELS;
 
 /**
+ * Who moves a process step on, in a person's words (`PROCESS_STEP_RUNNER_KINDS`,
+ * `classifyStepRunner`, `@synap-core/types/processes`): the step strip's and
+ * pod admin's runner mark. `automatic` is declared and unreachable until W2b
+ * declares "an automation moves this step". Keyed by EVERY kind.
+ */
+export const STEP_RUNNER_KIND_LABELS = {
+  person: "You approve",
+  ai: "An agent works it",
+  automatic: "Runs by itself",
+} as const satisfies Readonly<Record<ProcessStepRunnerKind, string>>;
+
+/** The step runner rows, exactly typed: the keys of the `stepRunner.*` catalog. */
+export type StepRunnerKindLabelRows = typeof STEP_RUNNER_KIND_LABELS;
+
+/**
  * What a session's runner says it is doing (0384, `RUNNER_STATES`), in a
  * person's words: the mark a session page and a needs-you row wear (decision
  * D-R1). Keyed by EVERY state: a word with no label stops the build.
@@ -2631,6 +2649,24 @@ export function resolveGateKindLabel(
   return (
     translatedWord(`gateKind.${key}`, catalogLocaleOf(opts?.locale)) ??
     GATE_KIND_LABELS[key as keyof GateKindLabelRows]
+  );
+}
+
+/**
+ * The words for who moves a step on (`person` | `ai` | `automatic`, the
+ * answer of `classifyStepRunner`), in `opts.locale` (else the ambient catalog
+ * locale), through `stepRunner.<kind>`. Unknown kinds humanize; none is "".
+ */
+export function resolveStepRunnerLabel(
+  kind: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!kind) return "";
+  const key = kind.trim().toLowerCase();
+  if (!Object.hasOwn(STEP_RUNNER_KIND_LABELS, key)) return humanizeToken(kind);
+  return (
+    translatedWord(`stepRunner.${key}`, catalogLocaleOf(opts?.locale)) ??
+    STEP_RUNNER_KIND_LABELS[key as keyof StepRunnerKindLabelRows]
   );
 }
 
@@ -4185,6 +4221,7 @@ export const vocabularyEn = buildVocabularyEn({
   runnerStates: RUNNER_STATE_LABELS,
   waitKinds: WAIT_KIND_LABELS,
   gateKinds: GATE_KIND_LABELS,
+  stepRunners: STEP_RUNNER_KIND_LABELS,
 });
 
 /** Every locale's vocabulary catalog, for `createT` and the parity test. */

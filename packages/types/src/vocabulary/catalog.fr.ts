@@ -586,6 +586,10 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "gateKind.human": "Votre approbation",
   "gateKind.check": "Vérification automatique",
   "gateKind.awaits": "Attend un signal",
+  // ── Step runners: `stepRunner.<kind>` (who moves a step on) ──
+  "stepRunner.person": "Vous approuvez",
+  "stepRunner.ai": "Un agent s’en charge",
+  "stepRunner.automatic": "S’exécute tout seul",
   // ── Needs-you counts: `needsYou.count.<kind>` (French counts 0 and 1 as
   // singular; `many` is a whole number of millions: "1000000 de décisions") ──
   "needsYou.count.decision":
