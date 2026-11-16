@@ -40,7 +40,11 @@ import {
 } from "../vault/index.js";
 import { isHttpUrl } from "../navigation/index.js";
 import { resolveServiceName } from "../service-marks/index.js";
-import { provideSecretAccessLine, type ProvideSecretGrant } from "./provide.js";
+import {
+  PROVIDE_SECRET_USES,
+  provideSecretAccessLine,
+  type ProvideSecretGrant,
+} from "./provide.js";
 
 // ─── Limits ─────────────────────────────────────────────────────────────────
 
@@ -68,6 +72,10 @@ export const ASK_LIMITS = {
   urlMaxChars: 2000,
   /** A provide(connection)'s service id, a provide(secret)'s name. */
   provideNameMaxChars: 120,
+  /** A provide(secret)'s purpose: what the secret is for ("Merging the PR"). */
+  secretPurposeMaxChars: 200,
+  /** A provide(secret)'s purpose: the tool, the action, the resource. */
+  secretPurposePartMaxChars: 120,
   acceptMax: 10,
   /** "What I looked at" — the objects the agent read before asking. */
   lookedAtMax: 8,
@@ -500,6 +508,49 @@ const httpUrl = z
   .max(ASK_LIMITS.urlMaxChars)
   .refine(isHttpUrl, "Must be an http(s) URL");
 
+/**
+ * A purpose part must name a thing, never carry a credential: one unbroken
+ * run of 24+ token characters (no `/` or `.`, so a path or a URL passes)
+ * mixing letters and digits (`ghp_…`, `sk_live_…`, a JWT segment) is refused. A heuristic floor, not a scanner: the field is
+ * bounded and shown to the person, so a pasted value would be seen there.
+ */
+const CREDENTIAL_LIKE_RUN = /[A-Za-z0-9_\-+=]{24,}/g;
+export function looksLikeCredential(text: string): boolean {
+  for (const run of text.match(CREDENTIAL_LIKE_RUN) ?? []) {
+    if (/[A-Za-z]/.test(run) && /[0-9]/.test(run)) return true;
+  }
+  return false;
+}
+
+const purposePart = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .refine(
+      (v) => !looksLikeCredential(v),
+      "Name what the secret is for, never a key or token"
+    );
+
+/**
+ * What a secret asked for will be used for, declared by the agent (plan
+ * d717d6ac §4, modelled on the vault request door's required `purpose`): the
+ * work it serves, which tool or capability uses it, the action, and on what.
+ * Short words for the person's card, never the secret.
+ */
+export const AskSecretPurposeSchema = z.object({
+  /** The work it serves ("Merging the delivery PR"). */
+  for: purposePart(ASK_LIMITS.secretPurposeMaxChars),
+  /** The tool or capability that reads it ("GitHub tool"). */
+  tool: purposePart(ASK_LIMITS.secretPurposePartMaxChars),
+  /** What that tool does with it ("merge"). */
+  action: purposePart(ASK_LIMITS.secretPurposePartMaxChars).optional(),
+  /** What it acts on ("Synap-core/backend"). */
+  on: purposePart(ASK_LIMITS.secretPurposePartMaxChars).optional(),
+});
+export type AskSecretPurpose = z.infer<typeof AskSecretPurposeSchema>;
+
 export const AskProvideSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("connection"),
@@ -518,6 +569,18 @@ export const AskProvideSchema = z.discriminatedUnion("kind", [
     kind: z.literal("secret"),
     /** What the secret is ("Stripe restricted key") — NEVER the secret. */
     name: z.string().min(1).max(ASK_LIMITS.provideNameMaxChars),
+    /**
+     * What the agent will DO with it, declared (`AskSecretPurposeSchema`).
+     * Optional so an ask posed before it keeps parsing; without it the card
+     * says the agent did not say what it is for. Never inferred.
+     */
+    purpose: AskSecretPurposeSchema.optional(),
+    /**
+     * How long the agent asks to read it: `once` (one read) or `session`
+     * (until the job closes; the default). The person may pick the other on
+     * the answer (`secretUses`).
+     */
+    uses: z.enum(PROVIDE_SECRET_USES).optional(),
   }),
 ]);
 export type AskProvide = z.infer<typeof AskProvideSchema>;
@@ -1605,6 +1668,9 @@ export {
 /** Handing something over for a `provide` ask — see `./provide.ts`. */
 export {
   PROVIDE_SECRET_GRANT_MINUTES,
+  PROVIDE_SECRET_ONCE_MINUTES,
+  PROVIDE_SECRET_USES,
+  provideSecretUsesMinutes,
   provideSecretAccessLine,
   provideGrantNote,
   provideExpectedGranteeId,
@@ -1615,6 +1681,9 @@ export {
   type ProvideSecretGrant,
   type ProvideSecretGrantRefusal,
   type ProvideSecretGrantOffer,
+  type ProvideSecretUses,
+  type ProvideSecretGrantUses,
+  type ProvideStandingGrant,
   type ProvideConnectUnavailableReason,
   type ProvideConnectionRowLite,
   type ProvideAccountChoice,

@@ -165,6 +165,17 @@ export const ASK_COPY = {
   /** Provide, secret: what handing it over lets the asking agent do. */
   provideGrantNote: (agent: string, minutes: number): string =>
     `${agent} will be able to read it for ${minutes} minutes, in this ${JOB_NOUN} only.`,
+  /** Provide, secret, asked for one read only. */
+  provideGrantOnceNote: (agent: string, minutes: number): string =>
+    `${agent} will be able to read it once, within ${minutes} minutes, in this ${JOB_NOUN} only.`,
+  /**
+   * Provide, secret: the agent already holds a permanent grant on the picked
+   * secret, so nothing new is granted and nothing ends with the job.
+   */
+  provideStandingGrantNote: (agent: string): string =>
+    `${agent} can already read this secret, until you take it back. Nothing new is granted.`,
+  /** Provide, secret: the ask declared no purpose (never inferred). */
+  provideNoPurpose: "The agent did not say what it is for.",
   /** Provide, secret: the pod could not tell which agent asked. */
   provideNoGrantNote:
     "No agent will be able to read it yet. The agent has to ask for access.",
