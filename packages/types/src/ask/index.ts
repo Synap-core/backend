@@ -41,6 +41,7 @@ import {
 import { isHttpUrl } from "../navigation/index.js";
 import { resolveServiceName } from "../service-marks/index.js";
 import { provideSecretAccessLine, type ProvideSecretGrant } from "./provide.js";
+import { DECLINED_ANSWER_TYPE, declinedAnswerText } from "./declined.js";
 
 // ─── Limits ─────────────────────────────────────────────────────────────────
 
@@ -891,6 +892,16 @@ export const AskAnswerValueSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("form"), values: AskFormValuesSchema }),
   z.object({ type: z.literal("provide"), ref: AskProvideRefSchema }),
+  /**
+   * REFUSE (`./declined.ts`): the person will not give this. Taken for EVERY
+   * mode and for a slot with no ask; the slot goes back to the agent with
+   * the reason, nothing is granted, and the same ask cannot be asked again
+   * while the refusal stands. `reason` is the person's words, for the agent.
+   */
+  z.object({
+    type: z.literal(DECLINED_ANSWER_TYPE),
+    reason: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  }),
 ]);
 export type AskAnswerValue = z.infer<typeof AskAnswerValueSchema>;
 
@@ -1072,6 +1083,10 @@ export function questionDisposition(
  *              the answer door hands the slot back and wakes the agent.
  *   `attest` — `act`: the person did it; the attest door ("I did this").
  *   `legacy` — no ask: today's behaviour (free text, "I did this", "Not mine").
+ *
+ * ONE EXCEPTION, on every resolution: a REFUSAL (`{ type: "declined" }`,
+ * `./declined.ts`) always goes through the ANSWER door, an `act` ask and an
+ * ask-less slot included. Refusing is not doing, so it is never an attest.
  */
 export type AskResolution = "answer" | "attest" | "legacy";
 
@@ -1081,6 +1096,15 @@ export function resolveAskResolution(
   if (!ask) return "legacy";
   return ask.mode === "act" ? "attest" : "answer";
 }
+
+/** The refusal rule's readers — see `./declined.ts` (zod-free). */
+export {
+  DECLINED_ANSWER_TYPE,
+  declinedAnswerText,
+  declinedReasonOf,
+  isDeclinedAnswer,
+  isDeclinedValue,
+} from "./declined.js";
 
 /** The decision-ask rule and the slot's effective ask — see `./ends-with-session.ts` (zod-free). */
 export {
@@ -1160,6 +1184,9 @@ export function chooseTakesOwnAnswer(
  * already bounded and redacted). `text` is the accompanying free text: required
  * for a `text` answer, an optional note otherwise.
  *
+ * - a refusal (`{ type: "declined" }`) ⇒ accepted for EVERY mode and for no
+ *   ask, before anything else: the person may always say no, and an `act`
+ *   ask is refused through the answer door, never attested.
  * - no ask ⇒ only free text (today's behaviour).
  * - `act` ⇒ refused (`wrong_door`): it resolves through the attest door.
  * - `confirm` ⇒ a confirm value.
@@ -1174,6 +1201,15 @@ export function validateAnswerAgainstAsk(
   value: AskAnswerValue,
   text?: string | null
 ): AskAnswerValidation {
+  if (value.type === DECLINED_ANSWER_TYPE) {
+    const reason = value.reason?.trim();
+    return {
+      ok: true,
+      value: reason
+        ? { type: DECLINED_ANSWER_TYPE, reason }
+        : { type: DECLINED_ANSWER_TYPE },
+    };
+  }
   const hasText = typeof text === "string" && text.trim().length > 0;
   if (value.type === "text" && !hasText) {
     return refuse("text_required", "A free-text answer needs its text.");
@@ -1468,6 +1504,9 @@ export function summarizeAnswer(
         .map(([k, v]) => `${labels.get(k) ?? k}: ${formatFormValue(v)}`);
       return withNote(parts.join("; ") || "Submitted the form");
     }
+    case DECLINED_ANSWER_TYPE:
+      // "Refused: <reason>", the agent's words to act on (`./declined.ts`).
+      return withNote(declinedAnswerText(value.reason));
     case "provide": {
       const head =
         value.ref.kind === "secret"
@@ -1661,6 +1700,7 @@ export {
   type AskCardAnswer,
   type AskCardAsker,
   type AskCardDue,
+  type AskCardRefuse,
   type AskCardSlot,
   type AskCardView,
   type AskCardViewOptions,

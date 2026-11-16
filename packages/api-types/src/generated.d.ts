@@ -14990,6 +14990,14 @@ export type SlotAnswerValue = {
 } | {
 	ref: SlotProvideRef;
 	type: "provide";
+}
+/**
+ * The person REFUSED the ask (`@synap-core/types/ask` `./declined.ts`):
+ * taken on every mode, grants nothing, keeps the slot's blocker.
+ */
+ | {
+	reason?: string;
+	type: "declined";
 };
 /**
  * WHERE an answer came from — STRUCTURAL MIRROR of `AnswerProvenance`
@@ -15062,6 +15070,14 @@ export interface SlotAnswer extends SlotAnswerProvenance {
 	 * carried no ask, and on every answer recorded before snapshots existed.
 	 */
 	askSnapshot?: SlotAskSnapshot;
+	/**
+	 * A REFUSAL only (`value.type === "declined"`): `askFingerprint` of the ask
+	 * the person refused (the slot's effective ask, as shown). The block doors
+	 * refuse an identical re-ask while this answer stands (api
+	 * `declined-reask.ts`); the hand-back clears the ask itself, so this is the
+	 * only record of WHICH ask was refused. Server-stamped with the answer.
+	 */
+	askFingerprint?: string;
 }
 /**
  * STRUCTURAL MIRROR of `AskSnapshot` (`@synap-core/types/ask`) — same reason
@@ -38884,6 +38900,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "file";
 					};
 					type: "provide";
+				} | {
+					reason?: string | undefined;
+					type: "declined";
 				} | undefined;
 			};
 			meta: object;
@@ -39380,6 +39399,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					answer?: {
 						answeredAt: string;
 						answeredBy: string;
+						askFingerprint?: string | undefined;
 						askSnapshot?: {
 							chosenKey: string | null;
 							followedRecommendation: boolean | null;
@@ -39501,12 +39521,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "file";
 							};
 							type: "provide";
+						} | {
+							reason?: string | undefined;
+							type: "declined";
 						} | undefined;
 						via?: "relayed" | "tap" | undefined;
 					} | undefined;
 					answerHistory?: {
 						answeredAt: string;
 						answeredBy: string;
+						askFingerprint?: string | undefined;
 						askSnapshot?: {
 							chosenKey: string | null;
 							followedRecommendation: boolean | null;
@@ -39628,6 +39652,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "file";
 							};
 							type: "provide";
+						} | {
+							reason?: string | undefined;
+							type: "declined";
 						} | undefined;
 						via?: "relayed" | "tap" | undefined;
 					}[] | undefined;
@@ -39896,6 +39923,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "file";
 							};
 							type: "provide";
+						} | {
+							reason?: string | undefined;
+							type: "declined";
 						} | undefined;
 					} | undefined;
 					ref?: {
@@ -40699,6 +40729,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					answer?: {
 						answeredAt: string;
 						answeredBy: string;
+						askFingerprint?: string | undefined;
 						askSnapshot?: {
 							chosenKey: string | null;
 							followedRecommendation: boolean | null;
@@ -40820,12 +40851,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "file";
 							};
 							type: "provide";
+						} | {
+							reason?: string | undefined;
+							type: "declined";
 						} | undefined;
 						via?: "relayed" | "tap" | undefined;
 					} | undefined;
 					answerHistory?: {
 						answeredAt: string;
 						answeredBy: string;
+						askFingerprint?: string | undefined;
 						askSnapshot?: {
 							chosenKey: string | null;
 							followedRecommendation: boolean | null;
@@ -40947,6 +40982,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "file";
 							};
 							type: "provide";
+						} | {
+							reason?: string | undefined;
+							type: "declined";
 						} | undefined;
 						via?: "relayed" | "tap" | undefined;
 					}[] | undefined;
@@ -41215,6 +41253,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "file";
 							};
 							type: "provide";
+						} | {
+							reason?: string | undefined;
+							type: "declined";
 						} | undefined;
 					} | undefined;
 					ref?: {

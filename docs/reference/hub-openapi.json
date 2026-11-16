@@ -40204,6 +40204,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -40470,7 +40484,11 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
-                            "confirmedAt": { "type": "string" }
+                            "confirmedAt": { "type": "string" },
+                            "askFingerprint": {
+                              "type": "string",
+                              "maxLength": 64
+                            }
                           },
                           "required": [
                             "text",
@@ -40758,6 +40776,20 @@
                                       }
                                     },
                                     "required": ["type", "ref"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["declined"]
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "maxLength": 2000
+                                      }
+                                    },
+                                    "required": ["type"]
                                   }
                                 ]
                               },
@@ -41028,7 +41060,11 @@
                                 "maxLength": 64
                               },
                               "quote": { "type": "string", "maxLength": 2000 },
-                              "confirmedAt": { "type": "string" }
+                              "confirmedAt": { "type": "string" },
+                              "askFingerprint": {
+                                "type": "string",
+                                "maxLength": 64
+                              }
                             },
                             "required": [
                               "text",
@@ -41314,6 +41350,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -44213,6 +44263,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -44479,7 +44543,11 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
-                            "confirmedAt": { "type": "string" }
+                            "confirmedAt": { "type": "string" },
+                            "askFingerprint": {
+                              "type": "string",
+                              "maxLength": 64
+                            }
                           },
                           "required": [
                             "text",
@@ -44767,6 +44835,20 @@
                                       }
                                     },
                                     "required": ["type", "ref"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["declined"]
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "maxLength": 2000
+                                      }
+                                    },
+                                    "required": ["type"]
                                   }
                                 ]
                               },
@@ -45037,7 +45119,11 @@
                                 "maxLength": 64
                               },
                               "quote": { "type": "string", "maxLength": 2000 },
-                              "confirmedAt": { "type": "string" }
+                              "confirmedAt": { "type": "string" },
+                              "askFingerprint": {
+                                "type": "string",
+                                "maxLength": 64
+                              }
                             },
                             "required": [
                               "text",
@@ -45323,6 +45409,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -47940,6 +48040,14 @@
                           }
                         },
                         "required": ["type", "ref"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["declined"] },
+                          "reason": { "type": "string", "maxLength": 2000 }
+                        },
+                        "required": ["type"]
                       }
                     ]
                   },
@@ -48325,6 +48433,14 @@
                           }
                         },
                         "required": ["type", "ref"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["declined"] },
+                          "reason": { "type": "string", "maxLength": 2000 }
+                        },
+                        "required": ["type"]
                       }
                     ]
                   },
