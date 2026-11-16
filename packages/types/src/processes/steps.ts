@@ -51,7 +51,9 @@ function gateKind(gate: unknown): string | null {
   return null;
 }
 
-export function classifyStepRunner(step: ClassifiableStep): ProcessStepRunnerKind {
+export function classifyStepRunner(
+  step: ClassifiableStep
+): ProcessStepRunnerKind {
   const gate = gateKind(step.gate);
   if (gate === "human") return "person";
   if (gate === "check") return "automatic";

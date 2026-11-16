@@ -58,8 +58,12 @@ describe("classifyStepRunner — who moves a step on", () => {
   });
 
   it("the gate decides before the runner (a gated agent step is the gate's)", () => {
-    expect(classifyStepRunner({ gate: "human", runner: "synap_ai" })).toBe("person");
-    expect(classifyStepRunner({ gate: "check", runner: { agentId: "a-1" } })).toBe("automatic");
+    expect(classifyStepRunner({ gate: "human", runner: "synap_ai" })).toBe(
+      "person"
+    );
+    expect(
+      classifyStepRunner({ gate: "check", runner: { agentId: "a-1" } })
+    ).toBe("automatic");
   });
 
   it("every runner shape is an agent; no runner is the run's own agent", () => {
@@ -84,7 +88,12 @@ describe("classifyStepRunner — who moves a step on", () => {
   });
 
   it("only ever answers one of its declared kinds", () => {
-    for (const step of [{}, { gate: "human" }, { gate: "check" }, { runner: "self" }]) {
+    for (const step of [
+      {},
+      { gate: "human" },
+      { gate: "check" },
+      { runner: "self" },
+    ]) {
       expect(PROCESS_STEP_RUNNER_KINDS).toContain(classifyStepRunner(step));
     }
   });

@@ -18,7 +18,8 @@ import { PLAYBOOK_VERSION_FIELDS } from "./playbook-versions.js";
 const KEPT_WITHOUT_BUMP: Record<string, string> = {
   name: "a rename does not change what a run does",
   description: "prose for people; a run is not told it",
-  subjectProfile: "the kind it works on; its stages carry the moves (next lane)",
+  subjectProfile:
+    "the kind it works on; its stages carry the moves (next lane)",
   scope: "where it may be started from, not what a run does (next lane)",
 };
 

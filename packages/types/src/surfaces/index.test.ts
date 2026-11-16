@@ -33,13 +33,7 @@ describe("DEPRECATED_SURFACES", () => {
     expect(browserIds.sort()).toEqual(
       // `import` / `files`: founder 2A (2026-10-19) — the capture Library is
       // Library › Kept, the Files app is Library › Documents.
-      [
-        "activity",
-        "files",
-        "governance",
-        "import",
-        "work-map",
-      ].sort()
+      ["activity", "files", "governance", "import", "work-map"].sort()
     );
   });
 
