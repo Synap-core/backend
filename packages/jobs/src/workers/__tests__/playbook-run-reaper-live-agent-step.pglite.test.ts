@@ -75,12 +75,7 @@ async function isRun(
   await q(
     `insert into session_stage_runs (id, session_id, stage_key, attempt, runner_agent_user_id, computer_user_id, runner_via, status, started_at)
      values ($1, $2, 'enrich', 1, $3, $4, 'stage', 'running', now() - interval '3 hours')`,
-    [
-      randomUUID(),
-      sess,
-      agent ? agentId : null,
-      agent ? "computer-1" : null,
-    ]
+    [randomUUID(), sess, agent ? agentId : null, agent ? "computer-1" : null]
   );
   if (agent) {
     await q(
