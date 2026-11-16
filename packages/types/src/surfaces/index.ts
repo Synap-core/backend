@@ -181,6 +181,22 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     replacedBy: "Library › Things on the phone, and the desktop Library",
     decisionDoc: V1_PLAN_DOC,
   },
+  {
+    // Wave "one timeline for Work" (founder yes, 16 Nov 2026; 4 Nov surface
+    // rule: on the phone, goals only behind details). The tab id stays `work`
+    // because people's stored tab settings and space layouts name it; the
+    // route `/work` redirects to the Goals collection `/goals`, where the
+    // Monday desk moved, and a stored `work` tab id reads as Home
+    // (`RETIRED_TAB_IDS`, relay `src/lib/shell-mode.ts`).
+    id: "work",
+    surface: "relay",
+    since: "2026-11-16",
+    reason:
+      "The Goals tab (tab id `work`) left the bar: on the phone goals sit behind details. `/work` redirects to the Goals collection, which holds the Monday desk and the same attention groups.",
+    replacedBy: "Goals (`/goals`), reached from Home",
+    decisionDoc:
+      "Synap doc 5207fbb6 — one timeline for Work (founder, 16 Nov 2026)",
+  },
   // `pipeline` (relay classic-shell kanban) left this registry on 2026-10-14:
   // its route, tab id and template slot were DELETED (projects as places), so
   // there is nothing left to keep people off.
