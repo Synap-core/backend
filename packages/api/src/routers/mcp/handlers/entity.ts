@@ -166,8 +166,19 @@ async function supersedeHintFor(
   }
 }
 
-export const entityHandlers: McpHandlerMap = {
-  synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+/**
+ * The typed create door's whole answer (entity id or proposal, `writeReceipt`,
+ * `placement`, `resolution`) as data. `synap_create_entity` wraps it in `ok()`;
+ * `synap_capture` calls it for a payload of exactly one plain entity, so a
+ * single captured entity is filed the way the typed door files it (a `create`
+ * proposal on target `entity`), never as an `import.graph`.
+ *
+ * The caller has already checked the `mcp.write` scope and the title cap.
+ */
+export async function createEntityData(
+  ctx: McpToolContext
+): Promise<Record<string, unknown>> {
+  {
     const {
       toolName,
       args,
@@ -177,7 +188,6 @@ export const entityHandlers: McpHandlerMap = {
       lensCaller,
       lensWorkspaceId,
     } = ctx;
-    requireScope(apiKeyScopes, "mcp.write", toolName);
     // `lensCaller` carries the injected `?workspaceId=` lens as the AMBIENT
     // governance workspace (see above) — without it the hub picked a random
     // membership and the caller got a `workspace.join` proposal instead of an
@@ -187,11 +197,6 @@ export const entityHandlers: McpHandlerMap = {
     const profileSlug =
       (args.profileSlug as string | undefined) ||
       (args.type as string | undefined);
-    // The pod refuses a title over the hard cap at `entities.create`; saying it
-    // here names the length, where the nested refusal could not.
-    if (typeof args.title === "string" && args.title.length > TITLE_HARD_MAX) {
-      return toolError(titleTooLongReason(args.title.length));
-    }
     const result = await lensCaller.entities.createEntity({
       userId,
       profileSlug,
@@ -303,7 +308,7 @@ export const entityHandlers: McpHandlerMap = {
       source: "agent",
       ...(agentUserId ? { resolvedAgentUserId: agentUserId } : {}),
     });
-    return ok({
+    return {
       ...created,
       effectiveWorkspaceId: receiptWorkspaceId,
       writeReceipt: {
@@ -312,7 +317,22 @@ export const entityHandlers: McpHandlerMap = {
       },
       ...(placement ? { placement } : {}),
       ...(resolution ? { resolution } : {}),
-    });
+    };
+  }
+}
+
+export const entityHandlers: McpHandlerMap = {
+  synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
+    // The pod refuses a title over the hard cap at `entities.create`; saying it
+    // here names the length, where the nested refusal could not.
+    if (
+      typeof ctx.args.title === "string" &&
+      ctx.args.title.length > TITLE_HARD_MAX
+    ) {
+      return toolError(titleTooLongReason(ctx.args.title.length));
+    }
+    return ok(await createEntityData(ctx));
   },
   synap_update_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const {
