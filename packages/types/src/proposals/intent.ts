@@ -58,7 +58,7 @@ import {
   summarizeGrant,
   type Place,
 } from "../grants/index.js";
-import { resolvePlaceLabel } from "../vocabulary/index.js";
+import { nounInSentence, resolvePlaceLabel } from "../vocabulary/index.js";
 import type { UnitTone } from "../units/state.js";
 import { isNonWidenableGovernanceReason } from "./governance-grant-options.js";
 
@@ -619,6 +619,33 @@ export interface AppConnectSummary {
   requests: AppConnectRequestLike[];
   /** Who asks: an app (`app/connect`) or an AI (`agent/connect`). */
   holderKind: "app" | "agent";
+  /**
+   * "add" when the app asks for one MORE thing (`data.mode`, plan 647ebfd4
+   * option C): approving adds these pairs to what it already holds. Absent
+   * for a request whose approval replaces the whole set.
+   */
+  mode?: "add";
+}
+
+/**
+ * The card's title for an app asking for one more thing, "Content Studio
+ * asks to read notes in Content OS": each space's line in grant words
+ * (`summarizeGrant`, the vocabulary door) said mid-sentence. null when a line
+ * is not in one space (an ask is always per space; anything else keeps the
+ * generic title).
+ */
+function addAskTitle(
+  appName: string,
+  lines: readonly AppConnectLine[]
+): string | null {
+  if (lines.length === 0 || lines.some((l) => l.place.kind !== "spaces"))
+    return null;
+  const parts = lines.map((l) => `${nounInSentence(l.what)} in ${l.where}`);
+  const said =
+    parts.length === 1
+      ? parts[0]
+      : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return `${appName} asks to ${said}`;
 }
 
 /** Is this an app's request for access? */
@@ -657,6 +684,8 @@ export function summarizeAppConnectRequest(input: {
   requests: ReadonlyArray<AppConnectRequestLike>;
   workspaceNames?: Readonly<Record<string, string>>;
   holderKind?: "app" | "agent";
+  /** "add": the app asks for one more thing (see `AppConnectSummary.mode`). */
+  mode?: "add";
 }): AppConnectSummary {
   const holderKind = input.holderKind ?? "app";
   const names: Record<string, string> = { ...input.workspaceNames };
@@ -691,7 +720,10 @@ export function summarizeAppConnectRequest(input: {
       return { workspaceId, place, what, where, text: `${what} · ${where}` };
     }
   );
-  const title = `${input.appName} asks for access`;
+  const title =
+    (input.mode === "add" && holderKind === "app"
+      ? addAskTitle(input.appName, lines)
+      : null) ?? `${input.appName} asks for access`;
   const access = describeAccess(
     accessModel(grantsOfRequests(input.requests), holderKind),
     { names }
@@ -704,6 +736,7 @@ export function summarizeAppConnectRequest(input: {
     sentence: lines.length ? `${title}. ${access}` : title,
     requests: [...input.requests],
     holderKind,
+    ...(input.mode === "add" ? { mode: "add" as const } : {}),
   };
 }
 
@@ -749,6 +782,7 @@ export function describeAppConnectProposal(
       requests,
       workspaceNames,
       holderKind: p.targetType === "agent" ? "agent" : "app",
+      ...(data?.mode === "add" ? { mode: "add" as const } : {}),
     });
   } catch (err) {
     if (err instanceof PlaceError) return null;

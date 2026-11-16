@@ -14,13 +14,23 @@
  * answered, a 403 JSON body whose words carry one of THOSE sentences gains the
  * fields. A 403 for any other reason is left as it is, and a field the route
  * already set is never overwritten.
+ *
+ * A refusal says when it can be ASKED for (plan 647ebfd4 rule 6): when the
+ * refused key is a pod app's and its document declares a permission covering
+ * the refused write in that space (`askableDenial`), the body also carries
+ * `askable: true` and `ask: { permission, workspaceId }`, the pair to send to
+ * `POST /apps/access-requests`. Nothing else changes: an empty list read
+ * stays an empty list, and no other refusal gains the field.
  */
 import type { Context, MiddlewareHandler, Next } from "hono";
+import { createLogger } from "@synap-core/core";
 import {
   GRANT_DENIED,
   runCollectingGrantDenials,
   type GrantDenialRecord,
 } from "../../../utils/grant-write-check.js";
+
+const logger = createLogger({ module: "grant-denial-code" });
 
 /** The words a refusal body may carry the denial in. */
 function bodyTexts(body: Record<string, unknown>): string[] {
@@ -42,13 +52,18 @@ function bodyTexts(body: Record<string, unknown>): string[] {
  */
 export function withGrantDenialCode(
   body: unknown,
-  denials: readonly GrantDenialRecord[]
+  denials: readonly GrantDenialRecord[],
+  /** The askable pair for a denial (`askableDenial`); none when omitted. */
+  ask?: (
+    denial: GrantDenialRecord
+  ) => { permission: string; workspaceId: string } | null
 ): Record<string, unknown> | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   const b = body as Record<string, unknown>;
   const texts = bodyTexts(b);
   const match = denials.find((d) => texts.some((t) => t.includes(d.message)));
   if (!match) return null;
+  const pair = ask?.(match) ?? null;
   return {
     ...b,
     code: b.code ?? GRANT_DENIED,
@@ -56,6 +71,7 @@ export function withGrantDenialCode(
     ...(b.action !== undefined || match.action !== undefined
       ? { action: b.action ?? match.action }
       : {}),
+    ...(pair && b.askable === undefined ? { askable: true, ask: pair } : {}),
   };
 }
 
@@ -74,7 +90,27 @@ export const grantDenialCodeMiddleware: MiddlewareHandler = async (
   } catch {
     return;
   }
-  const tagged = withGrantDenialCode(body, denials);
+  // Askable only for an app's key with a space named: one read of the app's
+  // document, never for any other refusal.
+  const asks = new Map<
+    GrantDenialRecord,
+    { permission: string; workspaceId: string } | null
+  >();
+  for (const d of denials) {
+    if (!d.clientId || !d.workspaceId) continue;
+    const { askableDenial } =
+      await import("../../../services/app-access-ask.js");
+    // The hint failing must not turn the refusal into a 500: the refusal is
+    // still sent, without `askable`, and the failure is logged.
+    asks.set(
+      d,
+      await askableDenial(d).catch((err: unknown) => {
+        logger.warn({ err }, "askable hint unavailable for a grant denial");
+        return null;
+      })
+    );
+  }
+  const tagged = withGrantDenialCode(body, denials, (d) => asks.get(d) ?? null);
   if (!tagged) return;
   const headers = new Headers(c.res.headers);
   headers.delete("content-length");

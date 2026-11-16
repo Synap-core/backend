@@ -113,6 +113,10 @@ export interface GrantDenialRecord {
   action?: string;
   /** The exact sentence `grantWriteDenial` returned. */
   message: string;
+  /** The space the refused write was in, when the producer knows it. */
+  workspaceId?: string | null;
+  /** The app the refused key's grant names (`KeyGrant.clientId`), if any. */
+  clientId?: string | null;
 }
 
 const denialSink = new AsyncLocalStorage<GrantDenialRecord[]>();
@@ -133,8 +137,17 @@ export function runCollectingGrantDenials<T>(
  * Record a grant denial worded outside `grantWriteDenial` (a door's own
  * sentence for the same refusal), so its 403 carries the code too.
  */
-export function recordGrantDenial(message: string, action?: string): void {
-  denialSink.getStore()?.push({ message, ...(action ? { action } : {}) });
+export function recordGrantDenial(
+  message: string,
+  action?: string,
+  where?: { workspaceId?: string | null; clientId?: string | null }
+): void {
+  denialSink.getStore()?.push({
+    message,
+    ...(action ? { action } : {}),
+    ...(where?.workspaceId ? { workspaceId: where.workspaceId } : {}),
+    ...(where?.clientId ? { clientId: where.clientId } : {}),
+  });
 }
 
 const str = (v: unknown): string | undefined =>
@@ -247,6 +260,9 @@ export async function grantWriteDenial(
   const message = `This key's grant does not allow "${denied.key}"${
     denied.workspaceId ? ` in workspace ${denied.workspaceId}` : ""
   }.`;
-  recordGrantDenial(message, denied.key);
+  recordGrantDenial(message, denied.key, {
+    workspaceId: denied.workspaceId,
+    clientId: grant.clientId ?? null,
+  });
   return message;
 }
