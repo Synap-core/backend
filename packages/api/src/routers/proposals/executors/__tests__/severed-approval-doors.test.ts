@@ -457,7 +457,12 @@ describe("(6b) playbook/run is at-most-once — runPlaybook is NOT idempotent", 
     // replay idempotent, which is why the CAS claim above stays the floor: a
     // run with no subject, a "start another" run and a trial still start one
     // session per call, exactly as before.
-    expect(call).toContain("oneLivePerSubject");
+    // The spread itself, not the word: the comment above it names the flag
+    // too, and a bare `toContain("oneLivePerSubject")` stayed green with the
+    // spread deleted (negative control, 2026-11-16).
+    expect(call).toContain(
+      "...(oneLivePerSubject ? { oneLivePerSubject: true } : {})"
+    );
     expect(runDoor).toContain(
       "!input.startAnother && !input.trial && !!subjectId"
     );
