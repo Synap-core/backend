@@ -459,7 +459,11 @@ describe("entering the step again", () => {
         channelId: null,
         status: "paused",
       },
-      stage: reviewStep({ over: "findingIds", as: "area", batch: 30 }),
+      stage: reviewStep({
+        over: "findingIds",
+        as: "area",
+        batch: 30,
+      }) as Parameters<typeof startStageForEach>[0]["stage"],
       stageRunId: step.id,
     });
     expect(again).toEqual({ status: "already_started" });
