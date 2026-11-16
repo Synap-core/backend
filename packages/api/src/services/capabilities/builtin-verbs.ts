@@ -2560,6 +2560,9 @@ const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
     userId: ctx.userId,
     workspaceId: ctx.workspaceId,
     agentUserId: ctx.agentUserId ?? null,
+    // Self-gated (`SELF_GATED_BUILTIN_VERBS`): the outer gate asked for review,
+    // so the install files its own `capability.install` and installs nothing.
+    mustPropose: ctx.mustPropose === true,
     projectId: input.projectId,
     projectName: input.projectName,
   });

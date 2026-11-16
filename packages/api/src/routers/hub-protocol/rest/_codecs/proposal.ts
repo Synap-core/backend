@@ -170,6 +170,16 @@ const ProposalSetupParamSchema = z
     secret: z
       .boolean()
       .describe("Prompt masked. The VALUE is never on the wire."),
+    obtain: z
+      .object({
+        url: z.string().optional(),
+        steps: z.array(z.string()),
+      })
+      .optional()
+      .describe(
+        "How a person gets this value: numbered steps (at most 7) and the " +
+          "https page they start on, from the capability manifest."
+      ),
     satisfied: z
       .boolean()
       .describe(

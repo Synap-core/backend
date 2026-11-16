@@ -59,7 +59,10 @@ import {
   parseVaultReference,
   vaultSecretIdOf,
 } from "@synap-core/types/vault";
-import type { CapabilityDefinition } from "@synap/playbooks";
+import type {
+  CapabilityDefinition,
+  CapabilityParamObtain,
+} from "@synap/playbooks";
 
 /** THE proposal type that carries a manifest-derived setup gap. See the docblock. */
 export const SETUP_PROPOSAL_TYPE = "capability.install";
@@ -73,6 +76,12 @@ export interface ProposalSetupParam {
   description?: string;
   /** Prompt masked and NEVER echo. Derived by `extractInstallParams`. */
   secret: boolean;
+  /**
+   * How a person gets this value: numbered steps and the https page they
+   * start on, from the manifest's `obtain` (`param-obtain.ts`). Absent when
+   * the manifest declares none, or an invalid one.
+   */
+  obtain?: CapabilityParamObtain;
   /** A non-blank value is present, OR a resolvable `vault://` ref is. */
   satisfied: boolean;
   /** `vault://<id>` when this param points at a vault secret. Never a value. */
@@ -229,6 +238,7 @@ export async function resolveProposalSetups(
         required: p.required === true,
         ...(p.description ? { description: p.description } : {}),
         secret: p.secret === true,
+        ...(p.obtain ? { obtain: p.obtain } : {}),
         satisfied,
         ...(ref ? { ref: makeVaultReference(ref) } : {}),
         // LABELS ONLY. `refName`/`refService` come from the same scoped read

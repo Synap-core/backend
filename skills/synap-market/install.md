@@ -34,6 +34,11 @@ never treat a non-"installed" response as failure:
   regardless of any standing grant on `market.install` itself — a grant on
   the verb governs _invoking_ it, not the provisioning it performs. Response:
   `{ status: "proposed", proposalId, reviewUrl }`.
+- **A capability that needs a key**: never put a key, token or any secret in
+  `params`. Install without it: the `capability.install` proposal asks the
+  person for each missing key on the proposal itself, with the manifest's steps
+  to get it (`obtain`), and keeps it in the vault. When the gate asks for
+  review, `market.install` files that install proposal, never a generic run.
 
 **`"proposed"` is success, not an error.** Surface `reviewUrl` to the user so
 they can approve it — don't retry, don't report it as a failure. See
@@ -108,14 +113,14 @@ Read it with MCP `synap_template_health` (or `synap templates` in a terminal).
 Each space's row says what is left to do; act on these fields, not on
 `drifted` alone (`drifted: true` means "there is a step", not "apply now"):
 
-| Field | Means | Your move |
-|---|---|---|
-| `state: "active"`, `drifted: true` | a newer version is out | the update path below |
-| `state: "awaiting-approval"` + `awaitingApproval: [ids]` | the last update filed proposals | point the person to them; **do not re-apply** |
-| `state: "partial"` / `"layer-2-not-run"` / `"failed"` | the last update did not finish | `synap templates update <slug>` finishes it |
-| `pendingDataChanges: {count, sentences, needsPodAdmin}` | the update changes existing data and waits for a **person** to agree | tell them the sentences; they run `synap templates update <slug>` themselves (a pod owner/admin when `needsPodAdmin`) |
-| `updateProposal: {id}` | an update of this space is already proposed | point the person to that proposal; **never file another** |
-| `applyWarning` | the pod's one sentence for what is left | relay it as is |
+| Field                                                    | Means                                                                | Your move                                                                                                             |
+| -------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `state: "active"`, `drifted: true`                       | a newer version is out                                               | the update path below                                                                                                 |
+| `state: "awaiting-approval"` + `awaitingApproval: [ids]` | the last update filed proposals                                      | point the person to them; **do not re-apply**                                                                         |
+| `state: "partial"` / `"layer-2-not-run"` / `"failed"`    | the last update did not finish                                       | `synap templates update <slug>` finishes it                                                                           |
+| `pendingDataChanges: {count, sentences, needsPodAdmin}`  | the update changes existing data and waits for a **person** to agree | tell them the sentences; they run `synap templates update <slug>` themselves (a pod owner/admin when `needsPodAdmin`) |
+| `updateProposal: {id}`                                   | an update of this space is already proposed                          | point the person to that proposal; **never file another**                                                             |
+| `applyWarning`                                           | the pod's one sentence for what is left                              | relay it as is                                                                                                        |
 
 The update path is `synap templates update <slug>` (the person's door). Run
 with an agent key it becomes a proposal the person approves. **Agreeing to data

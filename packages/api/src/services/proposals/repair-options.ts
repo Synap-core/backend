@@ -17,8 +17,10 @@
  * The proposal's stored payload re-validated against the kind as it is NOW
  * (`PropertyValidationService`, the materializer's own check), so the answer
  * is what the next approval would meet — a field fixed on the kind since the
- * failure is no longer listed. Entity `create` and `update` only; every other
- * proposal answers `repairable: false` and keeps the class-driven actions
+ * failure is no longer listed. Entity `create` and `update` by value; a
+ * proposal that needs an INPUT (an install's key, a requested secret) answers
+ * its `setup` rows instead (`repair-setup.ts`); every other proposal answers
+ * `repairable: false` and keeps the class-driven actions
  * (`resolveFailureActions`, Ask AI, Dismiss).
  *
  * One projection, three surfaces: relay, the browser (`@synap-core/web`
@@ -39,6 +41,10 @@ import {
   type PropertyIssue,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import {
+  describeSetupRepair,
+  type ProposalRepairSetup,
+} from "./repair-setup.js";
 
 /** Why a value cannot join a field's closed set (`addEnumOptionRefusal`). */
 export type AddOptionRefusal =
@@ -79,6 +85,14 @@ export interface ProposalRepair {
   fields: ProposalRepairField[];
   /** The kind the proposal names, when it no longer resolves. */
   missingKind?: string;
+  /**
+   * What the proposal still needs from the person before it can apply (an
+   * install's key, a requested secret), one row per input with how to get it
+   * (`obtain`) and, for a secret row, the person's own vault secrets to pick
+   * from. Handed over through `proposals.repair` `setup` (`repair-setup.ts`).
+   * Absent for a proposal that takes no input.
+   */
+  setup?: ProposalRepairSetup;
 }
 
 interface RepairSource {
@@ -210,7 +224,11 @@ export async function describeProposalRepair(
     repairable: false,
     fields: [],
   };
-  if (!isRepairableKind(source)) return none;
+  if (!isRepairableKind(source)) {
+    // A proposal that needs an input (finding 91a3bfd3): its setup rows.
+    const setup = await describeSetupRepair(source, userId);
+    return setup ? { ...none, repairable: setup.blocking, setup } : none;
+  }
   if (
     source.status !== ProposalStatus.APPROVAL_FAILED &&
     source.status !== ProposalStatus.PENDING

@@ -2328,6 +2328,20 @@ export interface CapabilityVerbState extends ToolVerb {
 // created. These contracts are pure shapes — NO I/O, NO zod — mirroring the
 // rest of this package; the Hub-REST door + service own validation.
 
+/**
+ * How a PERSON gets a param's value (a key, a token): the numbered steps and
+ * the page they start on. Read by the install proposal's setup row (finding
+ * 91a3bfd3), never by the applier. Same bounds as an `act` ask (at most 7
+ * steps of at most 200 characters; an https `url`), validated by the Hub
+ * door's `ParamObtainSchema` (`services/capabilities/param-obtain.ts`).
+ */
+export interface CapabilityParamObtain {
+  /** Where the steps start, e.g. the provider's API keys page. https only. */
+  url?: string;
+  /** What to do there, in order. 1 to 7 steps. */
+  steps: string[];
+}
+
 /** A declared parameter the applier fills from the `params` map. */
 export interface CapabilityParamSpec {
   name: string;
@@ -2336,6 +2350,8 @@ export interface CapabilityParamSpec {
   required?: boolean;
   default?: unknown;
   description?: string;
+  /** How the person gets this value. See {@link CapabilityParamObtain}. */
+  obtain?: CapabilityParamObtain;
 }
 
 /**

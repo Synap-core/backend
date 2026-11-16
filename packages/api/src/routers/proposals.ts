@@ -78,8 +78,20 @@ import {
   findEffectiveField,
   isRepairableKind,
 } from "../services/proposals/repair-options.js";
+import {
+  buildSetupRepair,
+  setupRepairCreatesSecret,
+  setupRepairInputSchema,
+  setupRepairKind,
+} from "../services/proposals/repair-setup.js";
 import { updatePropertyDef } from "../services/profiles/update-property-def.js";
-import { addEnumOptionRefusal, withAddedEnumOption } from "@synap/database";
+import {
+  addEnumOptionRefusal,
+  withAddedEnumOption,
+  getActingAgentUserId,
+  getRequestGrant,
+} from "@synap/database";
+import { assertFreshAuthentication } from "../utils/device-session.js";
 import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
 import { pauseRuleOfUndoneReceipt } from "../services/proposals/recommend-tighten.js";
 import {
@@ -1930,6 +1942,13 @@ export const proposalsRouter = router({
    * approves through `approve` with exactly that `expectedRevision`, so every
    * approval gate runs and a revise landing in between is refused.
    * Requires the approve right: what it grows is the kind's schema.
+   *
+   * SETUP arm (`setup`, finding 91a3bfd3): hand over what a proposal needs
+   * before it can apply, row by row as `repairOptions.setup` lists them (an
+   * install's key, a requested secret): an existing vault secret of yours, a
+   * NEW key (created in the vault first; only its `vault://` ref reaches the
+   * proposal), or a plain value. A person's act only: an agent or a key is
+   * refused, and typing a new key needs a recent sign-in.
    */
   repair: protectedProcedure
     .input(
@@ -1941,6 +1960,11 @@ export const proposalsRouter = router({
         addOption: z
           .object({ key: z.string().min(1), value: z.string().min(1).max(200) })
           .optional(),
+        /**
+         * Setup row name → what the person hands over (`repair-setup.ts`):
+         * `{kind:"existing", ref}` | `{kind:"new", value}` | `{kind:"value", value}`.
+         */
+        setup: setupRepairInputSchema.optional(),
         /**
          * The `revisionHistory.length` the reader saw (as `approve` takes it).
          * Required: a revise that landed after the card drew refuses the
@@ -1976,11 +2000,23 @@ export const proposalsRouter = router({
           message: reviewRefusalMessage(reason, "approve"),
         });
       }
+      if (input.setup) {
+        return repairProposalSetup({
+          ctx,
+          proposal,
+          userId,
+          setup: input.setup,
+          fieldEdits:
+            Object.keys(input.set).length > 0 || input.addOption !== undefined,
+          expectedRevision: input.expectedRevision,
+        });
+      }
       if (!isRepairableKind(proposal)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message:
-            "Only a record's create or update can be repaired here. Ask the AI to redo this one, or dismiss it.",
+          message: setupRepairKind(proposal)
+            ? "This proposal needs an input, not a field fix: hand it over in its setup rows."
+            : "Only a record's create or update can be repaired here. Ask the AI to redo this one, or dismiss it.",
         });
       }
       if (
@@ -4285,4 +4321,87 @@ function addOptionRefusalMessage(
     default:
       return `${key} has no list of allowed values to add '${value}' to.`;
   }
+}
+
+/**
+ * `proposals.repair`'s SETUP arm (`repair-setup.ts`): the person hands over
+ * what the proposal needs (finding 91a3bfd3). Called after the door's own
+ * visibility and approve-ladder checks.
+ *
+ * PERSON-ONLY: an acting agent or a key's grant is refused (a key handed over
+ * is the person's act; an agent never plants the credential it then uses).
+ * A NEW key needs a recent sign-in, the step-up of credential doors
+ * (`assertFreshAuthentication`). VAULT FIRST: each new key is created through
+ * the vault's own create door, and the revision carries refs only, never a
+ * value. A revision reopens an `approval_failed` row as pending
+ * (`mergeProposalRevision`); it does not approve: the card approves exactly
+ * the revision returned, as for a field repair.
+ */
+async function repairProposalSetup(args: {
+  ctx: Context;
+  proposal: {
+    id: string;
+    status: string;
+    targetType: string;
+    proposalType: string;
+    data: unknown;
+    revisionHistory: unknown;
+  };
+  userId: string;
+  setup: z.infer<typeof setupRepairInputSchema>;
+  fieldEdits: boolean;
+  expectedRevision: number;
+}): Promise<{ revision: number; secretsCreated: number }> {
+  const { ctx, proposal, userId, setup, expectedRevision } = args;
+  if (getActingAgentUserId() || ctx.agentUserId || getRequestGrant()) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Handing over a key or a value on a proposal is a person's act, on the proposal's page. An agent or a key cannot do it.",
+    });
+  }
+  if (args.fieldEdits) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Hand over the setup, or fix fields: one at a time.",
+    });
+  }
+  if (!setupRepairKind(proposal)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "This proposal takes no key or value to hand over. Ask the AI to redo it, or dismiss it.",
+    });
+  }
+  if (
+    proposal.status !== ProposalStatus.APPROVAL_FAILED &&
+    proposal.status !== ProposalStatus.PENDING
+  ) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message:
+        "This proposal was already decided, so there is nothing to hand over.",
+    });
+  }
+  // The version the reader saw, before anything is created in the vault.
+  assertReviewedRevision(expectedRevision, proposal.revisionHistory);
+  if (setupRepairCreatesSecret(setup)) assertFreshAuthentication(ctx);
+
+  const { secretsVaultRouter } = await import("./secrets-vault.js");
+  const vault = secretsVaultRouter.createCaller(ctx);
+  const { fields, secretsCreated } = await buildSetupRepair({
+    source: proposal,
+    userId,
+    entries: setup,
+    createSecret: (input) => vault.create(input),
+  });
+  await mergeProposalRevision({
+    proposalId: proposal.id,
+    actorId: userId,
+    patch: { kind: "inner", fields },
+    roster: rosterReadFor(ctx),
+    // Under the row lock: a revise between the card and the press wins.
+    expectedRevision,
+  });
+  return { revision: expectedRevision + 1, secretsCreated };
 }
