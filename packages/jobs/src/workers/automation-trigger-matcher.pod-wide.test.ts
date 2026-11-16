@@ -95,6 +95,21 @@ vi.mock("@synap/database", () => ({
   isNull: (col: unknown) => ({ op: "isNull", col }),
   inArray: (col: unknown, vals: unknown) => ({ op: "inArray", col, vals }),
   drizzleSql: () => ({}),
+  // Decision 782c862e: the pod-wide branch answers to the event's PERSON. The
+  // event actor resolves to its person + that person's agents; the shared
+  // predicate is a marker carrying the ids it was handed.
+  actorsOfSamePerson: async (_db: unknown, id: string) => [
+    id,
+    `agent-of-${id}`,
+  ],
+  personsOfOwners: async () => new Map(),
+  podWideAutomationAnswersTo: (actorIds: string[]) => ({
+    op: "and",
+    args: [
+      { op: "isNull", col: "workspace_id" },
+      { op: "podWideAudience", actorIds },
+    ],
+  }),
   // The ONE pod-visible workspace door the accessible floor reads (d6db364bb).
   podVisibleWorkspaceWhere: (userId: unknown) => ({
     op: "podVisibleWorkspace",
@@ -122,7 +137,7 @@ type Marker = { op?: string; col?: unknown; args?: unknown[] };
 function isPodWideBranch(node: unknown, col: string): boolean {
   const n = node as Marker;
   if (n?.op === "isNull" && n.col === col) return true;
-  // The pod-wide branch is OWNER-BOUND: `and(isNull(workspace_id), eq(created_by, userId))`.
+  // The pod-wide branch is PERSON-BOUND: `and(isNull(workspace_id), <audience>)`.
   if (n?.op === "and") {
     return ((n.args ?? []) as Marker[]).some(
       (a) => a?.op === "isNull" && a.col === col
@@ -155,23 +170,29 @@ function hasWorkspaceUnion(node: unknown, col: string): boolean {
 }
 
 /**
- * The pod-wide branch must be OWNER-BOUND. A bare `isNull(workspace_id)` is
+ * The pod-wide branch must be PERSON-BOUND. A bare `isNull(workspace_id)` is
  * bounded by nothing, so on a multi-member pod one user's pod-wide automation
- * would fire on another user's events. Locks the `createdBy` pairing.
+ * would fire on another user's events. Locks that the NULL check is paired with
+ * the shared `podWideAutomationAnswersTo` predicate, handed the ids the event's
+ * actor resolved to (its person and that person's agents, decision 782c862e).
+ * The predicate itself runs against Postgres in
+ * `automation-trigger-matcher.audience.pglite.test.ts`.
  */
-function podWideBranchIsOwnerBound(node: unknown, col: string): boolean {
-  if (node == null || typeof node !== "object") return false;
-  const n = node as Marker;
+function podWideBranchActorIds(node: unknown, col: string): string[] | null {
+  if (node == null || typeof node !== "object") return null;
+  const n = node as Marker & { actorIds?: string[] };
   if (n.op === "and") {
-    const args = (n.args ?? []) as Marker[];
-    if (
-      args.some((a) => a?.op === "isNull" && a.col === col) &&
-      args.some((a) => a?.op === "eq" && a.col === "created_by")
-    ) {
-      return true;
+    const args = (n.args ?? []) as Array<Marker & { actorIds?: string[] }>;
+    const audience = args.find((a) => a?.op === "podWideAudience");
+    if (args.some((a) => a?.op === "isNull" && a.col === col) && audience) {
+      return audience.actorIds ?? null;
     }
   }
-  return (n.args ?? []).some((child) => podWideBranchIsOwnerBound(child, col));
+  for (const child of n.args ?? []) {
+    const found = podWideBranchActorIds(child, col);
+    if (found) return found;
+  }
+  return null;
 }
 
 const ENTITY_EVENT = {
@@ -203,7 +224,7 @@ describe("pod-wide automation selection", () => {
     expect(hasWorkspaceUnion(whereArgs[0], "workspace_id")).toBe(true);
   });
 
-  it("owner-bounds the pod-wide branch (createdBy paired with the NULL check)", async () => {
+  it("person-bounds the pod-wide branch (the event actor's person and agents)", async () => {
     selectResults = [[]];
 
     await handleAutomationTriggerMatch({
@@ -212,8 +233,12 @@ describe("pod-wide automation selection", () => {
 
     // A bare `isNull(workspace_id)` is bounded by nothing: on a multi-member pod
     // one user's pod-wide automation would fire on another user's events. The
-    // NULL check must be AND-ed with `createdBy = userId`.
-    expect(podWideBranchIsOwnerBound(whereArgs[0], "workspace_id")).toBe(true);
+    // NULL check is AND-ed with the person predicate, handed exactly what the
+    // event actor resolved to.
+    expect(podWideBranchActorIds(whereArgs[0], "workspace_id")).toEqual([
+      "user-1",
+      "agent-of-user-1",
+    ]);
   });
 
   it("includes the NULL-workspace branch for a pod-wide (null-workspace) event", async () => {

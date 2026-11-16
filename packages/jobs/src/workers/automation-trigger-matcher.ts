@@ -17,7 +17,6 @@ import {
   eq,
   and,
   or,
-  isNull,
   inArray,
   drizzleSql,
   automations,
@@ -30,6 +29,9 @@ import {
   BELONGS_TO_PROJECT,
   podVisibleWorkspaceWhere,
   sampleProjectIdsOfEntity,
+  actorsOfSamePerson,
+  personsOfOwners,
+  podWideAutomationAnswersTo,
 } from "@synap/database";
 import type { AutomationTriggerConfig } from "@synap/database";
 import { matchMessageShape, type MessageEnvelope } from "@synap/database";
@@ -39,6 +41,7 @@ import {
   AUTOMATION_SKIP_REASONS,
   DAILY_CAP_WINDOW_MS,
   readMaxRunsPerDay,
+  readAutomationAudience,
 } from "@synap-core/types/automations";
 import {
   DEPENDENCY_LINK_TYPE,
@@ -1182,6 +1185,70 @@ async function getAccessibleWorkspaceFloor(userId: string): Promise<string[]> {
 }
 
 /**
+ * Drop each POD-WIDE candidate that answers to this event ONLY because its
+ * `triggerConfig.audience` is `everyone` (its owner is not one of
+ * `eventActorIds`) when the automation's person cannot see the event's space.
+ * Such a run executes in the event's workspace (`fireAutomation`), and the
+ * executor's offboarding check passes trivially for a pod-wide automation, so
+ * this is the place the decision's "do not widen data access" holds.
+ *
+ * Fails CLOSED: an owner that stands for no person (a system owner, an agent
+ * nobody owns) has no floor to check and is dropped. A pod-wide EVENT (no
+ * space) is left alone: `fireAutomation` already skips a pod-wide automation
+ * there. Reads: one users read for all such candidates, then one floor per
+ * distinct person (bounded by the pod's members, never per automation).
+ * Exported for the surfaces that replay the matcher (`channel-stack.ts`).
+ */
+export async function dropAudienceOutsideOwnerFloor<
+  T extends {
+    id: string;
+    workspaceId: string | null;
+    createdBy: string;
+    triggerConfig: unknown;
+  },
+>(
+  candidates: T[],
+  eventActorIds: readonly string[],
+  eventWorkspaceId: string | null
+): Promise<T[]> {
+  if (eventWorkspaceId == null) return candidates;
+  const actors = new Set(eventActorIds);
+  const foreign = candidates.filter((a) => {
+    if (a.workspaceId != null || actors.has(a.createdBy)) return false;
+    const audience = readAutomationAudience(a.triggerConfig);
+    return audience.ok && audience.value === "everyone";
+  });
+  if (foreign.length === 0) return candidates;
+
+  const persons = await personsOfOwners(
+    db,
+    foreign.map((a) => a.createdBy)
+  );
+  const seesSpace = new Map<string, boolean>();
+  for (const person of new Set(persons.values())) {
+    if (!person) continue;
+    const floor = await getAccessibleWorkspaceFloor(person);
+    seesSpace.set(person, floor.includes(eventWorkspaceId));
+  }
+  const refused = new Set(
+    foreign
+      .filter((a) => {
+        const person = persons.get(a.createdBy);
+        return !person || !seesSpace.get(person);
+      })
+      .map((a) => a.id)
+  );
+  if (refused.size === 0) return candidates;
+  for (const id of refused) {
+    logger.info(
+      { automationId: id, workspaceId: eventWorkspaceId },
+      "Skipping automation — audience 'everyone', but the person it runs for cannot see this space"
+    );
+  }
+  return candidates.filter((a) => !refused.has(a.id));
+}
+
+/**
  * Re-derive the automation chain context stamped on a focus session at
  * A2AI-trigger time (executePlaybookRun stores it in
  * `focus_sessions.metadata.automationChainContext`). Returns undefined when the
@@ -1330,22 +1397,22 @@ export async function handleAutomationTriggerMatch(job: {
   // NULL — has no workspace to run in at all. `fireAutomation` skips it with a
   // warning rather than dispatching a NULL workspace into an executor that
   // cannot scope one; see the guard there.
-  // OWNER BOUND on the pod-wide branch. "Owner-implicit" holds at CREATE time
-  // (routers/automations.ts) but is NOT enforced at MATCH time, and the
-  // workspace-scoped branch is bounded by membership while a bare
-  // `isNull(workspace_id)` is bounded by nothing. On a multi-member pod that
-  // would let user A's pod-wide automation fire on user B's events — A's flow
-  // executing inside B's run. Reads stay scoped to the event's workspace either
-  // way (no data leak), but cross-user EXECUTION is not something a NULL
-  // workspace should imply. Pairing the NULL check with `createdBy = userId`
-  // keeps the single-owner case (every pod-wide automation on this pod today)
-  // behaving exactly as intended, and makes the multi-member case explicit
-  // rather than accidental. Widening this to "all pod members" is a deliberate
-  // product decision, not a default.
-  const podWideMatch = and(
-    isNull(automations.workspaceId),
-    eq(automations.createdBy, userId)
-  );
+  // PERSON BOUND on the pod-wide branch (decision 782c862e, founder
+  // 2026-11-16; finding 54095e11). A bare `isNull(workspace_id)` is bounded by
+  // nothing: on a multi-member pod user A's pod-wide automation would fire on
+  // user B's events, A's flow executing inside B's run. So a pod-wide
+  // automation answers to its PERSON: the event's actor is resolved to the
+  // person it acts for (an agent of P counts as P), and the automation's owner
+  // is matched against that person and every agent they own. This used to be
+  // `createdBy = userId`, which an agent-authored automation (createdBy = the
+  // agent) could never meet: an event by its person, or a fact recorded by
+  // another of its person's agents, carried a different id, and nothing fired.
+  // An automation whose `triggerConfig.audience` is `everyone` answers to any
+  // member's events instead; `dropAudienceOutsideOwnerFloor` below refuses
+  // such a run in a space its person cannot see, so no data access widens.
+  // The predicate is shared with every replay (`podWideAutomationAnswersTo`).
+  const eventActorIds = await actorsOfSamePerson(db, userId);
+  const podWideMatch = podWideAutomationAnswersTo(eventActorIds);
 
   const workspaceMatch =
     workspaceId != null
@@ -1363,6 +1430,7 @@ export async function handleAutomationTriggerMatch(job: {
       id: automations.id,
       triggerConfig: automations.triggerConfig,
       workspaceId: automations.workspaceId,
+      createdBy: automations.createdBy,
       // Carries `metadata.ruleId` for a rule-compiled automation — the key
       // `dropExpiredRuleAutomations` batches its expiry lookup on.
       metadata: automations.metadata,
@@ -1428,6 +1496,7 @@ export async function handleAutomationTriggerMatch(job: {
               id: automations.id,
               triggerConfig: automations.triggerConfig,
               workspaceId: automations.workspaceId,
+              createdBy: automations.createdBy,
               // Carries `metadata.ruleId` for a rule-compiled automation — the key
               // `dropExpiredRuleAutomations` batches its expiry lookup on.
               metadata: automations.metadata,
@@ -1490,6 +1559,7 @@ export async function handleAutomationTriggerMatch(job: {
         id: automations.id,
         triggerConfig: automations.triggerConfig,
         workspaceId: automations.workspaceId,
+        createdBy: automations.createdBy,
         // Carries `metadata.ruleId` for a rule-compiled automation — the key
         // `dropExpiredRuleAutomations` batches its expiry lookup on.
         metadata: automations.metadata,
@@ -1542,6 +1612,27 @@ export async function handleAutomationTriggerMatch(job: {
     allAutomations.length = 0;
     allAutomations.push(...keptEvent);
     webhookAutomations = drop(webhookAutomations);
+  }
+
+  // ── `everyone` automations: only in a space their person can see ───────
+  // A pod-wide automation admitted by audience `everyone` (not by its owner)
+  // runs in the EVENT's workspace; when its person cannot see that space it
+  // would read data its person cannot. Refused here, per event, never paused.
+  if (allAutomations.length > 0 || webhookAutomations.length > 0) {
+    // A copy: the helper hands back its input when it drops nothing, and the
+    // in-place refill below would otherwise empty the very array it reads.
+    const keptEvent = await dropAudienceOutsideOwnerFloor(
+      [...allAutomations],
+      eventActorIds,
+      workspaceId ?? null
+    );
+    allAutomations.length = 0;
+    allAutomations.push(...keptEvent);
+    webhookAutomations = await dropAudienceOutsideOwnerFloor(
+      webhookAutomations,
+      eventActorIds,
+      workspaceId ?? null
+    );
   }
 
   if (allAutomations.length === 0 && webhookAutomations.length === 0) return;

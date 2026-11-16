@@ -4810,7 +4810,11 @@
           "triggerType": {
             "$ref": "#/components/schemas/AutomationTriggerType"
           },
-          "triggerConfig": { "type": "object", "additionalProperties": {} },
+          "triggerConfig": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Trigger settings (eventPattern, filters, expression, ...). audience: whose events a POD-WIDE automation answers to: 'me' (default; your own events and your agents') or 'everyone' (any member's, in a space you can see). A space automation ignores it."
+          },
           "flowDefinition": { "$ref": "#/components/schemas/FlowDefinition" },
           "status": { "$ref": "#/components/schemas/AutomationStatus" },
           "metadata": { "type": "object", "additionalProperties": {} }
@@ -4848,7 +4852,11 @@
           "triggerType": {
             "$ref": "#/components/schemas/AutomationTriggerType"
           },
-          "triggerConfig": { "type": "object", "additionalProperties": {} },
+          "triggerConfig": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Trigger settings (eventPattern, filters, expression, ...). audience: whose events a POD-WIDE automation answers to: 'me' (default; your own events and your agents') or 'everyone' (any member's, in a space you can see). A space automation ignores it."
+          },
           "flowDefinition": { "$ref": "#/components/schemas/FlowDefinition" },
           "status": { "$ref": "#/components/schemas/AutomationStatus" },
           "metadata": { "type": "object", "additionalProperties": {} }
