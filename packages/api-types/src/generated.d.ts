@@ -9166,7 +9166,9 @@ declare const GOVERNANCE_CEILING_AXES: [
 	"automation_ai_dispatch_per_run",
 	"automation_ai_dispatch_daily",
 	"worker_pending_approvals",
-	"worker_irreversible_sends_daily"
+	"worker_irreversible_sends_daily",
+	"linkedin_invitations_daily",
+	"linkedin_actions_daily"
 ];
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];
 declare const CONFIG_SCOPE_KINDS: [
@@ -42245,7 +42247,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ceiling: {
 					agentUserId: string | null;
-					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
+					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
 					createdAt: Date;
 					createdBy: string;
 					expiresAt: Date | null;
@@ -42271,7 +42273,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				ceilings: {
 					agentLabel: string | null;
 					agentUserId: string | null;
-					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
+					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
 					createdAt: Date;
 					createdBy: string;
 					expiresAt: Date | null;
@@ -42293,7 +42295,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ceiling: {
 					agentUserId: string | null;
-					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
+					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
 					createdAt: Date;
 					createdBy: string;
 					expiresAt: Date | null;
