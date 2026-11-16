@@ -50,7 +50,8 @@ import {
   bindCapabilityRenderer,
   withCapabilityPage,
 } from "../../../services/capabilities/bind-capability-renderer.js";
-import { getDb } from "@synap/database";
+import { getDb, getRequestGrant } from "@synap/database";
+import { processReadableByGrant } from "../../../access/grant-door-fence.js";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
 import {
@@ -85,6 +86,7 @@ import type { ProposalRevisionPatch } from "../../../services/proposals/proposal
 import {
   createPlaybookDoor,
   getPlaybookDoor,
+  getProcessDoor,
   listPlaybooksDoor,
   runPlaybookDoor,
   updatePlaybookDoor,
@@ -456,7 +458,10 @@ export const buildHandlers: McpHandlerMap = {
     const { toolName, args, apiKeyScopes, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // ONE playbook, in full: the get door (`playbooks.get`, the same one Hub
-    // GET /playbooks/:id reaches), on the same user floor as the list.
+    // GET /playbooks/:id reaches), on the same user floor as the list — plus
+    // the playbook seen whole as a Process (`process`, the ONE process read,
+    // Process wave W2; no new tool): what starts it, steps, checks, what it
+    // moves, its needs with coverage, skills, runs and health.
     const playbookId =
       typeof args.playbookId === "string" && args.playbookId.trim()
         ? args.playbookId.trim()
@@ -471,7 +476,36 @@ export const buildHandlers: McpHandlerMap = {
               : `Playbook ${playbookId} not found among your visible playbooks.`,
         });
       }
-      return ok(one.result);
+      // A key whose grant does not read every part a process composes
+      // (automations, sessions, skills, tools) gets the playbook alone, and
+      // is told why: withheld, never an empty process.
+      if (!processReadableByGrant(getRequestGrant())) {
+        return ok({
+          ...one.result,
+          process: null,
+          processWithheld:
+            "Your key's grant does not read every part of a process (its automations, sessions, skills and tools).",
+        });
+      }
+      try {
+        const process = await getProcessDoor(
+          playbookDoorIdentity(ctx),
+          playbookId
+        );
+        return ok({
+          ...one.result,
+          process: process.kind === "result" ? process.result : null,
+          ...(process.kind === "result"
+            ? {}
+            : { processError: "The process could not be read." }),
+        });
+      } catch {
+        return ok({
+          ...one.result,
+          process: null,
+          processError: "The process could not be read.",
+        });
+      }
     }
     // User-floor catalog (member workspaces + pod-wide) through the shared list
     // door. Narrow only on an explicit/confined workspaceId — not advisory

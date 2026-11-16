@@ -3825,7 +3825,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full (goal template, stages, criteria, expected outputs…), or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
+          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full (goal template, stages, criteria, expected outputs…) plus `process`: the playbook seen whole as a Process (what starts it: its automations and workers; steps; checks; what it moves; needs, each filled|empty|unknown against the space's tools; skills; run counts, recent runs and health; a part it could not read is listed in `unavailable`, never empty; `processWithheld` when your key's grant does not read every part); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3850,7 +3850,7 @@ export const tools = {
             playbookId: {
               type: "string",
               description:
-                "Read ONE playbook in full (its whole definition), instead of listing.",
+                "Read ONE playbook in full (its whole definition and its `process`), instead of listing.",
             },
             detail: {
               type: "string",
