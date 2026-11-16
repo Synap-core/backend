@@ -85,6 +85,18 @@ export interface KeyDraft {
 	/** What it may touch, where, and for how long. */
 	readonly grant: GrantDraft;
 }
+declare const PROVIDE_SECRET_USES: readonly [
+	"once",
+	"session"
+];
+export type ProvideSecretUses = (typeof PROVIDE_SECRET_USES)[number];
+/**
+ * What the agent ended up with: a new `once` or `session` grant, or
+ * `standing` — the agent ALREADY held a permanent grant on this secret, the
+ * pod wrote nothing new, and the agent reads it until the person takes that
+ * grant back (finding ebc40493: the sheet used to promise an hour).
+ */
+export type ProvideSecretGrantUses = ProvideSecretUses | "standing";
 /**
  * Why a handed-over secret came with no read for the agent.
  *   `agent_unknown`  — the pod cannot tell which agent asked.
@@ -100,7 +112,14 @@ export type ProvideSecretGrant = {
 	agentUserId: string;
 	/** ISO; `null` when an existing grant with no end already covered it. */
 	expiresAt: string | null;
+	/**
+	 * The grant that applies (`secretsVault.revokeGrant` takes it back).
+	 * Optional only for receipts written before it was stamped.
+	 */
+	grantId?: string;
 	status: "granted";
+	/** What kind of read it is; absent on a receipt written before it. */
+	uses?: ProvideSecretGrantUses;
 } | {
 	reason: ProvideSecretGrantRefusal;
 	status: "refused";
@@ -117,12 +136,30 @@ export type ProvideSecretGrantOffer = {
 	agentName: string;
 	/** Sent back on the answer as `expectedGranteeId`. */
 	agentUserId: string;
+	/** The minutes of a NEW grant of `uses` ({@link provideSecretUsesMinutes}). */
 	minutes: number;
 	status: "will_grant";
+	/**
+	 * The reads the ask asked for (default `session`); the person may pick
+	 * the other, sent back on the answer as `secretUses`. Optional only for
+	 * an offer from a pod older than it.
+	 */
+	uses?: ProvideSecretUses;
 } | {
 	reason: ProvideSecretGrantRefusal;
 	status: "no_grant";
 };
+/**
+ * An existing PERMANENT grant the asking agent already holds on one secret
+ * row (`provideOptions` `rows[].standingGrant`): handing that secret over
+ * writes no new grant, and the agent reads it until the person takes this one
+ * back. null on a row: a new bounded grant is written.
+ */
+export interface ProvideStandingGrant {
+	grantId: string;
+	/** Reads made through it so far, before this hand-over. */
+	useCount: number;
+}
 /** Why a new connection can't be started from this pod. */
 export type ProvideConnectUnavailableReason = "no_broker" | "not_offered" | "unreadable";
 declare const SECRET_TYPES: readonly [
@@ -210,6 +247,13 @@ export interface SecretDetailBundle {
 	grants: SecretGrantView[];
 	recentActivity: SecretActivityEvent[];
 }
+declare const AskSecretPurposeSchema: z.ZodObject<{
+	action: z.ZodOptional<z.ZodString>;
+	for: z.ZodString;
+	on: z.ZodOptional<z.ZodString>;
+	tool: z.ZodString;
+}, z.core.$strip>;
+export type AskSecretPurpose = z.infer<typeof AskSecretPurposeSchema>;
 declare const AskCauseSchema: z.ZodObject<{
 	at: z.ZodOptional<z.ZodString>;
 	kind: z.ZodEnum<{
@@ -14951,7 +14995,18 @@ export type SlotAskProvide = {
 } | {
 	kind: "secret";
 	name: string;
+	/** What it is for, declared. Mirrors `AskSecretPurpose` (@synap-core/types/ask). */
+	purpose?: SlotAskSecretPurpose;
+	/** One read, or until the job closes (the default). Mirrors `PROVIDE_SECRET_USES`. */
+	uses?: "once" | "session";
 };
+/** Mirrors `AskSecretPurpose` (@synap-core/types/ask): short words, never the secret. */
+export interface SlotAskSecretPurpose {
+	for: string;
+	tool: string;
+	action?: string;
+	on?: string;
+}
 /** A `provide` answer stores a REFERENCE, never the value. */
 export type SlotProvideRef = {
 	kind: "secret";
@@ -17815,6 +17870,12 @@ export interface AdminPodAppGroup {
 	live: number;
 	members: AdminPodAppMember[];
 }
+/** One pair resolved to a space the person may give it in. */
+export interface ResolvedAskPair {
+	permission: string;
+	workspaceId: string;
+	workspaceName: string;
+}
 export interface AppSignInSpace {
 	workspaceId: string;
 	name: string;
@@ -17916,6 +17977,23 @@ export interface OAuthAppConsent {
 	podWideKinds: string[];
 	/** Scopes it asked for that a pod app is never given (`mcp.*`), shown as dropped. */
 	ignoredScopes: string[];
+	/**
+	 * The short consent (`synap_ask`): the pairs it asks for that the person
+	 * may give it, each in one space; null for the full screen. Allow ADDS
+	 * them to what it holds; nothing it holds is shown or changed here.
+	 */
+	ask: OAuthAppAsk | null;
+}
+/** What the short consent shows (`OAuthAppConsent.ask`). */
+export interface OAuthAppAsk {
+	/** "Content Studio asks to read notes in Content OS" (the card's words). */
+	title: string;
+	/** The pairs the person may give it, each in one space. */
+	pairs: ResolvedAskPair[];
+	/** Pairs it asked for that the person cannot give it (`perm@place`). */
+	unavailable: string[];
+	/** The app's page in pod admin ("See everything it has"), once connected. */
+	connectionPublicId: string | null;
 }
 export interface OAuthConsentContext {
 	clientId: string;
@@ -25202,6 +25280,14 @@ export interface ProvideSecretRow {
 	ref: string;
 	name: string;
 	type: string;
+	/**
+	 * A permanent grant the asking agent ALREADY holds on this secret: handing
+	 * it over writes nothing new and the agent reads it until the person takes
+	 * this grant back (`provideGrantNote` with the picked row says so). null:
+	 * a new grant of the offer's `uses` is written. This pod always sets it;
+	 * optional only so an older pod's reply and a client's fixtures still type.
+	 */
+	standingGrant?: ProvideStandingGrant | null;
 }
 export interface ProvideConnectionRow {
 	/** The answer's `connectionId` (the registry row). */
@@ -25223,6 +25309,12 @@ export type ProvideOptions = {
 		/** What handing one over lets the asking agent do. */
 		grant: ProvideSecretGrantOffer;
 		name: string;
+		/**
+		 * What the agent declared it will do with it (`provide.purpose`);
+		 * null when it did not say (never inferred). Always set by this pod;
+		 * optional only so an older pod's reply still types.
+		 */
+		purpose?: AskSecretPurpose | null;
 		rows: ProvideSecretRow[];
 	};
 } | {
@@ -25246,6 +25338,34 @@ export type ProvideOptions = {
 	};
 	kind: "file";
 });
+declare const PROVIDE_SECRET_TAKE_BACK_DOOR = "secretsVault.revokeGrant";
+export interface ProvideSecretUse {
+	grantId: string;
+	secretId: string;
+	/** The secret's own name in the vault (never its value). */
+	secretName: string;
+	agentUserId: string;
+	agentName: string;
+	/** `standing`: a permanent grant the agent already held, reused. */
+	uses: ProvideSecretGrantUses;
+	/** ISO; null = no end of its own (a standing grant). */
+	expiresAt: string | null;
+	/** ISO, when it was taken back. */
+	revokedAt: string | null;
+	/** Not taken back, not expired, uses left: the agent can read it now. */
+	active: boolean;
+	/** Reads made through the grant (the redeem gate's own count). */
+	useCount: number;
+	/** null = unlimited; 1 for a one-read grant. */
+	maxUses: number | null;
+	/** ISO of the newest recorded read; null when none was recorded. */
+	lastUsedAt: string | null;
+	/** How to take it back; null when there is nothing left to take back. */
+	takeBack: {
+		door: typeof PROVIDE_SECRET_TAKE_BACK_DOOR;
+		grantId: string;
+	} | null;
+}
 export interface SessionAnswerItem {
 	/** Stable id — dedupe on it across polls. */
 	id: string;
@@ -29303,6 +29423,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				responseType?: string | undefined;
 				scope?: string | undefined;
 				state?: string | undefined;
+				synapAsk?: string | undefined;
 			};
 			meta: object;
 			output: {
@@ -29347,6 +29468,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				responseType?: string | undefined;
 				scope?: string | undefined;
 				state?: string | undefined;
+				synapAsk?: string | undefined;
 			};
 			meta: object;
 			output: OAuthConsentContext;
@@ -38790,6 +38912,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedLabel?: string | undefined;
 				questionId?: string | undefined;
 				rejectRelayed?: true | undefined;
+				secretUses?: "once" | "session" | undefined;
 				sessionId: string;
 				text?: string | undefined;
 				value?: {
@@ -39137,6 +39260,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | {
 						kind: "secret";
 						name: string;
+						purpose?: {
+							action?: string | undefined;
+							for: string;
+							on?: string | undefined;
+							tool: string;
+						} | undefined;
+						uses?: "once" | "session" | undefined;
 					};
 					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
@@ -39742,6 +39872,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | {
 							kind: "secret";
 							name: string;
+							purpose?: {
+								action?: string | undefined;
+								for: string;
+								on?: string | undefined;
+								tool: string;
+							} | undefined;
+							uses?: "once" | "session" | undefined;
 						};
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
@@ -40520,6 +40657,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: ProvideOptions;
 		}>;
+		provideSecretUse: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				expectedLabel: string;
+				sessionId: string;
+			};
+			meta: object;
+			output: {
+				status: "ok";
+				use: ProvideSecretUse;
+			} | {
+				status: "none";
+			};
+		}>;
 		recallAgain: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sessionId: string;
@@ -41061,6 +41211,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | {
 							kind: "secret";
 							name: string;
+							purpose?: {
+								action?: string | undefined;
+								for: string;
+								on?: string | undefined;
+								tool: string;
+							} | undefined;
+							uses?: "once" | "session" | undefined;
 						};
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
@@ -41396,6 +41553,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | {
 								kind: "secret";
 								name: string;
+								purpose?: {
+									action?: string | undefined;
+									for: string;
+									on?: string | undefined;
+									tool: string;
+								} | undefined;
+								uses?: "once" | "session" | undefined;
 							};
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
@@ -41593,6 +41757,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | {
 								kind: "secret";
 								name: string;
+								purpose?: {
+									action?: string | undefined;
+									for: string;
+									on?: string | undefined;
+									tool: string;
+								} | undefined;
+								uses?: "once" | "session" | undefined;
 							};
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
@@ -48457,6 +48628,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | {
 							kind: "secret";
 							name: string;
+							purpose?: {
+								action?: string | undefined;
+								for: string;
+								on?: string | undefined;
+								tool: string;
+							} | undefined;
+							uses?: "once" | "session" | undefined;
 						};
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
@@ -48664,6 +48842,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | {
 								kind: "secret";
 								name: string;
+								purpose?: {
+									action?: string | undefined;
+									for: string;
+									on?: string | undefined;
+									tool: string;
+								} | undefined;
+								uses?: "once" | "session" | undefined;
 							};
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
@@ -48861,6 +49046,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | {
 								kind: "secret";
 								name: string;
+								purpose?: {
+									action?: string | undefined;
+									for: string;
+									on?: string | undefined;
+									tool: string;
+								} | undefined;
+								uses?: "once" | "session" | undefined;
 							};
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
@@ -49809,6 +50001,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | {
 							kind: "secret";
 							name: string;
+							purpose?: {
+								action?: string | undefined;
+								for: string;
+								on?: string | undefined;
+								tool: string;
+							} | undefined;
+							uses?: "once" | "session" | undefined;
 						};
 						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
@@ -50008,6 +50207,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | {
 								kind: "secret";
 								name: string;
+								purpose?: {
+									action?: string | undefined;
+									for: string;
+									on?: string | undefined;
+									tool: string;
+								} | undefined;
+								uses?: "once" | "session" | undefined;
 							};
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
@@ -50205,6 +50411,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | {
 								kind: "secret";
 								name: string;
+								purpose?: {
+									action?: string | undefined;
+									for: string;
+									on?: string | undefined;
+									tool: string;
+								} | undefined;
+								uses?: "once" | "session" | undefined;
 							};
 							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
@@ -61064,6 +61277,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | {
 									kind: "secret";
 									name: string;
+									purpose?: {
+										action?: string | undefined;
+										for: string;
+										on?: string | undefined;
+										tool: string;
+									} | undefined;
+									uses?: "once" | "session" | undefined;
 								};
 								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
@@ -61272,6 +61492,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									} | {
 										kind: "secret";
 										name: string;
+										purpose?: {
+											action?: string | undefined;
+											for: string;
+											on?: string | undefined;
+											tool: string;
+										} | undefined;
+										uses?: "once" | "session" | undefined;
 									};
 									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
@@ -61469,6 +61696,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									} | {
 										kind: "secret";
 										name: string;
+										purpose?: {
+											action?: string | undefined;
+											for: string;
+											on?: string | undefined;
+											tool: string;
+										} | undefined;
+										uses?: "once" | "session" | undefined;
 									};
 									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
