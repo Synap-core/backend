@@ -180,11 +180,13 @@ const {
   listProcesses,
 } = await import("./process-read.js");
 
+const WS = "99999999-9999-4999-8999-999999999999";
+
 const PLAYBOOK = {
   id: "pb-1",
   name: "Ship a change",
   description: null,
-  workspaceId: "ws-1",
+  workspaceId: WS,
   status: "active",
   version: 3,
   executor: "is-agent",
@@ -393,7 +395,7 @@ describe("readProcess — composed from the existing reads", () => {
 
 describe("listProcesses — the same reads as cards", () => {
   it("a card carries health, counts, step and automation counts and its needs", async () => {
-    const [card] = await listProcesses(READER, { workspaceId: "ws-1" });
+    const [card] = await listProcesses(READER, { workspaceId: WS });
     expect(card).toMatchObject({
       id: "pb-1",
       stepCount: 2,
