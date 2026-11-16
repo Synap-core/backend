@@ -572,8 +572,13 @@ describe("risk 2: a Synap AI turn that ends while a step is away", () => {
     expect(await runStatus(sessionId)).toBe("running");
   });
 
-  it("completes the run when no step is away", async () => {
+  it("completes the run at its last stage when no step is away", async () => {
     const { sessionId } = await startRun();
+    // On an earlier stage a completed turn is a stop (stages left:
+    // `run-turn-end-stages-left.pglite.test.ts`); on the last, it is done.
+    await q(`update focus_sessions set current_stage = 'ship' where id = $1`, [
+      sessionId,
+    ]);
     expect(await settle(sessionId)).toBe("completed");
     expect(await runStatus(sessionId)).toBe("completed");
   });
