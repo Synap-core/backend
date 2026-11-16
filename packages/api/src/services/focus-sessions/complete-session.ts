@@ -724,16 +724,33 @@ export async function completeFocusSession(
         : terminalStatus === "cancelled"
           ? "cancelled"
           : "completed";
-    await db
+    // COMPARE-AND-SET: the run was read LIVE above, but a turn's end, the
+    // reaper or a cancel can settle it between that read and this write. Its
+    // verdict then stands (a run that completed is not re-stamped `cancelled`
+    // by a late close), and nothing is settled again.
+    const ended = await db
       .update(playbookRuns)
       .set({
         status: runStatus,
         completedAt: new Date(),
         error: runStatus === "failed" ? SESSION_FAILED_RUN_ERROR : null,
       })
-      .where(eq(playbookRuns.id, run.id));
-    // The parent automation run settles from its children (never throws).
-    await settleParentAutomationRunFromChild({ playbookRunId: run.id });
+      .where(
+        and(
+          eq(playbookRuns.id, run.id),
+          liveRunStatusWhere(playbookRuns.status)
+        )
+      )
+      .returning({ id: playbookRuns.id });
+    if (ended.length > 0) {
+      // The parent automation run settles from its children (never throws).
+      await settleParentAutomationRunFromChild({ playbookRunId: run.id });
+    } else {
+      logger.info(
+        { sessionId, runId: run.id, wanted: runStatus },
+        "complete-session: the run was settled by another writer first; its verdict stands"
+      );
+    }
   }
 
   // THE owed floor (`isDeliverableOutstanding`): a retired or OPTIONAL slot is
