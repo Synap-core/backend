@@ -18676,7 +18676,7 @@ export interface PlaybookCandidate {
 	reason: string;
 	/** `project` = a method run as a TRACK; `session` = one sitting of work. */
 	scope: PlaybookScope;
-	/** The user noun for that scope ("Goal template" / "Work template"). */
+	/** The user noun for that scope ("Goal process" / "Process"). */
 	templateKind: string;
 	/**
 	 * When to use it, in its author's words, cut at
@@ -25403,6 +25403,261 @@ export interface PlaybookScorecard {
 	escalations: number;
 	overrides: number;
 	criteria: CriterionScore[];
+}
+declare const PROCESS_HEALTH_STATES: readonly [
+	"config-error",
+	"unresolved-failure",
+	"blocked-by-policy",
+	"waiting-on-you",
+	"running",
+	"draft",
+	"paused",
+	"healthy",
+	"never-run",
+	"unknown"
+];
+export type ProcessHealthState = (typeof PROCESS_HEALTH_STATES)[number];
+export interface ProcessHealth {
+	state: ProcessHealthState;
+	label: string;
+	reason: string;
+	/** Run that explains the state, when the state is activity-derived. */
+	runId: string | null;
+	/**
+	 * `waiting-on-you` only: the focus session the waiting run drives — where
+	 * the owed slot lives, so the row's door opens it. Null when the pod did not
+	 * say (an automation run with no session, or a pod older than the field).
+	 */
+	sessionId?: string | null;
+}
+declare const PROCESS_NEED_KINDS: readonly [
+	"intent",
+	"capability"
+];
+export type ProcessNeedKind = (typeof PROCESS_NEED_KINDS)[number];
+declare const PROCESS_NEED_STATES: readonly [
+	"filled",
+	"empty",
+	"unknown"
+];
+export type ProcessNeedState = (typeof PROCESS_NEED_STATES)[number];
+declare const PROCESS_NEED_SOURCES: readonly [
+	"tools",
+	"requires"
+];
+export type ProcessNeedSource = (typeof PROCESS_NEED_SOURCES)[number];
+export interface ProcessNeedProvider {
+	/** The serving capability (container) id, when the registry names one. */
+	capabilityId: string | null;
+	/** Its name (a person's word comes from the vocabulary door, never here). */
+	capabilityName: string | null;
+	/** The serving verb id. */
+	verbId: string | null;
+}
+export interface ProcessNeed {
+	/** The entry as declared (an intent slug, a capability name/id, a verb id, a capability key). */
+	slug: string;
+	kind: ProcessNeedKind;
+	source: ProcessNeedSource;
+	state: ProcessNeedState;
+	/** Who fills it; `[]` exactly when `state` is not `filled`. */
+	providers: ProcessNeedProvider[];
+	/** The step keys that declare it (a step narrows its playbook's list); `[]` = the playbook itself. */
+	steps: string[];
+}
+declare const PROCESS_AUTOMATION_ROLES: readonly [
+	"schedule",
+	"flow",
+	"activator",
+	"member"
+];
+export type ProcessAutomationRole = (typeof PROCESS_AUTOMATION_ROLES)[number] | (string & {});
+export interface ProcessAutomation {
+	id: string;
+	name: string;
+	role: ProcessAutomationRole;
+	/** event | cron | webhook | manual. */
+	triggerType: string;
+	/** draft | active | paused | archived | error. */
+	status: string;
+	sortOrder: number | null;
+	/** The automation's next scheduled fire (cron), ISO; null when none. */
+	nextRunAt: string | null;
+}
+export interface ProcessWorker {
+	ruleId: string;
+	activatorKey: string;
+	mode: "propose" | "run";
+	scope: string;
+	state: "paused" | "running";
+	automationId: string | null;
+	projectId: string | null;
+	trackId: string | null;
+}
+export interface ProcessStep {
+	key: string;
+	name: string;
+	goal: string | null;
+	/** The stage category (`resolveStageCategory`). */
+	category: string;
+	/** Who works it, as declared (`PlaybookRunner` | null = the playbook's). */
+	runner: unknown | null;
+	/** The step's `tools` (narrows the playbook's list); `[]` = the playbook's. */
+	tools: string[];
+	/** The step's own `requires` (capability keys). */
+	requires: string[];
+	/** human | check | awaits | null. */
+	gate: string | null;
+	/** The subject status this step moves the subject to, if any. */
+	subjectStatus: string | null;
+}
+export interface ProcessCriterion {
+	key: string;
+	statement: string;
+	/** evidence | capability | judge | human. */
+	checkKind: string | null;
+	/** The step that declares it; null = the playbook's own. */
+	stepKey: string | null;
+}
+export interface ProcessGate {
+	stepKey: string;
+	/** human | check | awaits. */
+	kind: string;
+}
+export interface ProcessMoveState {
+	key: string;
+	label: string;
+	category: string;
+	/** The steps of THIS process that own the state (move a thing into it). */
+	ownedBy: string[];
+}
+export interface ProcessMoves {
+	/** The kind or role the process works on. */
+	profileSlug: string;
+	/** The kind's declared lifecycle, in order. */
+	states: ProcessMoveState[];
+	/** Statuses a step names that the lifecycle does not declare. */
+	undeclaredStatuses: string[];
+}
+declare const PROCESS_SKILL_SOURCES: readonly [
+	"guidance",
+	"grant",
+	"context",
+	"goal"
+];
+export type ProcessSkillSource = (typeof PROCESS_SKILL_SOURCES)[number];
+export interface ProcessSkill {
+	/** null when a guidance ref names a slug no visible skill carries. */
+	id: string | null;
+	slug: string | null;
+	name: string;
+	source: ProcessSkillSource;
+	/** A person approved it (an unapproved skill never reaches a prompt / is off). */
+	approved: boolean | null;
+}
+/**
+ * Run counts, each EXACT or `null` (not measured, never 0).
+ * open: open sessions running this process (session list `flow: {playbookId}`).
+ * needsYou: of those, the ones holding an ask the person must answer (THE
+ *   needs-you owed predicate, `asksYouSessionIds`).
+ * doneThisWeek: sessions of it closed in the last 7 days.
+ * failedThisWeek: runs that failed in the last 7 days (run ledger).
+ * total: every run of it (run ledger).
+ */
+export interface ProcessRunCounts {
+	open: number | null;
+	needsYou: number | null;
+	doneThisWeek: number | null;
+	failedThisWeek: number | null;
+	total: number | null;
+}
+export interface ProcessRunRow {
+	sessionId: string;
+	title: string | null;
+	status: string;
+	currentStage: string | null;
+	updatedAt: string;
+}
+export interface ProcessInstalledFrom {
+	packageSlug: string;
+	packageVersion: string | null;
+	installedAt: string | null;
+}
+export interface ProcessDefinition {
+	id: string;
+	name: string;
+	description: string | null;
+	workspaceId: string | null;
+	/** draft | active | paused | archived. */
+	status: string;
+	version: number;
+	/** is-agent | external-agent | hybrid | generate. */
+	executor: string;
+	/** Who runs it by default (`PlaybookRunner`), null = nobody named. */
+	runner: unknown | null;
+	/** session | project. */
+	scope: string;
+	subjectProfileSlug: string | null;
+	/** The version the person pre-approved agents to run without asking; null = none. */
+	preApprovedVersion: number | null;
+	installedFrom: ProcessInstalledFrom | null;
+	/** true / false when compared with the catalog; null when not compared. */
+	updateAvailable: boolean | null;
+}
+declare const PROCESS_READ_PARTS: readonly [
+	"when",
+	"needs",
+	"skills",
+	"moves",
+	"runs",
+	"health",
+	"updateAvailable"
+];
+export type ProcessReadPart = (typeof PROCESS_READ_PARTS)[number];
+/** One card of a space's processes. */
+export interface ProcessSummary {
+	id: string;
+	name: string;
+	description: string | null;
+	workspaceId: string | null;
+	status: string;
+	health: ProcessHealth;
+	counts: ProcessRunCounts;
+	stepCount: number;
+	automationCount: number;
+	needs: ProcessNeedSummary[];
+	/** Parts that could not be read (their fields are null / unknown). */
+	unavailable: ProcessReadPart[];
+}
+export interface ProcessNeedSummary {
+	slug: string;
+	kind: ProcessNeedKind;
+	state: ProcessNeedState;
+}
+/** One process, whole. */
+export interface ProcessRead {
+	playbook: ProcessDefinition;
+	when: {
+		automations: ProcessAutomation[];
+		/** A person can start it by hand (an active, session-scoped playbook). */
+		manualStart: boolean;
+		workers: ProcessWorker[];
+	};
+	steps: ProcessStep[];
+	checks: {
+		criteria: ProcessCriterion[];
+		gates: ProcessGate[];
+	};
+	/** null when the playbook names no subject kind. */
+	moves: ProcessMoves | null;
+	needs: ProcessNeed[];
+	skills: ProcessSkill[];
+	runs: {
+		counts: ProcessRunCounts;
+		recent: ProcessRunRow[];
+	};
+	health: ProcessHealth;
+	unavailable: ProcessReadPart[];
 }
 /** What the run door answers for a one-shot run. */
 export interface GeneratedRunAnswer {
@@ -49311,6 +49566,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				templateKind: string;
 				workspaceId: string | null;
 			}[];
+		}>;
+		process: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				playbookId: string;
+			};
+			meta: object;
+			output: ProcessRead;
+		}>;
+		processes: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+			} | undefined;
+			meta: object;
+			output: ProcessSummary[];
 		}>;
 		promote: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

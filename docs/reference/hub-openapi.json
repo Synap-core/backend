@@ -32549,6 +32549,233 @@
         }
       }
     },
+    "/playbooks/{id}/process": {
+      "get": {
+        "tags": ["Playbooks"],
+        "summary": "One process, whole",
+        "description": "The playbook seen as a Process: its definition and version, what starts it (its automations, from the one playbook → automation link, and its enabled workers), its steps, checks (criteria and gates), what it moves (the subject kind's lifecycle and the step owning each state), its needs (its `tools` and `requires` entries, each `filled`, `empty` or `unknown` against the space's tools), its skills, its runs (counts and recent sessions) and its health. A part the pod could not read is named in `unavailable`; its fields read null or `unknown`, never empty. Same read as tRPC playbooks.process and MCP synap_list_playbooks({playbookId}) → `process`.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The process",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "playbook": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string" },
+                        "name": { "type": "string" }
+                      },
+                      "required": ["id", "name"],
+                      "additionalProperties": {}
+                    },
+                    "when": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": {}
+                    },
+                    "steps": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": {}
+                      }
+                    },
+                    "checks": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": {}
+                    },
+                    "moves": {
+                      "type": ["object", "null"],
+                      "properties": {},
+                      "additionalProperties": {}
+                    },
+                    "needs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": {}
+                      }
+                    },
+                    "skills": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": {}
+                      }
+                    },
+                    "runs": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": {}
+                    },
+                    "health": {
+                      "type": "object",
+                      "properties": { "state": { "type": "string" } },
+                      "required": ["state"],
+                      "additionalProperties": {}
+                    },
+                    "unavailable": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "required": [
+                    "playbook",
+                    "when",
+                    "steps",
+                    "checks",
+                    "moves",
+                    "needs",
+                    "skills",
+                    "runs",
+                    "health",
+                    "unavailable"
+                  ],
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Playbook not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/processes": {
+      "get": {
+        "tags": ["Playbooks"],
+        "summary": "List processes",
+        "description": "A space's processes as cards (health, run counts, step and automation counts, needs), or every visible one when no space is named. Archived playbooks are left out. Same read as tRPC playbooks.processes.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ processes }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "processes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "name": { "type": "string" },
+                          "health": {
+                            "type": "object",
+                            "properties": { "state": { "type": "string" } },
+                            "required": ["state"],
+                            "additionalProperties": {}
+                          },
+                          "counts": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": {}
+                          },
+                          "needs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {},
+                              "additionalProperties": {}
+                            }
+                          },
+                          "unavailable": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "health",
+                          "counts",
+                          "needs",
+                          "unavailable"
+                        ],
+                        "additionalProperties": {}
+                      }
+                    }
+                  },
+                  "required": ["processes"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/widget-definitions": {
       "get": {
         "tags": ["Widgets"],
