@@ -114,8 +114,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /setup/status",
   "GET /shares",
   "GET /shares/policy",
-  "GET /shares/sites",
-  "GET /shares/sites/:id",
   "GET /skills",
   "GET /subscriptions",
   "GET /subscriptions/:eventId/fanout",
@@ -140,4 +138,4 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
 ];
 
 /** The baseline's size when it was cut; it only goes down. */
-export const UNCLASSIFIED_READ_ROUTES_CAP = 120;
+export const UNCLASSIFIED_READ_ROUTES_CAP = 118;

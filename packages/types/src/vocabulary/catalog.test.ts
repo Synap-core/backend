@@ -13,6 +13,7 @@ import {
   OBJECT_KINDS,
   OBJECT_NOUNS,
   STATUS_LABELS,
+  WAIT_KIND_LABELS,
   buildActionLabel,
   buildObjectActionTitle,
   nounParams,
@@ -30,10 +31,12 @@ import {
   resolvePrivateObjectLabel,
   resolveStatusLabel,
   resolveTemplateNoun,
+  resolveWaitKindLabel,
   vocabularyCatalogs,
   vocabularyEn,
 } from "./index.js";
-import { vocabularyFrNouns } from "./catalog.fr.js";
+import { vocabularyFr, vocabularyFrNouns } from "./catalog.fr.js";
+import { WAIT_KINDS } from "../units/wait-kind.js";
 
 afterEach(() => setAmbientCatalogLocale("en"));
 
@@ -97,6 +100,15 @@ describe("English is unchanged: no locale, the ambient default and an explicit e
     ]) {
       expect(resolveObjectNoun(kind)).toBe(resolveObjectNoun(kind, "en"));
     }
+    for (const kind of WAIT_KINDS) {
+      expect(resolveWaitKindLabel(kind)).toBe(WAIT_KIND_LABELS[kind]);
+      expect(resolveWaitKindLabel(kind, { locale: "en" })).toBe(
+        WAIT_KIND_LABELS[kind]
+      );
+    }
+    expect(resolveWaitKindLabel("vendor")).toBe("Outside party");
+    expect(resolveWaitKindLabel("ci")).toBe("CI");
+    expect(resolveWaitKindLabel("some_new_kind")).toBe("Some new kind");
   });
 
   it("titles, buttons and counts read as before", () => {
@@ -189,6 +201,30 @@ describe("French: words", () => {
     expect(
       resolveObjectIdentity("task", { label: "Todo" }, null, "fr").label
     ).toBe("Todo");
+  });
+
+  it("wait kinds: every kind has its words in English and in French", () => {
+    for (const kind of WAIT_KINDS) {
+      const key = `waitKind.${kind}` as const;
+      expect(vocabularyEn[key]).toBe(WAIT_KIND_LABELS[kind]);
+      expect(vocabularyFr[key]).toBeTruthy();
+      expect(resolveWaitKindLabel(kind, { locale: "fr" })).toBe(
+        vocabularyFr[key]
+      );
+    }
+    expect(resolveWaitKindLabel("vendor", { locale: "fr" })).toBe("Un tiers");
+    expect(resolveWaitKindLabel("ci", { locale: "fr" })).toBe("CI");
+    expect(resolveWaitKindLabel("devbox_job", { locale: "fr" })).toBe(
+      "Tests en cours"
+    );
+    expect(resolveWaitKindLabel("answer", { locale: "fr" })).toBe(
+      "Votre réponse"
+    );
+    // An unknown kind humanizes in any locale, never leaks.
+    expect(resolveWaitKindLabel("some_new_kind", { locale: "fr" })).toBe(
+      "Some new kind"
+    );
+    expect(resolveWaitKindLabel(null, { locale: "fr" })).toBe("");
   });
 
   it("template nouns", () => {
@@ -336,7 +372,11 @@ describe("the ambient catalog locale", () => {
     expect(buildActionLabel({ action: "create", objectKind: "task" })).toBe(
       "Créer une tâche"
     );
+    expect(resolveWaitKindLabel("their_reply")).toBe("Leur réponse");
     // An explicit locale wins over it.
     expect(resolveObjectNoun("task", "en")).toBe("Task");
+    expect(resolveWaitKindLabel("their_reply", { locale: "en" })).toBe(
+      "Their reply"
+    );
   });
 });

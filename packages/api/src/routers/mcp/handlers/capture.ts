@@ -77,6 +77,11 @@ import {
   materializedReceiptState,
 } from "../../../services/capture-agent/capture-receipt-state.js";
 import { readStoredProposalScope } from "../../../services/capture-agent/stored-capture-scope.js";
+import {
+  routeSingleEntityCapture,
+  captureStatusForCreateState,
+} from "../../../services/capture-agent/single-entity-create.js";
+import { createEntityData } from "./entity.js";
 import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
 import type { PendingTextMatch } from "../../../utils/pending-capture-dedup.js";
 
@@ -698,6 +703,90 @@ const captureHandler: McpToolHandler = async (
           "workspace re-routing of a lens-less graph: slugs and profiles were checked against the lens you sent (pod-wide base layer when none), a routed workspace may accept more",
           "governance: whether the write auto-applies or is proposed",
         ],
+      });
+    }
+
+    // ── ONE PLAIN ENTITY → the TYPED CREATE door ─────────────────────────
+    // A single entity with no relation, plan step, link or text provenance is
+    // not a graph: it is filed the way `synap_create_entity` files it (a
+    // `create` proposal on target `entity`, "Create Decision ..."), so the
+    // review queue stops filling with `import.graph` requests. The write is the
+    // typed door's own (`createEntityData`): its dedup, governance, facets,
+    // long-content-to-document and placement. Everything that cannot ride it
+    // stays on the graph below; the reasons are in `routeSingleEntityCapture`.
+    const singleRoute = routeSingleEntityCapture({
+      entities: graphEntities,
+      relationCount: captureRelations.length,
+      planStepCount: capturePlanStepCount,
+      text: captureNormalizedText,
+    });
+    if (singleRoute.route === "typed-create") {
+      const created = await createEntityData({
+        ...ctx,
+        args: {
+          ...singleRoute.args,
+          // The typed door files into a project only for a truthy id.
+          projectId: captureProjectId ?? undefined,
+          ...(typeof args.summary === "string" && args.summary
+            ? { reasoning: args.summary }
+            : {}),
+        },
+      });
+      const createReceipt = (created.writeReceipt ?? {}) as {
+        state?: "pending" | "applied" | "partial" | "no_effect";
+        projectId?: string;
+        effectiveWorkspaceId?: string | null;
+      };
+      const state = createReceipt.state;
+      const createdId = typeof created.id === "string" ? created.id : undefined;
+      const createdProposalId =
+        typeof created.proposalId === "string" ? created.proposalId : undefined;
+      // Scope is READ OFF what the write stored (as the graph lane does): a
+      // proposal row carries the session and project its insert derived.
+      let createdScope: CaptureScope = {
+        workspaceId: createReceipt.effectiveWorkspaceId ?? null,
+        projectId: createReceipt.projectId ?? scopeProjectId,
+        sessionId: sessionId ?? null,
+      };
+      if (state === "pending" && createdProposalId) {
+        const stored = await readStoredProposalScope(db, {
+          userId,
+          proposalIds: [createdProposalId],
+        });
+        if (stored.status === "read") createdScope = stored.scope;
+      }
+      let createPendingMatches: PendingTextMatch[] = [];
+      try {
+        const { findPendingTextMatches } =
+          await import("../../../utils/pending-capture-dedup.js");
+        createPendingMatches = await findCapturePendingMatches(
+          (query) =>
+            findPendingTextMatches(db, {
+              userId,
+              query,
+              limit: PENDING_MATCH_LIMIT,
+            }),
+          graphEntities
+        );
+      } catch (err) {
+        logger.warn({ err, userId }, "capture: pending text scan failed");
+      }
+      return ok({
+        ...created,
+        status: captureStatusForCreateState(state),
+        entityCount: 1,
+        relationCount: 0,
+        applied: state === "applied" || state === "partial",
+        scope: createdScope,
+        sessionId: createdScope.sessionId,
+        ...(createdId && (state === "applied" || state === "partial")
+          ? { entityIds: [createdId] }
+          : {}),
+        ...(crossKindLinks.length
+          ? { links: { proposed: crossKindLinks } }
+          : {}),
+        ...(titleLint.length ? { titleLint } : {}),
+        ...pendingMatchesAdvice(createPendingMatches, createdProposalId),
       });
     }
 
