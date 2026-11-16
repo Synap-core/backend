@@ -2148,6 +2148,41 @@ export type DevTimelineEvent = DevTimelineEventBase & ({
 	note: string | null;
 	slot: string | null;
 });
+/** The `GET /timeline` read. Newest first. */
+export type TimelineWire = {
+	events: TrackHistoryEvent[];
+	subject: {
+		id: string;
+		kind: "goal";
+	};
+	/** A source hit its scan cap — older events exist and are not listed. */
+	truncated: boolean;
+} | {
+	events: DevTimelineEvent[];
+	subject: {
+		id: string;
+		kind: "session";
+		title: string;
+	};
+	truncated: boolean;
+} | {
+	events: DevTimelineEvent[];
+	subject: {
+		id: string;
+		kind: "entity";
+		title: string | null;
+	};
+	truncated: boolean;
+} | {
+	events: DevTimelineEvent[];
+	subject: {
+		kind: "pull_request";
+		number: number;
+		repo: string;
+		url: string;
+	};
+	truncated: boolean;
+};
 /** A part as read: the value, or that its read failed. */
 export type RequestContextPart<T> = {
 	status: "ok";
@@ -41014,6 +41049,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: StructureAgainResult;
+		}>;
+		timeline: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				goalId?: string | undefined;
+				pr?: string | undefined;
+				sessionId?: string | undefined;
+			};
+			meta: object;
+			output: TimelineWire;
 		}>;
 		unblockOutput: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
