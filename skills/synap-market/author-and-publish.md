@@ -94,6 +94,15 @@ capability/cell/skill is NOT a WorkspaceYaml). A `category:"skill"` publish must
 carry a non-empty `definition.skill` with documentation or code — the pod refuses a
 bodiless skill at install, so the CP refuses it at publish.
 
+**A capability param a person must supply** (a key, a token): declare how to
+get it as `obtain` on the param, never as a path inside `description`:
+`{"name": "calApiKey", "label": "Cal.com API key", "type": "password",
+"required": true, "obtain": {"url": "https://app.cal.com/settings/developer/api-keys",
+"steps": ["Open Settings, then Developer, then API Keys", "Create a key and copy it"]}}`.
+At most 7 steps of at most 200 characters, and an `https` url (an `act` ask's
+bounds); a definition breaking them is refused. The install proposal shows the
+steps beside the field that takes the key.
+
 ### Compose — ship a whole stack in one install
 
 A template declares `dependencies[]` (`{kind, relation: compose|require}`) so

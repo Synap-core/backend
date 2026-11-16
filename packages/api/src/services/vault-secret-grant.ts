@@ -9,6 +9,7 @@
 
 import { db, and, eq, isNull } from "@synap/database";
 import { vaultGrants } from "@synap/database/schema";
+import { PROVIDE_SECRET_ONCE_MINUTES } from "@synap-core/types/ask";
 import { assertFreshAuthentication } from "../utils/device-session.js";
 
 export type VaultSecretGrantScope = "once" | "session" | "permanent";
@@ -36,11 +37,17 @@ export interface VaultSecretGrantResult {
   reused?: true;
 }
 
-/** An active grant identical in principal + workspace, if one exists. */
+/**
+ * An active grant identical in principal + workspace, if one exists. With
+ * `scope`, only a grant of that scope: a caller that reuses only a permanent
+ * grant must find it even when a shorter one for the same agent sits beside
+ * it (a first-match read could return the shorter one and miss it).
+ */
 export async function findActiveSecretGrant(
   secretId: string,
   grantedTo: string | null,
-  workspaceId: string | null
+  workspaceId: string | null,
+  opts?: { scope?: VaultSecretGrantScope }
 ): Promise<VaultSecretGrantResult | null> {
   const existing = await db.query.vaultGrants.findFirst({
     where: and(
@@ -52,7 +59,8 @@ export async function findActiveSecretGrant(
       workspaceId
         ? eq(vaultGrants.workspaceId, workspaceId)
         : isNull(vaultGrants.workspaceId),
-      isNull(vaultGrants.revokedAt)
+      isNull(vaultGrants.revokedAt),
+      opts?.scope ? eq(vaultGrants.scope, opts.scope) : undefined
     ),
     columns: { id: true, scope: true, expiresAt: true },
   });
@@ -74,7 +82,8 @@ export async function applyVaultSecretGrant(
   const reused = await findActiveSecretGrant(
     input.secretId,
     input.grantedTo,
-    input.workspaceId
+    input.workspaceId,
+    input.reusePermanentOnly ? { scope: "permanent" } : undefined
   );
   if (reused && (!input.reusePermanentOnly || reused.scope === "permanent")) {
     return reused;
@@ -87,7 +96,7 @@ export async function applyVaultSecretGrant(
   let expiresAt: Date | null;
   let maxUses: number | null;
   if (input.scope === "once") {
-    expiresAt = new Date(now + 15 * 60 * 1000);
+    expiresAt = new Date(now + PROVIDE_SECRET_ONCE_MINUTES * 60 * 1000);
     maxUses = 1;
   } else if (input.scope === "permanent") {
     expiresAt = null;

@@ -1108,6 +1108,13 @@ export async function executeCapability(input: {
  *   nothing. A capability.run proposal would not show in the channel, and on
  *   approval would have replayed the verb as the approver — an owner send.
  *
+ *   market.install → `runMarketInstall`: with `mustPropose` it files a
+ *   `capability.install` proposal (the one whose setup form asks the person
+ *   for the key, with the manifest's steps) and installs nothing. A
+ *   capability.run proposal replayed as the approver installed directly and
+ *   failed with "Needs setup", with no form to give the key (finding
+ *   91a3bfd3, proposal 118d24bd).
+ *
  * Tighten-only: only a `propose` verdict is handed down (a deny stays a deny,
  * a dry-run a dry-run, an unattended run with no review surface is refused
  * as before), and the handler's grant check still runs before anything. A
@@ -1117,6 +1124,7 @@ export async function executeCapability(input: {
  */
 export const SELF_GATED_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "messaging.send",
+  "market.install",
 ]);
 
 function isSelfGatedBuiltin(skill: { kind: string; name: string }): boolean {

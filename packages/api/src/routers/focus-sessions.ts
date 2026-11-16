@@ -105,6 +105,7 @@ import {
   loadOwedProvideAsk,
   readProvideOptions,
 } from "../services/focus-sessions/provide-options.js";
+import { readProvideSecretUse } from "../services/focus-sessions/provide-secret-use.js";
 import {
   askAboutSlot,
   ASK_ABOUT_SLOT_NOTE_MAX,
@@ -113,6 +114,7 @@ import {
   AskAnswerValueSchema,
   ASK_CHANGED_PREFIX,
   ASK_INVALID_PREFIX,
+  PROVIDE_SECRET_USES,
   SLOT_MOVED_ON_PHRASES,
 } from "@synap-core/types/ask";
 import { SLOT_ANSWER_TEXT_MAX } from "../services/focus-sessions/answer-slot.js";
@@ -314,6 +316,12 @@ const AnswerOutputInputSchema = z
      * agent the person was told will read it. No read for anyone else.
      */
     expectedGranteeId: z.string().min(1).max(200).optional(),
+    /**
+     * A secret answer: the reads the person picked (`once` | `session`);
+     * absent, the ask's own. `provideOptions`' `secret.grant.uses` is the
+     * ask's.
+     */
+    secretUses: z.enum(PROVIDE_SECRET_USES).optional(),
     /**
      * The one-tap Confirm of a relay waiting on the slot (`pendingRelay`):
      * the relayed answer becomes the person's. Send no `text` / `value`.
@@ -3313,6 +3321,7 @@ export const focusSessionsRouter = router({
         value: input.value,
         askFingerprint: input.askFingerprint,
         expectedGranteeId: input.expectedGranteeId,
+        secretUses: input.secretUses,
         confirmRelayed: input.confirmRelayed,
       });
       if (result.status === "answered") return { ok: true as const, ...result };
@@ -3363,6 +3372,40 @@ export const focusSessionsRouter = router({
         );
       }
       return readProvideOptions(owed, userId);
+    }),
+
+  /**
+   * WHAT BECAME OF A SECRET handed over for one slot — the card's line after
+   * the answer: how often the agent read it, when last, until when, and the
+   * grant Take back revokes (`secretsVault.revokeGrant`). Owner only, on the
+   * person's own session and secret; never a value (`provide-secret-use.ts`).
+   */
+  provideSecretUse: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().min(1).max(500),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person reads what became of their secret.",
+        });
+      }
+      const read = await readProvideSecretUse({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        expectedLabel: input.expectedLabel,
+      });
+      if (read.status === "not_found") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Session not found",
+        });
+      }
+      return read;
     }),
 
   /**

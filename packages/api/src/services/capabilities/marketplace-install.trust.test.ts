@@ -778,6 +778,32 @@ describe("identity", () => {
     expect(h.fetch).not.toHaveBeenCalled();
   });
 
+  it("a self-gated run (mustPropose) files a capability.install even with no agent: it never installs", async () => {
+    // `market.install` is self-gated (execute-capability.ts): when the outer
+    // gate asks for review, the verb runs with `mustPropose` and must file the
+    // install's OWN proposal, the one whose setup form asks for the key
+    // (finding 91a3bfd3), never install as whoever runs it.
+    h.snapshot = { sources: [], official: null, status: {} };
+    h.row = cellRow({
+      source: process.env.CONTROL_PLANE_URL ?? "https://api.synap.live",
+      listing: null,
+      definition: CELL,
+    });
+    const out = await runMarketInstall({
+      kind: "cell",
+      slug: "charts/bar",
+      ...PERSON,
+      mustPropose: true,
+    });
+    expect(out.status).toBe("proposed");
+    expect(h.propose).toHaveBeenCalledTimes(1);
+    expect(h.propose.mock.calls[0]![0]).toMatchObject({
+      proposalType: "capability.install",
+      targetType: "capability",
+    });
+    expect(h.installCell).not.toHaveBeenCalled();
+  });
+
   it("an official install is refused once a pod admin turns Synap off", async () => {
     h.snapshot = { sources: [], official: { enabled: false }, status: {} };
     h.row = cellRow({ listing: null, definition: CELL });

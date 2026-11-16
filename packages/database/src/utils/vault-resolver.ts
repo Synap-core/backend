@@ -222,6 +222,46 @@ export async function findRedeemableGrant(
  * Returns true if this call consumed the use; false if the grant was revoked,
  * expired, or already exhausted by a concurrent redeemer (lost race).
  */
+/**
+ * Consume one use of a SECRET grant and write its `read` row to
+ * `secret_audit_log`, in ONE statement: the use and its record land together
+ * or neither does, so no value reaches an agent unrecorded (before this,
+ * nothing wrote a read row — only `logger.info` and `use_count`). The row
+ * names who read (the redeeming agent; with none, the workspace grant's
+ * owner, marked `reader: 'workspace'`), which grant, and when — never the
+ * value, never the field it came from.
+ */
+export async function consumeSecretGrantRead(
+  grantId: string,
+  read: { secretId: string; ownerId: string; redeemer: GrantRedeemer }
+): Promise<boolean> {
+  const db = await getDb();
+  const agentUserId = read.redeemer.agentUserId ?? null;
+  const metadata = {
+    via: "redeem",
+    grantId,
+    reader: agentUserId ? "agent" : "workspace",
+    workspaceId: read.redeemer.workspaceId ?? null,
+  };
+  const consumed = await db.execute(drizzleSql`
+    WITH consumed AS (
+      UPDATE vault_grants
+      SET use_count = use_count + 1
+      WHERE id = ${grantId}
+        AND revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > now())
+        AND (max_uses IS NULL OR use_count < max_uses)
+      RETURNING id
+    )
+    INSERT INTO secret_audit_log (secret_id, user_id, action, metadata)
+    SELECT ${read.secretId}::uuid, ${agentUserId ?? read.ownerId}, 'read',
+           ${JSON.stringify(metadata)}::jsonb
+    FROM consumed
+    RETURNING id
+  `);
+  return (consumed as unknown as Array<{ id: string }>).length > 0;
+}
+
 export async function incrementGrant(grantId: string): Promise<boolean> {
   const db = await getDb();
   const updated = await db.execute(drizzleSql`
@@ -411,7 +451,11 @@ export async function resolveVaultSecret(
   // serialization point that prevents over-redemption of a capped grant under
   // concurrency; if we lost the race in the window, the grant is exhausted.
   if (pendingGrantId) {
-    const consumed = await incrementGrant(pendingGrantId);
+    const consumed = await consumeSecretGrantRead(pendingGrantId, {
+      secretId,
+      ownerId: userId,
+      redeemer: opts?.redeemer ?? {},
+    });
     if (!consumed) {
       logger.warn(
         { secretId, grantId: pendingGrantId },
