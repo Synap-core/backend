@@ -20,7 +20,12 @@ import {
   needsYouRisk,
   type NeedsYouRiskMark,
 } from "../needs-you/risk.js";
-import { nounInSentence, resolveObjectNoun } from "../vocabulary/index.js";
+import {
+  nounInSentence,
+  resolveActionLabel,
+  resolveObjectNoun,
+} from "../vocabulary/index.js";
+import { declinedAnswerText } from "./declined.js";
 import {
   ASK_CHANGED_PREFIX,
   askAnswersInline,
@@ -85,6 +90,25 @@ export const ASK_COPY = {
   no: "No",
   didThis: "I did this",
   notMine: "Not mine",
+  /**
+   * "Not mine" said in the room as the person (`unblockOutput`), so the agent
+   * that asked reads that the slot came back to it, and why.
+   */
+  notMineReceipt: (label: string): string => `Not mine: ${label.trim()}`,
+  /**
+   * REFUSE, on every ask (`{ type: "declined" }`, `./declined.ts`): the verb
+   * through the vocabulary door, the reason prompt, what refusing does, and
+   * the receipt. The receipt is the answer's own summary
+   * (`declinedAnswerText`), so the button and the receipt agree.
+   */
+  refuse: resolveActionLabel("refuse", "imperative"),
+  /** The optional reason field: the agent reads it. */
+  refuseReason: "Tell the agent why (optional)",
+  /** What refusing does, shown before the person confirms it. */
+  refuseConsequence:
+    "The agent gets this back with your reason and picks its next step. Nothing is handed over.",
+  refusedReceipt: (reason?: string | null): string =>
+    declinedAnswerText(reason),
   talk: "Talk it through",
   answerDoor: "Answer…",
   movedOn: "This one moved on",
@@ -926,6 +950,22 @@ export interface AskCardView {
   answers: AskCardAnswer[];
   /** The collapsed note affordance. */
   note: { label: string };
+  /**
+   * REFUSE, offered on EVERY card whatever its mode (confirm, choose, form,
+   * act, provide, or no ask): the answer door takes `{ type: "declined",
+   * reason? }` for all of them (`./declined.ts`).
+   */
+  refuse: AskCardRefuse;
+}
+
+/** The Refuse door's words ({@link askCardView}). */
+export interface AskCardRefuse {
+  /** The button: "Refuse". */
+  label: string;
+  /** The optional reason field's label. */
+  reasonLabel: string;
+  /** What refusing does, one line. */
+  consequence: string;
 }
 
 export interface AskCardDue {
@@ -1071,6 +1111,11 @@ export function askCardView(
     consequence: ask?.consequence?.trim() || null,
     answers: askCardAnswers(ask),
     note: { label: ASK_COPY.addNote },
+    refuse: {
+      label: ASK_COPY.refuse,
+      reasonLabel: ASK_COPY.refuseReason,
+      consequence: ASK_COPY.refuseConsequence,
+    },
   };
 }
 

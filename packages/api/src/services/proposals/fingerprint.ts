@@ -28,6 +28,7 @@ import { decodeHtmlEntities } from "@synap-core/types/text";
 import { heldWritesPackName } from "@synap-core/types/proposals/deferred-writes";
 import { describeDevDeployProposal } from "@synap-core/types/proposals/dev-deploy";
 import { describeVerbRunProposal } from "@synap-core/types/proposals/capability-run";
+import { describeAppConnectProposal } from "@synap-core/types/proposals/intent";
 import type { PROPOSE_REASON } from "@synap/governance-policy";
 import {
   capabilityRunVerbId,
@@ -185,10 +186,28 @@ export function extractProposalSummary(data: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+/**
+ * An app's ask for one more thing (`app/connect` with `mode: "add"`, plan
+ * 647ebfd4 option C): its card reads "Content Studio asks to read notes in
+ * Content OS" (`describeAppConnectProposal`), or null for any other proposal.
+ */
+function appAddAskTitle(p: ProposalFingerprintInput): string | null {
+  const ask = describeAppConnectProposal(p);
+  return ask?.mode === "add" ? ask.title : null;
+}
+
 export function computeProposalFingerprint(
   p: ProposalFingerprintInput
 ): string {
   const cls = classifyChange(p.proposalType);
+
+  // An app's asks share the app as their target, so two asks (Content OS,
+  // then Brand) would fold into one row titled after the first. Each is its
+  // own decision: its heading (the pairs it asks) is part of the signature.
+  const addAsk = appAddAskTitle(p);
+  if (addAsk) {
+    return `${p.proposalType}${SEP}${p.targetType}${SEP}id:${p.targetId?.trim() ?? ""} ${normalizeSignatureToken(addAsk)}`;
+  }
 
   // A deploy approval's target is its SESSION, so two asks of one session (a
   // push, then the deploy of the same commit; or two commits) would share the
@@ -449,6 +468,7 @@ function headingOf(row: ProposalFingerprintInput): string | null {
   return (
     describeDevDeployProposal(row)?.title ??
     describeVerbRunProposal(row)?.title ??
+    appAddAskTitle(row) ??
     null
   );
 }

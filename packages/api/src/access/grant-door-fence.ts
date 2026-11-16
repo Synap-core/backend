@@ -379,6 +379,12 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // key is fenced, and `synap keys list|templates` must still answer.
   /^\/keys\/requested\/?$/,
   /^\/keys\/templates\/?$/,
+  // A pod app reads its OWN ask for one more thing (`readAppAccessAsk`,
+  // services/app-access-ask.ts): the ask must be of the app the caller's
+  // grant names, filed for the caller (else 404) — no row a grant bounds.
+  // An app whose grant does not yet reach a space must read whether its
+  // person allowed it.
+  route("/apps/access-requests/:id"),
   /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
   // The built-in skill packages' SKILL.md files, read from the image's

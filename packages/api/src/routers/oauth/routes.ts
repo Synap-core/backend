@@ -49,7 +49,12 @@
  */
 
 import { cleanLoginHint } from "@synap-core/types/sign-in";
-import { withAppRequestScope } from "@synap-core/types/grants";
+import {
+  AppAccessAskSyntaxError,
+  formatSynapAsk,
+  parseSynapAsk,
+  withAppRequestScope,
+} from "@synap-core/types/grants";
 import { randomUUID } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
@@ -298,6 +303,46 @@ oauthApp.post("/register", async (c) => {
   return c.json(buildDcrResponse(clientId, metadata, createdAt), 201);
 });
 
+/**
+ * A pod app's `synap_ask` (`<permission>@<space id or template> …`): it asks
+ * for ONE MORE thing, and the consent screen shows only that. Each permission
+ * must be one its document declares; a value that is not the grammar, sent
+ * by any other client, or naming an undeclared permission is
+ * `invalid_request` (the app's mistake, sent back to it). Absent → null.
+ */
+function authorizeSynapAsk(
+  client: Pick<StoredClient, "clientKind" | "requestedPermissions">,
+  raw: string | undefined
+): string | null {
+  if (raw === undefined) return null;
+  if (client.clientKind !== "cimd" || isMcpClient(client)) {
+    throw new OAuthError(
+      "invalid_request",
+      "synap_ask is for a pod app that declares what it asks for"
+    );
+  }
+  let pairs;
+  try {
+    pairs = parseSynapAsk(raw);
+  } catch (err) {
+    if (err instanceof AppAccessAskSyntaxError)
+      throw new OAuthError("invalid_request", `synap_ask: ${err.message}`);
+    throw err;
+  }
+  const undeclared = pairs.filter(
+    (p) => !client.requestedPermissions.includes(p.permission)
+  );
+  if (undeclared.length > 0) {
+    throw new OAuthError(
+      "invalid_request",
+      `synap_ask names what this app does not declare: ${[
+        ...new Set(undeclared.map((p) => p.permission)),
+      ].join(", ")}`
+    );
+  }
+  return formatSynapAsk(pairs);
+}
+
 // ─── /authorize ──────────────────────────────────────────────────────────────
 //
 // Validates the request, then hands the browser to pod-admin's consent screen.
@@ -355,6 +400,7 @@ oauthApp.get("/authorize", async (c) => {
   // ── Phase 2: everything else redirects the error back to the client, with
   // `iss` like every authorization response (RFC 9207).
   let validated;
+  let synapAsk: string | null = null;
   try {
     if (resources.length > 1) {
       // RFC 8707 allows several; a token from this AS is for one pod resource.
@@ -365,6 +411,7 @@ oauthApp.get("/authorize", async (c) => {
       params.resource = resources.join(" ");
     }
     validated = validateAuthorizeRequest(client, redirectUri, params);
+    synapAsk = authorizeSynapAsk(client, q.synap_ask);
     if (validated.ignoredResource !== null) {
       // The value claude.ai (or any DCR client) really sends — the evidence
       // the lenient rule waits on. Public request data, no secret.
@@ -420,6 +467,9 @@ oauthApp.get("/authorize", async (c) => {
   if (validated.resource) {
     target.searchParams.set("resource", validated.resource);
   }
+  // The short consent (plan 647ebfd4 option C): what the app asks for one
+  // more of, normalized. The consent re-resolves it server-side.
+  if (synapAsk) target.searchParams.set("synap_ask", synapAsk);
   // The launch's space (spec 17 §6.4, review S6/A8): the Synap browser and
   // the SDK send `synap_space_hint`; the consent screen pre-ticks it only if
   // the person can give the app that space. It is not an authorize parameter

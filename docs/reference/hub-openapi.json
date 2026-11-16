@@ -4840,7 +4840,11 @@
           "triggerType": {
             "$ref": "#/components/schemas/AutomationTriggerType"
           },
-          "triggerConfig": { "type": "object", "additionalProperties": {} },
+          "triggerConfig": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Trigger settings (eventPattern, filters, expression, ...). audience: whose events a POD-WIDE automation answers to: 'me' (default; your own events and your agents') or 'everyone' (any member's, in a space you can see). A space automation ignores it."
+          },
           "flowDefinition": { "$ref": "#/components/schemas/FlowDefinition" },
           "status": { "$ref": "#/components/schemas/AutomationStatus" },
           "metadata": { "type": "object", "additionalProperties": {} }
@@ -4878,7 +4882,11 @@
           "triggerType": {
             "$ref": "#/components/schemas/AutomationTriggerType"
           },
-          "triggerConfig": { "type": "object", "additionalProperties": {} },
+          "triggerConfig": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Trigger settings (eventPattern, filters, expression, ...). audience: whose events a POD-WIDE automation answers to: 'me' (default; your own events and your agents') or 'everyone' (any member's, in a space you can see). A space automation ignores it."
+          },
           "flowDefinition": { "$ref": "#/components/schemas/FlowDefinition" },
           "status": { "$ref": "#/components/schemas/AutomationStatus" },
           "metadata": { "type": "object", "additionalProperties": {} }
@@ -28162,6 +28170,292 @@
         }
       }
     },
+    "/apps/access-requests": {
+      "post": {
+        "tags": ["Apps"],
+        "summary": "A pod app asks its person for one more thing",
+        "description": "With the app's own token. Each pair is a permission the app's client-id document declares, in one space (by id or by the template it was made from) the person may give it. Files ONE ask the person answers from a card; allowing it ADDS the pairs to what the app holds. A pair the app already holds, already asked for, or that the person declined less than 30 days ago is not asked again. An ask waits 7 days.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "requests": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "permission": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120,
+                              "description": "A permission the app's client-id document declares."
+                            },
+                            "workspaceId": {
+                              "type": "string",
+                              "format": "uuid",
+                              "description": "The space, by id."
+                            }
+                          },
+                          "required": ["permission", "workspaceId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "permission": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120,
+                              "description": "A permission the app's client-id document declares."
+                            },
+                            "template": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                              "description": "The space, by the template it was made from."
+                            }
+                          },
+                          "required": ["permission", "template"]
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 16
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 300,
+                    "description": "Why the app needs it, shown to the person as the app's words."
+                  }
+                },
+                "required": ["requests"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Nothing new to ask: each pair's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": ["string", "null"],
+                      "description": "The ask filed now; null when every pair was already given, already asked, or declined less than 30 days ago."
+                    },
+                    "status": {
+                      "type": ["string", "null"],
+                      "enum": [
+                        "pending",
+                        "allowed",
+                        "declined",
+                        "expired",
+                        null
+                      ]
+                    },
+                    "reviewUrl": { "type": ["string", "null"] },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" },
+                          "state": {
+                            "type": "string",
+                            "enum": ["asked", "given", "open", "quiet"],
+                            "description": "asked: in the ask filed now; given: the app holds it; open: an earlier ask still waits for it; quiet: the person said Not now less than 30 days ago."
+                          },
+                          "askId": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName",
+                          "state"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "reviewUrl",
+                    "expiresAt",
+                    "pairs"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The ask, filed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": ["string", "null"],
+                      "description": "The ask filed now; null when every pair was already given, already asked, or declined less than 30 days ago."
+                    },
+                    "status": {
+                      "type": ["string", "null"],
+                      "enum": [
+                        "pending",
+                        "allowed",
+                        "declined",
+                        "expired",
+                        null
+                      ]
+                    },
+                    "reviewUrl": { "type": ["string", "null"] },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" },
+                          "state": {
+                            "type": "string",
+                            "enum": ["asked", "given", "open", "quiet"],
+                            "description": "asked: in the ask filed now; given: the app holds it; open: an earlier ask still waits for it; quiet: the person said Not now less than 30 days ago."
+                          },
+                          "askId": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName",
+                          "state"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "reviewUrl",
+                    "expiresAt",
+                    "pairs"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a pod app's own token (NOT_A_POD_APP), a permission its document does not declare (ASK_NOT_DECLARED), or a space the person cannot give it (ASK_NOT_ON_OFFER)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apps/access-requests/{id}": {
+      "get": {
+        "tags": ["Apps"],
+        "summary": "What became of an app's ask",
+        "description": "With the app's own token: pending, allowed, declined (Not now) or expired. An app reads only its own asks.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ask",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "status": {
+                      "type": "string",
+                      "enum": ["pending", "allowed", "declined", "expired"]
+                    },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName"
+                        ]
+                      }
+                    },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "decidedAt": { "type": ["string", "null"] }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "pairs",
+                    "expiresAt",
+                    "decidedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a pod app's own token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ask of this app",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/relations": {
       "get": {
         "tags": ["Relations"],
@@ -40234,6 +40528,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -40500,7 +40808,11 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
-                            "confirmedAt": { "type": "string" }
+                            "confirmedAt": { "type": "string" },
+                            "askFingerprint": {
+                              "type": "string",
+                              "maxLength": 64
+                            }
                           },
                           "required": [
                             "text",
@@ -40788,6 +41100,20 @@
                                       }
                                     },
                                     "required": ["type", "ref"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["declined"]
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "maxLength": 2000
+                                      }
+                                    },
+                                    "required": ["type"]
                                   }
                                 ]
                               },
@@ -41058,7 +41384,11 @@
                                 "maxLength": 64
                               },
                               "quote": { "type": "string", "maxLength": 2000 },
-                              "confirmedAt": { "type": "string" }
+                              "confirmedAt": { "type": "string" },
+                              "askFingerprint": {
+                                "type": "string",
+                                "maxLength": 64
+                              }
                             },
                             "required": [
                               "text",
@@ -41344,6 +41674,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -44303,6 +44647,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -44569,7 +44927,11 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
-                            "confirmedAt": { "type": "string" }
+                            "confirmedAt": { "type": "string" },
+                            "askFingerprint": {
+                              "type": "string",
+                              "maxLength": 64
+                            }
                           },
                           "required": [
                             "text",
@@ -44857,6 +45219,20 @@
                                       }
                                     },
                                     "required": ["type", "ref"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["declined"]
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "maxLength": 2000
+                                      }
+                                    },
+                                    "required": ["type"]
                                   }
                                 ]
                               },
@@ -45127,7 +45503,11 @@
                                 "maxLength": 64
                               },
                               "quote": { "type": "string", "maxLength": 2000 },
-                              "confirmedAt": { "type": "string" }
+                              "confirmedAt": { "type": "string" },
+                              "askFingerprint": {
+                                "type": "string",
+                                "maxLength": 64
+                              }
                             },
                             "required": [
                               "text",
@@ -45413,6 +45793,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -48090,6 +48484,14 @@
                           }
                         },
                         "required": ["type", "ref"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["declined"] },
+                          "reason": { "type": "string", "maxLength": 2000 }
+                        },
+                        "required": ["type"]
                       }
                     ]
                   },
@@ -48479,6 +48881,14 @@
                           }
                         },
                         "required": ["type", "ref"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["declined"] },
+                          "reason": { "type": "string", "maxLength": 2000 }
+                        },
+                        "required": ["type"]
                       }
                     ]
                   },
@@ -50455,7 +50865,7 @@
       "get": {
         "tags": ["Attention"],
         "summary": "What really needs the person, and where everything else went",
-        "description": "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days; one row per ask, `needsYouRows` draws one per session), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads. A key bounded by a grant needs `session.read`: one that reads sessions, proposals, rooms and records everywhere gets the whole read; any other gets only the asks and sessions of the spaces, projects and objects its grant names, the proposals only with `proposal.read`, and `withheld` names the halves it did not read (`notifications`, the person's own `captures`, `invites` and access requests). `withheld` is absent for the whole read.",
+        "description": "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days; one row per ask, `needsYouRows` draws one per session), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads. A key bounded by a grant needs `session.read`: one that reads sessions, proposals, rooms and records everywhere gets the whole read; any other gets only the asks and sessions of the spaces, projects and objects its grant names, the proposals only with `proposal.read`, and `withheld` names the halves it did not read (`notifications`, the person's own `captures`, `invites` and access requests). `withheld` is absent for the whole read. `include=context` adds `context` (`NeedsYouContextRead`, `@synap-core/types/needs-you`): per session its newest `timelineItems` (default 4) timeline items, what the agent does meanwhile and the open sessions that wait on it; per row its session, its proposals' waits and its `subject` (the object it is about, under the caller's read floor; absent when it names none the caller can read), read once for the page; a part whose read failed is `{status: 'unreadable'}`.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -50486,6 +50896,18 @@
             "schema": { "type": "integer", "minimum": 1, "maximum": 200 },
             "required": false,
             "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "enum": ["context"] },
+            "required": false,
+            "name": "include",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 20 },
+            "required": false,
+            "name": "timelineItems",
             "in": "query"
           }
         ],

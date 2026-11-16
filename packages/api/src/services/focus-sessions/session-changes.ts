@@ -411,14 +411,21 @@ export function sessionDevFactWhere(
   sessionId: string,
   refs: readonly PullRequestRef[]
 ) {
-  const ci = DEV_LOOP_EVENT_TYPES.ciFinished;
   return or(
     drizzleSql`${eventsTable.data}->>'sessionId' = ${sessionId}`,
-    ...refs.map(
-      (r) =>
-        drizzleSql`(${eventsTable.data}->>'sessionId' is null and lower(${eventsTable.data}->>'repo') = ${r.repo.toLowerCase()} and ${eventsTable.data}->>(case when ${eventsTable.type} = ${ci} then 'pr' else 'number' end) = ${String(r.number)})`
-    )
+    ...refs.map(unstampedPullRequestFactWhere)
   )!;
+}
+
+/**
+ * The second half of {@link sessionDevFactWhere}: a fact that names NO session
+ * and is about this pull request (a PR fact by its `number`, a CI run by its
+ * `pr`). Exported so a batched read (the timeline's, over a page of sessions)
+ * says which session a fact belongs to by the SAME clause.
+ */
+export function unstampedPullRequestFactWhere(r: PullRequestRef) {
+  const ci = DEV_LOOP_EVENT_TYPES.ciFinished;
+  return drizzleSql`(${eventsTable.data}->>'sessionId' is null and lower(${eventsTable.data}->>'repo') = ${r.repo.toLowerCase()} and ${eventsTable.data}->>(case when ${eventsTable.type} = ${ci} then 'pr' else 'number' end) = ${String(r.number)})`;
 }
 
 /** A timestamp column truncated to the millisecond, as a UTC ISO string. */

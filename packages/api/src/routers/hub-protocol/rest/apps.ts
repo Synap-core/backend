@@ -10,6 +10,12 @@
  *                              with Synap" code may go (owner only) → { app }
  *   DELETE /apps/:id           revoke the app (revokes its keys → its grants)
  *
+ * A pod app asks its person for ONE MORE thing (plan 647ebfd4 option C), with
+ * its OWN token (the grant names the app); `services/app-access-ask.ts`:
+ *   POST   /apps/access-requests      { requests, reason? } → the ask (or what
+ *                                     each pair already is: given, open, quiet)
+ *   GET    /apps/access-requests/:id  pending / allowed / declined / expired
+ *
  * Pod apps (spec 17 PB4) — the connections manager the browser/settings call:
  *   GET    /pod-apps             the caller's pod app connections: each app row
  *                                plus `pod_app` (domain, tier, approval per
@@ -36,17 +42,30 @@
 
 import { z } from "zod";
 import type { Context } from "hono";
-import { db, AppRepository } from "@synap/database";
+import { db, AppRepository, getRequestGrant } from "@synap/database";
 import {
   hasScope,
   httpStatusForTrpcError,
   logger,
   requireAppPublicIdParam,
+  requireUuidParam,
   type HubHono,
   type HubVariables,
   refuseStaleDeviceSession,
 } from "./_shared.js";
 import { gateHubTwin, refusalBody } from "./_presence.js";
+import { ErrorSchema } from "./_codecs/_openapi.js";
+import { registerOpenApi } from "./_codecs/_register.js";
+import {
+  AccessAskBodySchema,
+  AccessAskParamsSchema,
+  AccessAskReceiptSchema,
+  AccessAskViewSchema,
+} from "./_codecs/app-access-ask.js";
+import {
+  fileAppAccessAsk,
+  readAppAccessAsk,
+} from "../../../services/app-access-ask.js";
 import {
   issueKey,
   loadOwnedApp,
@@ -116,7 +135,109 @@ function fail(c: Ctx, err: unknown, what: string) {
   return c.json(refusalBody(err, `${what} failed`), status);
 }
 
+/**
+ * An app's own token asks with either Hub scope: a read-only app must be able
+ * to ask for its first write. The ask grants nothing until its person allows it.
+ */
+function canAsk(c: Ctx): boolean {
+  const scopes = c.get("scopes");
+  return (
+    hasScope(scopes, "hub-protocol.read") ||
+    hasScope(scopes, "hub-protocol.write")
+  );
+}
+
 export function registerAppsRoutes(app: HubHono): void {
+  // ── An app's ask for one more thing (static, BEFORE /apps/:id) ────────────
+  registerOpenApi(app, {
+    method: "post",
+    path: "/apps/access-requests",
+    tags: ["Apps"],
+    summary: "A pod app asks its person for one more thing",
+    description:
+      "With the app's own token. Each pair is a permission the app's client-id document declares, in one space (by id or by the template it was made from) the person may give it. " +
+      "Files ONE ask the person answers from a card; allowing it ADDS the pairs to what the app holds. " +
+      "A pair the app already holds, already asked for, or that the person declined less than 30 days ago is not asked again. An ask waits 7 days.",
+    request: { body: AccessAskBodySchema },
+    responses: {
+      201: { description: "The ask, filed", schema: AccessAskReceiptSchema },
+      200: {
+        description: "Nothing new to ask: each pair's state",
+        schema: AccessAskReceiptSchema,
+      },
+      400: { description: "Invalid body", schema: ErrorSchema },
+      403: {
+        description:
+          "Not a pod app's own token (NOT_A_POD_APP), a permission its document does not declare (ASK_NOT_DECLARED), or a space the person cannot give it (ASK_NOT_ON_OFFER)",
+        schema: ErrorSchema,
+      },
+    },
+  });
+  app.post("/apps/access-requests", async (c) => {
+    if (!canAsk(c)) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const body = AccessAskBodySchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const receipt = await fileAppAccessAsk({
+        publicId: getRequestGrant()?.clientId,
+        callerUserId: userId,
+        agentUserId: c.get("agentUserId") as string | undefined,
+        pairs: body.data.requests,
+        reason: body.data.reason ?? null,
+      });
+      return c.json(receipt, receipt.id ? 201 : 200);
+    } catch (err) {
+      return fail(c, err, "POST /apps/access-requests");
+    }
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/apps/access-requests/{id}",
+    tags: ["Apps"],
+    summary: "What became of an app's ask",
+    description:
+      "With the app's own token: pending, allowed, declined (Not now) or expired. An app reads only its own asks.",
+    request: { params: AccessAskParamsSchema },
+    responses: {
+      200: { description: "The ask", schema: AccessAskViewSchema },
+      400: { description: "Invalid id", schema: ErrorSchema },
+      403: { description: "Not a pod app's own token", schema: ErrorSchema },
+      404: { description: "No such ask of this app", schema: ErrorSchema },
+    },
+  });
+  app.get("/apps/access-requests/:id", async (c) => {
+    if (!canAsk(c)) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const askId = requireUuidParam(c, "id");
+    if (askId instanceof Response) return askId;
+    try {
+      return c.json(
+        await readAppAccessAsk({
+          publicId: getRequestGrant()?.clientId,
+          callerUserId: userId,
+          askId,
+        })
+      );
+    } catch (err) {
+      return fail(c, err, "GET /apps/access-requests/:id");
+    }
+  });
+
   // ── POST /apps — register/upsert (idempotent by owner+name) ───────────────
   app.post("/apps", async (c) => {
     const stale = refuseStaleDeviceSession(c);

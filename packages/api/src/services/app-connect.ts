@@ -1373,6 +1373,12 @@ export async function oauthAppPodWideKinds(
  * Re-consent (same person, same app): the row is reused and the new approval
  * replaces the old one, narrowing (or widening, on this very screen) the live
  * key at once (`applyApprovedReach`).
+ *
+ * The SHORT consent (`ask`, the app's `synap_ask`, plan 647ebfd4 option C):
+ * `asked` is only the pairs the app asked for that are on offer, and the
+ * approval is filed with `mode: "add"`, so the executor MERGES them into what
+ * the app already holds; nothing it held before is dropped. Only an
+ * interrupted consent is withdrawn, never the app's own asks still waiting.
  */
 export async function connectOAuthApp(args: {
   ownerUserId: string;
@@ -1397,6 +1403,11 @@ export async function connectOAuthApp(args: {
    * and approves in the same call has no proposal a client could name first.
    */
   presenceChecked?: "oauth.consent";
+  /**
+   * The app's `synap_ask` pairs, resolved server-side within its ceiling
+   * (`resolveAskPairs`): the short consent, whose approval ADDS.
+   */
+  ask?: readonly AppApprovedRequest[];
 }): Promise<{ appId: string; publicId: string; proposalId: string }> {
   assertOwnerCredential("connect an app", {
     agentUserId: args.ctx.agentUserId,
@@ -1414,7 +1425,7 @@ export async function connectOAuthApp(args: {
     args.ownerUserId,
     args.permissions.filter((p) => !podWide.includes(p))
   );
-  const asked: AppApprovedRequest[] = [
+  const offered: AppApprovedRequest[] = [
     ...offer.flatMap((o) =>
       o.workspaces.map((w) => ({
         permission: o.permission,
@@ -1423,6 +1434,16 @@ export async function connectOAuthApp(args: {
     ),
     ...podWide.map((permission) => ({ permission, workspaceId: null })),
   ];
+  const add = args.ask !== undefined;
+  // The short consent: only what the app asked, of what is on offer.
+  const asked = add
+    ? offered.filter((o) =>
+        args.ask!.some(
+          (a) =>
+            a.permission === o.permission && a.workspaceId === o.workspaceId
+        )
+      )
+    : offered;
   const nameOf = new Map<string | null, string>([
     ...offer.flatMap((o) =>
       o.workspaces.map((w) => [w.workspaceId, w.workspaceName] as const)
@@ -1454,7 +1475,8 @@ export async function connectOAuthApp(args: {
   await repo.withdrawPendingRequests(
     app.id,
     args.ownerUserId,
-    "Superseded by a new consent."
+    "Superseded by a new consent.",
+    add ? "oauth-consent" : undefined
   );
 
   const requests = approved.map((r) => ({
@@ -1478,6 +1500,7 @@ export async function connectOAuthApp(args: {
           name: app.name,
           oauthClientId: args.oauthClientId,
           via: "oauth-consent",
+          ...(add ? { mode: "add" } : {}),
           requests,
           asked,
         },

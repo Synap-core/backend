@@ -95,6 +95,7 @@ import type {
   SlotPendingRelay,
 } from "@synap/playbooks";
 import {
+  ASK_COPY,
   ASK_LIMITS,
   AskAnswerValueSchema,
   RELAY_SURFACE_MAX_CHARS,
@@ -160,7 +161,12 @@ import {
   SLOT_ANSWER_TEXT_MAX,
   type AnswerExpectedOutputResult,
 } from "./answer-slot.js";
-import { stampBlocked, stampUnblocked } from "./block-output.js";
+import {
+  stampBlocked,
+  stampUnblocked,
+  unblockExpectedOutput,
+  type BlockExpectedOutputResult,
+} from "./block-output.js";
 import { updateExpectedOutputsLocked } from "./delegate-output.js";
 import { emitSideEffects } from "@synap/events";
 import { logEvent } from "../../lib/event-helpers.js";
@@ -169,6 +175,7 @@ import {
   FOCUS_SESSION_RELAY_CORRECT_ACTION,
   FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE,
   FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE,
+  FOCUS_SESSION_SLOT_HANDED_BACK_EVENT_TYPE,
 } from "./lifecycle-events.js";
 import { isUuid } from "@synap-core/types/property-render";
 
@@ -1235,7 +1242,12 @@ export async function answerSessionSlot(p: {
   // the slot follows its own answer rule (hand-back included).
   const met = verdict
     ? null
-    : criterionMetBy(outputs, chosen.index, readCriteria(session.criteria));
+    : criterionMetBy(
+        outputs,
+        chosen.index,
+        readCriteria(session.criteria),
+        value
+      );
 
   // SECRET — handing it over also lets the agent that asked read it, for this
   // session (`provide-secret-grant.ts`). Written BEFORE the answer commits so
@@ -1555,6 +1567,94 @@ export async function attestSessionSlot(p: {
   };
 }
 
+// ── Entrance 4: "Not mine" ──────────────────────────────────────────────────
+
+/**
+ * "NOT MINE", whole: the person hands a slot an agent gave them back,
+ * unanswered (`unblockExpectedOutput`, the ONE hand-back stamp), and the door
+ * now SAYS so (finding 278a866a): one `focus_session.slot_handed_back` history
+ * row and one room line as the person ("Not mine: <label>"), so the agent
+ * reads why the slot came back instead of finding it bare. No wake, no
+ * answer, no question claimed: "Not mine" is not an answer (a no to the ask
+ * is Refuse, `{ type: "declined" }`). Both are written only when the slot
+ * really was the person's; the tail is best-effort, after the stamp, like
+ * attest's: a committed hand-back never comes back as a 500.
+ */
+export async function notMineSessionSlot(p: {
+  sessionId: string;
+  /** Owner floor AND the person handing it back. */
+  userId: string;
+  expectedLabel: string;
+}): Promise<BlockExpectedOutputResult> {
+  const session = await db.query.focusSessions.findFirst({
+    where: and(
+      eq(focusSessions.id, p.sessionId),
+      eq(focusSessions.userId, p.userId)
+    ),
+    columns: { id: true, channelId: true, expectedOutputs: true },
+  });
+  const before: ExpectedOutput[] = Array.isArray(session?.expectedOutputs)
+    ? (session!.expectedOutputs as ExpectedOutput[])
+    : [];
+  const result = await unblockExpectedOutput(p);
+  if (result.status !== "unblocked" || !session) return result;
+  const slot = before.find(
+    (o) =>
+      normalizeExpectedLabel(o?.label) ===
+      normalizeExpectedLabel(result.expectedLabel)
+  );
+  if (slot?.owner !== "human") return result;
+
+  const at = new Date().toISOString();
+  let messageId: string | null = null;
+  if (session.channelId) {
+    try {
+      const posted = await postChannelMessage({
+        channelId: session.channelId,
+        content: ASK_COPY.notMineReceipt(result.expectedLabel),
+        role: "user",
+        triggerAI: false,
+        userId: p.userId,
+        idempotencyKey: `slot-not-mine:${session.id}:${at}:${result.expectedLabel}`,
+      });
+      messageId = posted.messageId;
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: session.id },
+        "not mine: the room line failed — the slot is handed back"
+      );
+    }
+  }
+  try {
+    await logEvent(
+      p.userId,
+      FOCUS_SESSION_SLOT_HANDED_BACK_EVENT_TYPE,
+      {
+        sessionId: session.id,
+        expectedLabel: result.expectedLabel,
+        kind: result.kind,
+        blockedReason: slot.blockedReason ?? null,
+        askMode: slot.ask?.mode ?? null,
+        askedBy: slot.askedBy ?? null,
+        handedBackBy: p.userId,
+        handedBackAt: at,
+        messageId,
+      },
+      {
+        subjectId: session.id,
+        subjectType: FOCUS_SESSION_SUBJECT_TYPE,
+        source: "api",
+      }
+    );
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: session.id },
+      "not mine: the history row failed — the slot is handed back"
+    );
+  }
+  return result;
+}
+
 /**
  * The answer to STORE for a slot's ask, or the refusal. Pure.
  *
@@ -1594,8 +1694,11 @@ export function resolveAnswer(
       },
     };
   }
-  // An ask-less slot answered with `{type:'text'}` stays a legacy answer.
-  if (!ask) return { text, value: undefined };
+  // An ask-less slot answered with `{type:'text'}` stays a legacy answer. A
+  // REFUSAL keeps its value on any slot: it is what tells the agent "no".
+  if (!ask && checked.value.type !== "declined") {
+    return { text, value: undefined };
+  }
   return {
     text: summarizeAnswer(ask, checked.value, text),
     value: checked.value,
@@ -2143,6 +2246,17 @@ export async function relaySessionAnswer(p: {
 
   if (p.disposition === "withdrawn") {
     return withdrawRelayedQuestion({ ...p, now, question, slot, facts });
+  }
+
+  // A REFUSAL is the person's own tap for now (plan d717d6ac §3, phase 2
+  // adds a relayed `declined` disposition): an agent cannot say "no" for them.
+  if (p.value?.type === "declined") {
+    return {
+      status: "ask_invalid",
+      code: "wrong_door",
+      message:
+        "A refusal is the person's own answer: it cannot be relayed yet. Relay their words as an answer, or withdraw the question.",
+    };
   }
 
   // 4. ANSWERED — the person's words first.

@@ -87,7 +87,6 @@ import type { StageSubjectStatusOutcome } from "../services/focus-sessions/stage
 import { delegateExpectedOutput } from "../services/focus-sessions/delegate-output.js";
 import {
   blockExpectedOutput,
-  unblockExpectedOutput,
   type BlockExpectedOutputResult,
 } from "../services/focus-sessions/block-output.js";
 import { BLOCKED_REASONS } from "@synap/playbooks";
@@ -98,6 +97,7 @@ import {
   attestSessionSlot,
   correctRelayedAnswer,
   describeAnswerRefusal,
+  notMineSessionSlot,
   type AttestSessionSlotResult,
 } from "../services/focus-sessions/session-answer.js";
 import {
@@ -3150,7 +3150,8 @@ export const focusSessionsRouter = router({
       // A person-only door still bounds a scoped key by its grant: the
       // session's own space + project, as on the answer doors.
       await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
-      const result = await unblockExpectedOutput({
+      // The hand-back, its history row and its room line ("Not mine: …").
+      const result = await notMineSessionSlot({
         sessionId: input.sessionId,
         userId: ctx.userId,
         expectedLabel: input.expectedLabel,

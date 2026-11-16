@@ -22,6 +22,9 @@
  *      reason in `error_message`) or a step output (`{ status: "skipped",
  *      reason }`) carries. Render through `humanizeToken`, never a local map.
  *
+ *   4. AUDIENCE — `triggerConfig.audience`, optional: whose events a POD-WIDE
+ *      automation answers to (decision 782c862e, founder 2026-11-16).
+ *
  * Pure + zero-dep — safe in browser, Electron, React Native, Node and CLI.
  */
 
@@ -148,3 +151,55 @@ export const AUTOMATION_SKIP_REASONS = {
 } as const;
 export type AutomationSkipReason =
   (typeof AUTOMATION_SKIP_REASONS)[keyof typeof AUTOMATION_SKIP_REASONS];
+
+// ── 4. Audience ─────────────────────────────────────────────────────────────
+
+/**
+ * Whose events a POD-WIDE automation (`workspace_id IS NULL`) answers to.
+ * Decision 782c862e (founder, 2026-11-16): "The person (agent-created
+ * automations fire on your events too) — but it can be chosen: either for
+ * everyone, or 'for me' being linked to user actions only".
+ *
+ *   me        (DEFAULT) the events of the automation's PERSON: its owner, or,
+ *             when an agent made it, the human who owns that agent; an event
+ *             recorded by any agent of that same person counts as theirs.
+ *   everyone  the events of any pod member, in a space the automation's person
+ *             can see (the matcher refuses the rest: no data access widens).
+ *
+ * A space automation (`workspace_id` set) already answers to every member of
+ * its space; the field does not narrow it. Read by the trigger matcher
+ * (`@synap/jobs`), validated by the create / update doors (`@synap/api`).
+ */
+export const AUTOMATION_AUDIENCE_KEY = "audience" as const;
+export const AUTOMATION_AUDIENCES = ["me", "everyone"] as const;
+export type AutomationAudience = (typeof AUTOMATION_AUDIENCES)[number];
+export const DEFAULT_AUTOMATION_AUDIENCE: AutomationAudience = "me";
+
+export type AutomationAudienceRead =
+  { ok: true; value: AutomationAudience } | { ok: false; error: string };
+
+/**
+ * Read + validate `triggerConfig.audience`. Absent / null ⇒ the default `me`
+ * (every automation authored before the field existed). Anything else that is
+ * not one of {@link AUTOMATION_AUDIENCES} is an error the doors return verbatim.
+ */
+export function readAutomationAudience(
+  triggerConfig: unknown
+): AutomationAudienceRead {
+  const raw = (triggerConfig as Record<string, unknown> | null | undefined)?.[
+    AUTOMATION_AUDIENCE_KEY
+  ];
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: DEFAULT_AUTOMATION_AUDIENCE };
+  }
+  if (
+    typeof raw !== "string" ||
+    !(AUTOMATION_AUDIENCES as readonly string[]).includes(raw)
+  ) {
+    return {
+      ok: false,
+      error: `triggerConfig.${AUTOMATION_AUDIENCE_KEY} must be one of ${AUTOMATION_AUDIENCES.map((a) => `"${a}"`).join(", ")} (got ${JSON.stringify(raw)}).`,
+    };
+  }
+  return { ok: true, value: raw as AutomationAudience };
+}

@@ -303,6 +303,19 @@ export async function expireLapsedProposals(
   for (const id of selectLapsedGuestIds(guestRows, now)) {
     if (!lapsed.includes(id)) lapsed.push(id);
   }
+  // An app's ask for one more thing past its own `expiresAt` (7 days, plan
+  // 647ebfd4): the app's next ask expires its own too; this is the backstop
+  // for an app that never asks again. Same failure rule as the guest scan.
+  try {
+    // Lazy: `permission-check.ts` imports this module, and the ask service
+    // imports `permission-check.ts` (a static import here is a cycle).
+    const { lapsedAppAskIds } = await import("../app-access-ask.js");
+    for (const id of await lapsedAppAskIds(now)) {
+      if (!lapsed.includes(id)) lapsed.push(id);
+    }
+  } catch (err) {
+    logger.warn({ err }, "expiry: app-ask scan failed (retried next run)");
+  }
   const seen = new Set(pending.map((p) => p.id));
   const candidates = [...pending, ...guestRows.filter((g) => !seen.has(g.id))];
 

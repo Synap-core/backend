@@ -72,6 +72,38 @@ describe("app/connect proposal words", () => {
     expect(s.sentence).not.toContain("uuid-123");
   });
 
+  // Rules out: an app's ask for one more thing titled as a whole new
+  // request ("asks for access"), and a title written by hand per surface.
+  it("an additive ask reads '<app> asks to <verb> in <space>'", () => {
+    const one = describeAppConnectProposal(
+      {
+        ...PROPOSAL,
+        data: {
+          ...PROPOSAL.data,
+          mode: "add",
+          requests: [{ permission: "entity.note.read", workspaceId: "ws-fin" }],
+        },
+      },
+      NAMES
+    )!;
+    expect(one.mode).toBe("add");
+    expect(one.title).toBe("synap.live asks to read notes in Finance");
+    const two = describeAppConnectProposal(
+      {
+        ...PROPOSAL,
+        data: { ...PROPOSAL.data, mode: "add" },
+      },
+      NAMES
+    )!;
+    expect(two.title).toBe(
+      "synap.live asks to create people in Sales and read notes in Finance"
+    );
+    // Without the mode, the same request keeps the whole-request title.
+    expect(describeAppConnectProposal(PROPOSAL, NAMES)!.title).toBe(
+      "synap.live asks for access"
+    );
+  });
+
   it("is null for other proposals and for unreadable data (fallback, not a half sentence)", () => {
     expect(
       isAppConnectProposal({ targetType: "app", proposalType: "revoke" })

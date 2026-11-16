@@ -38,6 +38,14 @@
  * ONE EVENT. `focus_session.slot_answered.completed` — the history row is
  * appended INSIDE the stamping transaction (it commits iff the answer does);
  * the reactor hop fires after commit.
+ *
+ * A REFUSAL (`value.type === "declined"`, `@synap-core/types/ask`
+ * `declined.ts`) is an answer like any other here (stamp, event, hand-back,
+ * and the caller's room line and wake), with four differences, each so a no
+ * never reads as a yes: the hand-back KEEPS the slot's blocker (nothing
+ * moved), the answer records the refused ask's fingerprint (the re-ask guard,
+ * `declined-reask.ts`), and it writes no run param, takes on no draft and
+ * files no decision.
  */
 
 import { db, focusSessions, and, eq } from "@synap/database";
@@ -53,6 +61,7 @@ import {
   askFingerprint,
   buildAskSnapshot,
   effectiveSlotAsk,
+  isDeclinedValue,
 } from "@synap-core/types/ask";
 import { archivedAnswerHistory } from "./answer-history.js";
 import {
@@ -207,9 +216,11 @@ export function stampAnswered(
   handBack = true
 ): ExpectedOutput[] {
   const slot = outputs[index]!;
+  // A refusal moved nothing: the thing the slot holds up stays blocked.
+  const keepBlocker = isDeclinedValue(answer.value);
   const handedBack =
     slot.owner === "human" && handBack
-      ? stampUnblocked(outputs, slot.label)[index]!
+      ? stampUnblocked(outputs, slot.label, { keepBlocker })[index]!
       : { ...slot };
   // A new answer has not been picked up yet — the prior receipt was about the
   // prior answer (`answer-pickup.ts`).
@@ -293,6 +304,7 @@ export async function answerExpectedOutput(
       const prompt =
         before.ask?.mode === "confirm" ? before.ask.prompt?.trim() : undefined;
       const question = prompt || before.why?.trim() || params.question?.trim();
+      const declined = isDeclinedValue(params.value);
       const answer: SlotAnswer = {
         text,
         messageId: params.messageId,
@@ -314,6 +326,10 @@ export async function answerExpectedOutput(
               ),
             }
           : {}),
+        // WHICH ask was refused: the hand-back clears the ask itself.
+        ...(declined
+          ? { askFingerprint: askFingerprint(before.ask ?? null) }
+          : {}),
       };
       const handBack = params.handBack !== false;
       const next = stampAnswered(current, chosen.index, answer, handBack);
@@ -323,6 +339,7 @@ export async function answerExpectedOutput(
       // does not read as the param's type is refused by the direct door
       // before this point; from a room reply (words, whatever the ask) it is
       // recorded as the answer and writes no param.
+      // (`paramValueFromAnswer` reads a refusal as no value at all.)
       const param = paramValueFromAnswer(before, params.value, text);
       const metadata =
         param.status === "value"
@@ -374,6 +391,7 @@ export async function answerExpectedOutput(
   );
 
   if (result.status === "answered") {
+    const declined = isDeclinedValue(result.answer.value);
     // The reactor hop — after commit, so a rule never fires on a rolled-back
     // answer. Best-effort: the answer and its history row already landed.
     try {
@@ -399,10 +417,13 @@ export async function answerExpectedOutput(
     }
     // Answering an ask on an undecided agent draft takes the draft on — the
     // ONE acceptance door, after commit, idempotent (accept-on-engagement.ts).
-    await acceptDraftOnEngagement({
-      sessionId: result.session.id,
-      userId: params.userId,
-    });
+    // Never on a refusal: saying no to its ask is not taking the draft on.
+    if (!declined) {
+      await acceptDraftOnEngagement({
+        sessionId: result.session.id,
+        userId: params.userId,
+      });
+    }
     // A pause may wait on this answer (`until.moves: answer:<session>/<slot>`):
     // it resumes now, not at the hourly sweep (plan 07f8a997 W1).
     await sendWaitHoldCheck(
@@ -413,6 +434,9 @@ export async function answerExpectedOutput(
     // opened for one, updated) as the person's own act. After commit, never
     // inside it: a failed filing must not lose the answer, and it is
     // returned as `failed`, never swallowed (`file-answer-decision.ts`).
+    // A refusal decides nothing: no decision is filed or updated (a decision
+    // the ask was opened for stays proposed).
+    if (declined) return result;
     const decision = await fileAnswerDecision({
       userId: params.userId,
       slot: result.before,
