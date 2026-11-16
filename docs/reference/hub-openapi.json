@@ -20306,7 +20306,19 @@
                                 "type": { "type": "string" },
                                 "required": { "type": "boolean" },
                                 "description": { "type": "string" },
-                                "secret": { "type": "boolean" }
+                                "secret": { "type": "boolean" },
+                                "obtain": {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": { "type": "string" },
+                                    "steps": {
+                                      "type": "array",
+                                      "items": { "type": "string" }
+                                    }
+                                  },
+                                  "required": ["steps"],
+                                  "description": "How a person gets this value: numbered steps (at most 7) and the https page they start on, from the capability manifest."
+                                }
                               },
                               "required": ["name"]
                             }
