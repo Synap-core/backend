@@ -560,6 +560,28 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "runner.needs_permission": "Attend votre autorisation",
   "runner.needs_answer": "Attend votre réponse",
   "runner.ended": "Terminé",
+  // ── Wait kinds: `waitKind.<kind>` (what a "Waiting on" chip names) ──
+  "waitKind.answer": "Votre réponse",
+  "waitKind.approval": "Votre approbation",
+  "waitKind.send": "À envoyer",
+  "waitKind.try_it": "À essayer",
+  "waitKind.access": "Accès",
+  "waitKind.decide": "Votre décision",
+  "waitKind.their_reply": "Leur réponse",
+  "waitKind.their_document": "Leur document",
+  "waitKind.signature": "Signature",
+  "waitKind.payment": "Paiement",
+  "waitKind.vendor": "Un tiers",
+  "waitKind.agent_work": "Agent au travail",
+  "waitKind.agent_stopped": "Agent arrêté",
+  "waitKind.ci": "CI",
+  "waitKind.devbox_job": "Tests en cours",
+  "waitKind.merge_queue": "File de fusion",
+  "waitKind.red_main": "Main en échec",
+  "waitKind.deploy": "Déploiement",
+  "waitKind.another_work": "Autre travail",
+  "waitKind.date": "Une date",
+  "waitKind.nobody": "Personne",
   // ── Needs-you counts: `needsYou.count.<kind>` (French counts 0 and 1 as
   // singular; `many` is a whole number of millions: "1000000 de décisions") ──
   "needsYou.count.decision":
