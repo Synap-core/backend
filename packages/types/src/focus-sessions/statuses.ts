@@ -156,6 +156,29 @@ export const UPDATABLE_SESSION_STATUSES = SESSION_STATUSES.filter(
 ) as [Exclude<SessionStatus, "stale">, ...Exclude<SessionStatus, "stale">[]];
 
 /**
+ * A RUN that is LIVE on its subject: every stored status except the terminal
+ * ones and `scheduled` (an appointment has run nothing) — active, paused,
+ * forming, stale. An agent's draft waiting for the person's acceptance is
+ * `active`, so it is live too (founder, 2026-11-16, "one live run per
+ * object" decision 3).
+ *
+ * THE set "one live run per object" counts: the run door answers
+ * `already_running` while a run of the playbook is live on the object
+ * (`playbooks.run`), and the partial unique index
+ * `uniq_focus_sessions_one_live_run` (migration 0427) lists the same
+ * statuses, pinned by `migrations-0427.pglite.test.ts`. A client showing
+ * "Running, open it" reads this list, never its own.
+ *
+ * DERIVED from {@link SESSION_STATUSES}, so a new stored status is live
+ * unless it is terminal or `scheduled`.
+ */
+export const LIVE_RUN_SESSION_STATUSES = SESSION_STATUSES.filter(
+  (s): s is Exclude<SessionStatus, TerminalSessionStatus | "scheduled"> =>
+    !isTerminalSessionStatus(s) && s !== "scheduled"
+);
+export type LiveRunSessionStatus = (typeof LIVE_RUN_SESSION_STATUSES)[number];
+
+/**
  * THE session lifecycle, declared ONCE like a goal's
  * (`TRACK_STATUS_DECLARATION`): each stored status's fixed CATEGORY. Keyed by
  * every status, so a status added to {@link SESSION_STATUSES} and not

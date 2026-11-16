@@ -65,6 +65,14 @@ export interface NewFocusSessionRow {
   expectedOutputs?: readonly unknown[];
   criteria?: readonly unknown[];
   metadata?: Record<string, unknown>;
+  /**
+   * The run holds its object's ONE live slot (0427, `one_live_per_subject`):
+   * only the run door's person run sets it. A second live slot-holder of the
+   * same (playbook, subject, owner) makes this insert throw a unique
+   * violation on `ONE_LIVE_RUN_INDEX`, which the run door turns into
+   * `already_running`. Absent ⇒ false.
+   */
+  oneLivePerSubject?: boolean;
 }
 
 export interface InsertFocusSessionOptions {
@@ -179,11 +187,21 @@ export async function insertFocusSessionRow(
     agentIds: row.agentIds ?? [],
     status: row.status ?? "active",
     criteria: [...(row.criteria ?? [])] as never[],
+    oneLivePerSubject: row.oneLivePerSubject === true,
     // D8: a test-key request's session is a probe (no-op outside that scope).
     metadata: stampProbeMarker(metadata),
   });
   if (options.onConflict === "nothing") {
-    const [kept] = await insert.onConflictDoNothing().returning();
+    // A slot-holding run arbitrates on its id ONLY: an untargeted DO NOTHING
+    // would also swallow the one-live-run conflict (0427) and return null,
+    // which reads as "this id was already written" — a duplicate run reported
+    // as a replay. Targeted, that conflict throws and the run door answers
+    // `already_running`. Other rows keep the untargeted form they always had.
+    const [kept] = await (
+      row.oneLivePerSubject === true
+        ? insert.onConflictDoNothing({ target: focusSessions.id })
+        : insert.onConflictDoNothing()
+    ).returning();
     return kept ?? null;
   }
   const [session] = await insert.returning();
