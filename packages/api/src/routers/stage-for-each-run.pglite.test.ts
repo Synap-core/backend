@@ -463,7 +463,7 @@ describe("entering the step again", () => {
         over: "findingIds",
         as: "area",
         batch: 30,
-      }) as Parameters<typeof startStageForEach>[0]["stage"],
+      }) as unknown as Parameters<typeof startStageForEach>[0]["stage"],
       stageRunId: step.id,
     });
     expect(again).toEqual({ status: "already_started" });
