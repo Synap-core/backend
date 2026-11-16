@@ -3545,6 +3545,201 @@
         },
         "required": ["substrate", "id", "title", "supersededBy"]
       },
+      "FindResult": {
+        "type": "object",
+        "properties": {
+          "intent": { "type": "string" },
+          "lens": {
+            "type": "object",
+            "properties": { "workspaceId": { "type": ["string", "null"] } },
+            "required": ["workspaceId"]
+          },
+          "scoring": { "type": "object", "additionalProperties": {} },
+          "coverage": { "type": "object", "additionalProperties": {} },
+          "capabilities": { "type": "object", "additionalProperties": {} },
+          "intents": { "type": "object", "additionalProperties": {} },
+          "marketplace": { "type": "object", "additionalProperties": {} },
+          "playbooks": { "type": "object", "additionalProperties": {} },
+          "spaces": { "type": "object", "additionalProperties": {} },
+          "noConfidentMatch": { "type": "object", "additionalProperties": {} },
+          "skills": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "automations": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "sessions": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "goals": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "projects": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "views": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "documents": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          }
+        },
+        "required": ["intent", "lens", "scoring", "coverage"]
+      },
+      "FoundObject": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string" },
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "why": { "type": ["string", "null"] },
+          "open": { "type": "string" },
+          "ref": { "type": "string" },
+          "workspaceId": { "type": ["string", "null"] },
+          "score": { "type": "number" },
+          "confidence": { "type": "number" },
+          "match": {
+            "type": "object",
+            "properties": {
+              "terms": { "type": "array", "items": { "type": "string" } },
+              "fields": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["terms", "fields"]
+          },
+          "termCoverage": {
+            "type": "object",
+            "properties": {
+              "hit": { "type": "number" },
+              "of": { "type": "number" }
+            },
+            "required": ["hit", "of"]
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "title",
+          "why",
+          "open",
+          "workspaceId",
+          "score",
+          "confidence",
+          "match",
+          "termCoverage"
+        ]
+      },
       "Command": {
         "type": "object",
         "properties": {
@@ -10475,7 +10670,7 @@
         "tags": ["Entities"],
         "summary": "Type-aware hybrid retrieval (Synap Retrieval Engine)",
         "deprecated": true,
-        "description": "DEPRECATED — prefer POST /knowledge/ask, whose semantic lane calls the exact same retrieve() SRE. Still functional for existing integrations. Infers entity type(s) + property hints from the query, fuses unscoped + type-scoped recall (RRF), and returns ranked entities plus the inferred understanding. Phase 1 of the SRE.",
+        "description": "DEPRECATED — prefer POST /knowledge/search, whose semantic lane calls the exact same retrieve() SRE. Still functional for existing integrations. Infers entity type(s) + property hints from the query, fuses unscoped + type-scoped recall (RRF), and returns ranked entities plus the inferred understanding. Phase 1 of the SRE.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -12292,7 +12487,7 @@
       "get": {
         "tags": ["Search"],
         "summary": "Search a single Typesense collection",
-        "description": "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
+        "description": "DEPRECATED — prefer POST /knowledge/search, which routes across all substrates. Still functional for existing integrations.",
         "deprecated": true,
         "security": [{ "bearerAuth": [] }],
         "parameters": [
@@ -12373,7 +12568,7 @@
       "get": {
         "tags": ["Search"],
         "summary": "Cross-collection Typesense search",
-        "description": "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
+        "description": "DEPRECATED — prefer POST /knowledge/search, which routes across all substrates. Still functional for existing integrations.",
         "deprecated": true,
         "security": [{ "bearerAuth": [] }],
         "parameters": [
@@ -12458,7 +12653,7 @@
       "get": {
         "tags": ["Search"],
         "summary": "Search documents only",
-        "description": "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
+        "description": "DEPRECATED — prefer POST /knowledge/search, which routes across all substrates. Still functional for existing integrations.",
         "deprecated": true,
         "security": [{ "bearerAuth": [] }],
         "parameters": [
@@ -12533,7 +12728,7 @@
       "get": {
         "tags": ["Search"],
         "summary": "PGVector semantic search",
-        "description": "DEPRECATED — prefer POST /knowledge/ask (the SRE already uses pgvector internally as one signal). Disabled on shared pods (returns empty / 503 when VECTOR_SEARCH_ENABLED=false).",
+        "description": "DEPRECATED — prefer POST /knowledge/search (the SRE already uses pgvector internally as one signal). Disabled on shared pods (returns empty / 503 when VECTOR_SEARCH_ENABLED=false).",
         "deprecated": true,
         "security": [{ "bearerAuth": [] }],
         "parameters": [
@@ -25395,7 +25590,7 @@
         "tags": ["Knowledge"],
         "summary": "Full-text search knowledge entries",
         "deprecated": true,
-        "description": "DEPRECATED — prefer POST /knowledge/ask, whose procedural lane calls the exact same searchFullText. Still functional for existing integrations.",
+        "description": "DEPRECATED — prefer POST /knowledge/search, whose procedural lane calls the exact same searchFullText. Still functional for existing integrations.",
         "parameters": [
           {
             "schema": { "type": "string" },
@@ -26100,7 +26295,7 @@
     "/knowledge/ask": {
       "post": {
         "tags": ["Knowledge"],
-        "summary": "DEPRECATED alias of /knowledge/search — raw retrieval door",
+        "summary": "DEPRECATED alias of POST /knowledge/search — raw retrieval door",
         "deprecated": true,
         "description": "DEPRECATED alias of POST /knowledge/search; retained for back-compat. Runs the exact same retrieval handler. Prefer POST /knowledge/search (retrieval) or POST /knowledge/answer (synthesized).",
         "requestBody": {
@@ -26579,6 +26774,78 @@
           },
           "500": {
             "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/find": {
+      "get": {
+        "tags": ["Knowledge"],
+        "summary": "Find what is there for this: verbs, playbooks, spaces, objects",
+        "description": "The find door (the same service as MCP synap_find and tRPC knowledge.find): runnable capabilities, intents, playbooks, spaces, and the objects that can be opened (skills and rules, automations, sessions, goals, projects, views, documents), each object with its `open` link. A catalog absent from the answer was not searched; `matches: []` was searched and nothing fit; `error` means that catalog's read failed. To recall CONTENT (entities, runbooks, captures) use POST /knowledge/search. Requires hub-protocol.read.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "minLength": 1, "maxLength": 2000 },
+            "required": true,
+            "name": "query",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Comma-separated, some of: capabilities, intents, playbooks, spaces, skills, automations, sessions, goals, projects, views, documents. Omit for all."
+            },
+            "required": false,
+            "description": "Comma-separated, some of: capabilities, intents, playbooks, spaces, skills, automations, sessions, goals, projects, views, documents. Omit for all.",
+            "name": "catalogs",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 25 },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What was found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FindResult" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope, outside the grant, or a space you cannot read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "The find failed",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
