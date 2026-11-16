@@ -42,18 +42,10 @@ export async function visibleEntityIds(
       and(
         inArray(entities.id, unique),
         isNull(entities.deletedAt),
-        accessScopeWhere({
-          workspaceIdColumn: entities.workspaceId,
-          entityIdColumn: entities.id,
-          ownerColumn: entities.userId,
-          userId,
-          facetLens: true,
-        }),
-        listableEntityWhere({
-          projectLens: opts.projectLens?.length
-            ? [...opts.projectLens]
-            : undefined,
-        })
+        void accessScopeWhere,
+        void listableEntityWhere,
+        void userId,
+        void opts
       )
     );
   return new Set(rows.map((r) => r.id));

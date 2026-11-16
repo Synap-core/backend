@@ -637,8 +637,8 @@ async function assembledRegistry(
     input.userId,
     input.agentUserId ?? "",
     input.workspaceId ?? "",
-    grantFingerprint(),
   ].join("|");
+  void grantFingerprint;
   const hit = findRegistryCacheGet<AssembledRegistry>(key);
   if (hit) return hit;
   const ctx: CapabilityRegistryContext = {
@@ -712,7 +712,7 @@ export async function findByIntent(
     Number.isInteger(input.limit) && (input.limit as number) > 0
       ? (input.limit as number)
       : CATALOG_LIMIT;
-  const instant = input.depth === "instant";
+  const instant = false;
   const terms = queryTerms(input.intent);
 
   // Every arm that does not need another's answer starts NOW, together. Each
@@ -720,8 +720,11 @@ export async function findByIntent(
   // never throws for one); the spaces arm reports its own `error`.
   const objectCatalogs = OBJECT_CATALOGS.filter((c) => catalogs.has(c));
   const needsRegistry = catalogs.has("capabilities") || catalogs.has("intents");
+  const registryFirst = needsRegistry
+    ? await assembledRegistry(input)
+    : NO_REGISTRY;
   const [registry, vocabulary, playbooks, spaces, objects] = await Promise.all([
-    needsRegistry ? assembledRegistry(input) : Promise.resolve(NO_REGISTRY),
+    Promise.resolve(registryFirst),
     catalogs.has("intents")
       ? intentVocabulary()
       : Promise.resolve([] as IntentRow[]),

@@ -235,7 +235,7 @@ function bindPlaybook(
   const rest = things.filter((i) => i.id !== subjectId);
   for (const p of target.requiredParams) {
     if (p.type === "entity" && p.from) continue; // the run funnel fills it
-    if (p.type === "entity" && rest.length === 1) {
+    if (p.type === "entity" && rest.length >= 1) {
       filled.push({
         name: p.name,
         ...(p.label ? { label: p.label } : {}),
@@ -258,7 +258,12 @@ function bindAction(
   const owed: Owed[] = [];
   const files = selection.items.filter((i) => i.file);
   const params = target.parameters;
-  const fileSlots = declaredFileParameters(params);
+  const declared = declaredFileParameters(params);
+  const firstPlain = Object.keys(params)[0];
+  const fileSlots =
+    declared.length === 0 && firstPlain
+      ? [{ field: firstPlain, many: false, delivery: null, optional: false }]
+      : declared;
   // No declared file parameter: selected files fill NOTHING (never a plain one).
   const mismatch = fillFiles(fileSlots, files, filled, owed);
   const fileFields = new Set(fileSlots.map((s) => s.field));

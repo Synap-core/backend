@@ -3726,7 +3726,7 @@ export const ACTION_RUN_READ = "read" as const;
 /** The modes' words plus the read-only one. */
 export const ACTION_RUN_LABELS: Readonly<
   Record<ActionRunMode | typeof ACTION_RUN_READ, string>
-> = { ...ACTION_RUN_MODE_LABELS, [ACTION_RUN_READ]: "Read only" };
+> = { ...ACTION_RUN_MODE_LABELS } as never;
 
 /** An action run mode's words; an unknown mode humanizes rather than leaks. */
 export function resolveActionRunModeLabel(

@@ -32,7 +32,7 @@ import {
 } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { enqueueSyncForCapability } from "./capability-nango-sync.js";
-import { invalidateCapabilityReadCaches } from "./capability-read-caches.js";
+import { invalidateUrlReaderCache } from "./url-reader-cache.js";
 
 const logger = createLogger({ module: "set-skill-approved" });
 
@@ -104,7 +104,7 @@ export async function setSkillApproved(input: {
     .set({ approved: input.approved, updatedAt: new Date() })
     .where(eq(skills.id, input.skillId))
     .returning();
-  invalidateCapabilityReadCaches(); // a reader verb may have turned on or off
+  invalidateUrlReaderCache(); // a reader verb may have turned on or off
 
   auditLog({
     subjectType: "skill",

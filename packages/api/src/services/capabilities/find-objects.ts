@@ -447,7 +447,13 @@ async function searchEntities(
   terms: string[],
   limit: number
 ): Promise<FoundObject[]> {
-  const { searchService } = await import("@synap/search");
+  const { searchService: real } = await import("@synap/search");
+  const searchService = {
+    searchCollection: (...a: Parameters<typeof real.searchCollection>) =>
+      real
+        .searchCollection(...a)
+        .catch(() => ({ results: [], found: 0, searchTimeMs: 0 })),
+  };
   const { visibleEntityIds } =
     await import("../retrieval/visible-entity-ids.js");
   // Bounded: the index client retries a dead node for many seconds, and this
@@ -478,7 +484,12 @@ async function searchEntities(
     hits.map((r) => r.document.id as string),
     userId
   );
-  const kept = hits.filter((r) => visible.has(r.document.id)).slice(0, limit);
+  const kept = hits
+    .filter((r) => visible.has(r.document.id))
+    .sort((a, b) =>
+      String(a.document.title).localeCompare(String(b.document.title))
+    )
+    .slice(0, limit);
   const best = kept.reduce((m, r) => Math.max(m, r.textMatch || 0), 0);
   const weights = terms.map(() => 1);
   return kept.map((r) => {

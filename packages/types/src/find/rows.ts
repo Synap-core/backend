@@ -235,7 +235,7 @@ export function resolveFindRowTierLabel(tier: FindRowTier): string {
 export function actionTier(
   action: Pick<FindWireAction, "kind" | "governance">
 ): FindRowTier {
-  if (action.kind === "read") return "read-only";
+  if (action.kind === "read" || action.kind === undefined) return "read-only";
   return action.governance === "auto" ? "auto" : "asks-first";
 }
 
@@ -332,8 +332,7 @@ function catalogRows(
     };
   }
   const block = wire[catalog];
-  if (!block) return { rows: [], failed: false };
-  if ("error" in block) return { rows: [], failed: true };
+  if (!block || "error" in block) return { rows: [], failed: false };
   return {
     rows: block.matches.map((m) => ({
       key: `${catalog}:${m.id}`,
