@@ -635,6 +635,20 @@ describe("needs of kind `need` (0426): the space's binding, one provider", () =>
     ]);
   });
 
+  it("each entry is named, never its raw token, whatever its state", () => {
+    // Unread bindings (every entry unknown) still name every entry.
+    const covered = coverNeeds(declaredNeeds(PB as never), caps, "ws-1", null);
+    expect(
+      covered
+        .filter((n) => n.kind === "need")
+        .map((n) => [n.slug, n.label, n.intentLabel])
+    ).toEqual([
+      ["need:code-host/fetch_record", "Code host", "Fetch a record"],
+      ["need:payments", "Payments", null],
+      ["need:deploy-target", "Deploy target", null],
+    ]);
+  });
+
   it("filled with its provider, empty when unfilled, unknown when the bindings are unread", () => {
     const covered = coverNeeds(
       declaredNeeds(PB as never),
@@ -649,12 +663,6 @@ describe("needs of kind `need` (0426): the space's binding, one provider", () =>
     ]);
     expect(covered[0]!.providers).toEqual([
       { capabilityId: "cap-gh", capabilityName: "GitHub", verbId: null },
-    ]);
-    // Named, never the raw token: the need's name and its intent's name.
-    expect(covered.map((n) => [n.slug, n.label, n.intentLabel])).toEqual([
-      ["need:code-host/fetch_record", "Code host", "Fetch a record"],
-      ["need:payments", "Payments", null],
-      ["need:deploy-target", "Deploy target", null],
     ]);
     expect(
       coverNeeds(declaredNeeds(PB as never), caps, "ws-1", null).every(
