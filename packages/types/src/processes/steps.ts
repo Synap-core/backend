@@ -1,33 +1,11 @@
 /**
- * WHO moves a process step on, for its mark (Process wave plan 0adf8352 W4:
- * the step strip colours each step by who runs it — AI, you, automatic). ONE
- * classifier the desktop and pod admin both read ("no surface forks a rule").
- *
- * Read from BOTH the step's entry gate and its runner (`PlaybookStage.gate`,
- * `PlaybookStage.runner`, spec 7111934d §2.1), in this order:
- *   1. a `human` gate → `person`: the step waits for a person to let it in;
- *   2. otherwise the runner decides → `ai`: every runner shape names an
- *      AGENT — `"self"` (the run's own agent), `"synap_ai"` / `{ synapAi }`
- *      (the pod's AI), `{ agentId }`,
- *      `{ role }` (any of the person's agents holding that role) and
- *      `{ engine }` (any of the person's agents of that engine, e.g.
- *      `claude-code`: an agent runtime, not a machine step);
- *   3. no runner, no gate → `ai`: the run's own agent works it (`"self"` is
- *      the declared default).
- *
- * A `check` gate is NOT a runner kind: it holds the move INTO the step until
- * the criteria of the step being left pass (`checkGateFailing(fromStage)`,
- * `stage-gate.ts`); once in, the step is worked by its runner, so it is drawn
- * by its runner. Surfaces render the gate itself from `step.gate` through
- * `trackStepGateLabel` (`@synap-core/types/units`). `automatic` stays in PROCESS_STEP_RUNNER_KINDS but
- * is UNREACHABLE today: nothing declares "an automation moves this step" yet
- * (Process wave W2b); when that declaration exists, it is read here.
- *
- * TOTAL over every stored shape: a gate given as a string (`"human"`, the read
- * contract) or as the stored object (`{ kind: "human" }`), a runner given as
- * one choice or as an ordered fallback list (the FIRST choice decides), and an
- * unknown runner shape (read as an agent, never thrown on). `check`, `awaits`
- * and any other gate value fall through to the runner. Pure, dependency-free.
+ * WHO moves a process step on, for its mark (Process wave plan 0adf8352 W4).
+ * ONE classifier the desktop and pod admin both read ("no surface forks a
+ * rule"). The rule: a `human` gate (the string or the stored `{ kind }`) →
+ * `person`; every other step → `ai`, whatever its runner or other gate (every
+ * runner shape names an agent, and a `check` gate only holds the move into the
+ * step: `trackStepGateLabel` names it). `automatic` is declared and
+ * unreachable until W2b declares "an automation moves this step". Pure.
  */
 
 export const PROCESS_STEP_RUNNER_KINDS = ["ai", "person", "automatic"] as const;
@@ -55,7 +33,6 @@ export function classifyStepRunner(
 ): ProcessStepRunnerKind {
   const gate = gateKind(step.gate);
   if (gate === "human") return "person";
-  // A `check` gate is a mark, not a runner (see the header). Every runner choice is an agent (see the header); the first choice of a
-  // fallback list is the one that runs when it can, and none is a machine step.
+  // Any other gate is a mark, not a runner; every runner choice is an agent.
   return "ai";
 }

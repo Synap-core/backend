@@ -60,7 +60,7 @@ describe("deriveProcessHealth", () => {
     expect(health).toMatchObject({
       state: "waiting-on-you",
       runId: "waiting",
-      label: "Waiting on you",
+      reason: "waiting_on_you",
     });
   });
 
@@ -98,7 +98,7 @@ describe("deriveProcessHealth", () => {
       })
     ).toMatchObject({
       state: "running",
-      label: "Running · previous run failed",
+      reason: "running_after_failure",
       runId: "running",
     });
   });
@@ -156,7 +156,8 @@ describe("deriveProcessHealth", () => {
         })
       ).toMatchObject({
         state: "unknown",
-        label: "Latest status unresolved",
+        reason: "latest_unresolved",
+        latestStatus: status,
         runId: status,
       });
     }

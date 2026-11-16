@@ -153,6 +153,50 @@ export const vocabularySentencesEn = {
   // humanized token, counted with English plural rules.
   "vocabulary.needsYou.count.uncurated":
     "{n, plural, one {# {noun}} other {# {nouns}}}",
+  // `resolveProcessHealthLabel` / `resolveProcessHealthReason`: a process
+  // health's words, keyed by its reason code (`PROCESS_HEALTH_REASONS`,
+  // `@synap-core/types/processes`). `waiting_on_you`'s label is the status
+  // label door's (`status.waiting_on_you`), so it has no row here.
+  "vocabulary.processHealth.config_invalid.label": "Configuration error",
+  "vocabulary.processHealth.config_invalid.reason":
+    "The saved definition is invalid or cannot be activated.",
+  "vocabulary.processHealth.running.label": "Running",
+  "vocabulary.processHealth.running.reason":
+    "At least one execution is currently in progress.",
+  "vocabulary.processHealth.running_after_failure.label":
+    "Running · previous run failed",
+  "vocabulary.processHealth.running_after_failure.reason":
+    "An execution is in progress after the previous known outcome failed.",
+  "vocabulary.processHealth.waiting_on_you.reason":
+    "The latest run is paused until you answer what its session asked of you.",
+  "vocabulary.processHealth.blocked_by_policy.label": "Blocked by policy",
+  "vocabulary.processHealth.blocked_by_policy.reason":
+    "Governance refused the latest run’s effect — it needs your review.",
+  "vocabulary.processHealth.latest_failed.label": "Latest run failed",
+  "vocabulary.processHealth.latest_failed.reason":
+    "No newer successful outcome resolves the latest failure.",
+  "vocabulary.processHealth.draft.label": "Draft",
+  "vocabulary.processHealth.draft.reason":
+    "The definition still needs to be completed or activated.",
+  "vocabulary.processHealth.paused.label": "Paused",
+  "vocabulary.processHealth.paused.reason":
+    "The definition is paused and will not start new runs.",
+  "vocabulary.processHealth.archived.label": "Archived",
+  "vocabulary.processHealth.archived.reason":
+    "The definition is archived and will not start new runs.",
+  "vocabulary.processHealth.healthy.label": "Healthy",
+  "vocabulary.processHealth.healthy.reason":
+    "The latest known outcome completed without failure.",
+  "vocabulary.processHealth.latest_unresolved.label":
+    "Latest status unresolved",
+  "vocabulary.processHealth.latest_unresolved.reason":
+    "The latest execution is {status}; Synap cannot classify it as healthy or failed yet.",
+  "vocabulary.processHealth.never_run.label": "Never run",
+  "vocabulary.processHealth.never_run.reason":
+    "This saved definition has no executions yet.",
+  "vocabulary.processHealth.not_enough_activity.label": "Status unknown",
+  "vocabulary.processHealth.not_enough_activity.reason":
+    "There is not enough loaded activity to determine current health.",
 } as const;
 
 export type VocabularySentencesEn = typeof vocabularySentencesEn;

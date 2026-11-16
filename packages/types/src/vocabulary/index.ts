@@ -58,6 +58,10 @@ import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
 import type { ProcessStepRunnerKind } from "../processes/steps.js";
+import type {
+  ProcessHealth,
+  ProcessHealthReason,
+} from "../processes/health.js";
 import type { SessionVerdict } from "../focus-sessions/verdict.js";
 import type { RunnerState } from "../units/runner-state.js";
 import type {
@@ -2626,6 +2630,76 @@ export function resolveStepRunnerLabel(
   return (
     translatedWord(`stepRunner.${key}`, catalogLocaleOf(opts?.locale)) ??
     STEP_RUNNER_KIND_LABELS[key as keyof StepRunnerKindLabelRows]
+  );
+}
+
+/**
+ * A process health's LABEL (its pill / mark text), from its reason code, in
+ * `opts.locale` (else the ambient catalog locale). `waiting_on_you` reads the
+ * status label door (`resolveStatusLabel("waiting_on_you")`). An unknown code
+ * (a newer pod) humanizes, never leaks.
+ */
+export function resolveProcessHealthLabel(
+  health: Pick<ProcessHealth, "reason">,
+  opts?: { locale?: Locale }
+): string {
+  const locale = catalogLocaleOf(opts?.locale);
+  if (health.reason === "waiting_on_you") {
+    return resolveStatusLabel("waiting_on_you", locale);
+  }
+  if (!isProcessHealthReason(health.reason)) {
+    return humanizeToken(health.reason);
+  }
+  return sentences(locale)(
+    `vocabulary.processHealth.${health.reason}.label` as ProcessHealthLabelKey
+  );
+}
+
+/**
+ * A process health's REASON sentence (the why under the label), from its code
+ * and, for `latest_unresolved`, the status it names (through
+ * `resolveStatusLabel`). An unknown code humanizes.
+ */
+export function resolveProcessHealthReason(
+  health: Pick<ProcessHealth, "reason" | "latestStatus">,
+  opts?: { locale?: Locale }
+): string {
+  const locale = catalogLocaleOf(opts?.locale);
+  if (!isProcessHealthReason(health.reason)) {
+    return humanizeToken(health.reason);
+  }
+  const t = sentences(locale);
+  if (health.reason === "latest_unresolved") {
+    return t("vocabulary.processHealth.latest_unresolved.reason", {
+      status: resolveStatusLabel(health.latestStatus ?? "", locale),
+    });
+  }
+  return t(
+    `vocabulary.processHealth.${health.reason}.reason` as ProcessHealthPlainReasonKey
+  );
+}
+
+type ProcessHealthLabelKey = `vocabulary.processHealth.${Exclude<
+  ProcessHealthReason,
+  "waiting_on_you"
+>}.label`;
+type ProcessHealthPlainReasonKey = `vocabulary.processHealth.${Exclude<
+  ProcessHealthReason,
+  "latest_unresolved"
+>}.reason`;
+// COVERAGE FLOOR: a reason code without its words does not build.
+type _ProcessHealthWordsCovered = [
+  ProcessHealthLabelKey | ProcessHealthPlainReasonKey,
+] extends [keyof VocabularySentencesEn]
+  ? true
+  : never;
+const _processHealthWordsCovered: _ProcessHealthWordsCovered = true;
+void _processHealthWordsCovered;
+
+function isProcessHealthReason(code: string): code is ProcessHealthReason {
+  return Object.hasOwn(
+    vocabularySentencesEn,
+    `vocabulary.processHealth.${code}.reason`
   );
 }
 

@@ -12,14 +12,16 @@
  * pod's own `services/runs` rows both fit it. A date may arrive as a `Date`
  * (in process) or an ISO string (on the wire); both read the same.
  *
- * Only two changes from the browser copy, both to make a leaf of it:
+ * Changes from the browser copy, to make a leaf of it:
  *   - `isWaitingOnYou(status)` is read through the ONE unit-state derivation it
  *     already wrapped (`resolveRunUnitState(status).state === "needs_you"`,
  *     `@synap-core/web/run-detail`'s own body);
  *   - `kind` is optional: a Process is a playbook seen whole, and the rule
- *     never branched on it.
+ *     never branched on it;
+ *   - the words left the wire: a health carries a `reason` CODE (and, for
+ *     `latest_unresolved`, the `latestStatus` it names), and a surface reads
+ *     the label and the sentence through the vocabulary door.
  */
-import { resolveStatusLabel } from "../vocabulary/index.js";
 import { resolveRunUnitState, type UnitStateInput } from "../units/state.js";
 
 /**
@@ -49,10 +51,41 @@ export const PROCESS_ATTENTION_STATES: readonly ProcessHealthState[] = [
   "waiting-on-you",
 ];
 
+/**
+ * WHY a process has its health, as a structured code: the wire carries the
+ * code, never words. A person reads it through the vocabulary door
+ * (`resolveProcessHealthLabel` / `resolveProcessHealthReason`,
+ * `@synap-core/types/vocabulary`, keys `vocabulary.processHealth.<code>.*`, en
+ * + fr), so no surface hand-writes a health sentence. A value, so a new code
+ * cannot exist without joining this list (the vocabulary's coverage floor
+ * then refuses to build until it has words).
+ */
+export const PROCESS_HEALTH_REASONS = [
+  "config_invalid",
+  "running",
+  "running_after_failure",
+  "waiting_on_you",
+  "blocked_by_policy",
+  "latest_failed",
+  "draft",
+  "paused",
+  "archived",
+  "healthy",
+  "latest_unresolved",
+  "never_run",
+  "not_enough_activity",
+] as const;
+export type ProcessHealthReason = (typeof PROCESS_HEALTH_REASONS)[number];
+
 export interface ProcessHealth {
   state: ProcessHealthState;
-  label: string;
-  reason: string;
+  /** Why: the code a surface resolves to words (see PROCESS_HEALTH_REASONS). */
+  reason: ProcessHealthReason;
+  /**
+   * `latest_unresolved` only: the latest run's status the reason names (a
+   * token; the vocabulary resolves it). Absent otherwise.
+   */
+  latestStatus?: string | null;
   /** Run that explains the state, when the state is activity-derived. */
   runId: string | null;
   /**
@@ -199,8 +232,7 @@ export function deriveProcessHealth(input: ProcessHealthInput): ProcessHealth {
   if (definitionStatus === "error") {
     return {
       state: "config-error",
-      label: "Configuration error",
-      reason: "The saved definition is invalid or cannot be activated.",
+      reason: "config_invalid",
       runId: null,
     };
   }
@@ -217,10 +249,7 @@ export function deriveProcessHealth(input: ProcessHealthInput): ProcessHealth {
     const previousFailed = latestNonRunning?.status === "failed";
     return {
       state: "running",
-      label: previousFailed ? "Running · previous run failed" : "Running",
-      reason: previousFailed
-        ? "An execution is in progress after the previous known outcome failed."
-        : "At least one execution is currently in progress.",
+      reason: previousFailed ? "running_after_failure" : "running",
       runId: running?.id ?? null,
     };
   }
@@ -231,9 +260,7 @@ export function deriveProcessHealth(input: ProcessHealthInput): ProcessHealth {
   if (latest && isWaitingOnYouRun(latest.status)) {
     return {
       state: "waiting-on-you",
-      label: resolveStatusLabel("waiting_on_you"),
-      reason:
-        "The latest run is paused until you answer what its session asked of you.",
+      reason: "waiting_on_you",
       runId: latest.id,
       sessionId: sessionIdOfRunMark(recentRuns, latest.id),
     };
@@ -246,10 +273,7 @@ export function deriveProcessHealth(input: ProcessHealthInput): ProcessHealth {
     const isBlocked = latest.status === "blocked_by_policy";
     return {
       state: isBlocked ? "blocked-by-policy" : "unresolved-failure",
-      label: isBlocked ? "Blocked by policy" : "Latest run failed",
-      reason: isBlocked
-        ? "Governance refused the latest run’s effect — it needs your review."
-        : "No newer successful outcome resolves the latest failure.",
+      reason: isBlocked ? "blocked_by_policy" : "latest_failed",
       runId: latest.id,
     };
   }
@@ -257,8 +281,7 @@ export function deriveProcessHealth(input: ProcessHealthInput): ProcessHealth {
   if (definitionStatus === "draft") {
     return {
       state: "draft",
-      label: "Draft",
-      reason: "The definition still needs to be completed or activated.",
+      reason: "draft",
       runId: null,
     };
   }
@@ -266,11 +289,7 @@ export function deriveProcessHealth(input: ProcessHealthInput): ProcessHealth {
   if (definitionStatus === "paused" || definitionStatus === "archived") {
     return {
       state: "paused",
-      label: definitionStatus === "archived" ? "Archived" : "Paused",
-      reason:
-        definitionStatus === "archived"
-          ? "The definition is archived and will not start new runs."
-          : "The definition is paused and will not start new runs.",
+      reason: definitionStatus === "archived" ? "archived" : "paused",
       runId: null,
     };
   }
@@ -278,8 +297,7 @@ export function deriveProcessHealth(input: ProcessHealthInput): ProcessHealth {
   if (latest && successfulOutcome(latest.status)) {
     return {
       state: "healthy",
-      label: "Healthy",
-      reason: "The latest known outcome completed without failure.",
+      reason: "healthy",
       runId: latest.id,
     };
   }
@@ -287,8 +305,8 @@ export function deriveProcessHealth(input: ProcessHealthInput): ProcessHealth {
   if (latest) {
     return {
       state: "unknown",
-      label: "Latest status unresolved",
-      reason: `The latest execution is ${latest.status}; Synap cannot classify it as healthy or failed yet.`,
+      reason: "latest_unresolved",
+      latestStatus: latest.status,
       runId: latest.id,
     };
   }
@@ -296,16 +314,14 @@ export function deriveProcessHealth(input: ProcessHealthInput): ProcessHealth {
   if (exactRunCount === 0) {
     return {
       state: "never-run",
-      label: "Never run",
-      reason: "This saved definition has no executions yet.",
+      reason: "never_run",
       runId: null,
     };
   }
 
   return {
     state: "unknown",
-    label: "Status unknown",
-    reason: "There is not enough loaded activity to determine current health.",
+    reason: "not_enough_activity",
     runId: runGroup?.latestRunId ?? null,
   };
 }

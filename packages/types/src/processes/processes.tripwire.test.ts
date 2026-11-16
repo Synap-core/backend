@@ -3,7 +3,8 @@
  *
  *  1. Every PROCESS_HEALTH_STATES member is REACHABLE from deriveProcessHealth
  *     (a state no input produces is a dead word a surface would still design
- *     for), and the rule produces no state outside the list.
+ *     for), and the rule produces no state outside the list. The same holds
+ *     for every PROCESS_HEALTH_REASONS code (each one has its words).
  *  2. Every section of a ProcessRead is either a block (PROCESS_BLOCKS) or one
  *     of its three headers (playbook, health, unavailable): a new section must
  *     join the block order or every surface would place it on its own. The
@@ -19,6 +20,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   PROCESS_BLOCKS,
+  PROCESS_HEALTH_REASONS,
   PROCESS_HEALTH_STATES,
   PROCESS_READ_PARTS,
   countProcessNeeds,
@@ -68,6 +70,12 @@ const INPUTS: ProcessHealthInput[] = [
     runGroup: null,
     recentRuns: [mark("a", "running", 1)],
     exactRunCount: 1,
+  },
+  {
+    definitionStatus: "active",
+    runGroup: null,
+    recentRuns: [mark("b", "running", 2), mark("a", "failed", 1)],
+    exactRunCount: 2,
   },
   {
     definitionStatus: "draft",
@@ -148,6 +156,18 @@ describe("processes leaf", () => {
   it("every health state is reachable, and none is produced outside the list", () => {
     const produced = new Set(INPUTS.map((i) => deriveProcessHealth(i).state));
     expect([...produced].sort()).toEqual([...PROCESS_HEALTH_STATES].sort());
+  });
+
+  it("every health reason code is reachable, and none is produced outside the list", () => {
+    const produced = new Set(INPUTS.map((i) => deriveProcessHealth(i).reason));
+    expect([...produced].sort()).toEqual([...PROCESS_HEALTH_REASONS].sort());
+    // `latestStatus` rides only with the reason that names it.
+    for (const input of INPUTS) {
+      const h = deriveProcessHealth(input);
+      expect(h.latestStatus !== undefined, h.reason).toBe(
+        h.reason === "latest_unresolved"
+      );
+    }
   });
 
   it("every ProcessRead section is a block or a header", () => {

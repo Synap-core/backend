@@ -251,7 +251,10 @@ export interface ProcessDefinition {
   /** session | project. */
   scope: string;
   subjectProfileSlug: string | null;
-  /** The version the person pre-approved agents to run without asking; null = none. */
+  /**
+   * The version the person pre-approved agents to run without asking; null =
+   * none, or unread (then `unavailable` names `preApproval`).
+   */
   preApprovedVersion: number | null;
   installedFrom: ProcessInstalledFrom | null;
   /** true / false when compared with the catalog; null when not compared. */
@@ -269,6 +272,7 @@ export const PROCESS_READ_PARTS = [
   "runs",
   "health",
   "updateAvailable",
+  "preApproval",
 ] as const;
 export type ProcessReadPart = (typeof PROCESS_READ_PARTS)[number];
 
@@ -282,7 +286,8 @@ export interface ProcessSummary {
   health: ProcessHealth;
   counts: ProcessRunCounts;
   stepCount: number;
-  automationCount: number;
+  /** Its automations; null when the `when` read failed (never a 0 for unmeasured). */
+  automationCount: number | null;
   needs: ProcessNeedSummary[];
   /** Parts that could not be read (their fields are null / unknown). */
   unavailable: ProcessReadPart[];
