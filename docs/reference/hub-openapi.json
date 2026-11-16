@@ -8579,9 +8579,18 @@
                                 "properties": {
                                   "bindingId": { "type": "string" },
                                   "setBy": { "type": "string" },
-                                  "updatedAt": { "type": "string" }
+                                  "updatedAt": { "type": "string" },
+                                  "origin": {
+                                    "type": "string",
+                                    "enum": ["person", "automatic"]
+                                  }
                                 },
-                                "required": ["bindingId", "setBy", "updatedAt"]
+                                "required": [
+                                  "bindingId",
+                                  "setBy",
+                                  "updatedAt",
+                                  "origin"
+                                ]
                               },
                               "candidates": {
                                 "type": "array",

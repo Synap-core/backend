@@ -22247,6 +22247,13 @@ export type SpaceNeedBindResult = {
 	need: string;
 	providerCapabilityId: string | null;
 	status: "unchanged";
+}
+/** A person chose the provider the pod had bound automatically: now theirs. */
+ | {
+	bindingId: string;
+	need: string;
+	providerCapabilityId: string;
+	status: "confirmed";
 };
 /** One declared need of a space and its state. */
 export interface SpaceNeedCoverage {
@@ -22264,9 +22271,15 @@ export interface SpaceNeedCoverage {
 	 * stands in (an implicit binding: the run uses it; the reconcile records it).
 	 */
 	implicit: boolean;
-	/** When filled by a row: who set it, and when. Null for an implicit binding. */
+	/**
+	 * When filled by a row: who set it, when, and HOW it was chosen (`person`,
+	 * or `automatic`: the pod bound the space's one filling provider; it stays
+	 * bound when a second provider is installed, and `candidates` then lists
+	 * both so a surface can offer the choice). Null for an implicit binding.
+	 */
 	binding: {
 		bindingId: string;
+		origin: "automatic" | "person";
 		setBy: string;
 		updatedAt: Date;
 	} | null;
