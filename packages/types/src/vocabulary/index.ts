@@ -57,10 +57,7 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
-import type {
-  ProcessGateKind,
-  ProcessStepRunnerKind,
-} from "../processes/steps.js";
+import type { ProcessStepRunnerKind } from "../processes/steps.js";
 import type { SessionVerdict } from "../focus-sessions/verdict.js";
 import type { RunnerState } from "../units/runner-state.js";
 import type {
@@ -2494,37 +2491,10 @@ export const WAIT_KIND_LABELS = {
 export type WaitKindLabelRows = typeof WAIT_KIND_LABELS;
 
 /**
- * Each step gate kind's words (`PROCESS_GATE_KINDS`,
- * `@synap-core/types/processes`): the SHORT form is a step's gate badge on the
- * process page, the step strip and pod admin; the LONG form says it in a
- * sentence (a tooltip, a detail). Only `human` is an entry gate: `check` judges
- * the step being left, `awaits` waits for an approval before it moves on.
- * Keyed by EVERY kind: a kind added without its words stops the build.
- */
-export const GATE_KIND_LABELS = {
-  human: "You approve",
-  check: "Checked",
-  awaits: "Waits for approval",
-} as const satisfies Readonly<Record<ProcessGateKind, string>>;
-
-/** The gate kind rows, exactly typed: the keys of the `gateKind.*` catalog. */
-export type GateKindLabelRows = typeof GATE_KIND_LABELS;
-
-/** Each gate kind's LONG form (`gateKind.<kind>.long`); see GATE_KIND_LABELS. */
-export const GATE_KIND_LONG_LABELS = {
-  human: "You approve before it starts",
-  check: "Checked before it moves on",
-  awaits: "Waits for an approval before it moves on",
-} as const satisfies Readonly<Record<ProcessGateKind, string>>;
-
-/** The long gate rows, exactly typed: the keys of `gateKind.<kind>.long`. */
-export type GateKindLongLabelRows = typeof GATE_KIND_LONG_LABELS;
-
-/**
  * Who moves a process step on, in a person's words (`PROCESS_STEP_RUNNER_KINDS`,
  * `classifyStepRunner`, `@synap-core/types/processes`): the step strip's and
- * pod admin's runner mark. It never repeats the gate badge (a `human` gate is
- * "You approve"; its step's runner is "You"). `automatic` is declared and
+ * pod admin's runner mark, beside the gate's words (`trackStepGateLabel`,
+ * `@synap-core/types/units`), which it never repeats. `automatic` is declared and
  * unreachable until W2b declares "an automation moves this step". Keyed by
  * EVERY kind.
  */
@@ -2639,37 +2609,6 @@ export function resolveWaitKindLabel(
     translatedWord(`waitKind.${key}`, catalogLocaleOf(opts?.locale)) ??
     WAIT_KIND_LABELS[key as keyof WaitKindLabelRows]
   );
-}
-
-/**
- * The words for a step gate kind (`human` | `check` | `awaits`), in
- * `opts.locale` (else the ambient catalog locale): the short badge through
- * `gateKind.<kind>`, or with `opts.form: "long"` the sentence through
- * `gateKind.<kind>.long`. Takes the token or a stored `{ kind }` gate; unknown
- * kinds humanize, never leak; no gate is "".
- */
-export function resolveGateKindLabel(
-  gate: string | { kind?: unknown } | null | undefined,
-  opts?: { locale?: Locale; form?: "short" | "long" }
-): string {
-  const v =
-    typeof gate === "string"
-      ? gate
-      : gate && typeof gate.kind === "string"
-        ? gate.kind
-        : "";
-  if (!v) return "";
-  const key = v.trim().toLowerCase();
-  if (!Object.hasOwn(GATE_KIND_LABELS, key)) return humanizeToken(v);
-  const kind = key as keyof GateKindLabelRows;
-  const locale = catalogLocaleOf(opts?.locale);
-  if (opts?.form === "long") {
-    return (
-      translatedWord(`gateKind.${kind}.long`, locale) ??
-      GATE_KIND_LONG_LABELS[kind]
-    );
-  }
-  return translatedWord(`gateKind.${kind}`, locale) ?? GATE_KIND_LABELS[kind];
 }
 
 /**
@@ -4240,8 +4179,6 @@ export const vocabularyEn = buildVocabularyEn({
   needsYouNouns: NEEDS_YOU_ITEM_NOUNS,
   runnerStates: RUNNER_STATE_LABELS,
   waitKinds: WAIT_KIND_LABELS,
-  gateKinds: GATE_KIND_LABELS,
-  gateKindsLong: GATE_KIND_LONG_LABELS,
   stepRunners: STEP_RUNNER_KIND_LABELS,
 });
 

@@ -15,10 +15,11 @@
  *   3. no runner, no gate → `ai`: the run's own agent works it (`"self"` is
  *      the declared default).
  *
- * A `check` gate is NOT a runner kind: it judges the stage being LEFT (someone
- * works the step, then its criteria are checked; `stage-gate.ts`), so a
- * check-gated step is drawn by its runner, and surfaces render the check as its
- * own mark from `step.gate`. `automatic` stays in PROCESS_STEP_RUNNER_KINDS but
+ * A `check` gate is NOT a runner kind: it holds the move INTO the step until
+ * the criteria of the step being left pass (`checkGateFailing(fromStage)`,
+ * `stage-gate.ts`); once in, the step is worked by its runner, so it is drawn
+ * by its runner. Surfaces render the gate itself from `step.gate` through
+ * `trackStepGateLabel` (`@synap-core/types/units`). `automatic` stays in PROCESS_STEP_RUNNER_KINDS but
  * is UNREACHABLE today: nothing declares "an automation moves this step" yet
  * (Process wave W2b); when that declaration exists, it is read here.
  *
@@ -28,16 +29,6 @@
  * unknown runner shape (read as an agent, never thrown on). `check`, `awaits`
  * and any other gate value fall through to the runner. Pure, dependency-free.
  */
-
-/**
- * The kinds of a step's gate (`@synap/playbooks` `StageGate.kind`): `human`
- * (the entry gate: a person approves before the step starts), `check` (judges
- * the step being LEFT: its criteria are checked before it moves on), `awaits`
- * (waits for a proposal's approval, e.g. a deploy, before it moves on). Their
- * words: `resolveGateKindLabel` (`@synap-core/types/vocabulary`).
- */
-export const PROCESS_GATE_KINDS = ["human", "check", "awaits"] as const;
-export type ProcessGateKind = (typeof PROCESS_GATE_KINDS)[number];
 
 export const PROCESS_STEP_RUNNER_KINDS = ["ai", "person", "automatic"] as const;
 export type ProcessStepRunnerKind = (typeof PROCESS_STEP_RUNNER_KINDS)[number];

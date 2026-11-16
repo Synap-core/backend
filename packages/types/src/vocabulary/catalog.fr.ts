@@ -582,13 +582,6 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "waitKind.another_work": "Autre travail",
   "waitKind.date": "Une date",
   "waitKind.nobody": "Personne",
-  // ── Gate kinds: `gateKind.<kind>` (the badge) and `.long` (the sentence) ──
-  "gateKind.human": "Vous approuvez",
-  "gateKind.check": "Vérifié",
-  "gateKind.awaits": "Attend une approbation",
-  "gateKind.human.long": "Vous approuvez avant le démarrage",
-  "gateKind.check.long": "Vérifié avant de passer à la suite",
-  "gateKind.awaits.long": "Attend une approbation avant de passer à la suite",
   // ── Step runners: `stepRunner.<kind>` (who moves a step on) ──
   "stepRunner.person": "Vous",
   "stepRunner.ai": "Un agent",
