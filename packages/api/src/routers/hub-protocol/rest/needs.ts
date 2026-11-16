@@ -49,6 +49,7 @@ const NeedCoverageSchema = zOpenapi.object({
       bindingId: zOpenapi.string(),
       setBy: zOpenapi.string(),
       updatedAt: zOpenapi.string(),
+      origin: zOpenapi.enum(["person", "automatic"]),
     })
     .nullable(),
   candidates: zOpenapi.array(

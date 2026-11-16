@@ -68,8 +68,18 @@ export interface SpaceNeedCoverage {
    * stands in (an implicit binding: the run uses it; the reconcile records it).
    */
   implicit: boolean;
-  /** When filled by a row: who set it, and when. Null for an implicit binding. */
-  binding: { bindingId: string; setBy: string; updatedAt: Date } | null;
+  /**
+   * When filled by a row: who set it, when, and HOW it was chosen (`person`,
+   * or `automatic`: the pod bound the space's one filling provider; it stays
+   * bound when a second provider is installed, and `candidates` then lists
+   * both so a surface can offer the choice). Null for an implicit binding.
+   */
+  binding: {
+    bindingId: string;
+    setBy: string;
+    updatedAt: Date;
+    origin: "person" | "automatic";
+  } | null;
   /** Installed capabilities that declare they fill it (the person's choices). */
   candidates: Array<{ capabilityId: string; name: string }>;
 }
@@ -137,6 +147,7 @@ export function foldNeedCoverage(input: {
               bindingId: binding!.bindingId,
               setBy: binding!.setBy,
               updatedAt: binding!.updatedAt ?? new Date(0),
+              origin: binding!.origin ?? "person",
             }
           : null,
       candidates,
@@ -248,6 +259,7 @@ export async function reconcileSpaceNeeds(input: {
           need: n.need,
           providerCapabilityId: n.provider.capabilityId,
           userId: input.userId,
+          origin: "automatic",
         });
         steps.push({
           need: n.need,

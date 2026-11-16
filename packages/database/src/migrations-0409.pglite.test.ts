@@ -67,7 +67,7 @@ const STUBS = `
 
 const TABLES: Array<{ table: PgTable; columns: number }> = [
   { table: installations, columns: 30 },
-  { table: installationBindings, columns: 21 },
+  { table: installationBindings, columns: 22 },
   { table: hostJobs, columns: 31 },
 ];
 

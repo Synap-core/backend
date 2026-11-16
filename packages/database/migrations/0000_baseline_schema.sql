@@ -6094,6 +6094,19 @@ BEGIN
   END IF;
 END $$;
 
+-- 0426: who chose the provider (person | automatic).
+ALTER TABLE "installation_bindings" ADD COLUMN IF NOT EXISTS "origin" text NOT NULL DEFAULT 'person';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'installation_bindings_origin_check'
+  ) THEN
+    ALTER TABLE "installation_bindings" ADD CONSTRAINT "installation_bindings_origin_check"
+      CHECK ("origin" IN ('person', 'automatic'));
+  END IF;
+END $$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS "uq_installation_bindings_space_need"
   ON "installation_bindings" ("workspace_id", "need_key")
   WHERE "installation_id" IS NULL AND "state" <> 'revoked';

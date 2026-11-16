@@ -57,6 +57,11 @@ export const INSTALLATION_BINDING_STATES = [
 export type InstallationBindingState =
   (typeof INSTALLATION_BINDING_STATES)[number];
 
+/** Who chose a space need binding's provider (0426). */
+export const INSTALLATION_BINDING_ORIGINS = ["person", "automatic"] as const;
+export type InstallationBindingOrigin =
+  (typeof INSTALLATION_BINDING_ORIGINS)[number];
+
 export const installationBindings = pgTable(
   "installation_bindings",
   {
@@ -95,6 +100,14 @@ export const installationBindings = pgTable(
     public: boolean("public").notNull().default(false),
     expiresAt: timestamp("expires_at", { mode: "date", withTimezone: true }),
     checkedAt: timestamp("checked_at", { mode: "date", withTimezone: true }),
+    /**
+     * Who chose the provider of a space's need binding (0426): `person` (a
+     * person or an approved proposal) or `automatic` (the pod bound the
+     * space's one installed filling provider). Installation bindings: `person`.
+     */
+    origin: text("origin", { enum: INSTALLATION_BINDING_ORIGINS })
+      .notNull()
+      .default("person"),
     /** The last health result, in plain words. */
     detail: text("detail"),
     revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),

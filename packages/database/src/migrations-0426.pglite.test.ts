@@ -123,6 +123,26 @@ describe("migration 0426 — needs filled once per space", () => {
     }
   });
 
+  it("a binding says who chose it: person by default, automatic, nothing else", async () => {
+    const ws = randomUUID();
+    const r = await pg.query<{ origin: string }>(
+      `INSERT INTO installation_bindings (user_id, workspace_id, need_key, state)
+       VALUES ('u', $1, 'email', 'live') RETURNING origin`,
+      [ws]
+    );
+    expect(r.rows[0]!.origin).toBe("person");
+    await pg.query(
+      `UPDATE installation_bindings SET origin = 'automatic' WHERE workspace_id = $1`,
+      [ws]
+    );
+    await expect(
+      pg.query(
+        `UPDATE installation_bindings SET origin = 'guess' WHERE workspace_id = $1`,
+        [ws]
+      )
+    ).rejects.toThrow(/installation_bindings_origin_check/);
+  });
+
   it("a deleted provider leaves the need empty, never a dangling id", async () => {
     const cap = randomUUID();
     await pg.query(`INSERT INTO capabilities VALUES ($1)`, [cap]);
@@ -156,6 +176,8 @@ describe("migration 0426 — needs filled once per space", () => {
       `ALTER TABLE "installation_bindings" ALTER COLUMN "intent" DROP NOT NULL;`,
       `"installation_bindings_scope_check"`,
       `"uq_installation_bindings_space_need"`,
+      `ADD COLUMN IF NOT EXISTS "origin" text NOT NULL DEFAULT 'person';`,
+      `"installation_bindings_origin_check"`,
     ]) {
       expect(M0426).toContain(line);
       expect(BASELINE).toContain(line);

@@ -91,6 +91,23 @@ BEGIN
   END IF;
 END $$;
 
+-- WHO chose the provider: `person` (a person, or an approved proposal) or
+-- `automatic` (the pod bound the space's ONE installed filling provider: the
+-- install reconcile or the boot backfill). An automatic binding is never
+-- shown as a person's choice; a person choosing the same provider turns it
+-- into `person`.
+ALTER TABLE "installation_bindings" ADD COLUMN IF NOT EXISTS "origin" text NOT NULL DEFAULT 'person';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'installation_bindings_origin_check'
+  ) THEN
+    ALTER TABLE "installation_bindings" ADD CONSTRAINT "installation_bindings_origin_check"
+      CHECK ("origin" IN ('person', 'automatic'));
+  END IF;
+END $$;
+
 -- One live binding per (space, need).
 CREATE UNIQUE INDEX IF NOT EXISTS "uq_installation_bindings_space_need"
   ON "installation_bindings" ("workspace_id", "need_key")

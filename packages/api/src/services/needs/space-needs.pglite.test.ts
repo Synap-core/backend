@@ -510,4 +510,115 @@ describe("the template-install reconcile and requires", () => {
       "need:code-host",
     ]);
   });
+
+  describe("automatic bindings stay distinguishable, idempotent, and never dangle", () => {
+    const space = async (opts: { archived?: boolean } = {}) => {
+      const id = randomUUID();
+      await q(
+        `INSERT INTO workspaces (id, owner_id, name, archived_at) VALUES ($1, $2, 'S', $3)`,
+        [id, PERSON, opts.archived ? new Date() : null]
+      );
+      await q(
+        `INSERT INTO playbooks (id, workspace_id, created_by, name, goal_template, tools, status)
+         VALUES ($1, $2, $3, 'Ship', 'Ship', '["need:code-host"]'::jsonb, 'active')`,
+        [randomUUID(), id, PERSON]
+      );
+      return id;
+    };
+    const provider = async (ws: string, name: string) => {
+      const id = randomUUID();
+      await q(
+        `INSERT INTO capabilities (id, workspace_id, created_by, name, template_key, metadata)
+         VALUES ($1, $2, $3, $4, $5, '{"fills":["code-host"]}'::jsonb)`,
+        [id, ws, PERSON, name, name.toLowerCase()]
+      );
+      return id;
+    };
+    const rowsOf = (ws: string) =>
+      q<{ provider: string | null; origin: string; state: string }>(
+        `SELECT provider_capability_id AS provider, origin, state FROM installation_bindings
+         WHERE workspace_id = $1 AND installation_id IS NULL ORDER BY created_at`,
+        [ws]
+      );
+
+    it("the backfill writes an AUTOMATIC row; a second boot writes nothing; archived spaces are skipped", async () => {
+      const S = await space();
+      const P = await provider(S, "GitHub");
+      const ARCH = await space({ archived: true });
+      await provider(ARCH, "Forge");
+      await backfillSpaceNeedBindings();
+      expect((await rowsOf(S)).rows).toEqual([
+        { provider: P, origin: "automatic", state: "live" },
+      ]);
+      // Archived: nothing written.
+      expect((await rowsOf(ARCH)).rows).toEqual([]);
+      // Idempotent: a second run writes nothing anywhere.
+      const total = async () =>
+        (
+          await q<{ n: number }>(
+            `SELECT count(*)::int AS n FROM installation_bindings`
+          )
+        ).rows[0]!.n;
+      const before = await total();
+      const again = await backfillSpaceNeedBindings();
+      expect(again.recorded).toBe(0);
+      expect(await total()).toBe(before);
+    });
+
+    it("a second provider installed later: the automatic row stays bound, shown as automatic, with both as candidates", async () => {
+      const S = await space();
+      const first = await provider(S, "GitHub");
+      await backfillSpaceNeedBindings();
+      const second = await provider(S, "GitLab");
+      const b = (await readSpaceNeedBindings(S)).get("code-host");
+      expect(b).toMatchObject({
+        providerCapabilityId: first,
+        origin: "automatic",
+        implicit: false,
+      });
+      const cov = (await workspaceNeedCoverage(S)).needs.find(
+        (n) => n.need === "code-host"
+      )!;
+      expect(cov.state).toBe("filled");
+      expect(cov.binding?.origin).toBe("automatic");
+      expect(cov.candidates.map((c) => c.capabilityId).sort()).toEqual(
+        [first, second].sort()
+      );
+      // The backfill never overrides it, nor picks the second one.
+      await backfillSpaceNeedBindings();
+      expect((await rowsOf(S)).rows).toEqual([
+        { provider: first, origin: "automatic", state: "live" },
+      ]);
+      // A person choosing the same provider makes it theirs.
+      const r = await applySpaceNeedBinding({
+        workspaceId: S,
+        need: "code-host",
+        providerCapabilityId: first,
+        userId: PERSON,
+      });
+      expect(r.status).toBe("confirmed");
+      expect((await rowsOf(S)).rows[0]!.origin).toBe("person");
+    });
+
+    it("the only provider uninstalled: the row turns empty (FK SET NULL), never a dangling id", async () => {
+      const S = await space();
+      const only = await provider(S, "GitHub");
+      await backfillSpaceNeedBindings();
+      await q(`DELETE FROM capabilities WHERE id = $1`, [only]);
+      expect((await rowsOf(S)).rows).toEqual([
+        { provider: null, origin: "automatic", state: "live" },
+      ]);
+      const cov = (await workspaceNeedCoverage(S)).needs.find(
+        (n) => n.need === "code-host"
+      )!;
+      expect(cov).toMatchObject({ state: "empty", provider: null });
+      expect(
+        resolveNeedRefVerbs(
+          "need:code-host",
+          await readSpaceNeedBindings(S),
+          []
+        ).status
+      ).toBe("provider_gone");
+    });
+  });
 });

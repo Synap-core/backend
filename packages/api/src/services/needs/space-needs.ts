@@ -54,6 +54,12 @@ export interface SpaceNeedBinding {
   updatedAt: Date | null;
   /** True when no row exists and the space's one filling provider stands in (absent = false). */
   implicit?: boolean;
+  /**
+   * Who chose the row's provider: `person` (a person or an approved
+   * proposal) or `automatic` (the pod recorded the space's one filling
+   * provider). Null for an implicit binding (no row).
+   */
+  origin?: "person" | "automatic" | null;
 }
 
 /** need slug → its binding (explicit, else implicit). A need with neither is absent. */
@@ -111,6 +117,7 @@ export function withImplicitBindings(
       setBy: null,
       updatedAt: null,
       implicit: true,
+      origin: null,
     });
   }
   return out;
@@ -157,6 +164,7 @@ export async function readSpaceNeedBindings(
       providerName: capabilities.name,
       setBy: installationBindings.userId,
       updatedAt: installationBindings.updatedAt,
+      origin: installationBindings.origin,
     })
     .from(installationBindings)
     .leftJoin(
@@ -180,6 +188,7 @@ export async function readSpaceNeedBindings(
       setBy: r.setBy,
       updatedAt: r.updatedAt,
       implicit: false,
+      origin: r.origin,
     });
   }
   const installed =
@@ -378,7 +387,14 @@ export type SpaceNeedBindResult =
       replaced: string | null;
     }
   | { status: "cleared"; need: string; replaced: string | null }
-  | { status: "unchanged"; need: string; providerCapabilityId: string | null };
+  | { status: "unchanged"; need: string; providerCapabilityId: string | null }
+  /** A person chose the provider the pod had bound automatically: now theirs. */
+  | {
+      status: "confirmed";
+      need: string;
+      providerCapabilityId: string;
+      bindingId: string;
+    };
 
 /** A binding write that cannot apply. `code` is the machine reason. */
 export class SpaceNeedBindError extends Error {
@@ -415,6 +431,12 @@ export async function applySpaceNeedBinding(input: {
   providerCapabilityId: string | null;
   /** The person the write is attributed to (the approver, on a proposal). */
   userId: string;
+  /**
+   * Who chooses: `person` (default: the door, its executor) or `automatic`
+   * (the install reconcile and the boot backfill, recording the space's one
+   * filling provider). An automatic write never overrides a person's row.
+   */
+  origin?: "person" | "automatic";
   /** Does the provider serve one of the need's intents (registry fold)? */
   servesIntent?: (
     providerCapabilityId: string,
@@ -474,22 +496,46 @@ export async function applySpaceNeedBinding(input: {
       eq(installationBindings.needKey, need.slug),
       ne(installationBindings.state, "revoked")
     );
+    const origin = input.origin ?? "person";
     const [current] = await tx
       .select({
         id: installationBindings.id,
         providerCapabilityId: installationBindings.providerCapabilityId,
+        origin: installationBindings.origin,
       })
       .from(installationBindings)
       .where(live)
       .limit(1);
+    const now = new Date();
+    // The pod never overrides a person's choice (nor an existing automatic
+    // row: the backfill only fills what has no row).
+    if (origin === "automatic" && current?.providerCapabilityId) {
+      return {
+        status: "unchanged" as const,
+        need: need.slug,
+        providerCapabilityId: current.providerCapabilityId,
+      };
+    }
     if ((current?.providerCapabilityId ?? null) === (provider?.id ?? null)) {
+      if (current && provider && current.origin !== origin) {
+        // A person picks the provider the pod had bound automatically.
+        await tx
+          .update(installationBindings)
+          .set({ origin, userId: input.userId, updatedAt: now })
+          .where(eq(installationBindings.id, current.id));
+        return {
+          status: "confirmed" as const,
+          need: need.slug,
+          providerCapabilityId: provider.id,
+          bindingId: current.id,
+        };
+      }
       return {
         status: "unchanged" as const,
         need: need.slug,
         providerCapabilityId: provider?.id ?? null,
       };
     }
-    const now = new Date();
     if (current) {
       await tx
         .update(installationBindings)
@@ -515,6 +561,7 @@ export async function applySpaceNeedBinding(input: {
         needKey: need.slug,
         providerCapabilityId: provider.id,
         state: "live",
+        origin,
         checkedAt: now,
       })
       .returning({ id: installationBindings.id });
