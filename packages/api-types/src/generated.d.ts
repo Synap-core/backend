@@ -4003,6 +4003,9 @@ export interface WorkspaceSettings {
 	/** Slug of the control plane package used to create this workspace. */
 	packageSlug?: string;
 	/**
+	 * @deprecated 0426: no longer written (a space's needs are derived from its
+	 * processes, `@synap-core/types/needs`); an older space may still hold it.
+	 *
 	 * WHAT THIS WORKSPACE NEEDS TO FUNCTION — the abstract intents (the pod's
 	 * `capability_intents` closed vocabulary) the template declared as this
 	 * space's task requirements.
@@ -5099,6 +5102,15 @@ export interface CapabilityNodeDef extends AutomationNodeBase {
 		/** Maps verb args to prior step outputs ({{steps.id.output}}). */
 		inputMapping?: Record<string, string>;
 		label?: string;
+		/**
+		 * Instead of a concrete verb: a NEED ref (`need:<need>` or
+		 * `need:<need>/<intent>`, 0426, `@synap-core/types/needs`). At run time
+		 * the executor runs the ONE verb the provider the space bound to that need
+		 * offers for it; an unfilled need, or a provider with several verbs for it
+		 * and no `/<intent>`, fails the step with the reason. `verbId` wins when
+		 * both are set.
+		 */
+		need?: string;
 		/** Verb id = the requiring skill's name (resolves to the backing skill). */
 		verbId?: string;
 		verbKind?: "action" | "read" | "write";
@@ -22163,6 +22175,114 @@ export type ExecuteCapabilityResult = {
 	kind: "not_found";
 	message: string;
 };
+/**
+ * THE NEED VOCABULARY — what a space needs filled, once, by one provider
+ * (founder decisions D2 and D3, 16 Nov 2026; plan 0adf8352 W3).
+ *
+ * Published as its own LEAF subpath (`@synap-core/types/needs`), like
+ * `capability-intents`: a VALUE import from the `./` barrel crashes Hermes
+ * (relay ships React Native). Pure and dependency-free.
+ *
+ * ── WHAT IS A NEED ─────────────────────────────────────────────────────────
+ * A need is a SEAT a provider fills: "code host", "deploy target",
+ * "payments". It is a named group of capability intents (the routing axis
+ * over verbs), coarser than an intent on purpose: Stripe, Shopify, PostHog
+ * and github-read all provide `[list_records, fetch_record]`, so an intent
+ * cannot tell payments from analytics from a code host. A capability pack
+ * DECLARES which needs it fills (`fills`); a space BINDS each need once, to
+ * one provider, shared by its members (`installation_bindings` rows with no
+ * installation, migration 0426).
+ *
+ * The person's word is "Needs" (`resolveObjectNoun("need")`). A need is never
+ * renamed, only aliased: an alias resolves to its slug ({@link canonicalNeedSlug}).
+ *
+ * ── HOW A NEED IS NAMED ────────────────────────────────────────────────────
+ * A NEED REF is `need:<slug>` or `need:<slug>/<intent>`:
+ *   - a playbook's `tools` (and a stage's `tools`) entry: the verbs the bound
+ *     provider offers for the need's intents (or the one intent);
+ *   - a playbook's or stage's `requires` entry: the bound provider's
+ *     capability key must be installed on the runner's computer;
+ *   - a criterion's `check.capability`, an automation `capability` node's
+ *     `need`: the ONE verb of the bound provider serving the need (the
+ *     `/<intent>` suffix picks it when the provider has several).
+ * A space DECLARES the needs its processes name ({@link declaredNeedsOf}): no
+ * template field, nothing stored (the retired `settings.taskIntents`).
+ *
+ * ── WHY A MIRROR AND NOT AN IMPORT ─────────────────────────────────────────
+ * THE SSOT IS THE POD's `needs` TABLE, seeded by migration `0426_needs.sql`.
+ * This list is a hand mirror with a parity guard (`parity.test.ts`) that
+ * re-derives the seed SQL. ⚠️ MIRRORED IN LOCKSTEP with:
+ *   - the `INSERT INTO "needs"` rows — migration `0426`
+ *   - `NEEDS` — synap-control-plane-api `src/seeds/need-vocabulary.ts`
+ * A slug added in a NEW migration must be added to both guards' filename
+ * lists: extending the list is part of adding the slug.
+ */
+/** One need: its slug (the seat), words, the intents it groups, its aliases. */
+export interface NeedDefinition {
+	/** Lowercase kebab slug ({@link NEED_SLUG_RE}); never renamed. */
+	readonly slug: string;
+	/** The person's words for it. */
+	readonly label: string;
+	readonly description: string;
+	/** The capability intents a provider of this need serves. */
+	readonly intents: readonly string[];
+	/** Older or other names that resolve to this slug. */
+	readonly aliases: readonly string[];
+}
+declare const NEEDS: readonly NeedDefinition[];
+/** What a binding write did. */
+export type SpaceNeedBindResult = {
+	bindingId: string;
+	need: string;
+	providerCapabilityId: string;
+	providerName: string;
+	/** The binding it replaced, revoked in the same transaction. */
+	replaced: string | null;
+	status: "bound";
+} | {
+	need: string;
+	replaced: string | null;
+	status: "cleared";
+} | {
+	need: string;
+	providerCapabilityId: string | null;
+	status: "unchanged";
+};
+/** One declared need of a space and its state. */
+export interface SpaceNeedCoverage {
+	need: string;
+	/** The vocabulary's words; null for a slug the vocabulary does not know. */
+	label: string | null;
+	known: boolean;
+	state: "empty" | "filled";
+	provider: {
+		capabilityId: string;
+		name: string | null;
+	} | null;
+	/**
+	 * True when no binding row exists and the space's ONE filling provider
+	 * stands in (an implicit binding: the run uses it; the reconcile records it).
+	 */
+	implicit: boolean;
+	/** When filled by a row: who set it, and when. Null for an implicit binding. */
+	binding: {
+		bindingId: string;
+		setBy: string;
+		updatedAt: Date;
+	} | null;
+	/** Installed capabilities that declare they fill it (the person's choices). */
+	candidates: Array<{
+		capabilityId: string;
+		name: string;
+	}>;
+}
+export interface SpaceNeedCoverageResult {
+	workspaceId: string;
+	/** In declaration order. `[]` = the space's processes name no need (a real answer). */
+	needs: SpaceNeedCoverage[];
+	/** The empty needs, in order. */
+	empty: string[];
+}
 declare const SHARE_KINDS: readonly [
 	"entity",
 	"document",
@@ -25459,7 +25579,8 @@ declare const PROCESS_STEP_RUNNER_KINDS: readonly [
 export type ProcessStepRunnerKind = (typeof PROCESS_STEP_RUNNER_KINDS)[number];
 declare const PROCESS_NEED_KINDS: readonly [
 	"intent",
-	"capability"
+	"capability",
+	"need"
 ];
 export type ProcessNeedKind = (typeof PROCESS_NEED_KINDS)[number];
 declare const PROCESS_NEED_STATES: readonly [
@@ -46993,6 +47114,72 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					title: string;
 					type: string;
 				}[];
+			};
+		}>;
+	}>>;
+	needs: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		bind: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				need: string;
+				providerCapabilityId: string | null;
+				workspaceId: string;
+			};
+			meta: object;
+			output: {
+				proposalId: string;
+				reviewPath: string;
+				reviewUrl: string;
+				status: "proposed";
+				summary: string;
+			} | {
+				result: SpaceNeedBindResult;
+				status: "applied";
+			};
+		}>;
+		forWorkspace: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId: string;
+			};
+			meta: object;
+			output: {
+				coverage: SpaceNeedCoverageResult;
+				vocabulary: typeof NEEDS;
+			};
+		}>;
+		vocabulary: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				needs: readonly NeedDefinition[];
 			};
 		}>;
 	}>>;
