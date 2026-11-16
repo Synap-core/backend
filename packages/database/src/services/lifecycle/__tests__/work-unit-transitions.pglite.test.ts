@@ -24,6 +24,7 @@ import { ddlFor } from "./lifecycle-pglite.js";
 import { TrackRepository } from "../../../repositories/track-repository.js";
 import { claimTransitionOutbox } from "../transition-outbox.js";
 import { setSessionStatus, writeSessionPatch } from "../session-status.js";
+import { expireOrphanedStageGates } from "../../../utils/stage-gate-wait.js";
 import { eq } from "drizzle-orm";
 
 let pg: PGlite;
@@ -453,6 +454,45 @@ describe("a session that ENDS takes its pending stage gates with it", () => {
     });
     expect((await proposalRow(handOff)).status).toBe("pending");
     expect((await proposalRow(otherGate)).status).toBe("pending");
+  });
+
+  it("the sweep expires the gates a session left pending when it ended before the rule", async () => {
+    // Live 16 Nov 2026: gate 491def0c still pending on session 432f5ac2,
+    // closed 9 Nov; approving such a gate can only fail.
+    const ended: Record<string, string> = {};
+    for (const status of ["closed", "failed", "cancelled"]) {
+      ended[status] = await proposal(
+        await session(status),
+        "playbook.stage_gate"
+      );
+    }
+    const live: string[] = [];
+    for (const status of ["paused", "stale", "active"]) {
+      live.push(await proposal(await session(status), "playbook.stage_gate"));
+    }
+    const closedHandOff = await proposal(
+      await session("closed"),
+      "assign_agent"
+    );
+
+    const expired = await expireOrphanedStageGates(db);
+
+    expect([...expired].sort()).toEqual(Object.values(ended).sort());
+    for (const [status, gate] of Object.entries(ended)) {
+      const g = await proposalRow(gate);
+      expect(g.status).toBe("expired");
+      expect(g.data).toMatchObject({
+        stageKey: "draft",
+        expiredBy: "session_ended",
+        sessionEndedAs: status,
+      });
+    }
+    for (const gate of live) {
+      expect((await proposalRow(gate)).status).toBe("pending");
+    }
+    expect((await proposalRow(closedHandOff)).status).toBe("pending");
+    // A second pass finds nothing left to expire.
+    expect(await expireOrphanedStageGates(db)).toEqual([]);
   });
 
   it("a pause or a resume expires nothing", async () => {
