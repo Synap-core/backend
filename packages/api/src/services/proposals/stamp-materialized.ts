@@ -55,7 +55,7 @@ import {
   safeFailureSentence,
   type ProposalFailureMeta,
 } from "../../routers/proposals/failure-classification.js";
-import { redactForStorage } from "../../utils/redact-secrets.js";
+import { redactForStorage, redactSecrets } from "../../utils/redact-secrets.js";
 import {
   SESSION_UNDO_COLUMNS,
   type SessionUndoColumn,
@@ -1376,6 +1376,29 @@ export async function runMaterializationUnderReceipt<T>(
         // sentence ride alongside.
         const meta = classifyThrownFailure(err);
         const sentence = safeFailureSentence(err, meta);
+        // The cause, in the server log, under the row it failed. The approve
+        // door logs its failures with the proposal id
+        // (`dispatchProposalApproval`); this path logged nothing (its callers
+        // re-throw to their door), so a receipt that failed as "an internal
+        // error occurred" left no trace to diagnose (finding 7ca4953f, 16 Nov
+        // 2026). Redacted like the approve door's line: a log is shipped. The
+        // stack's frames say where it threw.
+        logger.warn(
+          {
+            proposalId: receipt.id,
+            errorClass: meta.errorClass,
+            err:
+              meta.detail ??
+              redactForStorage(
+                err instanceof Error ? err.message : String(err)
+              ),
+            stack:
+              err instanceof Error && err.stack
+                ? redactSecrets(err.stack)
+                : undefined,
+          },
+          "materialization under a receipt failed"
+        );
         // What DID land before the throw (a non-plan graph keeps it), in the
         // shape a complete run stamps, plus the op that threw and the ops it
         // never reached. Without it the receipt kept its placeholder
