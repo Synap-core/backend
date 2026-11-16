@@ -1574,7 +1574,7 @@ describe("buildObjectActionTitle — the name slot names, never restates", () =>
       "Update Note",
     ],
     // Head-only is fine as it is.
-    [{ action: "run", objectKind: "playbook" }, "Run Template"],
+    [{ action: "run", objectKind: "playbook" }, "Run Process"],
     // A summary that already quotes the name keeps the name, once.
     [
       {

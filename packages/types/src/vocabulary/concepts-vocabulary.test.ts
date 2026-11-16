@@ -16,6 +16,7 @@ import {
   resolveObjectLabel,
   resolveObjectNoun,
   resolveObjectNounPlural,
+  resolvePackageNoun,
   resolveProposalKindLabel,
   resolveTemplateNoun,
   resolveToolKindLabel,
@@ -50,32 +51,33 @@ describe("concept vocabulary — Pack", () => {
 });
 
 describe("resolveTemplateNoun — derived from scope, never declared", () => {
-  it("a project-scoped playbook is a Goal template", () => {
-    expect(resolveTemplateNoun("project")).toBe("Goal template");
+  it("a project-scoped playbook is a Goal process (D1)", () => {
+    expect(resolveTemplateNoun("project")).toBe("Goal process");
     expect(resolveTemplateNoun("project", { plural: true })).toBe(
-      "Goal templates"
+      "Goal processes"
     );
   });
 
-  it("a session-scoped playbook is a Work template", () => {
-    expect(resolveTemplateNoun("session")).toBe("Work template");
-    expect(resolveTemplateNoun("session", { plural: true })).toBe(
-      "Work templates"
-    );
+  it("a session-scoped playbook is a Process (D1)", () => {
+    expect(resolveTemplateNoun("session")).toBe("Process");
+    expect(resolveTemplateNoun("session", { plural: true })).toBe("Processes");
   });
 
   it("a missing scope reads as session, as the schema does (NULL = session)", () => {
-    expect(resolveTemplateNoun(null)).toBe("Work template");
-    expect(resolveTemplateNoun(undefined)).toBe("Work template");
+    expect(resolveTemplateNoun(null)).toBe("Process");
+    expect(resolveTemplateNoun(undefined)).toBe("Process");
   });
 });
 
 // ── W5 naming pass (founder D1/D2): the retired words resolve to the glossary's ──
 
-describe("concept vocabulary — Template, Rule, Tools (W5)", () => {
-  it("a playbook is a Template to the user", () => {
-    expect(resolveObjectNoun("playbook")).toBe("Template");
-    expect(resolveObjectNounPlural("playbooks")).toBe("Templates");
+describe("concept vocabulary — Process, Rule, Tools (W5, D1)", () => {
+  it("a playbook is a Process to the user (founder D1, 16 Nov 2026)", () => {
+    expect(resolveObjectNoun("playbook")).toBe("Process");
+    expect(resolveObjectNounPlural("playbooks")).toBe("Processes");
+    expect(resolveObjectNoun("playbook", "fr")).toBe("Processus");
+    // "Template" now names only a package (a space template, a market package).
+    expect(resolveObjectNoun("playbook")).not.toBe(resolvePackageNoun(1));
   });
 
   it("an automation is an Automation — through every spelling that reaches it (D2)", () => {
@@ -190,8 +192,8 @@ describe("concept vocabulary — nouns of making and connecting (D3)", () => {
     expect(resolveObjectNoun("workspace")).not.toBe(resolveObjectNoun("app"));
   });
 
-  it("Template is the family noun, qualified by scope, a space template included (N6)", () => {
-    expect(resolveObjectNoun("playbook")).toBe("Template");
+  it("Template names only the space package; a playbook is a Process (N6, D1)", () => {
+    expect(resolveObjectNoun("playbook")).toBe("Process");
     expect(resolveTemplateNoun("space")).toBe("Space template");
     expect(resolveTemplateNoun("space", { plural: true })).toBe(
       "Space templates"
@@ -202,9 +204,9 @@ describe("concept vocabulary — nouns of making and connecting (D3)", () => {
     expect(resolveTemplateNoun("space", { plural: true, locale: "fr" })).toBe(
       "Modèles d’espace"
     );
-    // The two existing scopes keep their words.
-    expect(resolveTemplateNoun("session")).toBe("Work template");
-    expect(resolveTemplateNoun("project")).toBe("Goal template");
+    // A playbook's two scopes are processes (D1).
+    expect(resolveTemplateNoun("session")).toBe("Process");
+    expect(resolveTemplateNoun("project")).toBe("Goal process");
   });
 
   it("an account link is an Account, through every spelling (N8)", () => {

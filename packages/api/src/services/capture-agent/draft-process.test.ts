@@ -76,7 +76,7 @@ describe("draftProcessForKind", () => {
     });
     expect(arg.plan.playbooks).toEqual([
       expect.objectContaining({
-        name: "Goal template",
+        name: "Goal process",
         status: "draft",
         subjectProfile: {
           profileSlug: "track",
