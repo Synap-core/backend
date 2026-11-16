@@ -64,6 +64,7 @@ import { validateTriggerFilters } from "@synap-core/types/automations/filter-ope
 import {
   actionPhrase,
   eventPatternWhenText,
+  readAutomationAudience,
   readMaxAiDispatchesPerDay,
   readMaxRunsPerDay,
   unfilteredAiFanoutError,
@@ -632,6 +633,24 @@ function assertValidDailyCap(triggerConfig: unknown): void {
 }
 
 /**
+ * CREATE/UPDATE-DOOR GATE for `triggerConfig.audience` — the SAME reader the
+ * trigger matcher selects with (`readAutomationAudience`), so the door never
+ * stores an audience the runtime would read as something else. `everyone` is
+ * a governed field like any other: an agent's create lands as a draft and its
+ * activation always proposes (`proposeAgentActivation`), and an agent's update
+ * goes through `gateAgentAutomationChange`; nothing here bypasses either.
+ */
+const TRIGGER_CONFIG_DESCRIPTION =
+  "Trigger settings. audience: whose events a POD-WIDE automation answers to — 'me' (default; the person's own events and their agents') or 'everyone' (any member's, in a space the person can see).";
+
+function assertValidAudience(triggerConfig: unknown): void {
+  const result = readAutomationAudience(triggerConfig);
+  if (!result.ok) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: result.error });
+  }
+}
+
+/**
  * CREATE/UPDATE-DOOR GATE for an AI fan-out over an unfiltered `query` — THE
  * rule (`unfilteredAiFanoutError`, @synap-core/types/automations). Only the
  * flow being submitted is checked; a stored automation is never rewritten.
@@ -690,6 +709,7 @@ async function prepareAutomationForMaterialization(
     assertValidTriggerFilters(input.triggerConfig.filters);
   }
   assertValidDailyCap(input.triggerConfig);
+  assertValidAudience(input.triggerConfig);
 
   const resolvers = await loadFlowValidationResolvers(
     database,
@@ -2442,7 +2462,12 @@ export const automationsRouter = router({
           name: z.string().min(1).max(200),
           description: z.string().optional(),
           triggerType: z.enum(["event", "cron", "webhook", "manual"]),
-          triggerConfig: z.record(z.string(), z.unknown()).default({}),
+          // `audience` (pod-wide only): "me" (default) | "everyone" — see
+          // `assertValidAudience`; validated with the rest of the trigger.
+          triggerConfig: z
+            .record(z.string(), z.unknown())
+            .default({})
+            .describe(TRIGGER_CONFIG_DESCRIPTION),
           flowDefinition: z.object({
             nodes: z.array(z.record(z.string(), z.unknown())),
             edges: z.array(z.record(z.string(), z.unknown())),
@@ -2624,7 +2649,10 @@ export const automationsRouter = router({
         name: z.string().min(1).max(200).optional(),
         description: z.string().optional(),
         triggerType: z.enum(["event", "cron", "webhook", "manual"]).optional(),
-        triggerConfig: z.record(z.string(), z.unknown()).optional(),
+        triggerConfig: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe(TRIGGER_CONFIG_DESCRIPTION),
         flowDefinition: z
           .object({
             nodes: z.array(z.record(z.string(), z.unknown())),
@@ -2718,6 +2746,7 @@ export const automationsRouter = router({
           );
         }
         assertValidDailyCap(input.triggerConfig);
+        assertValidAudience(input.triggerConfig);
         // A malformed source declaration is refused before any proposal.
         declaredWebhookSource(effectiveTriggerType, input.triggerConfig);
       }

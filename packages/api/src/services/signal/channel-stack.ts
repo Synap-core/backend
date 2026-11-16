@@ -28,13 +28,16 @@ import {
   or,
   eq,
   inArray,
-  isNull,
   isNotNull,
   channels,
   automations,
   capabilities,
+  actorsOfSamePerson,
+  podWideAutomationAnswersTo,
   type AutomationTriggerConfig,
 } from "@synap/database";
+// The matcher's own `everyone` floor, so this list drops exactly what it drops.
+import { dropAudienceOutsideOwnerFloor } from "@synap/jobs/workers/automation-trigger-matcher.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { getLinksFor } from "../links/links-service.js";
@@ -310,13 +313,16 @@ export async function getChannelStack(input: {
   //      by W's automations plus pod-wide ones; a POD-WIDE channel fans across
   //      the caller's whole visible floor, exactly as the matcher does), then
   //      the pure predicate replays pattern + filters per automation.
-  const automationRows = await db
+  const viewerActorIds = await actorsOfSamePerson(db, userId);
+  const scannedRows = await db
     .select({
       id: automations.id,
       name: automations.name,
       status: automations.status,
       triggerType: automations.triggerType,
       triggerConfig: automations.triggerConfig,
+      workspaceId: automations.workspaceId,
+      createdBy: automations.createdBy,
     })
     .from(automations)
     .where(
@@ -325,24 +331,29 @@ export async function getChannelStack(input: {
         // Matcher-faithful scope. The matcher fires (a) workspace automations in
         // the EVENT's workspace — here the channel's workspace, or for a pod-wide
         // channel any workspace the caller can see (userVisibleWhere bounds it) —
-        // and (b) pod-wide automations that are OWNER-BOUND (`isNull(workspaceId)
-        // AND createdBy = userId`, automation-trigger-matcher.ts's `podWideMatch`).
-        // Without the createdBy gate the scan over-reports another user's pod-wide
-        // automation as firing here, which the matcher would never do.
+        // and (b) pod-wide automations that answer to the viewer's PERSON or to
+        // everyone — the matcher's own predicate (`podWideAutomationAnswersTo`,
+        // decision 782c862e), handed the viewer's person and agents. Without
+        // it the scan over-reports another person's pod-wide automation as
+        // firing here, which the matcher would never do.
         or(
           channel.workspaceId
             ? eq(automations.workspaceId, channel.workspaceId)
             : isNotNull(automations.workspaceId),
-          and(
-            isNull(automations.workspaceId),
-            eq(automations.createdBy, userId)
-          )
+          podWideAutomationAnswersTo(viewerActorIds)
         ),
         inArray(automations.status, ["active", "paused"]),
         eq(automations.triggerType, "event")
       )
     )
     .limit(AUTOMATION_SCAN_CAP);
+  // An `everyone` automation whose person cannot see this channel's space is
+  // dropped, exactly as the matcher drops it.
+  const automationRows = await dropAudienceOutsideOwnerFloor(
+    scannedRows,
+    viewerActorIds,
+    channel.workspaceId ?? null
+  );
 
   // Capability-embedded automations: `automation --member_of--> capability`
   // where the capability targets this channel. Reported REGARDLESS of trigger
