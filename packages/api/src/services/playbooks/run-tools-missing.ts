@@ -12,9 +12,11 @@
  * run resolves nothing for it, by the same rules as `run-tool-profile.ts`:
  *   - the run is one model call (`one-shot`): it has no tools at all;
  *   - the playbook's own `tools` does not list it (never offered at run time);
- *   - a run tool name is always offered; an intent slug needs a verb serving
- *     it on this pod; anything else needs a capability or verb the run's lens
- *     can see.
+ *   - a run tool name is always offered; a need ref (`need:<need>`, 0426)
+ *     needs the run's space to have bound a provider that offers a tool for
+ *     it (its reason is said: not filled, provider removed, no such tool); an
+ *     intent slug needs a verb serving it on this pod; anything else needs a
+ *     capability or verb the run's lens can see.
  *
  * Not checked: a run handed to an agent (it brings its own tools; its
  * computer is checked against `requires` by the runner), and a step whose
@@ -27,6 +29,7 @@ import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { isKnownIntent } from "@synap-core/types/capability-intents";
 import {
+  isNeedToolEntry,
   isRunToolName,
   readToolsList,
   runClassOf,
@@ -37,6 +40,15 @@ import {
   namedVerbs,
   type RunToolProfileDeps,
 } from "./run-tool-profile.js";
+import {
+  needResolutionReason,
+  resolveNeedRefVerbs,
+  type SpaceNeedBindings,
+} from "../needs/space-needs.js";
+
+/** The reads the check makes; the space's needs default to the real read. */
+type RunToolsMissingDeps = Pick<RunToolProfileDeps, "readRegistry"> &
+  Partial<Pick<RunToolProfileDeps, "readSpaceNeeds">>;
 
 const logger = createLogger({ module: "run-tools-missing" });
 
@@ -48,6 +60,8 @@ export interface StageToolsMissing {
   stageKey: string;
   stageName: string;
   missing: string[];
+  /** Why a missing NEED is missing, by entry, in one sentence (0426). */
+  reasons?: Record<string, string>;
 }
 
 export type RunToolsCheck =
@@ -107,7 +121,7 @@ export async function findRunToolsMissing(
     workspaceId: string | null;
     userId: string;
   },
-  deps: Pick<RunToolProfileDeps, "readRegistry"> = defaultDeps
+  deps: RunToolsMissingDeps = defaultDeps
 ): Promise<RunToolsCheck> {
   const stages = declaringStages(input.playbook);
   if (stages.length === 0) return { status: "ok", missing: [] };
@@ -120,12 +134,22 @@ export async function findRunToolsMissing(
     );
   let registry: Awaited<ReturnType<RunToolProfileDeps["readRegistry"]>> | null =
     null;
+  let bindings: SpaceNeedBindings = new Map();
+  const declaresNeed = stages.some((s) =>
+    s.tools.some((t) => playbookTools.has(t) && isNeedToolEntry(t))
+  );
   if (needsRegistry) {
     try {
       registry = await deps.readRegistry({
         workspaceId: input.workspaceId,
         userId: input.userId,
       });
+      // A run with no space has no binding: every need it names is unfilled.
+      if (declaresNeed && input.workspaceId) {
+        bindings = await (deps.readSpaceNeeds ?? defaultDeps.readSpaceNeeds)(
+          input.workspaceId
+        );
+      }
     } catch (err) {
       logger.error(
         { err, workspaceId: input.workspaceId },
@@ -134,10 +158,17 @@ export async function findRunToolsMissing(
       return { status: "unread" };
     }
   }
+  const needReasons = new Map<string, string>();
   const usable = (entry: string): boolean => {
     if (oneShot || !playbookTools.has(entry)) return false;
     if (isRunToolName(entry)) return true;
     if (!registry) return false;
+    if (isNeedToolEntry(entry)) {
+      const r = resolveNeedRefVerbs(entry, bindings, registry.capabilities);
+      if (r.status === "ok") return true;
+      needReasons.set(entry, needResolutionReason(r));
+      return false;
+    }
     if (isKnownIntent(entry)) {
       return (registry.index.get(entry)?.length ?? 0) > 0;
     }
@@ -147,7 +178,17 @@ export async function findRunToolsMissing(
   for (const s of stages) {
     const lacking = s.tools.filter((t) => !usable(t));
     if (lacking.length > 0) {
-      missing.push({ stageKey: s.key, stageName: s.name, missing: lacking });
+      const reasons = Object.fromEntries(
+        lacking
+          .filter((t) => needReasons.has(t))
+          .map((t) => [t, needReasons.get(t)!])
+      );
+      missing.push({
+        stageKey: s.key,
+        stageName: s.name,
+        missing: lacking,
+        ...(Object.keys(reasons).length > 0 ? { reasons } : {}),
+      });
     }
   }
   return { status: "ok", missing };
@@ -159,7 +200,12 @@ function runToolsMissingSentence(
   missing: readonly StageToolsMissing[]
 ): string {
   const steps = missing
-    .map((m) => `step "${m.stageName}" needs ${m.missing.join(", ")}`)
+    .map(
+      (m) =>
+        `step "${m.stageName}" needs ${m.missing
+          .map((t) => (m.reasons?.[t] ? `${t} (${m.reasons[t]})` : t))
+          .join(", ")}`
+    )
     .join("; ");
   return `A run of "${playbookName}" on this pod's AI cannot start: its ${steps}, which a run on this pod cannot use. Hand its runs to an agent that has these tools, add a capability that serves them, or take them off the step.`;
 }
@@ -174,7 +220,7 @@ export async function runToolsSaveWarnings(
     workspaceId: string | null;
     userId: string;
   },
-  deps?: Pick<RunToolProfileDeps, "readRegistry">
+  deps?: RunToolsMissingDeps
 ): Promise<string[]> {
   const check = await findRunToolsMissing(input, deps);
   if (check.status === "unread") {
@@ -199,7 +245,7 @@ export async function refuseRunMissingTools(
     handedToAgent: boolean;
     executor: string;
   },
-  deps?: Pick<RunToolProfileDeps, "readRegistry">
+  deps?: RunToolsMissingDeps
 ): Promise<void> {
   if (input.handedToAgent || input.executor === "external-agent") return;
   const check = await findRunToolsMissing(input, deps);

@@ -309,6 +309,10 @@
       "types": "./dist/capability-intents/index.d.ts",
       "import": "./dist/capability-intents/index.js"
     },
+    "./needs": {
+      "types": "./dist/needs/index.d.ts",
+      "import": "./dist/needs/index.js"
+    },
     "./skill-code": {
       "types": "./dist/skill-code/index.d.ts",
       "import": "./dist/skill-code/index.js"

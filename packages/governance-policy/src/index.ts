@@ -857,6 +857,8 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "workspace/adopt": "widenable",
   "workspace/configure_public_projection": "widenable",
   "workspace/declare_source": "widenable",
+  // Filling a space's need (0426): which provider every run of the space uses.
+  "workspace/bind_need": "widenable",
 } as const satisfies Record<
   StructureDoor,
   "floored" | "other-floor" | "widenable"
@@ -961,6 +963,8 @@ export type KnownGovernanceAction =
   | "activate"
   | "declare_source"
   | "configure_public_projection"
+  // A space's need filled by a provider (0426, `services/needs`).
+  | "bind_need"
   // Work model L2: the `moveStatus` door's lifecycle move (entity.transition).
   | "transition"
   | "write";
@@ -1031,6 +1035,8 @@ export function requiredPermissionFor(
     // Enterprise-OS Wave 0: declaring a workspace data edge
     // (synap_declare_workspace_source / Hub source-edges) is a governed write.
     action === "declare_source" ||
+    // Filling a space's need (0426): the same editor+ floor.
+    action === "bind_need" ||
     // Setting a workspace's public-projection config (Hub
     // public-projection door) is a governed write — same editor+ floor.
     action === "configure_public_projection" ||
@@ -2459,6 +2465,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "workspace/configure_public_projection": "disruptive", // scope: public
   "workspace/create": "disruptive", // struct (2.09)
   "workspace/declare_source": "disruptive", // scope: a data edge
+  "workspace/bind_need": "disruptive", // scope: the provider every run uses
   "workspace/delete": "disruptive", // destroy / ADMIN
   "workspace/restore": "disruptive", // ADMIN
   "workspace/update": "disruptive", // ADMIN
@@ -2840,6 +2847,9 @@ export const GATE_WRITE_DOORS = {
   "workspace/configure_public_projection": "gate",
   "workspace/create": "gate",
   "workspace/declare_source": "gate",
+  // A space's need filled by a provider (0426): Hub `PUT /needs/:need/binding`
+  // and tRPC `needs.bind`; replayed by `routers/proposals/executors/workspace.ts`.
+  "workspace/bind_need": "gate",
   "workspace/delete": "gate",
   "workspace/update": "gate",
   "workspaceMember/add": "gate",

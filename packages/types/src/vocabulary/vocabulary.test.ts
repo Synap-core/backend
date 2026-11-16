@@ -686,6 +686,7 @@ describe("tripwire: no raw machine token reaches a title", () => {
     "renderer.set",
     "declare_source",
     "configure_public_projection",
+    "bind_need",
   ];
   const REAL_TARGET_TYPES = [
     "entity",

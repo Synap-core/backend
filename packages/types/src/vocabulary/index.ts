@@ -319,6 +319,8 @@ const ACTION_VERB_ROWS = {
   link: { imperative: "Link", past: "Linked", present: "Links" },
   unlink: { imperative: "Unlink", past: "Unlinked" },
   attach: { imperative: "Attach", past: "Attached" },
+  // A space's need filled by a provider (0426, the `workspace/bind_need` door).
+  bind_need: { imperative: "Fill need", past: "Filled need" },
   // "Add to <session>" (a capture offered to a running session) — `add`
   // humanized to "Add" in BOTH moods, so the receipt read "Add to X".
   add: { imperative: "Add", past: "Added" },

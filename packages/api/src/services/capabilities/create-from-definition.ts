@@ -80,6 +80,7 @@ import { createLogger } from "@synap-core/core";
 // import for the same tsup code-splitting reason routers/automations.ts cites.
 import { validateEventPattern } from "@synap-core/types/events/unified";
 import { pickComputerSpec } from "@synap-core/types/capability-manifest";
+import { canonicalNeedSlug } from "@synap-core/types/needs";
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { automationsRouter } from "../../routers/automations.js";
 import { toolsRouter } from "../../routers/tools.js";
@@ -143,15 +144,45 @@ const MCP_EXEC_COLUMNS = Object.fromEntries(
  * verbatim, where an installation request reads them
  * (`services/installations`). A definition with no computer block leaves any
  * stored one alone.
+ *
+ * And the NEEDS it fills (`fills`, 0426) under `fills`, as canonical need
+ * slugs ({@link declaredNeedFills}): what the space binding reads to find an
+ * installed provider for an empty need. One projection for the applier and
+ * the reconcile's stamp, so a template that starts declaring `fills` (its
+ * content hash changes) reaches every installed container on the next
+ * reconcile.
  */
 export function declaredContainerMetadata(
-  def: Pick<CapabilityDefinition, "metadata">
+  def: Pick<CapabilityDefinition, "metadata" | "fills">
 ): Record<string, unknown> {
   const computer = pickComputerSpec(def as Record<string, unknown>);
+  const fills = declaredNeedFills(def.fills);
   return {
     ...(def.metadata ?? {}),
     ...(computer ? { computer } : {}),
+    ...(fills !== undefined ? { fills } : {}),
   };
+}
+
+/**
+ * A definition's declared `fills`, as canonical need slugs (an alias becomes
+ * its slug), deduped. `undefined` when the definition declares none (a stored
+ * value is then left alone). An unknown slug is dropped and logged: the
+ * catalog and the control plane refuse it before publish, so one reaching
+ * the pod is a stale cache, never a reason to fail an install.
+ */
+export function declaredNeedFills(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const v of raw) {
+    const slug = canonicalNeedSlug(v);
+    if (!slug) {
+      logger.warn({ fill: v }, "capability fills a need the pod does not know — not stamped");
+      continue;
+    }
+    if (!out.includes(slug)) out.push(slug);
+  }
+  return out;
 }
 
 /**

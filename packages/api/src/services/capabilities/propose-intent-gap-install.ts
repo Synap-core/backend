@@ -56,6 +56,7 @@
  */
 
 import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
+import { canonicalNeedSlug, needOf } from "@synap-core/types/needs";
 import { createPendingProposal } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
 import type { CatalogCacheEntry } from "./catalog-cache-query.js";
@@ -190,6 +191,12 @@ export const GAP_INSTALL_FAILED_NOT_RUN =
  */
 export async function proposeIntentGapInstall(input: {
   intent: string;
+  /**
+   * The NEED this install fills (0426), when the gap is a space's empty need
+   * rather than an intent: `intent` then carries the need slug, the title
+   * and `data.need` name the need.
+   */
+  need?: string;
   candidates: readonly IntentProviderCandidate[];
   unreadable?: readonly string[];
   userId: string;
@@ -205,7 +212,9 @@ export async function proposeIntentGapInstall(input: {
       intent: input.intent,
       unreadable: [...(input.unreadable ?? [])],
       message:
-        `Nothing ran: no marketplace capability declares the intent "${input.intent}". ` +
+        (input.need
+          ? `Nothing ran: no marketplace capability declares it fills the need "${input.need}". `
+          : `Nothing ran: no marketplace capability declares the intent "${input.intent}". `) +
         (input.unreadable?.length
           ? `${input.unreadable.length} cached pack(s) could not be read for a declaration, so this is a best-effort answer. `
           : "") +
@@ -215,7 +224,10 @@ export async function proposeIntentGapInstall(input: {
 
   try {
     const alternatives = input.candidates.slice(1);
-    const title = `Install "${chosen.name}" for intent "${input.intent}"`;
+    const needLabel = input.need ? (needOf(input.need)?.label ?? input.need) : null;
+    const title = needLabel
+      ? `Install "${chosen.name}" to fill the need "${needLabel}"`
+      : `Install "${chosen.name}" for intent "${input.intent}"`;
     const proposal = await createPendingProposal({
       userId: input.userId,
       workspaceId: input.workspaceId,
@@ -232,8 +244,10 @@ export async function proposeIntentGapInstall(input: {
         listingSha256: chosen.listingSha256,
         params: {},
         // Why this proposal exists, so the reviewer sees the GAP not just an
-        // install request. `intent` is the join key Phase 4 was asked to close.
-        intent: input.intent,
+        // install request. `intent` is the join key Phase 4 was asked to close;
+        // `need` the space's empty need (0426), whose binding the install's
+        // reconcile then fills.
+        ...(input.need ? { need: input.need } : { intent: input.intent }),
         ...(alternatives.length > 0
           ? {
               alternatives: alternatives.map((a) => ({
@@ -316,6 +330,99 @@ export async function resolveIntentGap(input: {
     intent: input.intent,
     candidates,
     unreadable,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    agentUserId: input.agentUserId ?? null,
+    sessionId: input.sessionId ?? null,
+  });
+}
+
+// ── Needs (0426): the same chain, for a space's empty NEED ─────────────────────
+//
+// A need is filled by a pack that DECLARES it (`fills`), never guessed from
+// the intents it provides (an intent cannot tell payments from analytics).
+// Same seam, same proposal type (`capability.install`), same idempotence.
+
+/**
+ * A cache entry's declared `fills`, as canonical need slugs. `null` when the
+ * entry declares no readable `fills` (not the same fact as `[]`, as for
+ * `declaredProvides`).
+ */
+export function declaredFills(
+  entry: Pick<CatalogCacheEntry, "definition">
+): string[] | null {
+  const raw = (entry.definition as { fills?: unknown } | null | undefined)?.fills;
+  if (raw === undefined || raw === null || !Array.isArray(raw)) return null;
+  const out: string[] = [];
+  for (const v of raw) {
+    const slug = canonicalNeedSlug(v);
+    if (slug && !out.includes(slug)) out.push(slug);
+  }
+  return out;
+}
+
+/**
+ * Which cached packs fill `need` — PURE. A pack qualifies ONLY by an explicit
+ * `fills` entry naming the need. A pack with no `fills` is not counted as
+ * unreadable: `fills` is optional, and most packs fill no need.
+ */
+export function selectNeedProviders(input: {
+  entries: readonly CatalogCacheEntry[];
+  need: string;
+  alreadyInstalled?: ReadonlySet<string>;
+}): IntentProviderCandidate[] {
+  const need = canonicalNeedSlug(input.need) ?? input.need;
+  const out: IntentProviderCandidate[] = [];
+  for (const entry of input.entries) {
+    if (entry.kind !== "capability") continue;
+    if (input.alreadyInstalled?.has(entry.slug)) continue;
+    if (!(declaredFills(entry) ?? []).includes(need)) continue;
+    out.push({
+      slug: entry.slug,
+      name: entry.name,
+      description: entry.description,
+      version: entry.version,
+      listingSha256: entry.listing?.sha256 ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Resolve ONE empty need end to end: read the catalog, select the packs that
+ * fill it, propose the first (the rest as alternatives) or say plainly that
+ * none does. Read-only until the single proposal INSERT.
+ */
+export async function resolveNeedGap(input: {
+  need: string;
+  userId: string;
+  workspaceId: string | null;
+  agentUserId?: string | null;
+  sessionId?: string | null;
+  alreadyInstalled?: ReadonlySet<string>;
+}): Promise<IntentInstallOffer> {
+  let entries: CatalogCacheEntry[];
+  try {
+    const { queryCatalogCache } = await import("./catalog-cache-query.js");
+    entries = await queryCatalogCache({ kind: "capability" });
+  } catch (err) {
+    return {
+      status: "failed",
+      intent: input.need,
+      error: err instanceof Error ? err.message : String(err),
+      message:
+        "Nothing ran: the marketplace catalog could not be read, so it is unknown whether a capability fills this need. Try again, or ask the user.",
+    };
+  }
+  const candidates = selectNeedProviders({
+    entries,
+    need: input.need,
+    ...(input.alreadyInstalled ? { alreadyInstalled: input.alreadyInstalled } : {}),
+  });
+  return proposeIntentGapInstall({
+    intent: input.need,
+    need: input.need,
+    candidates,
     userId: input.userId,
     workspaceId: input.workspaceId,
     agentUserId: input.agentUserId ?? null,

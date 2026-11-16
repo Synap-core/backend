@@ -58,6 +58,7 @@ export * from "./command-runs.js";
 // At-most-once receipt for a DIRECT-run WRITE/external capability verb (0219).
 export * from "./capability-run-receipts.js";
 export * from "./capability-intents.js";
+export * from "./needs.js";
 
 // NEW: Workspace system
 export * from "./workspaces.js";
@@ -199,7 +200,6 @@ export * from "./box-runs.js";
 export * from "./installations.js";
 export * from "./installation-bindings.js";
 export * from "./host-jobs.js";
-export * from "./intent-defaults.js";
 // API usage telemetry — calls per key / client / conversation, 5-min buckets (0364)
 export * from "./api-usage-buckets.js";
 // Server faults — the exact cause of each 5xx by errorId, pod admins only (0392)

@@ -23,9 +23,15 @@
  * WHAT A `tools` ENTRY NAMES, in this order (the first that matches wins):
  *   1. a run tool of {@link RUN_TOOL_NAMES} (an IS tool, by its name, or by
  *      its MCP spelling `synap_<name>`: playbook text uses MCP names);
- *   2. an intent slug of the `capability_intents` vocabulary: the verbs that
+ *   2. a NEED ref `need:<need>` or `need:<need>/<intent>` (0426, founder
+ *      decisions D2 and D3): the verbs of the provider the run's SPACE bound
+ *      to that need, for the need's intents (or the one intent). A need the
+ *      space has not filled offers nothing and is a missing-tool reason, never
+ *      a silent drop ({@link isNeedToolEntry}; the ref grammar is
+ *      `@synap-core/types/needs` `parseNeedRef`);
+ *   3. an intent slug of the `capability_intents` vocabulary: the verbs that
  *      serve it on this pod are offered;
- *   3. anything else: a capability (by name or id) or a verb id, resolved in
+ *   4. anything else: a capability (by name or id) or a verb id, resolved in
  *      the pod's registry under the run's lens. A name nothing serves is a
  *      FACT (the run is told), never a rejection, like `requiredIntents` was.
  *
@@ -201,6 +207,20 @@ export function normalizeToolEntry(entry: string): string {
   return RUN_TOOL_NAME_SET.has(stem) ? stem : entry;
 }
 
+/**
+ * The prefix of a NEED ref in `tools` (and `requires`): `need:<need>` or
+ * `need:<need>/<intent>`. This package has no dependencies, so it holds the
+ * prefix only; the ref grammar, the vocabulary and the parser are
+ * `@synap-core/types/needs` (`NEED_REF_PREFIX`, pinned equal to this one by
+ * the api's `need-ref-prefix.tripwire.test.ts`).
+ */
+export const NEED_TOOL_PREFIX = "need:";
+
+/** Is this `tools` entry a need ref (kind 2 of the header)? PURE. */
+export function isNeedToolEntry(entry: string): boolean {
+  return entry.startsWith(NEED_TOOL_PREFIX);
+}
+
 /** The door a declared verb runs through, and where its inputs are read. */
 export const RUN_CAPABILITY_TOOL = "run_capability";
 export const RUN_LIST_CAPABILITIES_TOOL = "list_capabilities";
@@ -274,8 +294,9 @@ export function activeToolsList(
 
 /**
  * The IS tool names of one turn: the class floor, then the declared run tools,
- * each once. Declared entries that are not run tools (intents, capabilities)
- * are not here: they become `verbs`, offered through {@link RUN_CAPABILITY_TOOL}.
+ * each once. Declared entries that are not run tools (needs, intents,
+ * capabilities) are not here: they become `verbs`, offered through
+ * {@link RUN_CAPABILITY_TOOL}.
  * PURE.
  */
 export function runTurnToolNames(

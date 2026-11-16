@@ -3083,6 +3083,10 @@ export const playbooksRouter = router({
           ownerId: ctx.userId,
           runner: input.runner,
           playbook,
+          // Before the run's space is resolved below: the explicit, the
+          // playbook's or the ambient one, for a `need:` entry of `requires`.
+          workspaceId:
+            input.workspaceId ?? playbook.workspaceId ?? ctx.workspaceId ?? null,
         });
         if (mapped.handToAgentId) input.handToAgentId = mapped.handToAgentId;
         if (mapped.runOn) input.runOn = mapped.runOn;
@@ -3243,6 +3247,7 @@ export const playbooksRouter = router({
       if (input.handToAgentId || input.runOn) {
         await resolveRunChoice({
           userId: ctx.userId,
+          workspaceId: runWorkspaceId,
           agentUserId: input.agentUserId,
           handToAgentId: input.handToAgentId,
           runOn: input.runOn,
@@ -3273,6 +3278,7 @@ export const playbooksRouter = router({
       if (declaresStepTools(playbook)) {
         const choice = await resolveRunChoice({
           userId: ctx.userId,
+          workspaceId: runWorkspaceId,
           agentUserId: input.agentUserId,
           handToAgentId: input.handToAgentId,
           runOn: input.runOn,

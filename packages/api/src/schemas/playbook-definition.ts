@@ -43,6 +43,7 @@ import {
   isKnownIntent,
   unknownIntents,
 } from "@synap-core/types/capability-intents";
+import { looksLikeNeedRef, needRefProblem } from "@synap-core/types/needs";
 import {
   playbookStagesSchema,
   relationTypeSlugSchema,
@@ -203,6 +204,10 @@ export const playbookParamsInputSchema = z
  * playbook may declare a capability a later install provides (the run is told
  * what is missing). A duplicate is refused: the reader would drop it, so
  * "saved" would misreport the stored list.
+ *
+ * A NEED ref (`need:code-host`, `need:gate/fetch_record`, 0426) names a seat
+ * the space fills once; an unfilled need is a fact too (the run is told), but
+ * a ref to a need the vocabulary does not have is a typo and is refused.
  */
 export const playbookToolsSchema = z
   .array(z.string().trim().min(1).max(PLAYBOOK_TOOL_MAX_CHARS))
@@ -218,6 +223,12 @@ export const playbookToolsSchema = z
           path: [index],
           message: `tools repeats "${tool}": it is a set, not a list`,
         });
+      }
+      if (looksLikeNeedRef(tool)) {
+        const problem = needRefProblem(tool);
+        if (problem) {
+          ctx.addIssue({ code: "custom", path: [index], message: problem });
+        }
       }
       seen.add(tool);
     }

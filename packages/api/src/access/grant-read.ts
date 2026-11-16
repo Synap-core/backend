@@ -53,7 +53,6 @@ import {
   hostJobs,
   installationBindings,
   installations,
-  intentDefaults,
   cellInstances,
   channels,
   documents,
@@ -258,8 +257,6 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     hostJobs,
     spec("installation", hostJobs, { idColumn: hostJobs.installationId }),
   ],
-  // A remembered provider choice is a preference: no id/workspace qualifier.
-  [intentDefaults, spec("preference", {})],
   [links, spec("link", links)],
   [tools, spec("tool", tools)],
   [mcpServers, spec("tool", mcpServers)],

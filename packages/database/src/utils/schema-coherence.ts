@@ -2217,10 +2217,19 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "lease_id",
     addedBy: "0409_installations.sql",
   },
+
+  // Needs (0426) — the need vocabulary. Absence means every run whose tools
+  // name a need, the space binding door and the needs read would throw
+  // (42P01).
   {
-    table: "intent_defaults",
-    column: "constraints_hash",
-    addedBy: "0409_installations.sql",
+    table: "needs",
+    column: "intents",
+    addedBy: "0426_needs.sql",
+  },
+  {
+    table: "needs",
+    column: "aliases",
+    addedBy: "0426_needs.sql",
   },
 
   // Document passages (0358b) — a document body as recall-sized units, and

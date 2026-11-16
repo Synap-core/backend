@@ -46,7 +46,6 @@ import {
   installations,
   installationBindings,
   hostJobs,
-  intentDefaults,
   inboundDeliveries,
   userPreferences,
   userResourceState,
@@ -619,13 +618,38 @@ registerVisibility({
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
+// Two shapes on one table (0426): an installation's binding is the OWNER's
+// within the workspace lens (as installations); a space's need binding (no
+// installation, founder decision D3: filled once per space, shared by its
+// members) follows the space's membership, never the person who set it. The
+// `installation_bindings_scope_check` CHECK guarantees a space binding has a
+// workspace, so the NULL-workspace branch only ever sees installation rows.
 registerVisibility({
   table: installationBindings,
   query: () => db.query.installationBindings,
   rule: {
-    kind: "workspaceOwned",
-    workspaceColumn: installationBindings.workspaceId,
-    userColumn: installationBindings.userId,
+    kind: "custom",
+    predicate: (access) =>
+      or(
+        and(
+          isNotNull(installationBindings.installationId),
+          eq(installationBindings.userId, access.userId),
+          workspaceLensWhere(
+            installationBindings.workspaceId,
+            access.userId,
+            access.workspaceLens
+          )
+        ),
+        and(
+          isNull(installationBindings.installationId),
+          isNotNull(installationBindings.workspaceId),
+          workspaceLensWhere(
+            installationBindings.workspaceId,
+            access.userId,
+            access.workspaceLens
+          )
+        )
+      ),
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
@@ -638,13 +662,6 @@ registerVisibility({
     userColumn: hostJobs.userId,
     nullWorkspaceMeans: "ownerPrivate",
   },
-});
-// A remembered provider choice (0409) is a PREFERENCE: the person's alone,
-// whatever space it was made for.
-registerVisibility({
-  table: intentDefaults,
-  query: () => db.query.intentDefaults,
-  rule: { kind: "user", userColumn: intentDefaults.userId },
 });
 // A focus session is one person's goal-bound work room, READABLE by its owner
 // and by the HUMAN roster of its own minted room (founder decision C,

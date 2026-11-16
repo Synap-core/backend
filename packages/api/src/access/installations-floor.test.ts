@@ -1,7 +1,8 @@
 /**
  * INSTALLATIONS READ FLOOR (0409) — what a person installed on their computers
  * is THEIRS: the installation, the URLs it is reachable at (bindings), the jobs
- * its computer ran, and the provider they chose to remember.
+ * its computer ran. A SPACE's need binding (0426, no installation) is the
+ * space's: its members read it, whoever set it.
  *
  * Predicate level, like two-user-floor.test.ts: build an AccessContext, compile
  * the WHERE the access layer emits for each table (PgDialect), and prove the
@@ -9,10 +10,12 @@
  * first assertion is also the "is it registered at all" check.
  *
  * Shape of the floor:
- *   - installations / installation_bindings / host_jobs: `workspaceOwned`
- *     (owner AND workspace lens; a NULL workspace stays owner-private), as
- *     box_runs. B can never read A's rows, whatever the lens.
- *   - intent_defaults: `user` (the person alone, no workspace branch).
+ *   - installations / host_jobs, and an installation's binding: owner AND
+ *     workspace lens (a NULL workspace stays owner-private), as box_runs. B
+ *     can never read A's rows, whatever the lens.
+ *   - a space's need binding (installation_id NULL): the space's membership
+ *     lens only, no owner term (D3: filled once per space, shared).
+ *   - intent_defaults: dropped by 0426.
  *
  * What it does NOT cover: the host-job routes, which floor on the computer
  * itself and never read through scopedDb (U7 tests them).
@@ -25,7 +28,6 @@ import {
   installations,
   installationBindings,
   hostJobs,
-  intentDefaults,
 } from "@synap/database/schema";
 import { AccessContext, scopedDb } from "./index.js";
 import { withVisibility } from "./visibility.js";
@@ -86,25 +88,26 @@ describe("installations floor — the owner within the workspace lens", () => {
   );
 });
 
-describe("intent_defaults floor — the person alone", () => {
-  it("pins to the caller's own id, with no workspace branch", () => {
-    for (const lens of [null, "ws-shared"]) {
-      const qA = compile(
-        scopedDb(accessA.withLens(lens)).predicate(intentDefaults)!
-      );
-      const qB = compile(
-        scopedDb(accessB.withLens(lens)).predicate(intentDefaults)!
-      );
-      expect(qA.params).toEqual([A]);
-      expect(qB.params).toEqual([B]);
-      expect(qA.sql).toContain('"user_id" = $1');
-      expect(qA.sql).not.toContain("workspace");
-    }
+describe("installation_bindings — a space's need binding is the space's", () => {
+  it("installation rows keep the owner term; space rows follow the lens only", () => {
+    const q = compile(
+      scopedDb(accessB.withLens("ws-shared")).predicate(installationBindings)!
+    );
+    // Two branches: the installation one carries B's owner term, the space
+    // one (installation_id IS NULL) carries none.
+    expect(q.sql).toContain(`"installation_bindings"."installation_id" is not null`);
+    expect(q.sql).toContain(`"installation_bindings"."installation_id" is null`);
+    const spaceBranch = q.sql.slice(
+      q.sql.indexOf(`"installation_bindings"."installation_id" is null`)
+    );
+    expect(spaceBranch).not.toContain(`"installation_bindings"."user_id"`);
+    expect(spaceBranch).toContain(`"installation_bindings"."workspace_id"`);
+    expect(q.params).toContain("ws-shared");
   });
 });
 
 describe("installations — a grant names the installation subject", () => {
-  it("installation, binding and job read under `installation`; a default under `preference`", () => {
+  it("installation, binding and job read under `installation`", () => {
     expect(GRANT_READ_SPECS.get(installations)?.subject).toBe("installation");
     // A binding and a job follow their installation: the id a grant narrows
     // to is the INSTALLATION's, never the row's own.
@@ -114,6 +117,5 @@ describe("installations — a grant names the installation subject", () => {
     const job = GRANT_READ_SPECS.get(hostJobs);
     expect(job?.subject).toBe("installation");
     expect(job?.idColumn).toBe(hostJobs.installationId);
-    expect(GRANT_READ_SPECS.get(intentDefaults)?.subject).toBe("preference");
   });
 });
