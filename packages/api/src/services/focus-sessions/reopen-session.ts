@@ -189,11 +189,19 @@ export async function reopenCancelledSession(params: {
         .orderBy(desc(playbookRuns.startedAt))
         .limit(1);
       if (cancelledRun?.status === "cancelled") {
-        await tx
+        // COMPARE-AND-SET: only the run still `cancelled` is revived (a
+        // concurrent reopen, or any writer between the read and here, wins).
+        const revived = await tx
           .update(playbookRuns)
           .set({ status: "running", completedAt: null, error: null })
-          .where(eq(playbookRuns.id, cancelledRun.id));
-        reopenedRunId = cancelledRun.id;
+          .where(
+            and(
+              eq(playbookRuns.id, cancelledRun.id),
+              eq(playbookRuns.status, "cancelled")
+            )
+          )
+          .returning({ id: playbookRuns.id });
+        if (revived.length > 0) reopenedRunId = cancelledRun.id;
       }
     }
 

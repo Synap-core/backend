@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
+  and,
   proposals,
   playbooks,
   playbookRuns,
@@ -8,6 +9,7 @@ import {
   eq,
   inArray,
   getWorkspaceMembership,
+  liveRunStatusWhere,
   transitionProposal,
 } from "@synap/database";
 // `createLinks` is the ONE link door and it lives in @synap/api, not
@@ -20,7 +22,10 @@ import { isLikelyUUID } from "@synap-core/types/proposals";
 import type { GuidanceDeclaration } from "@synap-core/types/guidance";
 import type { PlaybookRunner } from "@synap/playbooks";
 import type { Context } from "../../../context.js";
-import { registerProposalExecutor } from "../execution-registry.js";
+import {
+  registerProposalExecutor,
+  type ProposalEffect,
+} from "../execution-registry.js";
 import {
   assertApplied,
   dispatchExternalOnce,
@@ -1017,7 +1022,12 @@ export function registerPlaybookExecutors(): void {
         nextStatus === "failed" ||
         nextStatus === "proposed";
 
-      await db
+      // COMPARE-AND-SET: the approval replays the update only onto a run that
+      // is still LIVE, as the direct capture does (`applyRunCapture`). The
+      // run was read above without a status floor, and the person may approve
+      // long after it was filed: a run cancelled or finished since keeps its
+      // verdict, and the receipt says nothing was written.
+      const written = await db
         .update(playbookRuns)
         .set({
           status: nextStatus,
@@ -1025,15 +1035,41 @@ export function registerPlaybookExecutors(): void {
           error: (inner.error as string | undefined) ?? run.error,
           completedAt: terminal ? new Date() : run.completedAt,
         })
-        .where(eq(playbookRuns.id, runId));
+        .where(
+          and(
+            eq(playbookRuns.id, runId),
+            liveRunStatusWhere(playbookRuns.status)
+          )
+        )
+        .returning({ id: playbookRuns.id });
       // A failed child of an automation run settles its parent (never throws).
-      if (terminal)
+      if (terminal && written.length > 0)
         await settleParentAutomationRunFromChild({ playbookRunId: runId });
+      const effect: ProposalEffect =
+        written.length > 0
+          ? {
+              applied: "verified",
+              rows: written.length,
+              ids: written.map((r) => r.id),
+              subject: "playbook_run",
+            }
+          : {
+              applied: "none",
+              reason:
+                "The run had already ended (cancelled or finished) when this update was " +
+                "approved, so it keeps its verdict. The proposal is answered; nothing was changed.",
+            };
 
       // `session → produced → entity` provenance, workspace-validated and
-      // capped exactly as the direct path does.
+      // capped exactly as the direct path does — only onto the run the
+      // update landed on (an ended run's record is not rewritten).
       const producedEntityIds = inner.producedEntityIds as string[] | undefined;
-      if (run.sessionId && run.workspaceId && producedEntityIds?.length) {
+      if (
+        written.length > 0 &&
+        run.sessionId &&
+        run.workspaceId &&
+        producedEntityIds?.length
+      ) {
         const requested = producedEntityIds.slice(0, 100);
         const found = await db.query.entities.findMany({
           where: inArray(entities.id, requested),
@@ -1074,7 +1110,7 @@ export function registerPlaybookExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      return { success: true, effect };
     },
   });
 

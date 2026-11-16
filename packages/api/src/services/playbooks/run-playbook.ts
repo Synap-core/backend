@@ -40,6 +40,7 @@ import {
   countWorkerPendingApprovals,
   listWorkerTargetsInFlight,
   startedByAgentPatch,
+  liveRunStatusWhere,
   type PlaybookRunWorkerSpec,
 } from "@synap/database";
 import type {
@@ -2569,6 +2570,15 @@ async function latestRunFailedWithinCooldown(
  * external-agent hand-off stores its `externalAgent` receipt. The ONE write
  * after `Executor.run`, for `runPlaybook` and for a re-dispatch of the same
  * run (`services/agent-dispatch/redispatch-on-choice.ts`).
+ *
+ * COMPARE-AND-SET: written only onto a run that is still LIVE. Every caller
+ * writes onto a run it holds live — `runPlaybook` and the one-shot
+ * `generate-run` insert it `running`, the re-dispatch claims it `failed →
+ * running` — so LIVE is the one expected set, and no caller needs another.
+ * An executor call can be long, and the run can end under it (the person
+ * cancels the session, an IS turn completes it first): that verdict stands.
+ * Then nothing is written or settled, it is logged, and the run is returned
+ * as it now stands, so the caller reports the truth.
  */
 export async function recordExecutorResult(
   runId: string,
@@ -2595,8 +2605,22 @@ export async function recordExecutorResult(
       // brace-free `.set({...})`, and a nested object would blind it.)
       ...externalAgentPatch,
     })
-    .where(eq(playbookRuns.id, runId))
+    .where(
+      and(eq(playbookRuns.id, runId), liveRunStatusWhere(playbookRuns.status))
+    )
     .returning();
+  if (!updated) {
+    const [current] = await db
+      .select()
+      .from(playbookRuns)
+      .where(eq(playbookRuns.id, runId))
+      .limit(1);
+    logger.warn(
+      { runId, wanted: result.status, status: current?.status ?? null },
+      "recordExecutorResult: the run was no longer live; its verdict stands and the executor's result was not written"
+    );
+    return current as PlaybookRun;
+  }
   // A failed child of an automation run settles its parent (never throws).
   if (terminal)
     await settleParentAutomationRunFromChild({ playbookRunId: runId });
