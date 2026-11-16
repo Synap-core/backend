@@ -3197,6 +3197,11 @@ export interface RunPlaybookInput {
    * unknown, paused or acts for someone else.
    */
   handToAgentId?: string;
+  /**
+   * Start a second run although one of this playbook is live on the subject.
+   * Without it, a live run comes back as `status: "already_running"`.
+   */
+  startAnother?: boolean;
 }
 
 /** One request to enable a pack a blocked playbook depends on. */
@@ -3246,6 +3251,21 @@ export type HubRunPlaybookResult =
         [key: string]: unknown;
       }>;
       enableProposals: HubCapabilityEnableOffer[];
+    }
+  | {
+      /**
+       * Nothing started: you already have a live run of this playbook on the
+       * subject (`live_run`), or an agent's draft of it waits for you
+       * (`draft_awaiting_acceptance`). `session` is that run; `run` its
+       * newest ledger row, null for a draft. Pass `startAnother` to start a
+       * second run.
+       */
+      status: "already_running";
+      run: Record<string, unknown> | null;
+      session: Record<string, unknown>;
+      proposalId: null;
+      reason: "live_run" | "draft_awaiting_acceptance";
+      message: string;
     };
 
 // ─── Skills / Rules (prompt-injecting authoring doors) ───────────────────────
