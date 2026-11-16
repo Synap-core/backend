@@ -48,6 +48,7 @@ import {
   type DevApprovalType,
 } from "../../../services/proposals/dev-approval.js";
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
+import { assertMayDecideProposal } from "../../proposals/review-authority.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import {
   PROPOSAL_IDS_FILTER_MAX,
@@ -1059,6 +1060,17 @@ export function registerProposalsRoutes(app: HubHono): void {
         403
       );
     }
+    // The key's decision right first, before any read (as the in-pod door's
+    // first statement); the procedure then bounds it to the proposal's own
+    // space, project or object (assertCanReviewProposal).
+    try {
+      assertMayDecideProposal("reject", "reject");
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Forbidden" },
+        httpStatusForTrpcError(err)
+      );
+    }
     return proposalItemDoor(c, "reject");
   });
 
@@ -1067,6 +1079,17 @@ export function registerProposalsRoutes(app: HubHono): void {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },
         403
+      );
+    }
+    // The key's decision right first, before any read (as the in-pod door's
+    // first statement); the procedure then bounds it to the proposal's own
+    // space, project or object (assertCanReviewProposal).
+    try {
+      assertMayDecideProposal("reject", "restore");
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Forbidden" },
+        httpStatusForTrpcError(err)
       );
     }
     return proposalItemDoor(c, "restore");

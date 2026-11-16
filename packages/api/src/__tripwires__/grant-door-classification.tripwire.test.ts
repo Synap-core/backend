@@ -169,7 +169,11 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
  * revise core's key check (`assertMayReviseProposal`: a key revising a
  * proposal it did not file needs the approve right on that proposal's own
  * space, project or object), which `mergeProposalRevision` runs on every
- * revision.
+ * revision; and the decision right (`assertMayDecideProposal`: a key that
+ * drops or restores an item of a proposal needs `proposal.reject`, then the
+ * procedure it calls bounds it to the proposal's own space, project or object
+ * through `assertCanReviewProposal`, pinned by
+ * `proposal-decision-grant.tripwire.test.ts`).
  */
 const GATES = [
   "checkPermissionOrPropose",
@@ -180,6 +184,7 @@ const GATES = [
   "assertChannelWrite",
   "canWriteFacet",
   "assertMayReviseProposal",
+  "assertMayDecideProposal",
 ] as const;
 type Gate = (typeof GATES)[number];
 
