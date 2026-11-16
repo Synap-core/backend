@@ -20,6 +20,10 @@ import type {
 } from "./bind-context.js";
 import { bindContext } from "./bind-context.js";
 import { isQuestion } from "./question.js";
+import {
+  ACTION_RUN_READ,
+  resolveActionRunModeLabel,
+} from "../vocabulary/index.js";
 
 /** The object catalogs of find, in the order the wire reports them. */
 export const FIND_WIRE_OBJECT_CATALOGS = [
@@ -206,6 +210,22 @@ function kindToken(wireKind: string): string {
 function prose(line: string | null | undefined): string | null {
   const t = (line ?? "").replace(/\s+/g, " ").trim();
   return t ? t : null;
+}
+
+/**
+ * THE mapping from a row's tier to the run-mode token the vocabulary labels
+ * (`resolveActionRunModeLabel`: "Read only", "Runs on its own", "Asks first").
+ * One place: a surface never maps tiers to words itself.
+ */
+export const FIND_ROW_TIER_RUN_MODE = {
+  "read-only": ACTION_RUN_READ,
+  auto: "auto",
+  "asks-first": "ask",
+} as const satisfies Record<FindRowTier, string>;
+
+/** A tier's words, through the vocabulary's one run-mode resolver. */
+export function resolveFindRowTierLabel(tier: FindRowTier): string {
+  return resolveActionRunModeLabel(FIND_ROW_TIER_RUN_MODE[tier]);
 }
 
 /**

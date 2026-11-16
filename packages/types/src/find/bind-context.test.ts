@@ -26,7 +26,7 @@ describe("bindContext — playbook subject", () => {
       requiredParams: [],
     });
     expect(b.filled).toEqual([
-      { slot: "subject", vocabulary: "subject", ids: ["p1"] },
+      { name: "subject", value: "p1", source: "subject" },
     ]);
     expect(b.owed).toEqual([]);
     expect(b.mismatch).toBeUndefined();
@@ -39,9 +39,9 @@ describe("bindContext — playbook subject", () => {
       requiredParams: [],
     });
     expect(b.filled[0]).toEqual({
-      slot: "subject",
-      vocabulary: "subject",
-      ids: ["p1"],
+      name: "subject",
+      value: "p1",
+      source: "subject",
     });
   });
 
@@ -52,9 +52,9 @@ describe("bindContext — playbook subject", () => {
       requiredParams: [],
     });
     expect(b.filled[0]).toEqual({
-      slot: "subject",
-      vocabulary: "subject",
-      ids: ["p1"],
+      name: "subject",
+      value: "p1",
+      source: "subject",
       unverified: true,
     });
   });
@@ -95,9 +95,9 @@ describe("bindContext — playbook subject", () => {
       requiredParams: [{ name: "introducer", type: "entity" }],
     });
     expect(b.filled).toContainEqual({
-      slot: "introducer",
-      vocabulary: "param",
-      ids: ["p2"],
+      name: "introducer",
+      value: "p2",
+      source: "param",
     });
   });
 
@@ -125,8 +125,8 @@ describe("bindContext — capability file parameters", () => {
       },
     });
     expect(b.filled).toEqual([
-      { slot: "cover", vocabulary: "file", ids: ["f1"] },
-      { slot: "media", vocabulary: "file", ids: ["f2", "f3"] },
+      { name: "cover", value: "f1", source: "file" },
+      { name: "media", value: ["f2", "f3"], source: "file" },
     ]);
   });
 
@@ -135,9 +135,7 @@ describe("bindContext — capability file parameters", () => {
       vocabulary: "action",
       parameters: { thumb: "file:url?", video: "file:url" },
     });
-    expect(b.filled).toEqual([
-      { slot: "video", vocabulary: "file", ids: ["f1"] },
-    ]);
+    expect(b.filled).toEqual([{ name: "video", value: "f1", source: "file" }]);
     expect(b.owed).toEqual([]);
   });
 
@@ -147,7 +145,7 @@ describe("bindContext — capability file parameters", () => {
       vocabulary: "action",
       parameters: { media: "file[]:url" },
     });
-    expect(b.filled[0]!.ids).toHaveLength(20);
+    expect(b.filled[0]!.value).toHaveLength(20);
     expect(b.mismatch).toMatch(/1 left out/);
   });
 
@@ -205,8 +203,8 @@ describe("bindContext — intent input", () => {
       input,
     });
     expect(b.filled).toEqual([
-      { slot: "media", vocabulary: "file", ids: ["f1"] },
-      { slot: "to", vocabulary: "recipient", ids: ["p1"] },
+      { name: "media", value: ["f1"], source: "file" },
+      { name: "to", value: "p1", source: "recipient" },
     ]);
     expect(b.owed.map((o) => o.slot)).toEqual(["text"]);
   });
