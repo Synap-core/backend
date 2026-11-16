@@ -184,9 +184,10 @@ const GET_CHANNEL = READS("channel");
  * the same function, so they share this one declaration. The subjects are
  * the catalogs that read on the person's floor with no grant clause:
  * runnable verbs (`tool`, `command`), playbooks, and automations. The object
- * catalogs (skills and rules, automations, sessions, goals, projects, views,
- * documents; `find-objects.ts`) AND the key's grant row by row
- * (`grantReadPredicate`; guarded by
+ * catalogs (records, skills and rules, automations, sessions, goals, projects,
+ * views, documents; `find-objects.ts`) AND the key's grant row by row
+ * (`grantReadPredicate`; records through `accessScopeWhere`, which ANDs it
+ * over the index hits in `visibleEntityIds`; guarded by
  * `services/capabilities/__tests__/find-objects.grants.pglite.test.ts`),
  * except skills, which have no read subject yet (as LOAD_SKILL). The spaces
  * catalog reads the person's member spaces (name, purpose, kinds), which no
