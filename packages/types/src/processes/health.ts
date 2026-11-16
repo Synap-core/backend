@@ -20,7 +20,7 @@
  *     never branched on it.
  */
 import { resolveStatusLabel } from "../vocabulary/index.js";
-import { resolveRunUnitState } from "../units/state.js";
+import { resolveRunUnitState, type UnitStateInput } from "../units/state.js";
 
 /**
  * Every process health state, as a VALUE — the type is derived from it, so a
@@ -315,4 +315,50 @@ export function processHealthNeedsAttention(
   health: Pick<ProcessHealth, "state">
 ): boolean {
   return PROCESS_ATTENTION_STATES.includes(health.state);
+}
+
+/**
+ * The ONE tone of a process health: its state as the unit-state input every
+ * surface draws with `resolveUnitState` (the desktop's `UnitMark`, pod admin's
+ * pill). Presentation of the rule above, kept beside it so the desktop and pod
+ * admin never map a health state to a mark twice (Process wave plan 0adf8352
+ * W4). Total over `PROCESS_HEALTH_STATES` (the switch has no default: a new
+ * state does not compile until it is mapped).
+ *
+ *   config-error / unresolved-failure → failed (it broke; the owner must fix it)
+ *   blocked-by-policy                 → checkGate (policy said no: a person's
+ *                                        eye, calm, never the red of a failure)
+ *   waiting-on-you                    → waitingOnYou (your turn)
+ *   running                           → running
+ *   draft / never-run                 → everStarted: false (nothing yet)
+ *   paused                            → idle (the quiet paused mark)
+ *   healthy                           → terminal (the calm success mark: its
+ *                                        last outcome is done and nothing is
+ *                                        owed; a surface names it with
+ *                                        `resolveStatusLabel(health.state)`)
+ *   unknown                           → unreadable (unmeasured is never calm)
+ */
+export function processHealthUnitInput(
+  health: Pick<ProcessHealth, "state">
+): UnitStateInput {
+  switch (health.state) {
+    case "config-error":
+    case "unresolved-failure":
+      return { failed: true };
+    case "blocked-by-policy":
+      return { checkGate: true };
+    case "waiting-on-you":
+      return { waitingOnYou: true };
+    case "running":
+      return { running: true };
+    case "draft":
+    case "never-run":
+      return { everStarted: false };
+    case "paused":
+      return { idle: true };
+    case "healthy":
+      return { terminal: true };
+    case "unknown":
+      return { unreadable: true };
+  }
 }

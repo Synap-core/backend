@@ -38,7 +38,6 @@ describe("DEPRECATED_SURFACES", () => {
         "files",
         "governance",
         "import",
-        "processors",
         "work-map",
       ].sort()
     );
