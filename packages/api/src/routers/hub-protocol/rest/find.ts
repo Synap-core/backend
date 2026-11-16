@@ -3,8 +3,8 @@
  *
  * The Hub REST door of the ONE find service (`findForCaller`,
  * `services/capabilities/find-intent.ts`): runnable verbs, intents,
- * playbooks, spaces, and every object that can be OPENED (skills and rules,
- * automations, sessions, goals, projects, views, documents), each object row
+ * playbooks, spaces, and every object that can be OPENED (records, skills and
+ * rules, automations, sessions, goals, projects, views, documents), each object row
  * with its `open` link. MCP `synap_find` and tRPC `knowledge.find` call the
  * same function, so a Hub key (Raycast, the CLI, a pod app) gets the answer
  * an agent and the browser get. A thin adapter: no ranking, no catalog list,
@@ -14,6 +14,7 @@
  *   ?workspaceId= the lens; a space the caller cannot read is a 403
  *   ?catalogs=a,b which catalogs to search (`FIND_CATALOGS`); omit for all
  *   ?limit=      max matches per catalog (1-25, default 5)
+ *   ?depth=      `instant` skips installed recipes + marketplace; default `full`
  *
  * ABSENT ≠ EMPTY per catalog, as on the other doors: a block missing from the
  * answer was not searched, `matches: []` was searched and nothing fit, and
@@ -51,6 +52,10 @@ const FindQuerySchema = z.object({
       description: `Comma-separated, some of: ${FIND_CATALOGS.join(", ")}. Omit for all.`,
     }),
   limit: z.coerce.number().int().min(1).max(25).optional(),
+  depth: z.enum(["instant", "full"]).optional().openapi({
+    description:
+      "`instant` skips installed recipes and the marketplace (absent, not empty), for a bar that asks per keystroke. Default `full`.",
+  }),
 });
 
 /** Comma list → catalog names, each one a member of `FIND_CATALOGS`. */
@@ -65,6 +70,8 @@ const FoundObjectSchema = z
     why: z.string().nullable(),
     open: z.string(),
     ref: z.string().optional(),
+    profileSlug: z.string().optional(),
+    roles: z.array(z.string()).optional(),
     workspaceId: z.string().nullable(),
     score: z.number(),
     confidence: z.number(),
@@ -113,7 +120,7 @@ export function registerFindRoutes(app: HubHono): void {
     summary: "Find what is there for this: verbs, playbooks, spaces, objects",
     description:
       "The find door (the same service as MCP synap_find and tRPC knowledge.find): runnable " +
-      "capabilities, intents, playbooks, spaces, and the objects that can be opened (skills and " +
+      "capabilities, intents, playbooks, spaces, and the objects that can be opened (records, skills and " +
       "rules, automations, sessions, goals, projects, views, documents), each object with its " +
       "`open` link. A catalog absent from the answer was not searched; `matches: []` was " +
       "searched and nothing fit; `error` means that catalog's read failed. To recall CONTENT " +
@@ -174,6 +181,7 @@ export function registerFindRoutes(app: HubHono): void {
         ...(agentUserId ? { agentUserId } : {}),
         ...(catalogs ? { catalogs } : {}),
         ...(q.limit ? { limit: q.limit } : {}),
+        ...(q.depth ? { depth: q.depth } : {}),
       });
       if (!found.ok) {
         return c.json(
