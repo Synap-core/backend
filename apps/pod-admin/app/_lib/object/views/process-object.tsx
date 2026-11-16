@@ -33,6 +33,7 @@ import {
   resolveActionLabel,
   resolveObjectNoun,
   resolveObjectNounPlural,
+  resolveProcessHealthReason,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { navHref } from "../../../../lib/console-nav";
@@ -43,11 +44,12 @@ import { ResourceRow } from "../../../(admin)/components/resource-row";
 import { SectionCard } from "../../../(admin)/components/section-card";
 import { StatusPill } from "../../../(admin)/components/status-pill";
 import { statusPillFor } from "../../../(admin)/components/status-tone";
-import { templateSummary } from "../../../(admin)/processes/_lib/summary";
+import { processSummary } from "../../../(admin)/processes/_lib/summary";
 import { CATALOGS } from "../../../(admin)/processes/_lib/copy";
 import {
   blocksToDraw,
   blockUnavailable,
+  checkLines,
   countDoors,
   countExitTarget,
   installedFromWords,
@@ -55,9 +57,10 @@ import {
   preApprovalWords,
   processHealthPill,
   runnerLabel,
+  sayWith,
+  spaceWords,
   stepGateLabel,
   stepUses,
-  type Words,
 } from "../../../(admin)/processes/_lib/process-page";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
@@ -78,7 +81,7 @@ export function ProcessObject({
 }) {
   const t = useT(CATALOGS);
   const locale = useConsoleLocale();
-  const say = (w: Words) => t(w.key, w.params as never);
+  const say = sayWith(t);
   const utils = trpc.useUtils();
   const query = trpc.playbooks.process.useQuery(
     { playbookId: id },
@@ -100,13 +103,25 @@ export function ProcessObject({
   useReauthOnUnauthorized(query.error);
 
   const spaceName = useMemo(() => {
-    if (!workspaceId) return t("list.allSpaces");
-    return (
-      [...(mySpaces.data ?? []), ...(allSpaces.data ?? [])].find(
-        (s) => s.id === workspaceId
-      )?.name ?? t("list.aSpace")
+    const names = new Map(
+      [...(mySpaces.data ?? []), ...(allSpaces.data ?? [])].map((s) => [
+        s.id,
+        s.name,
+      ])
     );
-  }, [workspaceId, mySpaces.data, allSpaces.data, t]);
+    // Failed only when no read that could name it answered.
+    const failed = mySpaces.isError && (!viewerIsPodAdmin || allSpaces.isError);
+    const w = spaceWords(workspaceId, names, failed);
+    return typeof w === "string" ? w : t(w.key);
+  }, [
+    workspaceId,
+    mySpaces.data,
+    mySpaces.isError,
+    allSpaces.data,
+    allSpaces.isError,
+    viewerIsPodAdmin,
+    t,
+  ]);
 
   if (query.isLoading) return frame.loading(t("loading"));
   const read = query.data;
@@ -195,31 +210,44 @@ export function ProcessObject({
     ? consolePath({ page: "space", id: workspaceId })
     : null;
 
-  const thisWeek =
-    week.doors.length === 0 ? (
-      week.unmeasured ? (
-        t("count.unmeasured")
-      ) : (
-        t("count.none")
-      )
-    ) : (
-      <span className="flex flex-wrap gap-x-3 gap-y-1">
-        {week.doors.map((door) => (
-          <ExitLink
-            key={door.key}
-            exit={openIn(countExitTarget(door.key, id, read.health))}
-            label={say(door.words)}
-          />
-        ))}
-      </span>
-    );
+  // A count that could not be read is said whenever it happens, beside the
+  // counts that could; "nothing" only when every count read as 0.
+  const runsFact = (
+    <span className="flex flex-col gap-1">
+      {week.doors.length > 0 ? (
+        <span className="flex flex-wrap gap-x-3 gap-y-1">
+          {week.doors.map((door) => (
+            <ExitLink
+              key={door.key}
+              exit={openIn(countExitTarget(door.key, id, read.health))}
+              label={say(door.words)}
+            />
+          ))}
+        </span>
+      ) : week.unmeasured ? null : (
+        <span>{t("count.none")}</span>
+      )}
+      {week.unmeasured && (
+        <span className="text-foreground/65">{t("count.unmeasured")}</span>
+      )}
+    </span>
+  );
+  const summary = processSummary(def.description);
+  const reason = resolveProcessHealthReason(read.health, { locale });
 
   const blocks = blocksToDraw(read);
   return frame.object({
     header: {
       kind: "playbook",
       title: def.name,
-      summary: templateSummary(def.description, null),
+      summary:
+        summary || reason ? (
+          <>
+            {summary}
+            {summary && reason ? <br /> : null}
+            {reason}
+          </>
+        ) : undefined,
       status: processHealthPill(read.health, locale),
       breadcrumb: frame.breadcrumb?.(def.name),
       primaryAction: <ExitLink exit={desktop} label={t("action.openInApp")} />,
@@ -244,17 +272,19 @@ export function ProcessObject({
       },
       { label: t("fact.installedFrom"), value: say(installedFromWords(def)) },
       { label: t("fact.version"), value: String(def.version) },
-      { label: t("fact.thisWeek"), value: thisWeek },
+      { label: t("fact.runs"), value: runsFact },
     ],
     factColumns: 4,
     children: (
       <div className="flex flex-col gap-6">
-        {/* REASSURE: why the counts open elsewhere (D4). */}
-        <p className="-mt-3 text-[12.5px] text-foreground/65">
-          {t("count.reassure")}
-        </p>
+        {/* REASSURE: why the counts open elsewhere (D4), when there are some. */}
+        {week.doors.length > 0 && (
+          <p className="text-[12.5px] text-foreground/65">
+            {t("count.reassure")}
+          </p>
+        )}
         {blocks.map((block) => (
-          <Block key={block} block={block} read={read} t={t} />
+          <Block key={block} block={block} read={read} id={id} t={t} />
         ))}
         <SectionCard
           title={t("access.title")}
@@ -340,10 +370,13 @@ type T = TFunction<typeof CATALOGS.en>;
 function Block({
   block,
   read,
+  id,
   t,
 }: {
   block: ProcessBlock;
   read: ProcessRead;
+  /** The process's id: the desktop door of the needs. */
+  id: string;
   t: T;
 }) {
   const locale = useConsoleLocale();
@@ -409,7 +442,14 @@ function Block({
                   Icon={ListChecks}
                   primary={`${i + 1}. ${step.name}`}
                   secondary={secondary}
-                  status={gate ? { kind: "unknown", label: gate } : undefined}
+                  // The gate is a fact of the step, not a state: a plain badge.
+                  actions={
+                    gate ? (
+                      <span className="inline-flex min-h-6 items-center rounded-md px-2 text-[11.5px] text-foreground/75 ring-1 ring-inset ring-foreground/15">
+                        {gate}
+                      </span>
+                    ) : undefined
+                  }
                   wrap
                 />
               );
@@ -417,28 +457,27 @@ function Block({
           )}
         </SectionCard>
       );
-    case "checks":
+    case "checks": {
+      // Criteria, then the gates the gate door names; nothing to say: OMIT.
+      const lines = checkLines(read);
+      if (lines.length === 0) return null;
       return (
-        <SectionCard
-          title={t("block.checks")}
-          count={read.checks.criteria.length}
-        >
+        <SectionCard title={t("block.checks")} count={lines.length}>
           <ul className="flex list-disc flex-col gap-1 pl-5 text-[13px] text-foreground/85">
-            {read.checks.criteria.map((c) => {
-              const step = c.stepKey
-                ? read.steps.find((s) => s.key === c.stepKey)?.name
-                : null;
-              return (
-                <li key={c.key}>
-                  {step
-                    ? t("checks.ofStep", { statement: c.statement, step })
-                    : c.statement}
-                </li>
-              );
-            })}
+            {lines.map((line) => (
+              <li key={line.key}>
+                {line.step
+                  ? t("checks.ofStep", {
+                      statement: line.statement,
+                      step: line.step,
+                    })
+                  : line.statement}
+              </li>
+            ))}
           </ul>
         </SectionCard>
       );
+    }
     case "moves": {
       if (failed || !read.moves) {
         return <SectionCard title={t("block.moves")}>{explain}</SectionCard>;
@@ -484,6 +523,18 @@ function Block({
           title={t("block.needs")}
           count={failed ? null : read.needs.length}
           hint={failed ? undefined : t("needs.readOnly")}
+          actions={
+            !failed && read.needs.some((n) => n.state === "empty") ? (
+              <ExitLink
+                exit={openIn({
+                  kind: "objectInApp",
+                  objectKind: "playbook",
+                  id,
+                })}
+                label={t("needs.chooseInApp")}
+              />
+            ) : undefined
+          }
         >
           {failed ? (
             explain
@@ -505,7 +556,7 @@ function Block({
                           {row.provider}
                         </span>
                       ) : row.state === "empty" ? (
-                        <StatusPill kind="stale" label={t("needs.choose")} />
+                        <StatusPill kind="unknown" label={t("needs.empty")} />
                       ) : (
                         <StatusPill kind="unknown" label={t("needs.unknown")} />
                       )}
@@ -535,14 +586,14 @@ function Block({
                   <Link
                     key={`${s.source}:${s.id}`}
                     href={`/open/skill/${encodeURIComponent(s.id)}`}
-                    className="rounded bg-foreground/[0.06] px-2 py-1 text-[12px] text-foreground hover:bg-foreground/[0.1]"
+                    className="inline-flex min-h-8 items-center rounded bg-foreground/[0.06] px-2.5 text-[12px] text-foreground hover:bg-foreground/[0.1]"
                   >
                     {s.name}
                   </Link>
                 ) : (
                   <span
                     key={`${s.source}:${s.slug ?? s.name}`}
-                    className="rounded bg-foreground/[0.04] px-2 py-1 text-[12px] text-foreground/65"
+                    className="inline-flex min-h-8 items-center rounded bg-foreground/[0.04] px-2.5 text-[12px] text-foreground/65"
                   >
                     {s.name}
                   </span>

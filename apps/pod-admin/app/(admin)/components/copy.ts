@@ -56,6 +56,10 @@ export const en = {
   "user.signOut": "Sign out",
   retry: "Retry",
   "listSearch.rules": "Search rules…",
+  "rules.anyProcess": "In a process or not",
+  "rules.outside": "Outside a process",
+  "rules.outsideFailed":
+    "Which automations belong to no process couldn’t be read.",
   "listSearch.templates": "Search templates…",
   "listSearch.members": "Search members…",
   "listSearch.agents": "Search agents…",
@@ -111,6 +115,10 @@ export const fr: Catalog<typeof en> = {
   "user.signOut": "Se déconnecter",
   retry: "Réessayer",
   "listSearch.rules": "Rechercher une règle…",
+  "rules.anyProcess": "Dans un processus ou non",
+  "rules.outside": "Hors de tout processus",
+  "rules.outsideFailed":
+    "Impossible de lire quelles automatisations n’appartiennent à aucun processus.",
   "listSearch.templates": "Rechercher un modèle…",
   "listSearch.members": "Rechercher un membre…",
   "listSearch.agents": "Rechercher un agent…",

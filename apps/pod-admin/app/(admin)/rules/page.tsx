@@ -66,7 +66,6 @@ import {
   type RuleRowAction,
 } from "./_lib/rule-rows";
 import { useDrainPages } from "../../../lib/use-drain-pages";
-import { CATALOGS as PROCESS_CATALOGS } from "../processes/_lib/copy";
 
 const CATALOGS = { en, fr };
 
@@ -102,7 +101,6 @@ function RulesInner() {
   // `automationsOutsideProcess`), never re-derived here.
   const processFilter: ProcessFilter | null =
     searchParams.get("process") === "outside" ? "outside" : null;
-  const pt = useT(PROCESS_CATALOGS);
   const t = useT(CATALOGS);
   const search = useDebouncedQuery();
   const utils = trpc.useUtils();
@@ -171,13 +169,14 @@ function RulesInner() {
   // land would undercount and then jump.
   const healthReady = !groups.isLoading && !groupDrain.draining;
   const counting = ruleDrain.draining || !healthReady;
-  const counts = ruleCounts(all, healthOf);
+  // The Process filter narrows first, so the Show chip's counts are over the
+  // same set the list draws (Processes' footer counts the active ones).
+  const scoped = all.filter((r) =>
+    ruleInProcessScope(r.id, processFilter, outsideIds)
+  );
+  const counts = ruleCounts(scoped, healthOf);
   const visible = filterBySearch(
-    all.filter(
-      (r) =>
-        ruleMatches(filter, r, healthOf(r.id)) &&
-        ruleInProcessScope(r.id, processFilter, outsideIds)
-    ),
+    scoped.filter((r) => ruleMatches(filter, r, healthOf(r.id))),
     search.query,
     (r) => [r.name, spaceName(r.workspaceId)]
   );
@@ -287,7 +286,10 @@ function RulesInner() {
                 statusOption(f.key, {
                   label: f.label,
                   count:
-                    loading || rules.isError
+                    loading ||
+                    rules.isError ||
+                    outsideFailed ||
+                    (processFilter !== null && index.isLoading)
                       ? null
                       : counting
                         ? "…"
@@ -297,13 +299,13 @@ function RulesInner() {
             />
             <FilterChip<ProcessFilter>
               label={resolveObjectNoun("playbook")}
-              allLabel={pt("rules.anyProcess")}
+              allLabel={t("rules.anyProcess")}
               param="process"
               value={processFilter}
               options={[
                 {
                   id: "outside",
-                  label: pt("rules.outside"),
+                  label: t("rules.outside"),
                   icon: Workflow,
                 },
               ]}
@@ -362,7 +364,7 @@ function RulesInner() {
           />
         ) : outsideFailed ? (
           <ResourceRowError
-            message={pt("rules.outsideFailed")}
+            message={t("rules.outsideFailed")}
             onRetry={() => void index.refetch()}
           />
         ) : visible.length === 0 ? (

@@ -23,27 +23,25 @@ export const en = {
   "list.failed": "Couldn’t load processes.",
   "list.create": "Create in app",
   "list.steps": "{n, plural, one {# step} other {# steps}}",
+  "list.allAutomations": "All automations",
   "list.outside":
-    "{n, plural, one {# automation runs outside any process.} other {# automations run outside any process.}}",
+    "{n, plural, one {# active automation runs outside any process.} other {# active automations run outside any process.}}",
   "list.outsideDoor": "See them",
   "list.outsideFailed": "The automations outside a process couldn’t be read.",
-  "rules.anyProcess": "In a process or not",
-  "rules.outside": "Outside a process",
-  "rules.outsideFailed":
-    "Which automations belong to no process couldn’t be read.",
-  "list.allSpaces": "All spaces",
+  "list.noSpace": "Not in a space",
   "list.aSpace": "A space",
+  "list.spaceUnread": "Space couldn’t be read",
   "count.needsYou": "{n, plural, one {# needs you} other {# need you}}",
-  "count.failedThisWeek": "{n} failed",
+  "count.failedThisWeek": "{n} failed this week",
   "count.open": "{n} open",
-  "count.doneThisWeek": "{n} done",
-  "count.none": "No runs this week",
+  "count.doneThisWeek": "{n} done this week",
+  "count.none": "Nothing open; no runs this week",
   "count.unmeasured": "Some counts couldn’t be read.",
   "count.reassure":
     "Runs are worked in the desktop app: each count opens them there.",
   "fact.installedFrom": "Installed from",
   "fact.version": "Version",
-  "fact.thisWeek": "This week",
+  "fact.runs": "Runs",
   "installed.local": "Made on this pod",
   "installed.package": "{name} · v{version}",
   "installed.packageOnly": "{name}",
@@ -63,8 +61,9 @@ export const en = {
   "checks.ofStep": "{statement} · at {step}",
   "moves.undeclared":
     "Some steps name a status the kind does not declare: {statuses}.",
-  "needs.choose": "Choose a provider",
-  "needs.unknown": "Not measured",
+  "needs.empty": "No provider yet",
+  "needs.unknown": "Couldn’t check",
+  "needs.chooseInApp": "Choose in app",
   "needs.readOnly":
     "A provider is chosen in the Synap app for now; this page shows who fills each need.",
   "needs.shared":
@@ -80,7 +79,7 @@ export const en = {
   "archive.description":
     "When it is no longer a line of work anyone should start.",
   "archive.consequence":
-    "It stops being offered and its schedule and starting rules stop firing. Runs already made, and what they produced, stay. If the pod needs someone to approve it, it is proposed instead and waits in Review.",
+    "It stops being offered and its schedule and starting rules stop firing. Runs already made, and what they produced, stay. If the pod needs someone to approve it, it is proposed instead and waits in Requests.",
   "archive.proposed": "Archiving was proposed for review.",
   "archive.failed": "Couldn’t archive the process",
   "ids.process": "Process id",
@@ -103,29 +102,28 @@ export const fr: Catalog<typeof en> = {
   "list.failed": "Impossible de charger les processus.",
   "list.create": "Créer dans l’app",
   "list.steps": "{n, plural, one {# étape} other {# étapes}}",
+  "list.allAutomations": "Toutes les automatisations",
   "list.outside":
-    "{n, plural, one {# automatisation tourne hors de tout processus.} other {# automatisations tournent hors de tout processus.}}",
+    "{n, plural, one {# automatisation active tourne hors de tout processus.} other {# automatisations actives tournent hors de tout processus.}}",
   "list.outsideDoor": "Les voir",
   "list.outsideFailed":
     "Les automatisations hors processus n’ont pas pu être lues.",
-  "rules.anyProcess": "Dans un processus ou non",
-  "rules.outside": "Hors de tout processus",
-  "rules.outsideFailed":
-    "Impossible de lire quelles automatisations n’appartiennent à aucun processus.",
-  "list.allSpaces": "Tous les espaces",
+  "list.noSpace": "Hors espace",
   "list.aSpace": "Un espace",
+  "list.spaceUnread": "Espace illisible",
   "count.needsYou":
     "{n, plural, one {# attend votre réponse} other {# attendent votre réponse}}",
-  "count.failedThisWeek": "{n} en échec",
+  "count.failedThisWeek": "{n} en échec cette semaine",
   "count.open": "{n} en cours",
-  "count.doneThisWeek": "{n} terminées",
-  "count.none": "Aucune exécution cette semaine",
+  "count.doneThisWeek":
+    "{n, plural, one {# terminée cette semaine} other {# terminées cette semaine}}",
+  "count.none": "Rien en cours ; aucune exécution cette semaine",
   "count.unmeasured": "Certains comptes n’ont pas pu être lus.",
   "count.reassure":
     "Les exécutions se traitent dans l’app de bureau : chaque compte les y ouvre.",
   "fact.installedFrom": "Installé depuis",
   "fact.version": "Version",
-  "fact.thisWeek": "Cette semaine",
+  "fact.runs": "Exécutions",
   "installed.local": "Créé sur ce pod",
   "installed.package": "{name} · v{version}",
   "installed.packageOnly": "{name}",
@@ -146,8 +144,9 @@ export const fr: Catalog<typeof en> = {
   "checks.ofStep": "{statement} · à l’étape {step}",
   "moves.undeclared":
     "Certaines étapes nomment un statut que le type ne déclare pas : {statuses}.",
-  "needs.choose": "Choisir un fournisseur",
-  "needs.unknown": "Non mesuré",
+  "needs.empty": "Pas encore de fournisseur",
+  "needs.unknown": "Vérification impossible",
+  "needs.chooseInApp": "Choisir dans l’app",
   "needs.readOnly":
     "Le fournisseur se choisit pour l’instant dans l’app Synap ; cette page montre qui remplit chaque besoin.",
   "needs.shared":

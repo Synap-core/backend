@@ -7,21 +7,24 @@
  * Rows are `playbooks.processes()`, the pod's ONE process list
  * (`@synap-core/types/processes` `ProcessSummary`: health, run counts, needs),
  * archived ones left out. A row opens `/processes/[id]`; authoring stays in
- * the desktop app. The automations that belong to no process (the read's
- * `automationsOutsideProcess`, membership decided once on the pod) are
- * counted under the list, a door to Automations (`/rules?process=outside`),
- * the one list of every automation, folded into this nav item.
+ * the desktop app. Automations, folded into this nav item, are always one
+ * door away ("All automations" in the header); the ACTIVE ones that belong
+ * to no process (the read's `automationsOutsideProcess`, membership decided
+ * once on the pod) are counted under the list, a door to
+ * `/rules?process=outside`, which opens on the same Active filter.
+ * Filters live in the URL (`?space=`, `?health=`), like Automations.
  * `?focus=<playbookId>` is received by the row wrappers.
  */
 
-import { Workflow, Building2, Globe } from "lucide-react";
+import { Workflow, Building2, Circle, Globe } from "lucide-react";
+import { Button } from "@heroui/react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Suspense, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useMemo } from "react";
 import {
-  PROCESS_HEALTH_STATES,
+  PROCESS_HEALTH_REASONS,
   processHealthNeedsAttention,
-  type ProcessHealthState,
+  type ProcessHealthReason,
 } from "@synap-core/types/processes";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { navHref, navLabel } from "../../../lib/console-nav";
@@ -42,13 +45,27 @@ import { useFocusRow } from "../components/use-focus-row";
 import { filterBySearch } from "../components/list-search";
 import { ListSearch, useDebouncedQuery } from "../components/list-search-box";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
+import { ruleIsActive } from "../rules/_lib/rule-rows";
 import { CATALOGS } from "./_lib/copy";
-import { countDoors, processHealthPill, type Words } from "./_lib/process-page";
+import {
+  countDoors,
+  healthFilterOptions,
+  processHealthPill,
+  sayWith,
+  spaceWords,
+} from "./_lib/process-page";
 
 /** The space filter's id for a process that belongs to no space. */
-const ALL_SPACES = "all-spaces";
-/** "Needs attention" (the leaf's attention states), or one health state. */
-type HealthFilter = "attention" | ProcessHealthState;
+const NO_SPACE = "no-space";
+/** "Needs attention" (the leaf's attention states), or one health reason. */
+type HealthFilter = "attention" | ProcessHealthReason;
+
+function healthFilterOf(raw: string | null): HealthFilter | null {
+  if (raw === "attention") return raw;
+  return (PROCESS_HEALTH_REASONS as readonly string[]).includes(raw ?? "")
+    ? (raw as ProcessHealthReason)
+    : null;
+}
 
 export default function ProcessesPage() {
   return (
@@ -62,10 +79,11 @@ function ProcessesInner() {
   const router = useRouter();
   const t = useT(CATALOGS);
   const locale = useConsoleLocale();
-  const say = (w: Words) => t(w.key, w.params as never);
+  const say = sayWith(t);
   const search = useDebouncedQuery();
-  const [space, setSpace] = useState<string | null>(null);
-  const [health, setHealth] = useState<HealthFilter | null>(null);
+  const searchParams = useSearchParams();
+  const space = searchParams.get("space");
+  const health = healthFilterOf(searchParams.get("health"));
   const list = trpc.playbooks.processes.useQuery({}, { staleTime: 30_000 });
   const spaces = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 60_000,
@@ -77,23 +95,27 @@ function ProcessesInner() {
     () => (list.data?.processes ?? []).filter((p) => p.status !== "archived"),
     [list.data]
   );
-  // null = that read failed (never "none"); undefined = still loading.
+  // null = that read failed (never "none"); undefined = still loading. The
+  // footer counts the active ones: /rules opens on its Active filter.
   const outside = list.data?.automationsOutsideProcess;
+  const outsideActive = outside?.filter(ruleIsActive).length ?? 0;
   const spaceName = useMemo(() => {
     const byId = new Map((spaces.data ?? []).map((s) => [s.id, s.name]));
-    return (id: string | null) =>
-      id ? (byId.get(id) ?? t("list.aSpace")) : t("list.allSpaces");
-  }, [spaces.data, t]);
+    return (id: string | null) => {
+      const w = spaceWords(id, byId, spaces.isError);
+      return typeof w === "string" ? w : t(w.key);
+    };
+  }, [spaces.data, spaces.isError, t]);
 
   const shownRows = useMemo(
     () =>
       filterBySearch(
         rows.filter((p) => {
-          if (space !== null && (p.workspaceId ?? ALL_SPACES) !== space)
+          if (space !== null && (p.workspaceId ?? NO_SPACE) !== space)
             return false;
           if (health === "attention")
             return processHealthNeedsAttention(p.health);
-          return health === null || p.health.state === health;
+          return health === null || p.health.reason === health;
         }),
         search.query,
         (p) => [p.name, spaceName(p.workspaceId)]
@@ -101,14 +123,14 @@ function ProcessesInner() {
     [rows, search.query, spaceName, space, health]
   );
   const spaceOptions = useMemo(() => {
-    const ids = [...new Set(rows.map((p) => p.workspaceId ?? ALL_SPACES))];
+    const ids = [...new Set(rows.map((p) => p.workspaceId ?? NO_SPACE))];
     return ids.map((id) => ({
       id,
-      label: id === ALL_SPACES ? t("list.allSpaces") : spaceName(id),
-      icon: id === ALL_SPACES ? Globe : Building2,
-      count: rows.filter((p) => (p.workspaceId ?? ALL_SPACES) === id).length,
+      label: spaceName(id === NO_SPACE ? null : id),
+      icon: id === NO_SPACE ? Globe : Building2,
+      count: rows.filter((p) => (p.workspaceId ?? NO_SPACE) === id).length,
     }));
-  }, [rows, spaceName, t]);
+  }, [rows, spaceName]);
 
   const loading = list.isLoading || isAuthRedirecting;
   useFocusRow({ ready: !loading });
@@ -119,10 +141,21 @@ function ProcessesInner() {
         title={navLabel("processes")}
         description={t("list.description")}
         actions={
-          <ExitLink
-            exit={openIn({ kind: "app", appId: "playbooks" })}
-            label={t("list.create")}
-          />
+          <>
+            <Button
+              as={Link}
+              href={navHref("rules")}
+              size="sm"
+              variant="flat"
+              radius="md"
+            >
+              {t("list.allAutomations")}
+            </Button>
+            <ExitLink
+              exit={openIn({ kind: "app", appId: "playbooks" })}
+              label={t("list.create")}
+            />
+          </>
         }
       />
 
@@ -140,23 +173,24 @@ function ProcessesInner() {
             <FilterChip
               label={resolveObjectNoun("workspace")}
               allLabel={t("list.filter.allSpaces")}
+              param="space"
               value={space}
-              onChange={setSpace}
               options={spaceOptions}
             />
             <FilterChip<HealthFilter>
               label={t("list.filter.health")}
               allLabel={t("list.filter.anyHealth")}
+              param="health"
               value={health}
-              onChange={setHealth}
               options={[
                 statusOption("attention", {
                   label: t("list.filter.attention"),
                 }),
-                // The states the rows are in, in the leaf's order.
-                ...PROCESS_HEALTH_STATES.filter((s) =>
-                  rows.some((p) => p.health.state === s)
-                ).map((s) => statusOption(s)),
+                // The healths the rows are in, in the pill's own words.
+                ...healthFilterOptions(
+                  rows.map((p) => p.health),
+                  locale
+                ).map((o) => ({ ...o, icon: Circle })),
               ]}
             />
           </>
@@ -179,9 +213,9 @@ function ProcessesInner() {
             <p className="px-1 pt-3 text-[12px] text-foreground/65">
               {t("list.outsideFailed")}
             </p>
-          ) : outside && outside.length > 0 ? (
+          ) : outsideActive > 0 ? (
             <p className="flex flex-wrap items-center gap-2 px-1 pt-3 text-[12px] text-foreground/65">
-              {t("list.outside", { n: outside.length })}
+              {t("list.outside", { n: outsideActive })}
               <Link
                 href={navHref("rules", { process: "outside" })}
                 className="text-foreground/85 underline-offset-2 hover:underline"
@@ -199,6 +233,8 @@ function ProcessesInner() {
               spaceName(p.workspaceId),
               t("list.steps", { n: p.stepCount }),
               ...week.doors.map((d) => say(d.words)),
+              // A count that could not be read is said, never dropped.
+              ...(week.unmeasured ? [t("count.unmeasured")] : []),
             ].join(" · ");
             return (
               <div

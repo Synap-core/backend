@@ -67,6 +67,15 @@ export function ruleIsFailing(
   return rule.status === "active" && (health?.recentFailedCount ?? 0) > 0;
 }
 
+/**
+ * Live: the Show filter's default ("Active"), and what Processes' footer
+ * counts among the automations outside a process, so its number is the one
+ * the list opens on.
+ */
+export function ruleIsActive(rule: Pick<RuleFacts, "status">): boolean {
+  return rule.status === "active";
+}
+
 export function ruleMatches(
   filter: RuleFilter,
   rule: RuleFacts,
@@ -74,7 +83,7 @@ export function ruleMatches(
 ): boolean {
   switch (filter) {
     case "active":
-      return rule.status === "active";
+      return ruleIsActive(rule);
     case "failing":
       return ruleIsFailing(rule, health);
     case "never-ran":

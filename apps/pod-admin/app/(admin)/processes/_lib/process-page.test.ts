@@ -16,6 +16,11 @@ import {
   needRow,
   preApprovalWords,
   processHealthPill,
+  checkLines,
+  healthFilterOptions,
+  partUnavailable,
+  spaceWords,
+  sayWith,
   runnerLabel,
   stepGateLabel,
   stepUses,
@@ -23,7 +28,7 @@ import {
 } from "./process-page";
 
 const t = createT("en", CATALOGS);
-const say = (w: Words) => t(w.key, w.params as never);
+const say = sayWith(t);
 
 /** A process with every block empty and every part read. */
 function read(over: Partial<ProcessRead> = {}): ProcessRead {
@@ -129,7 +134,7 @@ describe("countDoors", () => {
     expect(doors.map((d) => say(d.words))).toEqual([
       "1 needs you",
       "2 open",
-      "9 done",
+      "9 done this week",
     ]);
     expect(unmeasured).toBe(false);
   });
@@ -296,5 +301,84 @@ describe("runnerLabel", () => {
   it("reads the pod's runner kind through the vocabulary door", () => {
     expect(runnerLabel({ runnerKind: "person" }, "en")).toBe("You");
     expect(runnerLabel({ runnerKind: "ai" }, "en")).toBe("An agent");
+  });
+});
+
+describe("spaceWords", () => {
+  const names = new Map([["w1", "Sales"]]);
+  it("names the space, says no space, never guesses a failed read", () => {
+    expect(spaceWords("w1", names, false)).toBe("Sales");
+    expect(say(spaceWords(null, names, false) as Words)).toBe("Not in a space");
+    expect(say(spaceWords("w2", names, true) as Words)).toBe(
+      "Space couldn’t be read"
+    );
+    expect(say(spaceWords("w2", names, false) as Words)).toBe("A space");
+  });
+});
+
+describe("healthFilterOptions", () => {
+  it("one value per reason present, in the pill's words and tone, leaf order", () => {
+    const opts = healthFilterOptions(
+      [
+        { state: "healthy", reason: "healthy" },
+        { state: "waiting-on-you", reason: "waiting_on_you" },
+        { state: "healthy", reason: "healthy" },
+      ],
+      "en"
+    );
+    expect(opts.map((o) => o.id)).toEqual(["waiting_on_you", "healthy"]);
+    const pill = processHealthPill(
+      { state: "waiting-on-you", reason: "waiting_on_you" },
+      "en"
+    );
+    expect(opts[0]).toEqual({
+      id: "waiting_on_you",
+      label: pill.label,
+      tone: pill.kind,
+    });
+  });
+});
+
+describe("checkLines", () => {
+  const steps = [{ ...step, key: "s1", name: "Review" }];
+  it("lists criteria, then the gates the gate door names, at their step", () => {
+    const lines = checkLines({
+      steps,
+      checks: {
+        criteria: [
+          {
+            key: "c1",
+            statement: "Tests pass",
+            checkKind: null,
+            stepKey: null,
+          },
+        ],
+        gates: [
+          { stepKey: "s1", kind: "human" },
+          { stepKey: "s1", kind: "awaits" },
+        ],
+      },
+    });
+    expect(lines).toEqual([
+      { key: "criterion:c1", statement: "Tests pass", step: null },
+      { key: "gate:s1", statement: "A person approves entry", step: "Review" },
+    ]);
+  });
+  it("is empty when only an unnamed gate is there (the card is omitted)", () => {
+    expect(
+      checkLines({
+        steps,
+        checks: { criteria: [], gates: [{ stepKey: "s1", kind: "awaits" }] },
+      })
+    ).toEqual([]);
+  });
+});
+
+describe("partUnavailable", () => {
+  it("reads the read's unavailable list for a block or a part", () => {
+    expect(
+      partUnavailable({ unavailable: ["preApproval"] }, "preApproval")
+    ).toBe(true);
+    expect(partUnavailable({ unavailable: [] }, "needs")).toBe(false);
   });
 });

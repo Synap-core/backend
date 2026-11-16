@@ -1,19 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { templateSummary } from "./summary";
+import { processSummary } from "./summary";
 
-describe("templateSummary", () => {
-  it("prefers the description's first sentence", () => {
-    expect(
-      templateSummary("Runs a dev task. Then reports.", "Build {feature}")
-    ).toBe("Runs a dev task.");
-  });
-  it("reads goal references as names", () => {
-    expect(
-      templateSummary(null, "Research @{arg:company} for {owner}.\nMore.")
-    ).toBe("Research ‹company› for ‹owner›.");
+describe("processSummary", () => {
+  it("keeps the description's first sentence", () => {
+    expect(processSummary("Runs a dev task. Then reports.")).toBe(
+      "Runs a dev task."
+    );
   });
   it("is null with nothing to say and bounded when long", () => {
-    expect(templateSummary("  ", null)).toBeNull();
-    expect(templateSummary("x".repeat(300), null)!.length).toBe(201);
+    expect(processSummary("  ")).toBeNull();
+    expect(processSummary(null)).toBeNull();
+    expect(processSummary("x".repeat(300))!.length).toBe(201);
   });
 });
