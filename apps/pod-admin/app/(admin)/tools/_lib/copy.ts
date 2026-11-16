@@ -70,7 +70,6 @@ export const en = {
   "history.title": "History",
   "history.empty": "It hasn’t run yet.",
   "history.failed": "Couldn’t load its runs.",
-  "history.showAll": "Show all its runs",
   "runs.toolTitle": "One tool’s runs",
   "runs.toolHint": "Its actions’ runs, newest first",
   "runs.openTool": "Open the tool",
@@ -160,7 +159,6 @@ export const fr: Catalog<typeof en> = {
   "history.title": "Historique",
   "history.empty": "Il n’a encore jamais tourné.",
   "history.failed": "Impossible de charger ses exécutions.",
-  "history.showAll": "Voir toutes ses exécutions",
   "runs.toolTitle": "Les exécutions d’un outil",
   "runs.toolHint":
     "Les exécutions de ses actions, des plus récentes aux plus anciennes",

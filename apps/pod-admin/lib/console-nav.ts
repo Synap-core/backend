@@ -134,29 +134,15 @@ export const CONSOLE_NAV = [
   {
     id: "operate",
     label: "Operate",
+    // Jobs (`/sessions`) and Runs (`/runs`) left the console (founder, 16 Nov
+    // 2026: no work status in pod admin): `WORK_MOVED_TO_APP` redirects them.
     items: [
-      {
-        id: "sessions",
-        href: "/sessions",
-        label: "Jobs",
-        icon: "MessagesSquare",
-        kind: "session",
-        audience: "admin",
-      },
       {
         id: "rules",
         href: "/rules",
         label: "Automations",
         icon: "Zap",
         kind: "automation",
-        audience: "admin",
-      },
-      {
-        id: "runs",
-        href: "/runs",
-        label: "Runs",
-        icon: "Activity",
-        kind: "run",
         audience: "admin",
       },
       {
@@ -637,14 +623,30 @@ export const DIAGNOSE_DESTINATION: Readonly<Record<string, NavId>> = {
   // describes is Review's.
   review_queue: "review",
   capabilities: "tools",
-  failed_flows: "runs",
-  stuck_runs: "sessions",
   agent_activity: "agents",
   quality_by_prompt_version: "intelligence",
   schema_hygiene: "kinds",
   schema_contract: "kinds",
   // Memory, disks, database connections against their alert thresholds.
   resources: "health",
+};
+
+/**
+ * The desktop app that owns the work in Jobs and Runs, by manifest id: Work
+ * (`sessions`, browser `navigation/workDestination.ts` `WORK_APP_ID`).
+ */
+export const WORK_APP_ID = "sessions";
+
+/**
+ * `diagnose.global` sections whose page left the console with Jobs and Runs:
+ * Home's row hands them to the desktop app's Work, and only an admin sees
+ * them, as when they led to the admin pages. No nav badge (no nav item).
+ */
+export const DIAGNOSE_IN_APP: Readonly<
+  Record<string, { appId: string; audience: NavAudience }>
+> = {
+  failed_flows: { appId: WORK_APP_ID, audience: "admin" },
+  stuck_runs: { appId: WORK_APP_ID, audience: "admin" },
 };
 
 // ─── next.config.ts ──────────────────────────────────────────────────────────
@@ -662,8 +664,45 @@ export interface ConsoleRedirect {
  * not be swallowed by the bare `/trust-keys` rule. The request's own query
  * string (`?focus=…`) is passed through by Next.
  */
+/** One id, in the charset `/open/:type/:id` accepts (open-params `SAFE_ID_RE`). */
+const FOCUS_ID = {
+  type: "query",
+  key: "focus",
+  value: "(?<id>[A-Za-z0-9_-]{1,64})",
+} as const;
+
+/**
+ * Jobs and Runs left the console (founder, 16 Nov 2026: pod admin runs the
+ * pod; the work is done in the apps). One job or run lands on its `/open`
+ * page, the same read-only body the console drew and the door into the app;
+ * a list lands on Home, whose one link opens Work in the app. A client link
+ * built from `@synap-core/types/console` (`/sessions?focus=<id>`) keeps
+ * landing on its object.
+ */
+export const WORK_MOVED_TO_APP: readonly ConsoleRedirect[] = [
+  {
+    source: "/sessions",
+    has: [FOCUS_ID],
+    destination: "/open/session/:id",
+    permanent: false,
+  },
+  {
+    source: "/runs",
+    has: [FOCUS_ID],
+    destination: "/open/run/:id",
+    permanent: false,
+  },
+  {
+    source: "/sessions/:id",
+    destination: "/open/session/:id",
+    permanent: false,
+  },
+  { source: "/sessions", destination: "/home", permanent: false },
+  { source: "/runs", destination: "/home", permanent: false },
+];
+
 export function consoleRedirects(): ConsoleRedirect[] {
-  const rules = NAV_ITEMS.flatMap((item) =>
+  const legacy = NAV_ITEMS.flatMap((item) =>
     (item.legacy ?? []).map((legacy): ConsoleRedirect => ({
       source: legacy.source,
       destination: legacy.destination ?? item.href,
@@ -681,5 +720,6 @@ export function consoleRedirects(): ConsoleRedirect[] {
         : {}),
     }))
   );
+  const rules = [...legacy, ...WORK_MOVED_TO_APP];
   return [...rules.filter((r) => r.has), ...rules.filter((r) => !r.has)];
 }

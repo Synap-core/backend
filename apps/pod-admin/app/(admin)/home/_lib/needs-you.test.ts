@@ -284,11 +284,15 @@ describe("buildNeedsYou link building", () => {
     }).rows;
     expect(row.headline).toBe("2 flows failing in the last 7 days");
     expect(row.secondary).toBe("“AI Dev Session” failed 10 times");
+    // Runs left the console (`WORK_MOVED_TO_APP`): Work in the app.
     expect(row.action).toEqual({
       kind: "link",
-      label: "Open runs",
-      exit: { href: "/runs?filter=failing", isDesktopLink: false },
+      label: "Open in the app",
+      exit: openIn({ kind: "app", appId: "sessions" }),
     });
+    expect(row.action.kind === "link" && row.action.exit.href).toBe(
+      "synap://open/app/sessions"
+    );
   });
 
   it("falls back to the failed-run total when no flow is named", () => {
@@ -304,7 +308,7 @@ describe("buildNeedsYou link building", () => {
     expect(row.secondary).toBe("3 failed runs");
   });
 
-  it("sends stuck runs to Jobs, naming the oldest", () => {
+  it("sends stuck runs to Work in the app, naming the oldest", () => {
     const [row] = buildNeedsYou({
       sections: [
         section("stuck_runs", "degraded", {
@@ -324,8 +328,8 @@ describe("buildNeedsYou link building", () => {
     expect(row.secondary).toBe("Oldest: “Sync”, 30h");
     expect(row.action).toEqual({
       kind: "link",
-      label: "Open jobs",
-      exit: { href: "/sessions?filter=stuck", isDesktopLink: false },
+      label: "Open in the app",
+      exit: openIn({ kind: "app", appId: "sessions" }),
     });
   });
 

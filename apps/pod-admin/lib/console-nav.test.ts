@@ -125,12 +125,36 @@ describe("consoleRedirects", () => {
       ["/marketplace", "tab=installed", "/tools?type=capabilities", false],
       ["/marketplace", "tab=tools", "/tools?type=capabilities", false],
       ["/trust-keys", "section=secrets", "/security?section=secrets", false],
+      [
+        "/sessions",
+        "focus=(?<id>[A-Za-z0-9_-]{1,64})",
+        "/open/session/:id",
+        false,
+      ],
+      ["/runs", "focus=(?<id>[A-Za-z0-9_-]{1,64})", "/open/run/:id", false],
       ["/overview", null, "/home", false],
       ["/origins", null, "/applications", false],
       ["/people", null, "/members", false],
       ["/connectors", null, "/sources", false],
       ["/trust-keys", null, "/security", false],
+      ["/sessions/:id", null, "/open/session/:id", false],
+      ["/sessions", null, "/home", false],
+      ["/runs", null, "/home", false],
     ]);
+  });
+
+  it("sends Jobs and Runs out of the console: one object to its /open page, a list to Home", () => {
+    // Founder, 16 Nov 2026: no work status in pod admin.
+    expect(NAV_ITEMS.map((i) => i.href)).not.toContain("/sessions");
+    expect(NAV_ITEMS.map((i) => i.href)).not.toContain("/runs");
+    const focus = rules.find(
+      (r) => r.source === "/sessions" && r.has?.[0]?.key === "focus"
+    );
+    // The capture is what fills `:id`: a value outside `/open`'s id charset
+    // falls through to the bare rule (Home), never into a broken `/open` URL.
+    const capture = new RegExp(`^${focus?.has?.[0]?.value}$`);
+    expect(capture.exec("4f1c-aa_9")?.groups?.id).toBe("4f1c-aa_9");
+    expect(capture.exec("a/b")).toBeNull();
   });
 
   it("puts every query-narrowed rule before any bare-path rule", () => {

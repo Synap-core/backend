@@ -14,10 +14,10 @@
  *                      checks collapse into one disclosure. Pending trusted
  *                      issuers are decisions: they wait in Review. The review
  *                      backlog is left to the requests card (`homeSections`).
- *   3. Requests      — a short peek into Review, never a second queue: the
- *                      SAME read as Review (`signals.list` needs-you) and its
- *                      count (`signals.count`), so Home shows one number
- *                      (audit abbc7a19 PA-D-13). Every row and the count lead into `/review`.
+ *   3. Requests      — Review's count (`signals.count`) as one door into
+ *                      `/review`, and one link to Work in the desktop app. No
+ *                      rows: pod admin runs the pod, the work is done in the
+ *                      apps (founder, 16 Nov 2026).
  *   4. Pod at a glance — sync, backups and contents as three compact rows;
  *                      the operator's, shown with "All tools" on.
  *
@@ -68,15 +68,14 @@ import {
   humanizeBytes,
   truncateMiddle,
 } from "../../../lib/format";
-import { navHref } from "../../../lib/console-nav";
+import { navHref, WORK_APP_ID } from "../../../lib/console-nav";
 import { useConsoleLocale, useT } from "../../../lib/i18n/locale-provider";
-import type { Exit } from "../../../lib/open-in";
+import { openIn, type Exit } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { PageHeader, PageShell } from "../components/page-header";
 import { SecurityNudge } from "../components/recovery-codes-nudge";
 import {
   ResourceRow,
-  ResourceRowEmpty,
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../components/resource-row";
@@ -85,8 +84,6 @@ import { DIAGNOSE_QUERY_OPTIONS } from "../../../lib/diagnose-query";
 import { useConsoleBadges } from "../components/side-nav-badges";
 import { useConsoleRole } from "../components/side-nav-role";
 import { useAllTools } from "../components/all-tools";
-import { kindIcon } from "../../_lib/object/kind-icon";
-import { reviewRows } from "../review/_lib/review-rows";
 import { en, fr } from "./_lib/copy";
 import { MorningBriefCard } from "./_lib/morning-brief";
 import { StatusPill, type StatusKind } from "../components/status-pill";
@@ -527,25 +524,18 @@ function PassingChecks({
   );
 }
 
-// ─── 3. Requests (a peek into Review) ─────────────────────────────────
+// ─── 3. Requests (a count door, and Work in the app) ──────────────────
 
-/** How many waiting requests the peek names before "See all". */
-const QUEUE_PEEK = 4;
-
+/**
+ * Not a list: pod admin runs the pod, the work is done in the apps (founder,
+ * 16 Nov 2026). The card keeps Review's count as its one door and hands the
+ * work itself to the desktop app's Work.
+ */
 function RequestsCard() {
   const t = useT(CATALOGS);
-  const locale = useConsoleLocale();
-  // THE needs-you read Review draws (`signals.list`), so the peek and the
-  // count below range over the same population (audit abbc7a19 PA-D-13): it can never say
-  // "nothing waiting" beside "See all 3".
-  const { data, isLoading, isError, refetch } = trpc.signals.list.useQuery(
-    { lens: "needs-you", limit: QUEUE_PEEK },
-    { staleTime: 15_000 }
-  );
   // The count is Review's own (`signals.count`, via the nav's badge read), so
   // "See all N" always equals the number on the Requests badge.
   const reviewCount = useConsoleBadges().review;
-  const rows = reviewRows(data?.signals ?? [], new Map());
 
   return (
     <SectionCard
@@ -568,44 +558,15 @@ function RequestsCard() {
         </Button>
       }
     >
-      {isLoading ? (
-        <ResourceRowSkeleton count={2} />
-      ) : isError || !data ? (
-        <ResourceRowError
-          message={t("requests.failed")}
-          onRetry={() => void refetch()}
-        />
-      ) : rows.length === 0 ? (
-        <ResourceRowEmpty message={t("requests.empty")} />
-      ) : (
-        <div className="-mx-2 divide-y divide-foreground/[0.05]">
-          {rows.map((row) => (
-            // Each row opens the same request inside Review — one queue,
-            // with its drawer and batch rules, rather than a second one.
-            <Link
-              key={row.key}
-              href={navHref("review", { focus: row.key })}
-              className="block rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 hover:bg-content2/50"
-            >
-              <ResourceRow
-                Icon={kindIcon(row.nounKind)}
-                primary={row.title}
-                secondary={[
-                  row.who,
-                  row.where,
-                  formatRelativeIn(row.occurredAt, Date.now(), { locale }),
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-                wrap
-              />
-            </Link>
-          ))}
-        </div>
-      )}
+      <div className="flex justify-start">
+        <ActionLink exit={WORK_EXIT} label={t("requests.work")} />
+      </div>
     </SectionCard>
   );
 }
+
+/** Work, in the desktop app (`WORK_MOVED_TO_APP` sends Jobs and Runs here). */
+const WORK_EXIT = openIn({ kind: "app", appId: WORK_APP_ID });
 
 // ─── 4. Pod at a glance ───────────────────────────────────────────────
 

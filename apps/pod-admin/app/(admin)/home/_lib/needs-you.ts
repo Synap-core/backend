@@ -14,17 +14,20 @@
  *
  * Where a row goes is decided by `DIAGNOSE_DESTINATION` (lib/console-nav.ts),
  * the same table the nav's badges read, so a row and the badge it raises can
- * never point at different pages.
+ * never point at different pages; a section whose work moved to the desktop
+ * app (`DIAGNOSE_IN_APP`) opens Work there.
  */
 
 import {
   DIAGNOSE_DESTINATION,
+  DIAGNOSE_IN_APP,
   navHref,
   navItem,
   navLabel,
   navVisibleTo,
   type NavAudience,
   type NavId,
+  WORK_APP_ID,
 } from "../../../../lib/console-nav";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import type { UpdateIssue } from "../../updates/_lib/updates-model";
@@ -131,6 +134,18 @@ function openPage(
     kind: "link",
     label: `Open ${navLabel(id).toLowerCase()}`,
     exit: consoleRoute(navHref(id, params)),
+  };
+}
+
+/**
+ * Jobs and Runs left the console (`WORK_MOVED_TO_APP`): a failing flow or a
+ * stuck run is worked in the desktop app's Work.
+ */
+function openWork(): NeedsYouAction {
+  return {
+    kind: "link",
+    label: "Open in the app",
+    exit: openIn({ kind: "app", appId: WORK_APP_ID }),
   };
 }
 
@@ -246,8 +261,7 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
           : failedTotal !== null
             ? plural(failedTotal, "failed run")
             : undefined,
-      // The board's failing view lists exactly the flows this row counts.
-      action: openPage("runs", { filter: "failing" }),
+      action: openWork(),
       items: [],
     };
   },
@@ -271,8 +285,7 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
         oldestName && oldestAge !== null
           ? `Oldest: “${oldestName}”, ${formatAgeHours(oldestAge)}`
           : undefined,
-      // Sessions' Stuck segment draws the line where this section does.
-      action: openPage("sessions", { filter: "stuck" }),
+      action: openWork(),
       items: [],
     };
   },
@@ -384,7 +397,11 @@ function sectionRow(s: DiagnoseSection): NeedsYouRow {
     // read: the server's own headline — linked to the page that owns the
     // section when the nav places it, otherwise not linked at all.
     headline: s.headline,
-    action: page ? openPage(page) : ({ kind: "none" } as const),
+    action: page
+      ? openPage(page)
+      : DIAGNOSE_IN_APP[s.key]
+        ? openWork()
+        : ({ kind: "none" } as const),
     items: [],
   };
   return { key: s.key, tone, ...body };
@@ -392,6 +409,8 @@ function sectionRow(s: DiagnoseSection): NeedsYouRow {
 
 /** Whether a viewer may open the page this section's row would lead to. */
 function sectionVisibleTo(key: string, audience: NavAudience): boolean {
+  const inApp = DIAGNOSE_IN_APP[key];
+  if (inApp) return audience === "admin" || inApp.audience === "member";
   const page = DIAGNOSE_DESTINATION[key];
   // A key the nav does not place has no link, so any viewer may read it.
   return !page || navVisibleTo(navItem(page), audience);

@@ -6,18 +6,16 @@
  *
  *   • Home     — the "Needs you" rows Home builds from `diagnose.global`
  *                (the review backlog left to Requests, `homeSections`);
- *   • Review   — `signals.count`, the number browser and relay badge too;
- *   • Sessions — the stuck-runs section; Runs — the failing-flows section.
+ *   • Review   — `signals.count`, the number browser and relay badge too.
+ *
+ * Jobs and Runs, which badged the stuck-runs and failing-flows sections, left
+ * the console (`WORK_MOVED_TO_APP`); those sections now count on Home only.
  *
  * `diagnose.global` is called with the shared `DIAGNOSE_QUERY_OPTIONS`, so the
  * nav and Home share one cached query rather than racing two.
  */
 
-import {
-  DIAGNOSE_DESTINATION,
-  type NavAudience,
-  type NavId,
-} from "../../../lib/console-nav";
+import { type NavAudience, type NavId } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
 import { DIAGNOSE_QUERY_OPTIONS } from "../../../lib/diagnose-query";
 import {
@@ -38,23 +36,6 @@ export interface NavBadge {
 }
 
 export type NavBadges = Partial<Record<NavId, NavBadge>>;
-
-function sectionTone(status: DiagnoseSection["status"]): BadgeTone {
-  return status === "degraded" ? "down" : "stale";
-}
-
-function num(detail: Record<string, unknown>, key: string): number {
-  const v = detail[key];
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
-}
-
-/** The count a section badges its page with (only the sections that badge). */
-const SECTION_COUNT: Partial<
-  Record<string, (detail: Record<string, unknown>) => number>
-> = {
-  stuck_runs: (d) => num(d, "count") + num(d, "idleCount"),
-  failed_flows: (d) => num(d, "failingFlows"),
-};
 
 /** PURE: every badge from the two reads. Members only get Home + Review. */
 export function buildNavBadges({
@@ -80,18 +61,6 @@ export function buildNavBadges({
         text: String(all.length),
         tone: all.some((r) => r.tone === "degraded") ? "down" : "stale",
       };
-    }
-    if (role === "admin") {
-      for (const s of sections) {
-        const count = SECTION_COUNT[s.key]?.(s.detail) ?? 0;
-        const page = DIAGNOSE_DESTINATION[s.key];
-        if (s.status === "ok" || count === 0 || !page) continue;
-        badges[page] = {
-          count,
-          text: String(count),
-          tone: sectionTone(s.status),
-        };
-      }
     }
   }
 

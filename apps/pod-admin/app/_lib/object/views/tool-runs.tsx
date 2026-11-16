@@ -2,7 +2,8 @@
 
 /**
  * A tool page's runs: "Running now" (only while something runs) and
- * "History" (its last runs, "Show all" into Runs filtered to the tool). Drawn
+ * "History" (its last runs, each opening its own page; the full list is in
+ * the desktop app since Runs left the console, `WORK_MOVED_TO_APP`). Drawn
  * by the capability page and a code skill's page; an instruction skill does
  * not run, and its page says so instead (`skill-object.tsx`).
  *
@@ -12,12 +13,10 @@
  * is running". Shaping in `tool-runs-model.ts`.
  */
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Play } from "lucide-react";
 import { trpc } from "../../../../lib/trpc";
 import { formatRelative } from "../../../../lib/format";
-import { navHref } from "../../../../lib/console-nav";
 import { openIn } from "../../../../lib/open-in";
 import { useT } from "../../../../lib/i18n/locale-provider";
 import { kindIcon } from "../kind-icon";
@@ -27,7 +26,6 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../../(admin)/components/resource-row";
-import { useConsoleRole } from "../../../(admin)/components/side-nav-role";
 import { statusPillFor } from "../../../(admin)/components/status-tone";
 import {
   flowNoun,
@@ -59,7 +57,6 @@ export function ToolRuns({
 }) {
   const t = useT(TOOLS_CATALOGS);
   const router = useRouter();
-  const role = useConsoleRole();
   const scope =
     "capabilityId" in tool
       ? { capabilityId: tool.capabilityId }
@@ -97,15 +94,6 @@ export function ToolRuns({
     actionLabel,
   });
   const runs = history.data?.runs ?? [];
-  const showAll =
-    role === "admin"
-      ? navHref(
-          "runs",
-          "capabilityId" in tool
-            ? { capability: tool.capabilityId }
-            : { skill: tool.skillId }
-        )
-      : null;
 
   return (
     <>
@@ -173,14 +161,6 @@ export function ToolRuns({
               />
             ))}
           </div>
-        )}
-        {showAll && runs.length > 0 && (
-          <Link
-            href={showAll}
-            className="inline-flex min-h-10 items-center self-start rounded-sm px-1 text-[12.5px] text-foreground/70 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-          >
-            {t("history.showAll")}
-          </Link>
         )}
       </section>
     </>
