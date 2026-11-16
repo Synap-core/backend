@@ -47,6 +47,10 @@ import {
   queueOwnerHistoryImport,
 } from "../../../services/connectors/owner-history-import.js";
 import { recordChannelOrigin } from "../../../services/channels/channel-origin.js";
+import {
+  LINKEDIN_PAUSE_REASONS,
+  readLinkedinPause,
+} from "../../../services/channels/linkedin-account-limits.js";
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { logger, type HubHono, type HubVariables } from "./_shared.js";
@@ -105,6 +109,15 @@ const MessagingAccountSchema = z
     provider: z.string(),
     displayName: z.string(),
     status: z.enum(["connected", "reconnection_required", "disconnected"]),
+    /**
+     * A LinkedIn account LinkedIn told to slow down (a 429, a 422
+     * `cannot_resend_yet`, a checkpoint or restriction): its messages and
+     * connection requests wait until this time (ISO, the next UTC midnight),
+     * then go on. Null when the account is not paused.
+     */
+    pausedUntil: z.string().nullable(),
+    /** Why it is paused (a code to word), null when not paused. */
+    pausedReason: z.enum(LINKEDIN_PAUSE_REASONS).nullable(),
   })
   .openapi("MessagingAccount");
 
@@ -431,6 +444,7 @@ export function registerMessagingRoutes(app: HubHono): void {
           });
         }
 
+        const now = new Date();
         // Unipile is the source of truth for live status.
         // Merge live status first, then filter — so a DB-"disconnected" row
         // that Unipile still has running gets revived rather than hidden, and
@@ -438,6 +452,7 @@ export function registerMessagingRoutes(app: HubHono): void {
         const result = dbAccounts
           .map((row: DbMessagingAccount) => {
             const live = liveByExternalId.get(row.externalId);
+            const pause = readLinkedinPause(row.metadata, now);
             return {
               id: row.id,
               externalId: row.externalId,
@@ -445,6 +460,8 @@ export function registerMessagingRoutes(app: HubHono): void {
               displayName: live?.displayName ?? row.displayName,
               status: (live?.status ?? "disconnected") as
                 "connected" | "reconnection_required" | "disconnected",
+              pausedUntil: pause?.until ?? null,
+              pausedReason: pause?.reason ?? null,
             };
           })
           .filter((row) => row.status !== "disconnected");

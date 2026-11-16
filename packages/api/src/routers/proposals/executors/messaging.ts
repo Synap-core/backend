@@ -25,6 +25,7 @@ import { keepRowAsRecorded } from "../failure-classification.js";
 import {
   heldSend,
   holdPendingSend,
+  type HeldSend,
 } from "../../../services/channels/held-sends.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-messaging" });
@@ -271,33 +272,46 @@ export function registerMessagingExecutors(): void {
       // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
       // Only a confirmed-delivered send reaches the APPROVED flip below; a lost
       // claim / not-sent / ambiguous failure throws → APPROVAL_FAILED.
-      await dispatchExternalOnce(input.proposalId, async () => {
-        // BYPASS the capability gate: this send is already past governance (the
-        // proposal was approved). `alreadyApproved` makes sendExternalMessage
-        // dispatch directly, exactly once — no double-gate on re-entry.
-        const {
-          success: sent,
-          error,
-          errorClass,
-          providerRef,
-        } = await sendExternalMessage({
-          threadId,
-          accountId,
-          body,
-          userId,
-          alreadyApproved: true,
-          // The session it was asked in: a worker's send ceiling counts by it.
-          sessionId: proposal.sessionId ?? null,
+      // A LinkedIn account past today's limit (or paused): held, as above.
+      let threadHeld: HeldSend | null = null;
+      try {
+        await dispatchExternalOnce(input.proposalId, async () => {
+          // BYPASS the capability gate: this send is already past governance (the
+          // proposal was approved). `alreadyApproved` makes sendExternalMessage
+          // dispatch directly, exactly once — no double-gate on re-entry.
+          const {
+            success: sent,
+            error,
+            errorClass,
+            providerRef,
+            held,
+          } = await sendExternalMessage({
+            threadId,
+            accountId,
+            body,
+            userId,
+            alreadyApproved: true,
+            // The session it was asked in: a worker's send ceiling counts by it.
+            sessionId: proposal.sessionId ?? null,
+          });
+          if (!sent) {
+            logger.warn(
+              { proposalId: input.proposalId, threadId, platform },
+              "messaging.external.send: connector reported not-sent"
+            );
+            threadHeld = held ?? null;
+            return { delivered: false, reason: error, errorClass, providerRef };
+          }
+          return { delivered: true };
         });
-        if (!sent) {
-          logger.warn(
-            { proposalId: input.proposalId, threadId, platform },
-            "messaging.external.send: connector reported not-sent"
-          );
-          return { delivered: false, reason: error, errorClass, providerRef };
-        }
-        return { delivered: true };
-      });
+      } catch (err) {
+        const hold = threadHeld as HeldSend | null;
+        if (hold === null) throw err;
+        await holdPendingSend(input.proposalId, hold);
+        throw keepRowAsRecorded(
+          err instanceof Error ? err : new Error(String(err))
+        );
+      }
 
       const materializedPayload = {
         ...payload,
@@ -365,7 +379,9 @@ async function executeChannelSend(args: {
   // Not a connection yet (the reach is read live at every approval): the
   // send is HELD, kept PENDING with its text, never APPROVAL_FAILED (CRM
   // Messages contract b4f8c2cd, B). It becomes sendable once they connect.
-  let heldReason: string | null = null;
+  // The same for a LinkedIn account past today's limit or paused by
+  // LinkedIn: held until the next day (`linkedin-account-limits.ts`).
+  let heldRecord: HeldSend | null = null;
   try {
     await dispatchExternalOnce(input.proposalId, async () => {
       const result = await sendExternalMessage({
@@ -401,8 +417,10 @@ async function executeChannelSend(args: {
           },
           "messaging.external.send: not sent on the channel"
         );
-        if (result.errorClass === "not_connected") {
-          heldReason = result.error ?? "Not a connection yet.";
+        if (result.held) {
+          heldRecord = result.held;
+        } else if (result.errorClass === "not_connected") {
+          heldRecord = heldSend(result.error ?? "Not a connection yet.");
         }
         return {
           delivered: false,
@@ -416,9 +434,9 @@ async function executeChannelSend(args: {
     });
   } catch (err) {
     // Assigned in the closure above; TS cannot see it.
-    const hold = heldReason as string | null;
+    const hold = heldRecord as HeldSend | null;
     if (hold === null) throw err;
-    await holdPendingSend(input.proposalId, heldSend(hold));
+    await holdPendingSend(input.proposalId, hold);
     throw keepRowAsRecorded(
       err instanceof Error ? err : new Error(String(err))
     );

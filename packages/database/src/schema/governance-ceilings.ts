@@ -46,6 +46,9 @@ export const governanceCeilingAxisEnum = pgEnum("governance_ceiling_axis", [
   "automation_ai_dispatch_daily",
   "worker_pending_approvals",
   "worker_irreversible_sends_daily",
+  // 0427 — per LinkedIn account, subject = the messaging account row.
+  "linkedin_invitations_daily",
+  "linkedin_actions_daily",
 ]);
 export const GOVERNANCE_CEILING_AXES = governanceCeilingAxisEnum.enumValues;
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];

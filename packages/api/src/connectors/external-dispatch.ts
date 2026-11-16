@@ -98,6 +98,15 @@ import {
 } from "./channel-send.js";
 import type { MessagingConnector } from "./MessagingConnector.js";
 import { heldSend, type HeldSend } from "../services/channels/held-sends.js";
+import {
+  guardLinkedinAction,
+  linkedinAccountOf,
+  linkedinActionBlock,
+  linkedinProviderAction,
+  linkedinThrottleOf,
+  pauseIfThrottled,
+  takeLinkedinAction,
+} from "../services/channels/linkedin-account-limits.js";
 import { trialSessionWriteRefusal } from "@synap/capability-gate";
 import type { SendGuidanceStamp } from "../services/playbooks/playbook-guidance.js";
 
@@ -1069,7 +1078,18 @@ export async function sendExternalMessage(
   // owner branch would have sent it with no review.
   const appSend = !!getRequestGrant()?.clientId;
   const mustPropose = !!input.mustPropose || beyondGrant;
-  if ((input.agentUserId || appSend || mustPropose) && !input.alreadyApproved) {
+  // A LinkedIn account that used today's limit, or that LinkedIn paused for
+  // the day, files the message HELD, whoever sends it (a person too): kept
+  // with its text, sendable again from `until`
+  // (`services/channels/linkedin-account-limits.ts`).
+  const limitHold =
+    sendChannel && !input.alreadyApproved
+      ? await linkedinHoldAtFiling(sendChannel, input.accountId)
+      : null;
+  if (
+    (input.agentUserId || appSend || mustPropose || limitHold) &&
+    !input.alreadyApproved
+  ) {
     // The reach check at FILING (CRM Messages contract b4f8c2cd, B): a
     // LinkedIn first message to someone who is not a connection is HELD, never
     // refused: filed as a proposal with `data.held` and the next step named,
@@ -1086,6 +1106,7 @@ export async function sendExternalMessage(
       });
       if (unreachable) held = heldSend(unreachable.error);
     }
+    held = held ?? limitHold;
     const gateResult = await gateMessagingSend({
       ...input,
       guidance,
@@ -1141,7 +1162,55 @@ export async function sendExternalMessage(
       errorClass: "validation",
     };
   }
-  await connector.sendMessage(accountId, threadId, body);
+  // A LinkedIn account counts this message against its day (and pauses on
+  // LinkedIn's "slow down"); a hold is not sent.
+  const linkedinAccount = await linkedinAccountOf(userId, accountId);
+  if (linkedinAccount) {
+    const guarded = await guardLinkedinAction({
+      accountRowId: linkedinAccount.id,
+      kind: "message",
+      call: async () => {
+        try {
+          await connector.sendMessage(accountId, threadId, body);
+          return null;
+        } catch (err) {
+          return err instanceof Error ? err : new Error(String(err));
+        }
+      },
+      refusalOf: (err) =>
+        err
+          ? { status: providerStatusOf(err.message), message: err.message }
+          : null,
+    });
+    if ("held" in guarded) {
+      return {
+        success: false,
+        error: guarded.held.reason,
+        errorClass: "transient",
+        providerRef: provider,
+        held: guarded.held,
+      };
+    }
+    if (guarded.result) {
+      // LinkedIn said "slow down" (the guard paused the account): a definite
+      // not-sent, held with the account. Any other failure throws as before.
+      const message = guarded.result.message;
+      const status = providerStatusOf(message);
+      const held = linkedinThrottleOf(status, message)
+        ? await linkedinActionBlock(linkedinAccount.id, "message")
+        : null;
+      if (!held) throw guarded.result;
+      return {
+        success: false,
+        error: held.reason,
+        errorClass: classifyDispatchFailure({ status, message }),
+        providerRef: provider,
+        held,
+      };
+    }
+  } else {
+    await connector.sendMessage(accountId, threadId, body);
+  }
 
   // Mirror the outbound message into the messages table.
   let messageId: string | undefined;
@@ -1230,6 +1299,44 @@ const providerStatusOf = (message: string): number =>
   Number(/failed: (\d{3})\b/.exec(message)?.[1] ?? 0);
 
 /**
+ * A LinkedIn refusal that says "slow down" pauses the account for the day;
+ * the send that met it is then held with the account. Never throws: the
+ * refusal is a definite not-sent, and a failed pause write must not turn it
+ * into an ambiguous one.
+ */
+async function linkedinPauseHold(
+  accountRowId: string,
+  status: number,
+  message: string
+): Promise<HeldSend | null> {
+  try {
+    const pause = await pauseIfThrottled(accountRowId, { status, message });
+    return pause ? await linkedinActionBlock(accountRowId, "message") : null;
+  } catch (err) {
+    logger.warn(
+      { err, accountRowId, status },
+      "LinkedIn pause could not be recorded"
+    );
+    return null;
+  }
+}
+
+/**
+ * The account a LinkedIn message filed on this channel would go out from,
+ * when it may not act today: the hold it is filed under. No account (or not
+ * a LinkedIn one): null, the send door decides as before.
+ */
+async function linkedinHoldAtFiling(
+  channel: SendChannel,
+  named: string | null | undefined
+): Promise<HeldSend | null> {
+  const accountId = await resolveSendAccount(channel, named);
+  if (!accountId) return null;
+  const account = await linkedinAccountOf(channel.userId, accountId);
+  return account ? linkedinActionBlock(account.id, "message") : null;
+}
+
+/**
  * Deliver a send that names the person's channel (channels wave, lane D):
  * the account the channel's owner holds, the plan (attendee,
  * 1st-degree check, start or continue the chat, the outbound row, events),
@@ -1254,6 +1361,8 @@ async function sendOnChannel(args: {
     };
   }
   let accountId = "";
+  // The sending account, when it is a LinkedIn one: its day is counted.
+  let linkedinRowId: string | null = null;
   let plan!: Awaited<ReturnType<typeof planChannelSend>>;
   // Before anything is sent: the account, then continue the chat or start it
   // (attendee resolved, 1st-degree check). Everything here is a read: a
@@ -1272,6 +1381,8 @@ async function sendOnChannel(args: {
         };
       }
       accountId = resolved;
+      linkedinRowId =
+        (await linkedinAccountOf(channel.userId, accountId))?.id ?? null;
     }
     plan = await planChannelSend({ channel, connector, accountId });
   } catch (err) {
@@ -1281,6 +1392,9 @@ async function sendOnChannel(args: {
       { err, channelId: channel.id, provider },
       "channel send: a read before the send failed; nothing was sent"
     );
+    const held = linkedinRowId
+      ? await linkedinPauseHold(linkedinRowId, status, message)
+      : null;
     return {
       success: false,
       error: `Nothing was sent: ${humanizeToken(provider)} could not be read before sending (${redactForStorage(message, 160)}).`,
@@ -1288,6 +1402,7 @@ async function sendOnChannel(args: {
         ? classifyDispatchFailure({ status, message })
         : "transient",
       providerRef: provider,
+      ...(held ? { held, channelId: channel.id } : {}),
     };
   }
   if (!plan.ok) {
@@ -1297,6 +1412,38 @@ async function sendOnChannel(args: {
       errorClass: plan.errorClass,
       providerRef: plan.providerRef ?? provider,
     };
+  }
+  // A LinkedIn account spends one action of its day right before the send;
+  // past its limit (or while LinkedIn paused it) the message is HELD, not
+  // sent (`linkedin-account-limits.ts`). A failed count is a definite
+  // not-sent too: nothing reached the provider.
+  if (linkedinRowId) {
+    let held: HeldSend | null;
+    try {
+      held = await takeLinkedinAction(linkedinRowId, "message");
+    } catch (err) {
+      logger.warn(
+        { err, channelId: channel.id },
+        "channel send: the LinkedIn daily count could not be taken; nothing was sent"
+      );
+      return {
+        success: false,
+        error:
+          "Nothing was sent: this LinkedIn account's daily count could not be read. Try again.",
+        errorClass: "transient",
+        providerRef: provider,
+      };
+    }
+    if (held) {
+      return {
+        success: false,
+        error: held.reason,
+        errorClass: "transient",
+        providerRef: provider,
+        held,
+        channelId: channel.id,
+      };
+    }
   }
   // THE provider call. The provider REFUSING it (an HTTP 4xx answer: a rate
   // limit, a bad request, a lost connection) is a DEFINITE not-sent: it is
@@ -1328,11 +1475,17 @@ async function sendOnChannel(args: {
       { err, channelId: channel.id, provider, status },
       "channel send: the provider refused the message; nothing was sent"
     );
+    // LinkedIn said "slow down": the account pauses for the day and this
+    // message waits with it (held), never retried by itself.
+    const held = linkedinRowId
+      ? await linkedinPauseHold(linkedinRowId, status, message)
+      : null;
     return {
       success: false,
       error: `Nothing was sent: ${humanizeToken(provider)} refused the message (${redactForStorage(message, 160)}).`,
       errorClass: classifyDispatchFailure({ status, message }),
       providerRef: provider,
+      ...(held ? { held, channelId: channel.id } : {}),
     };
   }
   // The message went out: from here a failure to RECORD it is logged, never
@@ -1907,6 +2060,13 @@ export function extractProviderErrorMessage(
 
 /** Bound on the provider-authored error text a caller is shown. */
 const PROVIDER_ERROR_MAX = 400;
+
+/** The `type` a provider's error body names (Unipile: `errors/<kind>`). */
+function providerErrorType(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const t = (body as Record<string, unknown>).type;
+  return typeof t === "string" && t ? t : null;
+}
 
 function providerErrorText(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
@@ -3386,7 +3546,45 @@ export async function triggerProviderAction(
             ? { accountHint: accountHintOverride }
             : {}),
         };
-  const result = await handler({ input: dispatchInput, tool });
+  // A LinkedIn action through a verb's provider call (a code skill's
+  // connection request or message, which reaches no send door): spent from
+  // the account's day first, and a held one is not sent; a "slow down"
+  // answer pauses the account (`linkedin-account-limits.ts`).
+  const linkedinAction = linkedinProviderAction(input.method, input.path);
+  const linkedinAccount = linkedinAction
+    ? await linkedinAccountOf(input.userId, linkedinAction.accountExternalId)
+    : null;
+  let result: TriggerProviderActionResult;
+  if (linkedinAction && linkedinAccount) {
+    const guarded = await guardLinkedinAction({
+      accountRowId: linkedinAccount.id,
+      kind: linkedinAction.kind,
+      call: () => handler({ input: dispatchInput, tool }),
+      // Unipile names the refusal in its body's `type`
+      // (`errors/cannot_resend_yet`), which the error text leaves out.
+      refusalOf: (r) =>
+        r.success
+          ? null
+          : {
+              status: r.status,
+              message: [r.error, providerErrorType(r.body)]
+                .filter(Boolean)
+                .join(" "),
+            },
+    });
+    if ("held" in guarded) {
+      return {
+        success: false,
+        status: 429,
+        errorCode: "unavailable",
+        error: guarded.held.reason,
+        errorClass: "transient",
+      };
+    }
+    result = guarded.result;
+  } else {
+    result = await handler({ input: dispatchInput, tool });
+  }
 
   // P1 — stamp the structured failure scalars at the SINGLE dispatcher exit, from
   // data already in scope: the classifier maps the result's own {status, error,
