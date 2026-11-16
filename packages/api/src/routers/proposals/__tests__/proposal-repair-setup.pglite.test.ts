@@ -21,7 +21,10 @@
  *     device session are refused, and nothing is written;
  *  5. every entry is checked before any vault write;
  *  6. a vault.request with no matching secret offers the same row, and the
- *     key typed there becomes the secret the request names.
+ *     key typed there becomes the secret the request names;
+ *  7. an install whose manifest the pod cannot read (not in the cache, and
+ *     the by-key catalog read finds nothing: proposal eaa77f7d) says so
+ *     (`unreadable`), offers nothing to hand over, and the repair refuses.
  */
 import {
   afterEach,
@@ -90,24 +93,38 @@ vi.mock(
   "../../../services/capabilities/marketplace-install.js",
   async (orig) => ({
     ...((await orig()) as object),
-    lookupCatalogEntry: vi.fn(async () => ({
-      definition: {
-        key: "cal-com",
-        name: "Cal.com",
-        params: [
-          {
-            name: "calApiKey",
-            label: "Cal.com API key",
-            type: "password",
-            required: true,
-            description: "The Cal.com API key.",
-            obtain: OBTAIN,
-          },
-        ],
-        vault: [{ ref: "k", name: "Cal.com", value: "{{calApiKey}}" }],
-        tools: [],
-      },
-    })),
+    // `github-merge` is an opt-in capability: never in the cache.
+    lookupCatalogEntry: vi.fn(async (_kind: string, slug: string) =>
+      slug === "github-merge"
+        ? null
+        : {
+            definition: {
+              key: "cal-com",
+              name: "Cal.com",
+              params: [
+                {
+                  name: "calApiKey",
+                  label: "Cal.com API key",
+                  type: "password",
+                  required: true,
+                  description: "The Cal.com API key.",
+                  obtain: OBTAIN,
+                },
+              ],
+              vault: [{ ref: "k", name: "Cal.com", value: "{{calApiKey}}" }],
+              tools: [],
+            },
+          }
+    ),
+  })
+);
+
+// The by-key catalog read (the Control Plane) finds nothing either.
+vi.mock(
+  "../../../services/capabilities/cp-template-client.js",
+  async (orig) => ({
+    ...((await orig()) as object),
+    fetchCPCapabilityTemplate: vi.fn(async () => null),
   })
 );
 
@@ -160,7 +177,10 @@ const human = (userId: string, extra: Record<string, unknown> = {}) =>
 const caller = (userId: string, extra: Record<string, unknown> = {}) =>
   proposalsRouter.createCaller(human(userId, extra));
 
-async function fileInstall(status = "approval_failed"): Promise<string> {
+async function fileInstall(
+  status = "approval_failed",
+  slug = "cal-com"
+): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into proposals (id, status, proposal_type, target_type, target_id, workspace_id, data, revision_history, agent_user_id, created_by, rejection_reason, created_at, updated_at)
@@ -170,7 +190,7 @@ async function fileInstall(status = "approval_failed"): Promise<string> {
       status,
       WS,
       JSON.stringify({
-        slug: "cal-com",
+        slug,
         kind: "capability",
         version: null,
         source: "synap",
@@ -323,6 +343,31 @@ describe("proposals.repairOptions — setup rows", () => {
     const refs = repair.setup!.secretChoices.map((c) => c.ref);
     expect(refs).toContain(`vault://${OWN_SECRET}`);
     expect(refs).not.toContain(`vault://${OTHERS_SECRET}`);
+  });
+
+  it("an install whose manifest cannot be read says so and offers nothing to hand over", async () => {
+    const id = await fileInstall("approval_failed", "github-merge");
+    const repair = await caller(OWNER).repairOptions({ proposalId: id });
+    // Never an absent setup (read as "no setup") nor an empty "nothing needed".
+    expect(repair.setup).toMatchObject({
+      unreadable: true,
+      blocking: true,
+      params: [],
+      secretChoices: [],
+    });
+    expect(repair.repairable).toBe(false);
+
+    const before = await secretCount();
+    await expect(
+      caller(OWNER).repair({
+        proposalId: id,
+        expectedRevision: 0,
+        setup: { githubToken: { kind: "new", value: TYPED_KEY } },
+      })
+    ).rejects.toThrow(/cannot read what this proposal needs/);
+    expect(await secretCount()).toBe(before);
+    expect(h.vaultCreates).toHaveLength(0);
+    expect((await rowOf(id)).status).toBe("approval_failed");
   });
 
   it("a vault.request no secret matches offers the same row", async () => {

@@ -243,6 +243,15 @@ export const ProposalSetupSchema = z
       })
       .passthrough()
       .optional(),
+    unreadable: z
+      .literal(true)
+      .optional()
+      .describe(
+        "The pod could not read this pending proposal's manifest (not in the " +
+          "catalog cache, and the by-key catalog read failed): what it needs is " +
+          "UNKNOWN. `params` is then empty and `blocking` true; never read it as " +
+          "'nothing needed'."
+      ),
   })
   .openapi("ProposalSetup");
 

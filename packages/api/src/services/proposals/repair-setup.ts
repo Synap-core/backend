@@ -258,6 +258,11 @@ export async function buildSetupRepair(args: {
       "This proposal has nothing to hand over here: it needs no key or value, or the pod cannot read what it needs."
     );
   }
+  if (setup.unreadable) {
+    return refuse(
+      "The pod cannot read what this proposal needs right now (its catalog entry did not load), so nothing can be handed over yet. Try again later, or ask the AI to redo it."
+    );
+  }
   const names = Object.keys(entries);
   if (names.length === 0) {
     return refuse("Hand over at least one value.");

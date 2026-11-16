@@ -227,7 +227,11 @@ export async function describeProposalRepair(
   if (!isRepairableKind(source)) {
     // A proposal that needs an input (finding 91a3bfd3): its setup rows.
     const setup = await describeSetupRepair(source, userId);
-    return setup ? { ...none, repairable: setup.blocking, setup } : none;
+    // An unreadable setup is shown (the pod says it cannot tell what is
+    // needed) but offers nothing to hand over.
+    return setup
+      ? { ...none, repairable: setup.blocking && !setup.unreadable, setup }
+      : none;
   }
   if (
     source.status !== ProposalStatus.APPROVAL_FAILED &&
