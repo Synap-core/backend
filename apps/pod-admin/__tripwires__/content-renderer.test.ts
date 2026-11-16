@@ -176,7 +176,8 @@ describe("content is drawn, never injected", () => {
         )
     ).map((f) => f.path);
     // The preview (`html-preview.tsx`, no pod bridge) is the third door, used
-    // by a proposal's record card and a proposed document's body only.
+    // by a proposal's record card, a proposed document's body and a document
+    // update's pages (Result, Before | After) only.
     const previewDoor = join(
       "app",
       "_lib",
@@ -188,6 +189,7 @@ describe("content is drawn, never injected", () => {
     const proposalSites = [
       join(proposalDir, "ProposedRecordCard.tsx"),
       join(proposalDir, "ProposedDocumentBody.tsx"),
+      join(proposalDir, "DocumentUpdateChanges.tsx"),
     ];
     expect(sites.sort()).toEqual(
       [pageSite, embedSite, previewDoor, ...proposalSites].sort()

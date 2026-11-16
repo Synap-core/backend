@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
 import {
   createdObject,
+  updatedObject,
   reasonMark,
   reviewReadsWide,
   undoMark,
@@ -273,5 +274,59 @@ describe("createdObject — what an approved create made, openable", () => {
     expect(createdObject({ ...base, graph: true })).toBeNull();
     expect(createdObject({ ...base, targetType: "workspace" })).toBeNull();
     expect(createdObject({ ...base, targetId: "not-an-id" })).toBeNull();
+  });
+});
+
+describe("updatedObject — the existing object an update changes, openable", () => {
+  const ID = "7d4f6c0e-6a1b-4a8e-9a53-3f2b1c0d9e11";
+  const base = {
+    action: "update",
+    targetType: "document",
+    targetId: ID,
+    title: " Plan ",
+    graph: false,
+  };
+
+  it("names the document by the proposal's own target", () => {
+    expect(updatedObject(base)).toEqual({
+      kind: "document",
+      id: ID,
+      title: "Plan",
+    });
+  });
+
+  it("opens each kind under the word /open hosts it by (a session is not a focus_session there)", () => {
+    expect(updatedObject({ ...base, targetType: "entity" })?.kind).toBe(
+      "entity"
+    );
+    expect(updatedObject({ ...base, targetType: "playbook" })?.kind).toBe(
+      "playbook"
+    );
+    expect(updatedObject({ ...base, targetType: "skill" })?.kind).toBe("skill");
+    expect(updatedObject({ ...base, targetType: "focus_session" })?.kind).toBe(
+      "session"
+    );
+  });
+
+  it("has no status: the reviewer opens the object BEFORE deciding", () => {
+    // Unlike createdObject, there is no status input to refuse on at all.
+    expect(Object.keys(base)).not.toContain("status");
+    expect(updatedObject(base)).not.toBeNull();
+  });
+
+  it("names nothing for a create, a delete, a graph or a kind /open does not host", () => {
+    expect(updatedObject({ ...base, action: "create" })).toBeNull();
+    expect(updatedObject({ ...base, action: "delete" })).toBeNull();
+    expect(updatedObject({ ...base, graph: true })).toBeNull();
+    expect(updatedObject({ ...base, targetType: "workspace" })).toBeNull();
+    expect(updatedObject({ ...base, targetType: null })).toBeNull();
+    expect(updatedObject({ ...base, targetType: "constructor" })).toBeNull();
+  });
+
+  it("names nothing without a real id, and keeps a missing title as null", () => {
+    expect(updatedObject({ ...base, targetId: "not-an-id" })).toBeNull();
+    expect(updatedObject({ ...base, targetId: null })).toBeNull();
+    expect(updatedObject({ ...base, title: "   " })?.title).toBeNull();
+    expect(updatedObject({ ...base, title: null })?.title).toBeNull();
   });
 });

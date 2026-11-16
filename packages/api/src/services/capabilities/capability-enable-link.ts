@@ -62,7 +62,11 @@ export function capabilityActionSurface(
 }
 
 export interface CapabilityNextAction {
-  kind: "add" | "connect" | "enable" | "run" | "none";
+  /**
+   * `update`: the capability holds an update waiting for the person (a held
+   * catalog update); applying it is the fix (`capabilityUpdateAction`).
+   */
+  kind: "add" | "connect" | "enable" | "update" | "run" | "none";
   hint: string;
   /**
    * Deep link to the capability's own card — where `kind` is performed.
@@ -196,6 +200,22 @@ export function capabilityNextAction(
       };
     }
   }
+}
+
+/**
+ * A capability whose catalog template moved past what the pod holds, and the
+ * update waits for the person (decision D-C, 13 Nov 2026: one type, extended).
+ * The link is the capability's card, where its update is applied. No card (a
+ * brick in no container) = no link, as everywhere else.
+ */
+export function capabilityUpdateAction(
+  containerId: string | null | undefined
+): CapabilityNextAction {
+  return {
+    kind: "update",
+    hint: "An update is waiting for you. Apply it to use this.",
+    ...capabilityCardLink(containerId, "update"),
+  };
 }
 
 /**

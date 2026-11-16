@@ -224,11 +224,14 @@ const IMAGE_INPUTS = [
 // Paths the other repos link by source (app-bases, browser and relay-app read
 // @synap-core/types, api-types and markdown-core from this checkout; #372 broke
 // an app repo with backend CI green), plus the job's own files so a change to
-// the job runs it.
+// the job runs it. The person-doors check runs in the same job: a new mutation
+// changes api-types, and a change to its list or its script runs it too.
 const SHARED_FOR_DEPENDENTS = [
   /^packages\/(types|api-types|markdown-core)\//,
   /^scripts\/ci\/dependent-root\//,
   /^scripts\/ci\/dependents-typecheck\.mjs$/,
+  /^scripts\/ci\/person-doors\.mjs$/,
+  /^packages\/api\/src\/routers\/person-doors\.json$/,
   /^scripts\/layout\//,
   /^\.github\/actions\/monorepo-setup\//,
   /^\.github\/workflows\/ci\.yml$/,

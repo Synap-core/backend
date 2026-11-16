@@ -1355,6 +1355,36 @@ jobs:
             node scripts/ci/dependents-typecheck.mjs verdict --head "$RUNNER_TEMP/dependents/head"
           fi
 
+      # PERSON DOORS (P2, founder-validated 2026-11-13): a backend door no
+      # person can reach is the "built but severed" defect (shares.publishSite
+      # had no surface until browser 8e8d1219). On the three repos this job
+      # laid out (at main, or at a `Companion:` branch) plus pod-admin, every
+      # coreRouter mutation THIS CHANGE ADDS must be called by a surface or
+      # written down in packages/api/src/routers/person-doors.json (agentOnly
+      # with a reason, or noPersonDoorYet: the founder's list of doors owed a
+      # UI); a row removed while the door is still missing fails too. Gaps the
+      # change did not make only warn (scripts/ci/person-doors.mjs). Both sides
+      # are read with `git show`: the step above may have put the base's
+      # api-types in the tree. `!cancelled()`: a red typecheck does not hide
+      # this verdict.
+      - name: Person doors (a new mutation has a surface, or a row saying why not)
+        if: ${{ !cancelled() && env.RUN_WORK == 'true' && needs.preflight.outputs.hold != 'true' }}
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/person-doors"
+          mkdir -p "$T"
+          BASE=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          [ -n "$BASE" ] || { echo "::error::the tested commit has no parent to compare with"; exit 1; }
+          git cat-file -e "$BASE^{commit}" 2>/dev/null || git fetch -q --depth=1 origin "$BASE"
+          for side in "HEAD head" "$BASE base"; do
+            set -- $side
+            git show "$1:packages/api-types/src/generated.d.ts" > "$T/$2.d.ts"
+            git show "$1:packages/api/src/routers/person-doors.json" > "$T/$2.json" 2>/dev/null || echo '{}' > "$T/$2.json"
+          done
+          node scripts/ci/person-doors.mjs check --root .. \
+            --head-dts "$T/head.d.ts" --base-dts "$T/base.d.ts" \
+            --head-list "$T/head.json" --base-list "$T/base.json"
+
       - name: Upload the typecheck logs
         if: ${{ always() && env.RUN_WORK == 'true' && needs.preflight.outputs.hold != 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

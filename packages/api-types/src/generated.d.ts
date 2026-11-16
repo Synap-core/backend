@@ -16027,7 +16027,11 @@ export interface RunAgent {
  */
 export type CapabilityActionSurface = "desktop" | "web";
 export interface CapabilityNextAction {
-	kind: "add" | "connect" | "enable" | "none" | "run";
+	/**
+	 * `update`: the capability holds an update waiting for the person (a held
+	 * catalog update); applying it is the fix (`capabilityUpdateAction`).
+	 */
+	kind: "add" | "connect" | "enable" | "none" | "run" | "update";
 	hint: string;
 	/**
 	 * Deep link to the capability's own card — where `kind` is performed.
@@ -36074,7 +36078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errorClass: "auth" | "conflict" | "do_not_contact" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
 					next?: {
 						hint: string;
-						kind: "add" | "connect" | "enable" | "none" | "run";
+						kind: "add" | "connect" | "enable" | "none" | "run" | "update";
 						url?: string | undefined;
 					} | undefined;
 					resolved?: true | undefined;
