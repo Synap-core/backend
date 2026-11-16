@@ -32,6 +32,14 @@ const SiteCollectionSchema = z
     pageSize: z.number().int().min(1).max(100).default(SITE_DEFAULT_PAGE_SIZE),
     /** A field key in the allowlist, or null → addressed by public id only. */
     slugField: FieldKey.nullable().default(null),
+    /**
+     * The space that GOVERNS this collection, or null → the site's home space.
+     * Named, the collection's profile is resolved in that space, its policy
+     * must publish entities, its `entity` allowlist holds the sort and slug
+     * fields, and only records that sit in that space can join. Owner-side
+     * only: the public manifest never carries it.
+     */
+    sourceWorkspaceId: z.string().uuid().nullable().default(null),
     /** Lifecycle option keys for "publish all approved"; null = unavailable. */
     publishWhen: z
       .object({ statuses: z.array(z.string().min(1).max(64)).min(1).max(32) })
