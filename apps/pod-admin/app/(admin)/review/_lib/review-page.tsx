@@ -23,7 +23,8 @@
  * opens that row's decision (a row, its target, or any proposal id);
  * `?session=<id>` narrows every view to one session — the door a proposal's
  * review offers to "what else from this session waits for you". From
- * `lg` up the decision docks beside the list; below, it opens in a drawer.
+ * `lg` up the decision docks beside the list (the list at most 470 px, the
+ * request's story the rest, D7); below, it opens in a drawer.
  * An agent's question is answered in the same place (`ask-answer.tsx`);
  * once it is, the detail closes and focus moves to the next row. What waited
  * more than 7 days sits in a "Review later" fold under the list, out of the
@@ -477,10 +478,13 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         }
       />
 
+      {/* A queue beside its detail (page-grammar, founder default D7): the
+          list at most 470 px, the request's story takes the rest of the width
+          — a timeline needs it. */}
       <div
         className={
           docked && open
-            ? "grid grid-cols-[minmax(0,1fr)_340px] items-start gap-6 xl:grid-cols-[minmax(0,1fr)_420px]"
+            ? "grid grid-cols-[minmax(0,470px)_minmax(0,1fr)] items-start gap-6"
             : undefined
         }
       >

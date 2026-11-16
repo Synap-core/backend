@@ -32,7 +32,10 @@ import { Button, Input, addToast } from "@heroui/react";
 import { Check, X } from "lucide-react";
 import { ASK_COPY, classifyAskRefusal } from "@synap-core/types/ask";
 import Link from "next/link";
-import { resolveStatusLabel } from "@synap-core/types/vocabulary";
+import {
+  resolveActionLabel,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
 import {
   CRITERION_SLOT_KIND,
   isCriterionGradeAsk,
@@ -66,6 +69,8 @@ import { objectPage } from "../content/markdown-model";
 import { kindIcon, kindLabel } from "../kind-icon";
 import { OpenInAppLink } from "../open-in-app-link";
 import { useReauthOnUnauthorized } from "../use-reauth";
+import { RequestRowLines } from "../../request/request-row-lines";
+import { reviewRowView } from "../../../(admin)/review/_lib/review-row-view";
 
 /** The most rows one needs-you read returns (Review's page size). */
 const NEEDS_YOU_LIMIT = 100;
@@ -361,41 +366,44 @@ function CriterionVerdictButtons({
  * 869b2cd6: keep the panel, explain the rows it cannot act on).
  */
 function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
-  const Icon = kindIcon(row.nounKind);
+  // The ONE request row Review draws (D4): its lines, doors and marks.
+  const view = reviewRowView(row);
   const door = row.detail?.kind === "open" ? row.detail.door : null;
   const here = door?.kind === "session" && door.id === sessionId;
   return (
-    <div className="flex items-start gap-3 pb-4">
-      <Icon
-        aria-hidden
-        className="mt-0.5 h-4 w-4 shrink-0 text-foreground/55"
-      />
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <p className="break-words text-[13px] font-medium text-foreground">
-          {row.title}
-        </p>
-        {(row.reason || row.occurredAt) && (
-          <p className="text-[12px] text-foreground/65">
-            {[row.reason, formatRelative(row.occurredAt, { empty: "" })]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
+    <div className="flex flex-col gap-1.5 pb-4">
+      <RequestRowLines
+        what={view.what}
+        holds={view.holds}
+        // Its own session is where the reader already is: no door back to it.
+        who={view.who.filter(
+          (p) =>
+            !(
+              p.kind === "door" &&
+              p.door?.kind === "session" &&
+              p.door.id === sessionId
+            )
         )}
-        {door &&
-          (here ? (
-            <div
-              data-acted-elsewhere=""
-              className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
-            >
-              <span className="text-[12px] text-foreground/65">
-                {ACT_ELSEWHERE}
-              </span>
-              <OpenInAppLink type="session" id={sessionId} />
-            </div>
-          ) : (
-            <ExitLink exit={exitOf({ kind: "open", door })} label="Open" />
-          ))}
-      </div>
+      />
+      {door &&
+        (here ? (
+          <div
+            data-acted-elsewhere=""
+            className="flex flex-wrap items-baseline gap-x-2 gap-y-1 pl-12"
+          >
+            <span className="text-[12px] text-foreground/65">
+              {ACT_ELSEWHERE}
+            </span>
+            <OpenInAppLink type="session" id={sessionId} />
+          </div>
+        ) : (
+          <div className="pl-12">
+            <ExitLink
+              exit={exitOf({ kind: "open", door })}
+              label={resolveActionLabel("open", "imperative")}
+            />
+          </div>
+        ))}
     </div>
   );
 }

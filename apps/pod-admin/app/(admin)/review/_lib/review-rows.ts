@@ -36,6 +36,7 @@ import {
   lensRowOfNeedsYou,
   type LensDoor,
   type LensNeedsYouSignal,
+  type LensRow,
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
 import { needsYouRows } from "@synap-core/types/needs-you";
@@ -170,6 +171,12 @@ export function exitOf(detail: Extract<ReviewDetail, { kind: "open" }>): Exit {
 export interface ReviewRow {
   /** Stable key: the signal id. */
   key: string;
+  /**
+   * THE shared lens row of its signal (`lensRowOfNeedsYou`): what the row's
+   * three lines (`requestRow`) and the request's story (`requestStory`) are
+   * drawn from, the same derivation the desktop and phone apps draw.
+   */
+  lens: LensRow;
   group: ReviewGroup;
   /** The decision it asks — what Review groups by (founder B-1). */
   package: ReviewPackage;
@@ -284,6 +291,7 @@ function wholeCluster(s: ReviewSignal): string[] | null {
 type RowShape = Omit<
   ReviewRow,
   | "key"
+  | "lens"
   | "group"
   | "package"
   | "sessionId"
@@ -354,13 +362,9 @@ function accessRow(s: ReviewSignal): RowShape {
   };
 }
 
-function askRow(s: ReviewSignal): RowShape {
+function askRow(s: ReviewSignal, lens: LensRow): RowShape {
   // The shared lens row decides an ask's noun, chip, door and title (the
   // card's question, `askCardView`) — the same words browser and relay draw.
-  const lens = lensRowOfNeedsYou(
-    { kind: "item", key: s.id, signal: s, session: null },
-    "blocking"
-  );
   const slot = askSlotOf(s);
   // Who asked: the agent by name, else the cause — the card's own mark.
   const asker = slot ? askView(slot).asker : null;
@@ -397,28 +401,43 @@ export function reviewRows(
   const later = reviewLaterIds(signals);
   return signals.map((s) => {
     const group = reviewGroupOf(s);
+    const sessionId = sessionOf(s);
+    const sessionTitle = sessionId
+      ? s.sessionTitle ||
+        (s.source?.kind === "session" ? s.source.label : null) ||
+        null
+      : null;
+    // The session is the row's provenance door (its "where"), and the ask's
+    // asker opens it: the same session ref the browser and relay rows carry.
+    const lens = lensRowOfNeedsYou(
+      {
+        kind: "item",
+        key: s.id,
+        signal: s,
+        session: sessionId
+          ? { id: sessionId, title: sessionTitle, projectId: null }
+          : null,
+      },
+      "blocking"
+    );
     const shape =
       s.kind === "access-request"
         ? accessRow(s)
         : s.kind === "proposal-cluster"
           ? proposalRow(s, group, facts)
-          : askRow(s);
+          : askRow(s, lens);
     const occurredAt = iso(s.occurredAt);
     const expiresAt = proposalExpiresAt(occurredAt, s.lifetimeHours);
     const expired = proposalLapsed(expiresAt, now);
-    const sessionId = sessionOf(s);
     return {
       ...shape,
       ...(expired ? { inlineApprove: false, batchIds: null } : {}),
       key: s.id,
+      lens,
       group,
       package: packageOf(s, facts),
       sessionId,
-      sessionTitle: sessionId
-        ? s.sessionTitle ||
-          (s.source?.kind === "session" ? s.source.label : null) ||
-          null
-        : null,
+      sessionTitle,
       agent: s.by?.id && s.by.label ? { id: s.by.id, label: s.by.label } : null,
       title: shape.title ?? s.title,
       occurredAt,

@@ -1,14 +1,15 @@
 "use client";
 
 /**
- * One Review row — a decision's title, who asked, where, and its one verb —
- * with its batch checkbox. Every grouping draws its rows with it (moved out of
- * `review-page.tsx` so the package sections can draw the same row).
+ * One Review row — the request's three lines (`reviewRowView` over the
+ * shared `requestRow`: state, kind, the question and its age · what it holds ·
+ * who and where, each name a door) and its one verb, with its batch checkbox.
+ * Every grouping draws its rows with it, and so do the question cards and a
+ * session's "Needs you" (`RequestRowLines`).
  */
 
 import { Button, Checkbox } from "@heroui/react";
 import { ArrowUpRight, Lock, MessageSquare } from "lucide-react";
-import { formatRelative } from "../../../../lib/format";
 import type { Exit } from "../../../../lib/open-in";
 import {
   externalProps,
@@ -16,11 +17,12 @@ import {
   useAppOpenAttempt,
   usePlacedExit,
 } from "../../../../lib/exit-link";
-import { ResourceRow } from "../../components/resource-row";
-import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
-import { lensRowExpiry } from "@synap-core/types/lens";
-import { resolveReviewPackageLabel } from "@synap-core/types/vocabulary";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
+import { RequestRowLines } from "../../../_lib/request/request-row-lines";
+import { REQUEST_CATALOGS } from "../../../_lib/request/copy";
+import { useT } from "../../../../lib/i18n/locale-provider";
 import { exitOf, type ReviewRow } from "./review-rows";
+import { reviewRowView } from "./review-row-view";
 
 /**
  * An ask's "Review" when its door leads out of this page. On a phone a door
@@ -48,34 +50,11 @@ function DoorButton({ exit }: { exit: Exit }) {
           ) : undefined
         }
       >
-        Review
+        {resolveActionLabel("review", "imperative")}
       </Button>
       {open.offer}
     </>
   );
-}
-
-/** "Agent · Claude · Synap · 3 grouped · Expires in 20m · 2h ago" */
-export function secondaryLine(
-  row: ReviewRow,
-  { showPackage = false }: { showPackage?: boolean } = {}
-): string {
-  // Outside "Group by Package" the row says which decision it asks; a kind
-  // that reads the same word (Knowledge · Knowledge) is said once.
-  const pkg = showPackage ? resolveReviewPackageLabel(row.package) : null;
-  const kind = kindLabel(row.nounKind);
-  return [
-    pkg,
-    kind === pkg ? null : kind,
-    row.who,
-    row.where,
-    row.reason,
-    row.count > 1 ? `${row.count} grouped` : null,
-    lensRowExpiry(row)?.label ?? null,
-    formatRelative(row.occurredAt, { empty: "" }),
-  ]
-    .filter(Boolean)
-    .join(" · ");
 }
 
 export function ReviewListRow({
@@ -101,21 +80,23 @@ export function ReviewListRow({
   onApprove: () => void;
   approving: boolean;
 }) {
+  const t = useT(REQUEST_CATALOGS);
+  const view = reviewRowView(row, { showPackage });
   const exit = row.detail?.kind === "open" ? exitOf(row.detail) : null;
-  const opensHere = row.detail !== null && row.detail.kind !== "open";
-  const isAsk = row.detail?.kind === "ask";
+  const opensHere = view.action !== null && view.action.kind !== "exit";
+  const isAsk = view.action?.kind === "answer";
   const actions = (
-    <div className="flex items-center gap-1.5">
-      {row.inlineApprove && (
+    <div className="flex shrink-0 items-center gap-1.5">
+      {view.inlineApprove && (
         <Button
           size="sm"
           variant="light"
           radius="md"
           isDisabled={approving}
           onPress={onApprove}
-          aria-label={`Approve ${row.title}`}
+          aria-label={t("row.approveOne", { title: row.title })}
         >
-          Approve
+          {resolveActionLabel("approve", "imperative")}
         </Button>
       )}
       {opensHere && (
@@ -130,7 +111,7 @@ export function ReviewListRow({
             ) : undefined
           }
         >
-          {isAsk ? "Answer" : "Review"}
+          {resolveActionLabel(isAsk ? "answer" : "review", "imperative")}
         </Button>
       )}
       {exit && <DoorButton exit={exit} />}
@@ -141,45 +122,73 @@ export function ReviewListRow({
       data-row-id={row.key}
       aria-current={active ? "true" : undefined}
       className={[
-        "flex items-center",
+        "flex items-start",
         selected || active ? "bg-primary/[0.06]" : "",
       ].join(" ")}
     >
       {selectable && (
-        <div className="flex w-9 shrink-0 justify-center">
+        <div className="flex w-9 shrink-0 justify-center pt-3.5">
           {row.batchIds ? (
             <Checkbox
               size="sm"
               isSelected={selected}
               onValueChange={onToggle}
-              aria-label={`Select ${row.title}`}
+              aria-label={t("row.select", { title: row.title })}
             />
           ) : row.group === "access" ? (
-            <span title="Access requests are reviewed one at a time">
+            <span title={t("row.oneAtATimeAccess")}>
               <Lock
                 className="h-3.5 w-3.5 text-foreground/40"
-                aria-label="Access requests are reviewed one at a time"
+                aria-label={t("row.oneAtATimeAccess")}
               />
             </span>
           ) : isAsk ? (
-            <span title="Questions are answered one at a time">
+            <span title={t("row.oneAtATimeAsk")}>
               <MessageSquare
                 className="h-3.5 w-3.5 text-foreground/40"
-                aria-label="Questions are answered one at a time"
+                aria-label={t("row.oneAtATimeAsk")}
               />
             </span>
           ) : null}
         </div>
       )}
-      <div className="min-w-0 flex-1">
-        <ResourceRow
-          Icon={kindIcon(row.nounKind)}
-          primary={row.title}
-          secondary={secondaryLine(row, { showPackage })}
-          wrap
-          onSelect={opensHere ? onOpen : undefined}
-          actions={actions}
-        />
+      <div className="flex min-w-0 flex-1 items-start gap-3 px-3 py-3">
+        <div className="min-w-0 flex-1">
+          <RequestRowLines
+            what={view.what}
+            holds={view.holds}
+            who={view.who}
+            lead={
+              view.packageLabel ? (
+                <span className="font-medium text-foreground/70">
+                  {view.packageLabel}
+                </span>
+              ) : undefined
+            }
+            trail={
+              view.repeat ? (
+                <span className="pl-12 text-[12px] text-foreground/55">
+                  {view.repeat}
+                </span>
+              ) : undefined
+            }
+            titleSlot={
+              opensHere
+                ? (text) => (
+                    <button
+                      type="button"
+                      onClick={onOpen}
+                      aria-label={t("row.openDecision", { title: text })}
+                      className="rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    >
+                      {text}
+                    </button>
+                  )
+                : undefined
+            }
+          />
+        </div>
+        {actions}
       </div>
     </div>
   );

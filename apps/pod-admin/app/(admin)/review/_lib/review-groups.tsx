@@ -27,6 +27,7 @@ import {
   type ReviewPackage,
 } from "@synap-core/types/proposals/review-package";
 import {
+  resolveActionLabel,
   resolveObjectNoun,
   resolveReviewLayoutLabel,
   resolveReviewPackageLabel,
@@ -38,6 +39,8 @@ import { ResourceRow } from "../../components/resource-row";
 import { SegmentedChoice } from "../../components/segmented-choice";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
 import { Pill } from "../../../_lib/object/provenance-chips";
+import { RequestRowLines } from "../../../_lib/request/request-row-lines";
+import { reviewRowView } from "./review-row-view";
 import {
   agentGroups,
   itemCount,
@@ -248,7 +251,11 @@ function PackageBody({
   }
 }
 
-/** Questions as cards: the question, where it comes from, its one verb. */
+/**
+ * Questions as cards: each card draws the ONE request row (its three lines:
+ * the question, what it holds, who asked and where, every name a door) and
+ * its one verb — the same row the list draws (D4), capped like it (§4).
+ */
 function AskCards({
   rows,
   actions,
@@ -256,51 +263,59 @@ function AskCards({
   rows: ReviewRow[];
   actions: ReviewGroupActions;
 }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? rows : rows.slice(0, ROW_CAP);
   return (
-    <div className="grid grid-cols-1 gap-3 px-1 pb-1 sm:grid-cols-2">
-      {rows.map((row) => {
-        const opens = row.detail !== null && row.detail.kind !== "open";
-        return (
-          <Card
-            key={row.key}
-            data-row-id={row.key}
-            shadow="none"
-            radius="md"
-            className="bg-content1 ring-1 ring-inset ring-foreground/10"
-          >
-            <CardBody className="flex flex-col gap-2 p-4">
-              <p className="text-[13.5px] font-medium leading-5 text-foreground">
-                {row.title}
-              </p>
-              <p className="text-[12px] text-foreground/65">
-                {[
-                  row.reason,
-                  row.sessionTitle ?? row.where,
-                  formatRelative(row.occurredAt, { empty: "" }),
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </p>
-              <div>
-                {opens ? (
-                  <Button
-                    size="sm"
-                    color="primary"
-                    startContent={
-                      <MessageSquare className="h-3.5 w-3.5" aria-hidden />
-                    }
-                    onPress={() => actions.open(row)}
-                  >
-                    {row.detail?.kind === "ask" ? "Answer" : "Review"}
-                  </Button>
-                ) : (
-                  actions.renderRow(row)
-                )}
-              </div>
-            </CardBody>
-          </Card>
-        );
-      })}
+    <div className="flex flex-col gap-2 px-1 pb-1">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {shown.map((row) => {
+          const view = reviewRowView(row);
+          const opens = view.action !== null && view.action.kind !== "exit";
+          return (
+            <Card
+              key={row.key}
+              data-row-id={row.key}
+              shadow="none"
+              radius="md"
+              className="bg-content1 ring-1 ring-inset ring-foreground/10"
+            >
+              <CardBody className="flex flex-col gap-3 p-4">
+                <RequestRowLines
+                  what={view.what}
+                  holds={view.holds}
+                  who={view.who}
+                />
+                <div>
+                  {opens ? (
+                    <Button
+                      size="sm"
+                      color="primary"
+                      startContent={
+                        <MessageSquare className="h-3.5 w-3.5" aria-hidden />
+                      }
+                      onPress={() => actions.open(row)}
+                    >
+                      {resolveActionLabel(
+                        view.action?.kind === "answer" ? "answer" : "review",
+                        "imperative"
+                      )}
+                    </Button>
+                  ) : (
+                    actions.renderRow(row)
+                  )}
+                </div>
+              </CardBody>
+            </Card>
+          );
+        })}
+      </div>
+      {rows.length > ROW_CAP && (
+        <div>
+          <Button size="sm" variant="light" onPress={() => setAll((v) => !v)}>
+            {all ? "Show fewer" : `Show all ${rows.length}`}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -87,6 +87,7 @@ import {
   usePlacedExit,
 } from "../../../../lib/exit-link";
 import { kindIcon } from "../../../_lib/object/kind-icon";
+import { toneTextClass } from "../../../_lib/tone";
 import { chipColor } from "../../../apps/_lib/app-view";
 import { ErrorNote } from "../../../_lib/copy-button";
 import { ResourceRowSkeleton } from "../../components/resource-row";
@@ -322,7 +323,7 @@ export function AskAnswer({
           )}
           <span
             aria-hidden
-            className={`tabular-nums ${TONE_TEXT[view.ageFate.tone] ?? "text-foreground/65"}`}
+            className={`tabular-nums ${toneTextClass(view.ageFate.tone)}`}
           >
             {view.ageFate.label}
           </span>
@@ -507,7 +508,7 @@ function RelayWaiting({
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1">
         <p
-          className={`text-[12.5px] font-medium ${TONE_TEXT[view.mark.tone] ?? "text-foreground/80"}`}
+          className={`text-[12.5px] font-medium ${toneTextClass(view.mark.tone)}`}
         >
           {view.mark.label}
         </p>
@@ -551,13 +552,6 @@ function RelayWaiting({
     </div>
   );
 }
-
-/** Each age + fate tone, as the console's text colour. */
-const TONE_TEXT: Readonly<Record<string, string>> = {
-  warning: "text-warning-600",
-  textMuted: "text-foreground/55",
-  textSecondary: "text-foreground/65",
-};
 
 /**
  * Who asked, as a mark: the agent by name (its session is the door), or what

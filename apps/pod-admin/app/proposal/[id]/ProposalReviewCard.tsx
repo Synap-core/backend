@@ -89,6 +89,7 @@ import { mediaAlt } from "../../_lib/media/stored-media-model";
 import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 import { AdvancedPanel } from "../../_lib/object/advanced-panel";
 import { kindIcon } from "../../_lib/object/kind-icon";
+import { toneMarkClass } from "../../_lib/tone";
 import { READS_WIDE_ATTR } from "../../_lib/receiver-shell";
 import {
   AgentMark,
@@ -248,13 +249,6 @@ export type ProposalSourceExit = ReturnType<
 
 // ─── Marks ───────────────────────────────────────────────────────────────────
 
-const MARK_TONE: Record<ReviewMark["tone"], string> = {
-  warning: "bg-warning/10 text-warning ring-warning/25",
-  primary: "bg-primary/10 text-primary ring-primary/25",
-  success: "bg-success/10 text-success ring-success/25",
-  default: "bg-foreground/[0.05] text-foreground/75 ring-foreground/15",
-};
-
 /**
  * A state as ONE mark: colour + icon + a few words. Its sentence is disclosed
  * on press (a popover, so it reaches touch and keyboard, not only hover) —
@@ -274,7 +268,7 @@ function DisclosedMark({
           type="button"
           data-review-mark={mark.label}
           aria-label={`${mark.label}: why`}
-          className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium ring-1 ring-inset transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${MARK_TONE[mark.tone]}`}
+          className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium ring-1 ring-inset transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${toneMarkClass(mark.tone)}`}
         >
           <Icon aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
           {mark.label}
