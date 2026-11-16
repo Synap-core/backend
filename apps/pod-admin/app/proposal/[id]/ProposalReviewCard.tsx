@@ -105,6 +105,7 @@ import { AlwaysApproveMenu, RejectNeverMenu } from "./AlwaysApproveMenu";
 import { proposalPageT, type OutcomeKey } from "./copy";
 import { DeferredWritesList } from "./DeferredWritesList";
 import { FailedApproval } from "./FailedApproval";
+import { SetupHandOver } from "./SetupHandOver";
 import {
   DuplicateUnchecked,
   ItemTwinChoice,
@@ -1340,6 +1341,18 @@ export function ProposalReviewBody({
               <RequesterNote who={actor?.name ?? null} text={why.proposer} />
             )}
           </section>
+        )}
+
+        {/* What it needs from you (B5): the hand-over, before the verbs that
+          wait on it. A failed approval hands over in its own card below. */}
+        {status === "pending" && setupBlock !== null && (
+          <SetupHandOver
+            proposalId={p.id}
+            expectedRevision={renderedRevision(p) ?? 0}
+            // The pod wrote the revision; the proposal is read again and its
+            // Approve no longer waits.
+            onHandedOver={() => undefined}
+          />
         )}
 
         {/* A failed approval says why, and offers the fix the pod found

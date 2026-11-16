@@ -240,6 +240,12 @@ const {
     status: "pending",
     /** `signals.needsYou` with its context: the request's story. */
     context: contextOf() as Q,
+    /** `proposals.repairOptions`: what a proposal still needs from you. */
+    repairOptions: {
+      proposalId: "p",
+      repairable: false,
+      fields: [],
+    } as Record<string, unknown>,
     /** Review's query string (`?session=` narrows it). */
     search: "",
     /** Fields laid over the fixture proposal (a different review). */
@@ -319,7 +325,7 @@ vi.mock("../../../../lib/trpc", async () => ({
       // The failed-approval card (`FailedApproval.tsx`): nothing to fix here.
       repairOptions: {
         useQuery: () => ({
-          data: { proposalId: "p", repairable: false, fields: [] },
+          data: state.repairOptions,
           isLoading: false,
           isError: false,
           refetch() {},
@@ -545,6 +551,93 @@ describe.each([
     );
     expect(count(html, /data-review-decision/)).toBe(1);
     Object.assign(state, { context: reads.contextOf() });
+  });
+});
+
+/** An install that needs its key (finding 91a3bfd3, founder default B5). */
+const SETUP = {
+  blocking: true,
+  params: [
+    {
+      name: "apiKey",
+      label: "Cal.com API key",
+      required: true,
+      secret: true,
+      satisfied: false,
+      obtain: {
+        url: "https://app.cal.com/settings/developer/api-keys",
+        steps: ["Open Settings, then Developer", "Create a key"],
+      },
+    },
+  ],
+};
+
+describe.each([
+  ["the Review dock", () => dock()],
+  ["the /proposal page", () => page()],
+])("%s — a proposal that needs an input (B5)", (_host, render) => {
+  it("Approve waits, with 'Fill in X first' in its place; the hand-over comes before the verbs", () => {
+    Object.assign(state, {
+      proposal: { setup: SETUP },
+      repairOptions: {
+        proposalId: PROPOSAL_ID,
+        repairable: true,
+        fields: [],
+        setup: {
+          ...SETUP,
+          secretChoices: [{ ref: "vault://s1", label: "CAL_KEY" }],
+        },
+      },
+    });
+    const html = render();
+    const seen = text(html);
+    expect(seen).toMatch(/Fill in Cal\.com API key first/);
+    // The Approve button is disabled while the row is empty.
+    const approve = html.slice(
+      html.lastIndexOf("<button", html.indexOf(">Approve<")),
+      html.indexOf(">Approve<")
+    );
+    expect(approve).toMatch(/disabled/);
+    // What it needs: the row, how to get it, the page it starts on.
+    const handOver = at(html, "data-setup-hand-over");
+    expect(handOver).toBeLessThan(at(html, "data-review-decision"));
+    expect(seen).toMatch(/Open Settings, then Developer Create a key/);
+    expect(html).toContain(
+      'href="https://app.cal.com/settings/developer/api-keys"'
+    );
+    Object.assign(state, {
+      proposal: {},
+      repairOptions: { proposalId: "p", repairable: false, fields: [] },
+    });
+  });
+
+  it("a failed approval that needs an input shows the hand-over row, not just the sentence", () => {
+    Object.assign(state, {
+      status: "approval_failed",
+      proposal: { rejectionReason: "Needs setup: Cal.com API key." },
+      repairOptions: {
+        proposalId: PROPOSAL_ID,
+        repairable: true,
+        fields: [],
+        setup: { ...SETUP, secretChoices: [] },
+      },
+    });
+    const html = render();
+    const failed = html.slice(at(html, "data-failed-approval"));
+    expect(failed).toContain("data-setup-hand-over");
+    expect(text(failed)).toMatch(/Needs setup: Cal\.com API key\./);
+    expect(text(failed)).toMatch(/Cal\.com API key/);
+    Object.assign(state, {
+      status: "pending",
+      proposal: {},
+      repairOptions: { proposalId: "p", repairable: false, fields: [] },
+    });
+  });
+
+  it("nothing to hand over: Approve does not wait", () => {
+    const html = render();
+    expect(text(html)).not.toMatch(/Fill in .* first/);
+    expect(html).not.toContain("data-setup-hand-over");
   });
 });
 

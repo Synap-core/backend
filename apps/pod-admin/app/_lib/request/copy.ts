@@ -78,6 +78,7 @@ export const en = {
   "setup.handedOver": "Handed over. It can be approved now.",
   "setup.failed": "It could not be handed over",
   "setup.signInAgain": "Sign in again to type a new key, then try once more.",
+  "setup.signIn": "Sign in again",
   "setup.unreadable": "What it needs could not be read.",
   "setup.retry": "Try again",
 } as const;
@@ -147,6 +148,7 @@ export const fr: Catalog<typeof en> = {
   "setup.failed": "Elle n’a pas pu être fournie",
   "setup.signInAgain":
     "Reconnectez-vous pour saisir une nouvelle clé, puis réessayez.",
+  "setup.signIn": "Se reconnecter",
   "setup.unreadable": "Ce qu’il faut fournir n’a pas pu être lu.",
   "setup.retry": "Réessayer",
 };
