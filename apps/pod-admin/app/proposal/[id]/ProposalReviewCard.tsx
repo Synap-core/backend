@@ -131,6 +131,7 @@ import { useT } from "../../../lib/i18n/locale-provider";
 import {
   proposalSetupBlock,
   type ProposalSetupView,
+  type SetupBlock,
 } from "./proposal-setup-model";
 import {
   compositeItems,
@@ -628,7 +629,7 @@ function DecisionButtons({
    * label of the first required setup row still empty. Approve waits, with
    * "Fill in X first" in its place; Reject stays.
    */
-  setupBlock?: string | null;
+  setupBlock?: SetupBlock;
   mode: DecisionMode;
   undo: ReviewMark | null;
   onDecided: () => void;
@@ -810,7 +811,9 @@ function DecisionButtons({
           data-setup-block=""
           className="text-[12px] text-foreground/70"
         >
-          {rt("setup.fillFirst", { name: setupBlock })}
+          {setupBlock.kind === "fill"
+            ? rt("setup.fillFirst", { name: setupBlock.name })
+            : rt("setup.cannotTell")}
         </span>
       )}
     </div>

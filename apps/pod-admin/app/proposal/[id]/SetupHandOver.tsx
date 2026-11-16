@@ -241,6 +241,18 @@ export function SetupHandOver({
       | undefined
   )?.setup;
   if (!setup) return null;
+  // What it needs could not be told (the pod could not read the manifest):
+  // said, never drawn as "nothing to fill".
+  if (setup.unreadable) {
+    return (
+      <p
+        data-setup-unreadable="needs"
+        className="text-[12.5px] text-status-stale"
+      >
+        {t("setup.cannotTell")}
+      </p>
+    );
+  }
   const rows = setupRows(setup);
   if (rows.length === 0) return null;
   const choices = setup.secretChoices ?? [];
@@ -296,9 +308,7 @@ export function SetupHandOver({
               proposalId,
               expectedRevision,
               set: {},
-              // The setup arm (`setupRepairInputSchema`). Cast until the
-              // generated API types carry it (backend#1071 regenerates them).
-              ...({ setup: entries } as object),
+              setup: entries,
             })
           }
         >

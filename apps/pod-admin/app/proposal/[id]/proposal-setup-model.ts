@@ -28,7 +28,17 @@ export interface ProposalSetupParamView {
 export interface ProposalSetupView {
   params: ProposalSetupParamView[];
   blocking: boolean;
+  /**
+   * The pod cannot tell what it needs (its manifest could not be read):
+   * `params` is then empty and `blocking` true. Said as such, never as
+   * "nothing needed".
+   */
+  unreadable?: true;
 }
+
+/** What keeps Approve waiting (B5): a row to fill, or a need nobody can tell. */
+export type SetupBlock =
+  { kind: "fill"; name: string } | { kind: "unreadable" } | null;
 
 /** One of the person's own vault secrets (`repairOptions.setup.secretChoices`). */
 export interface SetupSecretChoiceView {
@@ -53,13 +63,17 @@ function labelOf(p: ProposalSetupParamView): string {
   return p.label?.trim() || humanizeToken(p.name);
 }
 
-/** "Fill in X first" (B5): the first REQUIRED row still empty, or null. */
+/**
+ * What keeps Approve waiting (B5): the first REQUIRED row still empty
+ * ("Fill in X first"), or a need the pod cannot tell; null = nothing.
+ */
 export function proposalSetupBlock(
   setup: ProposalSetupView | null | undefined
-): string | null {
+): SetupBlock {
   if (!setup?.blocking) return null;
+  if (setup.unreadable) return { kind: "unreadable" };
   const row = setup.params.find((p) => p.required && !p.satisfied);
-  return row ? labelOf(row) : null;
+  return row ? { kind: "fill", name: labelOf(row) } : null;
 }
 
 /** The rows the person still has to hand over, required first. */

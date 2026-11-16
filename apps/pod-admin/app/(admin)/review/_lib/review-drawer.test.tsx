@@ -636,6 +636,31 @@ describe.each([
     });
   });
 
+  it("what it needs cannot be told: Approve waits, and says why", () => {
+    const unreadable = { blocking: true, params: [], unreadable: true };
+    Object.assign(state, {
+      proposal: { setup: unreadable },
+      repairOptions: {
+        proposalId: PROPOSAL_ID,
+        repairable: false,
+        fields: [],
+        setup: { ...unreadable, secretChoices: [] },
+      },
+    });
+    const html = render();
+    const seen = text(html);
+    Object.assign(state, {
+      proposal: {},
+      repairOptions: { proposalId: "p", repairable: false, fields: [] },
+    });
+    expect(count(seen, /Synap cannot tell what this needs/)).toBe(2);
+    const approve = html.slice(
+      html.lastIndexOf("<button", html.indexOf(">Approve<")),
+      html.indexOf(">Approve<")
+    );
+    expect(approve).toMatch(/disabled/);
+  });
+
   it("nothing to hand over: Approve does not wait", () => {
     const html = render();
     expect(text(html)).not.toMatch(/Fill in .* first/);

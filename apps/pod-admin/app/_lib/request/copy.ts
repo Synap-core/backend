@@ -109,6 +109,8 @@ export const en = {
   "setup.signInAgain": "Sign in again to type a new key, then try once more.",
   "setup.signIn": "Sign in again",
   "setup.unreadable": "What it needs could not be read.",
+  "setup.cannotTell":
+    "Synap cannot tell what this needs, so it cannot be approved yet.",
   "setup.retry": "Try again",
 } as const;
 
@@ -208,6 +210,8 @@ export const fr: Catalog<typeof en> = {
     "Reconnectez-vous pour saisir une nouvelle clé, puis réessayez.",
   "setup.signIn": "Se reconnecter",
   "setup.unreadable": "Ce qu’il faut fournir n’a pas pu être lu.",
+  "setup.cannotTell":
+    "Synap ne sait pas ce qu’il faut fournir : la demande ne peut pas encore être approuvée.",
   "setup.retry": "Réessayer",
 };
 

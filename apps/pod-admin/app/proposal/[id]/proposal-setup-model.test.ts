@@ -38,7 +38,15 @@ const setup: ProposalSetupView = {
 
 describe("proposalSetupBlock — Approve waits on the first required row (B5)", () => {
   it("names it by its label", () => {
-    expect(proposalSetupBlock(setup)).toBe("Cal.com API key");
+    expect(proposalSetupBlock(setup)).toEqual({
+      kind: "fill",
+      name: "Cal.com API key",
+    });
+  });
+  it("a need nobody can tell still blocks, said as such — never 'nothing needed'", () => {
+    expect(
+      proposalSetupBlock({ blocking: true, params: [], unreadable: true })
+    ).toEqual({ kind: "unreadable" });
   });
   it("nothing blocks: Approve does not wait", () => {
     expect(proposalSetupBlock({ ...setup, blocking: false })).toBeNull();
