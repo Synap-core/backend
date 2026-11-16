@@ -40,7 +40,6 @@ import {
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
 import { needsYouRows } from "@synap-core/types/needs-you";
-import { proposalNeedsItsPage } from "@synap-core/types/proposals";
 import { askTextRestates, type Ask } from "@synap-core/types/ask";
 import {
   REVIEW_PACKAGE_ORDER,
@@ -56,9 +55,10 @@ import {
 import { isUuid } from "../../../../lib/format";
 import { askSlotOf, askView, type AskSlot } from "./ask-detail";
 import {
+  proposalNeedsItsPage,
   proposalRequester,
   type ProposalPrincipalView,
-} from "../../../proposal/[id]/proposal-requester";
+} from "@synap-core/types/proposals";
 
 export type ReviewGroup = "access" | "changes" | "asks";
 

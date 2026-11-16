@@ -63,7 +63,7 @@ import {
   type ReviewRow,
 } from "../../../(admin)/review/_lib/review-rows";
 import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
-import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
+import { proposalRequester } from "@synap-core/types/proposals";
 import { proposalSubjectKind } from "../../../proposal/[id]/proposal-subject-kind";
 import { objectPage } from "../content/markdown-model";
 import { kindIcon, kindLabel } from "../kind-icon";

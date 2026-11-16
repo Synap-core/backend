@@ -64,6 +64,7 @@ import {
   needsIdentityChoice,
   pageOnlyReasonActs,
   proposalPageOnlyReason,
+  proposalRequesterParts,
   resolveProposalAction,
   type DuplicateItemChoice,
   type ProposalDuplicateReview,
@@ -142,7 +143,6 @@ import {
   proposalProfileSlug,
   proposalSubjectKind,
 } from "./proposal-subject-kind";
-import { proposalRequesterParts } from "./proposal-requester";
 import {
   graphRecords,
   proposedEntityMedia,

@@ -39,7 +39,7 @@ import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { useApproveIssuer } from "../../../_lib/presence/use-request-doors";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { DetailDrawer } from "../../components/detail-drawer";
-import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
+import { proposalRequester } from "@synap-core/types/proposals";
 import { proposalPageT } from "../../../proposal/[id]/copy";
 import { requestReadFailure } from "../../../proposal/[id]/request-read-failure";
 import { RequestUnreadable } from "../../../proposal/[id]/RequestUnreadable";

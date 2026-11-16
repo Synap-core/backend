@@ -41,6 +41,10 @@ import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
 import { Pill } from "../../../_lib/object/provenance-chips";
 import { RequestRowLines } from "../../../_lib/request/request-row-lines";
 import { reviewRowView } from "./review-row-view";
+import { useT } from "../../../../lib/i18n/locale-provider";
+import { en, fr } from "./copy";
+
+const CATALOGS = { en, fr };
 import {
   agentGroups,
   itemCount,
@@ -58,31 +62,27 @@ const ROW_CAP = 8;
 const NAME_CAP = 12;
 
 /**
- * What each package asks of the person — the line under its name. Product
- * copy (a sentence), not vocabulary: the package NAME comes from the door.
+ * The ONE "all" action a package offers, as an action TOKEN (its words come
+ * from the vocabulary door, `resolveActionLabel`); null = decided one at a
+ * time. What each package asks of the person is its catalog line
+ * (`copy.ts`, `package.ask.<package>`), never a hand map here (D9).
  */
-const PACKAGE_ASK: Readonly<Record<ReviewPackage, string>> = {
-  questions: "an agent waits on your answer",
-  access: "who may act or see · one at a time",
-  releases: "go or no-go on a deploy",
-  "how-things-work": "rules and playbooks agents follow · read each",
-  "data-changes": "changes to your records",
-  "hand-offs": "work handed to an agent",
-  knowledge: "what agents learned · skim, keep, reject the odd one",
-  bookkeeping: "agents' notes on their own sessions",
-};
-
-/** The verb of a package's one "all" action. */
-const KEEP_VERB: Readonly<Record<ReviewPackage, string | null>> = {
+const KEEP_ACTION: Readonly<Record<ReviewPackage, string | null>> = {
   questions: null,
   access: null,
   releases: null,
   "how-things-work": null,
-  "data-changes": "Approve",
-  "hand-offs": "Allow",
-  knowledge: "Keep",
-  bookkeeping: "Keep",
+  "data-changes": "approve",
+  "hand-offs": "allow",
+  knowledge: "keep",
+  bookkeeping: "keep",
 };
+
+/** A package's "all" verb, through the vocabulary door. */
+function keepVerb(pkg: ReviewPackage): string | null {
+  const action = KEEP_ACTION[pkg];
+  return action ? resolveActionLabel(action, "imperative") : null;
+}
 
 /** What the page hands the groups: how to draw a row and act on rows. */
 export interface ReviewGroupActions {
@@ -181,7 +181,8 @@ function PackageSection({
   actions: ReviewGroupActions;
 }) {
   const layouts = REVIEW_PACKAGE_LAYOUTS[pkg];
-  const verb = KEEP_VERB[pkg];
+  const t = useT(CATALOGS);
+  const verb = keepVerb(pkg);
   const first = rows[0];
   const oneAction =
     verb && layout !== "by-agent" ? (
@@ -194,7 +195,7 @@ function PackageSection({
   return (
     <SectionCard
       title={resolveReviewPackageLabel(pkg)}
-      hint={metaLine(rows, PACKAGE_ASK[pkg])}
+      hint={metaLine(rows, t(`package.ask.${pkg}`))}
       actions={
         <div className="flex flex-wrap items-center justify-end gap-2">
           {oneAction}
@@ -243,7 +244,7 @@ function PackageBody({
         <FoldedBySession
           rows={rows}
           actions={actions}
-          verb={KEEP_VERB[pkg] ?? "Keep"}
+          verb={keepVerb(pkg) ?? resolveActionLabel("keep", "imperative")}
         />
       );
     case "list":
