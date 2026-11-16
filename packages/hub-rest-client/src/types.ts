@@ -1180,7 +1180,19 @@ export type HubSlotAsk = (
       provide:
         | { kind: "connection"; service: string }
         | { kind: "file"; accept?: string[] }
-        | { kind: "secret"; name: string };
+        | {
+            kind: "secret";
+            name: string;
+            /** What it is for, declared; short words, never the secret. */
+            purpose?: {
+              for: string;
+              tool: string;
+              action?: string;
+              on?: string;
+            };
+            /** One read, or until the job closes (the default). */
+            uses?: "once" | "session";
+          };
     }
 ) & {
   /**

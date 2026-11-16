@@ -1025,7 +1025,22 @@ export interface SlotAskFormSpec {
 export type SlotAskProvide =
   | { kind: "connection"; service: string }
   | { kind: "file"; accept?: string[] }
-  | { kind: "secret"; name: string };
+  | {
+      kind: "secret";
+      name: string;
+      /** What it is for, declared. Mirrors `AskSecretPurpose` (@synap-core/types/ask). */
+      purpose?: SlotAskSecretPurpose;
+      /** One read, or until the job closes (the default). Mirrors `PROVIDE_SECRET_USES`. */
+      uses?: "once" | "session";
+    };
+
+/** Mirrors `AskSecretPurpose` (@synap-core/types/ask): short words, never the secret. */
+export interface SlotAskSecretPurpose {
+  for: string;
+  tool: string;
+  action?: string;
+  on?: string;
+}
 
 /** A `provide` answer stores a REFERENCE, never the value. */
 export type SlotProvideRef =
