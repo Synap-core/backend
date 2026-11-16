@@ -71,6 +71,7 @@ import {
   ASK_LIMITS,
   AskAnswerValueSchema,
   AskSchema,
+  PROVIDE_SECRET_USES,
 } from "@synap-core/types/ask";
 import {
   completeFocusSession,
@@ -652,6 +653,8 @@ const AnswerOutputBodySchema = z
     askFingerprint: z.string().min(1).max(64).optional(),
     // A secret answer: the agent `provideOptions` named as the reader.
     expectedGranteeId: z.string().min(1).max(200).optional(),
+    // A secret answer: the reads the person picked (`once` | `session`).
+    secretUses: z.enum(PROVIDE_SECRET_USES).optional(),
     // The one-tap Confirm of a relay waiting on the slot (`pendingRelay`).
     confirmRelayed: z.literal(true).optional(),
     // "Not what I said" (`correctRelayedAnswer`).
@@ -4106,6 +4109,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         value: parsed.data.value,
         askFingerprint: parsed.data.askFingerprint,
         expectedGranteeId: parsed.data.expectedGranteeId,
+        secretUses: parsed.data.secretUses,
         confirmRelayed: parsed.data.confirmRelayed,
       });
       if (result.status !== "answered") {

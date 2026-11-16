@@ -113,6 +113,7 @@ import {
   type AskAnswerRefusalCode,
   type AskStakes,
   type ProvideSecretGrant,
+  type ProvideSecretUses,
   type QuestionClosed,
 } from "@synap-core/types/ask";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
@@ -1103,6 +1104,11 @@ export async function answerSessionSlot(p: {
    */
   expectedGranteeId?: string;
   /**
+   * A secret answer: the reads the person picked (`once` | `session`);
+   * absent, the ask's own `provide.uses`, else `session`.
+   */
+  secretUses?: ProvideSecretUses;
+  /**
    * The person's ONE TAP on a relay that waited for it (`pendingRelay`, a
    * `commitment` an agent relayed — `relaySessionAnswer`): the answer is the
    * relayed one, recorded as theirs (`via: 'tap'` + `confirmedAt`, keeping
@@ -1262,12 +1268,18 @@ export async function answerSessionSlot(p: {
           ? { expectedGranteeId: p.expectedGranteeId }
           : {}),
       });
+      const secretAsk =
+        ask?.mode === "provide" && ask.provide.kind === "secret"
+          ? ask.provide
+          : null;
       ({ grant: secretGrant, createdGrantId } = await grantProvidedSecret({
         plan,
         secretId,
         ownerId: p.userId,
         sessionId: session.id,
         expectedLabel: label,
+        uses: p.secretUses ?? secretAsk?.uses ?? "session",
+        purpose: secretAsk?.purpose ?? null,
       }));
       text = summarizeAnswer(ask, value, p.text, {
         secretAccess: { grant: secretGrant, now: Date.now() },

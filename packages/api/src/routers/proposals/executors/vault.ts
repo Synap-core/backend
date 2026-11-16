@@ -10,10 +10,11 @@ import {
   transitionProposal,
 } from "@synap/database";
 import { secrets, ProposalStatus } from "@synap/database/schema";
+import { makeVaultReference } from "@synap-core/types/vault";
 import {
-  makeVaultReference,
-  matchVaultRequestSecrets,
-} from "@synap-core/types/vault";
+  listRequestableSecrets,
+  matchRequestedSecrets,
+} from "../../../services/proposals/vault-request-secrets.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import {
@@ -50,21 +51,7 @@ async function resolveRequestedSecret(
   approverId: string,
   inner: Record<string, unknown>
 ): Promise<{ id: string }> {
-  const owned = await db.query.secrets.findMany({
-    where: and(
-      eq(secrets.userId, approverId),
-      isNull(secrets.deletedAt),
-      eq(secrets.encryptionMode, "server")
-    ),
-    columns: {
-      id: true,
-      type: true,
-      name: true,
-      category: true,
-      url: true,
-      description: true,
-    },
-  });
+  const owned = await listRequestableSecrets(approverId);
   const named = typeof inner.secretId === "string" ? inner.secretId : null;
   if (named) {
     const secret = owned.find((s) => s.id === named);
@@ -78,16 +65,15 @@ async function resolveRequestedSecret(
     return secret;
   }
   const service = typeof inner.service === "string" ? inner.service : "";
-  const matches = matchVaultRequestSecrets(owned, {
-    service,
-    secretType: typeof inner.secretType === "string" ? inner.secretType : null,
-  });
+  const matches = matchRequestedSecrets(owned, inner);
   if (matches.length === 1) return matches[0]!;
   throw new TRPCError({
     code: "BAD_REQUEST",
     message:
       matches.length === 0
-        ? `No secret in your vault matches ${service || "this request"}. Add it to the vault, then approve again.`
+        ? // The request's setup row (`proposals.repairOptions`) offers to pick
+          // one of your secrets or add the key now, on this request.
+          `No secret in your vault matches ${service || "this request"}. Pick one you have or add the key on this request, then approve.`
         : `${matches.length} secrets in your vault match ${service || "this request"}. Grant it from the vault card on desktop or phone to pick one.`,
   });
 }

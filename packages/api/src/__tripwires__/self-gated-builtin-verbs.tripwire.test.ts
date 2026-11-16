@@ -25,6 +25,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   sendInputs: [] as Array<Record<string, unknown>>,
+  installInputs: [] as Array<Record<string, unknown>>,
   gateDecision: {
     decision: "propose",
     reasonCode: "APP_OUTWARD_INTENT",
@@ -77,6 +78,26 @@ vi.mock("../connectors/external-dispatch.js", () => ({
       : { success: true };
   },
 }));
+// market.install's inner gate is the install door's own trust decision: with
+// `mustPropose` it files a capability.install and installs nothing.
+vi.mock("../services/capabilities/marketplace-install.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  runMarketInstall: async (input: Record<string, unknown>) => {
+    h.installInputs.push(input);
+    return input.mustPropose
+      ? {
+          status: "proposed",
+          proposalId: "inner-proposal",
+          reviewUrl: "/open/inner-proposal",
+        }
+      : { status: "installed", result: {} };
+  },
+}));
+vi.mock("../services/capabilities/market-sources.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  resolveMarketSource: async () => ({ official: true }),
+  listMarketSources: async () => [],
+}));
 vi.mock("../services/capabilities/gate-capability-execution.js", () => ({
   gateCapabilityExecution: async () => h.gateDecision,
   CAPABILITY_RUN_PROPOSAL: { targetType: "capability", proposalType: "run" },
@@ -103,15 +124,26 @@ const PROBES: Record<
     params: { channelId: CHANNEL, content: "hello" },
     innerGateSaw: () => h.sendInputs.at(-1)?.mustPropose,
   },
+  "market.install": {
+    params: { kind: "capability", slug: "cal-com" },
+    innerGateSaw: () => h.installInputs.at(-1)?.mustPropose,
+  },
 };
 
 beforeEach(() => {
   h.sendInputs.length = 0;
+  h.installInputs.length = 0;
   h.capabilityProposals.length = 0;
   h.gateDecision = { decision: "propose", reasonCode: "APP_OUTWARD_INTENT" };
 });
 
 describe("every self-gated builtin verb hands mustPropose to its inner gate", () => {
+  it("market.install is self-gated: an agent's install files its own capability.install", () => {
+    // Finding 91a3bfd3: a generic capability.run of market.install replayed as
+    // the approver installed directly and failed "Needs setup" with no form.
+    expect(SELF_GATED_BUILTIN_VERBS.has("market.install")).toBe(true);
+  });
+
   it("the set is not empty and every member has a probe", () => {
     expect(SELF_GATED_BUILTIN_VERBS.size).toBeGreaterThan(0);
     for (const verb of SELF_GATED_BUILTIN_VERBS) {
