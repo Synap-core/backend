@@ -4086,6 +4086,117 @@
         },
         "required": ["userId", "workspaceId", "slug", "valueType"]
       },
+      "SiteStatus": {
+        "type": ["object", "null"],
+        "properties": {
+          "siteId": { "type": "string" },
+          "projectId": { "type": "string" },
+          "homeWorkspaceId": { "type": "string" },
+          "state": { "type": "string" },
+          "live": { "type": "boolean" },
+          "hasToken": { "type": "boolean" },
+          "tokenPrefix": { "type": ["string", "null"] },
+          "publishedAt": { "type": ["string", "null"] },
+          "revokedAt": { "type": ["string", "null"] },
+          "config": {
+            "type": "object",
+            "properties": {
+              "version": { "type": "number", "enum": [1] },
+              "collections": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "sort": { "type": "array", "items": { "type": "string" } },
+                    "pageSize": { "type": "integer" },
+                    "slugField": { "type": ["string", "null"] },
+                    "publishWhen": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "statuses": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        }
+                      },
+                      "required": ["statuses"]
+                    }
+                  },
+                  "required": ["sort", "pageSize", "slugField", "publishWhen"]
+                }
+              }
+            },
+            "required": ["version", "collections"]
+          },
+          "metadataFields": { "type": "array", "items": { "type": "string" } },
+          "collections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": { "type": "string" },
+                "count": { "type": "number" }
+              },
+              "required": ["key", "count"]
+            }
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entityId": { "type": "string" },
+                "title": {
+                  "type": ["string", "null"],
+                  "description": "The record's current title."
+                },
+                "collection": { "type": ["string", "null"] },
+                "publicId": { "type": ["string", "null"] },
+                "slug": { "type": ["string", "null"] },
+                "state": { "type": "string" },
+                "publishedAt": { "type": ["string", "null"] },
+                "live": {
+                  "type": "boolean",
+                  "description": "Served on the public web right now."
+                },
+                "stale": {
+                  "type": "boolean",
+                  "description": "The record changed after its snapshot: publish it again."
+                }
+              },
+              "required": [
+                "entityId",
+                "title",
+                "collection",
+                "publicId",
+                "slug",
+                "state",
+                "publishedAt",
+                "live",
+                "stale"
+              ]
+            }
+          },
+          "membersNextCursor": { "type": ["string", "null"] },
+          "membersTotal": { "type": "integer" }
+        },
+        "required": [
+          "siteId",
+          "projectId",
+          "homeWorkspaceId",
+          "state",
+          "live",
+          "hasToken",
+          "tokenPrefix",
+          "publishedAt",
+          "revokedAt",
+          "config",
+          "metadataFields",
+          "collections",
+          "members",
+          "membersNextCursor",
+          "membersTotal"
+        ]
+      },
       "PublishChartsResult": {
         "type": "object",
         "properties": {
@@ -27527,6 +27638,143 @@
           },
           "500": {
             "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shares/sites": {
+      "get": {
+        "tags": ["Shares"],
+        "summary": "A project's site, as its owner sees it",
+        "description": "The project's live site (state, config, collection counts, one page of members; never a token), or null when it has none. A key holding share.create reads only a site its grant reaches, and only the members of the spaces it reaches.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "maxLength": 512 },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Members per page (clamped)."
+            },
+            "required": false,
+            "description": "Members per page (clamped).",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The site, or null",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SiteStatus" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope, or not the project's owner",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found, or outside the key's grant",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shares/sites/{id}": {
+      "get": {
+        "tags": ["Shares"],
+        "summary": "One site, as its owner sees it",
+        "description": "State, config, collection counts and one page of members; never a token. A key holding share.create reads only a site its grant reaches, and only the members of the spaces it reaches.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "The site (its share row id)."
+            },
+            "required": true,
+            "description": "The site (its share row id).",
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": { "type": "string", "maxLength": 512 },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Members per page (clamped)."
+            },
+            "required": false,
+            "description": "Members per page (clamped).",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The site",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SiteStatus" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id or query",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope, or not the site's owner",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Site not found, or outside the key's grant",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
