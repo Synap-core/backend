@@ -36,10 +36,12 @@ import type { ProcessStepRunnerKind } from "./steps.js";
  * What a need names. `intent`: a `capability_intents` slug (any verb serving
  * it fills it). `capability`: a capability (by name or id) or a verb id from
  * `tools`, or a capability key from `requires` (what the runner's computer
- * must have). Plan W3 (L3) adds `need`: a named group of intents a space fills
- * once.
+ * must have). `need` (0426, founder decisions D2 and D3): a `need:<need>` ref
+ * (`@synap-core/types/needs`), a seat the space fills once with one provider;
+ * `filled` = the space bound a provider (that offers a tool for it, for a
+ * `tools` entry), its one provider in `providers`.
  */
-export const PROCESS_NEED_KINDS = ["intent", "capability"] as const;
+export const PROCESS_NEED_KINDS = ["intent", "capability", "need"] as const;
 export type ProcessNeedKind = (typeof PROCESS_NEED_KINDS)[number];
 
 /**

@@ -586,3 +586,75 @@ describe("the visibility floors reach the queries", () => {
     expect(await whereText(inAProcess?.where)).toContain("VISIBLE_playbooks");
   });
 });
+
+describe("needs of kind `need` (0426): the space's binding, one provider", () => {
+  const PB = {
+    tools: ["get_entity", "need:code-host/fetch_record", "need:payments"],
+    requires: ["need:deploy-target"],
+    stages: [],
+  };
+  const bindings = new Map([
+    [
+      "code-host",
+      {
+        bindingId: "b1",
+        need: "code-host",
+        providerCapabilityId: "cap-gh",
+        providerName: "GitHub",
+        setBy: "u",
+        updatedAt: new Date(),
+      },
+    ],
+    [
+      "deploy-target",
+      {
+        bindingId: "b2",
+        need: "deploy-target",
+        providerCapabilityId: "cap-vercel",
+        providerName: "Vercel",
+        setBy: "u",
+        updatedAt: new Date(),
+      },
+    ],
+  ]);
+  const caps = [
+    {
+      id: "cap-gh",
+      name: "GitHub",
+      verbs: [{ id: "github_pr_checks", intent: "fetch_record" }],
+    },
+  ] as never;
+
+  it("a need: ref is kind need, in tools and in requires", () => {
+    expect(declaredNeeds(PB as never).map((n) => [n.source, n.slug, n.kind])).toEqual([
+      ["tools", "need:code-host/fetch_record", "need"],
+      ["tools", "need:payments", "need"],
+      ["requires", "need:deploy-target", "need"],
+    ]);
+  });
+
+  it("filled with its provider, empty when unfilled, unknown when the bindings are unread", () => {
+    const covered = coverNeeds(declaredNeeds(PB as never), caps, "ws-1", bindings);
+    expect(covered.map((n) => [n.slug, n.state])).toEqual([
+      ["need:code-host/fetch_record", "filled"],
+      ["need:payments", "empty"],
+      ["need:deploy-target", "filled"],
+    ]);
+    expect(covered[0]!.providers).toEqual([
+      { capabilityId: "cap-gh", capabilityName: "GitHub", verbId: null },
+    ]);
+    expect(
+      coverNeeds(declaredNeeds(PB as never), caps, "ws-1", null).every(
+        (n) => n.state === "unknown"
+      )
+    ).toBe(true);
+    // A bound provider that offers no tool for a tools need does not fill it.
+    const noVerb = coverNeeds(
+      declaredNeeds({ tools: ["need:code-host/run_external_job"] } as never),
+      caps,
+      "ws-1",
+      bindings
+    );
+    expect(noVerb[0]!.state).toBe("empty");
+  });
+});

@@ -56,12 +56,19 @@ import {
 import type { Playbook } from "@synap/database/schema";
 import {
   collectPlaybookCriteria,
+  isNeedToolEntry,
   isRunToolName,
   readToolsList,
   resolveStageCategory,
   resolveStageGate,
 } from "@synap/playbooks";
 import { isKnownIntent } from "@synap-core/types/capability-intents";
+import {
+  readSpaceNeedBindings,
+  resolveNeedRefVerbs,
+  type SpaceNeedBindings,
+} from "../needs/space-needs.js";
+import { canonicalNeedSlug, parseNeedRef } from "@synap-core/types/needs";
 import {
   classifyStepRunner,
   deriveProcessHealth,
@@ -202,6 +209,18 @@ export function processChecks(row: Pick<Row, "criteria" | "stages">): {
   return { criteria, gates };
 }
 
+/** Does the playbook name a `need:` ref (tools or requires, its own or a step's)? PURE. */
+function declaresNeedRef(row: Pick<Row, "tools" | "requires" | "stages">): boolean {
+  return declaredNeeds(row).some((d) => d.kind === "need");
+}
+
+/** A space's need bindings; a process with no space has none (empty, read). */
+async function readNeedBindings(
+  workspaceId: string | null
+): Promise<SpaceNeedBindings> {
+  return workspaceId ? readSpaceNeedBindings(workspaceId) : new Map();
+}
+
 interface DeclaredNeed {
   slug: string;
   kind: ProcessNeed["kind"];
@@ -230,8 +249,11 @@ export function declaredNeeds(
       out.get(key) ??
       ({
         slug,
-        kind:
-          source === "tools" && isKnownIntent(slug) ? "intent" : "capability",
+        kind: isNeedToolEntry(slug)
+          ? "need"
+          : source === "tools" && isKnownIntent(slug)
+            ? "intent"
+            : "capability",
         source,
         steps: [],
       } satisfies DeclaredNeed);
@@ -252,13 +274,47 @@ export function declaredNeeds(
 type RegistryRow = Awaited<ReturnType<typeof listCapabilities>>[number];
 
 /**
+ * A `need:` entry against the space's bindings (0426). PURE. Unread bindings
+ * (null) → `unknown`. A `requires` need is filled once a provider is bound
+ * (its computer is checked when a step is handed over); a `tools` need also
+ * needs the bound provider to offer a tool for it, which takes the registry
+ * read (null → `unknown`). The one resolver: `resolveNeedRefVerbs`.
+ */
+function coverNeedRef(
+  d: DeclaredNeed,
+  caps: readonly RegistryRow[] | null,
+  bindings: SpaceNeedBindings | null
+): ProcessNeed {
+  if (bindings === null) return { ...d, state: "unknown", providers: [] };
+  const slug = canonicalNeedSlug(parseNeedRef(d.slug)?.need) ?? null;
+  const bound = slug ? bindings.get(slug) : undefined;
+  const providerId = bound?.providerCapabilityId ?? null;
+  if (!providerId) return { ...d, state: "empty", providers: [] };
+  const provider = {
+    capabilityId: providerId,
+    capabilityName: bound?.providerName ?? null,
+    verbId: null,
+  };
+  if (d.source === "requires") {
+    return { ...d, state: "filled", providers: [provider] };
+  }
+  if (caps === null) return { ...d, state: "unknown", providers: [] };
+  const r = resolveNeedRefVerbs(d.slug, bindings, caps);
+  return r.status === "ok"
+    ? { ...d, state: "filled", providers: [{ ...provider, capabilityName: r.providerName }] }
+    : { ...d, state: "empty", providers: [] };
+}
+
+/**
  * Each declared need with its state against ONE registry read (null = the read
- * failed → every `tools` need is `unknown`). PURE.
+ * failed → every `tools` need is `unknown`) and the space's need bindings
+ * (null = unread → every `need:` entry is `unknown`). PURE.
  */
 export function coverNeeds(
   declared: readonly DeclaredNeed[],
   caps: readonly RegistryRow[] | null,
-  workspaceId: string | null
+  workspaceId: string | null,
+  bindings: SpaceNeedBindings | null = null
 ): ProcessNeed[] {
   const intents = declared
     .filter((d) => d.kind === "intent")
@@ -268,6 +324,7 @@ export function coverNeeds(
       ? null
       : foldIntentCoverage({ declared: intents, caps: [...caps], workspaceId });
   return declared.map((d): ProcessNeed => {
+    if (d.kind === "need") return coverNeedRef(d, caps, bindings);
     if (d.source === "requires" || caps === null) {
       return { ...d, state: "unknown", providers: [] };
     }
@@ -654,6 +711,7 @@ export async function readProcess(
     groups,
     marks,
     recent,
+    bindings,
   ] = await Promise.all([
     part(
       "preApproval",
@@ -709,6 +767,11 @@ export async function readProcess(
     part("runs", unavailable, () => readGroups(reader, [row.id]), ctx),
     part("health", unavailable, () => readRecentMarks(reader, [row.id]), ctx),
     part("runs", unavailable, () => readRecentRuns(reader, row.id), ctx),
+    // The space's need bindings (0426): a `need:` entry's state and provider,
+    // read only when the playbook names a need.
+    declaresNeedRef(row)
+      ? part("needs", unavailable, () => readNeedBindings(row.workspaceId ?? null), ctx)
+      : Promise.resolve(new Map() as SpaceNeedBindings),
   ]);
   const counts =
     (
@@ -752,7 +815,7 @@ export async function readProcess(
     steps: processSteps(row),
     checks: processChecks(row),
     moves: flow && profileSlug ? movesOf(flow, row.id, profileSlug) : null,
-    needs: coverNeeds(declaredNeeds(row), caps, row.workspaceId ?? null),
+    needs: coverNeeds(declaredNeeds(row), caps, row.workspaceId ?? null, bindings),
     skills: (skills ?? []) as ProcessSkill[],
     runs: { counts, recent: recent ?? [] },
     health,
@@ -857,7 +920,11 @@ async function listProcessCards(
   const ctx = { workspaceId: input.workspaceId ?? null };
 
   const spaces = [...new Set(rows.map((r) => r.workspaceId ?? null))];
-  const [automationsBy, groups, marks, capsBySpace] = await Promise.all([
+  // The spaces whose processes name a need (0426): their bindings are read.
+  const needSpaces = [
+    ...new Set(rows.filter(declaresNeedRef).map((r) => r.workspaceId ?? null)),
+  ];
+  const [automationsBy, groups, marks, capsBySpace, bindingsBySpace] = await Promise.all([
     part("when", unavailable, () => readAutomations(reader, ids), ctx),
     part("runs", unavailable, () => readGroups(reader, ids), ctx),
     part("health", unavailable, () => readRecentMarks(reader, ids), ctx),
@@ -881,6 +948,17 @@ async function listProcessCards(
         ),
       ctx
     ),
+    part(
+      "needs",
+      unavailable,
+      async () =>
+        new Map(
+          await Promise.all(
+            needSpaces.map(async (ws) => [ws, await readNeedBindings(ws)] as const)
+          )
+        ),
+      ctx
+    ),
   ]);
   const countsBy = await part(
     "runs",
@@ -894,7 +972,10 @@ async function listProcessCards(
     const needs = coverNeeds(
       declaredNeeds(row),
       capsBySpace?.get(row.workspaceId ?? null) ?? null,
-      row.workspaceId ?? null
+      row.workspaceId ?? null,
+      declaresNeedRef(row)
+        ? (bindingsBySpace?.get(row.workspaceId ?? null) ?? null)
+        : new Map()
     );
     return {
       id: row.id,
