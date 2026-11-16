@@ -29,7 +29,26 @@ export type ReviewRowVerb =
   | { kind: "exit" }
   | null;
 
+/**
+ * The request's family, drawn as its kind tile (one grammar, icon = kind):
+ * a secret or connection to hand over, a change to approve, a question, a
+ * step to approve (a go / no-go), an access request.
+ */
+export type RequestFamily =
+  "secret" | "change" | "question" | "step" | "access";
+
+export function requestFamily(row: ReviewRow): RequestFamily {
+  if (row.group === "access") return "access";
+  if (row.detail?.kind === "ask") {
+    const mode = row.detail.slot.ask?.mode;
+    return mode === "provide" ? "secret" : "question";
+  }
+  if (row.group === "asks") return "question";
+  return row.package === "releases" ? "step" : "change";
+}
+
 export interface ReviewRowView extends RequestRowView {
+  family: RequestFamily;
   /** The decision it asks, outside "Group by Package"; null when said already. */
   packageLabel: string | null;
   /** "and N more like it" for a cluster (`LensRow.repeat`); null for one thing. */
@@ -67,6 +86,7 @@ export function reviewRowView(
   const kindNoun = tile?.kind === "tile" ? tile.noun : null;
   return {
     ...base,
+    family: requestFamily(row),
     what,
     packageLabel: pkg && pkg !== kindNoun ? pkg : null,
     repeat: row.lens.repeat,

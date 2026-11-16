@@ -85,49 +85,17 @@ export function ReviewListRow({
   const exit = row.detail?.kind === "open" ? exitOf(row.detail) : null;
   const opensHere = view.action !== null && view.action.kind !== "exit";
   const isAsk = view.action?.kind === "answer";
-  const actions = (
-    <div className="flex shrink-0 items-center gap-1.5">
-      {view.inlineApprove && (
-        <Button
-          size="sm"
-          variant="light"
-          radius="md"
-          isDisabled={approving}
-          onPress={onApprove}
-          aria-label={t("row.approveOne", { title: row.title })}
-        >
-          {resolveActionLabel("approve", "imperative")}
-        </Button>
-      )}
-      {opensHere && (
-        <Button
-          size="sm"
-          variant="flat"
-          radius="md"
-          onPress={onOpen}
-          startContent={
-            isAsk ? (
-              <MessageSquare className="h-3.5 w-3.5" aria-hidden />
-            ) : undefined
-          }
-        >
-          {resolveActionLabel(isAsk ? "answer" : "review", "imperative")}
-        </Button>
-      )}
-      {exit && <DoorButton exit={exit} />}
-    </div>
-  );
   return (
     <div
       data-row-id={row.key}
       aria-current={active ? "true" : undefined}
       className={[
-        "flex items-start",
-        selected || active ? "bg-primary/[0.06]" : "",
+        "rq-row relative flex min-h-11 items-start gap-3 p-3",
+        selected ? "bg-primary/[0.06]" : "",
       ].join(" ")}
     >
       {selectable && (
-        <div className="flex w-9 shrink-0 justify-center pt-3.5">
+        <div className="relative z-10 flex w-5 shrink-0 justify-center pt-1">
           {row.batchIds ? (
             <Checkbox
               size="sm"
@@ -152,44 +120,61 @@ export function ReviewListRow({
           ) : null}
         </div>
       )}
-      <div className="flex min-w-0 flex-1 items-start gap-3 px-3 py-3">
-        <div className="min-w-0 flex-1">
-          <RequestRowLines
-            what={view.what}
-            holds={view.holds}
-            who={view.who}
-            lead={
-              view.packageLabel ? (
-                <span className="font-medium text-foreground/70">
-                  {view.packageLabel}
-                </span>
-              ) : undefined
-            }
-            trail={
-              view.repeat ? (
-                <span className="pl-12 text-[12px] text-foreground/55">
-                  {view.repeat}
-                </span>
-              ) : undefined
-            }
-            titleSlot={
-              opensHere
-                ? (text) => (
-                    <button
-                      type="button"
-                      onClick={onOpen}
-                      aria-label={t("row.openDecision", { title: text })}
-                      className="rounded-sm text-left hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                    >
-                      {text}
-                    </button>
-                  )
-                : undefined
-            }
-          />
-        </div>
-        {actions}
+      <div className="min-w-0 flex-1">
+        <RequestRowLines
+          family={view.family}
+          what={view.what}
+          holds={view.holds}
+          who={view.who}
+          lead={
+            view.packageLabel ? (
+              <span className="font-medium text-foreground/70">
+                {view.packageLabel}
+              </span>
+            ) : undefined
+          }
+          trail={
+            view.repeat ? (
+              <span className="text-[12px] text-foreground/55">
+                {view.repeat}
+              </span>
+            ) : undefined
+          }
+          titleSlot={
+            opensHere
+              ? (text) => (
+                  // The ROW is the button (its press area stretched over the
+                  // row); the doors and verbs inside it sit above it.
+                  <button
+                    type="button"
+                    onClick={onOpen}
+                    aria-label={t("row.openDecision", { title: text })}
+                    className="text-left after:absolute after:inset-0 after:rounded-[inherit] after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-primary/40"
+                  >
+                    {text}
+                  </button>
+                )
+              : undefined
+          }
+        />
       </div>
+      {(view.inlineApprove || exit) && (
+        <div className="relative z-10 flex shrink-0 items-center gap-1.5">
+          {view.inlineApprove && (
+            <Button
+              size="sm"
+              variant="light"
+              radius="md"
+              isDisabled={approving}
+              onPress={onApprove}
+              aria-label={t("row.approveOne", { title: row.title })}
+            >
+              {resolveActionLabel("approve", "imperative")}
+            </Button>
+          )}
+          {exit && <DoorButton exit={exit} />}
+        </div>
+      )}
     </div>
   );
 }

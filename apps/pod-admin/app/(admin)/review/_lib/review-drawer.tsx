@@ -74,7 +74,9 @@ import {
   type RequestStory,
 } from "@synap-core/types/needs-you";
 import type { StoryRead } from "../../../_lib/request/request-story-view";
-import { useConsoleLocale } from "../../../../lib/i18n/locale-provider";
+import { REQUEST_CATALOGS } from "../../../_lib/request/copy";
+import type { RequestFamily } from "./review-row-view";
+import { useConsoleLocale, useT } from "../../../../lib/i18n/locale-provider";
 import type { AskSlot } from "./ask-detail";
 import type { ReviewDetail } from "./review-rows";
 
@@ -96,6 +98,11 @@ export interface OpenReview {
    * longer waiting: the review then reads its own (a proposal) or none.
    */
   lens?: LensRow;
+  /** The request's family and session: the detail's eyebrow ("An agent needs a secret · Pod-run delivery"). */
+  family?: RequestFamily;
+  session?: string | null;
+  /** One sentence under the title: what it is for. */
+  sentence?: string | null;
 }
 
 /** The page's request context read (`useRequestContext`), shared by every open request. */
@@ -139,17 +146,35 @@ export function ReviewDrawer({ open, ...rest }: ReviewFrameProps) {
  * pinned decision bar sits the same in both.
  */
 export function ReviewDock({ open, ...rest }: ReviewFrameProps) {
+  const t = useT(REQUEST_CATALOGS);
   if (!open) return null;
   const { onClose } = rest;
+  const what = open.family ? t(`eyebrow.${open.family}`) : null;
+  const eyebrow =
+    what && open.session
+      ? t("eyebrow.inSession", { what, session: open.session })
+      : what;
   return (
     <aside
       aria-label={open.title}
-      className="sticky top-4 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-col overflow-hidden rounded-lg bg-content1 ring-1 ring-inset ring-foreground/10"
+      className="sticky top-4 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-col overflow-hidden rounded-xl bg-content1 ring-1 ring-inset ring-foreground/10"
     >
-      <div className="flex items-center gap-3 border-b border-foreground/[0.06] px-6 py-4">
-        <h2 className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-medium text-foreground">
-          {open.title}
-        </h2>
+      <div className="flex items-start gap-3 px-6 pb-2 pt-6">
+        <header className="flex min-w-0 flex-1 flex-col gap-1.5">
+          {eyebrow && (
+            <span data-story-eyebrow="" className="rq-eyebrow rq-ink">
+              {eyebrow}
+            </span>
+          )}
+          <h2 className="line-clamp-3 break-words font-heading text-[24px] font-medium leading-tight text-foreground">
+            {open.title}
+          </h2>
+          {open.sentence && (
+            <p className="text-[15px] leading-relaxed text-foreground/75">
+              {open.sentence}
+            </p>
+          )}
+        </header>
         <Button
           isIconOnly
           size="sm"

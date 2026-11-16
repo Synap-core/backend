@@ -509,11 +509,13 @@ describe.each([
         at(html, 'data-story-node="now"')
       )
     );
-    expect(past).toMatch(/Checks failed 2 times/);
+    // Repeats grouped; four lines of past, three shown: the oldest folds
+    // behind its door, said in the oldest shown line's meta.
+    expect(past).toMatch(
+      /Checks failed Automation · 2 times · 1 more event Show/
+    );
     expect(past).toMatch(/Checks passed/);
     expect(past).toMatch(/Opened o\/r#7/);
-    // Four lines of past, three shown: the oldest folds behind its door.
-    expect(past).toMatch(/1 more event Show/);
     expect(past).not.toMatch(/Session started/);
     // Its own proposal is Now, not "Proposed: …" in the past.
     expect(past).not.toMatch(/Proposed:/);

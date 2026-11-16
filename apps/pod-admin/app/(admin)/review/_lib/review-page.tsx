@@ -101,6 +101,7 @@ import { ReviewOnboarding } from "./review-onboarding";
 import { showReviewOnboarding } from "./review-onboarding-model";
 import { HistoryList } from "../../history/_lib/history-list";
 import { useRequestContext } from "../../../_lib/request/use-request-context";
+import { requestFamily } from "./review-row-view";
 import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
 import { useT } from "../../../../lib/i18n/locale-provider";
@@ -774,7 +775,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                 <section
                   id="review-later"
                   aria-label={FATE_COPY.reviewLaterPile}
-                  className="mt-1 divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10"
+                  className="mt-1 flex flex-col gap-2"
                 >
                   {view.reviewLater.map((row) => (
                     <ReviewListRow
@@ -885,6 +886,11 @@ function openOf(row: ReviewRow): OpenReview | null {
     // names the question once and the detail does not repeat it.
     title: row.title,
     lens: row.lens,
+    family: requestFamily(row),
+    session: row.sessionTitle,
+    // What it is for, in the agent's words: the ask's why, else what
+    // answering unblocks.
+    sentence: row.lens.detail?.trim() || row.lens.unblocks?.trim() || null,
   };
 }
 

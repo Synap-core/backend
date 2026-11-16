@@ -373,6 +373,7 @@ function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
   return (
     <div className="flex flex-col gap-1.5 pb-4">
       <RequestRowLines
+        family={view.family}
         what={view.what}
         holds={view.holds}
         // Its own session is where the reader already is: no door back to it.
@@ -389,7 +390,7 @@ function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
         (here ? (
           <div
             data-acted-elsewhere=""
-            className="flex flex-wrap items-baseline gap-x-2 gap-y-1 pl-12"
+            className="flex flex-wrap items-baseline gap-x-2 gap-y-1 pl-10"
           >
             <span className="text-[12px] text-foreground/65">
               {ACT_ELSEWHERE}
@@ -397,7 +398,7 @@ function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
             <OpenInAppLink type="session" id={sessionId} />
           </div>
         ) : (
-          <div className="pl-12">
+          <div className="pl-10">
             <ExitLink
               exit={exitOf({ kind: "open", door })}
               label={resolveActionLabel("open", "imperative")}

@@ -123,7 +123,7 @@ function CappedRows({
   const [all, setAll] = useState(false);
   const shown = all ? rows : rows.slice(0, ROW_CAP);
   return (
-    <div className="divide-y divide-foreground/[0.05]">
+    <div className="flex flex-col gap-2">
       {shown.map(render)}
       {rows.length > ROW_CAP && (
         <div className="px-3 py-2">
@@ -282,6 +282,7 @@ function AskCards({
             >
               <CardBody className="flex flex-col gap-3 p-4">
                 <RequestRowLines
+                  family={view.family}
                   what={view.what}
                   holds={view.holds}
                   who={view.who}

@@ -677,8 +677,11 @@ describe("Refuse — on every ask mode, with what refusing does (founder D2)", (
       );
       const seenText = text(html);
       expect(html).toContain("data-ask-refuse");
-      expect(buttons.some((b) => b.children === ASK_COPY.refuse)).toBe(true);
-      expect(seenText).toContain(ASK_COPY.refuseConsequence);
+      // "Refuse…" opens the reasons; its name and what it does are said.
+      expect(buttons.some((b) => b.children === "Refuse…")).toBe(true);
+      expect(seenText).toContain(
+        `${ASK_COPY.refuse}: ${ASK_COPY.refuseConsequence}`
+      );
     }
   );
 
@@ -724,8 +727,10 @@ describe("Refuse — on every ask mode, with what refusing does (founder D2)", (
     );
     seen.provide = null;
     expect(seenText).toContain(ASK_COPY.provideNoPurpose);
-    expect(seenText).toMatch(/Used by Claude-code/);
+    expect(seenText).toMatch(/You give KEY/);
+    expect(seenText).toMatch(/Who Claude-code/);
     expect(seenText).toMatch(/Until This session only/);
+    expect(seenText).toMatch(/Give for this session/);
     expect(seenText).toContain(ASK_COPY.provideGrantNote("Claude-code", 60));
   });
 });
