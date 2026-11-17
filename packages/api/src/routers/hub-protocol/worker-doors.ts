@@ -16,6 +16,7 @@
  * `playbooks.run`. Nothing here decides a permission.
  */
 import { TRPCError } from "@trpc/server";
+import { AUTOMATION_SKIP_REASONS } from "@synap-core/types/automations";
 import type { HowOften } from "@synap-core/types/workers/how-often";
 import {
   WorkerScopeOverlapError,
@@ -38,7 +39,12 @@ export type WorkerDoorOutcome<T> =
       error: string;
       reasonCode: string;
       holder: WorkerScopeOverlapError["holder"];
-    };
+    }
+  /**
+   * Refused by the worker's own state: a session's worker whose session
+   * ended (`session_closed`, the reason its automation path skips with).
+   */
+  | { kind: "refused"; error: string; reasonCode: string };
 
 /** A service refusal as the door's outcome; anything else is thrown on. */
 function refusalOf(err: unknown): WorkerDoorOutcome<never> | null {
@@ -74,18 +80,27 @@ async function guarded<T>(fn: () => Promise<T>): Promise<WorkerDoorOutcome<T>> {
   }
 }
 
-/** The workers enabled on a goal (strict), or a project's, as views. */
+/**
+ * The workers enabled on a goal (strict), a project's, or the ones a session
+ * started (`scopeSessionId`, strict), as views.
+ */
 export function listWorkersDoor(
   identity: PlaybookDoorIdentity,
-  input: { trackId?: string; projectId?: string; playbookId?: string }
+  input: {
+    trackId?: string;
+    projectId?: string;
+    /** The session whose workers to list (not the caller's attribution). */
+    scopeSessionId?: string;
+    playbookId?: string;
+  }
 ): Promise<
   WorkerDoorOutcome<{ items: Awaited<ReturnType<typeof listWorkerViews>> }>
 > {
-  if (!input.trackId && !input.projectId) {
+  if (!input.trackId && !input.projectId && !input.scopeSessionId) {
     return Promise.resolve({
       kind: "invalid",
       error:
-        "trackId (the goal) or projectId is required — find a goal with synap_list_tracks.",
+        "trackId (the goal), projectId or scopeSessionId is required — find a goal with synap_list_tracks.",
     });
   }
   return guarded(async () => ({
@@ -93,12 +108,18 @@ export function listWorkersDoor(
       userId: identity.userId,
       ...(input.trackId ? { trackId: input.trackId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.scopeSessionId ? { sessionId: input.scopeSessionId } : {}),
       ...(input.playbookId ? { playbookId: input.playbookId } : {}),
     }),
   }));
 }
 
-/** Enable a declared worker on a goal (or a project). An agent's is a proposal. */
+/**
+ * Enable a declared worker on a goal, a project, or a session the caller owns
+ * (`scopeSessionId`: its runs are that session's children). An agent's is a
+ * proposal. Named `scopeSessionId`, never `sessionId`: on the doors that name
+ * is the caller's focus-session attribution.
+ */
 export function enableWorkerDoor(
   identity: PlaybookDoorIdentity,
   input: {
@@ -109,12 +130,21 @@ export function enableWorkerDoor(
     mode?: "run" | "propose";
     trackId?: string;
     projectId?: string;
+    scopeSessionId?: string;
   }
 ): Promise<WorkerDoorOutcome<Awaited<ReturnType<typeof enableWorker>>>> {
-  if (!input.trackId && !input.projectId) {
+  if (!input.trackId && !input.projectId && !input.scopeSessionId) {
     return Promise.resolve({
       kind: "invalid",
-      error: "Enable a worker for a goal (trackId) or a project (projectId).",
+      error:
+        "Enable a worker for a goal (trackId), a project (projectId) or a session (scopeSessionId).",
+    });
+  }
+  if (input.scopeSessionId && (input.trackId || input.projectId)) {
+    return Promise.resolve({
+      kind: "invalid",
+      error:
+        "A session's worker is filed where the session is: give scopeSessionId alone.",
     });
   }
   return guarded(() =>
@@ -127,6 +157,7 @@ export function enableWorkerDoor(
       ...(input.mode ? { mode: input.mode } : {}),
       ...(input.trackId ? { trackId: input.trackId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.scopeSessionId ? { sessionId: input.scopeSessionId } : {}),
     })
   );
 }
@@ -150,7 +181,9 @@ export function setWorkerPausedDoor(
  * Run a worker's playbook NOW, filed in the goal (or project) it is enabled
  * on, through the shared playbook run door — the same governance as
  * `synap_run_playbook` with that `trackId`. A paused worker still runs once
- * when asked: "run now" is a person's or an agent's explicit act.
+ * when asked: "run now" is a person's or an agent's explicit act. A SESSION's
+ * worker runs as that session's child (its `parentSessionId`, over the
+ * caller's bound session), exactly as its rule's runs are.
  */
 export async function runWorkerDoor(
   identity: PlaybookDoorIdentity,
@@ -165,10 +198,21 @@ export async function runWorkerDoor(
       error: `Worker ${input.ruleId} not found — list a goal's workers with synap_list_workers.`,
     };
   }
+  if (worker.state === "stopped") {
+    // A session's worker stops with its session: run now starts no child
+    // of an ended session, as its automation path does not.
+    return {
+      kind: "refused",
+      reasonCode: AUTOMATION_SKIP_REASONS.sessionClosed,
+      error:
+        "This worker's session has ended, so it starts nothing more. Enable it on an open session to run it again.",
+    };
+  }
   return runPlaybookDoor(identity, {
     playbookId: worker.playbookId,
     ...(worker.projectId ? { projectId: worker.projectId } : {}),
     ...(worker.trackId ? { trackId: worker.trackId } : {}),
+    ...(worker.sessionId ? { parentSessionId: worker.sessionId } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     source: input.source,
   });

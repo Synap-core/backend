@@ -805,6 +805,18 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      */
     handToAgentId?: string;
     /**
+     * PARENT SESSION — the focus session (`focus_sessions.id`) this node's
+     * runs are CHILDREN of. Forwarded to `runPlaybook({ parentSessionId })`,
+     * which writes `run session --spawned_from--> parent` through its one
+     * producer (`recordSessionSpawn`, owner floor on the parent). A node
+     * naming a parent that is no longer open (closed, cancelled, failed, or
+     * gone) starts and files NOTHING (`session_closed`): a session's worker
+     * stops with its session, and nothing on the session moves. Producer: a
+     * SESSION-scoped worker enablement (`workers.enable({ sessionId })`, via
+     * the rule grammar's `__parentSessionId` key). Absent ⇒ unchanged.
+     */
+    parentSessionId?: string;
+    /**
      * WHAT this node materializes (read through `readPlaybookRunMode`,
      * `@synap-core/types/automations`, which keeps this union and its runtime
      * list in sync both ways):

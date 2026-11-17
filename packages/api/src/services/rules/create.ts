@@ -31,6 +31,7 @@ import {
   linkRuleHalves,
   ruleNameFromIntent,
   type RuleBehaviourRecord,
+  type RuleReaction,
   type RuleRouting,
   type RuleScope,
   type RuleSeed,
@@ -108,6 +109,12 @@ export interface CreateRuleGovernedInput {
    * template rule is stamped exactly like a direct one.
    */
   seed?: RuleSeed;
+  /**
+   * The reaction this rule makes visible and pausable (`metadata.rule.
+   * reaction`) — set ONLY by the reactions compile pass. Such a rule carries
+   * no sentence: the reactions reactor runs it, never the matcher.
+   */
+  reaction?: RuleReaction;
 }
 
 /**
@@ -345,6 +352,7 @@ export async function createRuleGoverned(
       ...(compiled || draft ? { sentence: input.sentence } : {}),
       ...(input.auditSource ? { auditSource: input.auditSource } : {}),
       ...(input.seed ? { seed: input.seed } : {}),
+      ...(input.reaction ? { reaction: input.reaction } : {}),
     },
   });
 
@@ -479,6 +487,7 @@ export async function createRuleGoverned(
     // running for a month.
     ...(input.sentence !== undefined ? { sentence: input.sentence } : {}),
     ...(input.seed ? { seed: input.seed } : {}),
+    ...(input.reaction ? { reaction: input.reaction } : {}),
   });
 
   // COMPENSATION for the ordering below. The automation is created BEFORE the

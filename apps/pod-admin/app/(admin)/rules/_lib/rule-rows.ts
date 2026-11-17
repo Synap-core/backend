@@ -181,8 +181,8 @@ export function neverRanCallout(rules: readonly RuleFacts[]): string | null {
     .map(([name, n]) => (n > 1 ? `“${name}” ×${n}` : `“${name}”`));
   const head =
     idle.length === 1
-      ? "1 rule has never run."
-      : `${idle.length} rules have never run.`;
+      ? "1 automation has never run."
+      : `${idle.length} automations have never run.`;
   return `${head} Their trigger has not happened yet, or points at something that no longer exists — e.g. ${top.join(", ")}.`;
 }
 

@@ -24,12 +24,15 @@ import {
   eq,
   focusSessions,
   inArray,
+  isLifecycleCategory,
+  isNull,
   links,
   listableEntityWhere,
   profiles,
   projects,
   projectTracks,
   ProfileResolutionService,
+  relations,
 } from "@synap/database";
 import type { ProjectTrack } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
@@ -52,6 +55,11 @@ import {
   type WaitingOnSource,
 } from "@synap-core/types/units";
 import { createLogger } from "@synap-core/core";
+import {
+  rollupProgress,
+  type RollupChild,
+  type RollupProgress,
+} from "@synap-core/types/relations";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
@@ -867,4 +875,78 @@ function goalAdvancesWhere(workspaceId: string): SQL {
     eq(links.toType, "workspace"),
     eq(links.toId, workspaceId)
   )})`;
+}
+
+// ── A thing's PARTS (a relation's roll-up, reactions wave 3) ───────────────
+
+/** One parent's parts, as a roll-up counts them. */
+export interface PartsRollup {
+  /** Its parts per category (the lost ones too), each part once. */
+  byCategory: CategoryCounts;
+  /** THE roll-up decision over them (`rollupProgress`, decision D5). */
+  progress: RollupProgress;
+}
+
+/**
+ * Where each parent's PARTS stand: the things linked to it by `relation`
+ * (`parentEnd` names the parent's end: `target` for `part_of`, a child →
+ * its parent), each read off its own lifecycle columns (`status`, the
+ * category projection the status door writes). ONE read for every parent.
+ * A deleted part is not a part.
+ *
+ * `viewer` floors the parts to those the reader may see (a screen's
+ * "3 of 5 done"); null reads every part (the roll-up itself, server code,
+ * which decides on the whole set — a part the reader cannot see still
+ * counts toward whether the parent moves).
+ */
+export async function readPartsRollups(input: {
+  parentIds: readonly string[];
+  relation: string;
+  parentEnd: "target" | "source";
+  viewer: string | null;
+}): Promise<Map<string, PartsRollup>> {
+  const out = new Map<string, PartsRollup>();
+  if (input.parentIds.length === 0) return out;
+  const parentCol =
+    input.parentEnd === "target"
+      ? relations.targetEntityId
+      : relations.sourceEntityId;
+  const partCol =
+    input.parentEnd === "target"
+      ? relations.sourceEntityId
+      : relations.targetEntityId;
+  const rows = await db
+    .selectDistinct({
+      parentId: parentCol,
+      partId: entities.id,
+      status: entities.status,
+      category: entities.statusCategory,
+    })
+    .from(relations)
+    .innerJoin(entities, eq(entities.id, partCol))
+    .where(
+      and(
+        eq(relations.type, input.relation),
+        inArray(parentCol, [...input.parentIds]),
+        isNull(entities.deletedAt),
+        input.viewer ? entityReadVisibleWhere(input.viewer) : undefined
+      )
+    );
+  const parts = new Map<string, RollupChild[]>();
+  for (const r of rows) {
+    if (!r.parentId) continue;
+    const list = parts.get(r.parentId) ?? [];
+    list.push({
+      status: r.status ?? null,
+      category: isLifecycleCategory(r.category) ? r.category : null,
+    });
+    parts.set(r.parentId, list);
+  }
+  for (const id of input.parentIds) {
+    const list = parts.get(id) ?? [];
+    const byCategory: CategoryCounts = {};
+    for (const c of list) addCount(byCategory, c.category, 1);
+    out.set(id, { byCategory, progress: rollupProgress(list) });
+  }
+  return out;
 }

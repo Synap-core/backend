@@ -63,7 +63,8 @@ export const flowWorkerSchema = z.object({
   mode: z.enum(["run", "propose"]),
   scope: z.enum(WORKER_SCOPES),
   projectId: z.string().nullable(),
-  state: z.enum(["running", "paused"]),
+  /** `stopped`: a session's worker whose session ended. */
+  state: z.enum(["running", "paused", "stopped"]),
 });
 
 export const flowOfFlowSchema = z.object({

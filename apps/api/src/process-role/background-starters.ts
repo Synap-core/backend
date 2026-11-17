@@ -721,6 +721,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/hold-resume.js");
         const { registerReactionEffect } =
           await import("@synap/jobs/utils/reaction-effects.js");
+        const { registerReactionSource, registerReactionStateSource } =
+          await import("@synap/jobs/utils/reactions.js");
         const { registerStatusWatcherRunner } =
           await import("@synap/jobs/workers/status-watcher-cron.js");
         const { registerStageAdvancer } =
@@ -781,6 +783,13 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         // Pod default D2 (approval signal 1): a stage's approved work moves its
         // subject to the stage's `onApproved`, through the status door.
         registerReactionEffect(api.reachStageStatusReactionEffect);
+        // W3: a parent rolls up along a relation that declares it (pod
+        // default 1) through THE thing's door; the relations' declarations
+        // join the one list; and each rule's pause is its row in the rule
+        // list (draft = paused), read back here.
+        registerReactionEffect(api.rollUpReactionEffect);
+        registerReactionSource(api.relationReactionSource);
+        registerReactionStateSource(() => api.reactionEnabledStates());
         // The status watcher (W6): late, approaching, stuck and
         // hold-review signals, raised once per episode, owner told.
         registerStatusWatcherRunner(() => api.runStatusWatcher());

@@ -3,11 +3,14 @@
  *
  *   workers.list      — the enabled workers (space-wide + per project) for a
  *                       kind/role or a project, or the workers enabled ON a
- *                       goal (`trackId`, strict): state, scope, backlog, and
+ *                       goal (`trackId`, strict) or started by a session
+ *                       (`sessionId`, strict): state, scope, backlog, and
  *                       each one's trigger words, last / next run and run
  *                       health (`GoalWorkerView`).
- *   workers.enable    — enable a declared worker for a project or a track
- *                       (WORKBENCH act; refused on overlap, naming the holder).
+ *   workers.enable    — enable a declared worker for a project, a track or a
+ *                       session the caller owns (its runs are the session's
+ *                       children) (WORKBENCH act; refused on overlap, naming
+ *                       the holder).
  *   workers.setPaused — pause / resume one enablement (supervise act).
  *
  * The service is `services/playbooks/workers.ts` (one rule per enablement,
@@ -58,7 +61,10 @@ const enabledWorkerWire = z.object({
   scope: z.enum(WORKER_SCOPES),
   projectId: z.string().nullable(),
   trackId: z.string().nullable(),
-  state: z.enum(["running", "paused"]),
+  /** The session that started it (`session` scope); null otherwise. */
+  sessionId: z.string().nullable().optional(),
+  /** `stopped`: a session's worker whose session ended. */
+  state: z.enum(["running", "paused", "stopped"]),
   automationId: z.string().nullable(),
   pendingApprovals: z.number(),
   maxPendingApprovals: z.number(),
@@ -90,6 +96,7 @@ export const workersRouter = router({
         profileSlug: z.string().min(1).optional(),
         projectId: z.string().uuid().optional(),
         trackId: z.string().uuid().optional(),
+        sessionId: z.string().uuid().optional(),
         playbookId: z.string().uuid().optional(),
         liveOnly: z.boolean().default(false),
       })
@@ -115,9 +122,15 @@ export const workersRouter = router({
           mode: workerModeSchema.optional(),
           projectId: z.string().uuid().optional(),
           trackId: z.string().uuid().optional(),
+          /** A session the caller owns: its runs are the session's children. */
+          sessionId: z.string().uuid().optional(),
         })
-        .refine((i) => !!i.projectId || !!i.trackId, {
-          message: "Enable a worker for a project or a goal.",
+        .refine((i) => !!i.projectId || !!i.trackId || !!i.sessionId, {
+          message: "Enable a worker for a project, a goal or a session.",
+        })
+        .refine((i) => !i.sessionId || (!i.projectId && !i.trackId), {
+          message:
+            "A session's worker is filed where its session is — name the session alone.",
         })
         .refine((i) => !i.activatorKey !== !i.schedule, {
           message: "Name the worker: its activatorKey or a schedule.",

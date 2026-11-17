@@ -543,6 +543,9 @@ export async function updateRuleGoverned(
     ...((input.seed ?? existing.seed)
       ? { seed: (input.seed ?? existing.seed)! }
       : {}),
+    // A reaction's rule stays one through every edit (its pause included):
+    // dropping it would orphan the reaction's pause from its row.
+    ...(existing.reaction ? { reaction: existing.reaction } : {}),
   });
   // `createdAt` is the RULE's birthday, not this edit's. `buildRuleMetadata`
   // stamps `now`, which would silently reset it on every save.

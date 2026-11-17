@@ -770,6 +770,14 @@ const PLAYBOOK_GOAL_KEY = "__goal";
 const PLAYBOOK_PROJECT_KEY = "__projectId";
 const PLAYBOOK_TRACK_KEY = "__trackId";
 /**
+ * PARENT SESSION — the session a worker enabled FOR A SESSION files its runs
+ * under (`spawned_from`). Bookkeeping (kept out of `paramsMapping`); lands on
+ * the node as `data.parentSessionId`, which `executePlaybookRun` forwards to
+ * `runPlaybook`. Without this key a re-save through the sentence grammar would
+ * silently turn a session's worker into a free-standing one.
+ */
+const PLAYBOOK_PARENT_SESSION_KEY = "__parentSessionId";
+/**
  * STAGE WORKER — the node's `worker` spec (`PlaybookRunWorkerSpec`,
  * @synap/database): an enabled worker's size, status, threshold and backlog
  * limit (work model L4). Bookkeeping, so it never leaks into `paramsMapping`;
@@ -843,6 +851,7 @@ export const BOOKKEEPING_KEYS: readonly string[] = [
   PLAYBOOK_TRACK_KEY,
   PLAYBOOK_RUN_MODE_KEY,
   PLAYBOOK_WORKER_KEY,
+  PLAYBOOK_PARENT_SESSION_KEY,
 ];
 
 /**
@@ -948,6 +957,11 @@ export function playbookActivatorSentence(
     worker?: PlaybookRunNodeDef["data"]["worker"];
     projectId?: string;
     trackId?: string;
+    /**
+     * A SESSION enablement: the session its runs are children of
+     * (`spawned_from`). Omitted when absent, like the filing.
+     */
+    parentSessionId?: string;
   } & PlaybookActivatorTrigger
 ): RuleSentenceValue {
   const trigger =
@@ -990,6 +1004,9 @@ export function playbookActivatorSentence(
             ? { [PLAYBOOK_PROJECT_KEY]: input.projectId }
             : {}),
           ...(input.trackId ? { [PLAYBOOK_TRACK_KEY]: input.trackId } : {}),
+          ...(input.parentSessionId
+            ? { [PLAYBOOK_PARENT_SESSION_KEY]: input.parentSessionId }
+            : {}),
           ...(input.worker ? { [PLAYBOOK_WORKER_KEY]: input.worker } : {}),
           [CAPABILITY_ACTION_KEY]: `playbook:${input.playbookId}`,
         },
@@ -1239,6 +1256,8 @@ function actionToFlowNode(
       data.projectId = cfg[PLAYBOOK_PROJECT_KEY];
     if (nonEmptyStr(cfg[PLAYBOOK_TRACK_KEY]))
       data.trackId = cfg[PLAYBOOK_TRACK_KEY];
+    if (nonEmptyStr(cfg[PLAYBOOK_PARENT_SESSION_KEY]))
+      data.parentSessionId = cfg[PLAYBOOK_PARENT_SESSION_KEY];
     const worker = cfg[PLAYBOOK_WORKER_KEY];
     if (worker && typeof worker === "object" && !Array.isArray(worker))
       data.worker = worker;
@@ -1523,6 +1542,7 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       goalOverride?: string;
       projectId?: string;
       trackId?: string;
+      parentSessionId?: string;
       mode?: unknown;
       worker?: unknown;
       paramsMapping?: Record<string, unknown>;
@@ -1543,6 +1563,8 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
     if (nonEmptyStr(pdata.projectId))
       config[PLAYBOOK_PROJECT_KEY] = pdata.projectId;
     if (nonEmptyStr(pdata.trackId)) config[PLAYBOOK_TRACK_KEY] = pdata.trackId;
+    if (nonEmptyStr(pdata.parentSessionId))
+      config[PLAYBOOK_PARENT_SESSION_KEY] = pdata.parentSessionId;
     if (
       pdata.worker &&
       typeof pdata.worker === "object" &&

@@ -2562,7 +2562,7 @@ export const tools = {
               },
               maxItems: STATUS_OF_INCLUDES.length,
               description:
-                "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals; work = where its sessions and runs stand. An unknown part is refused.",
+                "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals; reactions = its rules; work = where its sessions and runs stand.",
             },
             only: {
               type: "string",
@@ -5122,6 +5122,11 @@ export const tools = {
               type: "string",
               description: "UUID of the goal (synap_list_tracks).",
             },
+            scopeSessionId: {
+              type: "string",
+              description:
+                "Instead of trackId: a session you own; its runs become its children.",
+            },
             playbookId: {
               type: "string",
               description:
@@ -5144,7 +5149,7 @@ export const tools = {
                 "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
             },
           },
-          required: ["trackId", "playbookId", "activatorKey"],
+          required: ["playbookId", "activatorKey"],
         },
       },
       {

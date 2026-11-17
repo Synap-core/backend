@@ -199,9 +199,13 @@ export function workerActivatorKey(a: {
  * Where an enabled worker runs. `space` = every thing of the subject in the
  * playbook's space (what installing a playbook with activators turns on);
  * `project` = only the things filed in that project (a track enables for its
- * project and files its sessions in the track).
+ * project and files its sessions in the track); `session` = a SESSION started
+ * it: it works over the things of the session's project (the space when the
+ * session is unfiled), files its runs where the session is filed, and every
+ * run is a CHILD of the session (`spawned_from`). It stops once the session
+ * is no longer open (its runs are skipped `session_closed`; nothing moves).
  */
-export const WORKER_SCOPES = ["space", "project"] as const;
+export const WORKER_SCOPES = ["space", "project", "session"] as const;
 export type WorkerScopeKind = (typeof WORKER_SCOPES)[number];
 
 // ── Targets ─────────────────────────────────────────────────────────────────

@@ -50,12 +50,17 @@ export interface ReactionWhen {
   to?: readonly string[];
   /** …or in one of these categories. */
   category?: readonly LifecycleCategory[];
+  /**
+   * Things only: the move is of one of these kinds' OWN lifecycle (a kind's
+   * slug; a role's move, on its facet, is not the kind's). Absent: any.
+   */
+  profileSlug?: readonly string[];
 }
 
 /**
  * VIA: the ONE existing link a reaction walks from what moved to what it
  * moves. A closed union: a declaration names a link, never an expression.
- * Lane E adds the relation arm (`part_of` roll-ups).
+ * The relation arm carries the roll-ups a link declares (wave 3).
  */
 export type ReactionVia =
   /** An approved proposal → every outcome (slot) whose own `ref` names its target. */
@@ -63,7 +68,21 @@ export type ReactionVia =
   /** A run → the session it drives. */
   | { link: "run_session" }
   /** A slot → the stage of its session that declares it, and that session's subject. */
-  | { link: "slot_stage" };
+  | { link: "slot_stage" }
+  /**
+   * A thing → the thing(s) a declared relation links it to (wave 3, a
+   * relation's `reactions`, `@synap-core/types/relations`). `parent` names
+   * the end that moves: `target` for `part_of` (child → parent), `source`
+   * for `parent_of`. The profile ids pin the declaring pair.
+   */
+  | {
+      link: "relation";
+      relation: string;
+      parent: "target" | "source";
+      relationDefId: string;
+      sourceProfileId: string;
+      targetProfileId: string;
+    };
 
 /** DO: the one effect, applied through the target's own door. Closed. */
 export type ReactionDo =
@@ -72,7 +91,13 @@ export type ReactionDo =
   /** Pause the session with a hold on the person (`setSessionStatus`). */
   | { effect: "pause_session" }
   /** Move the subject to the stage's `onApproved` (the status door, `moveStatus`). */
-  | { effect: "reach_stage_status" };
+  | { effect: "reach_stage_status" }
+  /**
+   * Roll the parent up (decision D5): when every non-lost part is done and
+   * at least one is, the parent moves to `to`, else to its next status
+   * (`moveStatus`, the thing's own door).
+   */
+  | { effect: "roll_up"; to?: string };
 
 export type ReactionEffectKey = ReactionDo["effect"];
 
@@ -98,6 +123,20 @@ export interface ReactionDeclaration {
   source: "built_in" | "declared";
   /** Built-in rules are on unless their owner paused them. */
   enabled: boolean;
+  /**
+   * A declared rule: who declared it, in the person's words (the relation and
+   * the kinds at its two ends), for the Rules list. Absent on a built-in.
+   */
+  declaredOn?: {
+    kind: "relation";
+    relation: string;
+    relationName: string;
+    source: { profileId: string; slug: string; name: string };
+    target: { profileId: string; slug: string; name: string };
+    workspaceId: string | null;
+    /** The person who declared it (the relation's author). */
+    userId: string | null;
+  };
 }
 
 /**
@@ -236,9 +275,19 @@ export function byReactionOrder(
 /** Does this rule listen to this move? Pure. */
 export function reactionMatches(
   r: Pick<ReactionDeclaration, "when">,
-  t: Pick<AnyTransitionPayload, "subjectType" | "to" | "category">
+  t: Pick<AnyTransitionPayload, "subjectType" | "to" | "category"> & {
+    profileSlug?: string | null;
+    role?: string | null;
+  }
 ): boolean {
   if (r.when.subjectType !== t.subjectType) return false;
+  const kinds = r.when.profileSlug;
+  if (kinds && kinds.length > 0) {
+    // A kind's own lifecycle only: a role's move (its facet) is not the kind's.
+    if (t.role || !t.profileSlug || !kinds.includes(t.profileSlug)) {
+      return false;
+    }
+  }
   const byTo = r.when.to && r.when.to.length > 0;
   const byCategory = r.when.category && r.when.category.length > 0;
   if (!byTo && !byCategory) return true;
@@ -332,21 +381,21 @@ export function reactionReason(
     case "proposed":
       return `Asked you before closing ${it}: closing it is your call.`;
     case "paused":
-      return `${kept}: this rule is paused.`;
+      return `${kept}: this automation is paused.`;
     case "not_chained":
-      return `${kept}: another rule made the change, and rules do not set each other off.`;
+      return `${kept}: another automation made the change, and automations do not set each other off.`;
     case "chain_depth":
-      return `${kept}: rules had already changed ${MAX_REACTION_DEPTH} things in a row.`;
+      return `${kept}: automations had already changed ${MAX_REACTION_DEPTH} things in a row.`;
     case "conflict":
-      return `${kept}: ${others.join(" and ") || "two rules"} would change it in different ways.`;
+      return `${kept}: ${others.join(" and ") || "two automations"} would change it in different ways.`;
     case "same_write":
-      return `Nothing more to do on ${it}: ${others[0] ?? "another rule"} already changes it the same way.`;
+      return `Nothing more to do on ${it}: ${others[0] ?? "another automation"} already changes it the same way.`;
     case "moved_meanwhile":
       return `${kept}: it changed since, and that change wins.`;
     case "needs_proposal":
-      return `${kept}: closing it needs your approval, and this rule cannot ask for it yet.`;
+      return `${kept}: closing it needs your approval, and this automation cannot ask for it yet.`;
     case "effect_unavailable":
-      return "Did not run this time: this rule is not available right now.";
+      return "Did not run this time: this automation is not available right now.";
     case "refused":
       return `${kept}: it could not be changed.`;
     case "failed":

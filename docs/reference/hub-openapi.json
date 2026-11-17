@@ -51612,12 +51612,12 @@
                                 },
                                 "scope": {
                                   "type": "string",
-                                  "enum": ["space", "project"]
+                                  "enum": ["space", "project", "session"]
                                 },
                                 "projectId": { "type": ["string", "null"] },
                                 "state": {
                                   "type": "string",
-                                  "enum": ["running", "paused"]
+                                  "enum": ["running", "paused", "stopped"]
                                 }
                               },
                               "required": [

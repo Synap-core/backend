@@ -25,6 +25,10 @@
  * failed to load says so with a retry. A stored HTML file (an uploaded
  * report) is a body that RUNS: its page in the isolated frame, its source a
  * toggle away (`content/html-frame`).
+ *
+ * The rules around it (`RulesAroundSection`, `statusOf` reactions): a
+ * roll-up that moves it, with its parts' "3 of 5 done", then the rules its
+ * own moves set off; omitted when none.
  */
 
 import { Chip } from "@heroui/react";
@@ -55,6 +59,7 @@ import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
 import { ConnectedObjects } from "../../_lib/object/connected-objects";
 import { WorkSection } from "../../_lib/object/views/work-section";
 import { objectPage } from "../../_lib/object/content/markdown-model";
+import { RulesAroundSection } from "../../_lib/object/views/rules-around-section";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
@@ -232,6 +237,7 @@ export function EntityView({ id }: { id: string }) {
           openInApp={openInApp}
         />
       ))}
+      <RulesAroundSection thingId={id} />
       {!hasBody && connected}
       {hasBody && (
         <DocumentContentSection

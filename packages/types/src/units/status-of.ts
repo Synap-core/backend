@@ -19,15 +19,15 @@
  *            serves it, each end the reader may see;
  *   rollup   a goal's tree, down its `serves` edges: its work per category, its
  *            stuck sessions and its waits per `waitKind`, each node once;
+ *   reactions the RULES around it ({@link StatusOfReaction}, plan 7d71ddcc):
+ *            those that fire when it moves, those that move it, each with
+ *            what it last did and, for a roll-up, its parts' "3 of 5 done";
  *   signals  the status signals (`status_signal_raised`) whose episode is still
  *            open: raised in the step it stands in, or on the hold it is under;
  *   work     WHERE ITS WORK STANDS ({@link StatusOfWork}): the sessions and
  *            runs on it, each with its stages, gates, owed asks, hold, stop
  *            reason, next move and, for a run that ended or stopped with
  *            stages left, the person's Continue.
- *
- * `reactions` ({@link StatusOfReaction}) is a typed slot the answer does not
- * fill yet: the rules that fire when it moves.
  *
  * Pure: types and constants only.
  */
@@ -60,6 +60,7 @@ export type StatusOfAnswerType = (typeof STATUS_OF_ANSWER_TYPES)[number];
 export const STATUS_OF_INCLUDES = [
   "moves",
   "history",
+  "reactions",
   "links",
   "rollup",
   "signals",
@@ -69,6 +70,66 @@ export type StatusOfInclude = (typeof STATUS_OF_INCLUDES)[number];
 
 /** History events one answer carries, newest first; more sets `truncated`. */
 export const STATUS_OF_HISTORY_MAX = 50;
+
+// ── include: ["reactions"] — the rules around it ──────────────────────────
+
+/**
+ * A RULE around the subject (plan 7d71ddcc §2: WHEN a subject reaches a
+ * status or category → VIA one link → DO one effect through the target's own
+ * door). The person sees the word "Rules" (decision D8). `role` says how it
+ * touches this subject: it `fires` when this subject moves, or it `moves`
+ * this subject when what it is linked to moves (a roll-up's parent).
+ */
+export interface StatusOfReaction {
+  /** The rule's stable id (`builtin:…`, `declared:rollup:…`). */
+  ruleId: string;
+  /** Its row in the pod's rule list (where its pause lives), once seeded. */
+  ruleRowId: string | null;
+  /** The rule's name, as the Rules list shows it. */
+  name: string;
+  /** Who declared it: a pod default, a relation, a playbook stage, a person. */
+  source: "default" | "relation" | "stage" | "user";
+  role: "fires" | "moves";
+  /** The status or category that fires it. */
+  when: { to?: string; category?: LifecycleCategory };
+  /** WHEN, VIA and DO in the person's words. */
+  whenWords: string;
+  /** The link it follows to its target. */
+  via: string | null;
+  /** What it does there, in words. */
+  does: string;
+  paused: boolean;
+  /** A move into done or lost: proposed (the default, D3) or applied. */
+  terminal: "propose" | "apply";
+  /**
+   * What it last did that touched this subject, newest: applied, proposed,
+   * or skipped with why. Null when it has not acted on it yet.
+   */
+  last: StatusOfReactionOutcome | null;
+  /**
+   * A roll-up that moves this subject: where its parts stand (the parts the
+   * reader may see). `label` reads "3 of 5 done".
+   */
+  progress?: {
+    done: number;
+    of: number;
+    lost: number;
+    open: number;
+    ready: boolean;
+    label: string;
+  };
+}
+
+/** One logged outcome of a rule, as `include: ["reactions"]` shows it. */
+export interface StatusOfReactionOutcome {
+  outcome: "applied" | "proposed" | "skipped";
+  /** A stable code (`applied`, `moved_meanwhile`, `paused`, …). */
+  code: string;
+  /** In plain words. */
+  reason: string;
+  at: string;
+  proposalId: string | null;
+}
 
 /**
  * The timeline events that are a STATUS history: a status move (with its hold,
@@ -507,27 +568,4 @@ export interface StatusOfWork {
   items: StatusOfWorkItem[];
   /** More sessions are on it than listed ({@link STATUS_OF_WORK_MAX}). */
   truncated: boolean;
-}
-
-// ── reactions (typed slot; not filled yet) ────────────────────────────────
-
-/**
- * A RULE that fires when the subject moves (WHEN a subject reaches a status
- * or category → VIA one link → DO one effect through the target's own door).
- * The person sees the word "Rules" (decision D8).
- * RESERVED: no read fills it yet.
- */
-export interface StatusOfReaction {
-  ruleId: string;
-  /** The rule's name, as the Rules list shows it. */
-  name: string;
-  /** Who declared it: a pod default, a relation, a playbook stage, a person. */
-  source: "default" | "relation" | "stage" | "user";
-  /** The status or category that fires it. */
-  when: { to?: string; category?: LifecycleCategory };
-  /** The link it follows to its target. */
-  via: string | null;
-  /** What it does there, in words. */
-  does: string;
-  paused: boolean;
 }

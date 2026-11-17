@@ -128,7 +128,8 @@ export interface ProcessWorker {
   activatorKey: string;
   mode: "run" | "propose";
   scope: string;
-  state: "running" | "paused";
+  /** `stopped`: a session's worker whose session ended. */
+  state: "running" | "paused" | "stopped";
   automationId: string | null;
   projectId: string | null;
   trackId: string | null;

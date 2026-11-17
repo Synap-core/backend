@@ -37,6 +37,7 @@ import {
   ensureSessionNarrativeRule,
   ensureDocumentRefresherRule,
   convergeActivatorsAtBoot,
+  convergeReactionRulesSafely,
   reconcileCapabilitiesToTemplates,
   backfillSpaceNeedBindings,
   reconcileStandaloneConfigsToTemplates,
@@ -772,6 +773,11 @@ async function runStartupHooksInner(): Promise<void> {
       "Failed to converge playbook activators on startup (non-fatal)"
     );
   }
+
+  // Every rule the reactions reactor applies (the pod defaults, the roll-ups
+  // relations declare) has its row in the rule list, where its owner sees
+  // and pauses it (plan 7d71ddcc W3). Idempotent; the owner's edit wins.
+  await convergeReactionRulesSafely();
 
   // Trusted issuers other than the Control Plane are established explicitly
   // through the generic federation bootstrap or by a local Pod owner — a fresh

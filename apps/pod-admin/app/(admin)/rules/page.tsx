@@ -5,7 +5,13 @@
  *
  * Rows are `automations.listPage` (user-floored, D1a) followed to its end so
  * the filter counts are true over every rule, joined on `flowId` with the
- * `runs.groups` automation rows for health (latest run, failures this week).
+ * `runs.groups` automation rows for health (latest run, failures this week),
+ * AND the rules the pod applies itself (`skills.listReactionRules`, plan
+ * 7d71ddcc D8: one list): its built-in rules and the roll-ups a relation
+ * declares. Those read as rule rows (`reaction-rule-rows.ts`): the same
+ * filters and pill, their recent outcomes as their runs, and one act, Pause
+ * or Turn on (`skills.setReactionRule`, the governed rule door). Their row
+ * opens `/rules/<rule id>`, which draws what it does and its history.
  * The first page draws at once; the counts say "…" until both reads are
  * drained, and a pill waits for its health rather than guessing. Each row is
  * identity + one line + one act (`rule-rows.ts` decides which), drawn by the
@@ -18,7 +24,7 @@
 
 import { addToast, Button } from "@heroui/react";
 import type { ReactNode } from "react";
-import { Workflow, Zap } from "lucide-react";
+import { Cog, Workflow, Zap } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
@@ -66,6 +72,16 @@ import {
   type RuleRowAction,
 } from "./_lib/rule-rows";
 import { useDrainPages } from "../../../lib/use-drain-pages";
+import {
+  reactionActivityPhrase,
+  reactionPauseConsequence,
+  reactionRuleAction,
+  reactionRuleFacts,
+  reactionRuleHealth,
+  reactionRuleOrigin,
+  ruleOriginLabel,
+  type ReactionRuleWire,
+} from "./_lib/reaction-rule-rows";
 
 const CATALOGS = { en, fr };
 
@@ -91,6 +107,8 @@ type PendingAct = {
   kind: NonNullable<RuleRowAction>;
   id: string;
   name: string;
+  /** A rule the pod applies (paused through the rule door, not an automation). */
+  pod?: true;
 };
 
 function RulesInner() {
@@ -119,6 +137,10 @@ function RulesInner() {
       staleTime: 30_000,
     }
   );
+  // The rules the pod applies itself (built-in, declared on a relation).
+  const podRules = trpc.skills.listReactionRules.useQuery(undefined, {
+    staleTime: 30_000,
+  });
   // Names for space ids; a failed read leaves the column saying "A space".
   const spaces = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 60_000,
@@ -143,20 +165,39 @@ function RulesInner() {
   }, [rules.isError, rules.error]);
   const isAuthRedirecting = rules.error?.data?.code === "UNAUTHORIZED";
 
-  const all = useMemo(
+  const podById = useMemo(
     () =>
-      (rules.data?.pages ?? [])
+      new Map(
+        ((podRules.data ?? []) as unknown as ReactionRuleWire[]).map((r) => [
+          r.id,
+          r,
+        ])
+      ),
+    [podRules.data]
+  );
+  const all = useMemo(
+    // The person's own automations in the list's own order, then the pod's
+    // (built in, declared on a link): one order, each row marked with where
+    // it comes from, never a block pinned above theirs.
+    (): RuleRow[] => [
+      ...(rules.data?.pages ?? [])
         .flatMap((p) => p.automations)
         .filter((r) => r.status !== "archived"),
-    [rules.data]
+      ...[...podById.values()].map((r) => ({
+        ...reactionRuleFacts(r),
+        triggerConfig: null,
+      })),
+    ],
+    [rules.data, podById]
   );
   const healthById = useMemo(() => {
     const map = new Map<string, RuleHealth>();
     for (const g of (groups.data?.pages ?? []).flatMap((p) => p.groups)) {
       map.set(g.flowId, g);
     }
+    for (const r of podById.values()) map.set(r.id, reactionRuleHealth(r));
     return map;
-  }, [groups.data]);
+  }, [groups.data, podById]);
   const healthOf = (id: string) => healthById.get(id);
   const spaceName = useMemo(() => {
     const byId = new Map((spaces.data ?? []).map((s) => [s.id, s.name]));
@@ -164,7 +205,9 @@ function RulesInner() {
       id ? (byId.get(id) ?? "A space") : "All spaces";
   }, [spaces.data]);
 
-  const loading = rules.isLoading || isAuthRedirecting;
+  // The pod's automations load beside the person's: the list draws once, in
+  // its final order, never with rows popping in under a Pause button.
+  const loading = rules.isLoading || podRules.isLoading || isAuthRedirecting;
   // Counts and pills wait for health too: "Failing" read before the groups
   // land would undercount and then jump.
   const healthReady = !groups.isLoading && !groupDrain.draining;
@@ -196,9 +239,11 @@ function RulesInner() {
     await Promise.all([
       utils.automations.invalidate(),
       utils.runs.groups.invalidate(),
+      utils.skills.listReactionRules.invalidate(),
     ]);
   };
   const pause = trpc.automations.pause.useMutation();
+  const setPodRule = trpc.skills.setReactionRule.useMutation();
   const trigger = trpc.automations.trigger.useMutation();
   const activate = trpc.automations.activate.useMutation();
 
@@ -206,7 +251,19 @@ function RulesInner() {
     if (!pending) return;
     setActError(null);
     try {
-      if (pending.kind === "pause") {
+      if (pending.pod) {
+        const on = pending.kind === "turn_on";
+        const result = await setPodRule.mutateAsync({ id: pending.id, on });
+        addToast({
+          title:
+            result.status === "proposed"
+              ? `Sent “${pending.name}” for review`
+              : on
+                ? `${resolveActionLabel("turn_on", "past")} “${pending.name}”`
+                : `Paused “${pending.name}”`,
+          color: "default",
+        });
+      } else if (pending.kind === "pause") {
         await pause.mutateAsync({ id: pending.id });
         addToast({ title: `Paused “${pending.name}”`, color: "default" });
       } else if (pending.kind === "turn_on") {
@@ -241,12 +298,17 @@ function RulesInner() {
   /** One rule's cells, shared by the table and the stacked row. */
   function rowOf(rule: RuleRow): RuleRowView {
     const health = healthOf(rule.id);
-    const act = ruleRowAction(rule, health);
+    const pod = podById.get(rule.id);
+    const act = pod ? reactionRuleAction(pod) : ruleRowAction(rule, health);
     return {
-      when: ruleWhenWords(
-        rule.triggerType,
-        rule.triggerConfig as Record<string, unknown> | null
-      ).text,
+      when: pod
+        ? pod.when
+        : ruleWhenWords(
+            rule.triggerType,
+            rule.triggerConfig as Record<string, unknown> | null
+          ).text,
+      runs: pod ? reactionActivityPhrase(pod) : null,
+      origin: ruleOriginLabel(pod ? reactionRuleOrigin(pod) : "yours"),
       space: spaceName(rule.workspaceId),
       lastRun: formatRelative(rule.lastRunAt, { empty: "never" }),
       pill: healthReady ? rulePill(rule, health) : undefined,
@@ -255,7 +317,12 @@ function RulesInner() {
           act={act}
           onPress={() => {
             setActError(null);
-            setPending({ kind: act, id: rule.id, name: rule.name });
+            setPending({
+              kind: act,
+              id: rule.id,
+              name: rule.name,
+              ...(pod ? { pod: true as const } : {}),
+            });
           }}
         />
       ) : undefined,
@@ -334,7 +401,7 @@ function RulesInner() {
             variant="flat"
             radius="md"
           >
-            Review never-ran rules
+            Review never-ran automations
           </Button>
         </div>
       )}
@@ -348,7 +415,7 @@ function RulesInner() {
               ? "Counting…"
               : `${counts.active} active · ${counts.failing} failing${
                   ruleDrain.capped
-                    ? " · counts cover the first 2,000 rules"
+                    ? " · counts cover the first 2,000 automations"
                     : ""
                 }`
         }
@@ -359,7 +426,7 @@ function RulesInner() {
           <ResourceRowSkeleton count={4} />
         ) : rules.isError ? (
           <ResourceRowError
-            message="Couldn't load rules."
+            message="Couldn't load automations."
             onRetry={() => void rules.refetch()}
           />
         ) : outsideFailed ? (
@@ -394,6 +461,11 @@ function RulesInner() {
                 header: "Name",
                 width: "minmax(0,2fr)",
                 label: (rule) => rule.name,
+                sub: (rule) => (
+                  <span className="text-[12px] text-foreground/65">
+                    {view(rule).origin}
+                  </span>
+                ),
               }}
               columns={[
                 {
@@ -414,12 +486,13 @@ function RulesInner() {
                 {
                   header: "Runs / fails",
                   width: "minmax(0,0.9fr)",
-                  cell: (rule) => (
-                    <span className="tabular">
-                      {rule.runCount.toLocaleString("en-US")} /{" "}
-                      {rule.failureCount.toLocaleString("en-US")}
-                    </span>
-                  ),
+                  cell: (rule) =>
+                    view(rule).runs ?? (
+                      <span className="tabular">
+                        {rule.runCount.toLocaleString("en-US")} /{" "}
+                        {rule.failureCount.toLocaleString("en-US")}
+                      </span>
+                    ),
                 },
                 {
                   header: "Status",
@@ -435,12 +508,13 @@ function RulesInner() {
               phone={(rule) => {
                 const row = view(rule);
                 return {
-                  Icon: Zap,
+                  Icon: podById.has(rule.id) ? Cog : Zap,
                   secondary: [
+                    row.origin,
                     row.when,
                     row.space,
                     `Last run ${row.lastRun}`,
-                    runsPhrase(rule),
+                    row.runs ?? runsPhrase(rule),
                   ].join(" · "),
                   status: row.pill,
                 };
@@ -460,14 +534,31 @@ function RulesInner() {
             )}
           </>
         )}
+        {podRules.isError && !loading && (
+          <div className="flex flex-wrap items-center gap-2 px-1 pt-3">
+            <p className="text-[12px] text-foreground/65">
+              The pod’s own automations couldn’t be loaded, so they are missing
+              from this list.
+            </p>
+            <Button
+              size="sm"
+              variant="light"
+              radius="md"
+              onPress={() => void podRules.refetch()}
+            >
+              Try again
+            </Button>
+          </div>
+        )}
         {groups.isError && !loading && (
           <p className="px-1 pt-3 text-[12px] text-foreground/65">
-            Run health couldn’t be loaded, so “Failing” may be missing rules.
+            Run health couldn’t be loaded, so “Failing” may be missing
+            automations.
           </p>
         )}
         {groupDrain.capped && (
           <p className="px-1 pt-3 text-[12px] text-foreground/65">
-            Run health covers the 2,000 most recently run rules.
+            Run health covers the 2,000 most recently run automations.
           </p>
         )}
       </SectionCard>
@@ -493,6 +584,13 @@ function RulesInner() {
               including anything it sends or changes. If the pod needs someone
               to approve it, it is proposed instead and waits in Review.
             </>
+          ) : pending?.pod && pending.kind === "turn_on" ? (
+            <>
+              From now on the pod applies it, for everyone in this pod, each
+              time its trigger happens. You can pause it here at any time.
+            </>
+          ) : pending?.pod && podById.get(pending.id) ? (
+            <>{reactionPauseConsequence(podById.get(pending.id)!)}</>
           ) : pending?.kind === "turn_on" ? (
             <>
               From now on it runs on its own each time its trigger happens,
@@ -511,10 +609,15 @@ function RulesInner() {
             ? "Run now"
             : pending?.kind === "turn_on"
               ? resolveActionLabel("turn_on")
-              : "Pause rule"
+              : "Pause automation"
         }
         confirmColor="warning"
-        isPending={pause.isPending || trigger.isPending || activate.isPending}
+        isPending={
+          pause.isPending ||
+          trigger.isPending ||
+          activate.isPending ||
+          setPodRule.isPending
+        }
       >
         {actError && (
           <p className="text-[12.5px] text-status-down">{actError}</p>
@@ -531,6 +634,10 @@ type RuleRow = RuleFacts & {
 
 interface RuleRowView {
   when: string;
+  /** Where it comes from: Built in, Declared on a link, Yours. */
+  origin: string;
+  /** A pod rule's "2 applied lately", in place of runs / fails. */
+  runs: string | null;
   space: string;
   lastRun: string;
   /** Absent until the rule's run health is read. */
@@ -582,15 +689,15 @@ function emptyMessage(
   total: number
 ): string {
   if (total === 0) {
-    return "No rules yet. Rules are made in the Synap app — “when this happens, do that”.";
+    return "No automations yet. Automations are made in the Synap app: “when this happens, do that”.";
   }
   switch (filter) {
     case "active":
-      return "No rule is switched on.";
+      return "No automation is switched on.";
     case "failing":
-      return "Nothing is failing. Every live rule’s runs this week went through.";
+      return "Nothing is failing. Every live automation’s runs this week went through.";
     case "never-ran":
-      return "Every rule has run at least once.";
+      return "Every automation has run at least once.";
     case "paused":
       return "No paused rules.";
     case "drafts":

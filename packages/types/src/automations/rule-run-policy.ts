@@ -145,6 +145,10 @@ export const AUTOMATION_SKIP_REASONS = {
    *  the subject, so it filed no second one. Step output
    *  (`{ status: "skipped", reason, sessionId }`). */
   runInFlight: "run_in_flight",
+  /** A `playbook_run` node names a parent session (a session's worker) that
+   *  is no longer open, so it started and filed nothing. Step output
+   *  (`{ status: "skipped", reason, parentSessionId }`). */
+  sessionClosed: "session_closed",
   /** Stage workers (`@synap-core/types/workers`): below threshold, approvals
    *  backlog, stale transition, volume ceiling. Step output + run row. */
   ...WORKER_SKIP_REASONS,
