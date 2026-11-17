@@ -444,6 +444,13 @@ export function emitFacetSideEffects(opts: {
   proposalId?: string | null;
   /** The bulk run (import / capture apply) this attach belongs to — `data.batchId`. */
   batchId?: string | null;
+  /**
+   * The facet itself is pod-wide (a shared role, no workspace) and
+   * `workspaceId` is only the lens it was written from. Rides the facet event
+   * only (`SideEffectPayload.podWideSubject`): the matcher then also matches
+   * it in every space the actor can reach, not only that lens.
+   */
+  podWideSubject?: boolean;
 }): void {
   const commonWs = opts.workspaceId;
   // Origin is resolved INSIDE the fire-and-forget chain, like recordDomainMutation.
@@ -477,6 +484,7 @@ export function emitFacetSideEffects(opts: {
           : {}),
       },
       ...(origin ? { origin } : {}),
+      ...(opts.podWideSubject ? { podWideSubject: true } : {}),
     });
     // Parent-entity refresh — reuse the entity reactors (search + vector +
     // automations) so the parent reflects the facet change.
@@ -523,6 +531,12 @@ export function registerFacetAttachEmitter(): void {
       status: facet.status,
       userId,
       workspaceId: facet.workspaceId ?? context?.fallbackWorkspaceId ?? null,
+      // A pod-wide role (`client`, `lead` with no workspace) attached from a
+      // space: the fallback above is only the lens it came from. Flagged, the
+      // matcher also fires the rules of every other space the actor reaches —
+      // an Operations « Onboard a client » activator on a client attached from
+      // the CRM. A space-bound facet keeps its own space only.
+      podWideSubject: facet.workspaceId == null,
       sessionId: context?.sessionId ?? null,
       entityTitle: context?.entityTitle ?? null,
       contextEntityTitle: context?.contextEntityTitle ?? null,
