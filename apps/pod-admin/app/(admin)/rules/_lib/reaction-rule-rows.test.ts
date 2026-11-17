@@ -4,10 +4,13 @@ import {
   reactionActivityPhrase,
   reactionOriginLine,
   reactionOutcomeLine,
+  reactionPauseConsequence,
   reactionRuleAction,
   reactionRuleFacts,
   reactionRuleHealth,
+  reactionRuleOrigin,
   reactionTerminalLine,
+  ruleOriginLabel,
   type ReactionRuleWire,
 } from "./reaction-rule-rows";
 import { ruleCounts, ruleMatches, rulePill } from "./rule-rows";
@@ -125,9 +128,33 @@ describe("a pod rule in the one Rules list", () => {
       tone: "unknown",
       detail: "why moved_meanwhile",
     });
-    expect(reactionOutcomeLine(outcome("proposed"))).toMatchObject({
-      label: "Proposed",
-      tone: "stale",
-    });
+    // The log proves a proposal was filed, never that it still waits: its
+    // words (which name the thing) are kept, never "Waiting for your review".
+    expect(reactionOutcomeLine(outcome("proposed"))).toEqual(
+      expect.objectContaining({
+        label: "Proposed",
+        tone: "stale",
+        detail: "why proposed",
+      })
+    );
+    expect(reactionOutcomeLine(outcome("proposed")).detail).not.toMatch(
+      /waiting/i
+    );
+  });
+
+  it("says where each row comes from, and that a pause is the whole pod's", () => {
+    expect(ruleOriginLabel(reactionRuleOrigin(rule()))).toBe(
+      "Declared on a link"
+    );
+    expect(
+      ruleOriginLabel(reactionRuleOrigin(rule({ source: "built_in" })))
+    ).toBe("Built in");
+    expect(ruleOriginLabel("yours")).toBe("Yours");
+    const said = reactionPauseConsequence(rule());
+    expect(said).toMatch(/^This pauses it for everyone in this pod\./);
+    expect(said).toContain(
+      "this no longer happens: a post moves to done or lost, then the campaign it is part of moves to its next status once every part is done."
+    );
+    expect(said).toMatch(/Nothing it already did is undone\.$/);
   });
 });

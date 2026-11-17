@@ -24,7 +24,7 @@
 
 import { addToast, Button } from "@heroui/react";
 import type { ReactNode } from "react";
-import { Workflow, Zap } from "lucide-react";
+import { Cog, Workflow, Zap } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
@@ -74,9 +74,12 @@ import {
 import { useDrainPages } from "../../../lib/use-drain-pages";
 import {
   reactionActivityPhrase,
+  reactionPauseConsequence,
   reactionRuleAction,
   reactionRuleFacts,
   reactionRuleHealth,
+  reactionRuleOrigin,
+  ruleOriginLabel,
   type ReactionRuleWire,
 } from "./_lib/reaction-rule-rows";
 
@@ -173,14 +176,17 @@ function RulesInner() {
     [podRules.data]
   );
   const all = useMemo(
+    // The person's own automations in the list's own order, then the pod's
+    // (built in, declared on a link): one order, each row marked with where
+    // it comes from, never a block pinned above theirs.
     (): RuleRow[] => [
+      ...(rules.data?.pages ?? [])
+        .flatMap((p) => p.automations)
+        .filter((r) => r.status !== "archived"),
       ...[...podById.values()].map((r) => ({
         ...reactionRuleFacts(r),
         triggerConfig: null,
       })),
-      ...(rules.data?.pages ?? [])
-        .flatMap((p) => p.automations)
-        .filter((r) => r.status !== "archived"),
     ],
     [rules.data, podById]
   );
@@ -199,7 +205,9 @@ function RulesInner() {
       id ? (byId.get(id) ?? "A space") : "All spaces";
   }, [spaces.data]);
 
-  const loading = rules.isLoading || isAuthRedirecting;
+  // The pod's automations load beside the person's: the list draws once, in
+  // its final order, never with rows popping in under a Pause button.
+  const loading = rules.isLoading || podRules.isLoading || isAuthRedirecting;
   // Counts and pills wait for health too: "Failing" read before the groups
   // land would undercount and then jump.
   const healthReady = !groups.isLoading && !groupDrain.draining;
@@ -300,6 +308,7 @@ function RulesInner() {
             rule.triggerConfig as Record<string, unknown> | null
           ).text,
       runs: pod ? reactionActivityPhrase(pod) : null,
+      origin: ruleOriginLabel(pod ? reactionRuleOrigin(pod) : "yours"),
       space: spaceName(rule.workspaceId),
       lastRun: formatRelative(rule.lastRunAt, { empty: "never" }),
       pill: healthReady ? rulePill(rule, health) : undefined,
@@ -392,7 +401,7 @@ function RulesInner() {
             variant="flat"
             radius="md"
           >
-            Review never-ran rules
+            Review never-ran automations
           </Button>
         </div>
       )}
@@ -406,7 +415,7 @@ function RulesInner() {
               ? "Counting…"
               : `${counts.active} active · ${counts.failing} failing${
                   ruleDrain.capped
-                    ? " · counts cover the first 2,000 rules"
+                    ? " · counts cover the first 2,000 automations"
                     : ""
                 }`
         }
@@ -417,7 +426,7 @@ function RulesInner() {
           <ResourceRowSkeleton count={4} />
         ) : rules.isError ? (
           <ResourceRowError
-            message="Couldn't load rules."
+            message="Couldn't load automations."
             onRetry={() => void rules.refetch()}
           />
         ) : outsideFailed ? (
@@ -452,6 +461,11 @@ function RulesInner() {
                 header: "Name",
                 width: "minmax(0,2fr)",
                 label: (rule) => rule.name,
+                sub: (rule) => (
+                  <span className="text-[12px] text-foreground/65">
+                    {view(rule).origin}
+                  </span>
+                ),
               }}
               columns={[
                 {
@@ -494,8 +508,9 @@ function RulesInner() {
               phone={(rule) => {
                 const row = view(rule);
                 return {
-                  Icon: Zap,
+                  Icon: podById.has(rule.id) ? Cog : Zap,
                   secondary: [
+                    row.origin,
                     row.when,
                     row.space,
                     `Last run ${row.lastRun}`,
@@ -522,8 +537,8 @@ function RulesInner() {
         {podRules.isError && !loading && (
           <div className="flex flex-wrap items-center gap-2 px-1 pt-3">
             <p className="text-[12px] text-foreground/65">
-              The rules the pod applies itself couldn’t be loaded, so they are
-              missing from this list.
+              The pod’s own automations couldn’t be loaded, so they are missing
+              from this list.
             </p>
             <Button
               size="sm"
@@ -537,12 +552,13 @@ function RulesInner() {
         )}
         {groups.isError && !loading && (
           <p className="px-1 pt-3 text-[12px] text-foreground/65">
-            Run health couldn’t be loaded, so “Failing” may be missing rules.
+            Run health couldn’t be loaded, so “Failing” may be missing
+            automations.
           </p>
         )}
         {groupDrain.capped && (
           <p className="px-1 pt-3 text-[12px] text-foreground/65">
-            Run health covers the 2,000 most recently run rules.
+            Run health covers the 2,000 most recently run automations.
           </p>
         )}
       </SectionCard>
@@ -570,15 +586,11 @@ function RulesInner() {
             </>
           ) : pending?.pod && pending.kind === "turn_on" ? (
             <>
-              From now on the pod applies it each time its trigger happens. You
-              can pause it here at any time.
+              From now on the pod applies it, for everyone in this pod, each
+              time its trigger happens. You can pause it here at any time.
             </>
-          ) : pending?.pod ? (
-            <>
-              The pod stops applying it until someone turns it back on. Every
-              time it would have acted is still logged, as skipped. Nothing it
-              already did is undone.
-            </>
+          ) : pending?.pod && podById.get(pending.id) ? (
+            <>{reactionPauseConsequence(podById.get(pending.id)!)}</>
           ) : pending?.kind === "turn_on" ? (
             <>
               From now on it runs on its own each time its trigger happens,
@@ -597,7 +609,7 @@ function RulesInner() {
             ? "Run now"
             : pending?.kind === "turn_on"
               ? resolveActionLabel("turn_on")
-              : "Pause rule"
+              : "Pause automation"
         }
         confirmColor="warning"
         isPending={
@@ -622,6 +634,8 @@ type RuleRow = RuleFacts & {
 
 interface RuleRowView {
   when: string;
+  /** Where it comes from: Built in, Declared on a link, Yours. */
+  origin: string;
   /** A pod rule's "2 applied lately", in place of runs / fails. */
   runs: string | null;
   space: string;
@@ -675,15 +689,15 @@ function emptyMessage(
   total: number
 ): string {
   if (total === 0) {
-    return "No rules yet. Rules are made in the Synap app — “when this happens, do that”.";
+    return "No automations yet. Automations are made in the Synap app: “when this happens, do that”.";
   }
   switch (filter) {
     case "active":
-      return "No rule is switched on.";
+      return "No automation is switched on.";
     case "failing":
-      return "Nothing is failing. Every live rule’s runs this week went through.";
+      return "Nothing is failing. Every live automation’s runs this week went through.";
     case "never-ran":
-      return "Every rule has run at least once.";
+      return "Every automation has run at least once.";
     case "paused":
       return "No paused rules.";
     case "drafts":

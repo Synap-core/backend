@@ -152,7 +152,7 @@ describe("phrases", () => {
       rule({ ...idle, id: "3", name: "Win and hand off" }),
       rule({ id: "4", name: "Busy rule" }),
     ]);
-    expect(text).toMatch(/^3 rules have never run\./);
+    expect(text).toMatch(/^3 automations have never run\./);
     expect(text).toContain("“Generate report” ×2, “Win and hand off”");
     expect(text).not.toContain("Busy rule");
     expect(neverRanCallout([rule()])).toBeNull();

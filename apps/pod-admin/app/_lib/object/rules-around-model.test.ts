@@ -77,6 +77,20 @@ describe("When this moves", () => {
         })
       )
     ).toBe("Last skipped: It was moved meanwhile.");
+    // A proposal was filed: whether it still waits is its own page's to say.
+    expect(
+      lastOutcomeWords(
+        entry({
+          last: {
+            outcome: "proposed",
+            code: "proposed",
+            reason: "Asked you before closing it.",
+            at: new Date().toISOString(),
+            proposalId: "p-1",
+          },
+        })
+      )
+    ).toBe("Last proposed a move");
     expect(ruleAroundHref(entry())).toBe(
       "/rules/declared%3Arollup%3Arel%3Apost%3Acampaign"
     );

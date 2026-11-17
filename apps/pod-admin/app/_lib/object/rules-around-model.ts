@@ -36,7 +36,8 @@ export function lastOutcomeWords(r: StatusOfReaction): string | null {
     case "applied":
       return "Last applied";
     case "proposed":
-      return "Last proposed, waiting for your review";
+      // A proposal was filed; whether it still waits is its own page's to say.
+      return "Last proposed a move";
     case "skipped":
       return `Last skipped: ${last.reason}`;
   }
