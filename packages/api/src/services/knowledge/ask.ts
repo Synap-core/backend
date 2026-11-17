@@ -43,6 +43,7 @@ import {
   type QueryUnderstanding,
 } from "../retrieval/understand-query.js";
 import type { RetrievalVerdict } from "../retrieval/grade.js";
+import type { RecallWindow } from "../retrieval/recall-window.js";
 import { classifySubstrates, type SubstrateKind } from "./classify.js";
 import {
   COMMON_STOPWORDS,
@@ -124,6 +125,12 @@ export interface AskParams {
    * `sources` keep the complete set.
    */
   detail?: AskDetail;
+  /**
+   * A time window on `updatedAt` (`synap_ask` `since` / `until`, ticket
+   * a9888512): a FILTER on the entity lanes' candidate fetch (semantic and
+   * structured), applied before ranking. The door that takes it echoes it.
+   */
+  window?: RecallWindow | null;
 }
 
 export interface AskAnswer {
@@ -299,6 +306,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     catalog,
     limit,
     compare,
+    window: params.window ?? null,
   });
   // knowledge_keys has no user column; scope to the user's namespace (workspaceId
   // slot), matching GET /knowledge/search — `undefined` would read UNFILTERED
@@ -421,6 +429,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
             // sanity ceiling, not a relevance cut. A `brief` ask promises a
             // short answer instead, so it reads the caller's limit (B1-b).
             limit: params.detail === "brief" ? limit : Math.max(limit, 200),
+            window: params.window ?? null,
           })
         )
       : { status: "ok", items: [] };

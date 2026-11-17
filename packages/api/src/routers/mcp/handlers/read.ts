@@ -9,6 +9,10 @@
  */
 
 import { ask } from "../../../services/knowledge/ask.js";
+import {
+  echoRecallWindow,
+  parseRecallWindow,
+} from "../../../services/retrieval/recall-window.js";
 import { resolveProfileDescription } from "../../../utils/profile-presentation.js";
 import { leanProposal } from "./proposal-lean.js";
 import {
@@ -144,6 +148,14 @@ export const readHandlers: McpHandlerMap = {
       { projectId, agentUserId }
     );
     const compare = args.compare === true;
+    // `since` / `until` (ticket a9888512): a filter on the entity lanes'
+    // candidate fetch, before ranking. A malformed or inverted window is
+    // refused, never read as "no window" (a different question).
+    const windowArg = parseRecallWindow({
+      since: args.since,
+      until: args.until,
+    });
+    if (!windowArg.ok) return toolError(windowArg.error);
     // Retrieve across all substrates (same call as /knowledge/search).
     const retrieved = await ask({
       query: args.query as string,
@@ -155,7 +167,13 @@ export const readHandlers: McpHandlerMap = {
       catalog,
       compare: compare || undefined,
       detail,
+      ...(windowArg.window ? { window: windowArg.window } : {}),
     });
+    // The window it applied, on every reply: "nothing in the window" must
+    // read differently from "the ranker missed it".
+    const windowBlock = windowArg.window
+      ? { window: echoRecallWindow(windowArg.window) }
+      : {};
 
     // A/B DIAGNOSTIC — when `compare` is set, return the ranker comparison
     // (baseline vs Horizon on the same pool) directly, skipping IS synthesis.
@@ -166,6 +184,7 @@ export const readHandlers: McpHandlerMap = {
         query: args.query,
         understanding: retrieved.understanding,
         lens: retrieved.lens,
+        ...windowBlock,
         comparison: retrieved.comparison ?? null,
       });
     }
@@ -235,6 +254,7 @@ export const readHandlers: McpHandlerMap = {
         ...queueBlock,
         degraded: retrieved.degraded,
         lens: retrieved.lens,
+        ...windowBlock,
         message:
           `⚠️ AI synthesis did not run. ${failure.message} ` +
           (failure.retryable
@@ -272,6 +292,7 @@ export const readHandlers: McpHandlerMap = {
       ...queueBlock,
       degraded: retrieved.degraded,
       lens: retrieved.lens,
+      ...windowBlock,
     });
   },
   synap_get_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {

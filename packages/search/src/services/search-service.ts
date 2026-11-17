@@ -26,6 +26,14 @@ export interface UnifiedSearchOptions {
   status?: string[];
   prefix?: boolean;
   facetBy?: string[];
+  /**
+   * A time window on `updatedAt` (epoch SECONDS, the index unit): keep hits
+   * updated at or after `updatedSince` and before `updatedUntil`. A filter on
+   * the index query, so the page is drawn from inside it (recall's `since` /
+   * `until`, `services/retrieval/recall-window.ts`).
+   */
+  updatedSince?: number;
+  updatedUntil?: number;
 }
 
 /** The typed Library marker of a hit (see `SearchResult.libraryItem`). */
@@ -434,6 +442,8 @@ export class SearchService {
     tags?: string[];
     status?: string[];
     libraryOnly?: boolean;
+    updatedSince?: number;
+    updatedUntil?: number;
   }): string {
     // Channel-scoped message search: the caller has already proven channel
     // visibility via the DB channel-access gate, so we pin to the single channel
@@ -486,6 +496,14 @@ export class SearchService {
 
     if (options.status?.length) {
       filters.push(`status:=${anyOf(options.status, "status")}`);
+    }
+
+    // Numbers only, never a caller string: a non-integer is not a window.
+    if (Number.isInteger(options.updatedSince)) {
+      filters.push(`updatedAt:>=${options.updatedSince}`);
+    }
+    if (Number.isInteger(options.updatedUntil)) {
+      filters.push(`updatedAt:<${options.updatedUntil}`);
     }
 
     // Every clause parenthesised, so no clause's operators can bind across the

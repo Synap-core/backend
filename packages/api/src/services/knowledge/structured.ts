@@ -27,6 +27,10 @@ import {
 } from "../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
+import {
+  recallWindowWhere,
+  type RecallWindow,
+} from "../retrieval/recall-window.js";
 
 export interface StructuredParams {
   /** Catalog-resolved profile slug the enumerative query named. */
@@ -37,6 +41,8 @@ export interface StructuredParams {
   /** Optional status word — applied to the task lane only (see TASK_STATUS_SYNONYMS). */
   status?: string;
   limit: number;
+  /** A time window on `updatedAt` (`retrieval/recall-window.ts`). */
+  window?: RecallWindow | null;
 }
 
 /**
@@ -144,6 +150,8 @@ export async function structuredLookup(
   ];
 
   if (projectId) conditions.push(projectLensWhere(entities.id, projectId));
+  const inWindow = recallWindowWhere(entities.updatedAt, params.window);
+  if (inWindow) conditions.push(inWindow);
 
   // Optional status filter (task lane only). Map the spoken word to the seeded
   // enum; an unrecognized word or a non-task profile → no filter (return all).

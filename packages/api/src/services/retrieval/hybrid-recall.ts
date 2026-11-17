@@ -28,6 +28,11 @@ import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
+import {
+  recallWindowSeconds,
+  recallWindowWhere,
+  type RecallWindow,
+} from "./recall-window.js";
 
 // Degradation is graceful but not invisible: the `source` flag signals a
 // vector-skip at the API boundary, and these debug logs let a pod operator see
@@ -133,6 +138,11 @@ export interface HybridRecallParams {
   embedding?: number[] | null;
   /** Pre-resolved once by composite retrieval to avoid repeated membership reads. */
   facetVisibilityScope?: FacetVisibilityScope;
+  /**
+   * A time window on `updatedAt` (`recall-window.ts`): BOTH halves draw only
+   * rows inside it, at query time, so the budget is not spent outside it.
+   */
+  window?: RecallWindow | null;
 }
 
 export interface HybridRecallResult {
@@ -144,6 +154,7 @@ export async function hybridRecall(
   params: HybridRecallParams
 ): Promise<HybridRecallResult> {
   const { query, userId, workspaceId, profileSlug, projectIds, limit } = params;
+  const inWindow = recallWindowWhere(entities.updatedAt, params.window);
   const facetVisibilityScope =
     params.facetVisibilityScope ??
     (await resolveFacetVisibilityScope(userId, workspaceId));
@@ -218,6 +229,13 @@ export async function hybridRecall(
               )
           )
         );
+      if (inWindow)
+        conds.push(
+          inArray(
+            entityVectors.entityId,
+            db.select({ id: entities.id }).from(entities).where(inWindow)
+          )
+        );
       const where = conds.length > 1 ? and(...conds) : conds[0];
       const rows = await db
         .select({ entityId: entityVectors.entityId })
@@ -244,6 +262,7 @@ export async function hybridRecall(
       collections: ["entities"],
       limit: widen,
       page: 1,
+      ...recallWindowSeconds(params.window),
     });
     let hits = resp.results.filter((r) => r.collection === "entities");
     if (profileSlug && scopeByEntityType) {
@@ -296,7 +315,10 @@ export async function hybridRecall(
           // the demo toggle; `projectIds` is that lens, already resolved).
           listableEntityWhere({
             projectLens: projectIds ? [...projectIds] : undefined,
-          })
+          }),
+          // The window again, on the row itself: the index's `updatedAt` can
+          // lag the database, and the database is the truth.
+          inWindow
         )
       );
     const visible = new Set(visibleRows.map((r) => r.id));
