@@ -139,21 +139,23 @@ describe("rankRouteCandidates — rarity (IDF over the pool)", () => {
   });
 
   it("a word every candidate shares outweighs nothing: the rare word wins", () => {
-    // "agent" is in 3 of 5, "build" in 1, "each" in 2. "common" hits
-    // agent+each, "rare" hits build+each: two words each, so under a flat
-    // per-word sum they tie and the input order decides — that is the defect. Under IDF the one holding the RARE word
-    // must win, whatever the input order.
+    // "report" is in 3 of 5, "build" in 1, "weekly" in 2. "common" hits
+    // weekly+report, "rare" hits weekly+build: two words each (in their
+    // names, so both pass the relevance floor), so under a flat per-word sum
+    // they tie and the name tie-break puts "A weekly report" first — that is
+    // the defect. Under IDF the one holding the RARE word must win, whatever
+    // the input order.
     const pool = [
-      pb("common", "Agent upkeep", "an agent that tidies each record"),
-      pb("rare", "Dev session", "each step: build then verify"),
-      pb("f1", "Agent one", "agent notes"),
-      pb("f2", "Agent two", "agent notes"),
+      pb("common", "A weekly report", "a report that tidies each record"),
+      pb("rare", "Weekly build", "each step: build then verify"),
+      pb("f1", "Report one", "report notes"),
+      pb("f2", "Report two", "report notes"),
       pb("f3", "Other", "nothing to see"),
     ];
     for (const candidates of [pool, [...pool].reverse()]) {
       const ranked = rankRouteCandidates({
         entity: {},
-        intentText: "build an agent for each",
+        intentText: "weekly build report",
         candidates,
       });
       expect(ranked[0]!.candidate.id).toBe("rare");
@@ -217,27 +219,32 @@ describe("rankRouteCandidates — the live CRM Hygiene case", () => {
     );
   });
 
-  it("ranks AI Dev Session above CRM Hygiene", () => {
+  it("offers nothing rather than a wrong first candidate", () => {
     const ranked = rankRouteCandidates({
       entity: {},
       intentText: INTENT,
       candidates: pool,
     });
-    const names = ranked.map((r) => r.candidate.name);
-    expect(names[0]).toBe("AI Dev Session");
     // CRM Hygiene matched only on generic words ("agent", "each"), which are
-    // stopwords now, so it is dropped.
-    expect(names.indexOf("CRM Hygiene")).toBe(-1);
+    // stopwords. "AI Dev Session" (once first here, on "build") and the rest
+    // matched only in their goal templates: this pool predates descriptions.
+    // "Lead → qualified (discovery)" has ONE name word ("discovery", in
+    // another sense) for a 10-word request, under the floor's one per five.
+    // No playbook of this pool is named for this work, so none is offered.
+    expect(ranked).toEqual([]);
   });
 
   it("returns only candidates that matched a word (no bare 'Runs for anything new')", () => {
+    // Same pool, a request a playbook IS named for: what comes back matched
+    // a word, and the candidates that matched none are not padded in.
     const ranked = rankRouteCandidates({
       entity: {},
-      intentText: INTENT,
+      intentText: "qualify a new lead after discovery",
       candidates: pool,
     });
     expect(ranked.length).toBeGreaterThan(0);
     expect(ranked.length).toBeLessThan(pool.length);
+    expect(ranked[0]!.candidate.name).toBe("Lead → qualified (discovery)");
     for (const r of ranked) {
       expect(r.signals.some((s) => s.type === "intent")).toBe(true);
     }
@@ -338,7 +345,7 @@ describe("rankRouteCandidates — generic words are not evidence (matcher-fixes)
         {
           kind: "playbook",
           id: "ship",
-          name: "Ship a change",
+          name: "Ship a fix",
           text: ["fix the backend"],
           subjectProfileSlug: null,
         },
@@ -408,5 +415,157 @@ describe("tokenize — the pod-wide stop list is unchanged; generic work words a
       ],
     });
     expect(ranked).toEqual([]);
+  });
+});
+
+/**
+ * THE NAME IS THE EVIDENCE (tickets b2ba4b6b, 84d2add0, 9753144a). Each pool
+ * keeps the live playbook's name and description (2026-11-17) and a short
+ * body standing in for its long goal template, with the words the live
+ * reply named as the match. The intents are the tickets' own words.
+ */
+describe("rankRouteCandidates — the name is the evidence, a relevance floor", () => {
+  const pb = (
+    id: string,
+    name: string,
+    description: string,
+    body: string[] = []
+  ): RouteCandidate => ({
+    kind: "playbook",
+    id,
+    name,
+    description,
+    text: [description, ...body],
+    subjectProfileSlug: null,
+  });
+
+  it("84d2add0: the playbook NAMED 'Newsletter issue' outranks one whose description mentions it", () => {
+    const pool = [
+      pb(
+        "derive",
+        "Derive outputs",
+        "Make posts from a piece, spread over two weeks on the accounts you pick (several per account, never two on one account the same day), each linked to the piece, and optionally a newsletter issue.",
+        ["Write the posts for the week"]
+      ),
+      pb(
+        "letter",
+        "Newsletter issue",
+        "Take a newsletter issue from idea to sent — angle, draft, edit, schedule — with a person approving before it goes out.",
+        ["Send the issue once approved", "Idea", "Drafting", "Sent"]
+      ),
+      pb(
+        "update",
+        "Write the weekly client update",
+        "Every Monday, draft each active client's update from what happened in the pod (done, next, decisions needed, risks, budget used) for a person to edit and send.",
+        ["Draft the updates", "Person edits and sends"]
+      ),
+      pb(
+        "bill",
+        "Bill a client",
+        "Issue an invoice for delivered work and send it."
+      ),
+      pb("plan", "Plan Next Content", "Decide what to publish next."),
+    ];
+    for (const candidates of [pool, [...pool].reverse()]) {
+      const ranked = rankRouteCandidates({
+        entity: {},
+        intentText: "write and send this week's newsletter issue",
+        candidates,
+      });
+      const ids = ranked.map((r) => r.candidate.id);
+      expect(ids[0]).toBe("letter");
+      expect(ids.indexOf("derive")).toBeGreaterThan(0);
+      // "send" and "issue" sit only in Bill a client's description (2 of the
+      // request's 5 words), never in its name: not offered.
+      expect(ids).not.toContain("bill");
+    }
+  });
+
+  it("9753144a: a restore drill is offered nothing on 'prove, backend, pod, new, apply' found in a long body", () => {
+    const ranked = rankRouteCandidates({
+      entity: {},
+      // matchSessionTemplate's intent: title + goal.
+      intentText:
+        "Promise Keeper 2026-11-17 · Tue P3 ownership drill Prove on current backend main that a pod's Postgres migrates from zero, dumps and restores losslessly, and that this week's new migrations apply cleanly.",
+      candidates: [
+        pb(
+          "website",
+          "Build a website (Website Factory)",
+          "Create a NEW website from the Website Factory template, with the pod's published data.",
+          [
+            "Prove the build on a preview before production; the backend stays the pod's own; apply the plan the person approved.",
+          ]
+        ),
+        pb(
+          "letter",
+          "Newsletter issue",
+          "Take a newsletter issue from idea to sent.",
+          ["Write the issue this week"]
+        ),
+        pb(
+          "content",
+          "Produce Content",
+          "Take a briefed post from brief to published.",
+          ["Publish what is new on the pod's channels"]
+        ),
+      ],
+    });
+    expect(ranked).toEqual([]);
+  });
+
+  it("b2ba4b6b: an orientation spec is not offered 'Produce Content' on route, spec, first, read, records, identity", () => {
+    const ranked = rankRouteCandidates({
+      entity: {},
+      intentText:
+        "Agent orientation route: spec and first fixes An outside agent can learn what Synap is, who it is for, where it stands and what is stale in one compact read, with Foundation records answering identity questions first.",
+      candidates: [
+        pb(
+          "content",
+          "Produce Content",
+          "Take a briefed post from brief to published, from the Synap brand kit.",
+          [
+            "Route each draft to the spec first; read where the piece stands; the records of the brand identity come first.",
+          ]
+        ),
+        pb("website", "Website Factory", "Create a new website.", [
+          "Read the spec",
+        ]),
+      ],
+    });
+    expect(ranked).toEqual([]);
+  });
+
+  it("a description that holds most of the request still admits a candidate whose name does not", () => {
+    const ranked = rankRouteCandidates({
+      entity: {},
+      intentText: "make a reel from my take",
+      candidates: [
+        pb(
+          "take",
+          "Enhance a recording",
+          "Turn a recorded take into a vertical reel: cut, caption and export the best pieces.",
+          ["Run the passes on {take}"]
+        ),
+      ],
+    });
+    expect(ranked.map((r) => r.candidate.id)).toEqual(["take"]);
+  });
+
+  it("a structural signal is evidence about the entity: the floor never cuts it", () => {
+    const ranked = rankRouteCandidates({
+      entity: { profileSlug: "post" },
+      intentText: "publish this tomorrow morning",
+      candidates: [
+        {
+          kind: "playbook",
+          id: "kind",
+          name: "Produce content",
+          text: ["Publish the post on its channels"],
+          subjectProfileSlug: "post",
+        },
+      ],
+    });
+    expect(ranked.map((r) => r.candidate.id)).toEqual(["kind"]);
+    expect(ranked[0]!.signals.map((s) => s.type)).toEqual(["intent", "kind"]);
   });
 });

@@ -121,6 +121,28 @@ describe("ask router", () => {
     expect(r.answers[0].substrate).toBe("episodic");
   });
 
+  it("episodic sources: one per fact text, and a capability run that found nothing is not one (d1fe02c8)", async () => {
+    const empty =
+      'Ran capability "market.search" → {"entries":[],"message":"Nothing matched the marketplace either."}';
+    searchFactsMock.mockResolvedValue([
+      { id: "6e44bab4", fact: empty },
+      { id: "f07faba5", fact: empty },
+      { id: "6d0f512c", fact: `${empty} ` },
+      { id: "c76dad8a", fact: "Approval_failed proposals: 5 of 8 forks wrong" },
+      { id: "c76dad8b", fact: "Approval_failed proposals: 5 of 8 forks wrong" },
+      {
+        id: "run-hit",
+        fact: 'Ran capability "market.search" → {"entries":[{"slug":"crm"}]}',
+      },
+    ]);
+    const r = await ask({
+      ...baseParams,
+      query: "what did I decide about how failed proposals should be handled",
+    });
+    const episodic = r.answers.find((a) => a.substrate === "episodic")!;
+    expect(episodic.items.map((i) => i.id)).toEqual(["c76dad8a", "run-hit"]);
+  });
+
   it("orders three substrates primary-first, semantic-before-episodic for the rest", async () => {
     const r = await ask({ ...baseParams, query: "remember how to deploy" });
     // classifier: procedural primary, also episodic. semantic always runs.
