@@ -114,6 +114,37 @@ describe("worker doors", () => {
     expect(h.views).toHaveBeenCalledWith({ userId: "u-1", trackId: GOAL });
   });
 
+  it("a session's worker: scopeSessionId reaches the service as the session it is FOR, alone", async () => {
+    const SESSION = "11111111-1111-4111-8111-111111111111";
+    h.enable.mockResolvedValue({ status: "enabled", ruleId: "r-1" });
+    await enableWorkerDoor(AGENT, {
+      playbookId: "pb-1",
+      activatorKey: "created",
+      scopeSessionId: SESSION,
+    });
+    expect(h.enable).toHaveBeenCalledWith({
+      userId: "u-1",
+      agentUserId: "agent-1",
+      playbookId: "pb-1",
+      activatorKey: "created",
+      sessionId: SESSION,
+    });
+    // Filed where the session is: a goal or project beside it is refused.
+    expect(
+      await enableWorkerDoor(AGENT, {
+        playbookId: "pb-1",
+        activatorKey: "created",
+        scopeSessionId: SESSION,
+        trackId: GOAL,
+      })
+    ).toMatchObject({ kind: "invalid" });
+    expect(h.enable).toHaveBeenCalledTimes(1);
+
+    h.views.mockResolvedValue([]);
+    await listWorkersDoor(AGENT, { scopeSessionId: SESSION });
+    expect(h.views).toHaveBeenCalledWith({ userId: "u-1", sessionId: SESSION });
+  });
+
   it("run now runs the worker's playbook through the playbook run door, filed in its goal", async () => {
     h.enabled.mockResolvedValue([
       {
