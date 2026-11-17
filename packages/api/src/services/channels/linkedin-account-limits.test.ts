@@ -11,7 +11,6 @@ import {
   linkedinBlockOf,
   linkedinProviderAction,
   linkedinThrottleOf,
-  nextUtcDay,
   readLinkedinPause,
 } from "./linkedin-account-limits.js";
 import { readHeld } from "./held-sends.js";
@@ -156,11 +155,32 @@ describe("when a send is held, and until when", () => {
     ).toBeNull();
   });
 
-  it("the next day starts at UTC midnight", () => {
-    expect(nextUtcDay(NOW).toISOString()).toBe(TOMORROW);
-    expect(nextUtcDay(new Date("2026-12-31T23:59:59Z")).toISOString()).toBe(
-      "2027-01-01T00:00:00.000Z"
-    );
+  it("the next day starts at UTC midnight, across a year's end", () => {
+    expect(
+      linkedinBlockOf({
+        metadata: {
+          linkedinDaily: { day: "2026-12-31", actions: 50, invitations: 0 },
+        },
+        kind: "message",
+        limits: LIMITS,
+        now: new Date("2026-12-31T23:59:59Z"),
+      })
+    ).toMatchObject({ until: "2027-01-01T00:00:00.000Z" });
+  });
+
+  it("a pause whose reason is not one of ours is not read as a pause", () => {
+    expect(
+      readLinkedinPause(
+        { linkedinPause: { until: TOMORROW, reason: "bored", at: NOW } },
+        NOW
+      )
+    ).toBeNull();
+    expect(
+      readLinkedinPause(
+        { linkedinPause: { until: TOMORROW, reason: "restricted" } },
+        NOW
+      )
+    ).toMatchObject({ reason: "restricted", at: TOMORROW });
   });
 });
 

@@ -15,7 +15,9 @@
  *    {day, actions, invitations}`, spent atomically right before the provider
  *    call, at every door that sends: the channel send door
  *    (`sendExternalMessage`) and a verb's provider call
- *    (`triggerProviderAction`, which every code skill reaches).
+ *    (`triggerProviderAction`, which every code skill reaches). The day is
+ *    the database's UTC day at the moment of the UPDATE. A call LinkedIn
+ *    REFUSED (a 4xx answer) did not happen, so it gives its slot back.
  *  - THE PAUSE: a LinkedIn answer that says "slow down" (a 429, a checkpoint
  *    or a restriction) stops the account's actions until the next UTC
  *    midnight, with why
@@ -30,11 +32,14 @@
  * account (WhatsApp, email…) goes on exactly as before.
  */
 
+import { createLogger } from "@synap-core/core";
 import { db, and, eq, drizzleSql } from "@synap/database";
 import { messagingAccounts } from "@synap/database/schema";
 import { resolveCeiling } from "@synap/database/agent-governance";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import type { HeldSend } from "./held-sends.js";
+
+const logger = createLogger({ module: "linkedin-account-limits" });
 
 /** What a LinkedIn action is, for the counts. */
 export type LinkedinActionKind = "invitation" | "message";
@@ -42,6 +47,10 @@ export type LinkedinActionKind = "invitation" | "message";
 /** Why LinkedIn paused an account (a stable code; the CRM words it). */
 export const LINKEDIN_PAUSE_REASONS = ["rate_limited", "restricted"] as const;
 export type LinkedinPauseReason = (typeof LINKEDIN_PAUSE_REASONS)[number];
+
+function isPauseReason(v: unknown): v is LinkedinPauseReason {
+  return (LINKEDIN_PAUSE_REASONS as readonly unknown[]).includes(v);
+}
 
 /** `messaging_accounts.metadata.linkedinPause`. */
 export interface LinkedinPause {
@@ -61,7 +70,7 @@ function utcDay(now: Date): string {
 }
 
 /** The next UTC midnight after `now`: when today's counts and pause end. */
-export function nextUtcDay(now: Date): Date {
+function nextUtcDay(now: Date): Date {
   return new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
   );
@@ -76,14 +85,10 @@ export function readLinkedinPause(
   const p = (metadata as Record<string, unknown>).linkedinPause;
   if (!p || typeof p !== "object") return null;
   const { until, reason, at } = p as Record<string, unknown>;
-  if (typeof until !== "string" || typeof reason !== "string") return null;
+  if (typeof until !== "string" || !isPauseReason(reason)) return null;
   const end = Date.parse(until);
   if (Number.isNaN(end) || end <= now.getTime()) return null;
-  return {
-    until,
-    reason: reason as LinkedinPauseReason,
-    at: typeof at === "string" ? at : until,
-  };
+  return { until, reason, at: typeof at === "string" ? at : until };
 }
 
 /**
@@ -110,7 +115,7 @@ export async function linkedinAccountOf(
 }
 
 /** The two daily limits in force for one account (a row for it, else the defaults). */
-export async function linkedinDailyLimits(
+async function linkedinDailyLimits(
   accountRowId: string
 ): Promise<{ invitations: number; actions: number }> {
   const subject = { type: MESSAGING_ACCOUNT_SUBJECT, id: accountRowId };
@@ -136,7 +141,15 @@ function countsOf(
   return { actions: n(rec.actions), invitations: n(rec.invitations) };
 }
 
-const UNTIL_WORDS = "It can go from tomorrow (00:00 UTC).";
+/** The hold an action waits under while LinkedIn's pause lasts. */
+function pauseHoldOf(pause: LinkedinPause, now: Date): HeldSend {
+  return {
+    errorClass: "linkedin_limit",
+    reason: `LinkedIn paused this account for today (${humanizeToken(pause.reason).toLowerCase()}). It can go once the pause ends.`,
+    at: now.toISOString(),
+    until: pause.until,
+  };
+}
 
 /**
  * Why this account may not make one more `kind` action today, as the hold a
@@ -152,20 +165,13 @@ export function linkedinBlockOf(args: {
   const { metadata, kind, limits, now } = args;
   const at = now.toISOString();
   const pause = readLinkedinPause(metadata, now);
-  if (pause) {
-    return {
-      errorClass: "linkedin_limit",
-      reason: `LinkedIn paused this account for today (${humanizeToken(pause.reason).toLowerCase()}). It can go once the pause ends.`,
-      at,
-      until: pause.until,
-    };
-  }
+  if (pause) return pauseHoldOf(pause, now);
   const used = countsOf(metadata, now);
   const until = nextUtcDay(now).toISOString();
   if (kind === "invitation" && used.invitations >= limits.invitations) {
     return {
       errorClass: "linkedin_limit",
-      reason: `This LinkedIn account sent today's ${limits.invitations} connection requests. ${UNTIL_WORDS}`,
+      reason: `This LinkedIn account sent today's ${limits.invitations} connection requests. It can go from tomorrow (00:00 UTC).`,
       at,
       until,
     };
@@ -173,7 +179,7 @@ export function linkedinBlockOf(args: {
   if (used.actions >= limits.actions) {
     return {
       errorClass: "linkedin_limit",
-      reason: `This LinkedIn account made today's ${limits.actions} LinkedIn actions (messages and connection requests). ${UNTIL_WORDS}`,
+      reason: `This LinkedIn account made today's ${limits.actions} LinkedIn actions (messages and connection requests). It can go from tomorrow (00:00 UTC).`,
       at,
       until,
     };
@@ -209,29 +215,35 @@ export async function linkedinActionBlock(
   return linkedinBlockOf({ metadata, kind, limits, now });
 }
 
+/** The database's UTC day now: the day an action is counted on. */
+const SQL_UTC_DAY = drizzleSql`to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD')`;
+
+/** What `takeLinkedinAction` did: counted on `day`, or did not (the hold). */
+export type LinkedinTake = { day: string } | { held: HeldSend };
+
 /**
  * Spend one `kind` action from the account's day, right before the provider
  * call. Atomic: the UPDATE lands only while the account is not paused and
  * today's counts are under both limits (a connection request counts in both).
- * `null` = spent, go; a hold = do not send, hold it.
+ * The day is read in the same statement (`now()` in UTC), never from a clock
+ * read before an await: a send crossing midnight counts on the new day and
+ * never writes the old day over the new day's count.
  */
 export async function takeLinkedinAction(
   accountRowId: string,
-  kind: LinkedinActionKind,
-  now: Date = new Date()
-): Promise<HeldSend | null> {
+  kind: LinkedinActionKind
+): Promise<LinkedinTake> {
   const limits = await linkedinDailyLimits(accountRowId);
-  const day = utcDay(now);
   const inv = kind === "invitation" ? 1 : 0;
   const meta = drizzleSql`COALESCE(${messagingAccounts.metadata}, '{}'::jsonb)`;
-  const today = drizzleSql`COALESCE(${meta} -> 'linkedinDaily' ->> 'day', '') = ${day}`;
+  const today = drizzleSql`COALESCE(${meta} -> 'linkedinDaily' ->> 'day', '') = ${SQL_UTC_DAY}`;
   const actions = drizzleSql`COALESCE((${meta} -> 'linkedinDaily' ->> 'actions')::int, 0)`;
   const invitations = drizzleSql`COALESCE((${meta} -> 'linkedinDaily' ->> 'invitations')::int, 0)`;
   const rows = await db
     .update(messagingAccounts)
     .set({
       metadata: drizzleSql`jsonb_set(${meta}, '{linkedinDaily}', jsonb_build_object(
-        'day', ${day}::text,
+        'day', ${SQL_UTC_DAY},
         'actions', CASE WHEN ${today} THEN ${actions} + 1 ELSE 1 END,
         'invitations', CASE WHEN ${today} THEN ${invitations} + ${inv}::int ELSE ${inv}::int END))`,
     })
@@ -239,25 +251,67 @@ export async function takeLinkedinAction(
       and(
         eq(messagingAccounts.id, accountRowId),
         drizzleSql`(${meta} -> 'linkedinPause' ->> 'until' IS NULL
-          OR (${meta} -> 'linkedinPause' ->> 'until')::timestamptz <= ${now.toISOString()}::timestamptz)`,
+          OR (${meta} -> 'linkedinPause' ->> 'until')::timestamptz <= now())`,
         drizzleSql`(NOT ${today} OR ${actions} < ${limits.actions}::int)`,
         drizzleSql`(${inv}::int = 0 OR NOT ${today} OR ${invitations} < ${limits.invitations}::int)`
       )
     )
-    .returning({ id: messagingAccounts.id });
-  if (rows.length > 0) return null;
+    .returning({
+      day: drizzleSql<string>`${messagingAccounts.metadata} -> 'linkedinDaily' ->> 'day'`,
+    });
+  if (rows[0]) return { day: rows[0].day };
   // Not spent: say why, from the row as it is now.
+  const now = new Date();
   const metadata = await accountMetadata(accountRowId);
-  return (
-    linkedinBlockOf({ metadata, kind, limits, now }) ?? {
+  return {
+    held: linkedinBlockOf({ metadata, kind, limits, now }) ?? {
       // The row moved between the UPDATE and this read (a new day began):
-      // still not sent this time, and it can go at once.
+      // still not sent this time, and it can go at once (`until` now makes
+      // the proposal approvable again).
       errorClass: "linkedin_limit",
       reason: "This LinkedIn account's daily count was busy. Send it again.",
       at: now.toISOString(),
       until: now.toISOString(),
-    }
-  );
+    },
+  };
+}
+
+/**
+ * Give back the slot an action took on `day`, when LinkedIn refused the
+ * call: nothing happened on LinkedIn, so it does not count. A slot of a day
+ * that is over is left alone. Never throws: a failed refund only leaves the
+ * slot spent (the safe side).
+ */
+async function refundLinkedinAction(
+  accountRowId: string,
+  kind: LinkedinActionKind,
+  day: string
+): Promise<void> {
+  const inv = kind === "invitation" ? 1 : 0;
+  const meta = drizzleSql`COALESCE(${messagingAccounts.metadata}, '{}'::jsonb)`;
+  const actions = drizzleSql`COALESCE((${meta} -> 'linkedinDaily' ->> 'actions')::int, 0)`;
+  const invitations = drizzleSql`COALESCE((${meta} -> 'linkedinDaily' ->> 'invitations')::int, 0)`;
+  try {
+    await db
+      .update(messagingAccounts)
+      .set({
+        metadata: drizzleSql`jsonb_set(${meta}, '{linkedinDaily}', jsonb_build_object(
+          'day', ${day}::text,
+          'actions', GREATEST(${actions} - 1, 0),
+          'invitations', GREATEST(${invitations} - ${inv}::int, 0)))`,
+      })
+      .where(
+        and(
+          eq(messagingAccounts.id, accountRowId),
+          drizzleSql`${meta} -> 'linkedinDaily' ->> 'day' = ${day}::text`
+        )
+      );
+  } catch (err) {
+    logger.warn(
+      { err, accountRowId, kind },
+      "LinkedIn refused the call but its slot could not be given back"
+    );
+  }
 }
 
 /**
@@ -283,24 +337,39 @@ export function linkedinThrottleOf(
   return null;
 }
 
-/** Pause the account's LinkedIn actions until the next UTC midnight. */
-export async function pauseLinkedinAccount(
+/**
+ * LinkedIn said "slow down" (`linkedinThrottleOf`): pause the account until
+ * the next UTC midnight, and return the hold the action that met it waits
+ * under; null for any other answer. Never throws: the refusal is a definite
+ * not-sent, and a failed pause write must not turn it into an ambiguous one
+ * (this action is still held).
+ */
+export async function holdOnThrottle(
   accountRowId: string,
-  reason: LinkedinPauseReason,
-  now: Date = new Date()
-): Promise<LinkedinPause> {
+  refusal: { status: number; message?: string }
+): Promise<HeldSend | null> {
+  const reason = linkedinThrottleOf(refusal.status, refusal.message);
+  if (!reason) return null;
+  const now = new Date();
   const pause: LinkedinPause = {
     until: nextUtcDay(now).toISOString(),
     reason,
     at: now.toISOString(),
   };
-  await db
-    .update(messagingAccounts)
-    .set({
-      metadata: drizzleSql`jsonb_set(COALESCE(${messagingAccounts.metadata}, '{}'::jsonb), '{linkedinPause}', ${JSON.stringify(pause)}::jsonb)`,
-    })
-    .where(eq(messagingAccounts.id, accountRowId));
-  return pause;
+  try {
+    await db
+      .update(messagingAccounts)
+      .set({
+        metadata: drizzleSql`jsonb_set(COALESCE(${messagingAccounts.metadata}, '{}'::jsonb), '{linkedinPause}', ${JSON.stringify(pause)}::jsonb)`,
+      })
+      .where(eq(messagingAccounts.id, accountRowId));
+  } catch (err) {
+    logger.warn(
+      { err, accountRowId, status: refusal.status },
+      "LinkedIn pause could not be recorded"
+    );
+  }
+  return pauseHoldOf(pause, now);
 }
 
 /**
@@ -337,10 +406,28 @@ export function linkedinProviderAction(
   return null;
 }
 
+/** The one sentence for a LinkedIn action whose count could not be taken. */
+export const LINKEDIN_UNCOUNTED =
+  "Nothing was sent: this LinkedIn account's daily count could not be read. Try again.";
+
+/** What the guard did with one LinkedIn action. */
+export type LinkedinGuarded<T> =
+  /** Not sent: the account may not act today. */
+  | { held: HeldSend }
+  /** Not sent: the count could not be taken (`LINKEDIN_UNCOUNTED`). */
+  | { uncounted: true }
+  /**
+   * Called. `paused`: LinkedIn said "slow down", the account is paused for
+   * the day and this action waits with it.
+   */
+  | { result: T; paused: HeldSend | null };
+
 /**
- * The one guard both send doors run around their provider call, for a
- * LinkedIn account: spend the action first (a hold = do not call), then read
- * the answer for a "slow down" and pause the account on one.
+ * The one guard every send door runs around its provider call, for a
+ * LinkedIn account: spend the action first (held or not counted = do not
+ * call; both are a definite not-sent), then read the answer: a refusal gives
+ * the slot back, and a "slow down" pauses the account. A throw from `call`
+ * (an ambiguous outcome) propagates with the slot spent.
  */
 export async function guardLinkedinAction<T>(args: {
   accountRowId: string;
@@ -348,53 +435,24 @@ export async function guardLinkedinAction<T>(args: {
   call: () => Promise<T>;
   /** The provider's refusal in the result, when it refused (status, text). */
   refusalOf: (result: T) => { status: number; message?: string } | null;
-  now?: Date;
-}): Promise<{ held: HeldSend } | { result: T }> {
-  const now = args.now ?? new Date();
-  const held = await takeLinkedinAction(args.accountRowId, args.kind, now);
-  if (held) return { held };
+}): Promise<LinkedinGuarded<T>> {
+  let take: LinkedinTake;
+  try {
+    take = await takeLinkedinAction(args.accountRowId, args.kind);
+  } catch (err) {
+    logger.warn(
+      { err, accountRowId: args.accountRowId },
+      "the LinkedIn daily count could not be taken; nothing was sent"
+    );
+    return { uncounted: true };
+  }
+  if ("held" in take) return { held: take.held };
   const result = await args.call();
   const refusal = args.refusalOf(result);
-  if (refusal) await pauseIfThrottled(args.accountRowId, refusal, now);
-  return { result };
-}
-
-/** Pause the account when a LinkedIn refusal says to slow down. */
-export async function pauseIfThrottled(
-  accountRowId: string,
-  refusal: { status: number; message?: string },
-  now: Date = new Date()
-): Promise<LinkedinPause | null> {
-  const reason = linkedinThrottleOf(refusal.status, refusal.message);
-  return reason ? pauseLinkedinAccount(accountRowId, reason, now) : null;
-}
-
-/**
- * A verb run that did not go out, approved as a proposal: is it a LinkedIn
- * action its account may not make today? Then the proposal is HELD rather
- * than failed. A verb joins by declaring its intent (`request_connection`
- * is a connection request, `send_message` a message) and naming the account
- * it acts as in its `accountId` parameter, as the LinkedIn verbs do; any
- * other run is not this door's.
- */
-export async function linkedinRunHold(args: {
-  userId: string;
-  intent: string | null | undefined;
-  params: Record<string, unknown>;
-  now?: Date;
-}): Promise<HeldSend | null> {
-  const kind: LinkedinActionKind | null =
-    args.intent === "request_connection"
-      ? "invitation"
-      : args.intent === "send_message"
-        ? "message"
-        : null;
-  if (!kind) return null;
-  const accountId =
-    typeof args.params.accountId === "string"
-      ? args.params.accountId.trim()
-      : "";
-  if (!accountId) return null;
-  const account = await linkedinAccountOf(args.userId, accountId);
-  return account ? linkedinActionBlock(account.id, kind, args.now) : null;
+  if (!refusal) return { result, paused: null };
+  const paused = await holdOnThrottle(args.accountRowId, refusal);
+  if (refusal.status >= 400 && refusal.status < 500) {
+    await refundLinkedinAction(args.accountRowId, args.kind, take.day);
+  }
+  return { result, paused };
 }

@@ -18,6 +18,7 @@
  */
 
 import type { FailureErrorClass } from "../../connectors/external-dispatch.js";
+import type { HeldSend } from "../channels/held-sends.js";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
 import { isDelegationHeaders } from "@synap/database";
@@ -69,6 +70,12 @@ export interface SkillExecutionResult {
    */
   errorClass?: FailureErrorClass;
   providerRef?: string;
+  /**
+   * The in-skill provider call was a LinkedIn action its account may not make
+   * today (`TriggerProviderActionResult.held`): not sent, it waits until
+   * `held.until`. Set by the backend sandbox only.
+   */
+  held?: HeldSend;
 }
 
 export async function executeSkillViaIS(args: {

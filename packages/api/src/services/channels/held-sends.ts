@@ -101,8 +101,7 @@ const HOLDABLE_TYPES = [SEND_TYPE, CAPABILITY_RUN_PROPOSAL_TYPE];
  * APPROVAL_FAILED). A pending row gets `held` written on its data; a row a
  * previous approval had marked failed is reopened as pending (its failure
  * dropped: the reason is now `held`). Anything else (approved meanwhile,
- * withdrawn, rejected) is left alone. A `linkedin_limit` hold may also be
- * written on a capability run (a connection request).
+ * withdrawn, rejected) is left alone.
  */
 export async function holdPendingSend(
   proposalId: string,

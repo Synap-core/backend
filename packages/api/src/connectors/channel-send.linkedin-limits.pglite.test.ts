@@ -18,13 +18,20 @@
  *     that met it being retried or failed instead of held;
  *   - another provider's 429 pausing anything (its classification unchanged);
  *   - a 422 cannot_resend_yet (one person, re-invited too soon) pausing the
- *     whole account.
+ *     whole account, or keeping its slot (the day's 20th request refused by
+ *     LinkedIn must leave the 20th slot free);
+ *   - a verb's call LinkedIn told to slow down answering without the hold
+ *     its approval waits under (`held`);
+ *   - a count that could not be taken (the database refused it) throwing
+ *     on any door instead of answering a definite not-sent;
+ *   - a send whose clock was read before midnight writing yesterday's day
+ *     over today's count.
  *
  * Harness copied from `channel-send.pglite.test.ts` (same stubs, same reasons),
  * plus the vault secret resolver and the HTTP transport of a verb's call.
  * Cannot see: a live Unipile account, the capability executor's skill sandbox
- * (`linkedinRunHold` is driven directly; the executor's hold wiring is pinned
- * in `proposals.linkedin-held-run.pglite.test.ts`).
+ * (the executor's hold wiring is pinned in
+ * `proposals.linkedin-held-run.pglite.test.ts`).
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -182,10 +189,7 @@ import {
   sendExternalMessage,
   triggerProviderAction,
 } from "./external-dispatch.js";
-import {
-  linkedinRunHold,
-  takeLinkedinAction,
-} from "../services/channels/linkedin-account-limits.js";
+import { takeLinkedinAction } from "../services/channels/linkedin-account-limits.js";
 
 registerMessagingExecutors();
 
@@ -481,6 +485,23 @@ describe("the channel send door counts each LinkedIn message against the account
       (await proposalRow(second.proposalId as string)).data.held
     ).toMatchObject({ errorClass: "linkedin_limit" });
   });
+
+  it("a message LinkedIn refuses (a 422) did not happen: its slot is given back", async () => {
+    await setAccountMeta(usedUp(7));
+    startChat.mockRejectedValue(
+      new Error(
+        'Unipile startChat failed: 422 — {"status":422,"type":"errors/invalid_recipient"}'
+      )
+    );
+    const out = await appSendsTo(PERSON);
+    await expect(approve(out.proposalId as string)).rejects.toThrow();
+    expect(startChat).toHaveBeenCalledTimes(1);
+    expect((await accountMeta()).linkedinDaily).toEqual({
+      day: DAY(),
+      actions: 7,
+      invitations: 0,
+    });
+  });
 });
 
 describe("LinkedIn says slow down: the account pauses until the next day, nothing retries", () => {
@@ -676,21 +697,132 @@ describe("a verb's provider call (a code skill's connection request) is counted 
     await invite();
     expect(await accountMeta()).not.toHaveProperty("linkedinPause");
   });
+
+  it("LinkedIn refuses the day's 20th connection request (422 cannot_resend_yet): its slot is given back, the answer is LinkedIn's reason and holds nothing", async () => {
+    await setAccountMeta(usedUp(19, 19));
+    h.providerStatus = 422;
+    h.providerBody = {
+      status: 422,
+      type: "errors/cannot_resend_yet",
+      detail: "You cannot resend this invitation yet.",
+    };
+    const out = await invite();
+    expect(out).toMatchObject({ success: false, status: 422 });
+    expect(out.error).toMatch(/cannot resend this invitation yet/i);
+    expect(out.held).toBeUndefined();
+    expect((await accountMeta()).linkedinDaily).toEqual({
+      day: DAY(),
+      actions: 19,
+      invitations: 19,
+    });
+    // The 20th slot is still free: the next request goes.
+    h.providerStatus = 201;
+    h.providerBody = {};
+    expect((await invite()).success).toBe(true);
+  });
+
+  it("LinkedIn says slow down on a verb's call: the answer carries the hold its approval waits under", async () => {
+    h.providerStatus = 429;
+    h.providerBody = { status: 429, type: "errors/too_many_requests" };
+    const out = await invite();
+    expect(out).toMatchObject({
+      success: false,
+      held: { errorClass: "linkedin_limit", until: NEXT_UTC_MIDNIGHT() },
+    });
+  });
+});
+
+describe("a count that could not be taken is a definite not-sent on every door", () => {
+  // A count the database cannot read (`actions` is not a number): the
+  // counting UPDATE throws.
+  const broken = () =>
+    setAccountMeta({
+      linkedinDaily: { day: DAY(), actions: "x", invitations: 0 },
+    });
+  const TOOL = randomUUID();
+  const SECRET = randomUUID();
+  beforeAll(async () => {
+    await q(
+      `insert into secrets (id, user_id, name, is_pod_wide, created_at, updated_at) values ($1,$2,'unipile-2',false,now(),now())`,
+      [SECRET, OWNER]
+    );
+  });
+
+  it("the thread send door answers not-sent (never throws) and calls nothing", async () => {
+    await broken();
+    const out = await sendExternalMessage({
+      threadId: "li-thread",
+      accountId: ACCOUNT,
+      body: "Hi",
+      userId: OWNER,
+    });
+    expect(out).toMatchObject({ success: false });
+    expect(out.error).toMatch(/daily count could not be read/);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a verb's provider call answers not-sent (never throws) and calls nothing", async () => {
+    await q(
+      `insert into tools (id, name, kind, credential_ref, config, approved, created_by, created_at, updated_at)
+       values ($1,'unipile_linkedin','api',$2,$3,true,$4,now(),now())`,
+      [
+        TOOL,
+        `vault://${SECRET}`,
+        JSON.stringify({
+          baseUrl: "https://api.unipile.example/api/v1",
+          auth: { in: "header", name: "X-API-KEY" },
+        }),
+        OWNER,
+      ]
+    );
+    await broken();
+    const out = await triggerProviderAction({
+      userId: OWNER,
+      provider: "unipile_linkedin",
+      method: "POST",
+      path: `/${ACCOUNT}/users/me/relation-requests`,
+      body: { user_id: "ACoMarie" },
+      alreadyApproved: true,
+    });
+    expect(out).toMatchObject({ success: false });
+    expect(out.error).toMatch(/daily count could not be read/);
+    expect(h.providerCalls).toHaveLength(0);
+  });
+
+  it("the channel send door: its approval sends nothing and releases its claim, so it can be approved again", async () => {
+    const out = await appSendsTo(PERSON);
+    await broken();
+    await expect(approve(out.proposalId as string)).rejects.toThrow(
+      /daily count could not be read/
+    );
+    expect(startChat).not.toHaveBeenCalled();
+    const [row] = (
+      await q<{ claimed: string | null }>(
+        `select external_dispatched_at as claimed from proposals where id=$1`,
+        [out.proposalId]
+      )
+    ).rows;
+    expect(row!.claimed).toBeNull();
+  });
 });
 
 describe("the counts themselves", () => {
   it("connection requests stop at 20 while messages go on to 50", async () => {
     for (let i = 0; i < 20; i++) {
-      expect(await takeLinkedinAction(ACCOUNT_ROW, "invitation")).toBeNull();
+      expect(await takeLinkedinAction(ACCOUNT_ROW, "invitation")).toEqual({
+        day: DAY(),
+      });
     }
     expect(await takeLinkedinAction(ACCOUNT_ROW, "invitation")).toMatchObject({
-      errorClass: "linkedin_limit",
+      held: { errorClass: "linkedin_limit" },
     });
     for (let i = 0; i < 30; i++) {
-      expect(await takeLinkedinAction(ACCOUNT_ROW, "message")).toBeNull();
+      expect(await takeLinkedinAction(ACCOUNT_ROW, "message")).toEqual({
+        day: DAY(),
+      });
     }
     expect(await takeLinkedinAction(ACCOUNT_ROW, "message")).toMatchObject({
-      errorClass: "linkedin_limit",
+      held: { errorClass: "linkedin_limit" },
     });
     expect((await accountMeta()).linkedinDaily).toEqual({
       day: DAY(),
@@ -699,19 +831,38 @@ describe("the counts themselves", () => {
     });
   });
 
-  it("a connection-request run (linkedinRunHold) is held only for a LinkedIn account that may not act", async () => {
-    const run = (intent: string | null, accountId: unknown) =>
-      linkedinRunHold({ userId: OWNER, intent, params: { accountId } });
-    expect(await run("request_connection", ACCOUNT)).toBeNull();
-    await setAccountMeta(usedUp(5, 20));
-    expect(await run("request_connection", ACCOUNT)).toMatchObject({
-      errorClass: "linkedin_limit",
+  it("a send whose clock was read just before midnight counts on the database's day: yesterday is never written over today's count", async () => {
+    // Today already has 5 actions (sent after midnight). This send read the
+    // clock at 23:59:59.9 yesterday, then awaited (the limits read) while
+    // midnight passed: only that first clock read is yesterday's.
+    await setAccountMeta(usedUp(5));
+    const RealDate = Date;
+    const beforeMidnight = new RealDate(`${YESTERDAY()}T23:59:59.900Z`);
+    let first = true;
+    vi.stubGlobal(
+      "Date",
+      class extends RealDate {
+        constructor(...args: unknown[]) {
+          if (args.length === 0 && first) {
+            first = false;
+            super(beforeMidnight.getTime());
+          } else if (args.length === 0) {
+            super();
+          } else {
+            super(args[0] as number);
+          }
+        }
+      }
+    );
+    try {
+      await takeLinkedinAction(ACCOUNT_ROW, "message");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect((await accountMeta()).linkedinDaily).toEqual({
+      day: DAY(),
+      actions: 6,
+      invitations: 0,
     });
-    // A message is still allowed; an unknown account or a verb with no send
-    // intent is not this door's.
-    expect(await run("send_message", ACCOUNT)).toBeNull();
-    expect(await run("request_connection", "someone-else")).toBeNull();
-    expect(await run("find_people", ACCOUNT)).toBeNull();
-    expect(await run(null, ACCOUNT)).toBeNull();
   });
 });
