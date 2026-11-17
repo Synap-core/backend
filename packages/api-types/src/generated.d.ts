@@ -26159,7 +26159,8 @@ export interface ProcessWorker {
 	activatorKey: string;
 	mode: "propose" | "run";
 	scope: string;
-	state: "paused" | "running";
+	/** `stopped`: a session's worker whose session ended. */
+	state: "paused" | "running" | "stopped";
 	automationId: string | null;
 	projectId: string | null;
 	trackId: string | null;
@@ -39476,7 +39477,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						projectId: string | null;
 						ruleId: string;
 						scope: "project" | "session" | "space";
-						state: "paused" | "running";
+						state: "paused" | "running" | "stopped";
 					}[];
 					workspaceId: string | null;
 				}[];
@@ -61469,7 +61470,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				scope: "project" | "session" | "space";
 				sessionId?: string | null | undefined;
 				size: "per_moment" | "per_thing";
-				state: "paused" | "running";
+				state: "paused" | "running" | "stopped";
 				trackId: string | null;
 				trigger: {
 					kind: "event" | "manual" | "schedule";
