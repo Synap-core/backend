@@ -69,6 +69,7 @@ import {
   provideAcceptAttribute,
   type AskCardAnswer,
   type AskCardAsker,
+  type AskSettleKind,
 } from "@synap-core/types/ask";
 import { POD_URL, trpc } from "../../../../lib/trpc";
 import {
@@ -159,7 +160,7 @@ import {
 import { fileProblem, uploadProvidedFile } from "./provide-file";
 
 /** How a card settled: the receipt a host may draw ("Answer sent", "Marked as done"…). */
-export type AskSettleKind = "answered" | "attested" | "handed-back" | "refused";
+export type { AskSettleKind };
 
 export interface AskAnswerProps {
   /** The question as it read when the reader opened it. */

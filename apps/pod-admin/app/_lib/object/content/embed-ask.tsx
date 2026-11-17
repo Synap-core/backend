@@ -24,6 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { Embed } from "@synap-core/markdown-core";
+import { askEmbedRef } from "@synap-core/types/ask";
 import {
   nounInSentence,
   resolveObjectNoun,
@@ -49,15 +50,6 @@ const CHIP =
   "inline-flex max-w-full items-center gap-1.5 rounded-md bg-foreground/[0.05] px-2 py-1 text-[12.5px] text-foreground/80 ring-1 ring-inset ring-foreground/10";
 const BOX =
   "rounded-lg bg-foreground/[0.02] px-4 pt-4 ring-1 ring-inset ring-foreground/10";
-
-/** The embed's reference, or null when it names nothing (it was diagnosed). */
-export function askRefOf(
-  embed: Pick<Embed, "ref">
-): { sessionId: string; slot: string } | null {
-  const sessionId = embed.ref.sessionId?.trim();
-  const slot = embed.ref.slot?.trim();
-  return sessionId && slot ? { sessionId, slot } : null;
-}
 
 type T = ReturnType<typeof askEmbedT>;
 
@@ -369,7 +361,7 @@ export function AskEmbed({
   fallback: ReactNode;
 }) {
   const host = useContext(EmbedHostContext);
-  const ref = askRefOf(embed);
+  const ref = askEmbedRef(embed.ref);
   const t = askEmbedT();
   const prose =
     embed.fallback.length > 0 ? (
@@ -403,7 +395,7 @@ export function AskEmbed({
 /** Inline in a sentence: only ever the door to the session. */
 export function AskChip({ embed }: { embed: Embed }) {
   const t = askEmbedT();
-  const ref = askRefOf(embed);
+  const ref = askEmbedRef(embed.ref);
   const href = ref ? objectPage("session", ref.sessionId) : null;
   const body = (
     <>
