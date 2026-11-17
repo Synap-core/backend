@@ -1772,6 +1772,12 @@ const documentUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
     ops: ops as Parameters<typeof applyDocumentPatch>[0]["ops"],
     allowRemovingEmbeds: input.allowRemovingEmbeds,
     provenanceSessionId: sessionId,
+    // A question written in the document is filed only on the run's OWN session
+    // (set by the executor, never a client field). `ctx.sessionId` may be named
+    // in a REST body, so it is provenance here, not a verified session. The
+    // run's session is the person's own open session, not necessarily this
+    // agent's (`ownsFocusSession` is by user).
+    ambientSessionId: ctx.automationRun?.sessionId ?? null,
   });
 };
 

@@ -33,12 +33,20 @@ export async function createHubProtocolCallerContext(
   sessionId?: string | null,
   agentUserId?: string | null,
   keyType?: string | null,
-  keyWorkspaceId?: string | null
+  keyWorkspaceId?: string | null,
+  /**
+   * The session the request VERIFIABLY runs in (the ownership-checked
+   * `X-Session-Id`), apart from `sessionId`, which a REST body may name. Left
+   * out, `sessionId` is the verified one (the MCP adapter's). See
+   * {@link ambientSessionOf}.
+   */
+  ambientSessionId?: string | null
 ): Promise<
   Context & {
     scopes?: string[];
     apiKeyId?: string;
     apiKeyName?: string;
+    ambientSessionId?: string | null;
   }
 > {
   const db = await getDb();
@@ -54,6 +62,7 @@ export async function createHubProtocolCallerContext(
     scopes?: string[];
     apiKeyId?: string;
     apiKeyName?: string;
+    ambientSessionId?: string | null;
   } = {
     db,
     authenticated: true,
@@ -76,9 +85,20 @@ export async function createHubProtocolCallerContext(
     sourceMessageId: sourceMessageId ?? null,
     // Link proposals created during this request to the active session.
     sessionId: sessionId ?? null,
+    ...(ambientSessionId !== undefined ? { ambientSessionId } : {}),
   };
 
   return ctx;
+}
+
+/** The session this hub call verifiably runs in: the one an ask may be filed on. */
+export function ambientSessionOf(ctx: {
+  sessionId?: string | null;
+  ambientSessionId?: string | null;
+}): string | null {
+  return (
+    ("ambientSessionId" in ctx ? ctx.ambientSessionId : ctx.sessionId) ?? null
+  );
 }
 
 /**

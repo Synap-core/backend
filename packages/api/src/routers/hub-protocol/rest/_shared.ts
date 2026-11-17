@@ -1106,7 +1106,10 @@ export async function getCaller(
       ? undefined
       : ((c.get("agentUserId") as string | undefined) ?? undefined),
     keyType,
-    keyWorkspaceId
+    keyWorkspaceId,
+    // Only the middleware-verified session: a body-named `sessionId` is
+    // provenance, never the session a question may be filed on.
+    (c.get("sessionId") as string | undefined) ?? null
   );
   return hubProtocolRouter.createCaller(ctx as any);
 }
