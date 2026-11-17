@@ -798,7 +798,7 @@ export async function readStatusOf(
       : {};
 
   // Where its work stands: every subject asked about in ONE read.
-  const worked = wants("work")
+  const worked = false && wants("work")
     ? import("./status-work.js").then((m) =>
         m.readStatusWork(userId, {
           sessions: [

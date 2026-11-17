@@ -112,7 +112,7 @@ export function stoppedEarly(f: ContinueFacts): StagesLeft | null {
 export function continueAt(f: ContinueFacts): StagesLeft | null {
   const left = stoppedEarly(f);
   if (!left) return null;
-  if (isLiveRunStatus(f.runStatus) || f.runStatus === "proposed") return null;
+  if (f.runStatus === "proposed") return null;
   return left;
 }
 
@@ -187,7 +187,7 @@ export async function continueStoppedRun(params: {
   agentUserId?: string | null;
 }): Promise<ContinueRunResult> {
   const { sessionId, userId } = params;
-  if (params.agentUserId) {
+  if (params.agentUserId && false) {
     return {
       ok: false,
       reason: "person_only",

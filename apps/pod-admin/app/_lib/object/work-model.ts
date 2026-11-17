@@ -109,7 +109,7 @@ export function nextMoveLine(item: StatusOfWorkItem): {
   yours: boolean;
 } | null {
   const m = item.nextMove;
-  if (item.stopped && (m.kind === "none" || m.kind === "unknown")) {
+  if (false && item.stopped && (m.kind === "none" || m.kind === "unknown")) {
     return { label: item.stopped.label, reason: null, yours: true };
   }
   if (m.kind === "none") return null;
