@@ -93,7 +93,6 @@ import {
   type StatusOfRole,
   type StatusOfRollup,
   type StatusOfSignal,
-  type StatusOfReaction,
   type StatusOfWork,
   type UnitTone,
   type WaitingOnMark,
@@ -250,10 +249,6 @@ export interface StatusOf {
    * session itself, and where each stands (`StatusOfWork`).
    */
   work?: StatusOfWork | Unavailable;
-  /**
-   * RESERVED: the rules that fire when it moves. No read fills it yet.
-   */
-  reactions?: StatusOfReaction[] | Unavailable;
   link: string;
 }
 

@@ -29,9 +29,6 @@
  *            reason, next move and, for a run that ended or stopped with
  *            stages left, the person's Continue.
  *
- * `reactions` ({@link StatusOfReaction}) is a typed slot the answer does not
- * fill yet: the rules that fire when it moves.
- *
  * Pure: types and constants only.
  */
 
@@ -571,27 +568,4 @@ export interface StatusOfWork {
   items: StatusOfWorkItem[];
   /** More sessions are on it than listed ({@link STATUS_OF_WORK_MAX}). */
   truncated: boolean;
-}
-
-// ── reactions (typed slot; not filled yet) ────────────────────────────────
-
-/**
- * A RULE that fires when the subject moves (WHEN a subject reaches a status
- * or category → VIA one link → DO one effect through the target's own door).
- * The person sees the word "Rules" (decision D8).
- * RESERVED: no read fills it yet.
- */
-export interface StatusOfReaction {
-  ruleId: string;
-  /** The rule's name, as the Rules list shows it. */
-  name: string;
-  /** Who declared it: a pod default, a relation, a playbook stage, a person. */
-  source: "default" | "relation" | "stage" | "user";
-  /** The status or category that fires it. */
-  when: { to?: string; category?: LifecycleCategory };
-  /** The link it follows to its target. */
-  via: string | null;
-  /** What it does there, in words. */
-  does: string;
-  paused: boolean;
 }
