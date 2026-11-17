@@ -1204,6 +1204,46 @@ describe("a SESSION starts a worker (scope `session`)", () => {
     ).toEqual([]);
   });
 
+  it("when its session ends, the worker reads as STOPPED (derived, nothing stored), and no longer live", async () => {
+    const res = (await enableWorker({
+      userId: USER,
+      playbookId: PB,
+      activatorKey: KEY,
+      sessionId: S_MINE,
+    })) as { status: string; ruleId: string };
+    const [open] = await listEnabledWorkers({
+      userId: USER,
+      sessionId: S_MINE,
+    });
+    expect(open!.state).toBe("running");
+
+    await q(`update focus_sessions set status = 'closed' where id = $1`, [
+      S_MINE,
+    ]);
+    // Negative control: without the session read this stays "running".
+    const [ended] = await listEnabledWorkers({
+      userId: USER,
+      sessionId: S_MINE,
+    });
+    expect(ended).toMatchObject({
+      ruleId: res.ruleId,
+      state: "stopped",
+      automationId: null,
+    });
+    expect(
+      await listEnabledWorkers({
+        userId: USER,
+        sessionId: S_MINE,
+        liveOnly: true,
+      })
+    ).toEqual([]);
+    // Its rule was not touched: the state is read, never written.
+    const [rule] = (
+      await q(`select metadata from skills where id = $1`, [res.ruleId])
+    ).rows as Array<{ metadata: { rule: { draft?: boolean } } }>;
+    expect(rule!.metadata.rule.draft).toBeUndefined();
+  });
+
   it("an unfiled session's worker works over the space: no project lens, no filing", async () => {
     await enableWorker({
       userId: USER,

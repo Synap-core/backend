@@ -62,6 +62,8 @@ function render<T>(
         reasonCode: outcome.reasonCode,
         holder: outcome.holder,
       });
+    case "refused":
+      return ok({ error: outcome.error, reasonCode: outcome.reasonCode });
   }
 }
 

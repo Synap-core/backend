@@ -146,6 +146,11 @@ function render<T>(c: HubContext, outcome: WorkerDoorOutcome<T>) {
         },
         409
       );
+    case "refused":
+      return c.json(
+        { error: outcome.error, reasonCode: outcome.reasonCode },
+        409
+      );
   }
 }
 

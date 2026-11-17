@@ -167,4 +167,23 @@ describe("worker doors", () => {
       (await runWorkerDoor(AGENT, { ruleId: "nope", source: "mcp" })).kind
     ).toBe("not_found");
   });
+  it("run now on a session's worker whose session ended is refused session_closed, nothing started", async () => {
+    h.enabled.mockResolvedValue([
+      {
+        ruleId: "r-2",
+        playbookId: "pb-1",
+        projectId: PROJECT,
+        trackId: null,
+        sessionId: "11111111-1111-4111-8111-111111111111",
+        state: "stopped",
+      },
+    ]);
+    // Negative control: without the check this runs as the ended session's child.
+    expect(
+      await runWorkerDoor(AGENT, { ruleId: "r-2", source: "mcp" })
+    ).toEqual(
+      expect.objectContaining({ kind: "refused", reasonCode: "session_closed" })
+    );
+    expect(h.run).not.toHaveBeenCalled();
+  });
 });

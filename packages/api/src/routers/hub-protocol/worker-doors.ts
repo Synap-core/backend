@@ -16,6 +16,7 @@
  * `playbooks.run`. Nothing here decides a permission.
  */
 import { TRPCError } from "@trpc/server";
+import { AUTOMATION_SKIP_REASONS } from "@synap-core/types/automations";
 import type { HowOften } from "@synap-core/types/workers/how-often";
 import {
   WorkerScopeOverlapError,
@@ -38,7 +39,12 @@ export type WorkerDoorOutcome<T> =
       error: string;
       reasonCode: string;
       holder: WorkerScopeOverlapError["holder"];
-    };
+    }
+  /**
+   * Refused by the worker's own state: a session's worker whose session
+   * ended (`session_closed`, the reason its automation path skips with).
+   */
+  | { kind: "refused"; error: string; reasonCode: string };
 
 /** A service refusal as the door's outcome; anything else is thrown on. */
 function refusalOf(err: unknown): WorkerDoorOutcome<never> | null {
@@ -190,6 +196,16 @@ export async function runWorkerDoor(
     return {
       kind: "not_found",
       error: `Worker ${input.ruleId} not found — list a goal's workers with synap_list_workers.`,
+    };
+  }
+  if (worker.state === "stopped") {
+    // A session's worker stops with its session: run now starts no child
+    // of an ended session, as its automation path does not.
+    return {
+      kind: "refused",
+      reasonCode: AUTOMATION_SKIP_REASONS.sessionClosed,
+      error:
+        "This worker's session has ended, so it starts nothing more. Enable it on an open session to run it again.",
     };
   }
   return runPlaybookDoor(identity, {
