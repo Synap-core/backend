@@ -753,7 +753,9 @@ describe("REACHED ON APPROVAL (decision D2): a stage's onApproved", () => {
         sessionId: "sess-1",
         settled,
       });
-      expect(out?.stages).toEqual([{ stageKey: "script", value: "Scripted" }]);
+      expect(out?.stages).toEqual([
+        { stageKey: "script", stageName: "Script", value: "Scripted" },
+      ]);
       // A plan: nothing is moved here (the reactor writes it, D1).
       expect(h.move).not.toHaveBeenCalled();
     });
