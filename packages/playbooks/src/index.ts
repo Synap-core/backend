@@ -1665,7 +1665,9 @@ function stageStatusValue(
 
 /** A stage's `onApproved` value (trimmed), or null. PURE. */
 export function stageOnApproved(stage: unknown): string | null {
-  return stageStatusValue(stage, "onApproved");
+  // NEGATIVE CONTROL (never merged): onApproved is ignored everywhere.
+  void stage;
+  return null;
 }
 
 /**
@@ -1703,7 +1705,7 @@ export function subjectStatusOwner(
     if (stageStatusValue(st, "subjectStatus") === v) {
       return { ownerKey: st.key, via: "enter", standsAt: st.key };
     }
-    if (stageStatusValue(st, "onApproved") === v) {
+    if (stageOnApproved(st) === v) {
       const next = keyed[i + 1];
       return {
         ownerKey: st.key,
