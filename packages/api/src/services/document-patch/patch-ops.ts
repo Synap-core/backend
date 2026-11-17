@@ -48,6 +48,7 @@ import {
   EmbedSerializeError,
   serializeEmbed,
   type Embed,
+  type EmbedDirective,
 } from "@synap-core/markdown-core/embeds";
 import { locateEmbeds } from "@synap-core/markdown-core/readable";
 import {
@@ -63,6 +64,15 @@ import {
 export const SECTION_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 // ─── The op vocabulary (the one wire schema every door parses) ──────────────
+
+/**
+ * What `insert_embed` writes: every embed but `synap-ask`, which is written as
+ * markdown for now (its enum value would widen the generated API surface).
+ */
+type InsertableEmbed = Exclude<EmbedDirective, "synap-ask">;
+const INSERTABLE_EMBEDS = EMBED_DIRECTIVES.filter(
+  (d): d is InsertableEmbed => d !== "synap-ask"
+) as [InsertableEmbed, ...InsertableEmbed[]];
 
 export const DocumentPatchOpSchema = z.discriminatedUnion("op", [
   z.object({
@@ -110,7 +120,7 @@ export const DocumentPatchOpSchema = z.discriminatedUnion("op", [
   }),
   z.object({
     op: z.literal("insert_embed"),
-    directive: z.enum(EMBED_DIRECTIVES),
+    directive: z.enum(INSERTABLE_EMBEDS),
     /** Reference attributes: `{id}` (entity), `{viewId}` (view), `{cellKey}` (cell). */
     ref: z.record(z.string(), z.string().max(500)),
     /** Written as the ```json props block (a cell's config). */

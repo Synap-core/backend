@@ -14,6 +14,7 @@ import type { DocumentContent } from "./document-model";
 import { EmbedHostContext, type EmbedHost } from "./embed-context";
 import { HtmlPageSection } from "./html-frame";
 import { useCellInstance } from "./use-cell-instance";
+import { useEmbedAsk } from "./use-embed-ask";
 import { useEmbedCell } from "./use-embed-cell";
 import { useEmbedEntity } from "./use-embed-entity";
 import { useObjectRef } from "./use-object-ref";
@@ -113,6 +114,7 @@ export function ContentBlock({
       useEntity: useEmbedEntity,
       useCell: useEmbedCell,
       useCellInstance,
+      useAsk: useEmbedAsk,
       useObjectRef,
       openInApp,
     }),
