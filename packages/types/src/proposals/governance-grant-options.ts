@@ -45,6 +45,9 @@ export interface GovernanceGrantContext {
   /** `data.verbId ?? data.skillId ?? data.capabilityId` — whichever field a
    * `capability.run` proposal actually carries (gate paths vary). */
   capabilityTarget?: string | null;
+  /** The intent the target verb serves, when the caller knows it: a verb
+   * whose intent is propose-only (a public post) is never offered "always". */
+  capabilityIntent?: string | null;
   /** `"<subjectType>.<action>"` off the proposal's requested event. */
   actionKey?: string | null;
   /** The entity/facet profile slug this proposal targets. */
@@ -103,12 +106,36 @@ export const PROPOSE_ONLY_CAPABILITY_VERBS = [
   "postiz_schedule_post",
 ] as const;
 
+/**
+ * Capability INTENTS a stored `auto` rule or an `auto` grant never widens to a
+ * direct run, whatever the verb serving them is named: a public post stays a
+ * person's yes for every provider (`unipile_publish_post` as much as Postiz).
+ */
+export const PROPOSE_ONLY_CAPABILITY_INTENTS = ["publish_post"] as const;
+
+/**
+ * May a stored `auto` rule (or an `auto` grant) run this verb on its own? The
+ * ONE derivation the capability gate and every "always" menu read: no for a
+ * verb on the list above (its name trimmed and lowercased, so a case variant
+ * is the same verb) or a verb whose intent is propose-only. Pass the intent
+ * whenever the caller has it: the name list alone misses another provider's
+ * public post.
+ */
 export function capabilityVerbAllowsRuleWiden(
-  verbName: string | null | undefined
+  verbName: string | null | undefined,
+  intent?: string | null
 ): boolean {
+  const norm = (v: string) => v.trim().toLowerCase();
+  if (
+    intent &&
+    (PROPOSE_ONLY_CAPABILITY_INTENTS as readonly string[]).includes(
+      norm(intent)
+    )
+  )
+    return false;
   if (!verbName) return true;
   return !(PROPOSE_ONLY_CAPABILITY_VERBS as readonly string[]).includes(
-    verbName
+    norm(verbName)
   );
 }
 
@@ -180,7 +207,7 @@ export function deriveGovernanceGrantOptions(
   // that rule would never fire.
   if (
     ctx.capabilityTarget &&
-    capabilityVerbAllowsRuleWiden(ctx.capabilityTarget) &&
+    capabilityVerbAllowsRuleWiden(ctx.capabilityTarget, ctx.capabilityIntent) &&
     !isNonWidenableGovernanceReason(ctx.governanceReason)
   ) {
     opts.push({

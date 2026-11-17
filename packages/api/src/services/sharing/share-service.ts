@@ -65,6 +65,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
+import { grantWriteDenial } from "../../utils/grant-write-check.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { generateShareToken, hashToken } from "../../utils/share-token.js";
 import { VISIBLE_TO } from "../../utils/project-scope.js";
@@ -688,6 +689,15 @@ export async function unshareResource(
   if (!anchorId) throw badRequest("anchorProjectId is required");
   const anchor = await loadAnchor(database, anchorId);
   await assertCanNarrow(database, actor.userId, target, anchor);
+  // A key narrows only inside its grant (no grant = a person): unsharing is a
+  // `share.delete` where its share was checked (`planShare`), into the anchor.
+  const denied = await grantWriteDenial({
+    subjectType: "share",
+    action: "delete",
+    workspaceId: target.workspaceId ?? anchor.workspaceId,
+    projectId: anchor.id,
+  });
+  if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
 
   let removed = false;
   if (target.kind === "entity") {
@@ -843,6 +853,15 @@ export async function revokeLink(
   const link = await loadLink(database, shareId);
   const anchor = await loadAnchor(database, link.anchorProjectId);
   await assertAnchorAdmin(database, actor.userId, anchor);
+  // A key revokes only inside its grant (no grant = a person): a link revoke
+  // is a `share.delete` in the space of the project it opens.
+  const denied = await grantWriteDenial({
+    subjectType: "share",
+    action: "delete",
+    workspaceId: anchor.workspaceId,
+    projectId: anchor.id,
+  });
+  if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const removedGuests =
     (options.removeGuests ?? true) && !agentOf(actor)
       ? await removeGuestsGrantedBy(database, actor, anchor, shareId)

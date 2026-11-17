@@ -1174,6 +1174,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           agentAttached: z.boolean(),
         }),
       },
+      202: {
+        description: "Proposed for review: a hand-off to another agent",
+        schema: z.object({}).passthrough(),
+      },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
@@ -3945,10 +3949,27 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId: acting.userId,
         expectedLabel: parsed.data.expectedLabel,
         agentType: parsed.data.agentType,
+        // An agent key handing the slot to another agent meets the ONE
+        // hand-off gate (`agent-hand-off.ts`): refused or proposed.
+        actingAgentUserId: (c.get("agentUserId") as string | undefined) ?? null,
       });
       switch (result.status) {
         case "not_found":
           return c.json({ error: `Focus session ${id} not found` }, 404);
+        case "refused":
+          return c.json({ error: result.reason }, 403);
+        case "proposed":
+          return jsonGoverned(c, {
+            status: "proposed" as const,
+            message: proposedMessageFor(
+              result.proposalType,
+              "Handing this deliverable to another agent was proposed for review"
+            ),
+            proposalId: result.proposalId,
+            summary: result.summary,
+            reviewPath: result.reviewPath,
+            reviewUrl: result.reviewUrl,
+          });
         case "unknown_label":
           return c.json(
             {

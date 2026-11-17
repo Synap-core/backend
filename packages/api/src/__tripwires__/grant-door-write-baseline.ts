@@ -127,20 +127,9 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /setup/first-admin",
   "POST /setup/magic-link",
   "POST /setup/service",
-  "POST /shares/links/:id/revoke",
-  "POST /shares/publication/revoke",
-  "POST /shares/publish",
-  "POST /shares/sites",
-  "POST /shares/sites/:id/publish",
-  "POST /shares/sites/:id/revoke",
-  "POST /shares/sites/:id/unpublish",
-  "POST /shares/unpublish",
-  "POST /shares/unshare",
   "POST /skills",
-  "POST /skills/:id/approve",
   "POST /threads",
   "POST /tools",
-  "POST /tools/:id/approve",
   "POST /tools/:id/auth-binding",
   "POST /tools/:id/credentials",
   "POST /tools/:id/webhook",
@@ -174,4 +163,4 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
 ];
 
 /** Lower it when the list shrinks; never raise it. */
-export const UNCLASSIFIED_WRITE_ROUTES_CAP = 155;
+export const UNCLASSIFIED_WRITE_ROUTES_CAP = 144;

@@ -48571,6 +48571,18 @@
               }
             }
           },
+          "202": {
+            "description": "Proposed for review: a hand-off to another agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
           "400": {
             "description": "Bad request",
             "content": {

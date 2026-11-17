@@ -30,7 +30,9 @@
 import { presenceProofSchema } from "@synap-core/types/presence";
 import { z } from "@hono/zod-openapi";
 
+import { db, eq, tools as toolsTable } from "@synap/database";
 import { toolsRouter } from "../../tools.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -653,6 +655,22 @@ export function registerToolsRoutes(app: HubHono): void {
     const approved = parsed.data.approved;
 
     try {
+      // The key's grant bounds the act (T13: an app acting as the person never
+      // holds a review verb): turning a tool on or off is the `tool.approve`
+      // gate verb in the tool's own space. A pod-wide tool has none, so only a
+      // grant pinned to no space reaches it. No grant = a signed-in person.
+      const [target] = await db
+        .select({ workspaceId: toolsTable.workspaceId })
+        .from(toolsTable)
+        .where(eq(toolsTable.id, id))
+        .limit(1);
+      const denial = await grantWriteDenial({
+        subjectType: "tool",
+        action: "approve",
+        workspaceId: target?.workspaceId ?? null,
+      });
+      if (denial) return c.json({ error: denial }, 403);
+
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
