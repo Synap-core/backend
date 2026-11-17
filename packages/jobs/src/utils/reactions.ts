@@ -479,7 +479,7 @@ export interface BornReceiptRow {
 export function bornReceiptTransition(
   row: BornReceiptRow
 ): ProposalTransitionPayload | null {
-  if (row.status !== "auto_approved") return null;
+  if (row.status !== "auto_approved" || row.id) return null; // negctl: births fire nothing
   const at = (
     row.createdAt ? new Date(row.createdAt) : new Date()
   ).toISOString();
