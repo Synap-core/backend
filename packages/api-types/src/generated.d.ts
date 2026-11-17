@@ -26084,10 +26084,10 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 	/**
 	 * With the `playbookId` narrow, how this window node follows it: `session`
 	 * = its own `playbookId` is the playbook, `goal` = only through the method
-	 * of the goal it is filed in. `null` without the narrow, and on a far end
-	 * (far ends are not narrowed).
+	 * of the goal it is filed in; `null` on a far end (far ends are not
+	 * narrowed). ABSENT without the narrow: there is nothing to match.
 	 */
-	playbookMatch: WorkGraphPlaybookMatch | null;
+	playbookMatch?: WorkGraphPlaybookMatch | null;
 	unitFacts: SessionUnitCounts;
 	viewerRole: SessionViewerRole;
 };

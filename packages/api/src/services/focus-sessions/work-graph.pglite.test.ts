@@ -756,7 +756,7 @@ describe("buildWorkGraph — by playbook (founder decision D2)", () => {
   it("without the narrow, no node claims a match", async () => {
     const g = await graph(PIVOT);
     expect(g.nodes.length).toBeGreaterThan(0);
-    expect(g.nodes.every((n) => n.playbookMatch === null)).toBe(true);
+    for (const n of g.nodes) expect(n).not.toHaveProperty("playbookMatch");
   });
 });
 

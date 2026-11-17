@@ -280,10 +280,10 @@ const WorkGraphWireSchema = z.object({
       inWindow: z.boolean(),
       /**
        * With `playbookId`: how this window node follows it — `session` (its
-       * own playbook) or `goal` (only through its goal's method). `null`
-       * without the narrow and on far ends.
+       * own playbook) or `goal` (only through its goal's method); `null` on
+       * far ends. Absent without the narrow.
        */
-      playbookMatch: z.enum(["session", "goal"]).nullable(),
+      playbookMatch: z.enum(["session", "goal"]).nullable().optional(),
     })
   ),
   edges: z.array(

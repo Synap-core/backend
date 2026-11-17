@@ -1442,7 +1442,7 @@ export const sessionHandlers: McpHandlerMap = {
               currentStageName: n.currentStage
                 ? (readTrackStage(n.stages, n.currentStage)?.name ?? null)
                 : null,
-              playbookMatch: n.playbookMatch,
+              playbookMatch: n.playbookMatch ?? null,
               projectId: n.projectId,
               workspaceId: n.workspaceId,
               updatedAt: n.updatedAt,

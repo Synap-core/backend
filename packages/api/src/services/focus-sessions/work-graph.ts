@@ -230,10 +230,10 @@ export type WorkGraphNode = Awaited<
   /**
    * With the `playbookId` narrow, how this window node follows it: `session`
    * = its own `playbookId` is the playbook, `goal` = only through the method
-   * of the goal it is filed in. `null` without the narrow, and on a far end
-   * (far ends are not narrowed).
+   * of the goal it is filed in; `null` on a far end (far ends are not
+   * narrowed). ABSENT without the narrow: there is nothing to match.
    */
-  playbookMatch: WorkGraphPlaybookMatch | null;
+  playbookMatch?: WorkGraphPlaybookMatch | null;
 };
 
 /** How a node follows the graph's `playbookId` narrow (see {@link WorkGraphNode.playbookMatch}). */
@@ -478,19 +478,20 @@ export async function buildWorkGraph(
     { userId, roster, lens: input.boundWorkspaceId }
   );
   // A window node passed the WHERE, so it follows the playbook one way or
-  // the other: its own playbook first, else its goal's method.
-  const matchOf = (n: {
-    inWindow: boolean;
-    playbookId: string | null;
-  }): WorkGraphPlaybookMatch | null =>
-    !input.playbookId || !n.inWindow
-      ? null
-      : n.playbookId === input.playbookId
-        ? "session"
-        : "goal";
+  // the other: its own playbook first, else its goal's method. Without the
+  // narrow there is nothing to match, and the field is left out.
+  const playbookId = input.playbookId;
   const nodes: WorkGraphNode[] = withHolder.map((n) => ({
     ...withViewerRole(n, userId),
-    playbookMatch: matchOf(n),
+    ...(playbookId
+      ? {
+          playbookMatch: !n.inWindow
+            ? null
+            : n.playbookId === playbookId
+              ? ("session" as const)
+              : ("goal" as const),
+        }
+      : {}),
   }));
 
   // Interactions are derived among the nodes (both ends on the read).
