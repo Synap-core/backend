@@ -225,7 +225,11 @@ export async function satisfyExpectedOutputs(
   // subject edge (subject-edge.ts — best-effort, never fails the satisfy),
   // and a stage whose outputs are now all approved reaches its status.
   if (result.satisfied.length > 0) {
-    await afterSlotsSettled({ sessionId, approver: params.approver });
+    await afterSlotsSettled({
+      sessionId,
+      approver: params.approver,
+      settled: result.satisfied.map((label) => ({ label })),
+    });
   }
   return result;
 }
@@ -241,6 +245,8 @@ async function afterSlotsSettled(input: {
   sessionId: string;
   now?: Date;
   approver: StageApprover | undefined;
+  /** The slots this door settled: a stage the run already left may own one. */
+  settled: ReadonlyArray<{ key?: string | null; label?: string | null }>;
 }): Promise<void> {
   await linkSatisfiedOutputsToSubject({
     sessionId: input.sessionId,
@@ -252,6 +258,7 @@ async function afterSlotsSettled(input: {
   await reachApprovedStageOutputs({
     sessionId: input.sessionId,
     approver: input.approver,
+    settled: input.settled,
   });
 }
 
@@ -645,6 +652,7 @@ export async function attestExpectedOutput(
     await afterSlotsSettled({
       sessionId: result.session.id,
       approver: { kind: "person", userId },
+      settled: [{ label: expectedLabel }],
     });
     // The person DID what the criterion checks: their word is its grade,
     // through THE owner grade door (never throws: the stamp stands). Loaded
@@ -1007,6 +1015,7 @@ export async function satisfyClaimsByEvidence(params: {
           sessionId,
           now,
           approver: { kind: "agent", userId },
+          settled: r.satisfied,
         });
       }
       return r;
@@ -1125,6 +1134,7 @@ export async function satisfyPullRequestByMerge(params: {
           sessionId,
           now,
           approver: { kind: "agent", userId },
+          settled: r.satisfied,
         });
       }
       return r;
@@ -1281,6 +1291,7 @@ export async function satisfyStageSlotsFromChild(params: {
           sessionId,
           now,
           approver: { kind: "agent", userId },
+          settled: r.satisfied,
         });
       }
       return r;

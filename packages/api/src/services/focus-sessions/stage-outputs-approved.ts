@@ -67,3 +67,44 @@ export function stageOutputsApproved(
   }
   return delivered > 0;
 }
+
+/** A slot a door just settled: its key, and its stored label. */
+export interface SettledSlot {
+  key?: string | null;
+  label?: string | null;
+}
+
+/**
+ * The stages that DECLARE one of the `settled` slots, in stage order —
+ * matched like {@link stageOutputsApproved}: declared key, else label (trim +
+ * casefold). A run may have moved on before its slot settled (a merge, a
+ * person's approval of a sent message): the stage whose work it was still
+ * reaches its status (decision D2). PURE.
+ */
+export function stagesDeclaringSlots(
+  stages: unknown,
+  settled: readonly SettledSlot[]
+): string[] {
+  if (!Array.isArray(stages) || settled.length === 0) return [];
+  const keys = new Set(
+    settled.map((s) => s.key).filter((k): k is string => !!k)
+  );
+  const labels = new Set(
+    settled
+      .map((s) => normalizeExpectedLabel(s.label ?? undefined))
+      .filter((l): l is string => !!l)
+  );
+  const out: string[] = [];
+  for (const stage of stages) {
+    const key = (stage as { key?: unknown } | null)?.key;
+    if (typeof key !== "string") continue;
+    const declares = declaredStageOutputs(stages, key).some((o) => {
+      const k = (o as { key?: unknown }).key;
+      if (typeof k === "string" && keys.has(k)) return true;
+      const label = normalizeExpectedLabel(o?.label);
+      return !!label && labels.has(label);
+    });
+    if (declares) out.push(key);
+  }
+  return out;
+}

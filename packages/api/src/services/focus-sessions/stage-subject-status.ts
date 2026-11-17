@@ -97,7 +97,11 @@ import {
 import type { Context } from "../../types/context.js";
 import { moveStatus, type MoveStatusResult } from "../lifecycle/move-status.js";
 import { readSubjectProfile } from "../playbooks/playbook-activators.js";
-import { stageOutputsApproved } from "./stage-outputs-approved.js";
+import {
+  stageOutputsApproved,
+  stagesDeclaringSlots,
+  type SettledSlot,
+} from "./stage-outputs-approved.js";
 
 const logger = createLogger({ module: "focus-sessions/stage-subject-status" });
 
@@ -487,17 +491,26 @@ async function stageLeftForGate(
 
 /**
  * APPROVAL SIGNAL 1: a slot of the session was just settled (approved,
- * attested, answered, evidenced). When the stage the run stands on declares
- * an `onApproved` and outputs, and every one of them is now delivered
- * ({@link stageOutputsApproved}), the subject reaches that status. The
- * approver is who settled the slot. Called AFTER the settling commit by each
- * slot-settling door; idempotent (a status already held is `already_set`);
- * never throws. `undefined` when nothing was due.
+ * attested, answered, evidenced, merged). A stage that declares an
+ * `onApproved` and outputs, every one of them now delivered
+ * ({@link stageOutputsApproved}), reaches that status. The stages judged:
+ * the one the run stands on, and every EARLIER stage that declares one of the
+ * `settled` slots — a run may move on before its slot settles (a pull request
+ * merged after the run reached the next stage, a sent message a person
+ * approves later), and the stage whose work it was still reaches its status.
+ * A later stage never: its slots do not exist yet. In stage order, so the
+ * history reads as the work did. The approver is who settled the slot.
+ * Called AFTER the settling commit by each slot-settling door; idempotent (a
+ * status already held is `already_set`; one the subject is past is never
+ * moved back); never throws. Returns the last stage's outcome, `undefined`
+ * when nothing was due.
  */
 export async function reachApprovedStageOutputs(input: {
   sessionId: string;
   /** Who settled the slot — see {@link StageApprover}. */
   approver: StageApprover;
+  /** The slots this door settled (key and/or label), when it knows them. */
+  settled?: readonly SettledSlot[];
 }): Promise<StageSubjectStatusOutcome | undefined> {
   try {
     const [row] = await db
@@ -517,19 +530,29 @@ export async function reachApprovedStageOutputs(input: {
       sessionId: row.id,
       playbookId: row.playbookId,
     });
-    const stage = proc?.stages.find((s) => s?.key === row.currentStage);
-    if (!proc || !stage || !stageOnApproved(stage)) return undefined;
+    if (!proc) return undefined;
+    const at = proc.stages.findIndex((s) => s?.key === row.currentStage);
+    if (at < 0) return undefined;
+    const declaring = new Set(
+      stagesDeclaringSlots(proc.stages, input.settled ?? [])
+    );
     const slots: ExpectedOutput[] = Array.isArray(row.expectedOutputs)
       ? (row.expectedOutputs as ExpectedOutput[])
       : [];
-    if (!stageOutputsApproved(proc.stages, row.currentStage, slots))
-      return undefined;
-    return await writeStageReachedStatus({
-      session: row,
-      stageKey: row.currentStage,
-      signal: "output_approved",
-      approver: input.approver,
-    });
+    let last: StageSubjectStatusOutcome | undefined;
+    for (const stage of proc.stages.slice(0, at + 1)) {
+      const key = stage?.key;
+      if (!key || !stageOnApproved(stage)) continue;
+      if (key !== row.currentStage && !declaring.has(key)) continue;
+      if (!stageOutputsApproved(proc.stages, key, slots)) continue;
+      last = await writeStageReachedStatus({
+        session: row,
+        stageKey: key,
+        signal: "output_approved",
+        approver: input.approver,
+      });
+    }
+    return last;
   } catch (err) {
     logger.warn(
       { err, sessionId: input.sessionId },
