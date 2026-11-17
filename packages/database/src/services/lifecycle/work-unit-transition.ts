@@ -17,6 +17,7 @@ import type {
   LifecycleCategory,
   RecordedHold,
   TransitionBase,
+  TransitionCause,
   WorkUnitTransitionPayload,
 } from "@synap-core/types/lifecycle";
 import type { StatusMoveActor } from "./apply-status-move.js";
@@ -61,6 +62,8 @@ export interface TransitionBaseInput {
   hold?: RecordedHold | null;
   /** A replay: the app its proposal was filed by (`proposals.app_id`). */
   appId?: string | null;
+  /** The move that caused this one (a reaction, reactions W2); absent otherwise. */
+  cause?: TransitionCause | null;
 }
 
 /**
@@ -94,6 +97,7 @@ export function transitionBaseOf(
       appId: input.appId,
     }),
     hold: input.hold ?? null,
+    ...(input.cause ? { cause: input.cause } : {}),
   };
 }
 

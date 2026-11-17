@@ -41,6 +41,7 @@ import {
   type Hold,
   type RecordedHold,
   type RunTransitionPayload,
+  type TransitionCause,
 } from "@synap-core/types/lifecycle";
 import type * as schema from "../../schema/index.js";
 import {
@@ -105,6 +106,8 @@ export interface SetRunStatusInput {
   defaultHold?: Hold;
   occurredAt?: Date | null;
   appId?: string | null;
+  /** The move that caused this one (a reaction, reactions W2). */
+  cause?: TransitionCause | null;
 }
 
 export interface SetRunStatusResult {
@@ -243,6 +246,7 @@ export async function setRunStatus(
             occurredAt: input.occurredAt,
             hold: holds.get(row.id) ?? null,
             appId: input.appId,
+            cause: input.cause,
           }),
           subjectType: "playbook_run",
           playbookId: row.playbookId,

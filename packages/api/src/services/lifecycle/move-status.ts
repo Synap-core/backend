@@ -52,6 +52,7 @@ import {
   isTerminalLifecycleCategory,
   resolveOccurredAt,
   type Hold,
+  type TransitionCause,
 } from "@synap-core/types/lifecycle";
 import { createLogger } from "@synap-core/core";
 import {
@@ -118,6 +119,12 @@ export interface MoveStatusInput {
    * reopen. Set ONLY by the birth writer; no request input reaches it.
    */
   atSessionBirth?: boolean;
+  /**
+   * The move that caused this one (reactions W2): a reaction's move, or the
+   * approval replay of a move a reaction proposed. Stamped on the transition
+   * so its history says "moved because X moved".
+   */
+  cause?: TransitionCause | null;
 }
 
 const AI_SOURCES = new Set(["ai", "intelligence", "agent"]);
@@ -529,6 +536,7 @@ export async function moveStatus(
     hold,
     occurredAt,
     appId: input.appId,
+    cause: input.cause,
   });
   if (result.status === "moved") {
     // Owed in the move's transaction; a failed delivery stays owed (sweeper).

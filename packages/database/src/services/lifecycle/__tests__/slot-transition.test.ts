@@ -50,6 +50,26 @@ describe("slotTransitionsOf", () => {
     });
   });
 
+  it("a move a rule caused carries its cause (reactions W2)", () => {
+    const cause = {
+      reactionId: "rule-1",
+      transitionId: "t-src",
+      chainId: "t-src",
+      depth: 1,
+    };
+    const [t] = slotTransitionsOf({
+      session: SESSION,
+      before: [{ key: "k" }],
+      after: [{ key: "k", status: "done" }],
+      actor: { kind: "system" },
+      cause,
+    });
+    expect(t).toMatchObject({ to: "done", cause });
+    expect(
+      of([{ key: "k" }], [{ key: "k", status: "done" }])[0]
+    ).not.toHaveProperty("cause");
+  });
+
   it("an answer handed back owes owed → answered (done); a delivery done", () => {
     expect(
       of(
