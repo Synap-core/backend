@@ -3561,7 +3561,7 @@ export async function triggerProviderAction(
       kind: linkedinAction.kind,
       call: () => handler({ input: dispatchInput, tool }),
       // Unipile names the refusal in its body's `type`
-      // (`errors/cannot_resend_yet`), which the error text leaves out.
+      // (`errors/checkpoint_error`), which the error text leaves out.
       refusalOf: (r) =>
         r.success
           ? null

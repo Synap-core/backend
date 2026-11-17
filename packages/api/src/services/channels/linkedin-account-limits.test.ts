@@ -53,20 +53,23 @@ describe("which provider calls are LinkedIn actions", () => {
 });
 
 describe("which LinkedIn answers pause the account", () => {
-  it("a 429, a 422 cannot_resend_yet, a checkpoint or a restriction", () => {
+  it("a 429, a checkpoint or a restriction", () => {
     expect(linkedinThrottleOf(429, "Unipile sendMessage failed: 429")).toBe(
       "rate_limited"
     );
+    expect(linkedinThrottleOf(403, "errors/checkpoint_error")).toBe(
+      "restricted"
+    );
+    expect(linkedinThrottleOf(422, "account restricted")).toBe("restricted");
+  });
+
+  it("a 422 cannot_resend_yet is about one person, not the account: no pause", () => {
     expect(
       linkedinThrottleOf(
         422,
         'failed: 422 — {"type":"errors/cannot_resend_yet"}'
       )
-    ).toBe("cannot_resend_yet");
-    expect(linkedinThrottleOf(403, "errors/checkpoint_error")).toBe(
-      "restricted"
-    );
-    expect(linkedinThrottleOf(422, "account restricted")).toBe("restricted");
+    ).toBeNull();
   });
 
   it("anything else is not a pause: another 4xx, a 5xx, a timeout", () => {

@@ -16,9 +16,9 @@
  *    call, at every door that sends: the channel send door
  *    (`sendExternalMessage`) and a verb's provider call
  *    (`triggerProviderAction`, which every code skill reaches).
- *  - THE PAUSE: a LinkedIn answer that says "slow down" (a 429, a 422
- *    `cannot_resend_yet`, a checkpoint or a restriction) stops the account's
- *    actions until the next UTC midnight, with why
+ *  - THE PAUSE: a LinkedIn answer that says "slow down" (a 429, a checkpoint
+ *    or a restriction) stops the account's actions until the next UTC
+ *    midnight, with why
  *    (`metadata.linkedinPause {until, reason, at}`). Nothing retries by
  *    itself; the account read shows it (`GET /messaging/accounts`).
  *
@@ -40,11 +40,7 @@ import type { HeldSend } from "./held-sends.js";
 export type LinkedinActionKind = "invitation" | "message";
 
 /** Why LinkedIn paused an account (a stable code; the CRM words it). */
-export const LINKEDIN_PAUSE_REASONS = [
-  "rate_limited",
-  "cannot_resend_yet",
-  "restricted",
-] as const;
+export const LINKEDIN_PAUSE_REASONS = ["rate_limited", "restricted"] as const;
 export type LinkedinPauseReason = (typeof LINKEDIN_PAUSE_REASONS)[number];
 
 /** `messaging_accounts.metadata.linkedinPause`. */
@@ -266,10 +262,15 @@ export async function takeLinkedinAction(
 
 /**
  * Did LinkedIn tell this account to slow down? Only a provider REFUSAL (a
- * 4xx answer) counts: a 429, a 422 `cannot_resend_yet`, or a checkpoint /
- * restriction answer (Unipile's error `type`, in the error text). Read for a
- * LinkedIn account only: every other provider keeps the shared classifier
- * (`classifyDispatchFailure`) as it is.
+ * 4xx answer) counts: a 429, or a checkpoint / restriction answer (Unipile's
+ * error `type`, in the error text). Read for a LinkedIn account only: every
+ * other provider keeps the shared classifier (`classifyDispatchFailure`) as
+ * it is.
+ *
+ * NOT a pause: a 422 `cannot_resend_yet`. LinkedIn says it about ONE person
+ * (re-invited too soon), not the account: that one request fails with
+ * LinkedIn's reason and the account keeps working (lead decision, 16 Nov
+ * 2026; the daily caps keep volume far below LinkedIn's throttles).
  */
 export function linkedinThrottleOf(
   status: number,
@@ -277,7 +278,6 @@ export function linkedinThrottleOf(
 ): LinkedinPauseReason | null {
   if (!(status >= 400 && status < 500)) return null;
   const text = message ?? "";
-  if (/cannot_resend_yet/i.test(text)) return "cannot_resend_yet";
   if (/checkpoint|restricted/i.test(text)) return "restricted";
   if (status === 429 || /too_many_requests/i.test(text)) return "rate_limited";
   return null;
