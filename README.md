@@ -42,9 +42,16 @@ clone. You need Docker with Compose v2.
 ```bash
 git clone https://github.com/synap-core/backend.git
 cd backend
-./synap install --domain localhost      # builds the images from source
+./synap install --domain localhost      # pulls the published images (ghcr.io); add --from-source to build them
 ./synap setup admin --email you@example.com --magic-link
 ```
+
+The install needs ghcr.io reachable (it pins third-party images by digest and
+pulls the published ones); offline, use `--from-source`. With no terminal on
+stdin (a pipe, CI, an agent shell) the install runs as `--non-interactive`:
+every prompt takes its default or a flag (`--domain`, `--email`,
+`--admin-email`, `--admin-password`, `--intelligence-key`).
+Pass `--non-interactive` explicitly to skip the questions in a terminal too.
 
 The API answers on <http://localhost:4000> and Pod Admin on
 <http://localhost:4040>. Details: [Install from a clone](deploy/README.md#install-from-a-clone).
