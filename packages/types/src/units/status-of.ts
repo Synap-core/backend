@@ -333,6 +333,10 @@ export interface StatusOfWorkGate {
   /** A PERSON decided it (never the proposal's own payload). */
   decidedByHuman: boolean;
   decidedAt?: string;
+  /** The stage being left when the gate was filed (the proposal's `fromStage`). */
+  fromStage?: string | null;
+  /** The proposal's own sentence ("Approve stage: Draft for Video 12"). */
+  summary?: string | null;
 }
 
 /** A slot the run owes the PERSON (the packet's `userMustDecide.owedSlots`). */
@@ -349,6 +353,11 @@ export interface StatusOfWorkAsk {
   criterionKey?: string;
   /** How it asks (`confirm`, `choose`, `form`, `act`, `provide`), when it declares an ask. */
   askMode?: string;
+  /**
+   * The question in the agent's words: a confirm's `prompt`, a form's
+   * `title`. Absent when the ask names none (draw `label` then).
+   */
+  prompt?: string;
 }
 
 /** A proposal filed in the session that waits on a decision. */
@@ -441,6 +450,8 @@ export interface StatusOfWorkItem {
    */
   on: "self" | "subject" | "target" | "goal";
   playbookId: string | null;
+  /** The session's room (`channelId`); `null` = it has none. */
+  roomId: string | null;
   /** Its newest playbook run; `null` = it follows no playbook. */
   run: StatusOfWorkRun | null | StatusOfWorkUnavailable;
   /** Its declared stages, in order; `items: []` = a run with no stages. */

@@ -142,6 +142,19 @@ export function workStages(input: {
   };
 }
 
+/** The ask's question in the agent's words, when it names one. */
+function askPrompt(ask: unknown): { prompt?: string } {
+  if (!ask || typeof ask !== "object") return {};
+  const a = ask as { prompt?: unknown; form?: { title?: unknown } };
+  const text =
+    typeof a.prompt === "string"
+      ? a.prompt
+      : typeof a.form?.title === "string"
+        ? a.form.title
+        : "";
+  return text.trim() ? { prompt: text.trim() } : {};
+}
+
 function asksOf(
   owed: ContinuationPacket["userMustDecide"]["owedSlots"]
 ): StatusOfWorkItem["asks"] {
@@ -160,6 +173,7 @@ function asksOf(
         ...(s.owedSince ? { owedSince: s.owedSince } : {}),
         ...(s.criterionKey ? { criterionKey: s.criterionKey } : {}),
         ...(s.ask?.mode ? { askMode: s.ask.mode } : {}),
+        ...askPrompt(s.ask),
       })),
   };
 }
@@ -217,6 +231,7 @@ export function workItemOf(input: {
     tone: resolveStatusTone(row.status),
     on: input.on,
     playbookId: row.playbookId,
+    roomId: row.channelId,
     run:
       runRead && "failed" in runRead
         ? unavailable(runRead.failed)
@@ -244,6 +259,8 @@ export function workItemOf(input: {
               ...(g.proposalId ? { proposalId: g.proposalId } : {}),
               decidedByHuman: g.decidedByHuman,
               ...(g.decidedAt ? { decidedAt: g.decidedAt } : {}),
+              ...(g.fromStage ? { fromStage: g.fromStage } : {}),
+              ...(g.summary ? { summary: g.summary } : {}),
             })),
           }
     ),

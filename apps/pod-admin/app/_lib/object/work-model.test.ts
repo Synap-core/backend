@@ -19,6 +19,7 @@ const stopped = (over: Partial<StatusOfWorkItem> = {}): StatusOfWorkItem => ({
   tone: "error",
   on: "subject",
   playbookId: "pb",
+  roomId: null,
   run: {
     id: "run-1",
     status: "failed",
