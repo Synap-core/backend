@@ -495,10 +495,9 @@ describe("readSessionTimelines — a page of sessions in a fixed number of queri
 });
 
 describe("an automatic receipt's failure: answered by its agent, never by the person", () => {
-  // Finding d4d20c02 (17 Nov 2026): a failed capture receipt named the founder
-  // as its reviewer and read as their decision. It now names no reviewer; the
-  // timeline must still show the failure, answered by the agent that filed it,
-  // or by the pod (`system`) when the row records no agent.
+  // A failed receipt names no reviewer; the timeline must still show it,
+  // answered by the agent that filed it, or by the pod (`system`) when the
+  // row records no agent.
   it("shows each failure with no reviewer, by its agent or the pod; an applied receipt stays out", async () => {
     const sessionId = randomUUID();
     await session(sessionId, USER);

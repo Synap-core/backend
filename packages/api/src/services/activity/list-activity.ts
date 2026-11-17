@@ -9,8 +9,7 @@
  *              session source already carries that lifecycle, once.
  *   decision — a person's approve / reject / revert / failed approval, by the
  *              REVIEWER, at `reviewed_at`; and an automatic receipt's failure
- *              (no reviewer), by its agent, or the pod (`system`) when none
- *              is recorded (`answeredRowWhere`, finding d4d20c02).
+ *              (no reviewer), by its agent, or the pod (`system`).
  *   run      — automation + playbook runs, at `coalesce(completed_at,
  *              started_at)`. An automation run is a RULE acting (`system`).
  *   session  — one row per session of the project-path population (work +
@@ -445,9 +444,8 @@ async function readDecisions<P extends Projection>(
     q.outcome
   ) ?? [...DECISION_STATUSES];
   if (statuses.length === 0) return none;
-  // The reviewer; a receipt's failure has none and is its agent's (or, with
-  // no agent recorded, the pod's: a null actor). Never the person the row is
-  // about (finding d4d20c02, e.g. 7ad8bdde).
+  // The reviewer; a receipt's failure has none and is its agent's (null =
+  // the pod). Never the person the row is about.
   const actorId = drizzleSql<
     string | null
   >`coalesce(${proposals.reviewedBy}, ${proposals.agentUserId})`;
@@ -457,7 +455,7 @@ async function readDecisions<P extends Projection>(
   const at = drizzleSql`${proposals.reviewedAt}`;
   const where = and(
     proposalFloor(viewer, q.workspaceLens),
-    answeredRowWhere(),
+    answeredRowWhere,
     inArray(proposals.status, statuses as never[]),
     q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
     q.trackId ? proposalInTrack(q.trackId) : undefined,

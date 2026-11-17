@@ -1,8 +1,6 @@
 /**
- * An agent's auto-applied receipt names NO reviewer (plan 8032a127 D4,
- * finding d4d20c02). `reviewedBy` is the person who decided; the capture
- * doors stamped the person on an agent's receipt, so every one of them, and
- * each failure (7ad8bdde, 18 Oct 2026), read as the founder's own decision.
+ * An agent's auto-applied receipt names NO reviewer; a person's own
+ * first-party write names the person (`createAutoApprovedProposal`).
  *
  * Driven through the REAL `createAutoApprovedProposal`, mocked only at the
  * row insert and the audit stamp. The discriminating pair: the same call with
@@ -34,11 +32,10 @@ vi.mock("./audit-log.js", () => ({
 const { createAutoApprovedProposal } =
   await import("./event-backed-proposal.js");
 
-const PERSON = "user-founder";
+const PERSON = "user-person";
 const AGENT = "agent-scout";
 const BASE = {
   userId: PERSON,
-  reviewedBy: PERSON,
   workspaceId: null,
   targetType: "entity",
   targetId: "t1",
@@ -62,6 +59,15 @@ describe("createAutoApprovedProposal: who reviewed a receipt", () => {
       subjectUserId: PERSON,
     });
     expect(inserted[0]!.reviewedAt).toBeInstanceOf(Date);
+  });
+
+  it("a write that says it is an agent's names no reviewer, even with no agent id", async () => {
+    // The same predicate migration 0428 clears old rows by.
+    await createAutoApprovedProposal({
+      ...BASE,
+      data: { operations: [], source: "agent" },
+    });
+    expect(inserted[0]).toMatchObject({ reviewedBy: null });
   });
 
   it("a person's own first-party write keeps the person as its reviewer", async () => {

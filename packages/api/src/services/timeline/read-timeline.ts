@@ -641,7 +641,7 @@ export async function readSessionTimelines(
       ).as("rank"),
     })
     .from(proposals)
-    .where(and(inArray(proposals.sessionId, readable), decisionRowsWhere()))
+    .where(and(inArray(proposals.sessionId, readable), decisionRowsWhere))
     .as("decisions_ranked");
 
   // The slots' history: the rows the ask doors write on the session.

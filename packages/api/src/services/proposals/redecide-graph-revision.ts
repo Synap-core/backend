@@ -300,9 +300,8 @@ async function redecide(input: {
     to: ProposalStatus.AUTO_APPROVED,
     from: [ProposalStatus.PENDING],
     set: {
-      // The agent's own rule applied it, not the person: an auto-applied
-      // receipt names no reviewer (`createAutoApprovedProposal`, finding
-      // d4d20c02). `reviewedAt` is when it settled.
+      // The agent's rule applied it, not the person: no reviewer, as
+      // `createAutoApprovedProposal` says. `reviewedAt` is when it settled.
       reviewedBy: null,
       reviewedAt: now,
       updatedAt: now,

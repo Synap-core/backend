@@ -7,10 +7,8 @@
  * `decision` source reads its answered rows through `answeredRowWhere`.
  *
  * One answer is not a person's: an agent's auto-applied receipt that failed
- * to apply (`approval_failed`, no `reviewedBy`). It is answered by its agent,
- * or by the pod when no agent is recorded, never by the person whose name the
- * row used to carry (finding d4d20c02: 10 such failures read as the founder's
- * decisions, e.g. 7ad8bdde, 18 Oct 2026).
+ * (`approval_failed`, no `reviewedBy`, see `createAutoApprovedProposal`). It
+ * is answered by its agent, or by the pod when no agent is recorded.
  */
 
 import {
@@ -36,25 +34,22 @@ export const DECISION_STATUSES = [
  * An answered proposal a history shows: decided by a person (`reviewedBy`),
  * or an automatic receipt's failure, which has no reviewer. Without that last
  * arm the failure of an agent's receipt went silent once it stopped naming the
- * person. The caller narrows the status (`DECISION_STATUSES` or fewer).
+ * person. The caller narrows the status (`DECISION_STATUSES` or fewer). A
+ * constant fragment: `and` / `or` / `.where()` only read it.
  */
-export function answeredRowWhere(): SQL {
-  return and(
-    isNotNull(proposals.reviewedAt),
-    or(isNotNull(proposals.reviewedBy), eq(proposals.status, "approval_failed"))
-  )!;
-}
+export const answeredRowWhere: SQL = and(
+  isNotNull(proposals.reviewedAt),
+  or(isNotNull(proposals.reviewedBy), eq(proposals.status, "approval_failed"))
+)!;
 
 /**
  * The proposals a history reads as decision events: the pending ones (asked)
  * and the answered ones (`answeredRowWhere`).
  */
-export function decisionRowsWhere(): SQL {
-  return or(
-    eq(proposals.status, "pending"),
-    and(inArray(proposals.status, [...DECISION_STATUSES]), answeredRowWhere())
-  )!;
-}
+export const decisionRowsWhere: SQL = or(
+  eq(proposals.status, "pending"),
+  and(inArray(proposals.status, [...DECISION_STATUSES]), answeredRowWhere)
+)!;
 
 export interface DecisionRow {
   id: string;
@@ -121,9 +116,8 @@ export function decisionEvents<
         note:
           (p.status === "rejected" ? p.rejectionReason : approvalNote) ?? null,
       },
-      // No reviewer: the pod settled it (an automatic receipt that failed).
-      // Its agent answers; with none recorded, `activityActorOf` names the
-      // pod (`system`). Never the author column, which holds the person.
+      // No reviewer: its agent, else the pod (`activityActorOf` → system).
+      // Never the author column, which holds the person.
       actorId: p.reviewedBy ?? p.agentUserId,
       isAgent: !p.reviewedBy && Boolean(p.agentUserId),
     });

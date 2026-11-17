@@ -405,7 +405,7 @@ export async function readTrackHistory(
             ? inArray(proposals.sessionId, [...sessionStage.keys()])
             : undefined
         ),
-        decisionRowsWhere()
+        decisionRowsWhere
       )
     )
     .orderBy(desc(proposals.createdAt))

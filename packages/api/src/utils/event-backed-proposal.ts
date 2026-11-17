@@ -139,15 +139,6 @@ export async function createEventBackedProposal(
 
 export interface CreateAutoApprovedProposalInput extends CreateEventBackedProposalInput {
   /**
-   * The PERSON who performed (and is implicitly approving) the already-done
-   * write. Stamped only when no agent is behind it: `reviewedBy` names a person
-   * who decided (activity's `decision` source, the approver on display, the
-   * session-changes `humanDecided`), and when an agent's write auto-applied,
-   * the pod decided, not the person. The other receipt doors already leave it
-   * empty (`permission-check.ts`, `automation-governance.ts`).
-   */
-  reviewedBy?: string | null;
-  /**
    * Pre-allocated proposal id. A composite caller that must stamp the receipt
    * onto the writes it is ABOUT to make (capture auto-apply threads it into
    * `events.proposal_id` via the create door) generates the id first and passes
@@ -166,13 +157,14 @@ export interface CreateAutoApprovedProposalInput extends CreateEventBackedPropos
  * EXCEPT:
  *   - it inserts the proposals row directly with `status: 'auto_approved'`
  *     (createPendingProposal hardcodes PENDING + can't stamp reviewedBy/reviewedAt),
- *   - it stamps `reviewedBy` + `reviewedAt: now`,
+ *   - it stamps `reviewedAt: now`, and names the person (`userId`) as the
+ *     reviewer only when no agent is behind the write (see the insert),
  *   - it writes a SECOND `.completed` audit event so the timeline reads
  *     requested → completed (the write already happened — there is no pending gap).
  *
- * This does NOT go through `checkPermissionOrPropose`: the write is a first-party
- * human action that is already committed; we are RECORDING it, not asking
- * permission. Callers should treat it as best-effort (a recording hiccup must
+ * This does NOT go through `checkPermissionOrPropose`: the write (a person's,
+ * or an agent's that its policy already let through) is committed; we are
+ * RECORDING it, not asking permission. Callers should treat it as best-effort (a recording hiccup must
  * never fail the underlying operation).
  */
 export async function createAutoApprovedProposal(
@@ -182,6 +174,12 @@ export async function createAutoApprovedProposal(
     await buildRequestedEventAndData(input);
 
   const reviewedAt = new Date();
+  // An agent is behind the write when the row names one, or, as rows did
+  // before the agent was recorded on receipts, says `data.source = 'agent'`.
+  // Migration 0428 clears old rows by this same predicate.
+  const byAgent =
+    Boolean(input.agentUserId) ||
+    (input.data as { source?: unknown } | undefined)?.source === "agent";
 
   const [proposal] = await db
     .insert(proposals)
@@ -197,11 +195,15 @@ export async function createAutoApprovedProposal(
       // OWNER FLOOR (0248): this row RECORDS an already-done first-party human
       // write, so `input.userId` — the human who performed it — is the subject.
       subjectUserId: input.userId,
-      // No reviewer on an agent's receipt (see `reviewedBy` above). The
-      // capture doors stamped the person here, so 1,735 agent receipts and 10
-      // of their failures (e.g. 7ad8bdde, 18 Oct 2026) read as the founder's
-      // own decisions (finding d4d20c02). `reviewedAt` stays: when it settled.
-      reviewedBy: input.agentUserId ? null : (input.reviewedBy ?? null),
+      // `reviewedBy` is the PERSON who decided (Activity's decision source,
+      // the approver on display, session-changes `humanDecided`). A person's
+      // own write is theirs; an agent's write that auto-applied was decided
+      // by the policy, so it names no one, as the other receipt doors
+      // (permission-check, automation-governance) already did. Stamping the
+      // person here made every agent receipt and each of its failures read as
+      // the person's decision (plan 8032a127 D4, finding d4d20c02, e.g.
+      // 7ad8bdde). `reviewedAt` stays: when it settled.
+      reviewedBy: byAgent ? null : input.userId,
       reviewedAt,
       // C2 lifecycle-hygiene fix: no default TTL — this row is already
       // terminal (auto_approved), so a synthetic expiry never did anything

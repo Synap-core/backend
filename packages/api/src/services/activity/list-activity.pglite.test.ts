@@ -903,11 +903,9 @@ describe("activity.daily — parity with activity.list", () => {
 });
 
 describe("an automatic receipt's failure: by its agent or the pod, never the person", () => {
-  // Finding d4d20c02 (17 Nov 2026): a failed capture receipt named the founder
-  // as its reviewer and read as their decision (e.g. 7ad8bdde). It now names
-  // no reviewer, and the decision source must still list it: by the agent that
-  // filed it, or by the pod (`system`) when the row records no agent. Its own
-  // session, so the ledgers the tests above pin are unchanged.
+  // A failed receipt names no reviewer; the decision source must still list
+  // it: by the agent that filed it, or by the pod (`system`) when the row
+  // records no agent. Its own session, so the ledgers pinned above hold.
   const S_RCPT = randomUUID();
   const F_AGENT = randomUUID();
   const F_POD = randomUUID();
