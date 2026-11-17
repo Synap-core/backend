@@ -10,10 +10,13 @@
  *      through the done door (`satisfyPullRequestByMerge`), outside the
  *      posting key's grant, because the fact is checked against the slot's
  *      OWN `ref` (same repo, same number) under the row lock. The posting key
- *      keeps only `event.create`. A slot whose ref does not match, a person's
- *      slot, a slot a criterion checks, or any other session the PR resolves
- *      to (an outcome ref on a session the body does not name) falls through
- *      to step 1, where the key's grant decides as before;
+ *      keeps only `event.create`. While pod default 3 is on ("an outcome is
+ *      met wherever it was filed", the rule `builtin:outcome-met-where-filed`,
+ *      reactions W2), the same act also closes the slot of every OTHER
+ *      session whose own `ref` is this PR (`via: outcome_ref`), logged under
+ *      the rule. A slot whose ref does not match, a person's slot, a slot a
+ *      criterion checks, or (the rule paused) a session the body does not
+ *      name falls through to step 1, where the key's grant decides as before;
  *   1. the outcome is completed through the ONE session write door,
  *      `updateFocusSession({ completeOutput })` — governed by
  *      `checkPermissionOrPropose` with the PRODUCER agent as the actor, inside
@@ -48,6 +51,11 @@
 
 import { createLogger } from "@synap-core/core";
 import { podSessionIdFromBody, type PullRequestEvent } from "@synap-core/types";
+import { db, recordReactionOutcomes } from "@synap/database";
+import {
+  OUTCOME_MET_REACTION_ID,
+  isReactionEnabled,
+} from "@synap/jobs/utils/reactions.js";
 import { satisfyPullRequestByMerge } from "../focus-sessions/satisfy-expected-output.js";
 import { updateFocusSession } from "../focus-sessions/update-session.js";
 import {
@@ -155,6 +163,38 @@ async function recheckAfterMerge(p: {
   }
 }
 
+/** Default 3's log row for a merge that met an outcome its body did not name. */
+async function logMetAnywhere(
+  userId: string,
+  sessionId: string,
+  slotKey: string,
+  event: PullRequestEvent
+): Promise<void> {
+  try {
+    await recordReactionOutcomes(db, [
+      {
+        reactionId: OUTCOME_MET_REACTION_ID,
+        outcome: "applied",
+        code: "applied",
+        reason: `Met because ${event.repo}#${event.number} merged.`,
+        userId,
+        sourceTransitionId: null,
+        source: `pr:${event.repo}#${event.number}`,
+        target: `slot:${sessionId}/${slotKey}`,
+        to: "done",
+        chainId: null,
+        depth: null,
+        sessionId,
+      },
+    ]);
+  } catch (err) {
+    logger.warn(
+      { err, sessionId, slotKey },
+      "merge sweeper: reaction log append failed"
+    );
+  }
+}
+
 /** `dev.pr_merged` → the PR outcome is completed (into the default branch only). */
 export async function sweepMergedPullRequest(
   input: SweepInput
@@ -167,6 +207,14 @@ export async function sweepMergedPullRequest(
   // `event.sessionId`, which the observation door may have DERIVED from an
   // outcome ref (`sessionForDevLoopFact`) rather than read from the PR.
   const namedSessionId = podSessionIdFromBody(event.body);
+  // Pod default 3, "an outcome is met wherever it was filed" (reactions W2):
+  // while the rule is on, the pod's own act also closes the slot of every
+  // OTHER session whose own `ref` is this PR (`via: outcome_ref`), not only
+  // the session the body names. The safety is the same: the merge is checked
+  // against the slot's own ref under the row lock.
+  const metAnywhere =
+    open.some((o) => o.base.via === "outcome_ref") &&
+    (await isReactionEnabled(OUTCOME_MET_REACTION_ID));
   for (const { base, slotKey } of open) {
     // F3: a merge into a feature branch (a stacked PR) is not on main yet.
     // Absent `intoDefault` is not known to be the default: fail closed.
@@ -180,8 +228,10 @@ export async function sweepMergedPullRequest(
       });
       continue;
     }
-    // Step 0: the pod's own act, for the session the PR names only.
-    if (namedSessionId !== null && namedSessionId === base.sessionId) {
+    // Step 0: the pod's own act, for the session the PR names, and (default
+    // 3) for every session whose outcome points at the PR.
+    const named = namedSessionId !== null && namedSessionId === base.sessionId;
+    if (named || (metAnywhere && base.via === "outcome_ref")) {
       try {
         const pod = await satisfyPullRequestByMerge({
           sessionId: base.sessionId,
@@ -190,6 +240,8 @@ export async function sweepMergedPullRequest(
           slotKey,
         });
         if (pod.satisfied.some((s) => s.key === slotKey)) {
+          if (!named)
+            await logMetAnywhere(userId, base.sessionId, slotKey, event);
           await recheckAfterMerge({
             sessionId: base.sessionId,
             userId,

@@ -86,6 +86,12 @@ import {
   registerHoldResumeReactor,
   type HoldResumeJobData,
 } from "./hold-resume.js";
+import {
+  handleReactions,
+  REACTIONS_QUEUE,
+  registerReactionsReactor,
+  type ReactionsJobData,
+} from "./reactions.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
 import {
   handleNotificationCleanup,
@@ -379,6 +385,7 @@ const ALL_QUEUES = [
   LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
   INBOUND_DELIVERY_SWEEPER_QUEUE,
   HOLD_RESUME_QUEUE,
+  REACTIONS_QUEUE,
   FOCUS_SESSION_REAPER_QUEUE,
   SESSION_TITLER_QUEUE,
   // Session recall: on-demand per session + the 2-min sweep floor that
@@ -901,6 +908,14 @@ export async function registerAllWorkers(): Promise<void> {
   );
   registerHoldResumeReactor();
   logger.info("Registered worker + reactor: hold-resume");
+
+  // Reactions (plan 7d71ddcc W2): every move some rule listens to queues one
+  // job; the job applies the matching rules through their targets' doors.
+  await boss.work(REACTIONS_QUEUE, async ([job]: any[]) =>
+    handleReactions((job?.data ?? {}) as ReactionsJobData)
+  );
+  registerReactionsReactor();
+  logger.info("Registered worker + reactor: reactions");
 
   // Relation backfill (one-time: creates relation rows for existing entity_id property values)
   await boss.work("relation-backfill", async ([job]: any[]) =>
