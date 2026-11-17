@@ -121,47 +121,69 @@ export const REDACTED_SECRET_VALUE = "***REDACTED***";
 
 /**
  * The ONE redactor for a structured payload about to be STORED where people
- * and agents read it (a proposal's `data.body`): every value under a
- * secret-bearing key is replaced, at any depth. A `vault://` reference is
- * kept — a pointer, not a credential. Numbers / booleans / null and every
- * other key pass through, so the payload stays reviewable.
+ * and agents read it (a proposal's `data.body`): under a secret-bearing key,
+ * every string is replaced, at any depth below it (`api_keys: [...]`,
+ * `credentials: { pass }`), the rule {@link redactPayloadForLog} applies to an
+ * audit line. A `vault://` reference is kept — a pointer, not a credential.
+ * Numbers / booleans / null stay, as they do in the log (`maxTokens`), and
+ * every other key passes through, so the payload stays reviewable.
  */
-export function redactSecretKeys<T>(value: T, depth = 0): T {
-  if (depth >= REDACT_DEPTH_LIMIT || !value || typeof value !== "object") {
-    return value;
+export function redactSecretKeys<T>(
+  value: T,
+  depth = 0,
+  underSecretKey = false
+): T {
+  if (typeof value === "string") {
+    return (underSecretKey &&
+    value.trim() &&
+    !/^vault:\/\//.test(value.trim())
+      ? REDACTED_SECRET_VALUE
+      : value) as T;
+  }
+  if (!value || typeof value !== "object") return value;
+  // Past the depth bound, what sits under a credential key is replaced,
+  // never passed through (as the log redactor does).
+  if (depth >= REDACT_DEPTH_LIMIT) {
+    return (underSecretKey ? REDACTED_SECRET_VALUE : value) as T;
   }
   if (Array.isArray(value)) {
-    return value.map((v) => redactSecretKeys(v, depth + 1)) as T;
+    return value.map((v) =>
+      redactSecretKeys(v, depth + 1, underSecretKey)
+    ) as T;
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] =
-      isSecretPayloadKey(k) &&
-      typeof v === "string" &&
-      v.trim() &&
-      !/^vault:\/\//.test(v.trim())
-        ? REDACTED_SECRET_VALUE
-        : redactSecretKeys(v, depth + 1);
+    out[k] = redactSecretKeys(
+      v,
+      depth + 1,
+      underSecretKey || isSecretPayloadKey(k)
+    );
   }
   return out as T;
 }
 
 /**
- * Does a payload still carry a value `redactSecretKeys` replaced? A replay of
- * such a payload would send the marker as the credential — the caller refuses
- * it instead (the secret was never stored, so it cannot be replayed).
+ * Does a payload still carry a value `redactSecretKeys` replaced, at any depth
+ * under a secret-bearing key? A replay of such a payload would send the marker
+ * as the credential — the caller refuses it instead (the secret was never
+ * stored, so it cannot be replayed).
  */
-export function carriesRedactedSecret(value: unknown, depth = 0): boolean {
+export function carriesRedactedSecret(
+  value: unknown,
+  depth = 0,
+  underSecretKey = false
+): boolean {
+  if (value === REDACTED_SECRET_VALUE) return underSecretKey;
   if (depth >= REDACT_DEPTH_LIMIT || !value || typeof value !== "object") {
     return false;
   }
   if (Array.isArray(value)) {
-    return value.some((v) => carriesRedactedSecret(v, depth + 1));
+    return value.some((v) =>
+      carriesRedactedSecret(v, depth + 1, underSecretKey)
+    );
   }
-  return Object.entries(value as Record<string, unknown>).some(
-    ([k, v]) =>
-      (isSecretPayloadKey(k) && v === REDACTED_SECRET_VALUE) ||
-      carriesRedactedSecret(v, depth + 1)
+  return Object.entries(value as Record<string, unknown>).some(([k, v]) =>
+    carriesRedactedSecret(v, depth + 1, underSecretKey || isSecretPayloadKey(k))
   );
 }
 

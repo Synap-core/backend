@@ -236,6 +236,7 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
 // the "always" menus' derivation in @synap-core/types, which cannot import
 // this engine, so both read ONE list.
 export {
+  PROPOSE_ONLY_CAPABILITY_INTENTS,
   PROPOSE_ONLY_CAPABILITY_VERBS,
   capabilityVerbAllowsRuleWiden,
 } from "@synap-core/types/proposals";
