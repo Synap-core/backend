@@ -18,6 +18,7 @@ export { registerWorkspaceOpsRoutes } from "./workspace-ops.js";
 // else, so folding the helpers below into this one would make the file read as
 // an orphaned route.
 export { registerInstalledRoutes } from "./installed.js";
+export { registerNeedsRoutes } from "./needs.js";
 export {
   packageSlugFromCellTypeKey,
   INSTALLED_KINDS,

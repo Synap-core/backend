@@ -97,6 +97,7 @@ import {
   registerWorkspacesEnsureTemplateRoutes,
   registerWorkspaceOpsRoutes,
   registerInstalledRoutes,
+  registerNeedsRoutes,
   registerPackageUpdatesRoutes,
   registerCatalogRefreshRoutes,
   registerMessagingRoutes,
@@ -315,6 +316,7 @@ registerWorkspacesEnsureTemplateRoutes(app); // /workspaces/ensure-template (Con
 registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/context
 registerWorkspaceOpsRoutes(app); // governed archive/restore/rename, /entities/move, /profiles/grant-access (R8a)
 registerInstalledRoutes(app); // /installed — the ONE read door over the install ledgers
+registerNeedsRoutes(app); // /workspaces/:id/needs — a space's needs, each filled once (0426)
 registerPackageUpdatesRoutes(app); // /package-updates — one update's plan and its apply (S2/S3)
 registerCatalogRefreshRoutes(app); // POST /catalog/refresh — the official catalog sync now (pod admins)
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.

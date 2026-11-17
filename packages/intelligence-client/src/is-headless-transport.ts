@@ -67,6 +67,13 @@ export interface RunToolProfile {
    * Absent = no preference: the IS picks the model as for any turn.
    */
   tier?: "deep" | "standard" | "quick";
+  /**
+   * Declared entries the run could not be given, each with the reason in one
+   * sentence (0426): a need its space has not filled, a provider that offers
+   * no tool for it. Absent when nothing is missing. Never silent: what the
+   * run lacks is said, so the agent can tell the person instead of guessing.
+   */
+  missing?: Array<{ entry: string; reason: string }>;
 }
 
 export interface HeadlessChatRequest {

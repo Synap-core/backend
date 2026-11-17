@@ -476,6 +476,17 @@ const OBJECT_KIND_ROWS = {
     label: "Tool",
     labelPlural: "Tools",
   },
+  // A NEED (0426, founder decisions D2 and D3): a seat a provider fills once
+  // per space ("Code host", "Payments"). Its own word, "Need", never "Role"
+  // (which already means four things). Category `tool`: a tool fills it.
+  need: {
+    kind: "need",
+    category: "tool",
+    icon: "Puzzle",
+    color: ID(12),
+    label: "Need",
+    labelPlural: "Needs",
+  },
   // An Application (App Connect v1) — an app that REACHES the pod with a grant.
   // NOT `category: "tool"`: a tool is what the pod USES (outbound); an
   // application is what USES the pod (inbound). The user word is "Connected app"

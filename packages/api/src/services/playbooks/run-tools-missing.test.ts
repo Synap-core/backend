@@ -217,3 +217,87 @@ describe("runToolsSaveWarnings", () => {
     expect(w[0]).toMatch(/could not be checked/);
   });
 });
+
+describe("findRunToolsMissing — a step's need (0426)", () => {
+  const needDeps = (provider: string | null) => ({
+    readRegistry: async () => ({
+      ...registry,
+      capabilities: [
+        ...registry.capabilities,
+        {
+          id: "cap-gh",
+          name: "GitHub",
+          verbs: [
+            { id: "github_pr_checks", kind: "read", intent: "fetch_record" },
+          ],
+        },
+      ],
+    }),
+    readSpaceNeeds: async () =>
+      new Map(
+        provider === undefined
+          ? []
+          : [
+              [
+                "code-host",
+                {
+                  bindingId: "b",
+                  need: "code-host",
+                  providerCapabilityId: provider,
+                  providerName: "GitHub",
+                  setBy: "u",
+                  updatedAt: new Date(),
+                },
+              ],
+            ]
+      ),
+  });
+
+  it("a need the space filled with a provider that serves it is usable", async () => {
+    const r = await findRunToolsMissing(
+      {
+        playbook: playbook(["need:code-host"], ["need:code-host"]),
+        ...lens,
+      },
+      needDeps("cap-gh")
+    );
+    expect(r).toEqual({ status: "ok", missing: [] });
+  });
+
+  it("an unfilled need is missing, with its reason, and the refusal says it", async () => {
+    const pb = playbook(["need:payments"], ["need:payments"]);
+    const r = await findRunToolsMissing(
+      { playbook: pb, ...lens },
+      needDeps("cap-gh")
+    );
+    expect(r).toEqual({
+      status: "ok",
+      missing: [
+        {
+          stageKey: "read",
+          stageName: "Read the runs",
+          missing: ["need:payments"],
+          reasons: {
+            "need:payments": expect.stringMatching(/not filled in this space/),
+          },
+        },
+      ],
+    });
+    await expect(
+      refuseRunMissingTools(
+        { playbook: pb, ...lens, handedToAgent: false, executor: "is-agent" },
+        needDeps("cap-gh")
+      )
+    ).rejects.toThrow(/need:payments \(The need "Payments" is not filled/);
+  });
+
+  it("a removed provider is missing too", async () => {
+    const r = await findRunToolsMissing(
+      { playbook: playbook(["need:code-host"], ["need:code-host"]), ...lens },
+      needDeps(null)
+    );
+    expect(
+      r.status === "ok" && r.missing[0]?.reasons?.["need:code-host"]
+    ).toMatch(/was removed/);
+  });
+});

@@ -2682,6 +2682,17 @@ export interface CapabilityDefinition {
    */
   emits?: string[];
   /**
+   * The NEEDS this capability fills (0426, founder decision D2): slugs of the
+   * need vocabulary (`@synap-core/types/needs`), e.g. a GitHub pack fills
+   * `["code-host", "gate"]`. Declared by the author and validated by the
+   * catalog and the control plane (each slug a need, and the pack provides at
+   * least one intent the need groups). The pod reads it to find which
+   * installed capability can fill a space's empty need, and which catalog
+   * pack to propose when none can; the applier stamps it on the installed
+   * capability as `metadata.fills`.
+   */
+  fills?: string[];
+  /**
    * Where the capability runs and how a computer installs, checks and removes
    * it (installer reconciliation f75fbb48 §3.5): `placement`, `install`,
    * `verify`, `uninstall`, `permissions`, `licence`, `services`, `recipes`.

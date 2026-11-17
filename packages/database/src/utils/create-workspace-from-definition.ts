@@ -750,7 +750,9 @@ export async function createWorkspaceFromDefinition(
   // stored as-authored, gaps are reported and can be proposed for, never
   // reconciled away here.
   if (definition.taskIntents) {
-    settings.taskIntents = definition.taskIntents;
+    // `settings.taskIntents` is retired (0426): a space's needs are derived
+    // from the `need:` refs of its processes (`services/needs`), and no
+    // runtime path read taskIntents since 0419. Not written any more.
   }
   const intent = projectTemplateIntent(definition.intent);
   if (intent) {

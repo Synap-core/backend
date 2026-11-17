@@ -742,6 +742,14 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // views, skills and automations; `/:slug` plans one of them over the same
   // rows. Without it a computer's key (finding de33a075) could not run
   // `synap market update`, which reads this list.
+  // A space's needs (0426): the playbooks and automations of the space that
+  // name a need, the space's bindings (`installation_bindings`, read under
+  // `installation`) and the installed capabilities that could fill one
+  // (`tool`).
+  [
+    /^\/workspaces\/[^/]+\/needs\/?$/,
+    READS("playbook", "automation", "installation", "tool"),
+  ],
   [
     /^\/package-updates\/?$/,
     READS("proposal", "tool", "view", "skill", "automation"),

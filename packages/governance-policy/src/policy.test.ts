@@ -84,6 +84,7 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   session_narrative_update: "write", // services/session-document/upsert-section.ts
   refresher_section_update: "write", // services/document-patch/apply-document-patch.ts (D4)
   declare_source: "write", // workspace source-edge declaration (Enterprise-OS Wave 0)
+  bind_need: "write", // a space's need filled by a provider (0426)
   configure_public_projection: "write", // workspace public-projection config door
   transition: "write", // services/lifecycle moveStatus door (entity.transition)
   write: "write", // filesystem.write

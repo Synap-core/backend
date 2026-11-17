@@ -37,10 +37,12 @@ import type { ProcessStepRunnerKind } from "./steps.js";
  * What a need names. `intent`: a `capability_intents` slug (any verb serving
  * it fills it). `capability`: a capability (by name or id) or a verb id from
  * `tools`, or a capability key from `requires` (what the runner's computer
- * must have). Plan W3 (L3) adds `need`: a named group of intents a space fills
- * once.
+ * must have). `need` (0426, founder decisions D2 and D3): a `need:<need>` ref
+ * (`@synap-core/types/needs`), a seat the space fills once with one provider;
+ * `filled` = the space bound a provider (that offers a tool for it, for a
+ * `tools` entry), its one provider in `providers`.
  */
-export const PROCESS_NEED_KINDS = ["intent", "capability"] as const;
+export const PROCESS_NEED_KINDS = ["intent", "capability", "need"] as const;
 export type ProcessNeedKind = (typeof PROCESS_NEED_KINDS)[number];
 
 /**
@@ -76,6 +78,17 @@ export interface ProcessNeed {
   providers: ProcessNeedProvider[];
   /** The step keys that declare it (a step narrows its playbook's list); `[]` = the playbook itself. */
   steps: string[];
+  /**
+   * The entry's name in a person's words, never its raw token
+   * (`resolveProcessNeedLabels`, `@synap-core/types/vocabulary`): a `need:`
+   * entry → the need's name ("Code host"), an intent → its name, a capability
+   * → its name when the read found it. The pod fills it in English; a surface
+   * in another locale calls the resolver with its locale. Null when there is
+   * no name to give (an unfound capability). Absent on an older pod.
+   */
+  label?: string | null;
+  /** A `need:<slug>/<intent>` entry's intent, named ("Fetch a record"); null otherwise. */
+  intentLabel?: string | null;
 }
 
 // ── When (what starts and moves it) ──────────────────────────────────────────

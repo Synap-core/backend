@@ -135,6 +135,12 @@ export interface WorkspaceDefinitionInput {
   /** Capability ids this workspace provides or consumes. */
   workspaceCapabilities?: string[];
   /**
+   * @deprecated 0426 (founder decisions D2 and D3): a space's needs are the
+   * `need:` refs its playbooks and automations name (`@synap-core/types/needs`
+   * `declaredNeedsOf`); the pod no longer persists this field and no runtime
+   * path reads it. Kept one release so templates that still send it install;
+   * removed with the catalog's `taskIntents`.
+   *
    * WHAT THIS WORKSPACE NEEDS TO FUNCTION — the abstract intents (closed
    * vocabulary, the pod's `capability_intents` table) its template declares it
    * requires. Distinct from `workspaceCapabilities`, which names what this space

@@ -96,7 +96,18 @@ export function collectCapabilitySteps(nodes: unknown[]): CapabilityStepRef[] {
     const data = (n.data && typeof n.data === "object" ? n.data : {}) as {
       verbId?: unknown;
       capabilityId?: unknown;
+      need?: unknown;
     };
+    // A node that names a NEED and no verb (0426) is resolved at run time
+    // against the space's binding: no verb to check against the registry here
+    // (its ref is checked by `validateFlow`).
+    if (
+      !(typeof data.verbId === "string" && data.verbId.trim() !== "") &&
+      typeof data.need === "string" &&
+      data.need.trim() !== ""
+    ) {
+      return;
+    }
     refs.push({
       nodeId: typeof n.id === "string" && n.id ? n.id : `#${i}`,
       verbId:

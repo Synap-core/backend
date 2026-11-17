@@ -9,7 +9,7 @@
  *   stays beside it. Keys are today's tokens: `kind.<slug>.one|other`,
  *   `action.<token>.imperative|past|progressive|present`, `status.<token>`,
  *   `needsYou.count.<kind>`, `runner.<state>`, `waitKind.<kind>`,
- *   `stepRunner.<kind>`. A row added to a table is a key of this catalog,
+ *   `stepRunner.<kind>`, `need.<slug>`, `intent.<slug>`. A row added to a table is a key of this catalog,
  *   and `Catalog<VocabularyEn>` then refuses every translation without it;
  * - the SENTENCES the door used to splice by hand (titles, button labels,
  *   "Private …", "Handed to …"), written here as messages. A sentence that
@@ -29,6 +29,8 @@ import type {
   StatusLabelRows,
   WaitKindLabelRows,
   StepRunnerKindLabelRows,
+  NeedLabelRows,
+  IntentLabelRows,
 } from "./index.js";
 import type { ObjectKindRows } from "./object-kinds.js";
 
@@ -57,6 +59,8 @@ type RunnerStateKey = `runner.${keyof RunnerStateLabelRows & string}`;
 
 type WaitKindKey = `waitKind.${keyof WaitKindLabelRows & string}`;
 type StepRunnerKey = `stepRunner.${keyof StepRunnerKindLabelRows & string}`;
+type NeedKey = `need.${keyof NeedLabelRows & string}`;
+type IntentKey = `intent.${keyof IntentLabelRows & string}`;
 
 /**
  * The door's sentences. Each English text reproduces what the door returned
@@ -215,7 +219,9 @@ export type VocabularyEn = Readonly<
     | NeedsYouCountKey
     | RunnerStateKey
     | WaitKindKey
-    | StepRunnerKey,
+    | StepRunnerKey
+    | NeedKey
+    | IntentKey,
     string
   >
 > &
@@ -234,6 +240,8 @@ export interface VocabularyTables {
   readonly runnerStates: Readonly<Record<string, string>>;
   readonly waitKinds: Readonly<Record<string, string>>;
   readonly stepRunners: Readonly<Record<string, string>>;
+  readonly needs: Readonly<Record<string, string>>;
+  readonly intents: Readonly<Record<string, string>>;
 }
 
 /**
@@ -276,6 +284,12 @@ export function buildVocabularyEn(tables: VocabularyTables): VocabularyEn {
   }
   for (const [kind, label] of Object.entries(tables.stepRunners)) {
     words[`stepRunner.${kind}`] = label;
+  }
+  for (const [slug, label] of Object.entries(tables.needs)) {
+    words[`need.${slug}`] = label;
+  }
+  for (const [slug, label] of Object.entries(tables.intents)) {
+    words[`intent.${slug}`] = label;
   }
   return { ...words, ...vocabularySentencesEn } as VocabularyEn;
 }

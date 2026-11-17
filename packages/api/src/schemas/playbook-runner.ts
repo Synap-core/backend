@@ -13,6 +13,7 @@
  */
 
 import { z } from "zod";
+import { looksLikeNeedRef, needRefProblem } from "@synap-core/types/needs";
 import {
   PLAYBOOK_REQUIRES_MAX,
   PLAYBOOK_RUNNER_MAX_CHOICES,
@@ -108,6 +109,10 @@ export const playbookRunnerSchema = runnerOf(playbookRunnerRefSchema);
  * `requires`: capability keys (`media-ffmpeg`), a SET. Shape only here: whether
  * a key is a capability the runner's computer can get is answered when the step
  * is handed over (the installations door says "not in the marketplace").
+ *
+ * An entry may instead name a NEED (`need:deploy-target`, 0426): the key of the
+ * provider the space bound to it (`requiresOf` resolves it). A need ref must
+ * name a need of the vocabulary (`needRefProblem`), refused otherwise.
  */
 export const requiresSchema = z
   .array(
@@ -116,9 +121,19 @@ export const requiresSchema = z
       .trim()
       .min(1)
       .max(200)
-      .regex(/^@?[a-z0-9][a-z0-9._/-]*$/, {
-        message:
-          'a required tool is a capability key (e.g. "media-ffmpeg"), not prose',
+      .superRefine((key, ctx) => {
+        if (looksLikeNeedRef(key)) {
+          const problem = needRefProblem(key);
+          if (problem) ctx.addIssue({ code: "custom", message: problem });
+          return;
+        }
+        if (!/^@?[a-z0-9][a-z0-9._/-]*$/.test(key)) {
+          ctx.addIssue({
+            code: "custom",
+            message:
+              'a required tool is a capability key (e.g. "media-ffmpeg") or a need (e.g. "need:deploy-target"), not prose',
+          });
+        }
       })
   )
   .max(PLAYBOOK_REQUIRES_MAX, {

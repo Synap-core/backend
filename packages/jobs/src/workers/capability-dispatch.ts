@@ -69,6 +69,38 @@ export function registerCapabilityExecutor(fn: CapabilityExecutor): void {
 }
 
 /**
+ * IoC slot for the ONE need resolver (0426, `services/needs/space-needs.ts`
+ * in @synap/api): the verb an automation `capability` node that names a NEED
+ * (`data.need`, `need:<need>[/<intent>]`) runs in its space. Filled at boot by
+ * apps/api via `registerNeedVerbResolver()`, like `registerCapabilityExecutor`.
+ * Answers the verb, or the reason there is none (an unfilled need, a provider
+ * with no tool or several tools for it).
+ */
+export type NeedVerbResolver = (input: {
+  need: string;
+  workspaceId: string;
+  userId: string;
+}) => Promise<{ verbId: string } | { reason: string }>;
+
+let needVerbResolver: NeedVerbResolver | null = null;
+
+export function registerNeedVerbResolver(fn: NeedVerbResolver): void {
+  needVerbResolver = fn;
+}
+
+/** The verb a need ref runs in a space, through the pod's one resolver. */
+export async function resolveNeedVerbViaPod(
+  input: Parameters<NeedVerbResolver>[0]
+): Promise<{ verbId: string } | { reason: string }> {
+  if (!needVerbResolver) {
+    throw new Error(
+      "Need resolver not registered — apps/api must call registerNeedVerbResolver() at boot"
+    );
+  }
+  return needVerbResolver(input);
+}
+
+/**
  * IoC slot for the ONE playbook-run spine (`runPlaybook`, @synap/api). @synap/jobs
  * cannot statically import @synap/api (circular dep), so apps/api fills this slot
  * at boot via `registerPlaybookRunner()` — the SAME pattern as

@@ -696,6 +696,15 @@ export interface CapabilityNodeDef extends AutomationNodeBase {
     capabilityName?: string;
     /** Verb id = the requiring skill's name (resolves to the backing skill). */
     verbId?: string;
+    /**
+     * Instead of a concrete verb: a NEED ref (`need:<need>` or
+     * `need:<need>/<intent>`, 0426, `@synap-core/types/needs`). At run time
+     * the executor runs the ONE verb the provider the space bound to that need
+     * offers for it; an unfilled need, or a provider with several verbs for it
+     * and no `/<intent>`, fails the step with the reason. `verbId` wins when
+     * both are set.
+     */
+    need?: string;
     verbLabel?: string;
     verbKind?: "read" | "write" | "action";
     granted?: boolean;

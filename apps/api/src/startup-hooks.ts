@@ -38,6 +38,7 @@ import {
   ensureDocumentRefresherRule,
   convergeActivatorsAtBoot,
   reconcileCapabilitiesToTemplates,
+  backfillSpaceNeedBindings,
   reconcileStandaloneConfigsToTemplates,
   installOfficialAgentTemplates,
   selfHealAgentTemplateLinks,
@@ -970,6 +971,22 @@ async function runStartupHooksInner(): Promise<void> {
     logger.warn(
       { err },
       "Failed to reconcile capabilities to templates on startup (non-fatal)"
+    );
+  }
+
+  // A space's NEEDS (0426): record, as rows, the needs exactly one installed
+  // capability fills (its `metadata.fills`, stamped by the reconcile above),
+  // so a playbook converted to `need:` refs shows "filled" with its provider.
+  // Records only: never proposes an install, never picks between providers.
+  try {
+    const report = await backfillSpaceNeedBindings();
+    if (report.recorded > 0 || report.failed > 0) {
+      logger.info(report, "Backfilled the spaces' need bindings");
+    }
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to backfill the spaces' need bindings on startup (non-fatal)"
     );
   }
 

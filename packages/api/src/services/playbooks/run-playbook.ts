@@ -1109,6 +1109,8 @@ export async function resolveRunChoice(
   > & {
     playbook: Pick<Playbook, "id" | "executor"> &
       Partial<Pick<Playbook, "runner" | "requires">>;
+    /** The run's space: a `need:` entry of `requires` names its bound provider. */
+    workspaceId?: string | null;
   }
 ): Promise<ResolvedRunChoice> {
   // A one-shot (`generate`) playbook is run by the pod itself: Synap AI.
@@ -1164,7 +1166,11 @@ export async function resolveRunChoice(
   }
 
   // 2. The playbook's own runner.
-  const requires = requiresOf(input.playbook);
+  const { resolveRequiresNeeds } = await import("../needs/space-needs.js");
+  const requires = await resolveRequiresNeeds(
+    requiresOf(input.playbook),
+    input.workspaceId
+  );
   const authored =
     input.playbook.runner !== null && input.playbook.runner !== undefined
       ? await resolveRunner({
@@ -1481,6 +1487,7 @@ export async function runPlaybook(
       }
     : await resolveRunChoice({
         userId: input.userId,
+        workspaceId: input.workspaceId,
         agentUserId: input.agentUserId,
         handToAgentId: input.handToAgentId,
         runOn: input.runOn,
@@ -2451,6 +2458,7 @@ export async function startHeldRun(
   // The person's remembered choice applies too: it is their run now.
   const { handOff, runOn, persona } = await resolveRunChoice({
     userId: session.userId,
+    workspaceId: session.workspaceId,
     handToAgentId: held.handToAgentId ?? null,
     runOn: held.runOn,
     playbook,

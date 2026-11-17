@@ -859,6 +859,9 @@ export interface WorkspaceSettings {
   /** Slug of the control plane package used to create this workspace. */
   packageSlug?: string;
   /**
+   * @deprecated 0426: no longer written (a space's needs are derived from its
+   * processes, `@synap-core/types/needs`); an older space may still hold it.
+   *
    * WHAT THIS WORKSPACE NEEDS TO FUNCTION — the abstract intents (the pod's
    * `capability_intents` closed vocabulary) the template declared as this
    * space's task requirements.

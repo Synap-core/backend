@@ -56,6 +56,7 @@
     "library.propose",
     "n8nActions.analyzeContent",
     "n8nActions.createEntity",
+    "needs.bind",
     "notifCenter.requestHandoff",
     "notifCenter.snooze",
     "notifications.batchUpdate",

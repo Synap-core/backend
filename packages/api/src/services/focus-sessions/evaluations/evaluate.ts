@@ -27,6 +27,8 @@
  *                the session is evaluated).
  */
 
+import { looksLikeNeedRef } from "@synap-core/types/needs";
+import { resolveNeedVerb } from "../../needs/space-needs.js";
 import {
   db,
   focusSessions,
@@ -281,8 +283,28 @@ export async function evaluateSession(
         ...(posted.detail ? { rationale: posted.detail } : {}),
       });
     } else if (c.check.kind === "capability") {
+      // A NEED ref (`need:gate/fetch_record`, 0426): the verb the provider the
+      // session's space bound to it. Not filled (or no single verb): the
+      // criterion is not graded, and the reason is said, never a silent pass.
+      let verbId = c.check.capability;
+      if (verbId && looksLikeNeedRef(verbId)) {
+        const resolved = await resolveNeedVerb({
+          need: verbId,
+          workspaceId: session.workspaceId,
+          userId,
+        });
+        if ("reason" in resolved) {
+          results.push({
+            key: c.key,
+            status: "skipped",
+            reason: resolved.reason,
+          });
+          continue;
+        }
+        verbId = resolved.verbId;
+      }
       const run = await executeCapability({
-        verbId: c.check.capability,
+        verbId,
         parameters: {
           sessionId,
           criterionKey: c.key,
@@ -301,7 +323,7 @@ export async function evaluateSession(
         sessionId,
       });
       const { verdict, rationale } = capabilityVerdict(run);
-      await record(c, verdict, { evaluatorId: c.check.capability, rationale });
+      await record(c, verdict, { evaluatorId: verbId, rationale });
     } else if (c.check.kind === "judge") {
       judged.push(c);
     }
