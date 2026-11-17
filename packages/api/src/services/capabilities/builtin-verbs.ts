@@ -91,6 +91,7 @@ import {
 } from "./place-artboard-deck.js";
 import { VerbRefusal } from "./verb-refusal.js";
 import type { FailureErrorClass } from "@synap-core/types/failures";
+import type { QueueRecipeRunInput } from "../host-jobs/hosted-verbs.js";
 import { triageEmails } from "../mail-feed/triage.js";
 import { freezeChartEmbeds } from "../document-charts/freeze-chart-embeds.js";
 import { liveChartReader } from "../document-charts/freeze-charts-verb.js";
@@ -2493,10 +2494,12 @@ const runRecipeParams = z
   })
   .strict();
 
-const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
-  const input = runRecipeParams.parse(params);
-  const { queueRecipeRun } = await import("../host-jobs/hosted-verbs.js");
-  const out = await queueRecipeRun({
+/** The run a `computer.run_recipe` call asks for, read the same way when it is filed and when it runs. */
+function recipeRunInput(
+  input: z.infer<typeof runRecipeParams>,
+  ctx: BuiltinVerbContext
+): QueueRecipeRunInput {
+  return {
     userId: ctx.userId,
     agentUserId: ctx.agentUserId ?? null,
     sessionId: ctx.automationRun?.sessionId ?? ctx.sessionId ?? null,
@@ -2506,7 +2509,13 @@ const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
     recipe: input.recipe,
     values: input.params,
     computer: input.computer ?? null,
-  });
+  };
+}
+
+const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = runRecipeParams.parse(params);
+  const { queueRecipeRun } = await import("../host-jobs/hosted-verbs.js");
+  const out = await queueRecipeRun(recipeRunInput(input, ctx));
   // A refusal is a definite not-run with the next step (`verb-refusal.ts`):
   // an approval records its sentence and can be retried.
   if (!out.ok)
@@ -2533,6 +2542,48 @@ const RECIPE_REFUSAL_CLASS: Record<string, FailureErrorClass> = {
   BAD_PARAMS: "validation",
   NO_SPACE: "validation",
 };
+
+/**
+ * The refusals an agent's recipe run gets when it is FILED, before it becomes
+ * a proposal: what the APPROVED manifests say, which no approval can change
+ * and the agent can act on (pick a recipe it has, ask for the update, fix a
+ * value). With no computer named, only when no computer the approval could
+ * choose has the recipe with these values (`fitsAnotherComputer`).
+ *
+ * Every other refusal files as before: a computer offline or whose check
+ * failed, a tool not installed yet, a file not readable now, can all change
+ * before the person approves, and only the approval's run decides them.
+ */
+const RECIPE_REFUSED_AT_FILING: ReadonlySet<string> = new Set([
+  "UNKNOWN_RECIPE",
+  "BAD_PARAMS",
+]);
+
+/**
+ * The filing check of `computer.run_recipe`: the SAME plan the run makes
+ * (`planRecipeRun`, which `queueRecipeRun` runs on approval), read-only.
+ * `null` = file it; a refusal = refuse it to the caller, nothing filed. A
+ * read that fails THROWS: the filing door files as before, never refusing on
+ * a fact it did not read.
+ */
+export async function recipeRunRefusalAtFiling(
+  params: Record<string, unknown>,
+  ctx: BuiltinVerbContext
+): Promise<{ reasonCode: string; message: string } | null> {
+  // A call the handler's schema refuses is the parameter check's to answer
+  // (`checkVerbParameters`); this one reads the computer, not the call shape.
+  const parsed = runRecipeParams.safeParse(params);
+  if (!parsed.success) return null;
+  const { planRecipeRun } = await import("../host-jobs/hosted-verbs.js");
+  const planned = await planRecipeRun(recipeRunInput(parsed.data, ctx));
+  if (
+    planned.ok ||
+    !RECIPE_REFUSED_AT_FILING.has(planned.code) ||
+    planned.fitsAnotherComputer
+  )
+    return null;
+  return { reasonCode: planned.code, message: planned.error };
+}
 
 const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = marketInstallParams.parse(params);

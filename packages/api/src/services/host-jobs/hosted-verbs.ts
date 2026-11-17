@@ -4,12 +4,15 @@
  * (`synap worker`) with nobody at the keyboard, asked through the pod: a
  * person's Run, an agent (through the capability gate), a playbook step.
  *
- *   queue   ← `computer.run_recipe` (builtin verb, post-gate): choose the
- *             computer (`chooseRecipeComputer`: where the tool is installed
- *             and checked), check the recipe and its values against the
+ *   plan    ← `planRecipeRun`, read-only: choose the computer
+ *             (`chooseRecipeComputer`: where the tool is installed and
+ *             checked), check the recipe and its values against the
  *             installation's APPROVED manifest, check each input file is one
- *             the person can read, then queue a host job of kind `verb` on
- *             that installation. Only that computer can lease it.
+ *             the person can read. Run when an agent's run is FILED
+ *             (`recipeRunRefusalAtFiling`) and again by the queue.
+ *   queue   ← `computer.run_recipe` (builtin verb, post-gate): the plan, then
+ *             a host job of kind `verb` on that installation. Only that
+ *             computer can lease it.
  *   lease   ← `leaseHostJob`: each input file becomes a signed GET minted at
  *             THIS lease for the job's owner (`leaseInputs`); a file gone or no
  *             longer readable fails the run with the reason.
@@ -41,8 +44,12 @@ import type {
 } from "@synap-core/types/host-jobs";
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
-import { normalizeRecipeValues } from "@synap-core/types/capability-manifest";
+import {
+  normalizeRecipeValues,
+  type Recipe,
+} from "@synap-core/types/capability-manifest";
 import { listPersonsComputers } from "../installations/request-installation.js";
+import type { ComputerRef } from "../installations/installations.js";
 import type { RunStatus, UnifiedRun } from "../runs/types.js";
 import { hostJobReadStatus, installationHealth } from "./host-jobs.js";
 import {
@@ -122,9 +129,65 @@ export type QueueRecipeRunResult =
   | { ok: true; job: HostJobRow; result: HostVerbQueuedResult }
   | { ok: false; code: string; error: string };
 
-export async function queueRecipeRun(
-  input: QueueRecipeRunInput
-): Promise<QueueRecipeRunResult> {
+/** What a plan reads: the person, the tool, the recipe, its values, the computer, the space. */
+export type PlanRecipeRunInput = Pick<
+  QueueRecipeRunInput,
+  "userId" | "workspaceId" | "capabilityKey" | "recipe" | "values" | "computer"
+>;
+
+/** A run that can be queued now: where, which recipe, with which values. */
+export interface RecipeRunPlan {
+  candidate: RecipeRunCandidate;
+  computer: ComputerRef;
+  recipe: Recipe;
+  /** The values in the form stored on the job (`normalizeRecipeValues`). */
+  values: Record<string, unknown>;
+  workspaceId: string | null;
+}
+
+export type PlanRecipeRunResult =
+  | { ok: true; plan: RecipeRunPlan }
+  | {
+      ok: false;
+      code: string;
+      error: string;
+      /**
+       * With no computer named: another installation the run could still be
+       * sent to (whatever its health now) has the recipe and takes these
+       * values. Set on `UNKNOWN_RECIPE` and `BAD_PARAMS` only.
+       */
+      fitsAnotherComputer?: boolean;
+    };
+
+/** This approved manifest has the recipe, and the values fill it. */
+function recipeFits(
+  manifest: Record<string, unknown>,
+  name: string,
+  values: Record<string, unknown>
+): boolean {
+  const recipe = manifestRecipes(manifest).find((r) => r.name === name);
+  return (
+    !!recipe &&
+    recipeValuesProblem(recipe, normalizeRecipeValues(recipe, values)) === null
+  );
+}
+
+/**
+ * Everything `queueRecipeRun` checks before it queues, and nothing it writes:
+ * the ONE check of a recipe run, called by the queue (the approval of an
+ * agent's run, a person's Run) and by `recipeRunRefusalAtFiling` when an
+ * agent's run is FILED, so a run that cannot apply is refused to the agent
+ * instead of failing after the person's yes (proposals 768f3e27, recipe
+ * "range-cut" absent from the approved media-ffmpeg; 3a1876af, a value of the
+ * wrong type; 10-11 Nov). One function, so the two can never disagree:
+ * `filing-and-approval-share-the-check.test.ts`.
+ *
+ * A refusal is a fact read (`{ ok: false, code }`); a read that fails throws,
+ * and the filing door files as before on a throw.
+ */
+export async function planRecipeRun(
+  input: PlanRecipeRunInput
+): Promise<PlanRecipeRunResult> {
   const rows = await db
     .select()
     .from(installations)
@@ -157,6 +220,16 @@ export async function queueRecipeRun(
   });
   if (!choice.ok) return choice;
   const { candidate, computer } = choice;
+  // The computer is chosen by health NOW; with none named, the approval may
+  // choose another, whose approved version can differ.
+  const fitsAnotherComputer =
+    !input.computer?.trim() &&
+    candidates.some(
+      (c) =>
+        c.installationId !== candidate.installationId &&
+        computers.some((k) => k.id === c.machineUserId) &&
+        recipeFits(c.manifest, input.recipe, input.values)
+    );
 
   const recipes = manifestRecipes(candidate.manifest);
   const recipe = recipes.find((r) => r.name === input.recipe);
@@ -179,6 +252,7 @@ export async function queueRecipeRun(
     return {
       ok: false,
       code: "UNKNOWN_RECIPE",
+      fitsAnotherComputer,
       error: podHasIt
         ? `${input.capabilityKey} on ${computer.name}: its approved version has no recipe "${input.recipe}", the pod's current one has it. Ask for the update (synap_request_installation, action "update") and approve it. ${list}`
         : `${input.capabilityKey} on ${computer.name} has no recipe "${input.recipe}", and neither has the pod's ${input.capabilityKey}. ${list}`,
@@ -189,7 +263,13 @@ export async function queueRecipeRun(
   // on the job, so the computer's runner receives what it renders.
   const values = normalizeRecipeValues(recipe, input.values);
   const problem = recipeValuesProblem(recipe, values);
-  if (problem) return { ok: false, code: "BAD_PARAMS", error: problem };
+  if (problem)
+    return {
+      ok: false,
+      code: "BAD_PARAMS",
+      error: problem,
+      fitsAnotherComputer,
+    };
 
   // The files a run makes land in a space (the upload door needs one): the
   // ask's, else the installation's.
@@ -230,6 +310,19 @@ export async function queueRecipeRun(
       }
     }
   }
+
+  return {
+    ok: true,
+    plan: { candidate, computer, recipe, values, workspaceId },
+  };
+}
+
+export async function queueRecipeRun(
+  input: QueueRecipeRunInput
+): Promise<QueueRecipeRunResult> {
+  const planned = await planRecipeRun(input);
+  if (!planned.ok) return planned;
+  const { candidate, computer, recipe, values, workspaceId } = planned.plan;
 
   const [job] = await db
     .insert(hostJobs)
