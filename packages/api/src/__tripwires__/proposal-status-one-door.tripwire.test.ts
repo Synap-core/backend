@@ -287,4 +287,27 @@ describe("proposals.status has one writer: transitionProposal", () => {
       "These write proposals.status outside the status door. Use transitionProposal (@synap/database): it adds the transition table's guard to your WHERE, so a decided proposal is never overwritten. A data-only update stays a plain update(proposals)."
     ).toEqual([]);
   });
+  // Reactions W1: the door OWES each move's transition, in the same
+  // transaction as its compare-and-set — so every caller owes, whatever it
+  // passes. A refactor that writes without owing (or outside the lock) goes
+  // red here before any reaction misses a move.
+  it("the door locks, writes and owes the transition in one transaction", () => {
+    const src = readFileSync(join(REPO, DOOR), "utf8");
+    const move = src.slice(src.indexOf("async function moveProposals("));
+    expect(move.length).toBeGreaterThan(100);
+    const lock = move.indexOf('.for("update"');
+    const write = move.indexOf(".update(proposals)");
+    const owe = move.indexOf("insertTransitionOutbox(tx");
+    expect(move).toMatch(/\.transaction\(async \(tx\) =>/);
+    expect(lock, "the door no longer locks the rows it moves").toBeGreaterThan(
+      -1
+    );
+    expect(write).toBeGreaterThan(lock);
+    expect(owe, "the door no longer owes the transition").toBeGreaterThan(
+      write
+    );
+    // Every public call runs through it.
+    const door = src.slice(src.indexOf("export function transitionProposal("));
+    expect(door).toMatch(/moveProposals\(executor/);
+  });
 });

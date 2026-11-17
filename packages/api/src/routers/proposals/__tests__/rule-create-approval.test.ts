@@ -18,10 +18,22 @@ let updates: { values: Record<string, unknown> }[] = [];
 const whereResult = (rows: unknown[]) =>
   Object.assign(Promise.resolve(rows), { limit: async () => rows });
 
-vi.mock("@synap/database", async (importOriginal) => ({
-  // The real status door: it writes through the mocked `db` below.
-  transitionProposal: (await importOriginal<typeof import("@synap/database")>())
-    .transitionProposal,
+vi.mock("@synap/database", () => ({
+  // The status door's write, against the mocked `db` below. The real door
+  // locks, writes and owes a transition in one transaction (reactions W1),
+  // pinned on PGlite by approval-postcondition.pglite.test.ts.
+  transitionProposal: (
+    executor: {
+      update: (t: unknown) => {
+        set: (v: Record<string, unknown>) => { where: (w: unknown) => unknown };
+      };
+    },
+    args: { to: string; set?: Record<string, unknown>; where: unknown }
+  ) =>
+    executor
+      .update(PROPOSALS)
+      .set({ ...(args.set ?? {}), status: args.to })
+      .where(args.where),
   db: {
     select: () => ({
       from: () => ({ where: () => whereResult(proposalRows) }),
