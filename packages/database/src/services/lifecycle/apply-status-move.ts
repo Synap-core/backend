@@ -271,7 +271,7 @@ export interface ApplyStatusMoveInput {
    * move between two paused statuses keeps the hold it had).
    */
   hold?: Hold | null;
-  /** The move that caused this one (a reaction, reactions W2). */
+  /** The move that caused this one (a reaction). */
   cause?: TransitionCause | null;
 }
 

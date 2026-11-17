@@ -133,7 +133,7 @@ describe("a goal's status flip owes its transition", () => {
     });
   });
 
-  it("a move a rule caused carries its cause; one nobody caused carries none (reactions W2)", async () => {
+  it("a move a rule caused carries its cause; one nobody caused carries none", async () => {
     const { trackId } = await goal("active");
     await repo.transitionStatus(
       trackId,

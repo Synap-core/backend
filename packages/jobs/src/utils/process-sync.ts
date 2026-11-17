@@ -64,9 +64,16 @@
  *     ONE door — whose own gate on the target stage can pause it again. Without
  *     `onFail` the run stays paused, exactly as before.
  *
- *  3. WORKER BACKLOG DRAIN. A decided (approved / rejected) proposal of a
- *     worker enablement may make room under its `maxPendingApprovals`: the
- *     fires the backlog HELD are released once (`worker-backlog-release.ts`).
+ *  3. WORKER BACKLOG DRAIN. A proposal of a worker enablement that leaves
+ *     `pending` (decided, expired, withdrawn) makes room under its
+ *     `maxPendingApprovals`, which counts pending proposals: the fires the
+ *     backlog HELD are released once (`worker-backlog-release.ts`).
+ *
+ *  2 and 3 read the proposal's TRANSITION (`proposal.transition.completed`),
+ *  like 1 reads the entity's. The door owes one per move, never one for a
+ *  re-stamp (`transitionProposal`), so each runs once per move. The
+ *  `proposal.approved` / `.rejected` events `emitProposalReviewed` still
+ *  sends are for rules and webhooks; this file ignores them.
  *
  * Non-fatal per session: one session's failure is reported and never stops the
  * others, nor the automation matching that follows in the same hop.
@@ -99,6 +106,7 @@ import {
 } from "@synap/playbooks";
 import {
   LIFECYCLE_TRANSITION_EVENT_TYPE,
+  TRANSITION_EVENT_TYPES,
   isDualEmittedStatusUpdate,
 } from "@synap/events";
 import { advanceSessionStageViaSlot } from "./stage-advance.js";
@@ -166,14 +174,12 @@ export async function syncProcessOnEvent(
       ...(await settleWorkerTargets(ev)),
     ];
   }
-  if (ev.eventType === "proposal.rejected.completed") {
+  if (ev.eventType === TRANSITION_EVENT_TYPES.proposal) {
+    const { from, to } = ev.data ?? {};
     return [
-      ...(await applyRejectedGateOnFail(ev)),
-      ...(await releaseWorkerBacklog(ev)),
+      ...(to === "rejected" ? await applyRejectedGateOnFail(ev) : []),
+      ...(from === "pending" ? await releaseWorkerBacklog(ev) : []),
     ];
-  }
-  if (ev.eventType === "proposal.approved.completed") {
-    return releaseWorkerBacklog(ev);
   }
   return [];
 }
@@ -277,9 +283,9 @@ async function settleWorkerTargets(
 }
 
 /**
- * 3 — a decided proposal may drain a worker's approvals backlog: release the
- * fires it HELD (`worker-backlog-release.ts`). Nothing for a proposal that is
- * not a worker's.
+ * 3 — a proposal that left `pending` may drain a worker's approvals backlog:
+ * release the fires it HELD (`worker-backlog-release.ts`). Nothing for a
+ * proposal that is not a worker's.
  */
 async function releaseWorkerBacklog(
   ev: ProcessSyncEvent

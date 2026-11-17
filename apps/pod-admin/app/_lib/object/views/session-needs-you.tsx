@@ -420,7 +420,7 @@ export function ProposedChangesSection({
    * Proposals the page already draws as their own card (a stage gate in
    * "Where it stands", decided there): listed once, never twice.
    */
-  drawnAbove?: ReadonlySet<string>;
+  drawnAbove?: ReadonlySet<string> | "pending";
 }) {
   const list = trpc.proposals.list.useQuery(
     { sessionId, status: "pending", limit: PROPOSALS_LIMIT },
@@ -429,7 +429,8 @@ export function ProposedChangesSection({
   const [all, setAll] = useState(false);
   useReauthOnUnauthorized(list.error);
 
-  if (list.isLoading) return null;
+  // Waits for the work read too, so a gate it draws never flashes here first.
+  if (list.isLoading || drawnAbove === "pending") return null;
   const failure = list.error ? (
     <ResourceRowError
       message="The changes this session proposed couldn’t be read."

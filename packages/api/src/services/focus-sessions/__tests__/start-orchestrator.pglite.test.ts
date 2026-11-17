@@ -234,7 +234,7 @@ async function approve(data: Record<string, unknown>, approver = USER) {
       emitSideEffects: () => undefined,
       notify: async () => undefined,
     },
-  } as never) as Promise<Record<string, unknown>>;
+  } as never) as unknown as Promise<Record<string, unknown>>;
 }
 
 beforeAll(async () => {

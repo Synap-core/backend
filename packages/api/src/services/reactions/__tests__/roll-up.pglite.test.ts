@@ -1,11 +1,11 @@
 /**
- * POD DEFAULT 1 — "roll up along a relation" (plan 7d71ddcc W3, decisions
- * D3, D5, D6), end to end on PGlite: a part moves through THE thing's door
- * (`moveStatus`), the reactions job (`handleReactions`, the one reactor)
- * reads that move off the outbox, lists the rules — the roll-up a relation
- * DECLARES (`profile_relations.metadata.reactions`, `relationReactionSource`)
- * — runs the guards, and the `roll_up` effect moves (or proposes) the parent
- * through the same door, with the reaction's `cause`.
+ * POD DEFAULT 1 — "roll up along a relation" (decisions D3, D5, D6), end to end
+ * on PGlite: a part moves through THE thing's door (`moveStatus`), the
+ * reactions job (`handleReactions`, the one reactor) reads that move off the
+ * outbox, lists the rules — the roll-up a relation DECLARES
+ * (`profile_relations.metadata.reactions`, `relationReactionSource`) — runs the
+ * guards, and the `roll_up` effect moves (or proposes) the parent through the
+ * same door, with the reaction's `cause`.
  *
  *  - D5: a lost part is ignored; at least one part must be done; an open part
  *    holds the parent;

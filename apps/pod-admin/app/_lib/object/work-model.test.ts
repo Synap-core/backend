@@ -5,10 +5,12 @@ import {
   continueButton,
   continueEmphasis,
   gateProposalIds,
+  gatesDrawnAbove,
   gatesWaiting,
   holdLine,
   nextMoveLine,
   offersContinue,
+  restartPlace,
   stagesLeftLine,
   workStages,
   workToShow,
@@ -167,6 +169,39 @@ describe("work-model — what the work section draws", () => {
     expect(offersContinue({ items: [theirs], truncated: false })).toBe(false);
     expect(offersContinue({ status: "unavailable" })).toBe(false);
     expect(gateProposalIds(undefined).size).toBe(0);
+  });
+
+  it("R1: the restart waits for the work read: never Run again in the header, then gone", () => {
+    const read = { items: [stopped()], truncated: false };
+    expect(
+      restartPlace({ canRerun: true, loading: true, read: undefined })
+    ).toBe("none");
+    expect(restartPlace({ canRerun: true, loading: false, read })).toBe("more");
+    // A failed read keeps today's fallback: Run again in the header.
+    expect(
+      restartPlace({
+        canRerun: true,
+        loading: false,
+        read: { status: "unavailable" },
+      })
+    ).toBe("header");
+    expect(restartPlace({ canRerun: false, loading: false, read })).toBe(
+      "none"
+    );
+  });
+
+  it("R2: Proposed changes waits for the work read; a failed read hides nothing", () => {
+    expect(gatesDrawnAbove({ loading: true, read: undefined })).toBe("pending");
+    const landed = gatesDrawnAbove({
+      loading: false,
+      read: { items: [stopped()], truncated: false },
+    });
+    expect(landed !== "pending" && [...landed]).toEqual(["p-1"]);
+    const failed = gatesDrawnAbove({
+      loading: false,
+      read: { status: "unavailable" },
+    });
+    expect(failed !== "pending" && failed.size).toBe(0);
   });
 
   it("S4: the stage the run stopped on is marked stopped, not current", () => {

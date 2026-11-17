@@ -113,16 +113,19 @@ describe("emitSideEffects — origin: 'sync'", () => {
   });
 });
 
-describe("connection-sync-approval reactor", () => {
-  it("enqueues the approval worker for an approved proposal (keyed per proposal)", async () => {
-    await emitSideEffects({
-      subjectType: "proposal",
-      action: "approved",
-      subjectId: "prop-1",
-      userId: "user-1",
-      workspaceId: "ws-1",
-      data: { proposalStatus: "approved" },
-    });
+describe("connection-sync-approval reactor (on the proposal's transition)", () => {
+  /** A proposal's move, as the dispatcher fans it out (`emitLifecycleTransition`). */
+  const moved = (to: string, workspaceId: string | null = "ws-1") => ({
+    subjectType: "proposal",
+    action: "transition",
+    subjectId: "prop-1",
+    userId: "user-1",
+    workspaceId,
+    data: { subjectType: "proposal", subjectId: "prop-1", from: "pending", to },
+  });
+
+  it("enqueues the approval worker for a move into approved (keyed per proposal)", async () => {
+    await emitSideEffects(moved("approved"));
     const call = send.mock.calls.find(
       (c) => c[0] === "connection-sync-approval"
     );
@@ -133,47 +136,30 @@ describe("connection-sync-approval reactor", () => {
     });
   });
 
-  it("does not enqueue for a rejected proposal", async () => {
-    await emitSideEffects({
-      subjectType: "proposal",
-      action: "rejected",
-      subjectId: "prop-1",
-      userId: "user-1",
-      workspaceId: "ws-1",
-    });
-    expect(queuesSent()).not.toContain("connection-sync-approval");
+  it("a POD-WIDE approval enqueues too: the transition has no workspace gate", async () => {
+    await emitSideEffects(moved("approved", null));
+    expect(queuesSent()).toContain("connection-sync-approval");
   });
-});
 
-describe("enqueueConnectionSyncApproval (the one enqueue, shared by reactor + pod-wide approval path)", () => {
-  it("sends the same job shape and per-proposal singletonKey the reactor uses", async () => {
-    const { enqueueConnectionSyncApproval } =
-      await import("../side-effects.js");
-    const own = vi.fn(async (..._a: unknown[]) => "id");
-    await enqueueConnectionSyncApproval(
-      { proposalId: "prop-9", userId: "u-9" },
-      { send: own } as never
-    );
-    expect(own).toHaveBeenCalledTimes(1);
-    expect(own.mock.calls[0]).toEqual([
-      "connection-sync-approval",
-      { proposalId: "prop-9", userId: "u-9" },
-      { singletonKey: "connection-sync-approval:prop-9" },
-    ]);
-
-    // Parity: the reactor's enqueue for the same proposal is byte-identical, so a
-    // proposal reached by both doors collapses onto one singleton job.
-    send.mockClear();
+  it("one approval = its transition + the old `proposal.approved` event ⇒ exactly ONE enqueue", async () => {
+    await emitSideEffects(moved("approved"));
     await emitSideEffects({
       subjectType: "proposal",
       action: "approved",
-      subjectId: "prop-9",
-      userId: "u-9",
+      subjectId: "prop-1",
+      userId: "user-1",
       workspaceId: "ws-1",
+      data: { proposalStatus: "approved" },
     });
-    const reactorCall = send.mock.calls.find(
-      (c) => c[0] === "connection-sync-approval"
-    );
-    expect(reactorCall).toEqual(own.mock.calls[0]);
+    expect(
+      queuesSent().filter((q) => q === "connection-sync-approval")
+    ).toHaveLength(1);
+  });
+
+  it("does not enqueue for any other move (rejected, auto_approved, reverted)", async () => {
+    for (const to of ["rejected", "auto_approved", "reverted"]) {
+      await emitSideEffects(moved(to));
+    }
+    expect(queuesSent()).not.toContain("connection-sync-approval");
   });
 });

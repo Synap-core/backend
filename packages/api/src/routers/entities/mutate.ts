@@ -19,6 +19,7 @@ import {
   isNotNull,
   getDb,
   getWorkspaceMembership,
+  getRequestGrant,
   eventRepository,
   EntityRepository,
   extractIdentitySignals,
@@ -51,6 +52,10 @@ import {
   isReachFieldPatch,
   reachFieldGrantSpace,
 } from "../../utils/reach-field-grant.js";
+import {
+  clearsDoNotContact,
+  isDoNotContactSetWrite,
+} from "../../services/channels/do-not-contact-fields.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import {
   emitAiCorrection,
@@ -539,19 +544,35 @@ export const mutateProcs = {
       // role (decision 3632f045): checked in that role's space and ALWAYS
       // proposed (utils/reach-field-grant.ts). Every other own field of a
       // pod-wide record stays judged pod scope.
-      const reachSpace = isReachFieldPatch(input)
-        ? await reachFieldGrantSpace({
-            entityId: input.id,
-            kind: existing.type,
-            storedWorkspaceId: existing.workspaceId,
-          })
-        : null;
+      const reachPatch = isReachFieldPatch(input);
+      // An opt-out the app records (CNIL): a patch that only SETS the
+      // person's do-not-contact flag reaches the pod-wide person through the
+      // same role rule, and the gate APPLIES it (a de-escalation,
+      // `isDoNotContactSetWrite`), never proposes it.
+      const doNotContactSet =
+        existing.type === "person" && isDoNotContactSetWrite(input);
+      const reachSpace =
+        reachPatch || doNotContactSet
+          ? await reachFieldGrantSpace({
+              entityId: input.id,
+              kind: existing.type,
+              storedWorkspaceId: existing.workspaceId,
+            })
+          : null;
+      // Lifting an opt-out is the person's: an app (any key's grant, the
+      // person's own token through it included) or an agent CLEARING the flag,
+      // or removing its reason or date, files a proposal the person approves
+      // in their pod. Signed in, or replaying their approval, they apply it.
+      const appOrAgentClearsDoNotContact =
+        clearsDoNotContact(input) &&
+        (isAiWriteRequest(input) || getRequestGrant() !== undefined);
       const forcePropose =
         promotesToGlobal ||
         changesProfileType ||
         aiAttachesBody ||
         aiHomesRecord ||
-        reachSpace !== null ||
+        (reachPatch && reachSpace !== null) ||
+        appOrAgentClearsDoNotContact ||
         input.forcePropose === true;
 
       // A promotion to pod-wide lands the row pod-wide: the key's grant must

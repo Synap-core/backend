@@ -89,7 +89,7 @@ beforeAll(async () => {
     reviewed_by  text,
     reviewed_at  timestamptz,
     updated_at   timestamptz,
-    -- the proposal door reads these to owe the move's transition (reactions W1)
+    -- the proposal door reads these to owe the move's transition
     workspace_id text,
     session_id uuid,
     created_by text,

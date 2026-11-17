@@ -1,8 +1,8 @@
 /**
- * THE REACTION LOG (reactions W2) — what each rule did with each move it
- * matched: applied it, proposed it, or skipped it, and why. One `events` row
- * per outcome, under the rule (`subject_type = 'reaction'`, `subject_id` = the
- * rule's id), owned by the person whose thing moved.
+ * THE REACTION LOG — what each rule did with each move it matched: applied it,
+ * proposed it, or skipped it, and why. One `events` row per outcome, under the
+ * rule (`subject_type = 'reaction'`, `subject_id` = the rule's id), owned by
+ * the person whose thing moved.
  *
  * WHY `events`, written raw: it is the pod's history spine, and the history
  * rows the slot doors write (`focus_session.slot_asked`, `…slot_attested`, the
