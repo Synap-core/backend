@@ -17,7 +17,9 @@ import { proposalPageT } from "./copy";
 import type { ReviewMark } from "./proposal-review-model";
 
 /** What a press on Approve does: approve now, or ask once more (irreversible). */
-export function approvePressAct(undo: ReviewMark | null): "approve" | "confirm" {
+export function approvePressAct(
+  undo: ReviewMark | null,
+): "approve" | "confirm" {
   return undo ? "confirm" : "approve";
 }
 
