@@ -29,9 +29,11 @@ import {
 } from "@synap-core/types/processes";
 import { resolveUnitState, trackStepGateLabel } from "@synap-core/types/units";
 import type { Locale, TFunction } from "@synap-core/types/i18n";
+import { canonicalNeedSlug, parseNeedRef } from "@synap-core/types/needs";
 import {
   humanizeToken,
   resolveProcessHealthLabel,
+  resolveProcessNeedLabels,
   resolveStepRunnerLabel,
 } from "@synap-core/types/vocabulary";
 import type { ExitTarget } from "../../../../lib/open-in";
@@ -226,22 +228,78 @@ export function checkLines(
   ];
 }
 
-/** A need as a row: its name, and who fills it when it is filled. */
-export function needRow(need: ProcessNeed): {
+/**
+ * A need as a row: its name in the reader's locale (`resolveProcessNeedLabels`,
+ * else the name the pod gave), its intent when the entry names one, and who
+ * fills it when it is filled.
+ */
+export function needRow(
+  need: ProcessNeed,
+  locale: Locale
+): {
   label: string;
+  intentLabel: string | null;
   provider: string | null;
   state: ProcessNeed["state"];
 } {
+  const words = resolveProcessNeedLabels(need, { locale });
   const named = need.providers.find((p) => p.capabilityName)?.capabilityName;
   const verb = need.providers.find((p) => p.verbId)?.verbId;
   return {
-    label: humanizeToken(need.slug),
+    label: words.label ?? need.label ?? humanizeToken(need.slug),
+    intentLabel: words.intentLabel ?? need.intentLabel ?? null,
     provider:
       need.state === "filled"
         ? (named ?? (verb ? humanizeToken(verb) : null))
         : null,
     state: need.state,
   };
+}
+
+/** One need of a space, as `needs.forWorkspace` answers it (the columns read here). */
+export interface NeedCoverageRow {
+  need: string;
+  state: "filled" | "empty";
+  provider: { capabilityId: string; name: string | null } | null;
+  candidates: ReadonlyArray<{ capabilityId: string; name: string }>;
+}
+
+/**
+ * The space's answer for one need of the process: only a `need:` entry has
+ * one (a space fills a need once, for every process that names it), matched
+ * on the need's canonical slug (an alias reads as its slug). Null for any
+ * other entry, or when the space's needs were not read.
+ */
+export function needCoverageFor(
+  need: Pick<ProcessNeed, "kind" | "slug">,
+  coverage: readonly NeedCoverageRow[] | null | undefined
+): NeedCoverageRow | null {
+  if (need.kind !== "need" || !coverage) return null;
+  const ref = parseNeedRef(need.slug);
+  if (!ref) return null;
+  const slug = canonicalNeedSlug(ref.need) ?? ref.need;
+  return coverage.find((c) => c.need === slug) ?? null;
+}
+
+/**
+ * The providers a person may choose for a need: the installed capabilities
+ * that can fill it, with the current one kept even when it is no longer
+ * among them (the choice never hides what fills it now). Empty: nothing
+ * installed can fill it, so there is nothing to choose here.
+ */
+export function providerChoices(
+  row: NeedCoverageRow
+): Array<{ capabilityId: string; name: string | null }> {
+  const out: Array<{ capabilityId: string; name: string | null }> = [
+    ...row.candidates,
+  ];
+  if (
+    row.provider &&
+    !out.some((c) => c.capabilityId === row.provider!.capabilityId)
+  ) {
+    out.unshift(row.provider);
+  }
+  return out;
 }
 
 /** What a step may use, in words; null when it uses the process's own list. */

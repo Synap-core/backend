@@ -52,7 +52,6 @@ export const en = {
   "block.checks": "Done when",
   "block.skills": "What agents load",
   "block.moves": "What it moves",
-  "block.needs": "Needs",
   "block.unavailable": "This part couldn’t be read.",
   "when.manual": "A person can also start it by hand.",
   "when.workers":
@@ -63,9 +62,10 @@ export const en = {
     "Some steps name a status the kind does not declare: {statuses}.",
   "needs.empty": "No provider yet",
   "needs.unknown": "Couldn’t check",
-  "needs.chooseInApp": "Choose in app",
-  "needs.readOnly":
-    "A provider is chosen in the Synap app for now; this page shows who fills each need.",
+  "needs.findInApp": "Find a provider in the app",
+  "needs.provider": "Provider for {need}",
+  "needs.coverageFailed":
+    "Who can fill this space’s needs couldn’t be read, so they show read-only.",
   "needs.shared":
     "Shared with every process in this space that needs the same thing.",
   "access.title": "Who may run it",
@@ -135,7 +135,6 @@ export const fr: Catalog<typeof en> = {
   "block.checks": "Terminé quand",
   "block.skills": "Ce que chargent les agents",
   "block.moves": "Ce qu’il fait avancer",
-  "block.needs": "Besoins",
   "block.unavailable": "Cette partie n’a pas pu être lue.",
   "when.manual": "Une personne peut aussi le lancer à la main.",
   "when.workers":
@@ -146,9 +145,10 @@ export const fr: Catalog<typeof en> = {
     "Certaines étapes nomment un statut que le type ne déclare pas : {statuses}.",
   "needs.empty": "Pas encore de fournisseur",
   "needs.unknown": "Vérification impossible",
-  "needs.chooseInApp": "Choisir dans l’app",
-  "needs.readOnly":
-    "Le fournisseur se choisit pour l’instant dans l’app Synap ; cette page montre qui remplit chaque besoin.",
+  "needs.findInApp": "Trouver un fournisseur dans l’app",
+  "needs.provider": "Fournisseur pour {need}",
+  "needs.coverageFailed":
+    "Impossible de lire qui peut remplir les besoins de cet espace : ils restent en lecture seule.",
   "needs.shared":
     "Partagé avec chaque processus de cet espace qui a le même besoin.",
   "access.title": "Qui peut le lancer",

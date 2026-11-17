@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveProcessHealthLabel } from "@synap-core/types/vocabulary";
+import {
+  resolveProcessHealthLabel,
+  resolveProcessNeedLabels,
+} from "@synap-core/types/vocabulary";
 import { createT } from "@synap-core/types/i18n";
 import {
   unmeasuredProcessRunCounts,
@@ -13,7 +16,9 @@ import {
   countDoors,
   countExitTarget,
   installedFromWords,
+  needCoverageFor,
   needRow,
+  providerChoices,
   preApprovalWords,
   processHealthPill,
   checkLines,
@@ -102,6 +107,9 @@ describe("blocksToDraw", () => {
             status: "active",
             currentStage: null,
             updatedAt: "2026-11-16T00:00:00Z",
+            // Not read by pod admin (D4: no run list); the fixture fits the type.
+            kind: "work",
+            triage: {} as never,
           },
         ],
       },
@@ -244,13 +252,32 @@ describe("needRow", () => {
               verbId: "github.pr",
             },
           ],
-        })
+        }),
+        "en"
       )
-    ).toEqual({ label: "Code host", provider: "GitHub", state: "filled" });
+    ).toEqual({
+      label: "Code host",
+      intentLabel: null,
+      provider: "GitHub",
+      state: "filled",
+    });
   });
   it("gives an empty or unmeasured need no provider", () => {
-    expect(needRow(need({})).provider).toBeNull();
-    expect(needRow(need({ state: "unknown" })).state).toBe("unknown");
+    expect(needRow(need({}), "en").provider).toBeNull();
+    expect(needRow(need({ state: "unknown" }), "en").state).toBe("unknown");
+  });
+  it("names a need: entry and its intent through the vocabulary door", () => {
+    const row = needRow(
+      need({ kind: "need", slug: "need:code-host/open_pr" }),
+      "en"
+    );
+    const words = resolveProcessNeedLabels(
+      { kind: "need", slug: "need:code-host/open_pr" },
+      { locale: "en" }
+    );
+    expect(row.label).toBe(words.label);
+    expect(row.intentLabel).toBe(words.intentLabel);
+    expect(row.label).not.toMatch(/need:/);
   });
 });
 
@@ -380,5 +407,45 @@ describe("partUnavailable", () => {
       partUnavailable({ unavailable: ["preApproval"] }, "preApproval")
     ).toBe(true);
     expect(partUnavailable({ unavailable: [] }, "needs")).toBe(false);
+  });
+});
+
+describe("needCoverageFor / providerChoices", () => {
+  const coverage = [
+    {
+      need: "code-host",
+      state: "filled" as const,
+      provider: { capabilityId: "gh", name: "GitHub" },
+      candidates: [{ capabilityId: "gl", name: "GitLab" }],
+    },
+  ];
+  it("matches only a need: entry, on its canonical slug, intent ignored", () => {
+    expect(
+      needCoverageFor(
+        { kind: "need", slug: "need:code-host/open_pr" },
+        coverage
+      )
+    ).toBe(coverage[0]);
+    expect(
+      needCoverageFor({ kind: "need", slug: "need:git-host" }, coverage)
+    ).toBe(coverage[0]);
+    expect(
+      needCoverageFor({ kind: "intent", slug: "code-host" }, coverage)
+    ).toBeNull();
+    expect(
+      needCoverageFor({ kind: "need", slug: "need:code-host" }, null)
+    ).toBeNull();
+    expect(
+      needCoverageFor({ kind: "need", slug: "need:crm" }, coverage)
+    ).toBeNull();
+  });
+  it("offers the candidates and keeps the current provider among them", () => {
+    expect(providerChoices(coverage[0]!).map((c) => c.capabilityId)).toEqual([
+      "gh",
+      "gl",
+    ]);
+    expect(
+      providerChoices({ ...coverage[0]!, provider: null, candidates: [] })
+    ).toEqual([]);
   });
 });

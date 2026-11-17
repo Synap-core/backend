@@ -20,7 +20,7 @@
  * space proposes) and Archive. Authoring stays in the app ("Open in app").
  */
 
-import { addToast, Button } from "@heroui/react";
+import { addToast, Button, Select, SelectItem } from "@heroui/react";
 import Link from "next/link";
 import { ListChecks, Zap } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
@@ -53,7 +53,9 @@ import {
   countDoors,
   countExitTarget,
   installedFromWords,
+  needCoverageFor,
   needRow,
+  providerChoices,
   preApprovalWords,
   processHealthPill,
   runnerLabel,
@@ -512,64 +514,12 @@ function Block({
       );
     }
     case "needs":
-      // Read-only until lane L3's need-binding door reaches this PR's base
-      // (plan W3, branch feat/process-needs): the select will read
-      // `needs.forWorkspace({ workspaceId })` candidates and write
-      // `needs.bind({ workspaceId, need, providerCapabilityId })`, which may
-      // answer "proposed" (checkPermissionOrPropose).
-      // TODO(process-wave L3): wire the provider select to those doors.
-      return (
-        <SectionCard
-          title={t("block.needs")}
-          count={failed ? null : read.needs.length}
-          hint={failed ? undefined : t("needs.readOnly")}
-          actions={
-            !failed && read.needs.some((n) => n.state === "empty") ? (
-              <ExitLink
-                exit={openIn({
-                  kind: "objectInApp",
-                  objectKind: "playbook",
-                  id,
-                })}
-                label={t("needs.chooseInApp")}
-              />
-            ) : undefined
-          }
-        >
-          {failed ? (
-            explain
-          ) : (
-            <div className="flex flex-col gap-2">
-              {rows(
-                read.needs.map((need) => {
-                  const row = needRow(need);
-                  return (
-                    <div
-                      key={`${need.source}:${need.slug}`}
-                      className="flex min-h-12 items-center justify-between gap-3 px-3 py-2"
-                    >
-                      <span className="min-w-0 truncate text-[13px] font-medium text-foreground">
-                        {row.label}
-                      </span>
-                      {row.state === "filled" ? (
-                        <span className="text-[13px] text-foreground/85">
-                          {row.provider}
-                        </span>
-                      ) : row.state === "empty" ? (
-                        <StatusPill kind="unknown" label={t("needs.empty")} />
-                      ) : (
-                        <StatusPill kind="unknown" label={t("needs.unknown")} />
-                      )}
-                    </div>
-                  );
-                })
-              )}
-              <p className="text-[12px] text-foreground/65">
-                {t("needs.shared")}
-              </p>
-            </div>
-          )}
+      return failed ? (
+        <SectionCard title={resolveObjectNounPlural("need")}>
+          {explain}
         </SectionCard>
+      ) : (
+        <NeedsSection read={read} id={id} t={t} />
       );
     case "skills":
       return (
@@ -607,6 +557,163 @@ function Block({
       // D4: runs are counts in the facts, doors to the desktop.
       return null;
   }
+}
+
+/**
+ * What the process needs, and who fills each need. A `need:` entry is filled
+ * once per SPACE (D2/D3): its provider is chosen here from the installed
+ * capabilities that can fill it (`needs.forWorkspace`), written through the
+ * ONE governed door (`needs.bind`, `checkPermissionOrPropose`: an answer of
+ * "proposed" waits in Requests and is said so). Other entries, a process in
+ * no space, or a space whose needs could not be read stay read-only, and a
+ * failed read is said, never guessed. Nothing installed to fill it: the
+ * desktop app finds one.
+ */
+function NeedsSection({
+  read,
+  id,
+  t,
+}: {
+  read: ProcessRead;
+  id: string;
+  t: T;
+}) {
+  const locale = useConsoleLocale();
+  const utils = trpc.useUtils();
+  const workspaceId = read.playbook.workspaceId;
+  const hasNeedEntry = read.needs.some((n) => n.kind === "need");
+  const coverage = trpc.needs.forWorkspace.useQuery(
+    { workspaceId: workspaceId ?? "" },
+    {
+      enabled: Boolean(workspaceId) && hasNeedEntry,
+      staleTime: 30_000,
+      retry: false,
+    }
+  );
+  const bind = trpc.needs.bind.useMutation();
+  const rowsOf = coverage.data?.coverage.needs ?? null;
+
+  async function choose(need: string, providerCapabilityId: string) {
+    if (!workspaceId) return;
+    try {
+      const out = await bind.mutateAsync({
+        workspaceId,
+        need,
+        providerCapabilityId,
+      });
+      addToast({
+        title:
+          out.status === "proposed"
+            ? t("action.proposed")
+            : resolveActionLabel("bind_need", "past"),
+        color: "default",
+      });
+      if (out.status !== "proposed") {
+        await Promise.all([
+          utils.needs.forWorkspace.invalidate({ workspaceId }),
+          utils.playbooks.process.invalidate({ playbookId: id }),
+        ]);
+      }
+    } catch (err) {
+      addToast({
+        title: t("action.failed"),
+        description: err instanceof Error ? err.message : undefined,
+        color: "danger",
+      });
+    }
+  }
+
+  // Said once the space's answer is in (no door flashing while it loads).
+  const settled = !(hasNeedEntry && workspaceId && coverage.isLoading);
+  const unfillable =
+    settled &&
+    read.needs.some((n) => {
+      if (n.state !== "empty") return false;
+      const row = needCoverageFor(n, rowsOf);
+      return !row || providerChoices(row).length === 0;
+    });
+
+  return (
+    <SectionCard
+      title={resolveObjectNounPlural("need")}
+      count={read.needs.length}
+      actions={
+        unfillable ? (
+          <ExitLink
+            exit={openIn({ kind: "objectInApp", objectKind: "playbook", id })}
+            label={t("needs.findInApp")}
+          />
+        ) : undefined
+      }
+    >
+      <div className="flex flex-col gap-2">
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
+          {read.needs.map((need) => {
+            const row = needRow(need, locale);
+            const space = needCoverageFor(need, rowsOf);
+            const choices = space ? providerChoices(space) : [];
+            return (
+              <div
+                key={`${need.source}:${need.slug}`}
+                className="flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-2"
+              >
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate text-[13px] font-medium text-foreground">
+                    {row.label}
+                  </span>
+                  {row.intentLabel && (
+                    <span className="truncate text-[11.5px] text-foreground/65">
+                      {row.intentLabel}
+                    </span>
+                  )}
+                </span>
+                {space && choices.length > 0 ? (
+                  <Select
+                    size="sm"
+                    radius="md"
+                    variant="bordered"
+                    className="w-full max-w-[240px]"
+                    aria-label={t("needs.provider", { need: row.label })}
+                    placeholder={t("needs.empty")}
+                    selectedKeys={
+                      space.provider ? [space.provider.capabilityId] : []
+                    }
+                    isDisabled={bind.isPending}
+                    onSelectionChange={(keys) => {
+                      const k = Array.from(keys as Set<string>)[0];
+                      if (k && k !== space.provider?.capabilityId) {
+                        void choose(space.need, k);
+                      }
+                    }}
+                  >
+                    {choices.map((c) => (
+                      <SelectItem key={c.capabilityId}>
+                        {c.name ?? resolveObjectNoun("capability")}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                ) : row.state === "filled" ? (
+                  <span className="text-[13px] text-foreground/85">
+                    {row.provider}
+                  </span>
+                ) : row.state === "empty" ? (
+                  <StatusPill kind="unknown" label={t("needs.empty")} />
+                ) : (
+                  <StatusPill kind="unknown" label={t("needs.unknown")} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {hasNeedEntry && workspaceId && coverage.isError && (
+          <p className="text-[12px] text-foreground/65">
+            {t("needs.coverageFailed")}
+          </p>
+        )}
+        <p className="text-[12px] text-foreground/65">{t("needs.shared")}</p>
+      </div>
+    </SectionCard>
+  );
 }
 
 /** One automation of the process: a door to its page, its on/off state. */
