@@ -30,9 +30,10 @@
  * be read on every move (this reactor's `list()` has no index; `listHolds`
  * reads by `hold.until.moves`), would take the D3 "propose done or lost"
  * guard meant for a person's declarations (a resume executes a decision
- * already made), and would log each resume as a Rule the person never wrote.
- * The two share the shape (after the outbox, a singleton job per move, the
- * target's own compare-and-set door as the `system`), not the registry.
+ * already made), and would log each resume as an automation the person
+ * never declared. The two share the shape (after the outbox, a singleton job
+ * per move, the target's own compare-and-set door as the `system`), not the
+ * registry.
  */
 import {
   db,

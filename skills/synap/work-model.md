@@ -22,7 +22,7 @@ How they relate: a project files things; each kind or role declares one **lifecy
 
 ### Three tenses of a thing
 
-- **Past = history.** Every status change is one transition event: from, to, who, which session, why, and, when a rule made it, the move that caused it (`cause`).
+- **Past = history.** Every status change is one transition event: from, to, who, which session, why, and, when an automation of the pod made it, the move that caused it (`cause`).
 - **Present = status.** One value per kind or role, in its own column.
 - **Future = agenda.** Tasks and events linked to the thing, with an owner. _(Planned, wave 4.)_
 
@@ -41,15 +41,15 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 
 Things are not the only subjects of the door. A goal, a session, a playbook run, a proposal and an owed slot (an ask or a declared output) move through their own door the same way, and each move is one transition event (`track.…`, `focus_session.…`, `playbook_run.…`, `proposal.…`, `slot.transition.completed`). A hold may wait on any of them moving.
 
-### Rules: moves that follow other moves
+### Automations the pod applies: moves that follow other moves
 
-Some moves follow another move on their own. Each is a **rule**, and the person sees all of them in one Rules list, where each can be paused.
+Some moves follow another move on their own. Each is an **automation** the pod applies ("rule" or "reaction" in code), listed with the person's own automations, marked Built in or Declared on a link, and each can be paused for the whole pod.
 
 - **An outcome is met wherever it was filed** (built in). When a proposal is approved (by a person, or let through by a rule), every open outcome whose `ref` names what it approved is met, in every session of its owner, not only the one it was filed under. A merged pull request does the same for every outcome whose `ref` is that PR.
 - **A run that stops early goes to Needs you** (built in). A run that stops with stages left asks the person "Continue at <stage>?"; its session pauses, held on the person, and resumes when they answer. A run a worker started fails with its reason instead.
 - **A roll-up** (declared on a link). The relation between two kinds may declare `{kind: "rollup", to?, parent?, terminal?, chains?}` (`profile_relations.metadata.reactions`): once every part that is not lost is done, and at least one is, the parent moves to `to`, else to its next status. The thing's page shows the progress ("3 of 5").
 
-Every rule acts as the system, on the person's own declaration; it is not the AI. It moves the target through the target's own door from the status it read, so a person's move always wins. A move into done or lost is a proposal unless the rule says `terminal: "apply"` (the outcome rule does: the approval was already the person's call). The target's history names the move that caused it. A move a rule made sets off other rules only when that rule `chains`, never more than 3 deep. A rule that skips a move logs why. Read the rules around one thing with `statusOf` `include: ["reactions"]`.
+Every one acts as the system, on the person's own declaration; it is not the AI. It moves the target through the target's own door from the status it read, so a person's move always wins. A move into done or lost is a proposal unless it says `terminal: "apply"` (the outcome one does: the approval was already the person's call). The target's history names the move that caused it. A move one made sets off others only when it `chains`, never more than 3 deep. One that skips a move logs why. Read the ones around a thing with `statusOf` `include: ["reactions"]`.
 
 ### Where a kind stands: the flow read and the blocker
 

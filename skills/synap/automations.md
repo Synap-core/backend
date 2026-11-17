@@ -54,7 +54,7 @@ Prefer it to `entity.update.completed` for any status. For a ROLE it is the only
 
 Other subjects move through the same door and emit their own transition event, filtered the same way (`to`, `from`, `category`): `track.transition.completed` (a goal), `focus_session.transition.completed` (a session), `playbook_run.transition.completed` (a run, with `stopReason`), `proposal.transition.completed` (every move of a proposal: approved, rejected, expired, withdrawn, failed) and `slot.transition.completed` (an ask or a declared output). `proposal.approved.completed` and `proposal.rejected.completed` still fire for a proposal in a space; the transition also covers the rest.
 
-**The pod's own rules are not automations.** An outcome met wherever it was filed, a run that stops early going to Needs you, a roll-up a relation declares: each is a rule in the same Rules list, applied by the pod after the move (`work-model`, "Rules"). Do not write an automation that repeats one.
+**The pod applies some automations itself.** An outcome met wherever it was filed, a run that stops early going to Needs you, a roll-up a relation declares: each shows in the same list as the person's automations (Built in, Declared on a link), applied by the pod after the move (`work-model`). Do not write an automation that repeats one.
 
 **A worker usually beats a hand-written rule.** "When a post enters Review, run the review" is an activator on the playbook (`on: enters_status`), and "once 5 leads wait in qualified" is `on: count` + `min`; both compile to a governed rule like the one above, fire once per thing per transition, and are throttled by `maxPendingApprovals`. Write the rule by hand only for work no method owns. Workers: `processes`.
 
