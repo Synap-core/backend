@@ -295,6 +295,21 @@ describe("default 3: an approval meets the outcome wherever it was filed", () =>
     expect((await slotsOf(theirs))[0]!.status ?? "pending").toBe("pending");
   });
 
+  it("matches the ref's id in any case, and a session closed within the window", async () => {
+    const playbook = randomUUID();
+    const upper = await session([recipe(playbook.toUpperCase())]);
+    const justClosed = await session([recipe(playbook)], {
+      status: "closed",
+      closedAt: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    const t = await approve(
+      await proposalUnder(await session([]), { type: "playbook", id: playbook })
+    );
+    expect(await react(t)).toEqual({ applied: 2 });
+    expect((await slotsOf(upper))[0]!.status).toBe("done");
+    expect((await slotsOf(justClosed))[0]!.status).toBe("done");
+  });
+
   it("never meets the person's own outcome, one a criterion checks, a withdrawn one, or one in an ended session", async () => {
     const playbook = randomUUID();
     const persons = await session([recipe(playbook, { owner: "human" })]);

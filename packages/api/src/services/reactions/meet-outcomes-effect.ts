@@ -27,6 +27,7 @@ import type { PlannedWrite } from "@synap/jobs/utils/reactions.js";
 import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
 import { slotStatusOf } from "@synap-core/types/units";
 import {
+  RECENTLY_CLOSED_MS,
   outcomeRefOfProposal,
   satisfyOutputsByRef,
   selectSlotsMetByRef,
@@ -53,8 +54,22 @@ async function proposalOwner(proposalId: string): Promise<string | null> {
 }
 
 /** The owner's sessions with an outcome whose `ref` is this object. */
-async function sessionsPointingAt(userId: string, ref: OutcomeRefTarget) {
-  const wanted = JSON.stringify([{ ref: { kind: ref.kind, id: ref.id } }]);
+/**
+ * The owner's sessions with an outcome whose `ref` is this object, bounded in
+ * SQL by the same scope the door applies (`sessionMayBeMetByRef`: not
+ * cancelled or failed; closed only within the approval window), so an
+ * approval never scans the owner's whole history. The id is matched in any
+ * case, as `slotRefIs` does (the JSON text is lowered on both sides).
+ */
+async function sessionsPointingAt(
+  userId: string,
+  ref: OutcomeRefTarget,
+  now: Date
+) {
+  const wanted = JSON.stringify([
+    { ref: { kind: ref.kind, id: ref.id } },
+  ]).toLowerCase();
+  const closedSince = new Date(now.getTime() - RECENTLY_CLOSED_MS);
   return db
     .select({
       id: focusSessions.id,
@@ -67,7 +82,9 @@ async function sessionsPointingAt(userId: string, ref: OutcomeRefTarget) {
     .where(
       and(
         eq(focusSessions.userId, userId),
-        drizzleSql`${focusSessions.expectedOutputs} @> ${wanted}::jsonb`
+        drizzleSql`${focusSessions.status} NOT IN ('cancelled', 'failed')`,
+        drizzleSql`(${focusSessions.status} <> 'closed' OR ${focusSessions.closedAt} > ${closedSince.toISOString()}::timestamptz)`,
+        drizzleSql`lower(${focusSessions.expectedOutputs}::text)::jsonb @> ${wanted}::jsonb`
       )
     );
 }
@@ -82,7 +99,7 @@ export const meetOutcomesReactionEffect: ReactionEffect = {
     if (!owner) return [];
     const now = new Date();
     const writes: PlannedWrite[] = [];
-    for (const s of await sessionsPointingAt(owner, ref)) {
+    for (const s of await sessionsPointingAt(owner, ref, now)) {
       if (!sessionMayBeMetByRef(s, now)) continue;
       const slots: ExpectedOutput[] = Array.isArray(s.expectedOutputs)
         ? (s.expectedOutputs as ExpectedOutput[])
