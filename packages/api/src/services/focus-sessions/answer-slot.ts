@@ -449,6 +449,7 @@ export async function answerExpectedOutput(
       await reachApprovedStageOutputs({
         sessionId: result.session.id,
         approver: { kind: "person", userId: params.userId },
+        settled: [{ key: result.before.key, label: result.before.label }],
       });
     }
     // A pause may wait on this answer (`until.moves: answer:<session>/<slot>`):
