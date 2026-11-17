@@ -32,9 +32,7 @@ import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { proposals } from "../schema/proposals.js";
-import { notifications } from "../schema/notifications.js";
-import { messages } from "../schema/messages.js";
+import * as schema from "../schema/index.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { channels } from "../schema/channels.js";
 import { relations } from "../schema/relations.js";
@@ -131,16 +129,15 @@ const count = async () =>
 
 beforeAll(async () => {
   client = new PGlite();
-  for (const t of [
-    proposals,
-    notifications,
-    messages,
-    focusSessions,
-    channels,
-    relations,
-  ]) {
-    await client.exec(ddlFor(t as unknown as PgTable));
-  }
+  // EVERY schema table, not a hand-kept list: the doors this filing runs
+  // through write more tables over time (the proposal transition door now
+  // owes a `lifecycle_transition_outbox` row), and a list falls behind.
+  const tables = (Object.values(schema) as unknown[]).filter(
+    (v): v is PgTable =>
+      !!v && typeof v === "object" && Symbol.for("drizzle:IsDrizzleTable") in v
+  );
+  const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
+  for (const t of byName.values()) await client.exec(ddlFor(t));
   db = drizzle(client, { schema: { focusSessions, channels, relations } });
 }, 120_000);
 
