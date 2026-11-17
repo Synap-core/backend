@@ -81,8 +81,8 @@ export function WorkSection({
   self: boolean;
   /** The reader may move it (the owner): Continue, Approve, Send back. */
   canAct: boolean;
-  /** A session's page in this frame. */
-  sessionHref: (sessionId: string) => string;
+  /** A session's page in this frame; null = none to open. */
+  sessionHref: (sessionId: string) => string | null;
 }) {
   const query = trpc.lifecycle.statusOf.useQuery(
     { ids: [subjectId], include: ["work"] },
@@ -91,7 +91,7 @@ export function WorkSection({
   useReauthOnUnauthorized(query.error);
 
   if (query.isLoading) return null;
-  const answer = query.data?.[0] as { work?: WorkRead } | undefined;
+  const answer = query.data?.[0] as unknown as { work?: WorkRead } | undefined;
   const shown = query.error
     ? { kind: "failed" as const }
     : workToShow(answer?.work);
@@ -141,7 +141,7 @@ function WorkItem({
   item: StatusOfWorkItem;
   self: boolean;
   canAct: boolean;
-  href: string;
+  href: string | null;
   onMoved: () => void;
 }) {
   const utils = trpc.useUtils();
@@ -170,9 +170,15 @@ function WorkItem({
     <div className="flex flex-col gap-2.5">
       {!self && (
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <Link href={href} className={DOOR}>
-            {item.name || "Untitled session"}
-          </Link>
+          {href ? (
+            <Link href={href} className={DOOR}>
+              {item.name || "Untitled session"}
+            </Link>
+          ) : (
+            <span className="text-[13px] text-foreground/80">
+              {item.name || "Untitled session"}
+            </span>
+          )}
           <span className="text-[12px] text-foreground/65">{item.label}</span>
         </div>
       )}
@@ -251,7 +257,7 @@ function WorkItem({
       {asks !== null && asks > 0 && (
         <p className="text-[12.5px] text-foreground/75">
           {asks === 1 ? "1 question waits" : `${asks} questions wait`} for you
-          {self ? (
+          {self || !href ? (
             " in Needs you."
           ) : (
             <>

@@ -222,9 +222,7 @@ export function EntityView({ id }: { id: string }) {
         subjectId={id}
         self={false}
         canAct
-        sessionHref={(sid) =>
-          objectPage("session", sid) ?? `/open/session/${sid}`
-        }
+        sessionHref={(sid) => objectPage("session", sid)}
       />
       {prose.map((field) => (
         <ContentBlock
