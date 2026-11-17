@@ -9,10 +9,10 @@ import {
   proposalSetupBlock,
   setupEntry,
   setupRows,
-  type ProposalSetupView,
 } from "./proposal-setup-model";
+import type { ProposalSetup } from "../../_lib/request/api";
 
-const setup: ProposalSetupView = {
+const setup = {
   blocking: true,
   params: [
     {
@@ -34,7 +34,7 @@ const setup: ProposalSetupView = {
     },
     { name: "team", required: true, secret: false, satisfied: true },
   ],
-};
+} satisfies ProposalSetup;
 
 describe("proposalSetupBlock — Approve waits on the first required row (B5)", () => {
   it("names it by its label", () => {
@@ -42,6 +42,42 @@ describe("proposalSetupBlock — Approve waits on the first required row (B5)", 
       kind: "fill",
       name: "Cal.com API key",
     });
+  });
+  it("a required connection not connected holds Approve, with the pod's own next step", () => {
+    expect(
+      proposalSetupBlock({
+        blocking: true,
+        params: [],
+        connection: {
+          required: true,
+          kind: "provider",
+          provider: "google",
+          state: "missing",
+        },
+        nextAction: {
+          kind: "connect",
+          hint: "Connect your Google account",
+          url: "/apps/google",
+        },
+      } as ProposalSetup)
+    ).toEqual({
+      kind: "connect",
+      hint: "Connect your Google account",
+      url: "/apps/google",
+    });
+  });
+  it("a connection link the console cannot open as is is never offered", () => {
+    const block = proposalSetupBlock({
+      blocking: true,
+      params: [],
+      connection: { required: true, kind: "provider", state: "missing" },
+      nextAction: {
+        kind: "connect",
+        hint: "Connect it",
+        url: "synap://open/app/settings",
+      },
+    } as ProposalSetup);
+    expect(block).toMatchObject({ kind: "connect", url: null });
   });
   it("a need nobody can tell still blocks, said as such — never 'nothing needed'", () => {
     expect(
@@ -72,7 +108,6 @@ describe("setupRows — what is left to hand over, required first", () => {
   });
   it("a page that is not https is never offered", () => {
     const rows = setupRows({
-      blocking: true,
       params: [
         {
           name: "k",

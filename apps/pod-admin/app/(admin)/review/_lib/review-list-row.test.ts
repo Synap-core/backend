@@ -47,9 +47,10 @@ function rowOf(s: ReviewSignal) {
 const kinds = (parts: readonly RequestRowPart[]) => parts.map((p) => p.kind);
 
 describe("reviewRowView — three lines of marks and doors", () => {
-  it("line 1: the state mark, the kind tile, the question, its age", () => {
+  it("line 1: the kind tile, the question, its age — no state mark (everything here waits on you)", () => {
     const view = reviewRowView(rowOf(owed));
-    expect(kinds(view.what)).toEqual(["state", "tile", "text", "age"]);
+    expect(kinds(view.what)).toEqual(["tile", "text", "age"]);
+    expect(kinds(view.what)).not.toContain("state");
     const title = view.what.find((p) => p.kind === "text");
     expect(title).toMatchObject({ role: "title" });
   });
@@ -127,7 +128,9 @@ describe("reviewRowView — three lines of marks and doors", () => {
       "Bookkeeping"
     );
     // A proposal's tile is the kind of thing it changes.
-    expect(reviewRowView(row).what[1]).toMatchObject({
+    expect(
+      reviewRowView(row).what.find((p) => p.kind === "tile")
+    ).toMatchObject({
       kind: "tile",
       objectKind: "knowledge",
     });

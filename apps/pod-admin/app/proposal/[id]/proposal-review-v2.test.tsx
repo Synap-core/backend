@@ -22,6 +22,7 @@ import { createElement } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
 
 vi.mock("../../(admin)/components/side-nav-role", () => ({
   useConsoleRole: () => state.role,
@@ -143,6 +144,11 @@ vi.mock("../../../lib/trpc", async () => ({
 }));
 
 import { ProposalReview } from "./ProposalReview";
+import { alwaysEn } from "./copy";
+
+/** The one Refuse trigger (the vocabulary door's verb) and the rule menu's. */
+const REFUSE = `${resolveActionLabel("refuse", "imperative")}…`;
+const NEVER = alwaysEn["never.trigger"];
 
 const TWIN = {
   ref: "record",
@@ -315,7 +321,7 @@ describe("a create the pod matched to an existing record", () => {
     }
     expect(presses.has("Approve")).toBe(false);
     expect(seen).not.toMatch(/\bApprove\b/);
-    expect(seen).toContain("Reject…");
+    expect(seen).toContain(REFUSE);
   });
 
   it("the verb pressed is the resolution the pod receives", () => {
@@ -367,32 +373,34 @@ describe("a create with no twin", () => {
   });
 });
 
-describe("Reject and never allow", () => {
-  it("an agent's change offers it beside Reject", () => {
+describe("Refuse and never allow", () => {
+  it("an agent's change offers it beside Refuse", () => {
     state.proposal = personCreate(null);
     const seen = text(render());
-    expect(seen).toContain("Reject…");
-    expect(seen).toContain("Reject and never allow");
+    expect(seen).toContain(REFUSE);
+    expect(seen).toContain(NEVER);
+    // The verb is Refuse everywhere: never the old Reject.
+    expect(seen).not.toMatch(/\bReject\b/);
   });
 
   it("a person's own change does not: a person is never refused", () => {
     state.proposal = { ...personCreate(null), agentUserId: null };
-    expect(text(render())).not.toContain("Reject and never allow");
+    expect(text(render())).not.toContain(NEVER);
   });
 
   it("stays beside a change that acts on its own: never narrows", () => {
     state.proposal = skillUpdate();
     const seen = text(render());
     expect(seen).not.toContain("Approve and always allow");
-    expect(seen).toContain("Reject and never allow");
+    expect(seen).toContain(NEVER);
   });
 
   it("a member is offered neither rule: the rule door is a pod admin's", () => {
     state.role = "member";
     state.proposal = personCreate(null);
     const seen = text(render());
-    expect(seen).toContain("Reject…");
-    expect(seen).not.toContain("Reject and never allow");
+    expect(seen).toContain(REFUSE);
+    expect(seen).not.toContain(NEVER);
     expect(seen).not.toContain("Approve and always allow");
   });
 });
@@ -629,14 +637,16 @@ describe("a long capture", () => {
     expect(text(html)).toMatch(/Show all 8 /);
   });
 
-  it("pins the decision bar to the window, on an opaque ground", () => {
+  it("pins the decision bar to the window, on the card's own opaque surface", () => {
     state.proposal = bigCapture(8);
     const html = render();
     const bar = html.slice(html.indexOf("data-review-decision"));
     const cls = bar.slice(bar.indexOf('class="'), bar.indexOf(">"));
     expect(cls).toContain("sticky");
     expect(cls).toContain("bottom-0");
-    expect(cls).toContain("bg-background");
+    // The story's footer ground (`STORY_FOOTER`): the card's surface, never
+    // a see-through tint.
+    expect(cls).toContain("bg-content1");
   });
 });
 

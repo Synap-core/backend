@@ -276,6 +276,7 @@ import {
 } from "./session-needs-you";
 import { AskAnswer } from "../../../(admin)/review/_lib/ask-answer";
 import { reviewRows } from "../../../(admin)/review/_lib/review-rows";
+import { en as REQUEST_EN } from "../../request/copy";
 
 /** Visible text only — attributes and tags stripped. */
 const text = (html: string) =>
@@ -675,33 +676,86 @@ describe("Refuse — on every ask mode, with what refusing does (founder D2)", (
           onClose={() => {}}
         />
       );
-      const seenText = text(html);
-      expect(html).toContain("data-ask-refuse");
-      // "Refuse…" opens the reasons; its name and what it does are said.
-      expect(buttons.some((b) => b.children === "Refuse…")).toBe(true);
-      expect(seenText).toContain(
-        `${ASK_COPY.refuse}: ${ASK_COPY.refuseConsequence}`
+      // "Refuse…" opens the reasons: the verb from the vocabulary door.
+      expect(buttons.some((b) => b.children === `${ASK_COPY.refuse}…`)).toBe(
+        true
       );
+      // What refusing does is said once, on its own line, after the verbs.
+      const refusing = html.indexOf("data-review-refusing");
+      expect(refusing).toBeGreaterThanOrEqual(0);
+      expect(count(html, /data-review-refusing/)).toBe(1);
+      expect(text(html.slice(refusing))).toContain(ASK_COPY.refuseConsequence);
+      // Never the old "Reject" verb.
+      expect(text(html)).not.toMatch(/\bReject\b/);
     }
   );
 
-  it("a secret asked with no purpose: the card says so, nothing is inferred", () => {
+  it("in the story, Refuse is the decision bar's — never inside Now", () => {
+    const [row] = reviewRows(
+      [
+        {
+          ...SLOT,
+          id: "owed:story",
+          title: "Ship it on Friday?",
+          ask: { mode: "confirm", prompt: "Ship it on Friday?" },
+        },
+      ] as never,
+      new Map()
+    );
+    if (row?.detail?.kind !== "ask") throw new Error("expected an ask row");
+    const html = render(
+      <AskAnswer
+        slot={row.detail.slot}
+        live={row.detail.slot}
+        onSettled={() => {}}
+        onClose={() => {}}
+        story={{ story: null, read: { status: "off" } }}
+      />
+    );
+    const refuse = `>${ASK_COPY.refuse}…<`;
+    const now = html.indexOf('data-story-node="now"');
+    const bar = html.indexOf("data-review-decision");
+    expect(now).toBeGreaterThanOrEqual(0);
+    expect(bar).toBeGreaterThan(now);
+    // Exactly one Refuse, and it stands in the bar, after the timeline.
+    expect(count(html, new RegExp(refuse))).toBe(1);
+    expect(html.indexOf(refuse)).toBeGreaterThan(bar);
+    expect(html.slice(now, html.indexOf("</ol>"))).not.toContain(refuse);
+    // What refusing does rides the bar too.
+    expect(html.slice(bar)).toContain("data-review-refusing");
+  });
+});
+
+/**
+ * A SECRET asked for, as the decision (UX review M3): one sentence naming the
+ * picked secret with ONE door to change it, how long, the verb beside
+ * Refuse, then who can read it for how long.
+ */
+describe("SecretProvide — the secret ask as one decision", () => {
+  const SLOT = {
+    count: 1,
+    groupKey: null,
+    ageBucket: "recent",
+    repeatCount: 1,
+    occurredAt: "2026-10-24T09:00:00.000Z",
+    category: "ai",
+    kind: "owed-slot",
+    target: { kind: "session", id: SESSION_ID },
+  };
+  const grant = {
+    status: "will_grant",
+    agentUserId: "a1",
+    agentName: "Claude-code",
+    minutes: 60,
+    uses: "session",
+  };
+  const secretAsk = (secret: Record<string, unknown>) => {
     seen.provide = {
       kind: "secret",
       sessionId: SESSION_ID,
       expectedLabel: "Hand me the key",
       askFingerprint: "fp",
-      secret: {
-        name: "KEY",
-        rows: [{ ref: "vault://k", name: "KEY", type: "api_key" }],
-        grant: {
-          status: "will_grant",
-          agentUserId: "a1",
-          agentName: "Claude-code",
-          minutes: 60,
-          uses: "session",
-        },
-      },
+      secret: { name: "KEY", grant, ...secret },
     };
     const [row] = reviewRows(
       [
@@ -715,22 +769,109 @@ describe("Refuse — on every ask mode, with what refusing does (founder D2)", (
       new Map()
     );
     if (row?.detail?.kind !== "ask") throw new Error("expected an ask row");
-    const seenText = text(
-      render(
+    try {
+      return render(
         <AskAnswer
           slot={row.detail.slot}
           live={row.detail.slot}
           onSettled={() => {}}
           onClose={() => {}}
         />
-      )
+      );
+    } finally {
+      seen.provide = null;
+    }
+  };
+  const KEY_ROW = { ref: "vault://k", name: "KEY", type: "api_key" };
+  /** The one sentence: from its paragraph to the next tag that closes it. */
+  const sentence = (html: string) => {
+    const at = html.indexOf("data-secret-give");
+    const p = html.indexOf("<p", at);
+    return html.slice(p, html.indexOf("</p>", p));
+  };
+
+  it("one sentence: the picked secret, a Change door beside it, then who it goes to", () => {
+    const html = secretAsk({ rows: [KEY_ROW] });
+    const line = sentence(html);
+    const name = line.indexOf(">KEY</strong>");
+    const change = line.indexOf("data-secret-change");
+    const agent = line.indexOf("Claude-code");
+    expect(name).toBeGreaterThanOrEqual(0);
+    expect(change).toBeGreaterThan(name);
+    expect(agent).toBeGreaterThan(change);
+    expect(text(line)).toContain(` · ${REQUEST_EN["secret.change"]} `);
+    // The door is a real button that says whether the picker is open.
+    expect(line).toMatch(
+      /<button[^>]*data-secret-change=""[^>]*aria-expanded="false"/
     );
-    seen.provide = null;
+  });
+
+  it("no purpose: the card says so and offers Ask what for, nothing inferred", () => {
+    const seenText = text(secretAsk({ rows: [KEY_ROW] }));
     expect(seenText).toContain(ASK_COPY.provideNoPurpose);
-    expect(seenText).toMatch(/You give KEY/);
-    expect(seenText).toMatch(/Who Claude-code/);
-    expect(seenText).toMatch(/Until This session only/);
-    expect(seenText).toMatch(/Give for this session/);
-    expect(seenText).toContain(ASK_COPY.provideGrantNote("Claude-code", 60));
+    expect(
+      buttons.some((b) => b.children === REQUEST_EN["secret.askWhatFor"])
+    ).toBe(true);
+  });
+
+  it("a declared purpose is said in the sentence: what it does, and on what", () => {
+    const html = secretAsk({
+      rows: [KEY_ROW],
+      purpose: {
+        for: "Merging",
+        tool: "GitHub tool",
+        action: "merge",
+        on: "o/r",
+      },
+    });
+    const line = text(sentence(html));
+    expect(line).toContain("merge");
+    expect(line).toContain("o/r");
+    expect(html).not.toContain("data-secret-no-purpose");
+  });
+
+  it("how long: this session (with its minutes) or one read, this session picked", () => {
+    const html = secretAsk({ rows: [KEY_ROW] });
+    const group = html.slice(
+      html.indexOf(`aria-label="${REQUEST_EN["secret.howLong"]}"`)
+    );
+    const options = [
+      ...group.matchAll(
+        /<button[^>]*aria-pressed="(true|false)"[^>]*>(.*?)<\/button>/g
+      ),
+    ]
+      .slice(0, 2)
+      .map((m) => [m[1], text(m[2]!).trim()]);
+    expect(options).toHaveLength(2);
+    expect(options[0]![0]).toBe("true");
+    expect(options[0]![1]).toContain("60");
+    expect(options[1]).toEqual(["false", REQUEST_EN["secret.usesOnce"]]);
+    // The verb names the pick; Refuse stands beside it.
+    expect(
+      buttons.some((b) => b.children === REQUEST_EN["secret.giveSession"])
+    ).toBe(true);
+    expect(buttons.some((b) => b.children === `${ASK_COPY.refuse}…`)).toBe(
+      true
+    );
+    // Then one quiet line: who can read it, for how long.
+    const note = text(html.slice(html.indexOf("data-secret-grant-note")));
+    expect(note).toContain("Claude-code");
+    expect(note).toContain("60");
+  });
+
+  it("no secrets in the vault: said, no verb to give, no door to change, Refuse stays", () => {
+    const html = secretAsk({ rows: [] });
+    expect(text(html)).toContain(REQUEST_EN["secret.none"]);
+    expect(html).not.toContain("data-secret-change");
+    expect(
+      buttons.some(
+        (b) =>
+          typeof b.children === "string" &&
+          b.children.startsWith(REQUEST_EN["secret.give"])
+      )
+    ).toBe(false);
+    expect(buttons.some((b) => b.children === `${ASK_COPY.refuse}…`)).toBe(
+      true
+    );
   });
 });

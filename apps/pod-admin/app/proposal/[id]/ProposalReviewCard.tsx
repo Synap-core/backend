@@ -39,13 +39,7 @@
 
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
-import {
-  Button,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  Textarea,
-} from "@heroui/react";
+import { Button, Popover, PopoverContent, PopoverTrigger } from "@heroui/react";
 import {
   AppWindow,
   Check,
@@ -64,7 +58,9 @@ import {
   needsIdentityChoice,
   pageOnlyReasonActs,
   proposalPageOnlyReason,
+  proposalRequester,
   proposalRequesterParts,
+  type ProposalPrincipalView,
   resolveProposalAction,
   type DuplicateItemChoice,
   type ProposalDuplicateReview,
@@ -84,7 +80,7 @@ import { ExitFallback, ExitLink } from "../../../lib/exit-link";
    non-uuid workspace ref would fire a request that can only fail. */
 import { formatRelative, formatTimestamp, isUuid } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
-import { computerHref, navItem } from "../../../lib/console-nav";
+import { computerHref } from "../../../lib/console-nav";
 import { proposalExpiresAt, proposalLapsed } from "../../_lib/proposal-expiry";
 import { mediaAlt } from "../../_lib/media/stored-media-model";
 import { useConsoleRole } from "../../(admin)/components/side-nav-role";
@@ -123,16 +119,16 @@ import { ProposalSessionContext } from "./ProposalSessionContext";
 import type { RequestStory } from "@synap-core/types/needs-you";
 import {
   RequestStoryView,
+  StoryDepth,
+  StoryHead,
   type StoryRead,
 } from "../../_lib/request/request-story-view";
 import { useProposalStory } from "../../_lib/request/use-proposal-story";
 import { REQUEST_CATALOGS } from "../../_lib/request/copy";
-import { useT } from "../../../lib/i18n/locale-provider";
-import {
-  proposalSetupBlock,
-  type ProposalSetupView,
-  type SetupBlock,
-} from "./proposal-setup-model";
+import { useConsoleLocale, useT } from "../../../lib/i18n/locale-provider";
+import { DecisionFooter } from "../../_lib/request/decision-footer";
+import { RefuseSheet, RefuseTrigger } from "../../_lib/request/refuse-sheet";
+import { proposalSetupBlock, type SetupBlock } from "./proposal-setup-model";
 import {
   compositeItems,
   turnOnRecords,
@@ -249,9 +245,20 @@ export function useProposalReview(proposalId: string) {
   return {
     query,
     sourceExits,
+    /** Whether the source read answered: the story waits on it (S4). */
+    sourceState: {
+      settled: source.isFetched || source.isError,
+      failed: source.isError,
+      retry: () => void source.refetch(),
+    },
     workspaceName: workspace.data?.name ?? null,
   };
 }
+
+/** Where the proposal came from, as the review's story needs it. */
+export type ProposalSourceState = ReturnType<
+  typeof useProposalReview
+>["sourceState"];
 
 export type ProposalReviewData = NonNullable<
   ReturnType<typeof useProposalReview>["query"]["data"]
@@ -308,12 +315,26 @@ function ProvenanceLine({
   proposal: p,
   sourceExits,
   workspaceName,
+  identity,
 }: {
   proposal: ProposalReviewData;
   sourceExits: ProposalSourceExit[];
   workspaceName: string | null;
+  /** The reader: the person it acts for reads "for you" when it is them. */
+  identity?: string;
 }) {
-  const { actor, forWhom } = proposalRequesterParts(p);
+  const t = proposalPageT();
+  const principal = p.principal as ProposalPrincipalView | null | undefined;
+  const forYou =
+    !!identity &&
+    principal?.kind === "delegated" &&
+    principal.name === identity;
+  // The person it acts for, said "for you" when it is the reader (S16).
+  const { actor, forWhom } = proposalRequesterParts(
+    forYou
+      ? { ...p, principal: { kind: "delegated", name: t("review.forYou") } }
+      : p
+  );
   const created = p.createdAt ? new Date(p.createdAt) : null;
   const asked = created && !Number.isNaN(created.getTime()) ? created : null;
   const agentExit = sourceExits.find((s) => s.target.kind === "agent");
@@ -334,7 +355,7 @@ function ProvenanceLine({
     <div className="flex flex-col gap-1.5">
       <div
         role="group"
-        aria-label="Who is asking"
+        aria-label={t("review.whoAsks")}
         data-review-provenance=""
         className="flex flex-wrap items-center gap-1.5"
       >
@@ -345,12 +366,12 @@ function ProvenanceLine({
             ) : actor.role === "app" ? (
               <AppWindow
                 aria-hidden
-                className="h-3.5 w-3.5 text-foreground/55"
+                className="h-3.5 w-3.5 text-foreground/70"
               />
             ) : actor.role === "guest" ? (
               <UserRound
                 aria-hidden
-                className="h-3.5 w-3.5 text-foreground/55"
+                className="h-3.5 w-3.5 text-foreground/70"
               />
             ) : (
               <PersonAvatar name={actor.name} />
@@ -360,7 +381,7 @@ function ProvenanceLine({
                 <span className="font-medium text-foreground">
                   {resolveProvenanceLabel("guest")}
                 </span>
-                <span className="text-foreground/55"> through </span>
+                <span className="text-foreground/70"> through </span>
                 {actor.name}
               </span>
             ) : (
@@ -372,20 +393,22 @@ function ProvenanceLine({
         )}
         {forWhom && (
           <Pill>
-            {forWhom.name ? (
+            {forYou ? (
+              <span className="text-foreground/80">{forWhom.text}</span>
+            ) : forWhom.name ? (
               <>
-                <span className="text-foreground/55">for</span>
+                <span className="text-foreground/70">for</span>
                 <PersonAvatar name={forWhom.name} />
                 <span className="truncate">{forWhom.name}</span>
               </>
             ) : (
-              <span className="text-foreground/65">{forWhom.text}</span>
+              <span className="text-foreground/75">{forWhom.text}</span>
             )}
           </Pill>
         )}
         {workspaceName && (
           <Pill exit={spaceExit} title={resolveObjectNoun("workspace")}>
-            <Layers aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+            <Layers aria-hidden className="h-3.5 w-3.5 text-foreground/70" />
             <span className="truncate">{workspaceName}</span>
           </Pill>
         )}
@@ -397,14 +420,14 @@ function ProvenanceLine({
               exit={exit}
               title={resolveObjectNoun(target.kind)}
             >
-              <Icon aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+              <Icon aria-hidden className="h-3.5 w-3.5 text-foreground/70" />
               <span className="truncate">{target.label}</span>
             </Pill>
           );
         })}
         {asked && (
           <Pill>
-            <Clock aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+            <Clock aria-hidden className="h-3.5 w-3.5 text-foreground/70" />
             <time
               dateTime={asked.toISOString()}
               title={formatTimestamp(p.createdAt)}
@@ -442,16 +465,17 @@ const NOTE_CLAMP_LINES = 3;
  */
 function RequesterNote({ who, text }: { who: string | null; text: string }) {
   const [open, setOpen] = useState(false);
+  const t = proposalPageT();
   const long =
     text.length > NOTE_CLAMP_CHARS ||
     text.split("\n").length > NOTE_CLAMP_LINES;
   return (
     <figure data-review-note="" className="flex flex-col gap-1">
-      <figcaption className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/55">
-        {who ? `Note from ${who}` : "Their note"}
+      <figcaption className="text-[12.5px] font-medium text-foreground/70">
+        {who ? t("review.noteFrom", { who }) : t("review.note")}
       </figcaption>
       <blockquote
-        className={`whitespace-pre-line border-l-2 border-foreground/10 pl-3 text-[12.5px] leading-relaxed text-foreground/65 ${
+        className={`whitespace-pre-line border-l-2 border-foreground/10 pl-3 text-[12.5px] leading-relaxed text-foreground/80 ${
           long && !open ? "line-clamp-3" : ""
         }`}
       >
@@ -461,7 +485,7 @@ function RequesterNote({ who, text }: { who: string | null; text: string }) {
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="self-start pl-3 text-[12px] text-foreground/55 underline decoration-foreground/20 underline-offset-2 hover:text-foreground"
+          className="self-start pl-3 text-[12px] text-foreground/70 underline decoration-foreground/20 underline-offset-2 hover:text-foreground"
         >
           {open ? "Show less" : "Show more"}
         </button>
@@ -534,7 +558,7 @@ const OUTCOME_TONE: Record<
   muted: {
     ring: "ring-foreground/15",
     bg: "bg-foreground/[0.05]",
-    text: "text-foreground/60",
+    text: "text-foreground/70",
   },
 };
 
@@ -560,7 +584,7 @@ function Outcome({
         <span className="text-[15px] font-medium text-foreground">
           {resolveStatusLabel(status)}
         </span>
-        <span className="text-[13px] leading-relaxed text-foreground/60">
+        <span className="text-[13px] leading-relaxed text-foreground/70">
           {t(o.messageKey)}
         </span>
         {created && <CreatedDoor created={created} />}
@@ -641,7 +665,6 @@ function DecisionButtons({
    */
   stopTwins?: readonly ApprovalRunTwin[] | null;
 }) {
-  const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
   const [pickedId, setPickedId] = useState<string | null>(null);
   // A rule menu decides through its own calls (approve or reject, then a
@@ -659,50 +682,22 @@ function DecisionButtons({
   // decide, then be refused the rule they chose, so the menus are not offered.
   const mayRule = useConsoleRole() === "admin";
 
+  // ONE Refuse for every request (M2 / S8): the same trigger beside the
+  // primary verb, the same sheet.
   if (rejecting) {
     return (
-      <div className="flex flex-col gap-2">
-        <Textarea
-          value={reason}
-          onValueChange={setReason}
-          label={t("decide.reason.label")}
-          placeholder={t("decide.reason.placeholder")}
-          minRows={2}
-        />
-        <div className="flex items-center gap-2">
-          <Button
-            color="danger"
-            className="min-h-10"
-            isLoading={decision.rejecting}
-            isDisabled={busy}
-            onPress={() => decision.reject(reason)}
-          >
-            {resolveActionLabel("reject")}
-          </Button>
-          <Button
-            variant="light"
-            className="min-h-10"
-            isDisabled={decision.rejecting}
-            onPress={() => setRejecting(false)}
-          >
-            {t("decide.cancel")}
-          </Button>
-        </div>
-      </div>
+      <RefuseSheet
+        kind="proposal"
+        busy={busy}
+        pending={decision.rejecting}
+        onRefuse={(why) => decision.reject(why ?? "")}
+        onCancel={() => setRejecting(false)}
+      />
     );
   }
 
   const rejectButton = (
-    <Button
-      color="danger"
-      variant="flat"
-      className="min-h-10"
-      startContent={<X size={16} />}
-      isDisabled={busy}
-      onPress={() => setRejecting(true)}
-    >
-      {`${resolveActionLabel("reject")}…`}
-    </Button>
+    <RefuseTrigger isDisabled={busy} onPress={() => setRejecting(true)} />
   );
   const undoChip = undo && <DisclosedMark mark={undo} icon={TriangleAlert} />;
 
@@ -768,10 +763,11 @@ function DecisionButtons({
     <div className="flex flex-wrap items-center gap-2">
       <Button
         color="success"
-        className="min-h-10"
+        className="min-h-11"
         startContent={<Check size={16} />}
         isLoading={decision.approving}
         isDisabled={busy || waiting || setupBlock !== null}
+        // The primary verb, at the same size as Refuse beside it (S8).
         aria-describedby={setupBlock ? "review-setup-block" : undefined}
         onPress={() => decision.approve(choice)}
       >
@@ -801,19 +797,22 @@ function DecisionButtons({
       )}
       {undoChip}
       {waiting && (
-        <span className="text-[12px] text-foreground/60">
+        <span className="text-[12px] text-foreground/70">
           {t("decide.pickFirst")}
         </span>
       )}
       {setupBlock && (
         <span
           id="review-setup-block"
-          data-setup-block=""
-          className="text-[12px] text-foreground/70"
+          data-setup-block={setupBlock.kind}
+          className="text-[12.5px] text-foreground/80"
         >
           {setupBlock.kind === "fill"
             ? rt("setup.fillFirst", { name: setupBlock.name })
-            : rt("setup.cannotTell")}
+            : setupBlock.kind === "connect"
+              ? // The hand-over above says how; the bar says only what waits.
+                rt("setup.connectFirst")
+              : rt("setup.cannotTell")}
         </span>
       )}
     </div>
@@ -834,29 +833,6 @@ function ApplyingNow({ run }: { run: ApprovalRun }) {
       </span>
       <ApprovalProgressLines copy={copy} />
     </div>
-  );
-}
-
-/** Who decides, and where it is recorded — one quiet line by the verbs. */
-function WhoDecides({ identity }: { identity?: string }) {
-  const role = useConsoleRole();
-  const audit = navItem("audit");
-  const log =
-    role === "admin" ? (
-      <a
-        href={audit.href}
-        className="underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground/60"
-      >
-        {audit.label}
-      </a>
-    ) : (
-      audit.label
-    );
-  const t = proposalPageT();
-  return (
-    <p className="text-[11.5px] text-foreground/55">
-      {identity ? t("decide.as", { identity }) : t("decide.recorded")} {log}
-    </p>
   );
 }
 
@@ -906,8 +882,15 @@ export function ProposalReviewBody({
   barClassName = "",
   afterDecision,
   story: hostStory,
+  sourceState,
 }: {
   proposal: ProposalReviewData;
+  /**
+   * Whether `proposals.source` answered (`useProposalReview`). The body's own
+   * story read waits on it, so it is narrowed to the proposal's session once,
+   * never pod-wide first; a failed source read is a failed story read.
+   */
+  sourceState?: ProposalSourceState;
   /**
    * The request's story when the host already read it (Review's page-wide
    * context read); absent, the body reads its own (`useProposalStory`).
@@ -929,7 +912,7 @@ export function ProposalReviewBody({
 }) {
   const status = reviewStatus(p);
   const payload = p.request.data ?? p.data;
-  const { appConnect } = proposalHeading(p, payload);
+  const { appConnect, heading } = proposalHeading(p, payload);
   /* Writes kept for later (a held-writes pack, a join's deferred writes): one
      row per write, never the payload drawn as a record ("Untitled", its day,
      its outcome ids). They sit at the top of the row's own `data`. */
@@ -1083,14 +1066,43 @@ export function ProposalReviewBody({
     proposalId: p.id,
     sessionId: session?.target.id ?? null,
     sessionTitle: session?.target.label ?? null,
-    enabled: actionable && hostStory === undefined,
+    enabled:
+      actionable && hostStory === undefined && (sourceState?.settled ?? true),
   });
-  const story = hostStory ?? ownStory;
+  const story =
+    hostStory ??
+    (sourceState?.failed
+      ? {
+          story: null,
+          read: { status: "error" as const, retry: sourceState.retry },
+        }
+      : ownStory);
   const rt = useT(REQUEST_CATALOGS);
-  // What it still needs before it can apply (B5): the first required row.
-  const setupBlock = proposalSetupBlock(
-    (p as { setup?: ProposalSetupView }).setup
+  const pt = proposalPageT();
+  const locale = useConsoleLocale();
+  const agentSource = sourceExits.find((s) => s.target.kind === "agent");
+  // ONE name for the requesting agent everywhere on the page (head,
+  // timeline, its note, what refusing does): the agent as the story names it
+  // ("Claude Code on MacBook"), else the proposal's own actor name.
+  const agentName = story.story?.head.by?.label ?? p.agentActorName ?? null;
+  // The ONE requester sentence (`proposalRequester`): "Claude Code, for you"
+  // when the person it acts for is the reader.
+  const principal = p.principal as ProposalPrincipalView | null | undefined;
+  const requesterLabel = proposalRequester(
+    {
+      ...p,
+      agentActorName: agentName,
+      principal:
+        principal?.kind === "delegated" &&
+        identity &&
+        principal.name === identity
+          ? { kind: "delegated", name: rt("story.you") }
+          : principal,
+    },
+    { locale }
   );
+  // What it still needs before it can apply (B5): the first required row.
+  const setupBlock = proposalSetupBlock(p.setup);
 
   const why = proposalWhy({
     governanceReason: p.governanceReason,
@@ -1099,7 +1111,7 @@ export function ProposalReviewBody({
   const reason = reasonMark(p.governanceReason);
   const reasonComputer = askingComputer(p);
   const undo = undoMark(p.revertable);
-  const { actor } = proposalRequesterParts(p);
+  const { actor } = proposalRequesterParts({ ...p, agentActorName: agentName });
 
   /* A single create's twins sit under its own card; a graph item's sit inside
      that item's card, with its choice. */
@@ -1144,46 +1156,142 @@ export function ProposalReviewBody({
         // A proposal's change IS what is decided: drawn first in Now, it is
         // the subject (`UpdatedDoor` opens the object an update changes).
         showSubject={false}
+        // ONE head for every request (M2): who asked, in the shared
+        // requester sentence (M5), and what the session is. Who, for whom,
+        // where and when in full, and what the session is for, sit in depth.
         head={
-          <>
-            <ProvenanceLine
-              proposal={p}
-              sourceExits={sourceExits}
-              workspaceName={workspaceName}
-            />
-            {session && (
-              <ProposalSessionContext
-                sessionId={session.target.id}
-                proposalId={p.id}
-              />
-            )}
-          </>
+          <StoryHead
+            requester={
+              requesterLabel
+                ? {
+                    label: requesterLabel,
+                    door: agentSource
+                      ? { kind: "agent", id: agentSource.target.id }
+                      : null,
+                  }
+                : null
+            }
+            session={
+              session
+                ? {
+                    title: session.target.label,
+                    door: { kind: "session", id: session.target.id },
+                  }
+                : null
+            }
+          />
+        }
+        afterExtra={
+          actionable && !applying ? (
+            <p data-story-after="approve" className="text-[13.5px]">
+              {rt("story.approveDoes", { change: heading })}
+            </p>
+          ) : undefined
+        }
+        footer={
+          <DecisionFooter
+            identity={identity}
+            className={`${actionable ? "sticky" : ""} ${barClassName}`}
+            consequence={
+              actionable && !applying
+                ? actor?.name
+                  ? rt("refuse.proposalConsequence", { who: actor.name })
+                  : rt("refuse.proposalConsequenceAnyone")
+                : undefined
+            }
+            verbs={
+              applying && run ? (
+                <>
+                  <ApplyingNow run={run} />
+                  {afterDecision}
+                </>
+              ) : actionable ? (
+                <>
+                  {/* A failed READ of progress is said, never read as
+                      "nothing running"; the approve door itself still
+                      refuses or joins a run that is in fact applying. */}
+                  {progress.isError && (
+                    <ApprovalProgressLines
+                      copy={progressUnavailable()}
+                      onRetry={() => void progress.refetch()}
+                    />
+                  )}
+                  {stopped && run && <ApplyingNow run={run} />}
+                  <DecisionButtons
+                    proposal={p}
+                    mode={mode}
+                    undo={undo}
+                    onDecided={onDecided}
+                    resume={stopped}
+                    stopTwins={stoppedOnTwins(run) ? run.twins : null}
+                    setupBlock={status === "pending" ? setupBlock : null}
+                  />
+                </>
+              ) : (
+                <>
+                  <Outcome
+                    status={status}
+                    created={createdObject({
+                      status,
+                      action,
+                      targetType: p.targetType ? String(p.targetType) : null,
+                      targetId: p.targetId ?? null,
+                      title:
+                        records[0]?.title ??
+                        (p.targetName ? String(p.targetName) : null),
+                      graph,
+                    })}
+                  />
+                  {afterDecision}
+                </>
+              )
+            }
+          />
         }
         depth={
-          /* The ONE Advanced: ids and the raw request, collapsed, last —
-             the reader decides on the change, not on the JSON. */
-          <AdvancedPanel
-            ids={[
-              { label: "Proposal id", value: p.id },
-              { label: "Change", value: `${p.targetType} · ${p.proposalType}` },
-              ...(p.targetId
-                ? [{ label: "Target id", value: p.targetId }]
-                : []),
-            ]}
-            raw={p.request}
-          />
+          <>
+            <StoryDepth>
+              <ProvenanceLine
+                proposal={p}
+                sourceExits={sourceExits}
+                workspaceName={workspaceName}
+                identity={identity}
+              />
+              {session && (
+                <ProposalSessionContext
+                  sessionId={session.target.id}
+                  proposalId={p.id}
+                />
+              )}
+            </StoryDepth>
+            {/* The ONE Advanced: ids and the raw request, collapsed, last —
+                the reader decides on the change, not on the JSON. */}
+            <AdvancedPanel
+              ids={[
+                { label: pt("advanced.proposalId"), value: p.id },
+                {
+                  label: pt("advanced.change"),
+                  value: `${p.targetType} · ${p.proposalType}`,
+                },
+                ...(p.targetId
+                  ? [{ label: pt("advanced.targetId"), value: p.targetId }]
+                  : []),
+              ]}
+              raw={p.request}
+            />
+          </>
         }
       >
         {updated && (
           <UpdatedDoor
             updated={updated}
-            applied={status === "approved" || status === "auto_approved"}
+            kind={p.targetType === "entity" ? defs.targetKind : null}
           />
         )}
 
         {/* The change first. */}
         {appConnect ? (
-          <Section label="What it asks for">
+          <Section label={pt("review.asksFor")}>
             {/* The ONE access sentence: what approving lets it do, as its
               page will say it once approved (access model B). */}
             <p className="text-[13px] text-foreground/90">
@@ -1199,15 +1307,14 @@ export function ProposalReviewBody({
                 </li>
               ))}
             </ul>
-            <p className="text-[12px] text-foreground/65">
-              It gets a key only after you approve, and its writes still follow
-              your review rules.
+            <p className="text-[12.5px] text-foreground/75">
+              {pt("review.keyAfterApprove")}
             </p>
           </Section>
         ) : deferredWrites ? (
           <DeferredWritesList review={deferredWrites} />
         ) : docChanges ? (
-          <Section label="What changes">
+          <Section label={rt("story.whatChanges")}>
             <DocumentUpdateChanges
               payload={payload}
               envelope={p.data}
@@ -1272,9 +1379,7 @@ export function ProposalReviewBody({
         ) : null}
         {turnsOn && turnsOn.unreadSkills > 0 && (
           <p className="text-[13px] text-foreground/80">
-            {`It also turns on ${turnsOn.unreadSkills} ${
-              turnsOn.unreadSkills === 1 ? "skill" : "skills"
-            } you cannot read.`}
+            {pt("review.turnsOnUnread", { n: turnsOn.unreadSkills })}
           </p>
         )}
         {edges.length > 0 && <PartEdgeList edges={edges} />}
@@ -1318,7 +1423,10 @@ export function ProposalReviewBody({
         {(reason ||
           why.proposer ||
           duplicate?.check.status === "unchecked") && (
-          <section aria-label="Why" className="flex flex-col gap-3">
+          <section
+            aria-label={pt("review.why")}
+            className="flex flex-col gap-3"
+          >
             {(reason || duplicate?.check.status === "unchecked") && (
               <div className="flex flex-wrap items-center gap-2">
                 {reason && (
@@ -1330,7 +1438,7 @@ export function ProposalReviewBody({
                 {reason && reasonComputer && (
                   <Link
                     href={computerHref(reasonComputer.id)}
-                    className="text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+                    className="text-[12.5px] font-medium rq-ink underline underline-offset-2"
                   >
                     {reasonComputer.name}
                   </Link>
@@ -1375,71 +1483,6 @@ export function ProposalReviewBody({
             graph={reviewGraph}
           />
         )}
-
-        <div
-          data-review-decision=""
-          className={`flex flex-col gap-2 border-t border-foreground/[0.06] ${
-            actionable ? "sticky z-10" : ""
-          } ${barClassName}`}
-        >
-          {applying && run ? (
-            <>
-              <ApplyingNow run={run} />
-              {afterDecision}
-            </>
-          ) : actionable ? (
-            <>
-              {/* A failed READ of progress is said, never read as "nothing
-                running"; the approve door itself still refuses or joins a
-                run that is in fact applying. */}
-              {progress.isError && (
-                <ApprovalProgressLines
-                  copy={progressUnavailable()}
-                  onRetry={() => void progress.refetch()}
-                />
-              )}
-              {stopped && run && <ApplyingNow run={run} />}
-              <DecisionButtons
-                proposal={p}
-                mode={mode}
-                undo={undo}
-                onDecided={onDecided}
-                resume={stopped}
-                stopTwins={stoppedOnTwins(run) ? run.twins : null}
-                setupBlock={status === "pending" ? setupBlock : null}
-              />
-            </>
-          ) : (
-            <>
-              <Outcome
-                status={status}
-                created={createdObject({
-                  status,
-                  action,
-                  targetType: p.targetType ? String(p.targetType) : null,
-                  targetId: p.targetId ?? null,
-                  title:
-                    records[0]?.title ??
-                    (p.targetName ? String(p.targetName) : null),
-                  graph,
-                })}
-              />
-              {afterDecision}
-            </>
-          )}
-          {actionable && !applying && (
-            <p
-              data-review-refusing=""
-              className="text-[12px] text-foreground/60"
-            >
-              <span className="font-medium text-foreground/70">
-                {rt("story.refusing")}
-              </span>{" "}
-              {rt("refuse.proposalConsequence")}
-            </p>
-          )}
-          <WhoDecides identity={identity} />
-        </div>
       </RequestStoryView>
     </div>
   );

@@ -43,8 +43,6 @@ import { RequestRowLines } from "../../../_lib/request/request-row-lines";
 import { reviewRowView } from "./review-row-view";
 import { useT } from "../../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
-
-const CATALOGS = { en, fr };
 import {
   agentGroups,
   itemCount,
@@ -55,6 +53,8 @@ import {
   type RowGroup,
   type ReviewRow,
 } from "./review-rows";
+
+const CATALOGS = { en, fr };
 
 /** Rows a section shows before "Show all" (ui-composition §4). */
 const ROW_CAP = 8;
@@ -112,23 +112,34 @@ function metaLine(rows: readonly ReviewRow[], tail?: string): string {
     .join(" · ");
 }
 
-/** A list of rows, capped, with "Show all N". */
+/**
+ * A list of rows, capped, with "Show all N" (ui-composition §4): the ONE cap
+ * of the page, for rows, question cards and the gallery alike.
+ */
 function CappedRows({
   rows,
   render,
+  cap = ROW_CAP,
+  listClassName = "flex flex-col gap-2",
+  moreClassName = "px-3 py-2",
 }: {
   rows: readonly ReviewRow[];
   render: (row: ReviewRow) => ReactNode;
+  cap?: number;
+  /** The rows' own layout (a column, a card grid). */
+  listClassName?: string;
+  moreClassName?: string;
 }) {
+  const t = useT(CATALOGS);
   const [all, setAll] = useState(false);
-  const shown = all ? rows : rows.slice(0, ROW_CAP);
+  const shown = all ? rows : rows.slice(0, cap);
   return (
     <div className="flex flex-col gap-2">
-      {shown.map(render)}
-      {rows.length > ROW_CAP && (
-        <div className="px-3 py-2">
+      <div className={listClassName}>{shown.map(render)}</div>
+      {rows.length > cap && (
+        <div className={moreClassName}>
           <Button size="sm" variant="light" onPress={() => setAll((v) => !v)}>
-            {all ? "Show fewer" : `Show all ${rows.length}`}
+            {all ? t("list.showFewer") : t("list.showAll", { n: rows.length })}
           </Button>
         </div>
       )}
@@ -264,12 +275,13 @@ function AskCards({
   rows: ReviewRow[];
   actions: ReviewGroupActions;
 }) {
-  const [all, setAll] = useState(false);
-  const shown = all ? rows : rows.slice(0, ROW_CAP);
   return (
-    <div className="flex flex-col gap-2 px-1 pb-1">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {shown.map((row) => {
+    <div className="px-1 pb-1">
+      <CappedRows
+        rows={rows}
+        listClassName="grid grid-cols-1 gap-3 sm:grid-cols-2"
+        moreClassName=""
+        render={(row) => {
           const view = reviewRowView(row);
           const opens = view.action !== null && view.action.kind !== "exit";
           return (
@@ -309,15 +321,8 @@ function AskCards({
               </CardBody>
             </Card>
           );
-        })}
-      </div>
-      {rows.length > ROW_CAP && (
-        <div>
-          <Button size="sm" variant="light" onPress={() => setAll((v) => !v)}>
-            {all ? "Show fewer" : `Show all ${rows.length}`}
-          </Button>
-        </div>
-      )}
+        }}
+      />
     </div>
   );
 }
@@ -330,56 +335,49 @@ function Gallery({
   rows: ReviewRow[];
   actions: ReviewGroupActions;
 }) {
-  const [all, setAll] = useState(false);
-  const shown = all ? rows : rows.slice(0, ROW_CAP * 2);
   return (
-    <div className="flex flex-col gap-2">
-      <div className="grid grid-cols-1 gap-2.5 px-1 pb-1 sm:grid-cols-2 lg:grid-cols-3">
-        {shown.map((row) => {
-          const Icon = kindIcon(row.nounKind);
-          return (
-            <Card
-              key={row.key}
-              data-row-id={row.key}
-              isPressable={row.detail !== null && row.detail.kind !== "open"}
-              onPress={() => actions.open(row)}
-              shadow="none"
-              radius="md"
-              className="bg-content1 text-left ring-1 ring-inset ring-foreground/10"
-            >
-              <CardBody className="flex flex-col gap-1.5 p-3">
-                <Chip
-                  size="sm"
-                  radius="sm"
-                  variant="flat"
-                  startContent={<Icon className="ml-1 h-3 w-3" aria-hidden />}
-                >
-                  {kindLabel(row.nounKind)}
-                </Chip>
-                <p className="line-clamp-3 text-[13px] font-medium leading-5 text-foreground">
-                  {row.title}
-                </p>
-                <p className="truncate text-[12px] text-foreground/65">
-                  {[
-                    row.sessionTitle ?? row.where,
-                    row.count > 1 ? `${row.count} grouped` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-              </CardBody>
-            </Card>
-          );
-        })}
-      </div>
-      {rows.length > shown.length || all ? (
-        <div className="px-1">
-          <Button size="sm" variant="light" onPress={() => setAll((v) => !v)}>
-            {all ? "Show fewer" : `Show all ${rows.length}`}
-          </Button>
-        </div>
-      ) : null}
-    </div>
+    <CappedRows
+      rows={rows}
+      cap={ROW_CAP * 2}
+      listClassName="grid grid-cols-1 gap-2.5 px-1 pb-1 sm:grid-cols-2 lg:grid-cols-3"
+      moreClassName="px-1"
+      render={(row) => {
+        const Icon = kindIcon(row.nounKind);
+        return (
+          <Card
+            key={row.key}
+            data-row-id={row.key}
+            isPressable={row.detail !== null && row.detail.kind !== "open"}
+            onPress={() => actions.open(row)}
+            shadow="none"
+            radius="md"
+            className="bg-content1 text-left ring-1 ring-inset ring-foreground/10"
+          >
+            <CardBody className="flex flex-col gap-1.5 p-3">
+              <Chip
+                size="sm"
+                radius="sm"
+                variant="flat"
+                startContent={<Icon className="ml-1 h-3 w-3" aria-hidden />}
+              >
+                {kindLabel(row.nounKind)}
+              </Chip>
+              <p className="line-clamp-3 text-[13px] font-medium leading-5 text-foreground">
+                {row.title}
+              </p>
+              <p className="truncate text-[12px] text-foreground/65">
+                {[
+                  row.sessionTitle ?? row.where,
+                  row.count > 1 ? `${row.count} grouped` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            </CardBody>
+          </Card>
+        );
+      }}
+    />
   );
 }
 

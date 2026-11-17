@@ -56,6 +56,11 @@ export interface DetailDrawerProps {
   headerAccessory?: ReactNode;
   /** Optional right-side header content (status pill or extra metadata). */
   headerRight?: ReactNode;
+  /**
+   * The host's own head in place of the title block (the ✕ stays): a frame
+   * that draws the same head docked and in this drawer passes it here.
+   */
+  header?: ReactNode;
   /** Footer slot for actions. Closing is the header ✕ — no footer Close. */
   footer?: ReactNode;
   /**
@@ -75,6 +80,7 @@ export function DetailDrawer({
   subtitle,
   headerAccessory,
   headerRight,
+  header,
   footer,
   size = "md",
   children,
@@ -96,24 +102,31 @@ export function DetailDrawer({
         {(close) => (
           <>
             <DrawerHeader className="flex flex-col gap-1.5 border-b border-foreground/[0.06] px-6 py-4">
-              <div className="flex items-center gap-3">
-                {headerAccessory && (
+              <div
+                className={`flex gap-3 ${header ? "items-start" : "items-center"}`}
+              >
+                {header}
+                {!header && headerAccessory && (
                   <div className="shrink-0">{headerAccessory}</div>
                 )}
-                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span
-                    className={`${
-                      titleLines === 2 ? "line-clamp-2 break-words" : "truncate"
-                    } text-[15px] font-medium text-foreground`}
-                  >
-                    {title}
-                  </span>
-                  {subtitle && (
-                    <span className="truncate text-[11.5px] text-foreground/65">
-                      {subtitle}
+                {!header && (
+                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span
+                      className={`${
+                        titleLines === 2
+                          ? "line-clamp-2 break-words"
+                          : "truncate"
+                      } text-[15px] font-medium text-foreground`}
+                    >
+                      {title}
                     </span>
-                  )}
-                </div>
+                    {subtitle && (
+                      <span className="truncate text-[11.5px] text-foreground/65">
+                        {subtitle}
+                      </span>
+                    )}
+                  </div>
+                )}
                 {headerRight && <div className="shrink-0">{headerRight}</div>}
                 <Button
                   isIconOnly

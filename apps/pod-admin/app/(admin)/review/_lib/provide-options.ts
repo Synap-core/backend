@@ -22,7 +22,6 @@ import {
   ASK_COPY,
   provideAccountChoices,
   provideExpectedGranteeId,
-  provideGrantNote,
   providePrePickedAccount,
   provideSecretAccessLine,
   type AskProvideKind,
@@ -31,7 +30,9 @@ import {
   type ProvideSecretGrantOffer,
   type ProvideSecretUses,
   type ProvideStandingGrant,
+  provideSecretUsesMinutes,
 } from "@synap-core/types/ask";
+import type { ProvideSecretUse } from "../../../_lib/request/api";
 
 export type ProvideOptions =
   inferRouterOutputs<AppRouter>["focusSessions"]["provideOptions"];
@@ -70,14 +71,12 @@ export interface SecretSheet {
   choices: SecretChoice[];
   /** Pre-picked: the one whose name is the asked name, when exactly one is. */
   initialRef: string | null;
-  /** What handing one over lets the asking agent do. */
-  grantNote: string;
   /**
-   * The agent named in `grantNote`, sent back on the answer: the pod grants
-   * the read only if that agent is still the one asking.
+   * The agent the card names, sent back on the answer: the pod grants the
+   * read only if that agent is still the one asking.
    */
   expectedGranteeId: string | null;
-  /** The offer the notes are worded from (`provideGrantNote`). */
+  /** The pod's offer: who will read it, for how long. */
   grant: ProvideSecretGrantOffer;
   /** The agent that will read it; null = no agent can yet. */
   agentName: string | null;
@@ -88,18 +87,20 @@ export interface SecretSheet {
 }
 
 /**
- * The honest secret card for the pick (plan d717d6ac §4): For · Used by · On
- * · Until, and the line above the button. A standing grant on the picked
- * secret is said as such, never as an hour.
+ * The honest secret card for the pick (plan d717d6ac §4): what the agent
+ * declared, who reads it, and for how long. A standing grant on the picked
+ * secret is said as such, never as an hour. The words are the component's;
+ * the facts are here.
  */
 export interface SecretCardView {
   purpose: SecretPurposeView | null;
   usedBy: string | null;
-  /** How long the read lasts: a new `once` / `session` read, or `standing`. */
+  /** How long the read lasts: a new `once` / `session` read, or `standing`; null = no agent can read it yet. */
   until: "once" | "session" | "standing" | null;
   /** The person may pick once or session (a new grant to an agent). */
   canPickUses: boolean;
-  note: string;
+  /** The minutes a new grant of the picked reads lasts at most. */
+  minutes: number;
 }
 
 export function secretCard(
@@ -115,10 +116,7 @@ export function secretCard(
     usedBy: sheet.agentName,
     until: !grants ? null : standing ? "standing" : uses,
     canPickUses: grants && !standing,
-    note: provideGrantNote(sheet.grant, {
-      standingGrant: picked?.standingGrant ?? null,
-      uses,
-    }),
+    minutes: provideSecretUsesMinutes(uses),
   };
 }
 
@@ -137,7 +135,6 @@ function secretSheet(o: Of<"secret">): SecretSheet {
       standingGrant: r.standingGrant ?? null,
     })),
     initialRef: named.length === 1 ? named[0].ref : null,
-    grantNote: provideGrantNote(o.secret.grant),
     expectedGranteeId: provideExpectedGranteeId(o.secret.grant),
     grant: o.secret.grant,
     agentName:
@@ -302,37 +299,30 @@ export function connectedReceipt(serviceName: string): ProvideReceipt {
 
 // ─── What became of a secret ────────────────────────────────────────────────
 
-/** `focusSessions.provideSecretUse`'s `use`, structurally. */
-export interface ProvideSecretUseRead {
-  secretName: string;
-  agentName: string;
-  uses: "once" | "session" | "standing";
-  expiresAt: string | null;
-  active: boolean;
-  useCount: number;
-  lastUsedAt: string | null;
-  takeBack: { door: string; grantId: string } | null;
-}
+/**
+ * Where a handed-over secret stands, from the pod's own fields
+ * (`focusSessions.provideSecretUse`): still readable (with the grant Take
+ * back revokes, and whether it is a STANDING one the agent held before this
+ * ask), taken back (only when `revokedAt` is set), used up (`useCount >=
+ * maxUses`), or ended at its expiry. Never "Taken back" for a grant that
+ * only ran out.
+ */
+export type SecretUseState =
+  | { kind: "active"; grantId: string; standing: boolean }
+  | { kind: "takenBack" }
+  | { kind: "usedUp" }
+  | { kind: "ended"; at: string | null };
 
-export interface SecretUseView {
-  secretName: string;
-  agentName: string;
-  useCount: number;
-  lastUsedAt: string | null;
-  until: "once" | "session" | "standing";
-  /** Present while there is a grant left to take back. */
-  takeBack: { grantId: string } | null;
-}
-
-/** The line under a handed-over secret: "Read 2 times · last 14:02 · … · Take back". */
-export function secretUseView(use: ProvideSecretUseRead): SecretUseView {
-  return {
-    secretName: use.secretName,
-    agentName: use.agentName,
-    useCount: use.useCount,
-    lastUsedAt: use.lastUsedAt,
-    until: use.uses,
-    takeBack:
-      use.takeBack && use.active ? { grantId: use.takeBack.grantId } : null,
-  };
+export function secretUseState(use: ProvideSecretUse): SecretUseState {
+  if (use.revokedAt) return { kind: "takenBack" };
+  if (use.active && use.takeBack) {
+    return {
+      kind: "active",
+      grantId: use.takeBack.grantId,
+      standing: use.uses === "standing",
+    };
+  }
+  if (use.maxUses !== null && use.useCount >= use.maxUses)
+    return { kind: "usedUp" };
+  return { kind: "ended", at: use.expiresAt };
 }

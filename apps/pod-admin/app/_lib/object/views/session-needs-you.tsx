@@ -83,6 +83,8 @@ const PROPOSALS_SHOWN = 5;
 
 /** Where a row pod admin cannot act on is acted on (decision 94cd8636). */
 const ACT_ELSEWHERE = "Act on it in Relay or the Synap app.";
+/** Lines under a request row start where its text does: past the 28px kind tile and its gap. */
+const UNDER_TILE = "pl-10";
 
 const DOOR =
   "rounded-sm text-[12.5px] text-foreground/70 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
@@ -390,15 +392,15 @@ function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
         (here ? (
           <div
             data-acted-elsewhere=""
-            className="flex flex-wrap items-baseline gap-x-2 gap-y-1 pl-10"
+            className={`flex flex-wrap items-baseline gap-x-2 gap-y-1 ${UNDER_TILE}`}
           >
-            <span className="text-[12px] text-foreground/65">
+            <span className="text-[12px] text-foreground/70">
               {ACT_ELSEWHERE}
             </span>
             <OpenInAppLink type="session" id={sessionId} />
           </div>
         ) : (
-          <div className="pl-10">
+          <div className={UNDER_TILE}>
             <ExitLink
               exit={exitOf({ kind: "open", door })}
               label={resolveActionLabel("open", "imperative")}

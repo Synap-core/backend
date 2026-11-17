@@ -10,6 +10,7 @@ import { createElement } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { setAmbientCatalogLocale } from "@synap-core/types/i18n";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
 
 vi.mock("../../(admin)/components/side-nav-role", () => ({
   useConsoleRole: () => "admin",
@@ -126,6 +127,13 @@ vi.mock("../../../lib/trpc", async () => ({
 }));
 
 import { ProposalReview } from "./ProposalReview";
+import { alwaysEn } from "./copy";
+
+/** The one Refuse verb (the vocabulary door) and the rule menu's trigger. */
+const REFUSE_TRIGGER = new RegExp(
+  `${resolveActionLabel("refuse", "imperative")}…`
+);
+const NEVER = new RegExp(alwaysEn["never.trigger"].replace("…", ""));
 
 const AGENT = "55555555-5555-4555-8555-555555555555";
 const ID = "11111111-1111-4111-8111-111111111111";
@@ -234,7 +242,7 @@ describe("in French", () => {
     state.proposal = request("pending");
     const seen = text(render());
     expect(seen).toContain("Approuver et toujours autoriser…");
-    expect(seen).not.toMatch(/\bApprove\b|\bReject\b/);
+    expect(seen).not.toMatch(/\bApprove\b|\bReject\b|\bRefuse\b/);
   });
 });
 
@@ -252,9 +260,9 @@ describe("one pending state for the whole bar", () => {
     const html = render();
     for (const label of [
       /Approve$/,
-      /Reject…/,
+      REFUSE_TRIGGER,
       /Approve and always allow/,
-      /Reject and never allow/,
+      NEVER,
     ]) {
       expect(held(html, label), String(label)).toBe(false);
     }
@@ -268,9 +276,9 @@ describe("one pending state for the whole bar", () => {
       const html = render();
       for (const label of [
         /Approve/,
-        /Reject…/,
+        REFUSE_TRIGGER,
         /Approve and always allow/,
-        /Reject and never allow/,
+        NEVER,
       ]) {
         expect(held(html, label), String(label)).toBe(true);
       }

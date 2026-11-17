@@ -10,31 +10,26 @@
  * Before or Next, said by `read: off` — not as a failure.
  */
 
-import {
-  lensRowOfNeedsYou,
-  type LensNeedsYouSignal,
-} from "@synap-core/types/lens";
+import { lensRowOfNeedsYou } from "@synap-core/types/lens";
 import { requestStory, type RequestStory } from "@synap-core/types/needs-you";
 import { useConsoleLocale } from "../../../lib/i18n/locale-provider";
+import type { NeedsYouSignal } from "./api";
 import type { StoryRead } from "./request-story-view";
 import { useRequestContext } from "./use-request-context";
 
-type ClusterSignal = LensNeedsYouSignal & {
-  proposalIds?: string[] | null;
-  source?: { kind: string; id: string; label: string } | null;
-};
-
 /** The needs-you row that stands for this proposal, if it still waits. */
 export function proposalSignalOf(
-  rows: readonly unknown[],
+  rows: readonly NeedsYouSignal[],
   proposalId: string
-): ClusterSignal | null {
-  for (const r of rows as ClusterSignal[]) {
-    if (r.kind !== "proposal-cluster") continue;
-    if (r.proposalIds?.includes(proposalId)) return r;
-    if (r.target?.kind === "proposal" && r.target.id === proposalId) return r;
-  }
-  return null;
+): NeedsYouSignal | null {
+  return (
+    rows.find(
+      (r) =>
+        r.kind === "proposal-cluster" &&
+        (r.proposalIds?.includes(proposalId) ||
+          (r.target?.kind === "proposal" && r.target.id === proposalId))
+    ) ?? null
+  );
 }
 
 export function useProposalStory({
@@ -46,7 +41,7 @@ export function useProposalStory({
   proposalId: string;
   sessionId: string | null;
   sessionTitle: string | null;
-  /** Read only while the proposal waits: a decided one has no story ahead. */
+  /** Read only while the proposal waits and its source is known. */
   enabled: boolean;
 }): { story: RequestStory | null; read: StoryRead } {
   const locale = useConsoleLocale();
