@@ -100,19 +100,6 @@ export interface ReactionDeclaration {
  */
 export const BUILT_IN_REACTIONS: readonly ReactionDeclaration[] = [
   {
-    id: "builtin:outcome-met-where-filed",
-    title: "An outcome is met wherever it was filed",
-    when: { subjectType: "proposal", to: ["approved", "auto_approved"] },
-    via: { link: "outcome_ref" },
-    do: { effect: "meet_outcomes" },
-    order: 10,
-    terminal: "apply",
-    terminalWhy:
-      "The approval is already the person's decision: meeting the outcome it delivers asks nothing new.",
-    source: "built_in",
-    enabled: true,
-  },
-  {
     id: "builtin:stopped-run-needs-you",
     title: "A run that stops early goes to Needs you",
     when: { subjectType: "playbook_run", to: ["waiting_on_you"] },
