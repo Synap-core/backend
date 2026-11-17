@@ -134,9 +134,21 @@ const chunks = <T>(xs: readonly T[]): T[][] =>
  */
 export const SIGNAL_BACKLOG_AFTER_MS = 24 * 3_600_000;
 
+/**
+ * The subjects the watcher raises signals on: a thing, a goal, a session. A
+ * run, a proposal or a slot is never signalled itself (its session is).
+ */
+export type SignalSubjectType = Extract<
+  TransitionSubjectType,
+  "entity" | "track" | "focus_session"
+>;
+
+const isSignalSubject = (t: TransitionSubjectType): t is SignalSubjectType =>
+  t === "entity" || t === "track" || t === "focus_session";
+
 export interface SignalCandidate {
   signal: StatusSignal;
-  subjectType: TransitionSubjectType;
+  subjectType: SignalSubjectType;
   subjectId: string;
   facetId: string | null;
   /** The role whose lifecycle it is; null for a kind's own, a goal or a session. */
@@ -413,8 +425,12 @@ async function holdCandidates(now: Date): Promise<SignalCandidate[]> {
       listed.add(r.id);
   }
   return holds
-    .filter((h) => h.subjectType !== "entity" || listed.has(h.subjectId))
-    .map((h: CurrentHold) => ({
+    .filter(
+      (h): h is CurrentHold & { subjectType: SignalSubjectType } =>
+        isSignalSubject(h.subjectType) &&
+        (h.subjectType !== "entity" || listed.has(h.subjectId))
+    )
+    .map((h) => ({
       signal: "hold_review_due" as const,
       subjectType: h.subjectType,
       subjectId: h.subjectId,
@@ -1023,7 +1039,7 @@ const SIGNAL_NOTIFICATION = {
   track: { type: "track.signal", sourceType: "track" },
   focus_session: { type: "session.signal", sourceType: "session" },
 } as const satisfies Record<
-  TransitionSubjectType,
+  SignalSubjectType,
   { type: string; sourceType: string }
 >;
 

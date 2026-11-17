@@ -53,6 +53,7 @@
  */
 
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
+import type { LifecycleCategory } from "../lifecycle/option.js";
 import {
   declinedAnswerText,
   declinedReasonOf,
@@ -218,6 +219,73 @@ export function deliverableOwedBy(
 ): DeliverableOwedBy | null {
   if (!isDeliverableOutstanding(slot)) return null;
   return slot.owner === "human" ? "you" : "session";
+}
+
+/**
+ * A slot's STATUS as a transition subject (reactions W1): DERIVED from the
+ * owed rule above, never stored — a slot has no status column, and gets none.
+ * The doors that change it (answer, block, unblock, satisfy, attest, retire,
+ * delegate, the decision-ask reactor) owe a `slot` transition when this value
+ * changes (`oweSlotTransitions`, @synap/database).
+ *
+ *   owed      outstanding and the person's (`deliverableOwedBy` = you): the
+ *             ask is open;
+ *   pending   outstanding and the session's, never answered; or optional and
+ *             unfilled (owed by nobody, not made either);
+ *   answered  the person answered it and it went back to the session, which
+ *             still owes the slot (an answer that filed its decision is
+ *             already `done`);
+ *   done      delivered (`isDeliverableDelivered`);
+ *   retired   let go without being delivered (`retiredAt`).
+ */
+export const SLOT_STATUSES = [
+  "owed",
+  "pending",
+  "answered",
+  "done",
+  "retired",
+] as const;
+export type SlotStatus = (typeof SLOT_STATUSES)[number];
+
+/**
+ * THE slot lifecycle (founder decision D9, 17 Nov 2026): owed = open,
+ * answered or done = done, retired = lost. A slot the session owes is `open`
+ * too: it is owed, by the agent.
+ */
+export const SLOT_STATUS_DECLARATION = {
+  owed: { category: "open" },
+  pending: { category: "open" },
+  answered: { category: "done" },
+  done: { category: "done" },
+  retired: { category: "lost" },
+} as const satisfies Record<SlotStatus, { category: LifecycleCategory }>;
+
+/** The fields {@link slotStatusOf} reads. */
+export type SlotStatusFacts = FloorFacts & Pick<DeliverableFacts, "owner">;
+
+/** One slot → its derived status. Delivered wins over retired, as the floor reads it. */
+export function slotStatusOf(slot: SlotStatusFacts): SlotStatus {
+  if (isDeliverableDelivered(slot)) return "done";
+  if (slot.retiredAt != null) return "retired";
+  if (deliverableOwedBy(slot) === "you") return "owed";
+  const answer = slot.answer;
+  const answered =
+    answer != null &&
+    (typeof answer !== "object" || Object.keys(answer).length > 0);
+  return answered ? "answered" : "pending";
+}
+
+/**
+ * A slot's transition subject id: `<session id>/<slot key>` (the label when
+ * the slot has no key) — the `answer:` wait's spelling without its prefix, so
+ * a hold may wait on `slot:<session id>/<key>`.
+ */
+export function slotSubjectId(
+  sessionId: string,
+  slot: { key?: string | null; label?: string | null }
+): string | null {
+  const name = slot.key || slot.label;
+  return name ? `${sessionId}/${name}` : null;
 }
 
 /** The session a deliverable belongs to — the one fact the slot cannot carry. */

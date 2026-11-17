@@ -396,7 +396,12 @@ export async function handleHoldResume(
   let held: Array<{ h: CurrentHold; reason: string }>;
   if (moved) {
     held = (await listHolds(db, { awaiting: moved }, now))
-      .filter((h) => holdWokenBy(h.hold.until, moved))
+      // A WAIT (`proposal:<id>`, `answer:…`) is resumed only by the wait
+      // check, which re-reads the owner floor: a proposal's own transition
+      // (reactions W1) names the same ref, and sends that check instead.
+      .filter(
+        (h) => !isWaitHold(h.hold.until) && holdWokenBy(h.hold.until, moved)
+      )
       .map((h) => ({
         h,
         reason: `What it waited on (${moved.subjectType}:${moved.subjectId}) moved to ${moved.to}.`,
@@ -512,6 +517,12 @@ function waitReason(moves: string): string {
     : `What it waited on (${moves}) was decided.`;
 }
 
+function isWaitHold(until: CurrentHold["hold"]["until"]): boolean {
+  return (
+    until != null && "moves" in until && parseHoldWaitRef(until.moves) != null
+  );
+}
+
 /** Move one held thing back to the status its pause began from; false when it did not move. */
 async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
   const to = h.hold.resumeTo;
@@ -590,6 +601,12 @@ async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
       if (rows.length > 0) await followUp(h, to);
       return rows.length > 0;
     }
+    case "playbook_run":
+      return false;
+    // A proposal or a slot never pauses: nothing of theirs is held.
+    case "proposal":
+    case "slot":
+      return false;
   }
 }
 
@@ -647,6 +664,20 @@ export const holdResumeReactor: Reactor = {
       until && typeof until === "object" && "moves" in until
         ? parseHoldWaitRef(String((until as { moves: unknown }).moves))
         : null;
+    // A proposal moved (reactions W1): the holds that wait on it as a WAIT
+    // (`proposal:<id>`) are checked now, through the owner-floored wait
+    // read, whatever moved it (an expiry, a withdrawal, an approval).
+    if (payload.subjectType === "proposal") {
+      await boss.send(
+        HOLD_RESUME_QUEUE,
+        {
+          waits: { proposalId: payload.subjectId },
+        } satisfies HoldResumeJobData,
+        payload.eventId
+          ? { singletonKey: `hold-resume:proposal:${payload.eventId}` }
+          : {}
+      );
+    }
     if (d.category === "paused" && waitsOn) {
       await boss.send(
         HOLD_RESUME_QUEUE,

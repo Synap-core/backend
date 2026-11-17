@@ -40,6 +40,7 @@ import { entityFacets } from "../../schema/entity-facets.js";
 import { projectTracks } from "../../schema/project-tracks.js";
 import { focusSessions } from "../../schema/focus-sessions.js";
 import { proposals } from "../../schema/proposals.js";
+import { playbookRuns } from "../../schema/playbook-runs.js";
 
 const logger = createLogger({ module: "holds" });
 
@@ -335,6 +336,11 @@ async function statusesNow(
   const sessions = ids((t) =>
     t.subjectType === "focus_session" ? t.subjectId : null
   );
+  // A run's pause (`waiting_on_you`, `stale`, `proposed`) records a hold
+  // too (reactions W1). Proposals and slots have no paused status.
+  const runs = ids((t) =>
+    t.subjectType === "playbook_run" ? t.subjectId : null
+  );
   if (kinds.length) {
     for (const r of await db
       .select({ id: entities.id, status: entities.status })
@@ -364,6 +370,13 @@ async function statusesNow(
       .from(focusSessions)
       .where(inArray(focusSessions.id, sessions)))
       out.set(`focus_session:${r.id}`, r.status);
+  }
+  if (runs.length) {
+    for (const r of await db
+      .select({ id: playbookRuns.id, status: playbookRuns.status })
+      .from(playbookRuns)
+      .where(inArray(playbookRuns.id, runs)))
+      out.set(`playbook_run:${r.id}`, r.status);
   }
   return out;
 }

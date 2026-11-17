@@ -16,6 +16,13 @@
  * (`TRANSITION_EVENT_TYPES`), subject = the goal or the session. Their writers
  * do not dispatch inline; the sweeper delivers them.
  *
+ * RUNS, PROPOSALS AND SLOTS (reactions W1): a playbook run's status
+ * (`setRunStatus`), a proposal's (`transitionProposal`) and an owed slot's
+ * DERIVED status (`oweSlotTransitions`) owe the same shape too, emitted as
+ * `playbook_run.transition.completed`, `proposal.transition.completed` and
+ * `slot.transition.completed` (subject id `<session id>/<slot key>`). New
+ * event types on Hub SSE and webhooks, announced in the event catalog.
+ *
  * THE SHARED REPOSITORY: the log row is appended through `eventRepository`,
  * whose hooks (`setup-event-broadcasting.ts`, @synap/api) run on it:
  *   - realtime: `domain-event-bridge.ts` pushes an entity's transition as
@@ -105,6 +112,9 @@ export const TRANSITION_EVENT_TYPES = {
   entity: "entity.transition.completed",
   track: "track.transition.completed",
   focus_session: "focus_session.transition.completed",
+  playbook_run: "playbook_run.transition.completed",
+  proposal: "proposal.transition.completed",
+  slot: "slot.transition.completed",
 } as const satisfies Record<TransitionSubjectType, string>;
 
 export const LIFECYCLE_TRANSITION_EVENT_TYPE = TRANSITION_EVENT_TYPES.entity;
@@ -281,8 +291,11 @@ export async function emitLifecycleTransition(
       } as SideEffectPayload);
     }
   } else {
-    // A goal's or a session's move: the transition alone. No rule ever read
-    // their status off an update event, so there is nothing to keep working.
+    // A goal's, a session's, a run's, a proposal's or a slot's move: the
+    // transition alone. No rule ever read their status off an update event,
+    // so there is nothing to keep working. (A proposal's `approved` /
+    // `rejected` events stay, emitted by `emitProposalReviewed`: a different
+    // event type, so a rule on either fires once.)
     await fanOut("transition", {
       subjectType: t.subjectType,
       action: "transition",
