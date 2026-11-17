@@ -1109,6 +1109,14 @@ export const sessionHandlers: McpHandlerMap = {
       : await resolveAmbientSession(userId, agentUserId);
     const wantedId = explicitId ?? ambient?.sessionId;
     if (!wantedId) {
+      // A2: this conversation started several open sessions — none is guessed.
+      if (ambient?.clientSessions) {
+        return ok({
+          session: null,
+          message: `This conversation has ${ambient.clientSessions.count} open sessions, so none is guessed — pass sessionId to read one.`,
+          sessions: ambient.clientSessions.sessions,
+        });
+      }
       const openCount = ambient?.unclaimedOpenCount ?? 0;
       return ok({
         session: null,

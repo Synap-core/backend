@@ -44,6 +44,8 @@ export interface RequestWriteContext {
   readonly delegatedTurnAgent?: DelegatedTurnAgent;
   /** A1 — the session id the MCP door derived (guessed, not named). */
   readonly derivedSessionId?: string;
+  /** A2 — the session the caller NAMED at the door (MCP `sessionId`, Hub `X-Session-Id`). */
+  readonly namedSessionId?: string;
   /**
    * B4 — set when that derived session is the client's AUTO-OPENED receipt:
    * its project. The gate re-keys a write whose project differs (a receipt is
@@ -403,6 +405,25 @@ export function derivedReceiptProjectFor(
 /** The session id the MCP door derived for this request, if any. */
 export function getDerivedSessionId(): string | undefined {
   return storage.getStore()?.derivedSessionId;
+}
+
+// ═══ Concern: NAMED SESSION (A2, plan a640c5bb) ═══════════════════════════════
+//
+// The session the caller NAMED (MCP `sessionId` arg, Hub `X-Session-Id`),
+// ownership-checked at the door and entered here ONCE. The governance gate reads
+// it when its own `sessionId` argument is absent: most write doors never forward
+// `ctx.sessionId` to the gate, which then filed the write into the client's
+// newest session, not the one named (ticket 4bc6b9f4). A door that files a
+// write elsewhere on purpose passes its own `sessionId`, which still wins.
+
+/** Run `fn` with `sessionId` recorded as the session the caller named. */
+export function runWithNamedSession<T>(sessionId: string, fn: () => T): T {
+  return runWithPatch({ namedSessionId: sessionId }, fn);
+}
+
+/** The session the caller named at the door for this request, if any. */
+export function getNamedSessionId(): string | undefined {
+  return storage.getStore()?.namedSessionId;
 }
 
 /**

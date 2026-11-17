@@ -144,6 +144,7 @@ vi.mock(
 import { checkPermissionOrPropose as strict } from "./permission-check.js";
 import {
   runWithDerivedSession,
+  runWithNamedSession,
   runWithWriteSessionLedger,
 } from "@synap/database";
 import type { PermissionCheckOpts } from "./permission-check.js";
@@ -291,6 +292,89 @@ describe("the gate stamps the writing process as the session's runner (cockpit C
     await gate({ ...AGENT, projectId: P2 });
     expect(mockStampWritingRunner).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: "sess-for-project" })
+    );
+  });
+});
+
+// A2 (plan a640c5bb, ticket 4bc6b9f4): an agent named its own CHILD session on
+// `synap_update_playbook` and `synap_define_kind`; those doors pass no
+// `sessionId` to the gate, so the client ladder filed every write into the
+// PARENT (the client's other started session). The MCP and Hub doors now enter
+// the named session in the request context, and the gate reads it there.
+describe("a session the caller NAMED at the door reaches the gate (A2)", () => {
+  const CHILD = "44444444-4444-4444-8444-444444444444";
+  const PARENT = "55555555-5555-4555-8555-555555555555";
+
+  beforeEach(() => {
+    // What the client ladder answers when nothing names a session: the parent.
+    mockResolveSessionOnce.mockResolvedValue(PARENT);
+  });
+
+  for (const [door, write] of [
+    [
+      "update_playbook",
+      { subjectType: "playbook", action: "update", data: { id: "pb-1" } },
+    ],
+    [
+      "define_kind",
+      { subjectType: "profile", action: "create", data: { slug: "film" } },
+    ],
+    ["create_entity", {}],
+  ] as const) {
+    it(`${door}: a write whose door passes no sessionId is filed into the named child`, async () => {
+      const { ledger, result } = runWithWriteSessionLedger(() =>
+        runWithNamedSession(CHILD, () => gate({ ...AGENT, ...write }))
+      );
+      await result;
+      expect(mockResolveSessionOnce).not.toHaveBeenCalled();
+      expect(ledger.filings.map((f) => f.sessionId)).toEqual([CHILD]);
+      expect(mockStampWritingRunner).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: CHILD })
+      );
+    });
+  }
+
+  it("the auto-approved receipt row carries the named child", async () => {
+    await runWithNamedSession(CHILD, () => gate({ ...AGENT }));
+    expect(receiptRow()).toMatchObject({ sessionId: CHILD });
+  });
+
+  it("CONTROL — nothing named: the client ladder answers (the parent here)", async () => {
+    const { ledger, result } = runWithWriteSessionLedger(() =>
+      gate({ ...AGENT })
+    );
+    await result;
+    expect(mockResolveSessionOnce).toHaveBeenCalled();
+    expect(ledger.filings.map((f) => f.sessionId)).toEqual([PARENT]);
+  });
+
+  it("a door's own sessionId still wins over the named one", async () => {
+    await runWithNamedSession(CHILD, () =>
+      gate({ ...AGENT, sessionId: "door-own" })
+    );
+    expect(receiptRow()).toMatchObject({ sessionId: "door-own" });
+  });
+
+  it("a session's own update is filed into THAT session, never the named one", async () => {
+    const { ledger, result } = runWithWriteSessionLedger(() =>
+      runWithNamedSession(CHILD, () =>
+        gate({
+          ...AGENT,
+          subjectType: "focus_session",
+          action: "update",
+          data: { id: PARENT, progress: 50 },
+        })
+      )
+    );
+    await result;
+    // A session's own update is not recorded as a filing (B4); it is
+    // attributed to the session it is about.
+    expect(ledger.filings).toEqual([]);
+    expect(mockStampWritingRunner).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: PARENT })
+    );
+    expect(mockStampWritingRunner).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: CHILD })
     );
   });
 });

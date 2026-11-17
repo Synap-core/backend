@@ -25,6 +25,7 @@ import {
 import { getAgentFocusWorkspaceId } from "../../services/agent-identity-service.js";
 import {
   runWithDerivedSession,
+  runWithNamedSession,
   runWithWriteSessionLedger,
 } from "@synap/database";
 import {
@@ -242,10 +243,15 @@ export async function executeMCPToolViaHubProtocol(
   // write, by client + project), so the reply below names what landed. A
   // derived RECEIPT carries its project so the gate can re-key a write of
   // another project to that project's receipt.
+  //
+  // A2: a session the caller NAMED is entered too, so the gate files into it
+  // at every door, not only the doors that forward `ctx.sessionId` (4bc6b9f4).
   const { ledger, result: pending } = runWithWriteSessionLedger(() =>
     session?.attribution === "derived"
       ? runWithDerivedSession(session.sessionId, invokeHandler, session.receipt)
-      : invokeHandler()
+      : session?.attribution === "explicit"
+        ? runWithNamedSession(session.sessionId, invokeHandler)
+        : invokeHandler()
   );
   const result = await pending;
   const filed = resolution
@@ -264,7 +270,7 @@ export async function executeMCPToolViaHubProtocol(
     toolName !== "synap_start_session" &&
     filed?.status === "ok" &&
     filed.filedIn.length > 0
-      ? withSessionDisclosure(result, resolution.attribution.openCount ?? 0)
+      ? withSessionDisclosure(result, resolution.attribution)
       : result;
   // A started session never splits; a write about another project says so,
   // once per session and project (the data rides on `attribution` every time).
@@ -396,16 +402,22 @@ function withSessionAttribution(
 /** Appends the ambiguity note to a tool result without disturbing its payload. */
 function withSessionDisclosure(
   result: CallToolResult,
-  openCount: number
+  attribution: SessionAttributionReport
 ): CallToolResult {
   // `openCount` = unclaimed work sessions touched in the last 24 hours, counted
   // exactly (`resolveWorkSession`) — it used to stop at 10 and read as exact.
-  const note =
-    `Note: ${openCount} of your focus sessions were active in the last 24 hours ` +
-    `and none is yours, so this write was not filed under any of them — it is ` +
-    `grouped in a session opened for you (named in \`attribution.filed\`). If ` +
-    `it belongs to one of them, pass that session's id as \`sessionId\`; to ` +
-    `name your own unit of work, call synap_start_session.`;
+  // With `candidates` (A2) it is the sessions THIS conversation started.
+  const openCount = attribution.openCount ?? 0;
+  const note = attribution.candidates
+    ? `Note: this conversation has ${openCount} open sessions, so this write ` +
+      `was not filed under any of them — it is grouped in a session opened ` +
+      `for you (named in \`attribution.filed\`). Pass the \`sessionId\` of ` +
+      `the one it belongs to (listed in \`attribution.candidates\`).`
+    : `Note: ${openCount} of your focus sessions were active in the last 24 hours ` +
+      `and none is yours, so this write was not filed under any of them — it is ` +
+      `grouped in a session opened for you (named in \`attribution.filed\`). If ` +
+      `it belongs to one of them, pass that session's id as \`sessionId\`; to ` +
+      `name your own unit of work, call synap_start_session.`;
   return withNote(result, note);
 }
 

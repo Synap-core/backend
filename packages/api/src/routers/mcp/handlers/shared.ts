@@ -631,16 +631,23 @@ export interface SessionAttributionReport {
    */
   via?: "client" | "unclaimed";
   /**
-   * Several unclaimed work sessions were open, so NONE was guessed — the write
-   * is grouped under this client's own (auto-opened) session instead.
+   * Several sessions could answer, so NONE was guessed — the write is grouped
+   * under this client's own (auto-opened) session instead. Either several
+   * unclaimed work sessions, or (with `candidates`) several this client started.
    */
   ambiguous: boolean;
   /**
-   * Unclaimed open work sessions counted while resolving. `null` = NOT counted
-   * — an explicit handle or a client-bound session answered first, or the read
-   * failed (a failed read is not zero).
+   * Unclaimed open work sessions counted while resolving; with `candidates`,
+   * the open sessions this client started. `null` = NOT counted — an explicit
+   * handle or a client-bound session answered first, or the read failed (a
+   * failed read is not zero).
    */
   openCount: number | null;
+  /**
+   * A2: the open sessions THIS client started when there were several (newest
+   * first, at most `CLIENT_OPEN_SESSIONS_LISTED`) — pass one as `sessionId`.
+   */
+  candidates?: Array<{ id: string; title: string; startedAt: string | null }>;
   /**
    * The explicit `sessionId` the caller sent and the resolver DROPPED. The call
    * then carries no session at all (no ambient fallback), which the caller must
@@ -738,6 +745,17 @@ export async function resolveSessionHandle(
         via: r.source,
         ambiguous: false,
         openCount: r.unclaimedOpenCount,
+      },
+    };
+  }
+  if (r.clientSessions) {
+    return {
+      session: undefined,
+      attribution: {
+        session: "none",
+        ambiguous: true,
+        openCount: r.clientSessions.count,
+        candidates: r.clientSessions.sessions,
       },
     };
   }

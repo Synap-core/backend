@@ -18,9 +18,13 @@ const rows: { id: string; userId: string }[] = [
 const eqCalls: { col: string; val: unknown }[] = [];
 let shouldThrow = false;
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
+  // The real request write context underneath (`runWithNamedSession`,
+  // `getNamedSessionId`); only the ownership read is stubbed.
+  const actual = await importOriginal<typeof import("@synap/database")>();
   const col = (name: string) => ({ __col: name });
   return {
+    ...actual,
     focusSessions: { id: col("id"), userId: col("userId") },
     eq: (c: { __col: string }, v: unknown) => {
       eqCalls.push({ col: c.__col, val: v });
@@ -44,7 +48,10 @@ vi.mock("@synap/database", () => {
   };
 });
 
-const { resolveHubSessionHeader } = await import("./session.js");
+const { resolveHubSessionHeader, sessionMiddleware } = await import(
+  "./session.js"
+);
+const { getNamedSessionId } = await import("@synap/database");
 
 const OWNED = "11111111-1111-4111-8111-111111111111";
 const OTHERS = "22222222-2222-4222-8222-222222222222";
@@ -105,5 +112,49 @@ describe("hub X-Session-Id validation", () => {
   it("scopes the lookup by BOTH id and userId (no id-only match)", async () => {
     await resolveHubSessionHeader(OWNED, "user-A");
     expect(eqCalls.map((e) => e.col).sort()).toEqual(["id", "userId"]);
+  });
+});
+
+// A2 (plan a640c5bb, 4bc6b9f4): the verified header is also the request's
+// NAMED session, which the governance gate reads when a route passes none.
+describe("hub X-Session-Id reaches the governance gate", () => {
+  /** Runs the middleware; `next` reports the named session it runs under. */
+  async function namedSessionSeenByRoute(
+    header: string | undefined,
+    userId: string | undefined
+  ) {
+    let seen: string | undefined | null = null;
+    const set = vi.fn();
+    const c = {
+      req: { header: () => header },
+      get: () => userId,
+      set,
+    } as unknown as Parameters<typeof sessionMiddleware>[0];
+    await sessionMiddleware(c, async () => {
+      seen = getNamedSessionId();
+    });
+    return { seen, set };
+  }
+
+  it("an owned header is the named session for the whole route", async () => {
+    const { seen, set } = await namedSessionSeenByRoute(OWNED, "user-A");
+    expect(seen).toBe(OWNED);
+    expect(set).toHaveBeenCalledWith("sessionId", OWNED);
+  });
+
+  it("🔒 a header naming someone else's session names nothing", async () => {
+    const { seen, set } = await namedSessionSeenByRoute(OWNED, "user-B");
+    expect(seen).toBeUndefined();
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("no header names nothing", async () => {
+    const { seen } = await namedSessionSeenByRoute(undefined, "user-A");
+    expect(seen).toBeUndefined();
+  });
+
+  it("the named session ends with the request", async () => {
+    await namedSessionSeenByRoute(OWNED, "user-A");
+    expect(getNamedSessionId()).toBeUndefined();
   });
 });

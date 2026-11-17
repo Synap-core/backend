@@ -99,6 +99,7 @@ vi.mock("../handlers/entity.js", async () => {
                 sessionId: ctx.sessionId ?? null,
                 projectId: placement.projectId,
                 derivedSessionId: database.getDerivedSessionId() ?? null,
+                namedSessionId: database.getNamedSessionId() ?? null,
               }),
             },
           ],
@@ -123,6 +124,7 @@ async function createEntity(args: Record<string, unknown>) {
     sessionId: string | null;
     projectId: string | null;
     derivedSessionId: string | null;
+    namedSessionId: string | null;
     /** Absent on an explicit call that filed nothing new (`attributionCarriesNews`). */
     attribution?: { session: string };
   };
@@ -142,7 +144,27 @@ describe("A1 — a non-capture MCP hub door never takes a project from a guessed
     expect(out.attribution?.session).toBe("derived");
     expect(out.sessionId).toBe(S_NEWEST);
     expect(out.derivedSessionId).toBe(S_NEWEST);
+    // A guess is never the NAMED session the gate files into (A2).
+    expect(out.namedSessionId).toBeNull();
     expect(out.projectId).toBeNull();
+  });
+
+  it("A2: an explicit owned sessionId is the request's NAMED session, for the gate at every door", async () => {
+    h.owned = true;
+    h.openRows = [{ id: S_NEWEST }, { id: S_OLDER }];
+
+    const out = await createEntity({ sessionId: S_EXPLICIT });
+
+    expect(out.namedSessionId).toBe(S_EXPLICIT);
+    expect(out.derivedSessionId).toBeNull();
+  });
+
+  it("A2: a DROPPED explicit sessionId (not the caller's) names nothing", async () => {
+    h.owned = false;
+
+    const out = await createEntity({ sessionId: S_EXPLICIT });
+
+    expect(out.namedSessionId).toBeNull();
   });
 
   it("a DIFFERENT explicit owned session still places the write", async () => {
