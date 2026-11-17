@@ -268,12 +268,16 @@ beforeAll(async () => {
   );
 }, 120_000);
 
-function matchIds(block: FindObjects | undefined): string[] {
+function blockMatches(block: FindObjects | undefined) {
   expect(block, "catalog block missing").toBeDefined();
   if (!block || "error" in block) {
     throw new Error(`catalog read failed: ${JSON.stringify(block)}`);
   }
-  return block.matches.map((m) => m.id);
+  return block.matches;
+}
+
+function matchIds(block: FindObjects | undefined): string[] {
+  return blockMatches(block).map((m) => m.id);
 }
 
 /** The index's answer: every seeded entity, NOT in title order. */
@@ -452,10 +456,7 @@ describe("the entities catalog: the index's hits, through the REAL floor", () =>
     expect(ids, "a hit in a space the person is not a member of").not.toContain(
       ENT.foreign
     );
-    const block = (await entityBlock()) as {
-      matches: Array<Record<string, unknown>>;
-    };
-    const b = block.matches.find((m) => m.id === ENT.B)!;
+    const b = blockMatches(await entityBlock()).find((m) => m.id === ENT.B)!;
     expect(b).toMatchObject({
       kind: "entity",
       profileSlug: "person",
