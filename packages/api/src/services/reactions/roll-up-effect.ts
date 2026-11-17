@@ -33,7 +33,10 @@ import {
   relations,
   resolveStatusMoveTarget,
 } from "@synap/database";
-import { findLifecycleOption } from "@synap-core/types/lifecycle";
+import {
+  findLifecycleOption,
+  lifecycleOptionLabel,
+} from "@synap-core/types/lifecycle";
 import { rollupTarget } from "@synap-core/types/relations";
 import type {
   ReactionEffect,
@@ -70,6 +73,7 @@ async function parentsOf(childId: string, via: RelationVia) {
   return db
     .selectDistinct({
       id: entities.id,
+      title: entities.title,
       userId: entities.userId,
       workspaceId: entities.workspaceId,
     })
@@ -140,8 +144,10 @@ export const rollUpReactionEffect: ReactionEffect = {
         ...(declaredTo ? { to: declaredTo } : {}),
       });
       if (!to || to === target.current) continue;
-      const toCategory = findLifecycleOption(target.lifecycle, to)?.category;
-      if (!toCategory) continue;
+      const option = findLifecycleOption(target.lifecycle, to);
+      if (!option) continue;
+      const toCategory = option.category;
+      const name = parent.title?.trim() || "Untitled";
       writes.push({
         target: { subjectType: "entity", subjectId: parent.id },
         to,
@@ -154,6 +160,10 @@ export const rollUpReactionEffect: ReactionEffect = {
           done: progress.done,
           of: progress.of,
           lost: progress.lost,
+        },
+        say: {
+          name,
+          applied: `Moved \u201c${name}\u201d to ${lifecycleOptionLabel(option)}: every part of it is done.`,
         },
       });
     }
