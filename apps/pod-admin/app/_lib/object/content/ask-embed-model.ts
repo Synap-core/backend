@@ -22,6 +22,7 @@ export {
   findAskSlot,
   receiptStands,
   type AskCardEvent,
+  type AskReceipt,
 } from "@synap-core/types/ask";
 
 export type EmbedAskRead =
