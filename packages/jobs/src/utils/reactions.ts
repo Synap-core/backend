@@ -358,21 +358,21 @@ export function reactionReason(
     case "proposed":
       return `Asked you before closing ${it}: closing it is your call.`;
     case "paused":
-      return `${kept}: this rule is paused.`;
+      return `${kept}: this automation is paused.`;
     case "not_chained":
-      return `${kept}: another rule made the change, and rules do not set each other off.`;
+      return `${kept}: another automation made the change, and automations do not set each other off.`;
     case "chain_depth":
-      return `${kept}: rules had already changed ${MAX_REACTION_DEPTH} things in a row.`;
+      return `${kept}: automations had already changed ${MAX_REACTION_DEPTH} things in a row.`;
     case "conflict":
-      return `${kept}: ${others.join(" and ") || "two rules"} would change it in different ways.`;
+      return `${kept}: ${others.join(" and ") || "two automations"} would change it in different ways.`;
     case "same_write":
-      return `Nothing more to do on ${it}: ${others[0] ?? "another rule"} already changes it the same way.`;
+      return `Nothing more to do on ${it}: ${others[0] ?? "another automation"} already changes it the same way.`;
     case "moved_meanwhile":
       return `${kept}: it changed since, and that change wins.`;
     case "needs_proposal":
-      return `${kept}: closing it needs your approval, and this rule cannot ask for it yet.`;
+      return `${kept}: closing it needs your approval, and this automation cannot ask for it yet.`;
     case "effect_unavailable":
-      return "Did not run this time: this rule is not available right now.";
+      return "Did not run this time: this automation is not available right now.";
     case "refused":
       return `${kept}: it could not be changed.`;
     case "failed":

@@ -5,10 +5,12 @@
  * roll-up a relation declares; plan 7d71ddcc D8): the second rung after the
  * Rules list. In order:
  *   1. what it is: its name, on or paused, and its one act (Pause / Turn on,
- *      through the governed rule door, `skills.setReactionRule`);
+ *      through the governed rule door, `skills.setReactionRule`; a pause is
+ *      the whole pod's, and its confirm says so);
  *   2. what it does: When → Then, in words;
- *   3. what it did lately: applied, proposed (a door to the proposal), or
- *      skipped with why. Omitted when it has not acted for this reader;
+ *   3. what it did lately: applied, proposed (the log's words and a door to
+ *      the proposal, whose own page says where it stands), or skipped with
+ *      why. Omitted when it has not acted for this reader;
  *   4. its facts: where it comes from, who owns it, what a move into done or
  *      lost does (decision D3), whether its moves set off other rules.
  * One read: `skills.listReactionRules` (the list's own), no second shape.
@@ -32,8 +34,10 @@ import {
   ResourceRowEmpty,
   ResourceRowError,
 } from "../../components/resource-row";
+import { objectPage } from "../../../_lib/object/content/markdown-model";
 import {
   reactionOriginLine,
+  reactionPauseConsequence,
   reactionOutcomeLine,
   reactionTerminalLine,
   type ReactionRuleWire,
@@ -57,20 +61,20 @@ export function PodRuleObject({ id }: { id: string }) {
   if (query.isError || !rule) {
     return (
       <PageShell>
-        <PageHeader title="Rule" />
+        <PageHeader title="Automation" />
         {query.isError ? (
           <ResourceRowError
-            message="This rule couldn’t be read."
+            message="This automation couldn’t be read."
             onRetry={() => void query.refetch()}
           />
         ) : (
-          <ResourceRowEmpty message="No rule by this name, or you can’t see it." />
+          <ResourceRowEmpty message="No automation by this name, or you can’t see it." />
         )}
         <Link
           href={navHref("rules")}
           className="mt-4 inline-block text-[13px] underline underline-offset-2"
         >
-          Back to the rules
+          Back to the automations
         </Link>
       </PageShell>
     );
@@ -163,10 +167,13 @@ export function PodRuleObject({ id }: { id: string }) {
                         <>
                           {" "}
                           <Link
-                            href={`/proposal/${encodeURIComponent(o.proposalId)}`}
+                            href={
+                              objectPage("proposal", o.proposalId) ??
+                              `/proposal/${encodeURIComponent(o.proposalId)}`
+                            }
                             className="underline underline-offset-2"
                           >
-                            Review it
+                            Open the proposal
                           </Link>
                         </>
                       )}
@@ -193,8 +200,8 @@ export function PodRuleObject({ id }: { id: string }) {
             <dt className="text-foreground/65">Its moves</dt>
             <dd className="text-foreground">
               {rule.chains
-                ? "Can set off other rules (at most 3 moves deep)."
-                : "Set off no other rule."}
+                ? "Can set off other automations (at most 3 moves deep)."
+                : "Set off no other automation."}
             </dd>
           </dl>
         </SectionCard>
@@ -214,16 +221,17 @@ export function PodRuleObject({ id }: { id: string }) {
         }
         consequence={
           turnOn ? (
-            <>From now on the pod applies it each time its trigger happens.</>
-          ) : (
             <>
-              The pod stops applying it until someone turns it back on. Each
-              time it would have acted is logged as skipped. Nothing it already
-              did is undone.
+              From now on the pod applies it, for everyone in this pod, each
+              time its trigger happens.
             </>
+          ) : (
+            <>{reactionPauseConsequence(rule)}</>
           )
         }
-        confirmLabel={turnOn ? resolveActionLabel("turn_on") : "Pause rule"}
+        confirmLabel={
+          turnOn ? resolveActionLabel("turn_on") : "Pause automation"
+        }
         confirmColor="warning"
         isPending={setRule.isPending}
       >

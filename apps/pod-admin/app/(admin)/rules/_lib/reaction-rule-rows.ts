@@ -103,6 +103,33 @@ export function reactionOriginLine(r: ReactionRuleWire): string {
   return `Declared on the link “${d.source.name} ${d.relationName.toLowerCase()} ${d.target.name}”`;
 }
 
+/** Where a row of the list comes from, in two or three quiet words. */
+export type RuleRowOrigin = "built_in" | "declared" | "yours";
+
+export function ruleOriginLabel(origin: RuleRowOrigin): string {
+  switch (origin) {
+    case "built_in":
+      return "Built in";
+    case "declared":
+      return "Declared on a link";
+    case "yours":
+      return "Yours";
+  }
+}
+
+export function reactionRuleOrigin(r: ReactionRuleWire): RuleRowOrigin {
+  return r.source === "built_in" ? "built_in" : "declared";
+}
+
+/**
+ * What pausing it does, said before it happens: a pod automation is ONE row
+ * for the whole pod, so a pause stops it for everyone, and what stops
+ * happening is its own When / Then.
+ */
+export function reactionPauseConsequence(r: ReactionRuleWire): string {
+  return `This pauses it for everyone in this pod. Until someone turns it back on, this no longer happens: ${r.when.toLowerCase()}, then ${r.via} ${r.do}. Each time it would have acted is logged as skipped. Nothing it already did is undone.`;
+}
+
 /** What a move into done or lost does, in words (decision D3). */
 export function reactionTerminalLine(r: ReactionRuleWire): string {
   return r.terminal === "apply"
@@ -122,12 +149,9 @@ export function reactionOutcomeLine(o: ReactionOutcomeWire): {
     case "applied":
       return { label: "Applied", tone: "healthy", detail: o.reason, when };
     case "proposed":
-      return {
-        label: "Proposed",
-        tone: "stale",
-        detail: "Waiting for your review.",
-        when,
-      };
+      // The log proves a proposal was FILED, never that it still waits:
+      // its own page says where it stands (the row links it).
+      return { label: "Proposed", tone: "stale", detail: o.reason, when };
     case "skipped":
       return {
         label: o.code === "failed" ? "Failed" : "Skipped",

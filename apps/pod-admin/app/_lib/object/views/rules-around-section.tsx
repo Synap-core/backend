@@ -20,6 +20,7 @@ import { SectionCard } from "../../../(admin)/components/section-card";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import { StatusPill } from "../../../(admin)/components/status-pill";
 import { useReauthOnUnauthorized } from "../use-reauth";
+import { objectPage } from "../content/markdown-model";
 import {
   lastOutcomeWords,
   ruleAroundHref,
@@ -48,7 +49,7 @@ export function RulesAroundSection({ thingId }: { thingId: string }) {
     return (
       <SectionCard variant="flat" title={TITLE}>
         <ResourceRowError
-          message="The rules around it couldn’t be read."
+          message="The automations around it couldn’t be read."
           onRetry={() => void query.refetch()}
         />
       </SectionCard>
@@ -70,6 +71,10 @@ export function RulesAroundSection({ thingId }: { thingId: string }) {
 function RuleAround({ rule }: { rule: StatusOfReaction }) {
   const mark = ruleAroundMark(rule);
   const last = lastOutcomeWords(rule);
+  // Its own page says whether it still waits: the log only proves it was filed.
+  const proposal = rule.last?.proposalId
+    ? objectPage("proposal", rule.last.proposalId)
+    : null;
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap items-center gap-2">
@@ -86,6 +91,17 @@ function RuleAround({ rule }: { rule: StatusOfReaction }) {
           ? `It ${rule.does}.`
           : `${rule.whenWords}: ${rule.via} ${rule.does}.`}
         {last ? ` ${last.replace(/\.$/, "")}.` : ""}
+        {rule.last?.outcome === "proposed" && proposal && (
+          <>
+            {" "}
+            <Link
+              href={proposal}
+              className="underline decoration-foreground/25 underline-offset-2 hover:decoration-foreground"
+            >
+              Open the proposal
+            </Link>
+          </>
+        )}
       </p>
     </div>
   );
