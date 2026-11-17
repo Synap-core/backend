@@ -20166,6 +20166,25 @@ export type HolderSource = {
 } | {
 	from: "roster";
 };
+/**
+ * The process the holder's agent runs in (`session_runners`, see the header):
+ * which harness, which model, which computer, in what state. Each `null` =
+ * its client named none (unknown), never a default.
+ */
+export interface HolderRunner {
+	harness: string | null;
+	model: string | null;
+	provider: SessionRunner["provider"];
+	/** The computer hosting the agent (a `machine` agent user); its name is `agent.computer`. */
+	machineUserId: string | null;
+	/** The host the process named itself on. */
+	processHost: string | null;
+	state: SessionRunner["state"];
+	stateSince: string | null;
+	lastSeenAt: string | null;
+	/** Stamped recently and not ended: it is running now. */
+	live: boolean;
+}
 export interface SessionHolder {
 	/** Whose move: the ball of `waitKind` (`agent` → agent, `me` → person); nobody when none. */
 	kind: "agent" | "nobody" | "person";
@@ -20175,6 +20194,8 @@ export interface SessionHolder {
 	since: string | null;
 	/** The agent on it — for a person, the one that handed it back; `null` = none. */
 	agent: HolderAgent | null;
+	/** Where that agent runs (see the header); `null` = no runner of it was ever seen. */
+	runner: HolderRunner | null;
 	source: HolderSource;
 	/** Nobody only: the session ended, or no agent is on it. */
 	reason?: "ended" | "no_agent";
@@ -25978,12 +25999,25 @@ export interface WorkGraphHold {
 	/** `reviewBy` has passed. */
 	reviewDue: boolean;
 }
+/**
+ * One stage of a goal's method, as `deriveTrackStages` places it against the
+ * goal's `currentStage` — the rule every track surface uses. Only what a map
+ * draws: the stage's brief, tasks, outputs and criteria stay on the goal's
+ * own read (`getTrack`).
+ */
+export type WorkGraphGoalStage = Pick<TrackStage, "category" | "key" | "name" | "position">;
 /** A goal (track) a node is filed into, as the track floor lets the caller see it. */
 export interface WorkGraphGoal {
 	id: string;
 	name: string;
 	status: string;
 	projectId: string;
+	/** The goal's METHOD (`project_tracks.playbook_id`); `null` = it follows none. */
+	playbookId: string | null;
+	/** The stage key the goal is at; `null` = stageless, or not started. */
+	currentStage: string | null;
+	/** The method's stages in order, each placed against `currentStage`; `[]` = stageless. */
+	stages: WorkGraphGoalStage[];
 }
 declare const WORK_GRAPH_EDGE_KINDS: readonly [
 	"blocked_by",
@@ -26047,9 +26081,18 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 	inWindow: boolean;
 	live: SessionActivityLive | null;
 	nextMove: ContinuationNextMove;
+	/**
+	 * With the `playbookId` narrow, how this window node follows it: `session`
+	 * = its own `playbookId` is the playbook, `goal` = only through the method
+	 * of the goal it is filed in. `null` without the narrow, and on a far end
+	 * (far ends are not narrowed).
+	 */
+	playbookMatch: WorkGraphPlaybookMatch | null;
 	unitFacts: SessionUnitCounts;
 	viewerRole: SessionViewerRole;
 };
+/** How a node follows the graph's `playbookId` narrow (see {@link WorkGraphNode.playbookMatch}). */
+export type WorkGraphPlaybookMatch = "goal" | "session";
 export interface WorkGraph {
 	nodes: WorkGraphNode[];
 	edges: WorkGraphEdge[];
@@ -41738,8 +41781,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				kind?: "all" | "receipt" | "run" | "work" | undefined;
 				lens?: "all" | "default" | "triage" | undefined;
+				playbookId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				rootSessionId?: string | undefined;
+				subjectEntityId?: string | undefined;
 				trackId?: string | undefined;
 				windowHours?: number | undefined;
 				workspaceId?: string | string[] | null | undefined;

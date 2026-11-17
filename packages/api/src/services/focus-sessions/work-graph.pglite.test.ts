@@ -460,7 +460,13 @@ beforeAll(async () => {
   await q(
     `insert into session_runners (session_id, client_key, user_id, agent_user_id, harness, conversation_id, machine_user_id, process_key, process_host, state, state_since, state_reported_at, model, first_seen_at, last_seen_at)
      values ($1, $2, $3, $4, 'claude-code', 'conv-pivot', $5, 'devbox:4242:1761600000000', 'devbox', 'busy', now() - interval '20 seconds', now() - interval '20 seconds', 'claude-opus-4', now() - interval '5 minutes', now() - interval '10 seconds')`,
-    [P.run, `key:${randomUUID()}|conv:claude-code:conv-pivot`, PIVOT, AGENT, MACHINE]
+    [
+      P.run,
+      `key:${randomUUID()}|conv:claude-code:conv-pivot`,
+      PIVOT,
+      AGENT,
+      MACHINE,
+    ]
   );
 
   // BIG: one more than the ceiling of OPEN work, plus 3 recently closed.
