@@ -2907,6 +2907,10 @@ export interface StatusOfWorkGate {
 	/** A PERSON decided it (never the proposal's own payload). */
 	decidedByHuman: boolean;
 	decidedAt?: string;
+	/** The stage being left when the gate was filed (the proposal's `fromStage`). */
+	fromStage?: string | null;
+	/** The proposal's own sentence ("Approve stage: Draft for Video 12"). */
+	summary?: string | null;
 }
 /** A slot the run owes the PERSON (the packet's `userMustDecide.owedSlots`). */
 export interface StatusOfWorkAsk {
@@ -2922,6 +2926,11 @@ export interface StatusOfWorkAsk {
 	criterionKey?: string;
 	/** How it asks (`confirm`, `choose`, `form`, `act`, `provide`), when it declares an ask. */
 	askMode?: string;
+	/**
+	 * The question in the agent's words: a confirm's `prompt`, a form's
+	 * `title`. Absent when the ask names none (draw `label` then).
+	 */
+	prompt?: string;
 }
 /** A proposal filed in the session that waits on a decision. */
 export interface StatusOfWorkProposal {
@@ -3007,6 +3016,8 @@ export interface StatusOfWorkItem {
 	 */
 	on: "goal" | "self" | "subject" | "target";
 	playbookId: string | null;
+	/** The session's room (`channelId`); `null` = it has none. */
+	roomId: string | null;
 	/** Its newest playbook run; `null` = it follows no playbook. */
 	run: StatusOfWorkRun | null | StatusOfWorkUnavailable;
 	/** Its declared stages, in order; `items: []` = a run with no stages. */
@@ -19567,6 +19578,10 @@ export interface PacketGateItem {
 	decidedAt?: string;
 	/** A deploy gate's commit (≥ 7 hex chars, may be abbreviated). */
 	commitSha?: string;
+	/** The stage being left, as the latest proposal recorded it (`data.fromStage`). */
+	fromStage?: string;
+	/** The latest proposal's own one-line sentence (`data.summary`). */
+	summary?: string;
 }
 /** The newest `dev.deploy_approval` a PERSON approved for this session. */
 export interface PacketDeployApproval {
