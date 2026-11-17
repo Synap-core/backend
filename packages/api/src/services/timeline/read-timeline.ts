@@ -282,7 +282,10 @@ function devFactEvent(
   if (!sha || typeof d.status !== "string") return null;
   const status = d.status as CiFinishedStatus;
   const workflow = typeof d.workflow === "string" ? d.workflow : null;
-  const pr = typeof d.pr === "number" ? d.pr : null;
+  const pr =
+    typeof d.pr === "number"
+      ? d.pr
+      : (prByHead?.get(headKey(repo, sha)) ?? null);
   return {
     event: {
       id: `event:${row.id}`,

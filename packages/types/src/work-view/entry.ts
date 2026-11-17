@@ -243,7 +243,7 @@ export function foldChecks(entries: readonly WorkEntry[]): EntryRow[] {
     prEntries.set(k, [...(prEntries.get(k) ?? []), e]);
   }
   const host = (check: WorkEntry): WorkEntry | null => {
-    const same = [...prEntries.values()].flat();
+    const same = check.pr ? prEntries.get(prKey(check.pr)) : undefined;
     if (!same?.length) return null;
     const t = timeOf(check.at);
     const before = same
@@ -256,7 +256,7 @@ export function foldChecks(entries: readonly WorkEntry[]): EntryRow[] {
   const rows: EntryRow[] = [];
   const rowOf = new Map<WorkEntry, EntryRow>();
   for (const e of entries) {
-    const target = e.isCheck ? host(e) : null;
+    const target = e.isCheck && !e.failed ? host(e) : null;
     if (target) {
       folded.set(target, [...(folded.get(target) ?? []), e]);
       continue;
@@ -292,7 +292,7 @@ export function groupEntries(
       const t = Date.parse(row.entry.at);
       // A time the pod sent unreadable is kept, in a group of its own.
       const day = Number.isFinite(t)
-        ? new Date(t).toISOString().slice(0, 10)
+        ? calendarDayIn(t, opts.timeZone)
         : "unknown";
       key = `day:${day}`;
       label = { day, isToday: day === today };
