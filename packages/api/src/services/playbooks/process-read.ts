@@ -183,6 +183,7 @@ export function processSteps(
       requires: requiresOf(null, stage as { requires?: unknown }),
       gate,
       subjectStatus: str(stage.subjectStatus),
+      onApproved: str(stage.onApproved),
     };
   });
 }

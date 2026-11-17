@@ -2642,6 +2642,14 @@ async function evaluatePermission(
               // `data` here is already the INNER gate payload — so a payload
               // carrying its own `data` key would be read one level too deep.
               entityProfileSlug: subjectProfileSlug,
+              // No PERSON approved: a rule did, for the agent. A stage whose
+              // outputs are now all approved reaches its `onApproved` as that
+              // agent (governed: humanOnly / done / lost propose; D2).
+              approver: {
+                kind: "agent",
+                userId,
+                agentUserId: agentUserId ?? null,
+              },
             });
           } catch (err) {
             logger.warn(

@@ -194,6 +194,7 @@ describe("processes leaf", () => {
           requires: [],
           gate: "human",
           subjectStatus: null,
+          onApproved: null,
         },
       ],
       checks: { criteria: [], gates: [{ stepKey: "s", kind: "human" }] },

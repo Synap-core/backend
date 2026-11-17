@@ -131,6 +131,9 @@ export async function planSubjectMoveGates(input: {
       continue;
     if (input.role && proc.profileSlug && proc.profileSlug !== input.role)
       continue;
+    // Where the follow would land the run (D2): the stage `to` enters, or the
+    // one after the stage whose approved work reaches `to` — so an agent
+    // reaching a status passes through the NEXT stage's gate.
     const toStage = stageForSubjectStatus(proc.stages, input.to);
     if (!toStage || toStage === session.currentStage) continue;
     const keys = proc.stages.map((s) => s?.key);

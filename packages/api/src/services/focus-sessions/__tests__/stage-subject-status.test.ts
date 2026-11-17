@@ -35,6 +35,8 @@ const h = vi.hoisted(() => ({
   ),
   // Where a move would read the thing's CURRENT value (the birth's
   // never-backwards check). Default: no declared lifecycle.
+  /** The focus_sessions row `reachApprovedStageOutputs` reads. */
+  sessionRow: null as null | Record<string, unknown>,
   target: vi.fn(
     async (_db: unknown, _input: Record<string, unknown>) =>
       ({ ok: false, code: "NO_LIFECYCLE", reason: "none" }) as Record<
@@ -65,8 +67,17 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: {
       select: () => ({
-        from: () => ({
-          where: () => ({ limit: async () => (h.entity ? [h.entity] : []) }),
+        from: (table: unknown) => ({
+          where: () => ({
+            limit: async () =>
+              table === actual.focusSessions
+                ? h.sessionRow
+                  ? [h.sessionRow]
+                  : []
+                : h.entity
+                  ? [h.entity]
+                  : [],
+          }),
         }),
       }),
     },
@@ -84,8 +95,11 @@ vi.mock("../../../routers/entities.js", () => ({
 }));
 
 import {
+  reachApprovedStageOutputs,
   statusesAheadOfStage,
   writeBirthStageSubjectStatus,
+  writeGatePassStatuses,
+  writeStageReachedStatus,
   writeStageSubjectStatus,
 } from "../stage-subject-status.js";
 
@@ -123,6 +137,7 @@ beforeEach(() => {
     code: "NO_LIFECYCLE",
     reason: "none",
   });
+  h.sessionRow = null;
   h.target.mockClear();
   h.target.mockResolvedValue({
     ok: false,
@@ -567,5 +582,202 @@ describe("a BIRTH never moves its subject backwards", () => {
     });
     expect(out).toMatchObject({ status: "written", value: "Scripted" });
     expect(h.target).not.toHaveBeenCalled();
+  });
+});
+
+describe("REACHED ON APPROVAL (decision D2): a stage's onApproved", () => {
+  // Produce Content, its D2 shape.
+  const PRODUCE = [
+    { key: "brief", name: "Brief" },
+    {
+      key: "script",
+      name: "Script",
+      onApproved: "Scripted",
+      expectedOutputs: [{ kind: "document", label: "Script" }],
+    },
+    {
+      key: "draft",
+      name: "Draft",
+      subjectStatus: "In Draft",
+      gate: { kind: "human" },
+    },
+    { key: "schedule", name: "Schedule", onApproved: "Scheduled" },
+    {
+      key: "publish",
+      name: "Publish",
+      gate: { kind: "human" },
+      onApproved: "Published",
+    },
+  ];
+  beforeEach(() => {
+    h.proc = { ...h.proc!, stages: PRODUCE };
+    h.entity = {
+      properties: { "post-status": "Briefed" },
+      workspaceId: "ws-1",
+    };
+    h.move.mockResolvedValue({ status: "moved", transition: {} });
+  });
+
+  it("statusesAheadOfStage counts both fields, entry before approval", () => {
+    // Entering script: its own reached status is still ahead.
+    expect([...statusesAheadOfStage(PRODUCE, "script")].sort()).toEqual([
+      "In Draft",
+      "Published",
+      "Scheduled",
+      "Scripted",
+    ]);
+    // Past script's approval: Scripted is behind, the rest ahead.
+    expect(
+      [...statusesAheadOfStage(PRODUCE, "script", { reached: true })].sort()
+    ).toEqual(["In Draft", "Published", "Scheduled"]);
+    expect([
+      ...statusesAheadOfStage(PRODUCE, "publish", { reached: true }),
+    ]).toEqual([]);
+  });
+
+  it("a PERSON's approval writes it as them (a human actor: a humanOnly value is theirs, never re-proposed)", async () => {
+    h.proc!.humanOnlyStatuses = ["Scripted"];
+    h.target.mockResolvedValue({ ok: true, target: { current: "Briefed" } });
+    const out = await writeStageReachedStatus({
+      session: SESSION,
+      stageKey: "script",
+      signal: "output_approved",
+      approver: { kind: "person", userId: "approver-1" },
+    });
+    expect(out).toMatchObject({ status: "written", value: "Scripted" });
+    expect(h.move.mock.calls[0]![0]).toMatchObject({
+      to: "Scripted",
+      actor: { kind: "human", userId: "approver-1" },
+      sessionId: "sess-1",
+    });
+  });
+
+  it("an AGENT's approval (no person) moves as the agent, so governance can propose it", async () => {
+    h.target.mockResolvedValue({ ok: true, target: { current: "Briefed" } });
+    await writeStageReachedStatus({
+      session: SESSION,
+      stageKey: "script",
+      signal: "output_approved",
+      approver: { kind: "agent", userId: "owner-1", agentUserId: "agent-1" },
+    });
+    expect(h.move.mock.calls[0]![0]).toMatchObject({
+      actor: { kind: "agent", userId: "owner-1", agentUserId: "agent-1" },
+    });
+  });
+
+  it("never moves the subject BACK from a later status — done included", async () => {
+    h.target.mockResolvedValue({
+      ok: true,
+      target: {
+        current: "Published",
+        lifecycle: {
+          options: [{ key: "Published", category: "done" }],
+        },
+      },
+    });
+    const out = await writeStageReachedStatus({
+      session: SESSION,
+      stageKey: "script",
+      signal: "gate_passed",
+      approver: { kind: "person", userId: "approver-1" },
+    });
+    expect(out).toEqual({ status: "skipped", reason: "subject_ahead" });
+    expect(h.move).not.toHaveBeenCalled();
+  });
+
+  it("a stage with no onApproved reaches nothing", async () => {
+    const out = await writeStageReachedStatus({
+      session: SESSION,
+      stageKey: "brief",
+      signal: "gate_passed",
+      approver: { kind: "person", userId: "approver-1" },
+    });
+    expect(out).toEqual({
+      status: "skipped",
+      reason: "stage_has_no_on_approved",
+    });
+    expect(h.move).not.toHaveBeenCalled();
+  });
+
+  it("a GATE PASS writes the stage left's reached status, THEN the entered one, expecting the first", async () => {
+    h.target.mockResolvedValue({ ok: true, target: { current: "Briefed" } });
+    const out = await writeGatePassStatuses({
+      session: SESSION,
+      gatedStage: "draft",
+      fromStage: "script",
+      userId: "approver-1",
+    });
+    expect(h.move.mock.calls.map((c) => c[0]!.to)).toEqual([
+      "Scripted",
+      "In Draft",
+    ]);
+    expect(h.move.mock.calls[1]![0]).toMatchObject({
+      expectedFrom: "Scripted",
+      sessionId: "sess-1",
+      actor: { kind: "human", userId: "approver-1" },
+    });
+    expect(out.reached).toMatchObject({ status: "written", value: "Scripted" });
+    expect(out.entered).toMatchObject({ status: "written", value: "In Draft" });
+  });
+
+  it("a gate pass with no recorded fromStage approves the stage declared before the gated one", async () => {
+    h.target.mockResolvedValue({ ok: true, target: { current: "Scripted" } });
+    await writeGatePassStatuses({
+      session: SESSION,
+      gatedStage: "publish",
+      userId: "approver-1",
+    });
+    expect(h.move.mock.calls.map((c) => c[0]!.to)).toEqual(["Scheduled"]);
+  });
+
+  describe("approval signal 1: the stage's declared outputs, all delivered", () => {
+    const row = (slots: unknown[]) => ({
+      id: "sess-1",
+      playbookId: "pb-1",
+      subjectEntityId: "post-1",
+      workspaceId: "ws-1",
+      currentStage: "script",
+      expectedOutputs: slots,
+    });
+
+    it("reaches the status once the Script is approved, as the approver", async () => {
+      h.sessionRow = row([
+        { kind: "document", label: "Script", status: "done" },
+      ]);
+      h.target.mockResolvedValue({ ok: true, target: { current: "Briefed" } });
+      const out = await reachApprovedStageOutputs({
+        sessionId: "sess-1",
+        approver: { kind: "person", userId: "approver-1" },
+      });
+      expect(out).toMatchObject({ status: "written", value: "Scripted" });
+      expect(h.move.mock.calls[0]![0]).toMatchObject({
+        actor: { kind: "human", userId: "approver-1" },
+      });
+    });
+
+    it("NEGATIVE: an output still owed reaches nothing", async () => {
+      h.sessionRow = row([
+        { kind: "document", label: "Script", status: "pending" },
+      ]);
+      const out = await reachApprovedStageOutputs({
+        sessionId: "sess-1",
+        approver: { kind: "person", userId: "approver-1" },
+      });
+      expect(out).toBeUndefined();
+      expect(h.move).not.toHaveBeenCalled();
+    });
+
+    it("a stage with NO declared outputs is not approved by a slot (its approval is the next gate)", async () => {
+      h.sessionRow = {
+        ...row([{ kind: "document", label: "Other", status: "done" }]),
+        currentStage: "schedule",
+      };
+      const out = await reachApprovedStageOutputs({
+        sessionId: "sess-1",
+        approver: { kind: "person", userId: "approver-1" },
+      });
+      expect(out).toBeUndefined();
+      expect(h.move).not.toHaveBeenCalled();
+    });
   });
 });

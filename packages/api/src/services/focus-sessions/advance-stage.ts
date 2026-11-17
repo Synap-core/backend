@@ -95,6 +95,7 @@ import {
 import { applyStageGateOnAdvance } from "../playbooks/stage-gate.js";
 import { mergeEnteredStageSlots } from "./stage-slots.js";
 import {
+  writeGatePassStatuses,
   writeStageSubjectStatus,
   type StageSubjectStatusOutcome,
 } from "./stage-subject-status.js";
@@ -179,6 +180,12 @@ export interface AdvanceSessionStageResult {
    * when the advance followed the subject (`skipSubjectWrite`).
    */
   subjectStatus?: StageSubjectStatusOutcome;
+  /**
+   * The stage LEFT reached its `onApproved` because the entered stage's check
+   * gate passed on this advance (approval signal 2, decision D2), written
+   * BEFORE `subjectStatus`. Absent when nothing was reached.
+   */
+  subjectReached?: StageSubjectStatusOutcome;
   /** Set when a failed check gate returned the run to its `onFail` stage. */
   onFail?: { toStage: string };
   /**
@@ -374,6 +381,8 @@ export async function advanceSessionStage(
   // An UNGATED stage writes its `subjectStatus` on entry; a GATED stage writes
   // it when its gate passes (a check that passes now, a check resumed later by
   // `resumeCheckGateIfMet`, a human gate on approval) — never while it holds.
+  // A gate's pass ALSO reaches the stage left's `onApproved`, first (D2,
+  // `writeGatePassStatuses`); an ungated entry approves nothing.
   const writeSubject = (): Promise<StageSubjectStatusOutcome> | undefined =>
     input.skipSubjectWrite
       ? undefined
@@ -411,8 +420,22 @@ export async function advanceSessionStage(
       ...slots,
     };
     if (!gate.paused) {
-      const subjectStatus = await writeSubject();
-      if (subjectStatus) result.subjectStatus = subjectStatus;
+      // The check judged the stage LEFT and it passed: that stage's
+      // `onApproved` is reached first, then the entered status (D2).
+      if (!input.skipSubjectWrite && !subjectFirst) {
+        const pass = await writeGatePassStatuses({
+          session,
+          gatedStage: toStage,
+          fromStage,
+          userId,
+          agentUserId: input.agentUserId ?? null,
+        });
+        if (pass.reached) result.subjectReached = pass.reached;
+        result.subjectStatus = pass.entered;
+      } else {
+        const subjectStatus = await writeSubject();
+        if (subjectStatus) result.subjectStatus = subjectStatus;
+      }
       result.stageRun = await enterStandingStage(input);
       return result;
     }

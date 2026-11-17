@@ -60,7 +60,7 @@ An app that draws a kind (a board, a thing's page) reads this. It does not rebui
 
 - **Per thing** when each item needs its own thinking: a post, a feature, a deal in negotiation.
 - **Per batch** when items are interchangeable: one session for "find 10 leads today" or "today's follow-ups".
-- A session's **step is its subject's status**, both ways: move the thing and the step follows; set a stage that owns a status and the thing moves (through the same door). A stage with no `subjectStatus` leaves the thing where it is.
+- A session's **step is its subject's status**, both ways: move the thing and the step follows; set a stage that owns a status and the thing moves (through the same door). A stage with no `subjectStatus` leaves the thing where it is; a stage's `onApproved` is the status its APPROVED work reaches (the step then stands at the next stage).
 - **Set the subject.** A session about one thing names it: `subjectEntityId` on `start_session`, or on `update_session` the moment the thing exists (a batch names its things as targets). A session on no thing shows on the homes as "No thing yet · attach one", outside every pipeline.
 - Following a method does not turn your session into a run; it stays your work and still shows in the method's runs.
 - **Targets get a result each**: a worker session holds its things as targets. Your own move of a target marks it `done`; someone else's move marks it `skipped`; targets left at close are `skipped`. Put the outcome on each thing, not only in a summary.

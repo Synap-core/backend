@@ -114,7 +114,7 @@ works a thing by following a **playbook**, and each stage of the playbook can
 **own** one status of the thing (`stages[].subjectStatus`). So the session's step
 and the thing's status are the same fact, both ways: entering a stage moves the
 thing, and moving the thing moves the session to the stage that owns the new
-status. A stage with no `subjectStatus` leaves the thing where it is. Every move
+status. A stage with no `subjectStatus` leaves the thing where it is; a stage's `onApproved` is the status its APPROVED work reaches (the step then stands at the next stage). Every move
 goes through the one status door (`moveStatus`), which classifies it, governs it
 and writes it with the transition; an agent passes `expectedStatus` and gets
 `conflict` if the thing moved meanwhile.

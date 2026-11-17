@@ -760,6 +760,15 @@ export async function completeProposalApproval(
         // without it a `kind: "knowledge"` slot satisfied by a PROPOSED capture
         // stayed pending forever. Same field the auto-approve half forwards.
         entityProfileSlug: readProposalEntityProfileSlug(args.proposal.data),
+        // The REVIEWER approved it: a stage whose outputs are now all
+        // approved reaches its `onApproved` as them (decision D2).
+        approver: args.ctx.agentUserId
+          ? {
+              kind: "agent",
+              userId: args.userId,
+              agentUserId: args.ctx.agentUserId,
+            }
+          : { kind: "person", userId: args.userId },
       });
       // `satisfyExpectedOutputs` stamps the expected-output SLOT `done`, but
       // the session outputs board (`session-outputs.ts`) reads the
