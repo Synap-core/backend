@@ -30,7 +30,9 @@
  * (chips, each a door); what it waits
  * on the owner for — the agents' questions and blockers, answered in place,
  * and the changes it proposed, each a door to its review
- * (`session-needs-you.tsx`); what it left — its report
+ * (`session-needs-you.tsx`), led by where its run stands — the stages, the
+ * gates waiting, a stop and its Continue (`work-section.tsx`, `statusOf`
+ * work); what it left — its report
  * (`focusSessions.document`), its outputs (`focusSessions.outputs`, 5 then
  * "Show all") and the sessions it spawned (the packet's `children`, the rest
  * through `focusSessions.browse` by `parentSessionId`); its
@@ -126,6 +128,7 @@ import {
   ProposedChangesSection,
 } from "./session-needs-you";
 import { RoomPanel } from "./room-panel";
+import { WorkSection } from "./work-section";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { OpenInAppLink } from "../open-in-app-link";
 import { useReauthOnUnauthorized } from "../use-reauth";
@@ -470,6 +473,12 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
           </p>
         )}
 
+        <WorkSection
+          subjectId={id}
+          self
+          canAct={owner}
+          sessionHref={sessionHref}
+        />
         {owner && <NeedsYouSection sessionId={id} gradedInRail={railGraded} />}
         <ProposedChangesSection sessionId={id} />
 
