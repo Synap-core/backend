@@ -44,7 +44,15 @@ import { getMessagingConnector } from "./index.js";
 import { resolveBroker } from "./index.js";
 import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
-import { resolveCapabilityGrant, getRequestGrant } from "@synap/database";
+import {
+  resolveCapabilityGrant,
+  getRequestGrant,
+  inArray,
+  proposals,
+  ProposalStatus,
+  runWithActingAgent,
+  UNDECIDED_PROPOSAL_STATUSES,
+} from "@synap/database";
 import {
   validateExternalUrl,
   safePublicFetch,
@@ -1561,6 +1569,67 @@ async function sendOnChannel(args: {
 }
 
 /**
+ * A send to a person's channel that already holds an UNDECIDED one (pending,
+ * or failed and never dispatched) revises that row and returns its id; null
+ * when there is none (plan 8032a127 D2).
+ *
+ * WHO REVISES: the ONE revise door, under the row's AUTHOR rung, entered by
+ * this door for the row's author (`runWithActingAgent`). The authority is the
+ * send door's, not the filing agent's: it has just passed this send's own gate
+ * for this person's channel, and it changes only the words (`body`, `subject`:
+ * the recipient, account and channel are protected fields). So the row keeps
+ * its author, the revision entry names the agent that filed the new words
+ * (`attributionAgentUserId`), and a failed row reopens for review as any
+ * revised failure does. A row with no agent (an app's draft) has no author
+ * rung: it is left alone and the send is filed beside it.
+ */
+export async function refileUndecidedSend(input: {
+  ownerUserId: string;
+  channelId: string;
+  body: string;
+  subject: string | null;
+  filingAgentUserId: string | null;
+}): Promise<string | null> {
+  const [existing] = await db
+    .select({ id: proposals.id, agentUserId: proposals.agentUserId })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.proposalType, "messaging.external.send"),
+        eq(proposals.targetType, "messaging"),
+        eq(proposals.targetId, input.channelId),
+        eq(proposals.subjectUserId, input.ownerUserId),
+        inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES]),
+        isNull(proposals.externalDispatchedAt),
+        isNotNull(proposals.agentUserId)
+      )
+    )
+    .orderBy(
+      drizzleSql`CASE WHEN ${proposals.status} = ${ProposalStatus.PENDING} THEN 0 ELSE 1 END`,
+      desc(proposals.createdAt)
+    )
+    .limit(1);
+  if (!existing) return null;
+  const { mergeProposalRevision } =
+    await import("../services/proposals/proposals-service.js");
+  await runWithActingAgent(existing.agentUserId ?? undefined, () =>
+    mergeProposalRevision({
+      proposalId: existing.id,
+      patch: {
+        kind: "envelope",
+        fields: {
+          body: input.body,
+          ...(input.subject !== null ? { subject: input.subject } : {}),
+        },
+      },
+      actorId: input.ownerUserId,
+      attributionAgentUserId: input.filingAgentUserId,
+    })
+  );
+  return existing.id;
+}
+
+/**
  * Verdict of the messaging-send capability gate (W3b). Mirrors the four
  * `gateCapabilityExecution` outcomes, with `propose` carrying the created
  * proposal id so the caller can surface it.
@@ -1706,6 +1775,19 @@ async function gateMessagingSend(
     const accountId = channel
       ? input.accountId || (channelMeta(channel).accountId as string) || null
       : null;
+    // ONE UNDECIDED SEND PER PERSON'S CHANNEL (plan 8032a127 D2): a send to a
+    // channel that already holds one revises it, so the person reviews one
+    // card for one person, never two drafts of which both could go out.
+    if (channel) {
+      const refiled = await refileUndecidedSend({
+        ownerUserId: input.userId,
+        channelId: channel.id,
+        body: input.body,
+        subject: input.subject ?? null,
+        filingAgentUserId: input.agentUserId ?? null,
+      });
+      if (refiled) return { kind: "propose", proposalId: refiled };
+    }
     const proposal = await createPendingProposal({
       userId: input.userId,
       // ATTRIBUTION IS ADDITIVE (routers/capture.ts:2745). Without an explicit
