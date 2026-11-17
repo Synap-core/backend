@@ -206,9 +206,7 @@ function ladderDefault() {
 }
 
 const orchestrateCalls = () =>
-  permSpy.mock.calls
-    .map((c) => c[0])
-    .filter((a) => a.action === "orchestrate");
+  permSpy.mock.calls.map((c) => c[0]).filter((a) => a.action === "orchestrate");
 
 async function approve(data: Record<string, unknown>, approver = USER) {
   const executor = proposalExecRegistry.resolveExact(
@@ -469,7 +467,9 @@ describe("approving it — one orchestrator, N links, N holds, N notes", () => {
         expect.objectContaining({ sessionId: b, held: "ended", linked: false }),
       ])
     );
-    expect((await linksTo(res.orchestratorSessionId)).map((l) => l.from_id)).toEqual([a]);
+    expect(
+      (await linksTo(res.orchestratorSessionId)).map((l) => l.from_id)
+    ).toEqual([a]);
     expect(await statusOf(b)).toBe("closed");
   });
 

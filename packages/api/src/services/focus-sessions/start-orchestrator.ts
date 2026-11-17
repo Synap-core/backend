@@ -311,8 +311,7 @@ export function orchestratorHold(orchestratorSessionId: string): Hold {
   return {
     on: "decision",
     ref: `focus_session:${orchestratorSessionId}`,
-    reason:
-      "Held by an orchestrator until the person approves its merged plan",
+    reason: "Held by an orchestrator until the person approves its merged plan",
     until: {
       moves: `answer:${orchestratorSessionId}/${ORCHESTRATOR_APPROVAL_SLOT}`,
     },
@@ -454,7 +453,12 @@ export async function applyOrchestration(p: {
   for (const r of p.sessionIds) {
     const row = owned.get(r);
     if (!row || !open.includes(row)) {
-      outcomes.push({ sessionId: r, held: "ended", linked: false, noted: false });
+      outcomes.push({
+        sessionId: r,
+        held: "ended",
+        linked: false,
+        noted: false,
+      });
       continue;
     }
     let held: OrchestratedChildOutcome["held"] = "already_paused";

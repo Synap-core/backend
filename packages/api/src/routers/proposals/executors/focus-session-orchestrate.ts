@@ -8,8 +8,6 @@
  * Rejecting the proposal runs nothing, so nothing is written.
  */
 import { TRPCError } from "@trpc/server";
-import { db, eq, proposals } from "@synap/database";
-import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 
@@ -20,14 +18,9 @@ export function registerFocusSessionOrchestrateExecutor(): void {
   registerProposalExecutor({
     key: "focus_session/orchestrate",
     async execute({ proposal, userId, input, deps }) {
-      const [alreadyDone] = await db
-        .select({ status: proposals.status })
-        .from(proposals)
-        .where(eq(proposals.id, input.proposalId));
-      if (alreadyDone?.status === ProposalStatus.APPROVED) {
-        return { success: true, alreadyApproved: true };
-      }
-
+      // No status pre-check: `applyOrchestration` is idempotent on the
+      // orchestrator id (create under it, links conflict-do-nothing, a paused
+      // session is not paused twice, keyed notes), so a replay changes nothing.
       const data = ((proposal.data as Record<string, unknown>)?.data ??
         {}) as Record<string, unknown>;
       const orchestratorSessionId = str(data.id) ?? proposal.targetId;
