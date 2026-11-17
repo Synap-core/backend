@@ -505,9 +505,9 @@ export async function isConnectionSyncProposal(
 
 /**
  * The approval hook, keyed by id — what the `connection-sync-approval` worker
- * runs when a `proposal.approved` event lands. Loads the row and delegates to
- * `applyConnectionSyncApproval`. A proposal that is not (or no longer) approved
- * earns nothing: the event may be replayed after a reopen.
+ * runs when a proposal's transition into `approved` lands. Loads the row and
+ * delegates to `applyConnectionSyncApproval`. A proposal that is not (or no
+ * longer) approved earns nothing: the event may be replayed after a reopen.
  */
 export async function applyConnectionSyncApprovalForProposal(input: {
   db?: DbHandle;
@@ -546,29 +546,4 @@ export async function applyConnectionSyncApprovalForProposal(input: {
     },
     userId: input.userId,
   });
-}
-
-/**
- * Does this approval need the connection-sync-approval job enqueued BY THE
- * APPROVAL PATH itself? True only for a WORKSPACE-LESS `import.graph` that
- * carries `data.connectionSync` (well-formed or not — the worker reports a
- * malformed stamp rather than it being dropped here).
- *
- * Why only pod-wide: `emitProposalReviewed` fans a workspace-scoped approval out
- * as `proposal.approved`, which the connection-sync-approval reactor already
- * turns into the job; a pod-wide one gets no side-effect emit at all. Answering
- * true for a workspace proposal would enqueue twice (harmless — singletonKey +
- * idempotent ensure — but a second door for the same fact). Pure.
- */
-export function isPodWideConnectionSyncApproval(proposal: {
-  proposalType: string;
-  workspaceId: string | null | undefined;
-  data: unknown;
-}): boolean {
-  return (
-    !proposal.workspaceId &&
-    (proposal.proposalType === "import.graph" ||
-      proposal.proposalType === "capture.graph") &&
-    readConnectionSync(proposal.data) !== undefined
-  );
 }

@@ -16,11 +16,11 @@
  *     `@synap-core/types`) over the facts the hold's owner recorded.
  *   - `until.moves` naming a WAIT (`answer:<session>/<slot>`,
  *     `proposal:<id>`, plan 07f8a997 W1 part C): the answer door
- *     (`answerExpectedOutput`) and the review door (`emitProposalReviewed`)
- *     send this queue `waits` when one lands, the reactor below sends it when
- *     a pause that names a wait is recorded (the Inngest trap: an answer given
- *     BEFORE the wait began must still resume it, at once), and the hourly
- *     sweep re-checks every wait hold. Met = the slot of a session the hold's
+ *     (`answerExpectedOutput`) sends this queue `waits` when an answer lands;
+ *     the reactor below sends it on every proposal's transition (a decision,
+ *     an expiry, a withdrawal) and when a pause that names a wait is recorded
+ *     (the Inngest trap: an answer given BEFORE the wait began must still
+ *     resume it, at once); the hourly sweep re-checks every wait hold. Met = the slot of a session the hold's
  *     OWNER owns carries an answer, or the proposal (filed under a session the
  *     owner owns) is no longer pending (`waitHoldsMet`).
  *

@@ -8,7 +8,6 @@
  * before the privileged `governance_rules` insert (see the comment inline).
  */
 
-import { sendWaitHoldCheck } from "../../services/lifecycle/wait-hold-check.js";
 import { settleGenerateRunOnDecision } from "../../services/playbooks/generate-run-decision.js";
 import { TRPCError } from "@trpc/server";
 import { twinsShownOnCard } from "../../services/duplicates/find-duplicate-candidates.js";
@@ -44,7 +43,6 @@ import { proposals } from "@synap/database/schema";
 import { resolveDailyWriteCeiling } from "@synap/database/agent-governance";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import type { PropertyDecisionMap } from "@synap/database";
-import { isPodWideConnectionSyncApproval } from "@synap/database";
 import { storedSessionSource } from "@synap/database";
 import type { StoredProposalData } from "@synap-core/types";
 import {
@@ -140,11 +138,7 @@ import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { relationsRouter } from "../relations.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { SERVER_CONVERSATION_EVENTS } from "../../realtime/socket-events.js";
-import {
-  emitSideEffects,
-  enqueueConnectionSyncApproval,
-  getBoss,
-} from "@synap/events";
+import { emitSideEffects, getBoss } from "@synap/events";
 import { messages } from "@synap/database/schema";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import {
@@ -257,9 +251,9 @@ export function emitProposalReviewed(
   markProposalNotificationsActioned([proposalId]);
   // Notify the originating channel so waiting agents can continue (fire-and-forget)
   enqueueProposalReviewedNotify(proposalId, status);
-  // A pause may wait on this decision (`until.moves: proposal:<id>`): it
-  // resumes now, not at the hourly sweep (plan 07f8a997 W1).
-  void sendWaitHoldCheck({ proposalId }, `proposal:${proposalId}:${status}`);
+  // A pause that waits on this decision (`until.moves: proposal:<id>`) is
+  // checked by hold-resume on the proposal's transition, which every move
+  // owes (an expiry and a withdrawal too): one check per move, not two.
 }
 
 /**
@@ -1507,20 +1501,6 @@ async function applyProposalApprovalInner(
       "approved",
       userId
     );
-
-    // A POD-WIDE connection-sync import still earns its
-    // connection's auto rule. `emitProposalReviewed` fans out side effects only
-    // for a workspace-scoped proposal (where the connection-sync-approval reactor
-    // enqueues the job), so the workspace-less case enqueues the SAME job here.
-    // Narrow on purpose: widening the emit to every pod-wide approval would newly
-    // fire webhook delivery and other reactors. Awaited so a queue failure fails
-    // loudly; the job retries and the rule mint behind it is idempotent.
-    if (isPodWideConnectionSyncApproval(proposal)) {
-      await enqueueConnectionSyncApproval({
-        proposalId: input.proposalId,
-        userId,
-      });
-    }
 
     // Per-item reasoned reject → flywheel, item-scoped (Phase 2, Gap 3).
     // For EACH item the reviewer rejected WITH a reason/reasonCode, emit an
