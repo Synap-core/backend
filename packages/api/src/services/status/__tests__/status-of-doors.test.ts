@@ -74,6 +74,7 @@ describe("tRPC lifecycle.statusOf", () => {
     expect(STATUS_OF_INCLUDES).toEqual([
       "moves",
       "history",
+      "reactions",
       "links",
       "rollup",
       "signals",
