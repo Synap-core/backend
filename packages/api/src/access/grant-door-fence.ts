@@ -683,6 +683,22 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // may not run a turn has no use for the list), as POST /chat/stream.
   [/^\/ai-providers\/available\/?$/, NARROWED("chat", [], "stream")],
   [/^\/messaging\/accounts\/?$/, PERSON("messaging")],
+  // How the person's connected tools are doing (finding 67b6c332, founder,
+  // 2026-11-17: an agent could not tell whether a Google connection kept
+  // failing to refresh, nor list which providers are connected). The
+  // sync-status rows (`getConnectionSyncStatus`, scoped to the CALLER's own
+  // connections by `scopeSyncStatusToUser`) carry phase, counts, the
+  // `needs_reauth` connection state and the failure class and sentence; the
+  // providers list carries provider, connected and the connection id. Neither
+  // returns a credential or a token. They are the person's own account-level
+  // rows, which no space holds, so a PERSON door on `tool` (the subject
+  // `tools` and `mcp_servers` read under, grant-read.ts): the key needs
+  // `tool.read`, which the AI read preset holds, whatever it is pinned to.
+  // `/connectors/broker-diagnostics` (pod admin only) and
+  // `/connectors/connections/:provider` stay unclassified: they are not the
+  // health read.
+  [/^\/connectors\/sync-status\/?$/, PERSON("tool")],
+  [/^\/connectors\/providers\/?$/, PERSON("tool")],
   // Which agents the person has (id, name, agent type, presence; never a
   // key): an app that hands a run to one of them (`handToAgentId` on
   // POST /playbooks/:id/run) must name it. The person's own roster, which no

@@ -691,6 +691,55 @@ describe("connection status door (decision 3): the person's accounts, by a named
   });
 });
 
+describe("connector health doors (finding 67b6c332): the person's connections, by `tool.read`", () => {
+  // An app's grant is always pinned to the spaces the person ticked; an agent's
+  // AI preset holds `tool.read` (AI_READ_SUBJECTS).
+  const pinned = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["w1"] });
+  const DOORS = ["/connectors/sync-status", "/connectors/providers"] as const;
+  it.each([
+    [["tool.read"], true],
+    [["tool"], true],
+    [["*"], true],
+    [["messaging.read"], false], // another person door's read
+    [["entity.deal.create"], false], // any write in one space is not enough
+    [[], false], // deny-all (a revoked or expired grant)
+  ] as const)("a pinned key holding %j → %s", (permissions, ok) => {
+    for (const path of DOORS)
+      expect(restDoorAllowed("GET", path, pinned(...permissions)), path).toBe(
+        ok
+      );
+  });
+  it("opens exactly those two doors, nothing beside them", () => {
+    const READER = pinned("tool.read");
+    for (const path of DOORS)
+      expect(restDoorAllowed("GET", `${path}/`, READER), path).toBe(true);
+    for (const path of [
+      "/connectors/broker-diagnostics", // pod admin only
+      "/connectors/connections/google",
+      "/connectors/connect",
+      "/connectors/sync-status/extra",
+    ])
+      expect(restDoorAllowed("GET", path, READER), path).toBe(false);
+  });
+  it("opens no write: tool.read changes no connector write's verdict", () => {
+    // The fence leaves a write to its gate, so a write door's verdict is not
+    // "refused"; what this pins is that `tool.read` adds nothing to it: the
+    // same verdict as a key holding only another door's read.
+    const READER = pinned("tool.read");
+    const OTHER = pinned("messaging.read");
+    for (const [method, path] of [
+      ["POST", "/connectors/connect"],
+      ["POST", "/connectors/session"],
+      ["POST", "/connectors/disconnect"],
+      ["DELETE", "/connectors/connections/conn-1"],
+    ] as const)
+      expect(restDoorAllowed(method, path, READER), `${method} ${path}`).toBe(
+        restDoorAllowed(method, path, OTHER)
+      );
+  });
+});
+
 describe("agent roster door: the person's agents, by a named read", () => {
   const app = (...permissions: string[]) =>
     key({ permissions, workspaceIds: ["w1"] });
