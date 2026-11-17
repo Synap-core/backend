@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ruleInProcessScope,
   neverRanCallout,
   ruleCounts,
   ruleFilterOf,
@@ -164,5 +165,20 @@ describe("phrases", () => {
     expect(runResultMessage("Digest", { status: "triggered" })).toBe(
       "“Digest” started a run."
     );
+  });
+});
+
+describe("ruleInProcessScope", () => {
+  const outside = new Set(["a1"]);
+  it("keeps every rule with no process filter", () => {
+    expect(ruleInProcessScope("b2", null, outside)).toBe(true);
+    expect(ruleInProcessScope("b2", null, null)).toBe(true);
+  });
+  it("keeps only the pod's outside-a-process rules under ?process=outside", () => {
+    expect(ruleInProcessScope("a1", "outside", outside)).toBe(true);
+    expect(ruleInProcessScope("b2", "outside", outside)).toBe(false);
+  });
+  it("passes nothing while that list is unread (never guessed)", () => {
+    expect(ruleInProcessScope("a1", "outside", null)).toBe(false);
   });
 });

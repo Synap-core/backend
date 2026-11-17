@@ -94,10 +94,27 @@ describe("navFor: the client scope of the one table", () => {
     ]);
     expect(groups[0]?.id).toBe(CLIENT_GROUP_ID);
     expect(ids(groups)[0]).toEqual([...CLIENT_NAV]);
-    // A scope, not a fork: every item of the table, each exactly once.
+    // A scope, not a fork: every item of the table, each exactly once,
+    // except a page folded into another item's (`within`).
     const all = ids(groups).flat();
     expect(new Set(all).size).toBe(all.length);
-    expect([...all].sort()).toEqual(NAV_ITEMS.map((i) => i.id).sort());
+    expect([...all].sort()).toEqual(
+      NAV_ITEMS.filter((i) => !i.within)
+        .map((i) => i.id)
+        .sort()
+    );
+  });
+
+  it("folds Automations into Processes: not listed, lit by Processes, still linked", () => {
+    const all = ids(navFor("admin", { allTools: true })).flat();
+    expect(all).toContain("processes");
+    expect(all).not.toContain("rules");
+    expect(activeNavId("/rules")).toBe("processes");
+    expect(activeNavId("/rules/a1")).toBe("processes");
+    expect(activeNavId("/processes/p1")).toBe("processes");
+    expect(navHref("rules", { filter: "never-ran" })).toBe(
+      "/rules?filter=never-ran"
+    );
   });
 
   it("scopes only the navigation: every client item is an item of the table", () => {
@@ -133,6 +150,8 @@ describe("consoleRedirects", () => {
       ],
       ["/runs", "focus=(?<id>[A-Za-z0-9_-]{1,64})", "/open/:id", false],
       ["/overview", null, "/home", false],
+      ["/templates", null, "/processes", false],
+      ["/templates/:id", null, "/processes/:id", false],
       ["/origins", null, "/applications", false],
       ["/people", null, "/members", false],
       ["/connectors", null, "/sources", false],

@@ -25,7 +25,7 @@ export type NavIconName =
   | "MessagesSquare"
   | "Zap"
   | "Activity"
-  | "LayoutTemplate"
+  | "Workflow"
   | "Building2"
   | "Shapes"
   | "Database"
@@ -75,6 +75,12 @@ export interface NavItem {
   kind?: string;
   /** Who sees it: members get Home, Requests, History and Settings; the rest is admin. */
   audience: NavAudience;
+  /**
+   * A page folded into another item's page: reached from it, never listed in
+   * the nav, and it lights that item up (`activeNavId`). Its links
+   * (`navHref`) and its page stay.
+   */
+  within?: string;
 }
 
 export interface NavGroup {
@@ -138,20 +144,30 @@ export const CONSOLE_NAV = [
     // 2026: no work status in pod admin): `WORK_MOVED_TO_APP` redirects them.
     items: [
       {
+        // A process is a playbook seen whole: its steps, needs, automations
+        // and who may run it (plan 0adf8352 W4, founder D1: "Process"
+        // replaces "Template"). Its runs are worked on the desktop (D4).
+        id: "processes",
+        href: "/processes",
+        label: "Processes",
+        icon: "Workflow",
+        kind: "playbook",
+        legacy: [
+          { source: "/templates" },
+          { source: "/templates/:id", destination: "/processes/:id" },
+        ],
+        audience: "admin",
+      },
+      {
+        // Folded into Processes: a process lists its own automations, and
+        // this page is the one list of every automation (Processes links
+        // here for the ones outside a process). Not in the nav itself.
         id: "rules",
         href: "/rules",
         label: "Automations",
         icon: "Zap",
         kind: "automation",
-        audience: "admin",
-      },
-      {
-        id: "templates",
-        href: "/templates",
-        // The registry's plural for a playbook (founder D1: "Processes").
-        label: "Processes",
-        icon: "LayoutTemplate",
-        kind: "playbook",
+        within: "processes",
         audience: "admin",
       },
     ],
@@ -478,7 +494,9 @@ export function navFor(
   const client: NavGroup = {
     id: CLIENT_GROUP_ID,
     label: null,
-    items: CLIENT_NAV.map(navItem).filter((i) => navVisibleTo(i, role)),
+    items: CLIENT_NAV.map(navItem).filter(
+      (i) => navVisibleTo(i, role) && !i.within
+    ),
   };
   if (role !== "admin" || !allTools) return [client];
   // Every other item, in its own group; a group left empty (the head one,
@@ -487,7 +505,7 @@ export function navFor(
     id: g.id,
     label: g.label,
     items: (g.items as readonly NavItem[]).filter(
-      (i) => !isClientNavItem(i) && navVisibleTo(i, role)
+      (i) => !isClientNavItem(i) && !i.within && navVisibleTo(i, role)
     ),
   }));
   return [client, ...operator].filter((g) => g.items.length > 0);
@@ -500,7 +518,8 @@ function segmentPrefix(pathname: string, prefix: string): boolean {
 /**
  * The item a pathname belongs to: the LONGEST matching prefix across every
  * item's `href` and `match`, on segment boundaries (`/sessions` never lights
- * up for `/sessions-archive`). null when no item owns the path.
+ * up for `/sessions-archive`). A folded page (`within`) lights up the item it
+ * is folded into. null when no item owns the path.
  */
 export function activeNavId(pathname: string): NavId | null {
   let best: { id: NavId; length: number } | null = null;
@@ -508,7 +527,7 @@ export function activeNavId(pathname: string): NavId | null {
     for (const prefix of [item.href, ...(item.match ?? [])]) {
       if (!segmentPrefix(pathname, prefix)) continue;
       if (!best || prefix.length > best.length) {
-        best = { id: item.id as NavId, length: prefix.length };
+        best = { id: (item.within ?? item.id) as NavId, length: prefix.length };
       }
     }
   }

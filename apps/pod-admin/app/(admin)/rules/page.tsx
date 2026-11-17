@@ -18,12 +18,15 @@
 
 import { addToast, Button } from "@heroui/react";
 import type { ReactNode } from "react";
-import { Zap } from "lucide-react";
+import { Workflow, Zap } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { ruleWhenWords } from "@synap-core/types/automations";
-import { resolveActionLabel } from "@synap-core/types/vocabulary";
+import {
+  resolveActionLabel,
+  resolveObjectNoun,
+} from "@synap-core/types/vocabulary";
 import { navHref } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -54,6 +57,7 @@ import {
   ruleFilterOf,
   ruleMatches,
   rulePill,
+  ruleInProcessScope,
   ruleRowAction,
   runResultMessage,
   runsPhrase,
@@ -64,6 +68,9 @@ import {
 import { useDrainPages } from "../../../lib/use-drain-pages";
 
 const CATALOGS = { en, fr };
+
+/** `?process=` values: only the automations that belong to no process. */
+type ProcessFilter = "outside";
 
 const TITLE = "Automations";
 const DESCRIPTION = "What runs on its own, and whether it worked.";
@@ -89,6 +96,11 @@ type PendingAct = {
 function RulesInner() {
   const searchParams = useSearchParams();
   const filter = ruleFilterOf(searchParams.get("filter"));
+  // `?process=outside`: only the automations that belong to no process
+  // (Processes' door). Membership is the pod's (`playbooks.processes`
+  // `automationsOutsideProcess`), never re-derived here.
+  const processFilter: ProcessFilter | null =
+    searchParams.get("process") === "outside" ? "outside" : null;
   const t = useT(CATALOGS);
   const search = useDebouncedQuery();
   const utils = trpc.useUtils();
@@ -111,6 +123,18 @@ function RulesInner() {
   const spaces = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 60_000,
   });
+  const index = trpc.playbooks.processes.useQuery(
+    {},
+    { staleTime: 30_000, enabled: processFilter !== null }
+  );
+  const outsideIds = useMemo(() => {
+    const list = index.data?.automationsOutsideProcess;
+    return list ? new Set(list.map((a) => a.id)) : null;
+  }, [index.data]);
+  // The filter is on and its read failed, or answered "could not read".
+  const outsideFailed =
+    processFilter !== null &&
+    (index.isError || (index.isSuccess && outsideIds === null));
   const ruleDrain = useDrainPages(rules, MAX_PAGES);
   const groupDrain = useDrainPages(groups, MAX_PAGES);
 
@@ -145,9 +169,14 @@ function RulesInner() {
   // land would undercount and then jump.
   const healthReady = !groups.isLoading && !groupDrain.draining;
   const counting = ruleDrain.draining || !healthReady;
-  const counts = ruleCounts(all, healthOf);
+  // The Process filter narrows first, so the Show chip's counts are over the
+  // same set the list draws (Processes' footer counts the active ones).
+  const scoped = all.filter((r) =>
+    ruleInProcessScope(r.id, processFilter, outsideIds)
+  );
+  const counts = ruleCounts(scoped, healthOf);
   const visible = filterBySearch(
-    all.filter((r) => ruleMatches(filter, r, healthOf(r.id))),
+    scoped.filter((r) => ruleMatches(filter, r, healthOf(r.id))),
     search.query,
     (r) => [r.name, spaceName(r.workspaceId)]
   );
@@ -246,24 +275,42 @@ function RulesInner() {
 
       <FilterRow
         filters={
-          <FilterChip
-            label="Show"
-            allLabel={null}
-            param="filter"
-            defaultValue="active"
-            value={filter}
-            options={RULE_FILTERS.map((f) =>
-              statusOption(f.key, {
-                label: f.label,
-                count:
-                  loading || rules.isError
-                    ? null
-                    : counting
-                      ? "…"
-                      : counts[f.key],
-              })
-            )}
-          />
+          <>
+            <FilterChip
+              label="Show"
+              allLabel={null}
+              param="filter"
+              defaultValue="active"
+              value={filter}
+              options={RULE_FILTERS.map((f) =>
+                statusOption(f.key, {
+                  label: f.label,
+                  count:
+                    loading ||
+                    rules.isError ||
+                    outsideFailed ||
+                    (processFilter !== null && index.isLoading)
+                      ? null
+                      : counting
+                        ? "…"
+                        : counts[f.key],
+                })
+              )}
+            />
+            <FilterChip<ProcessFilter>
+              label={resolveObjectNoun("playbook")}
+              allLabel={t("rules.anyProcess")}
+              param="process"
+              value={processFilter}
+              options={[
+                {
+                  id: "outside",
+                  label: t("rules.outside"),
+                  icon: Workflow,
+                },
+              ]}
+            />
+          </>
         }
         search={
           <ListSearch
@@ -306,12 +353,19 @@ function RulesInner() {
                 }`
         }
       >
-        {loading || (visible.length === 0 && counting) ? (
+        {loading ||
+        (visible.length === 0 && counting) ||
+        (processFilter !== null && index.isLoading) ? (
           <ResourceRowSkeleton count={4} />
         ) : rules.isError ? (
           <ResourceRowError
             message="Couldn't load rules."
             onRetry={() => void rules.refetch()}
+          />
+        ) : outsideFailed ? (
+          <ResourceRowError
+            message={t("rules.outsideFailed")}
+            onRetry={() => void index.refetch()}
           />
         ) : visible.length === 0 ? (
           <>
