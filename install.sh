@@ -145,6 +145,12 @@ SYNAP_COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign:v2.5.3@sha256:f1946d0f30fc8e3
 # /release/release.json: permission denied" (CP ticket 2e10228f). The two files
 # are copied into a world-readable directory of their own, whatever the
 # caller's directory mode or umask.
+docker_err_line() { # <docker output> — the line that says what went wrong, not the trailing usage hint
+  local l
+  l="$(printf '%s' "$1" | grep -iE 'error|denied|unable|failed|pull|no such|not found|timeout' | head -n 1)"
+  [ -n "$l" ] || l="$(printf '%s' "$1" | head -n 1)"
+  printf '%s' "$l"
+}
 cosign_verify() {
   local args=(verify-blob --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE"
               --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER")
@@ -184,7 +190,7 @@ verify_manifest_sig() { # <release> <manifest> — non-zero only under enforce
       info "release manifest signature verified (Synap CI, keyless)"
       return 0
     elif ! command -v cosign >/dev/null 2>&1 && [ "$rc" -ge 125 ] && [ "$rc" -le 127 ]; then
-      why="could not run the signature check (docker exited ${rc}: $(printf '%s' "$out" | tail -1))"
+      why="could not run the signature check (docker exited ${rc}: $(docker_err_line "$out"); the cosign image ${SYNAP_COSIGN_IMAGE} must be pullable, so ghcr.io must be reachable)"
     else
       why="the signature does not verify as Synap CI ($(printf '%s' "$out" | tail -1))"
     fi

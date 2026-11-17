@@ -372,6 +372,19 @@ sync_git_before_build() {
     GIT_SHA=$(cd "$repo_root" && git rev-parse HEAD 2>/dev/null || echo "")
 }
 
+# The ONE guard for every interactive prompt. With no terminal on stdin (a pipe,
+# CI, an agent shell) a bare `read` hits EOF and, under `set -e`, the script
+# exits 1 with no message. Say what to do instead. `install` never gets here
+# without a TTY (it switches itself to --non-interactive); this covers the rest.
+_synap_prompt_read() {
+    if [ ! -t 0 ]; then
+        echo -e "${RED:-}No answer on stdin: this step asks a question and no terminal is attached.${NC:-}" >&2
+        echo "Re-run from a terminal, or for install pass --non-interactive (every prompt then takes its default or a flag: --domain, --email, --admin-email, --admin-password, --intelligence-key ...)." >&2
+        exit 1
+    fi
+    read "$@"
+}
+
 # Used by destructive / confirm flows when automation must not block (e.g. Eve -y)
 synap_assume_yes() {
     [ "${SYNAP_ASSUME_YES:-}" = "1" ] || [ "${SYNAP_YES:-}" = "1" ] || [ "${SYNAP_NON_INTERACTIVE:-}" = "1" ]
@@ -2843,6 +2856,12 @@ EOF
 
     # ── Unattended contract (PODPROV-CONTRACT §3): validate every flag BEFORE
     # anything changes; in non-interactive mode no later step may prompt.
+    # No terminal on stdin and no explicit flag: nothing can answer a prompt, and a
+    # bare `read` at EOF would exit 1 silently under `set -e`. Behave as --non-interactive.
+    if [ "$INTERACTIVE" = true ] && [ ! -t 0 ]; then
+        INTERACTIVE=false
+        echo -e "${BLUE}ℹ️  No terminal on stdin: running as --non-interactive (prompts take their defaults or your flags).${NC}"
+    fi
     if [ "$INTERACTIVE" = false ]; then
         export SYNAP_NON_INTERACTIVE=1
     fi
@@ -2923,9 +2942,9 @@ EOF
             # Propose to change if interactive
             if [ "$INTERACTIVE" = true ]; then
                 echo -e "${BLUE}📁 Installation directory: ${INSTALL_DIR}${NC}"
-                read -p "Change installation directory? (y/N): " CHANGE_DIR
+                _synap_prompt_read -p "Change installation directory? (y/N): " CHANGE_DIR
                 if [ "$CHANGE_DIR" = "y" ] || [ "$CHANGE_DIR" = "Y" ]; then
-                    read -p "Enter installation directory: " INSTALL_DIR
+                    _synap_prompt_read -p "Enter installation directory: " INSTALL_DIR
                     INSTALL_DIR=${INSTALL_DIR:-$(pwd)/synap-backend}
                 fi
             fi
@@ -2995,7 +3014,7 @@ EOF
             else
                 prompt="$prompt: "
             fi
-            read -p "$prompt" DOMAIN
+            _synap_prompt_read -p "$prompt" DOMAIN
             DOMAIN=${DOMAIN:-${DEFAULT_DOMAIN:-localhost}}
         fi
         
@@ -3006,7 +3025,7 @@ EOF
             else
                 prompt="$prompt: "
             fi
-            read -p "$prompt" EMAIL
+            _synap_prompt_read -p "$prompt" EMAIL
             EMAIL=${EMAIL:-$DEFAULT_EMAIL}
         fi
         
@@ -3018,7 +3037,7 @@ EOF
             echo "  1) Pre-seed first admin via CLI/script (recommended for operators)"
             echo "  2) Set up in the browser after install (one-hour link from './synap setup admin --magic-link')"
             echo ""
-            read -p "Choice [1/2] (${mode_default}): " ADMIN_BOOTSTRAP_CHOICE
+            _synap_prompt_read -p "Choice [1/2] (${mode_default}): " ADMIN_BOOTSTRAP_CHOICE
             if [ "$ADMIN_BOOTSTRAP_CHOICE" = "2" ] || [ "$mode_default" = "token" -a -z "$ADMIN_BOOTSTRAP_CHOICE" ]; then
                 ADMIN_BOOTSTRAP_MODE="token"
             else
@@ -3034,7 +3053,7 @@ EOF
                 else
                     prompt="$prompt: "
                 fi
-                read -p "$prompt" ADMIN_EMAIL
+                _synap_prompt_read -p "$prompt" ADMIN_EMAIL
                 ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
             fi
 
@@ -3048,9 +3067,9 @@ EOF
                 local pw1=""
                 local pw2=""
                 while true; do
-                    read -s -p "Password: " pw1
+                    _synap_prompt_read -s -p "Password: " pw1
                     echo ""
-                    read -s -p "Confirm:  " pw2
+                    _synap_prompt_read -s -p "Confirm:  " pw2
                     echo ""
                     if [ -z "$pw1" ] && [ -z "$pw2" ]; then
                         ADMIN_PASSWORD=$(openssl rand -hex 16)
@@ -3083,14 +3102,14 @@ EOF
         echo ""
 
         if [ -z "$INTELLIGENCE_URL" ]; then
-            read -p "Choice [1/2/3]: " INTEL_CHOICE
+            _synap_prompt_read -p "Choice [1/2/3]: " INTEL_CHOICE
             INTEL_CHOICE=${INTEL_CHOICE:-3}
 
             case "$INTEL_CHOICE" in
                 1)
                     INTELLIGENCE_URL="https://intelligence.synap.live"
                     echo -e "${YELLOW}  Using Synap hosted service. Enter your API key from app.synap.live/settings/developer${NC}"
-                    read -p "  API Key (or press Enter to skip): " INTELLIGENCE_KEY
+                    _synap_prompt_read -p "  API Key (or press Enter to skip): " INTELLIGENCE_KEY
                     INTELLIGENCE_KEY=${INTELLIGENCE_KEY:-$DEFAULT_INTEL_KEY}
                     ;;
                 2)
@@ -3100,7 +3119,7 @@ EOF
                         LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
                     fi
                     local SUGGESTION=${DEFAULT_INTEL_URL:-"http://${LOCAL_IP:-localhost}:3001"}
-                    read -p "  Intelligence Service URL [${SUGGESTION}]: " INTELLIGENCE_URL
+                    _synap_prompt_read -p "  Intelligence Service URL [${SUGGESTION}]: " INTELLIGENCE_URL
                     INTELLIGENCE_URL=${INTELLIGENCE_URL:-$SUGGESTION}
 
                     if [ -z "$INTELLIGENCE_KEY" ]; then
@@ -3110,7 +3129,7 @@ EOF
                         else
                             key_prompt="$key_prompt: "
                         fi
-                        read -p "$key_prompt" INTELLIGENCE_KEY
+                        _synap_prompt_read -p "$key_prompt" INTELLIGENCE_KEY
                         INTELLIGENCE_KEY=${INTELLIGENCE_KEY:-$DEFAULT_INTEL_KEY}
                     fi
                     ;;
@@ -3204,7 +3223,7 @@ EOF
                         echo "  1) Reset directory and clone fresh (destructive)"
                         echo "  2) Choose a different install directory"
                         echo "  3) Cancel"
-                        read -p "Choice [1/2/3] (3): " DIR_CHOICE
+                        _synap_prompt_read -p "Choice [1/2/3] (3): " DIR_CHOICE
                         DIR_CHOICE=${DIR_CHOICE:-3}
                         case "$DIR_CHOICE" in
                             1)
@@ -3218,7 +3237,7 @@ EOF
                                 fi
                                 ;;
                             2)
-                                read -p "Enter new installation directory: " NEW_INSTALL_DIR
+                                _synap_prompt_read -p "Enter new installation directory: " NEW_INSTALL_DIR
                                 if [ -z "$NEW_INSTALL_DIR" ]; then
                                     echo -e "${RED}No directory entered. Installation cancelled.${NC}"
                                     exit 1
@@ -3273,7 +3292,7 @@ EOF
     if [ -f .env ]; then
         echo -e "${YELLOW}⚠️  .env file already exists${NC}"
         if [ "$INTERACTIVE" = true ]; then
-            read -p "Overwrite .env? (y/N): " OVERWRITE
+            _synap_prompt_read -p "Overwrite .env? (y/N): " OVERWRITE
             if [ "$OVERWRITE" != "y" ] && [ "$OVERWRITE" != "Y" ]; then
                 echo -e "${BLUE}ℹ️  Using existing .env file, updating values...${NC}"
                 # Just update domain/email/keys if needed
@@ -3477,7 +3496,7 @@ EOF
             echo -e "${RED}Aborting in non-interactive mode — investigate and re-run${NC}"
             exit 1
         fi
-        read -p "Continue anyway? (y/N): " CONTINUE
+        _synap_prompt_read -p "Continue anyway? (y/N): " CONTINUE
         if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
             echo "Install cancelled"
             exit 1
@@ -3841,7 +3860,7 @@ EOF
         echo -e "  ${BLUE}[a]${NC} All services"
         echo -e "  ${BLUE}[q]${NC} Quit"
         echo ""
-        read -p "Select service (number/a/q): " choice
+        _synap_prompt_read -p "Select service (number/a/q): " choice
         
         case "$choice" in
             [0-9]*)
@@ -4025,6 +4044,15 @@ _ue_cosign_via() {
 # (beside the manifest) and only that is mounted: mounting the manifest's own
 # directory depends on its mode and the host's umask, and install.sh's root-only
 # mktemp dir refused every fresh-host install (CP ticket 2e10228f).
+# The line of docker's output that says what went wrong: the first error line
+# (pull/denied/Error/Unable), not the trailing generic usage hint.
+_ue_docker_err_line() {
+    local l
+    l="$(printf '%s' "$1" | grep -iE 'error|denied|unable|failed|pull|no such|not found|timeout' | head -n 1)"
+    [ -n "$l" ] || l="$(printf '%s' "$1" | head -n 1)"
+    printf '%s' "$l"
+}
+
 _ue_cosign_verify() {
     local args=(verify-blob --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE"
                 --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER")
@@ -4066,7 +4094,7 @@ _ue_verify_manifest_sig() { # <fast|stable|release-id> <manifest> — non-zero o
             _ue_ok "release manifest signature verified (Synap CI, keyless)"
             return 0
         elif [ "$via" = docker ] && [ "$rc" -ge 125 ] && [ "$rc" -le 127 ]; then
-            why="could not run the signature check (docker exited ${rc}: $(printf '%s' "$out" | tail -1))"
+            why="could not run the signature check (docker exited ${rc}: $(_ue_docker_err_line "$out"); the cosign image ${SYNAP_COSIGN_IMAGE} must be pullable, so ghcr.io must be reachable)"
         else
             why="the signature does not verify as Synap CI ($(printf '%s' "$out" | tail -1))"
         fi
@@ -5620,7 +5648,7 @@ cmd_restart() {
         echo -e "  ${BLUE}[a]${NC} All services"
         echo -e "  ${BLUE}[q]${NC} Quit"
         echo ""
-        read -p "Select service (number/a/q): " choice
+        _synap_prompt_read -p "Select service (number/a/q): " choice
         
         case "$choice" in
             [0-9]*)
@@ -5844,7 +5872,7 @@ cmd_stop() {
         echo -e "  ${BLUE}[a]${NC} All services"
         echo -e "  ${BLUE}[q]${NC} Quit"
         echo ""
-        read -p "Select service (number/a/q): " choice
+        _synap_prompt_read -p "Select service (number/a/q): " choice
         
         case "$choice" in
             [0-9]*)
@@ -5976,14 +6004,14 @@ cmd_restore() {
             pwfile=${4:-}
             [ -s "$pwfile" ] || { echo -e "${RED}Password file not found or empty: ${pwfile}${NC}"; exit 1; }
         elif [ ! -s "$deploy_dir/state/backup/restic-password" ]; then
-            read -r -s -p "Repository password (from your recovery kit): " _kit_pw; echo
+            _synap_prompt_read -r -s -p "Repository password (from your recovery kit): " _kit_pw; echo
             [ -n "$_kit_pw" ] || { echo -e "${RED}No password given${NC}"; exit 1; }
             tmp_pw="$(umask 077 && mktemp)"
             printf '%s' "$_kit_pw" > "$tmp_pw"; unset _kit_pw
             pwfile="$tmp_pw"
         fi
         echo -e "${YELLOW}⚠️  WARNING: This replaces .env, every database and the stored files with snapshot ${snap}${NC}"
-        read -p "Continue? (yes/no): " CONFIRM
+        _synap_prompt_read -p "Continue? (yes/no): " CONFIRM
         [ "$CONFIRM" = "yes" ] || { [ -n "$tmp_pw" ] && rm -f "$tmp_pw"; echo "Restore cancelled"; exit 0; }
         local rc=0
         [ -n "$pwfile" ] && export BACKUP_PASSWORD_FILE="$pwfile"
@@ -6003,7 +6031,7 @@ cmd_restore() {
     # A directory is a `synap backup` / postgres-backup dump set (<db>.dump each).
     if [ -d "$target" ]; then
         echo -e "${YELLOW}⚠️  WARNING: This replaces every database with the contents of ${target}${NC}"
-        read -p "Continue? (yes/no): " CONFIRM
+        _synap_prompt_read -p "Continue? (yes/no): " CONFIRM
         [ "$CONFIRM" = "yes" ] || { echo "Restore cancelled"; exit 0; }
         SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_restore "$target" || exit 1
         # The fingerprint recorded with the dump is the second, independent
@@ -6626,7 +6654,7 @@ cmd_rebuild() {
         echo -e "  ${BLUE}[a]${NC} All services"
         echo -e "  ${BLUE}[q]${NC} Quit"
         echo ""
-        read -p "Select service (number/a/q): " choice
+        _synap_prompt_read -p "Select service (number/a/q): " choice
         
         case "$choice" in
             [0-9]*)
@@ -6809,7 +6837,7 @@ cmd_clean() {
         echo "  ${GREEN}[5]${NC} Remove build cache"
         echo "  ${GREEN}[q]${NC} Quit"
         echo ""
-        read -p "Select option (number/q): " choice
+        _synap_prompt_read -p "Select option (number/q): " choice
         
         case "$choice" in
             1)
@@ -6823,7 +6851,7 @@ cmd_clean() {
                 ;;
             4)
                 echo -e "${YELLOW}⚠️  This removes this pod's stopped containers, old release images and unused networks (volumes are kept)${NC}"
-                read -p "Continue? (y/N): " CONFIRM
+                _synap_prompt_read -p "Continue? (y/N): " CONFIRM
                 if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
                     docker compose rm -f; _clean_images; _clean_networks
                 fi
@@ -6855,7 +6883,7 @@ cmd_clean() {
                 ;;
             all)
                 echo -e "${YELLOW}⚠️  This removes this pod's stopped containers, old release images and unused networks (volumes are kept)${NC}"
-                read -p "Continue? (y/N): " CONFIRM
+                _synap_prompt_read -p "Continue? (y/N): " CONFIRM
                 if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
                     docker compose rm -f; _clean_images; _clean_networks
                 fi
@@ -7804,7 +7832,7 @@ USAGE
     fi
     if [ "$yes" != 1 ] && ! synap_assume_yes; then
         local ans=""
-        read -r -p "Rewrite postgresql.conf and restart Postgres now? [y/N] " ans || true
+        _synap_prompt_read -r -p "Rewrite postgresql.conf and restart Postgres now? [y/N] " ans || true
         case "$ans" in y|Y|yes) ;; *) echo "Nothing was changed."; return 0 ;; esac
     fi
     ts="$(date -u +%Y%m%dT%H%M%SZ)"; backup="postgresql.conf.before-tune-${ts}"
@@ -8469,7 +8497,7 @@ cmd_users() {
             fi
             if [ "$assume_yes" != "true" ] && ! synap_assume_yes; then
                 echo -e "${YELLOW}⚠️  This deletes the user identity for ${email}.${NC}"
-                read -p "Continue? (y/N): " confirm
+                _synap_prompt_read -p "Continue? (y/N): " confirm
                 if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
                     echo "Cancelled."
                     exit 0
@@ -8601,7 +8629,7 @@ cmd_reset() {
     fi
 
     local confirm=""
-    read -r -p "Type the pod domain (${pod_domain}) to confirm: " confirm || true
+    _synap_prompt_read -r -p "Type the pod domain (${pod_domain}) to confirm: " confirm || true
     if [ "$confirm" != "$pod_domain" ]; then
         echo "Cancelled — the domain did not match. Nothing was changed."
         exit 1
@@ -8661,7 +8689,7 @@ cmd_reset() {
         fi
 
         local rerun=""
-        read -p "Run fresh install now? (y/N): " rerun || true
+        _synap_prompt_read -p "Run fresh install now? (y/N): " rerun || true
         if [ "$rerun" = "y" ] || [ "$rerun" = "Y" ]; then
             cmd_install
             return $?
