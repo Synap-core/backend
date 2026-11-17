@@ -94,6 +94,8 @@ import { listCapabilities } from "../capabilities/capability-registry.js";
 import { foldIntentCoverage } from "../capabilities/capability-intent-index.js";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
+import { attachSessionKind } from "../focus-sessions/session-kind.js";
+import { attachTriage } from "../focus-sessions/triage.js";
 import { readFlowOf, flowOfInput } from "../lifecycle/flow-read.js";
 import { listPlaybookRunGroups } from "../runs/index.js";
 import { listRecentRunsByFlows } from "../runs/recent-by-flows.js";
@@ -760,6 +762,11 @@ export async function readProcess(
   };
 }
 
+/**
+ * The process's recent sessions, a session LIST: each row carries the two
+ * derived lenses every list door attaches (`attachSessionKind`,
+ * `attachTriage`), so no surface re-derives them from origin and metadata.
+ */
 async function readRecentRuns(
   reader: ProcessReader,
   playbookId: string
@@ -771,17 +778,27 @@ async function readRecentRuns(
       status: focusSessions.status,
       currentStage: focusSessions.currentStage,
       updatedAt: focusSessions.updatedAt,
+      origin: focusSessions.origin,
+      playbookId: focusSessions.playbookId,
+      metadata: focusSessions.metadata,
     })
     .from(focusSessions)
     .where(sessionsWhere(reader, { flow: { playbookId } }))
     .orderBy(desc(focusSessions.updatedAt))
     .limit(RECENT_RUNS);
-  return rows.map((r) => ({
+  return attachTriage(attachSessionKind(rows)).map((r) => ({
     sessionId: r.sessionId,
     title: r.title ?? null,
     status: r.status,
     currentStage: r.currentStage ?? null,
     updatedAt: new Date(r.updatedAt).toISOString(),
+    kind: r.kind,
+    triage: {
+      pending: r.triage.pending,
+      acceptedAt: r.triage.acceptedAt,
+      acceptedBy: r.triage.acceptedBy,
+      heldBecause: r.triage.heldBecause ?? null,
+    },
   }));
 }
 

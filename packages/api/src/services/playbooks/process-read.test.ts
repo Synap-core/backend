@@ -31,9 +31,11 @@ const h = vi.hoisted(() => ({
   queries: [] as Array<{ cols: Record<string, unknown>; where: unknown }>,
 }));
 
-vi.mock("../../access/scoped-db.js", async () => {
+vi.mock("../../access/scoped-db.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
   const { sql, getTableName } = await import("drizzle-orm");
   return {
+    ...actual,
     scopedDb: () => ({
       findFirst: async () => h.row,
       findMany: async () => (h.row ? [h.row] : []),

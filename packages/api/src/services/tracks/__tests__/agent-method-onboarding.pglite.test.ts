@@ -124,6 +124,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
   playbooks,
+  playbookAutomations,
   playbookVersions,
   projects,
   proposals,
@@ -183,6 +184,9 @@ beforeAll(async () => {
     playbooks,
     // Every kept version of a playbook (0416): the create door writes it.
     playbookVersions,
+    // The ONE playbook → automation link (0425): the create door reads a
+    // playbook's driving automation from it.
+    playbookAutomations,
     projects,
     sessionEvaluations,
     podMembers,
