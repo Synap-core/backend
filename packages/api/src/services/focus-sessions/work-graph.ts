@@ -80,7 +80,6 @@
  */
 
 import type { FocusSession } from "@synap/database/schema";
-import { runWithoutGrant } from "@synap/database";
 import type { WorkGraphReach } from "../../access/grant-door-fence.js";
 import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
@@ -92,6 +91,7 @@ import type {
 import {
   attachSessionLiveness,
   countUserSessions,
+  countUserSessionsForPerson,
   projectSessionRows,
   queryUserSessions,
 } from "./session-list-rows.js";
@@ -338,15 +338,14 @@ export async function buildWorkGraph(
   const windowNodes = await projectSessionRows(windowRows, userId);
   // A narrowed key: how many sessions the PERSON sees in this window that the
   // grant does not, counted with the same WHERE without the grant. A count,
-  // never a row (`runWithoutGrant` serves no row to the key). Counted over
+  // never a row (`countUserSessionsForPerson`). Counted over
   // the WINDOW, the map's population: a far end the grant does not read is
   // a window session (counted here) or settled before the window (not part
   // of the map); either way the edge to it is not drawn.
   const omittedByGrant = narrowed
     ? Math.max(
         0,
-        (await runWithoutGrant(() => countUserSessions(windowQuery))) -
-          windowTotal
+        (await countUserSessionsForPerson(windowQuery)) - windowTotal
       )
     : 0;
 
