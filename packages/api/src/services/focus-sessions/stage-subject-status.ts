@@ -541,7 +541,7 @@ export async function stagesApprovedBySettledSlots(input: {
     workspaceId: string | null;
     userId: string;
   };
-  stages: Array<{ stageKey: string; value: string }>;
+  stages: Array<{ stageKey: string; stageName: string; value: string }>;
 } | null> {
   const [row] = await db
     .select({
@@ -576,14 +576,15 @@ export async function stagesApprovedBySettledSlots(input: {
     return at >= 0 ? [x, { key: x.key, label: slots[at]?.label ?? null }] : [x];
   });
   const declaring = new Set(stagesDeclaringSlots(proc.stages, named));
-  const stages: Array<{ stageKey: string; value: string }> = [];
+  const stages: Array<{ stageKey: string; stageName: string; value: string }> =
+    [];
   for (const stage of proc.stages.slice(0, at + 1)) {
     const key = stage?.key;
     const value = stageOnApproved(stage);
     if (!key || !value) continue;
     if (key !== row.currentStage && !declaring.has(key)) continue;
     if (!stageOutputsApproved(proc.stages, key, slots)) continue;
-    stages.push({ stageKey: key, value });
+    stages.push({ stageKey: key, stageName: stage.name ?? key, value });
   }
   const { currentStage: _c, expectedOutputs: _e, ...session } = row;
   return {
@@ -612,6 +613,9 @@ export async function readReachedMoveTarget(input: {
   current: string | null;
   category: LifecycleCategory;
   humanOnly: boolean;
+  /** The person's words: the thing's title and the value's label. */
+  title: string;
+  label: string;
 } | null> {
   const proc = await loadSessionProcess({
     sessionId: input.session.id,
@@ -619,7 +623,7 @@ export async function readReachedMoveTarget(input: {
   });
   if (!proc) return null;
   const [subject] = await db
-    .select({ workspaceId: entities.workspaceId })
+    .select({ workspaceId: entities.workspaceId, title: entities.title })
     .from(entities)
     .where(eq(entities.id, input.subjectEntityId))
     .limit(1);
@@ -648,6 +652,8 @@ export async function readReachedMoveTarget(input: {
     category: option.category,
     humanOnly:
       option.humanOnly === true || proc.humanOnlyStatuses.includes(input.value),
+    title: subject.title?.trim() || "this",
+    label: option.label?.trim() || input.value,
   };
 }
 
