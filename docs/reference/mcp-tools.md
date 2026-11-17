@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 122 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 123 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -41,6 +41,7 @@ The pod's MCP server lists 122 tools. A new agent key lists the `entry` tools; t
 | [`synap_complete_session`](#synap_complete_session)                       | Complete focus session            | entry        | no        |
 | [`synap_revert_session`](#synap_revert_session)                           | Ask the user to revert a session  | sessions     | yes       |
 | [`synap_continue_session`](#synap_continue_session)                       | Continue a stopped run            | sessions     | no        |
+| [`synap_start_orchestrator`](#synap_start_orchestrator)                   | Start an orchestrator             | sessions     | no        |
 | [`synap_rerun_session`](#synap_rerun_session)                             | Rerun a session                   | sessions     | no        |
 | [`synap_get_session`](#synap_get_session)                                 | Get focus session                 | entry        | yes       |
 | [`synap_wait_for_answer`](#synap_wait_for_answer)                         | Wait for the person's answer      | entry        | no        |
@@ -712,6 +713,21 @@ Continue a run that stopped before its last stage ("Stopped at Script"): the SAM
 | Parameter   | Type   | Required | Description                                           |
 | ----------- | ------ | -------- | ----------------------------------------------------- |
 | `sessionId` | string | yes      | The session (run) UUID that stopped with stages left. |
+
+## synap_start_orchestrator
+
+**Start an orchestrator** · Group: `sessions` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+
+Start ONE orchestrator over 2 to 12 of your running sessions: a new session (goal = brief) that reads their rooms, writes a merged plan (slot 'merged-plan') and waits on the person's yes (slot 'plan-approval'). Each picked session is linked to it (`orchestrated_by`), paused if running with a hold that the person's answer to 'plan-approval' clears, and gets a handoff note in its room. Governed: an agent gets { status:'proposed', proposalId } (nothing is paused until the person approves); a person { status:'started', orchestratorSessionId, children }. A session that is not yours is not found; one that is not running or paused is refused. Optional agentId (synap_list_agents) hands the orchestrator to that agent on its computer.
+
+| Parameter    | Type          | Required | Description                                                                                                                                                                                                                                                                                                                                               |
+| ------------ | ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sessionIds` | array<string> | yes      | The running (or paused) sessions to coordinate: yours, 2 to 12.                                                                                                                                                                                                                                                                                           |
+| `brief`      | string        | yes      | What the orchestrator is for, one paragraph: its goal, and the note each picked session's room gets.                                                                                                                                                                                                                                                      |
+| `title`      | string        | no       | Optional short name; default 'Orchestrate N sessions'.                                                                                                                                                                                                                                                                                                    |
+| `agentId`    | string        | no       | Optional agent user id (synap_list_agents) that runs the orchestrator; omit to leave it for the person.                                                                                                                                                                                                                                                   |
+| `reasoning`  | string        | no       | Why, in the person's words: shown to whoever reviews the proposal.                                                                                                                                                                                                                                                                                        |
+| `sessionId`  | string        | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
 
 ## synap_rerun_session
 

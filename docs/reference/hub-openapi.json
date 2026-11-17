@@ -29555,7 +29555,8 @@
                       "dispatched_via",
                       "assigned_to",
                       "serves",
-                      "advances"
+                      "advances",
+                      "orchestrated_by"
                     ]
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },
@@ -50522,6 +50523,102 @@
                     "nextSince",
                     "hasMore"
                   ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/focus-sessions/orchestrate": {
+      "post": {
+        "tags": ["FocusSessions"],
+        "summary": "Start an orchestrator over several running sessions",
+        "description": "Files ONE governed write (focus_session/orchestrate). On approval (or at once for a person): an orchestrator session (goal = the brief, a merged-plan deliverable, the person's plan-approval slot), one `orchestrated_by` link per picked session, each running one paused until the person answers plan-approval, and a handoff note in each room. Same service as tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionIds": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "uuid" },
+                    "minItems": 2,
+                    "maxItems": 12
+                  },
+                  "brief": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "agentId": { "type": "string", "format": "uuid" },
+                  "reasoning": { "type": "string", "maxLength": 1000 }
+                },
+                "required": ["sessionIds", "brief"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Started: { status: 'started', orchestratorSessionId, channelId, children[] }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Proposed for review: { status: 'proposed', orchestratorSessionId, proposalId, reviewUrl }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
                 }
               }
             }

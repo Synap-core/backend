@@ -9175,7 +9175,19 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * the others it is listed and changes nothing (`services/projects/
  * pillar-health.ts`).
  */
- | "advances";
+ | "advances"
+/**
+ * session --orchestrated_by--> session. The FROM session is coordinated by
+ * the TO session, an orchestrator (founder decision D5, plan b38bc224; design
+ * doc 5fccda9b). Deliberately NOT a second `spawned_from`: every lineage
+ * reader assumes ONE parent per child (`getParentSessionId`, the packet's
+ * parent row, `parentOfGraph`), and the picked sessions already belong to
+ * their wave. Not a dependency either: what the child waits on is its HOLD
+ * (`until: answer:<orchestrator>/plan-approval`), which the person's yes
+ * clears. ONE producer: `services/focus-sessions/start-orchestrator.ts`
+ * (same owner at both ends). The Hub REST links door lists and refuses it.
+ */
+ | "orchestrated_by";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /** The normalized state of an external agent's task (the `status` verb). */
@@ -26301,6 +26313,30 @@ export type ContinueRunResult = {
 	ok: false;
 	reason: "already_running" | "conflict" | "denied" | "not_found" | "nothing_to_continue" | "person_only";
 };
+export type OrchestratedChildOutcome = {
+	/** `paused`: held on the yes. `already_paused`: keeps its own hold. `moved`: it changed status meanwhile, not held. `ended`: closed since; neither linked nor held. */
+	held: "already_paused" | "ended" | "moved" | "paused";
+	linked: boolean;
+	noteError?: string;
+	/** The note in its room; a failed post is said, never hidden. */
+	noted: boolean;
+	sessionId: string;
+};
+export type StartOrchestratorResult = {
+	channelId: string | null;
+	children: OrchestratedChildOutcome[];
+	orchestratorSessionId: string;
+	status: "started";
+} | {
+	message: string;
+	orchestratorSessionId: string;
+	proposalId: string;
+	proposalType?: string;
+	reviewPath?: string;
+	reviewUrl?: string;
+	status: "proposed";
+	summary?: string;
+};
 export type SessionRecallOutcome = {
 	posted: boolean;
 	recalled: RecalledItem[];
@@ -42120,6 +42156,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "spawned";
 				subjectBound?: boolean | undefined;
 			};
+		}>;
+		startOrchestrator: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentId?: string | undefined;
+				brief: string;
+				reasoning?: string | undefined;
+				sessionIds: string[];
+				title?: string | undefined;
+			};
+			meta: object;
+			output: StartOrchestratorResult;
 		}>;
 		structureAgain: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

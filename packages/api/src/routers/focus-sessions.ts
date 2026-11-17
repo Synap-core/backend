@@ -39,6 +39,10 @@ import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 import { createFocusSession } from "../services/focus-sessions/create-session.js";
 import {
+  startOrchestrator,
+  startOrchestratorInputSchema,
+} from "../services/focus-sessions/start-orchestrator.js";
+import {
   sessionCriteriaSchema,
   sessionEvidenceSchema,
 } from "../schemas/session-criteria.js";
@@ -1519,6 +1523,25 @@ export const focusSessionsRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: result.message });
       }
       return result;
+    }),
+
+  /**
+   * START AN ORCHESTRATOR (founder decision D5): ONE session that coordinates
+   * the picked running sessions — links each (`orchestrated_by`), pauses each
+   * running one until the person approves its merged plan, and posts a note
+   * in each room. Governed (`focus_session/orchestrate`): an agent gets
+   * `{ status: "proposed" }`, a person `{ status: "started" }`. Same service
+   * and input schema as Hub `POST /focus-sessions/orchestrate` and MCP
+   * `synap_start_orchestrator`.
+   */
+  startOrchestrator: protectedProcedure
+    .input(startOrchestratorInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      return startOrchestrator({
+        userId: requireUserId(ctx.userId),
+        agentUserId: ctx.agentUserId ?? null,
+        input,
+      });
     }),
 
   /**

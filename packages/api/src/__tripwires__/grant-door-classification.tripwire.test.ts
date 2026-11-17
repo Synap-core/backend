@@ -419,6 +419,11 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../utils/propose-channel-bind.js"),
     why: "binding a channel is proposed through the gate",
   },
+  "POST /focus-sessions/orchestrate": {
+    via: "startOrchestrator",
+    load: () => import("../services/focus-sessions/start-orchestrator.js"),
+    why: "focus_session.orchestrate through checkPermissionOrPropose (an agent's orchestrator is a proposal; nothing is written before the gate), shared with tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator",
+  },
   "POST /focus-sessions/:id/continue": {
     via: "continueStoppedRun",
     load: () => import("../services/focus-sessions/continue-run.js"),
