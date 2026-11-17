@@ -44,7 +44,7 @@ import {
 } from "@synap-core/types/console";
 import type { ObjectNavView } from "@synap-core/types/navigation";
 import { HOST_TYPES } from "../app/open/open-params";
-import { NAV_ITEMS } from "./console-nav";
+import { NAV_ITEMS, WORK_APP_ID } from "./console-nav";
 
 /**
  * Landing-site origin. A CONSTANT, deliberately.
@@ -415,6 +415,29 @@ export function openIn(target: ExitTarget): Exit {
       return web(`${WEB_BASE}/guides/${encodeURIComponent(target.slug)}`);
   }
 }
+
+/**
+ * Work in the desktop app — the ONE spelling of the exits Jobs and Runs left
+ * behind (`WORK_MOVED_TO_APP`, lib/console-nav.ts). A reading is an address
+ * param the desktop reads (`synap://open/app/sessions?view=…` → the app's
+ * props → `readWorkView` / `readWorkActivityFilter` in browser
+ * `navigation/workDestination.ts`): `failed` lands on Work › Activity's
+ * Failed preset (headed by the failing flows), `moving` on Moving now.
+ * Not in `console-nav.ts`, which must stay import-free for `next.config.ts`.
+ */
+export const WORK_EXIT = {
+  all: openIn({ kind: "app", appId: WORK_APP_ID }),
+  failed: openIn({
+    kind: "app",
+    appId: WORK_APP_ID,
+    query: { view: "activity", filter: "failed" },
+  }),
+  moving: openIn({
+    kind: "app",
+    appId: WORK_APP_ID,
+    query: { view: "moving" },
+  }),
+} as const satisfies Record<string, Exit>;
 
 /**
  * A marketplace publisher's own page — where a showcase-only listing installs
