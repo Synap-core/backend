@@ -217,20 +217,21 @@ beforeAll(async () => {
     sha: HEAD,
     title: "feat: the feed",
   });
-  // The session's PR, its run naming no session AND no PR (the producer did
-  // not know it): the timeline reads its PR from the head `dev.pr_opened`
-  // named. Heard 5 min late.
+  // The session's PR, its run naming no session; heard 5 min late.
   await devFact(USER, "ci.finished", -30, {
     repo: BE,
     sha: HEAD,
+    pr: 47,
     status: "failure",
     workflow: "CI",
     ingestedAt: at(-25).toISOString(),
   });
-  // A devbox job of this session, tied to no PR; another session's job.
+  // A devbox job of this session on the PR's head, naming no PR (the producer
+  // did not know it): the timeline reads the PR off the head `dev.pr_opened`
+  // named. Another session's job runs on a commit no PR names.
   await devFact(USER, "ci.finished", -20, {
     repo: BE,
-    sha: "d".repeat(40),
+    sha: HEAD,
     status: "success",
     workflow: "devbox dev-feed-h",
     sessionId: S.mine,
@@ -583,7 +584,7 @@ describe("readTimeline on PGlite", () => {
     expect(runs.map((e) => e.kind === "checks_finished" && e.checks)).toEqual([
       expect.objectContaining({
         job: "dev-feed-h",
-        pr: null,
+        pr: 47,
         result: "passed",
       }),
       expect.objectContaining({ job: null, pr: 47, result: "failed" }),
@@ -622,6 +623,7 @@ describe("readTimeline on PGlite", () => {
     const events = t!.events as DevTimelineEvent[];
     expect(kinds(events)).toEqual([
       "checks_finished", // the head-sha run naming no PR (-15)
+      "checks_finished", // the session's devbox job on the head (-20)
       "checks_finished", // the PR's run (-30)
       "pr_opened",
     ]);
@@ -629,7 +631,7 @@ describe("readTimeline on PGlite", () => {
     // Every run on the head carries the PR's number, named or read off the head.
     expect(
       events.flatMap((e) => (e.kind === "checks_finished" ? [e.checks.pr] : []))
-    ).toEqual([47, 47]);
+    ).toEqual([47, 47, 47]);
   });
 });
 
