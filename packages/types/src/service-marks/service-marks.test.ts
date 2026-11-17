@@ -177,6 +177,15 @@ describe("resolveAgentName: an agent named at its source, never by slug", () => 
     );
   });
 
+  it("a type already written as a name is kept as written, never re-cased", () => {
+    expect(resolveAgentName({ name: null, agentType: "Claude (Web)" })).toBe(
+      "Claude (Web)"
+    );
+    expect(resolveAgentName({ name: null, agentType: "Claude Code" })).toBe(
+      "Claude Code"
+    );
+  });
+
   it("nothing to name it by is undefined, never an id", () => {
     expect(resolveAgentName({ name: null, agentType: null })).toBeUndefined();
   });

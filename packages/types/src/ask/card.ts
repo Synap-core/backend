@@ -1000,7 +1000,14 @@ export interface AskCardView {
    * Age + fate as ONE mark ("Asked 8d ago · Stays until you decide");
    * `spoken` is the same in full words, for a screen reader.
    */
-  ageFate: { label: string; spoken: string; tone: UnitTone; fate: AskFate };
+  ageFate: {
+    label: string;
+    spoken: string;
+    tone: UnitTone;
+    fate: AskFate;
+    /** The fate's words alone ("Stays until you decide"), for a host that shows the age apart. */
+    fateLabel: string;
+  };
   /**
    * When the answer is needed (`ask.answerBy`), as ONE mark: "Needed by
    * 17:00", "Needed in 40m" within the hour (the window that makes it P0 and
@@ -1165,6 +1172,7 @@ export function askCardView(
       fate.kind === "ends_with_session" ? "dies_with_session" : fate.kind
     ],
     fate,
+    fateLabel: fateWords,
   };
 
   return {

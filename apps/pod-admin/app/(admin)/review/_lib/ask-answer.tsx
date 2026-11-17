@@ -152,8 +152,8 @@ import type { RequestStory } from "@synap-core/types/needs-you";
 import {
   RequestStoryView,
   StoryDepth,
-  StoryHead,
-  storyRequester,
+  RequestHead,
+  storyHeadParts,
   type StoryRead,
 } from "../../../_lib/request/request-story-view";
 import { fileProblem, uploadProvidedFile } from "./provide-file";
@@ -651,7 +651,6 @@ export function AskAnswer({
     // does), the question's answer in Now, what it unblocks in Next, the
     // decision bar as the story's footer; what the agent looked at, what it
     // declared for a secret and talking it through behind Show.
-    const requester = storyRequester(story.story);
     // The bar's verbs: Refuse, beside the control's own verb when it has
     // state to keep (a secret's Give lands here through `InDecisionBar`).
     // Nothing while the Refuse sheet is open or nothing is left to decide.
@@ -666,22 +665,20 @@ export function AskAnswer({
             story={story.story}
             read={story.read}
             head={
-              <StoryHead
-                requester={requester}
-                session={
-                  story.story?.head.session
-                    ? {
-                        title: story.story.head.session.title,
-                        door: story.story.head.session.door,
-                      }
-                    : null
-                }
+              // ONE head (founder, 17 Nov 2026): agent, for you, session and
+              // age as chips; what silence does stays a quiet line.
+              <RequestHead
+                parts={storyHeadParts(story.story, {
+                  name: null,
+                  text: rt("head.forYou"),
+                  you: true,
+                })}
                 extra={
                   <span
-                    className={`text-[13px] tabular-nums ${toneTextClass(view.ageFate.tone)}`}
+                    data-ask-fate=""
+                    className={`text-[12.5px] ${toneTextClass(view.ageFate.tone)}`}
                   >
-                    <span aria-hidden>{view.ageFate.label}</span>
-                    <span className="sr-only">{view.ageFate.spoken}</span>
+                    {view.ageFate.fateLabel}
                   </span>
                 }
               />

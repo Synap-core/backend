@@ -145,8 +145,27 @@ export type RequestStoryStep =
 
 export interface RequestStory {
   head: RequestStoryHead;
-  /** Oldest first, the {@link REQUEST_STORY_BEFORE_CAP} groups nearest Now. */
+  /**
+   * THIS request's own past (founder, 17 Nov 2026: the session's other asks
+   * and proposals are not this request's story), oldest first, the
+   * {@link REQUEST_STORY_BEFORE_CAP} groups nearest Now; without
+   * {@link status}.
+   */
   before: RequestStoryGroup[];
+  /**
+   * The request's own newest event when it IS its current status (a proposal
+   * whose approval failed: "Approval failed", 8h ago): said once, folded into
+   * the status mark ("Approval failed · 8h ago"), never a past line too.
+   */
+  status: RequestStoryGroup | null;
+  /**
+   * Draw the story as a rail (past · Now · next) only when it says something
+   * the head and the decision bar do not: an own past step that is not just
+   * the status, or a next step beyond the plain consequence (what the answer
+   * unblocks, a thing's status it holds, sessions that wait). False: Now is
+   * drawn flat, and the plain consequence joins the bar's line.
+   */
+  rail: boolean;
   /** Older groups folded above `before`; null when nothing folds. */
   folded: { groups: number; events: number; label: string } | null;
   /** The session holds older events than were read: the full timeline is the door. */
@@ -181,6 +200,25 @@ function eventDoor(e: DevTimelineEvent): LensDoor | null {
   if (e.refs.proposalId) return { kind: "proposal", id: e.refs.proposalId };
   if (e.refs.sessionId) return { kind: "session", id: e.refs.sessionId };
   return null;
+}
+
+/**
+ * An event about THIS request: its own proposal (revised, decided, its
+ * approval tried and failed) or its own slot (answered, refused, handed
+ * back). A session row's request is the session itself: every event is its.
+ */
+function isAboutTheRequest(
+  e: DevTimelineEvent,
+  row: LensRow,
+  ctx: RequestRowContext | undefined
+): boolean {
+  if (row.objectKind === "session" || row.key.startsWith(SESSION_KEY))
+    return true;
+  if (!ctx) return false;
+  if (e.refs.proposalId && ctx.proposalIds.includes(e.refs.proposalId))
+    return true;
+  const slot = "slot" in e ? e.slot : e.refs.slotLabel;
+  return !!ctx.slotLabel && slot === ctx.slotLabel;
 }
 
 /** A refusal: an answer on the wire, and its own act in the story (a no). */
@@ -377,16 +415,26 @@ export function requestStory(
         : null,
   };
 
-  // BEFORE
+  // BEFORE: this request's own past only.
   let before: RequestStoryGroup[] = [];
+  let status: RequestStoryGroup | null = null;
   let folded: RequestStory["folded"] = null;
   let olderExist = false;
   if (sessionCtx) {
     if (sessionCtx.timeline.status === "ok") {
-      const past = [...sessionCtx.timeline.value.events]
+      const read = sessionCtx.timeline.value.events; // newest first
+      const past = read
+        .filter((e) => isAboutTheRequest(e, row, rowCtx))
         .filter((e) => !isTheRequest(e, rowCtx))
         .reverse();
       const groups = groupRequestEvents(past, locale);
+      // The newest own event is the status when it is a decision on this
+      // request with nothing of its own after it: said by the status mark.
+      const newest = groups.at(-1);
+      if (newest && newest.kind === "decision_answered") {
+        status = newest;
+        groups.pop();
+      }
       const hidden = groups.slice(
         0,
         Math.max(0, groups.length - REQUEST_STORY_BEFORE_CAP)
@@ -400,7 +448,13 @@ export function requestStory(
           label: t("needsYou.story.moreEvents", { n: events }),
         };
       }
-      olderExist = sessionCtx.timeline.value.olderExist;
+      // Older events of THIS request may exist only when its own events
+      // reach the edge of what was read.
+      const oldestRead = read.at(-1);
+      olderExist =
+        sessionCtx.timeline.value.olderExist &&
+        !!oldestRead &&
+        isAboutTheRequest(oldestRead, row, rowCtx);
     } else {
       failed("timeline");
     }
@@ -494,9 +548,21 @@ export function requestStory(
     }
   }
 
+  const rail =
+    before.length > 0 ||
+    folded !== null ||
+    after.some(
+      (s) =>
+        s.kind === "unblocks" ||
+        s.kind === "thing" ||
+        s.kind === "sessions_wait"
+    );
+
   return {
     head,
     before,
+    status,
+    rail,
     folded,
     olderExist,
     timelineDoor: sessionDoor,

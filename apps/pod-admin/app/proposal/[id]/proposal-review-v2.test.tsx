@@ -519,11 +519,11 @@ describe("why, the note and undo", () => {
     expect(text(html)).not.toMatch(/Always asks a person/);
   });
 
-  it("the agent's words are labelled as theirs", () => {
+  it("the agent's words are labelled as theirs, without naming them again (the head does)", () => {
     state.proposal = withTwin();
-    expect(text(render())).toMatch(
-      /Note from Claude-code Same kind and name as a person you have/
-    );
+    const seen = text(render());
+    expect(seen).toMatch(/Their note Same kind and name as a person you have/);
+    expect(seen.split("Claude-code").length - 1).toBe(1);
   });
 
   it("an undoable change draws no undo copy at all", () => {
@@ -546,7 +546,9 @@ describe("why, the note and undo", () => {
       GOVERNANCE_POLICY_SENTENCES.WRITES_REQUIRE_PROPOSAL
     );
     // The requester's own words still show; only the class chip is gone.
-    expect(text(html)).toContain("Note from Claude-code");
+    expect(text(html)).toContain(
+      "Their note Same kind and name as a person you have"
+    );
   });
 });
 

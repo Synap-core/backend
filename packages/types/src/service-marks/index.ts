@@ -393,7 +393,8 @@ const TOKEN_SHAPED = /^[a-z0-9]+(?:[-_.][a-z0-9]+)*$/;
  * client that named itself by slug) counts as unnamed, so no surface has to
  * humanize a slug ("Claude-code"). Narrow on purpose, a real name is never
  * replaced: only a name that IS the agent's type, or that is token-shaped AND
- * a known service id. Undefined when there is nothing to name it by.
+ * a known service id. A type that is already a written name ("Claude
+ * (Web)") is kept as written. Undefined when there is nothing to name it by.
  */
 export function resolveAgentName(agent: {
   name?: string | null;
@@ -407,5 +408,11 @@ export function resolveAgentName(agent: {
       (TOKEN_SHAPED.test(own) && normalizeServiceId(own) !== null));
   if (own && !ownIsToken) return own;
   const token = type || own;
-  return token ? resolveServiceName(token) : undefined;
+  if (!token) return undefined;
+  // A type already written as a name ("Claude (Web)") is shown as written:
+  // only a token (`claude-code`, `orchestrator`) or a known service id is
+  // named through the registry, so a written name is never re-cased.
+  return TOKEN_SHAPED.test(token) || normalizeServiceId(token) !== null
+    ? resolveServiceName(token)
+    : token;
 }

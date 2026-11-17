@@ -14,8 +14,11 @@ import { nounParams, resolveNoun } from "@synap-core/types/vocabulary";
 export const en = {
   // ── The story's frame ──────────────────────────────────────────────────
   "story.label": "What led here, what you decide, what comes next",
-  "story.askedBy": "Asked by",
-  "story.forSession": "For",
+  // The one head: a row of chips (`RequestHead`).
+  "head.label": "Who is asking",
+  "head.for": "for",
+  "head.forYou": "for you",
+  "head.statusAgo": "{status} · {ago}",
   "story.you": "you",
   "story.fullTimeline": "See the whole story",
   "story.loading": "Reading what led here…",
@@ -64,6 +67,8 @@ export const en = {
     "If you reject it, nothing is applied and {who} sees your reason.",
   "refuse.proposalConsequenceAnyone":
     "If you reject it, nothing is applied and whoever asked sees your reason.",
+  "refuse.proposalConsequenceAgent":
+    "If you reject it, nothing is applied and the agent sees your reason.",
   // ── The ask ────────────────────────────────────────────────────────────
   "ask.showCurrent": "Show the current question",
   "ask.movedOnBody": "It was answered, handed back, or the session ended.",
@@ -159,8 +164,10 @@ export const en = {
 
 export const fr: Catalog<typeof en> = {
   "story.label": "Ce qui a mené ici, ce que vous décidez, ce qui suit",
-  "story.askedBy": "Demandé par",
-  "story.forSession": "Pour",
+  "head.label": "Qui demande",
+  "head.for": "pour",
+  "head.forYou": "pour vous",
+  "head.statusAgo": "{status} · {ago}",
   "story.you": "vous",
   "story.fullTimeline": "Voir toute l’histoire",
   "story.loading": "Lecture de ce qui a mené ici…",
@@ -208,6 +215,8 @@ export const fr: Catalog<typeof en> = {
     "Si vous la rejetez, rien n’est appliqué et {who} voit votre raison.",
   "refuse.proposalConsequenceAnyone":
     "Si vous la rejetez, rien n’est appliqué et le demandeur voit votre raison.",
+  "refuse.proposalConsequenceAgent":
+    "Si vous la rejetez, rien n’est appliqué et l’agent voit votre raison.",
   "ask.showCurrent": "Voir la question actuelle",
   "ask.movedOnBody":
     "Elle a reçu une réponse, a été rendue, ou la session s’est terminée.",
