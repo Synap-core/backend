@@ -586,9 +586,14 @@ export async function stagesApprovedBySettledSlots(input: {
     if (!stageOutputsApproved(proc.stages, key, slots)) continue;
     stages.push({ stageKey: key, stageName: stage.name ?? key, value });
   }
-  const { currentStage: _c, expectedOutputs: _e, ...session } = row;
   return {
-    session: { ...session, subjectEntityId: row.subjectEntityId },
+    session: {
+      id: row.id,
+      playbookId: row.playbookId,
+      subjectEntityId: row.subjectEntityId,
+      workspaceId: row.workspaceId,
+      userId: row.userId,
+    },
     stages,
   };
 }
