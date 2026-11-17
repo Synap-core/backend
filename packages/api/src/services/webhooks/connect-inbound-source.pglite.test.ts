@@ -705,9 +705,9 @@ describe("a 201 with failed[]: a failure, scrubbed; the retry rotates and sets b
     expect(await leaks(firstSecret, [thrown])).toEqual([]);
     // Not vacuous: the approval's failure was logged (with its redacted
     // detail) and its transition written, and the scan read both.
-    expect(
-      h.logs.some((l) => l.includes("proposal approval failed"))
-    ).toBe(true);
+    expect(h.logs.some((l) => l.includes("proposal approval failed"))).toBe(
+      true
+    );
     expect(await outboxOf(proposalId)).not.toEqual([]);
 
     await approve(proposalId);
