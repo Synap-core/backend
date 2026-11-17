@@ -38,6 +38,7 @@ import {
 import {
   playbookDescriptionPreview,
   playbookSearchText,
+  playbookTriggers,
 } from "../playbooks/playbook-search-text.js";
 
 /** How many ranked candidates ride back on a start. */
@@ -127,6 +128,7 @@ export async function matchSessionTemplate(
         text: playbookSearchText(p),
         subjectProfileSlug: null,
         description: p.description ?? undefined,
+        triggers: playbookTriggers(p.metadata),
         scope: p.scope,
       })),
   }).filter((r) => r.signals.some((s) => s.type === "intent"));

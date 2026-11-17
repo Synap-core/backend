@@ -14,7 +14,11 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { fileChecksum } from "./checksum.js";
-import { attachmentDisposition } from "./utils.js";
+import type { SignedGetObject } from "./interface.js";
+import {
+  attachmentDisposition,
+  servedContentTypeOverride,
+} from "./utils.js";
 
 // ============================================================================
 // TYPES
@@ -225,19 +229,26 @@ export class R2Storage {
   /**
    * Generate signed URL for temporary access
    *
-   * @param expiresIn - Expiration time in seconds (default: 1 hour)
+   * @param expiresIn - Expiration time in seconds
+   * @param object - The stored type (`IFileStorage.getSignedUrl`)
    *
    * @example
    * ```typescript
-   * const url = await r2.getSignedUrl('private/doc.pdf', 3600);
-   * // Valid for 1 hour
+   * const url = await r2.getSignedUrl('private/doc.pdf', 3600, {
+   *   contentType: 'application/pdf',
+   * });
    * ```
    */
-  async getSignedUrl(key: string, expiresIn: number = 3600): Promise<string> {
+  async getSignedUrl(
+    key: string,
+    expiresIn: number,
+    object: SignedGetObject
+  ): Promise<string> {
     const command = new GetObjectCommand({
       Bucket: this.bucketName,
       Key: key,
       ResponseContentDisposition: attachmentDisposition(key),
+      ResponseContentType: servedContentTypeOverride(object.contentType),
     });
 
     return await getSignedUrl(this.client, command, { expiresIn });

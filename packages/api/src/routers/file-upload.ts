@@ -61,6 +61,14 @@ const ALLOWED_MIME_TYPES = new Set([
   // `attachment` and `/synap-storage/*` carries `CSP: sandbox`; viewing is a
   // sandboxed `srcdoc` iframe. Tripwire: active-mime-needs-attachment-disposition.
   "text/html",
+  // Source code (ticket 15bc541d), stored as-is. Safe only because every
+  // signed GET serves these as `text/plain` (`servedContentTypeOverride`,
+  // @synap/storage) under Caddy's `nosniff`: a `<script src>` on the pod origin
+  // ignores `attachment`, so the served TYPE is what keeps them inert (plan
+  // D1). Same tripwire.
+  "text/javascript",
+  "application/javascript",
+  "text/css",
   // Brand fonts (C4: 5 MB cap). Font files are inert data — no script vector.
   "font/woff2",
   "font/woff",
@@ -689,7 +697,9 @@ async function finishUpload(p: {
   let previewUrl: string | undefined;
   if (mimeType.startsWith("image/")) {
     try {
-      previewUrl = await storage.getSignedUrl(storageKey, 3600);
+      previewUrl = await storage.getSignedUrl(storageKey, 3600, {
+        contentType: mimeType,
+      });
     } catch {
       // Non-fatal
     }
@@ -850,7 +860,8 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
     const expiresInSeconds = FILE_URL_DEFAULT_TTL_SECONDS;
     const url = await storage.getSignedUrl(
       document.storageKey,
-      expiresInSeconds
+      expiresInSeconds,
+      { contentType: document.mimeType }
     );
     const expiresAt = new Date(
       Date.now() + expiresInSeconds * 1000
@@ -917,10 +928,12 @@ export type FileEntityUrlResult =
  * proves the document is the entity's to share.
  *
  * Returns the URL only. The signer (`storage.getSignedUrl`) forces an
- * `attachment` disposition and never overrides the stored content type — an
- * active blob (HTML, SVG) can never render from this URL (D10; tripwire
- * `active-mime-needs-attachment-disposition`). `mimeType` is the stored type,
- * reported so a client decides drawability on what is actually served.
+ * `attachment` disposition — an active blob (HTML, SVG) can never render from
+ * this URL (D10) — and serves a script or style blob as `text/plain` (plan D1),
+ * every other type as stored (tripwire
+ * `active-mime-needs-attachment-disposition`). `mimeType` is the stored type;
+ * it differs from the served one only for script and style, which no client
+ * draws.
  */
 export async function signFileEntityUrl(
   userId: string,
@@ -941,7 +954,9 @@ export async function signFileEntityUrl(
 
   const expiresInSeconds =
     opts.expiresInSeconds ?? FILE_URL_DEFAULT_TTL_SECONDS;
-  const url = await storage.getSignedUrl(entity.storageKey, expiresInSeconds);
+  const url = await storage.getSignedUrl(entity.storageKey, expiresInSeconds, {
+    contentType: entity.mimeType,
+  });
   const expiresAt = new Date(
     Date.now() + expiresInSeconds * 1000
   ).toISOString();

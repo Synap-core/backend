@@ -21,15 +21,19 @@ import { callToolNote, loadSkillCall, toolGroupList } from "./tool-guidance.js";
 export const ENTRY_REFLEX_PROSE = [
   "The user's Synap pod: source of truth. Tool names below are stems; your door may prefix them (`synap_ask`).",
   "",
-  "1. **Recall first.** `get_*` a known id, else `ask`.",
+  // A link to read is the `web.read` capability, which agents did not reach
+  // for while nothing here named it (ticket 1ad78b69). Its 31 bytes were paid
+  // for by the trims in 3–6 and the depth line (plan D2: the budget rules
+  // stay; knowledge 0f03081b).
+  "1. **Recall first.** `get_*` a known id, else `ask`; a link: capability `web.read`.",
   "2. **Capture as you go.** A decision, learning, pain (`finding`), win (`proof-point`), fact or task: `capture` it when it happens.",
-  "3. **Orient once.** `orient`: pending review, open sessions, open goals, actions.",
-  "4. **Work in a session.** `start_session` (+ goal `trackId`: `list_tracks`, else `start_track`) or resume (`get_session`; playbook `templateId`); 2–5 `criteria`; advance `currentStage` with `update_session`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer`; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them (`Q-<id8>`); chat answer: `relay_answer`, words verbatim; PR = outcome `pr-<repo>-<n>` (`ref.url`); close open asks, then `complete_session`.",
-  "5. **`proposed` is success**: keep working, never retry.",
+  "3. **Orient once.** `orient`: pending review, open sessions, goals, actions.",
+  "4. **Work in a session.** `start_session` (+ goal `trackId`: `list_tracks`, else `start_track`) or resume (`get_session`; playbook `templateId`); 2-5 `criteria`; advance `currentStage` with `update_session`; person-only: `owner:'human'` slot + `blockedReason` + `ask` (confirm/choose with 1 `recommended`/form/act/provide), then `wait_for_answer`; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them (`Q-<id8>`); chat answer: `relay_answer`, words verbatim; PR = outcome `pr-<repo>-<n>` (`ref.url`); close open asks, `complete_session`.",
+  "5. **`proposed` is success**: go on, never retry.",
   // The same words `synap_load_skill`'s description and `synap_orient`'s
   // `yourTools` use (`tool-guidance.ts`): a client that drops `instructions`
   // still reads them there.
-  `6. **More tools on demand.** Unlock a group with \`${loadSkillCall("load_skill")}\`: ${toolGroupList("`")}, or \`${BUILDER_REF}\` for all. ${callToolNote("call_tool", "`")}`,
+  `6. **More tools.** Unlock a group with \`${loadSkillCall("load_skill")}\`: ${toolGroupList("`")}, or \`${BUILDER_REF}\` for all. ${callToolNote("call_tool", "`")}`,
   "",
-  "Depth via `load_skill`: `system/synap/concepts`, `work-model`, `focus-sessions`, `hand-off`, `from-intent`, `writes`, `catalog`.",
+  "Depth: `load_skill` `system/synap/concepts`, `work-model`, `focus-sessions`, `hand-off`, `from-intent`, `writes`, `catalog`.",
 ].join("\n");

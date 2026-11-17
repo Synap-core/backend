@@ -74,6 +74,17 @@
  * A structural signal (subject, kind, facet) is evidence about the ENTITY, so
  * a candidate carrying one is never cut by the floor.
  *
+ * ── DECLARED TRIGGERS (plan a640c5bb D3, founder 2026-11-18) ───────────────
+ * The floor left a playbook whose only words sit in its body unreachable
+ * ("AI Dev Session" for the space-brief request: "build" is in its goal
+ * template only). The answer is configuration, not a looser ranker: a playbook
+ * DECLARES `triggers`, phrases it is for (`metadata.triggers`). A trigger
+ * MATCHES when the request holds every one of its words (the same stems,
+ * stopwords and generic work words as the request); a match ADMITS the
+ * candidate, and its words score like name words (`WEIGHT.nameTerm`). A
+ * trigger the request holds only part of is body text: it scores, never
+ * admits.
+ *
  * ── TIES ────────────────────────────────────────────────────────────────────
  * Broken by relevance, never by recency: more distinct intent words, then the
  * rarest word matched, then the structural signal (kind > facet), then the
@@ -106,6 +117,12 @@ export interface RouteCandidate {
    * body field that can admit a word-only candidate (the relevance floor).
    */
   description?: string | null;
+  /**
+   * Phrases the candidate declares it is for (a playbook's
+   * `metadata.triggers`): one whose every word is in the request admits it,
+   * and those words score like name words (header, DECLARED TRIGGERS).
+   */
+  triggers?: ReadonlyArray<string>;
   /** The kind the candidate is built for; `null` = fires for any kind. */
   subjectProfileSlug: string | null;
   /**
@@ -236,6 +253,15 @@ export function tokenize(
   return out;
 }
 
+/**
+ * The words a trigger phrase is matched on — exactly the ranker's own reading
+ * of a request (`tokenize` + the generic work words). Empty = a phrase of stop
+ * words only, which can never match (the write door refuses it).
+ */
+export function triggerWords(phrase: string): string[] {
+  return [...tokenize(phrase, GENERIC_WORK_WORDS).keys()];
+}
+
 function nounFor(slug: string): string {
   return resolveObjectNoun(slug).toLowerCase();
 }
@@ -282,14 +308,35 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
     intent.size > 0
       ? input.candidates.map((c) =>
           tokenize(
-            [c.name, c.description, ...(c.text ?? [])].join(" "),
+            [c.name, c.description, ...(c.text ?? []), ...(c.triggers ?? [])].join(
+              " "
+            ),
             GENERIC_WORK_WORDS
           )
         )
       : [];
+  // The words of every trigger the request holds WHOLE (header, DECLARED
+  // TRIGGERS): they admit the candidate and count as name words.
+  const triggered =
+    intent.size > 0
+      ? input.candidates.map((c) => {
+          const words = new Set<string>();
+          for (const phrase of c.triggers ?? []) {
+            const stems = triggerWords(phrase);
+            if (stems.length > 0 && stems.every((s) => intent.has(s))) {
+              for (const s of stems) words.add(s);
+            }
+          }
+          return words;
+        })
+      : [];
   const named =
     intent.size > 0
-      ? input.candidates.map((c) => tokenize(c.name, GENERIC_WORK_WORDS))
+      ? input.candidates.map((c, index) => {
+          const words = tokenize(c.name, GENERIC_WORK_WORDS);
+          for (const s of triggered[index]!) if (!words.has(s)) words.set(s, s);
+          return words;
+        })
       : [];
   const described =
     intent.size > 0
@@ -359,8 +406,10 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
 
     return {
       termCount,
-      // The relevance floor (header, `FLOOR`).
+      // The relevance floor (header, `FLOOR`), or a declared trigger the
+      // request holds whole (header, DECLARED TRIGGERS).
       admitted:
+        (triggered[index]?.size ?? 0) > 0 ||
         (nameHits > 0 &&
           nameHits * FLOOR.requestWordsPerNameWord >= intent.size) ||
         (descriptionHits > 0 &&

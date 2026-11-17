@@ -744,6 +744,11 @@ export const buildHandlers: McpHandlerMap = {
       // What a run may use, "only these": validated by `playbooks.create`
       // (`playbookToolsSchema`, a stage list a subset), refused, never dropped.
       ...(args.tools !== undefined ? { tools: args.tools as string[] } : {}),
+      // The phrases that offer it (`metadata.triggers`): validated by
+      // `playbooks.create` (`playbookTriggersSchema`), refused, never dropped.
+      ...(args.triggers !== undefined
+        ? { triggers: args.triggers as string[] }
+        : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
@@ -800,6 +805,11 @@ export const buildHandlers: McpHandlerMap = {
           ? { statusProperty: args.statusProperty }
           : {}),
       };
+    }
+    // `metadata.triggers`: the metadata patch is shallow-merged, so this
+    // replaces the trigger list and keeps every other metadata key.
+    if (args.triggers !== undefined) {
+      patch.metadata = { triggers: args.triggers };
     }
     const reasoning = readReasoning(args);
     if (reasoning) patch.reasoning = reasoning;

@@ -564,6 +564,18 @@ const PLAYBOOK_PARAMS_PROPERTY = {
   },
 };
 
+/**
+ * `metadata.triggers` (plan a640c5bb D3), parsed by `playbookTriggersSchema`:
+ * the suggestion ranker offers the playbook when a request holds every word
+ * of one phrase.
+ */
+const PLAYBOOK_TRIGGERS_PROPERTY = {
+  type: "array",
+  items: { type: "string" },
+  description:
+    "Phrases it is for: a request holding every word of one gets it offered.",
+};
+
 /** The rules a playbook follows (design b199a3a4), parsed by `playbookGuidanceSchema`. */
 const PLAYBOOK_GUIDANCE_PROPERTY = {
   type: "array",
@@ -3999,7 +4011,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator, or a cron synap_create_automation with a playbook_run node. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
+          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator, or a cron synap_create_automation with a playbook_run node. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
         inputSchema: {
           type: "object",
           properties: {
@@ -4045,6 +4057,7 @@ export const tools = {
             runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
             requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
             tools: PLAYBOOK_PROCESS_JSON_SCHEMA.tools,
+            triggers: PLAYBOOK_TRIGGERS_PROPERTY,
             sessionId: {
               type: "string",
               description:
@@ -4063,7 +4076,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change — an absent field stays as it is; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
+          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators, triggers) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4089,6 +4102,7 @@ export const tools = {
             runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
             requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
             tools: PLAYBOOK_PROCESS_JSON_SCHEMA.tools,
+            triggers: PLAYBOOK_TRIGGERS_PROPERTY,
             subjectProfileSlug: {
               type: "string",
               description:

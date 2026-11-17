@@ -236,7 +236,9 @@ describe("R2StorageProvider", () => {
       const expiresIn = 3600;
 
       const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
-      const result = await provider.getSignedUrl(path, expiresIn);
+      const result = await provider.getSignedUrl(path, expiresIn, {
+        contentType: "text/markdown",
+      });
 
       expect(result).toBe(
         "https://signed-url.example.com/file.md?signature=abc123"

@@ -17,8 +17,12 @@
  * file would be signed), a 403 that leaks the URL, a non-uuid id reaching
  * Postgres as a 500, and a missing read scope passing.
  *
+ * Also: the door hands the signer the file's STORED type, which is what makes
+ * a stored `.js` / `.css` serve as `text/plain` (plan D1, ticket 15bc541d).
+ *
  * Cannot see: production Postgres, a real signer (the attachment disposition
- * is the `active-mime-needs-attachment-disposition` tripwire's job).
+ * and the text/plain override are the `active-mime-needs-attachment-disposition`
+ * tripwire's job).
  */
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono } from "hono";
@@ -32,6 +36,8 @@ const h = vi.hoisted(() => ({
   },
   getApiKeyStatus: vi.fn(),
   scopes: ["hub-protocol.read"] as string[],
+  /** What each signed GET was told about its object. */
+  signed: [] as Array<{ key: string; contentType: string | null }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -47,8 +53,14 @@ vi.mock("@synap/database", async (importOriginal) => {
 vi.mock("@synap/storage", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   storage: {
-    getSignedUrl: async (key: string, expiresIn: number) =>
-      `https://signed.test/${key}?expires=${expiresIn}`,
+    getSignedUrl: async (
+      key: string,
+      expiresIn: number,
+      object: { contentType: string | null }
+    ) => {
+      h.signed.push({ key, contentType: object.contentType });
+      return `https://signed.test/${key}?expires=${expiresIn}`;
+    },
   },
 }));
 vi.mock("../../../access/guest-containment.js", async (importOriginal) => ({
@@ -106,6 +118,8 @@ const FILE_A = randomUUID();
 const FILE_B = randomUUID();
 const DOC_A = randomUUID();
 const DOC_B = randomUUID();
+const FILE_JS = randomUUID(); // a stored script, in the granted workspace
+const DOC_JS = randomUUID();
 
 /** Keys by bearer: each one's grant is a real `grants` row. */
 const KEYS = {
@@ -153,14 +167,15 @@ beforeAll(async () => {
      values ($1,'file','File','kind','system','workspace',true,'{}'::jsonb,null)`,
     [FILE_PROFILE]
   );
-  for (const [entityId, docId, ws, key] of [
-    [FILE_A, DOC_A, WS_A, "users/owner/a.png"],
-    [FILE_B, DOC_B, WS_B, "users/owner/b.png"],
+  for (const [entityId, docId, ws, key, mime] of [
+    [FILE_A, DOC_A, WS_A, "users/owner/a.png", "image/png"],
+    [FILE_B, DOC_B, WS_B, "users/owner/b.png", "image/png"],
+    [FILE_JS, DOC_JS, WS_A, "users/owner/app.js", "text/javascript"],
   ] as const) {
     await q(
       `insert into documents (id, user_id, workspace_id, title, type, storage_key, mime_type)
-       values ($1,$2,$3,'f','file',$4,'image/png')`,
-      [docId, OWNER, ws, key]
+       values ($1,$2,$3,'f','file',$4,$5)`,
+      [docId, OWNER, ws, key, mime]
     );
     await q(
       `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data, document_id)
@@ -186,6 +201,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   h.scopes = ["hub-protocol.read"];
+  h.signed = [];
   h.getApiKeyStatus.mockImplementation(async (bearer: string) => {
     const name = bearer.replace(/^synap_/, "") as KeyName;
     return {
@@ -266,5 +282,25 @@ describe("GET /files/{entityId}/url — a signed URL bounded by the key's grant"
     const res = await get("full", FILE_A);
     expect(res.status).toBe(403);
     expect(((await res.json()) as Body).url).toBeUndefined();
+  });
+});
+
+describe("GET /files/{entityId}/url — the signer is told the stored type (plan D1)", () => {
+  it("a stored script ⇒ the signed GET is asked for text/javascript (served as text/plain)", async () => {
+    const res = await get("pinned", FILE_JS);
+    const body = (await res.json()) as Body;
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(h.signed).toEqual([
+      { key: "users/owner/app.js", contentType: "text/javascript" },
+    ]);
+    // The door reports the stored type; the signer decides what is served.
+    expect(body.mimeType).toBe("text/javascript");
+  });
+
+  it("an image ⇒ the signer is told image/png (served as stored)", async () => {
+    expect((await get("pinned", FILE_A)).status).toBe(200);
+    expect(h.signed).toEqual([
+      { key: "users/owner/a.png", contentType: "image/png" },
+    ]);
   });
 });

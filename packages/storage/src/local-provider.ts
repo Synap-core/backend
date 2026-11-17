@@ -24,6 +24,7 @@ import type {
   FileMetadata,
   UploadOptions,
   FileInfo,
+  SignedGetObject,
   SignedUploadOptions,
   DownloadStream,
   DownloadStreamOptions,
@@ -232,7 +233,8 @@ export class LocalStorageProvider implements IFileStorage {
    */
   async getSignedUrl(
     storagePath: string,
-    _expiresIn?: number
+    _expiresIn: number,
+    _object: SignedGetObject
   ): Promise<string> {
     const absPath = this.resolve(storagePath);
     return `file://${absPath}`;

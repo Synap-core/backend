@@ -59,3 +59,53 @@ export function attachmentDisposition(key: string): string {
   );
   return `attachment; filename*=UTF-8''${encoded}`;
 }
+
+/**
+ * Stored types a page RUNS or APPLIES when it includes them: every JavaScript
+ * MIME type essence (WHATWG MIME Sniffing, "JavaScript MIME type") and CSS.
+ * `attachment` does not help here: a `<script src>` / `<link rel=stylesheet>`
+ * subresource ignores the disposition, and a blob served on the pod origin
+ * passes a `script-src 'self'` policy. So a signed GET serves these as plain
+ * text; with `nosniff` (Caddy's `security_headers`, on every site block) the
+ * browser then refuses to run or apply them (ticket 15bc541d, plan D1).
+ */
+const SCRIPT_OR_STYLE_MIME_TYPES: ReadonlySet<string> = new Set([
+  "application/ecmascript",
+  "application/javascript",
+  "application/x-ecmascript",
+  "application/x-javascript",
+  "text/ecmascript",
+  "text/javascript",
+  "text/javascript1.0",
+  "text/javascript1.1",
+  "text/javascript1.2",
+  "text/javascript1.3",
+  "text/javascript1.4",
+  "text/javascript1.5",
+  "text/jscript",
+  "text/livescript",
+  "text/x-ecmascript",
+  "text/x-javascript",
+  "text/css",
+]);
+
+/** What a script or style blob is served as. */
+export const INERT_TEXT_CONTENT_TYPE = "text/plain; charset=utf-8";
+
+/**
+ * The `Content-Type` a signed GET serves instead of the stored one, or
+ * `undefined` to serve the stored type unchanged. Only script and style types
+ * are overridden ({@link SCRIPT_OR_STYLE_MIME_TYPES}); parameters and case are
+ * ignored (`Text/JavaScript; charset=utf-8` is JavaScript).
+ */
+export function servedContentTypeOverride(
+  storedContentType: string | null
+): string | undefined {
+  const essence = (storedContentType ?? "")
+    .split(";")[0]!
+    .trim()
+    .toLowerCase();
+  return SCRIPT_OR_STYLE_MIME_TYPES.has(essence)
+    ? INERT_TEXT_CONTENT_TYPE
+    : undefined;
+}

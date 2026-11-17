@@ -25,12 +25,17 @@ import type {
   FileMetadata,
   UploadOptions,
   FileInfo,
+  SignedGetObject,
   SignedUploadOptions,
   DownloadStream,
   DownloadStreamOptions,
 } from "./interface.js";
 import { StorageUploadUnavailableError } from "./interface.js";
-import { attachmentDisposition, buildEntityPath } from "./utils.js";
+import {
+  attachmentDisposition,
+  buildEntityPath,
+  servedContentTypeOverride,
+} from "./utils.js";
 import { fileChecksum } from "./checksum.js";
 import { uploadStreamToS3 } from "./s3-stream-upload.js";
 import { downloadStreamFromS3 } from "./s3-stream-download.js";
@@ -308,13 +313,18 @@ export class MinIOStorageProvider implements IFileStorage {
     };
   }
 
-  async getSignedUrl(path: string, expiresIn: number = 3600): Promise<string> {
+  async getSignedUrl(
+    path: string,
+    expiresIn: number,
+    object: SignedGetObject
+  ): Promise<string> {
     await this.ensureBucket();
 
     const command = new GetObjectCommand({
       Bucket: this.bucketName,
       Key: path,
       ResponseContentDisposition: attachmentDisposition(path),
+      ResponseContentType: servedContentTypeOverride(object.contentType),
     });
 
     return await getSignedUrl(this.publicSigner ?? this.client, command, {

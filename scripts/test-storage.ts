@@ -135,7 +135,9 @@ async function testStorage() {
     const signedTestPath = `test/${Date.now()}/signed-test.md`;
     await storage.upload(signedTestPath, "Test content for signed URL");
 
-    const signedUrl = await storage.getSignedUrl(signedTestPath, 3600);
+    const signedUrl = await storage.getSignedUrl(signedTestPath, 3600, {
+      contentType: "text/markdown",
+    });
 
     console.log("✅ Signed URL generated!");
     console.log(`   URL: ${signedUrl.substring(0, 80)}...\n`);
