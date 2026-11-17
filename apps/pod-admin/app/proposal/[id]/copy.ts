@@ -52,7 +52,8 @@ export const en = {
   "outcome.approved": "You approved this change: it’s now in your pod.",
   "outcome.auto_approved":
     "This matched an auto-approve rule and is already applied.",
-  "outcome.rejected": "You rejected this: the AI was told why.",
+  // One verb with the bar, its sheet and its consequence: refuse.
+  "outcome.rejected": "You refused this: the AI was told why.",
   "outcome.reverted": "This change was undone after it was applied.",
   "outcome.expired":
     "Its moment passed before anyone decided: nothing was applied.",
@@ -151,7 +152,7 @@ export const fr: Catalog<typeof en> = {
   "outcome.auto_approved":
     "Cette demande correspondait à une règle d’approbation automatique et est déjà appliquée.",
   "outcome.rejected":
-    "Vous avez rejeté cette demande\u00a0: l’IA a été prévenue du motif.",
+    "Vous avez refusé cette demande\u00a0: l’IA a été prévenue du motif.",
   "outcome.reverted": "Ce changement a été annulé après son application.",
   "outcome.expired":
     "Le délai est passé avant toute décision\u00a0: rien n’a été appliqué.",

@@ -197,7 +197,7 @@ afterEach(() => setAmbientCatalogLocale("en"));
 const ENGLISH_OUTCOMES = [
   "You approved this change",
   "matched an auto-approve rule",
-  "You rejected this",
+  "You refused this",
   "was undone after it was applied",
   "Its moment passed",
   "withdrew this",
