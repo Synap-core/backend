@@ -1610,8 +1610,6 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "automations.deleteAutomation": GATED,
     "signals.classify": GATED, // writes nothing
     "playbooks.promote": GATED,
-    // A space's need filled by a provider (0426): `workspace/bind_need`.
-    "needs.bind": GATED,
     "playbooks.update": GATED,
     "entities.deleteEntity": GATED,
     "documents.createDocument": GATED,
