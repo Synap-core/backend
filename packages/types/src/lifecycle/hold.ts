@@ -132,16 +132,16 @@ export const OCCURRED_AT_MAX_PAST_DAYS = 30;
 const DAY_MS = 86_400_000;
 
 /**
- * The subjects `until.moves` may name. `proposal:<id>` parses as the WAIT
- * form first (`parseHoldWaitRef`: "no longer pending", owner-floored), so it
- * is listed here only so a proposal's own transition names a subject.
+ * The subjects `until.moves` may name. A proposal is NOT one: `proposal:<id>`
+ * is the WAIT form (`parseHoldWaitRef`: "no longer pending", owner-floored,
+ * checked by the hold-resume worker whenever the proposal moves), so a second,
+ * unfloored spelling of the same wait is not offered.
  */
 const MOVES_SUBJECTS: readonly TransitionSubjectType[] = [
   "entity",
   "track",
   "focus_session",
   "playbook_run",
-  "proposal",
   "slot",
 ];
 

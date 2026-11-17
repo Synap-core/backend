@@ -102,3 +102,24 @@ describe("slot lifecycle (D9): derived, never stored", () => {
     expect(slotSubjectId("s-1", {})).toBeNull();
   });
 });
+
+describe("a hold may wait on a run or a slot moving (reactions W1)", () => {
+  it("names them as `until.moves` subjects; a proposal stays the wait form", async () => {
+    const { parseHoldMovesRef, parseHoldWaitRef } =
+      await import("../lifecycle/hold.js");
+    expect(parseHoldMovesRef("playbook_run:r-1")).toEqual({
+      subjectType: "playbook_run",
+      subjectId: "r-1",
+    });
+    expect(parseHoldMovesRef("slot:s-1/brief")).toEqual({
+      subjectType: "slot",
+      subjectId: "s-1/brief",
+    });
+    expect(parseHoldMovesRef("proposal:p1")).toBeNull();
+    const id = "6f1c2c1e-6c4b-4a47-9a7e-1b2c3d4e5f60";
+    expect(parseHoldWaitRef(`proposal:${id}`)).toEqual({
+      kind: "proposal",
+      proposalId: id,
+    });
+  });
+});
