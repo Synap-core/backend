@@ -35,7 +35,10 @@ function nested(lines: string[], key: string, indent: number): string[] {
 }
 
 /** `key: value` pairs one level below a `permissions:` line at `indent`. */
-function permissionsAt(lines: string[], indent: number): Record<string, string> {
+function permissionsAt(
+  lines: string[],
+  indent: number
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const l of nested(lines, "permissions", indent)) {
     const m = l.trim().match(/^([\w-]+):\s*(\S+)/);
