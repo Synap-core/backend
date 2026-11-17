@@ -11,41 +11,75 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parse } from "yaml";
 
 const FILE = fileURLToPath(
   new URL("../../.github/workflows/roll-siblings.yml", import.meta.url)
 );
+const indentOf = (l: string) => l.length - l.trimStart().length;
+
+/** The lines nested under `key:` (the first line that is exactly that key at
+ * `indent`), until the indent falls back. No YAML parser is a dependency of
+ * this repo, so the workflow is read by its indentation. */
+function nested(lines: string[], key: string, indent: number): string[] {
+  const at = lines.findIndex(
+    (l) => indentOf(l) === indent && l.trim() === `${key}:`
+  );
+  if (at < 0) return [];
+  const out: string[] = [];
+  for (const l of lines.slice(at + 1)) {
+    if (l.trim() === "") continue;
+    if (indentOf(l) <= indent) break;
+    out.push(l);
+  }
+  return out;
+}
+
+/** `key: value` pairs one level below a `permissions:` line at `indent`. */
+function permissionsAt(lines: string[], indent: number): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const l of nested(lines, "permissions", indent)) {
+    const m = l.trim().match(/^([\w-]+):\s*(\S+)/);
+    if (m && indentOf(l) === indent + 2) out[m[1]] = m[2];
+  }
+  return out;
+}
+
 /** Pure checks over a workflow's text; each returns its problems. */
 export function rollWorkflowProblems(text: string): string[] {
   const problems: string[] = [];
-  const wf = parse(text) as {
-    on: Record<string, any>;
-    permissions?: Record<string, string>;
-    jobs: Record<
-      string,
-      { permissions?: Record<string, string>; steps: any[] }
-    >;
-  };
-  const code = text
+  const lines = text
     .split("\n")
     .filter((l) => !l.trim().startsWith("#"))
-    .join("\n");
+    .map((l) => l.replace(/\s+$/, ""));
+  const code = lines.join("\n");
 
-  if (wf.on.workflow_dispatch?.inputs?.dry_run?.default !== true)
-    problems.push("dry_run must default to true");
-  for (const trigger of Object.keys(wf.on))
+  const on = nested(lines, "on", 0);
+  const triggers = on
+    .filter((l) => indentOf(l) === 2 && /^[\w-]+:/.test(l.trim()))
+    .map((l) => l.trim().split(":")[0]);
+  const dispatch = nested(on, "workflow_dispatch", 2);
+  const dryRun = nested(dispatch, "dry_run", 6);
+  const dryDefault = dryRun
+    .map((l) => l.trim().match(/^default:\s*(\S+)/)?.[1])
+    .find(Boolean);
+  if (dryDefault !== "true") problems.push("dry_run must default to true");
+  for (const trigger of triggers)
     if (!["schedule", "workflow_dispatch"].includes(trigger))
       problems.push(`trigger ${trigger} is not schedule or workflow_dispatch`);
 
+  const top = permissionsAt(lines, 0);
+  const jobsAt = lines.findIndex((l) => l === "jobs:");
+  const jobLines = jobsAt < 0 ? [] : nested(lines, "jobs", 0);
   const perms = [
-    wf.permissions,
-    ...Object.values(wf.jobs).map((j) => j.permissions),
+    top,
+    ...jobLines
+      .filter((l) => indentOf(l) === 2 && /^[\w-]+:$/.test(l.trim()))
+      .map((l) => permissionsAt(nested(jobLines, l.trim().slice(0, -1), 2), 4)),
   ];
   for (const p of perms)
-    for (const [k, v] of Object.entries(p ?? {}))
+    for (const [k, v] of Object.entries(p))
       if (v !== "read") problems.push(`permission ${k}: ${v} (only read)`);
-  if (wf.permissions?.contents !== "read")
+  if (top.contents !== "read")
     problems.push("top-level permissions must be contents: read");
   if (/permission-[a-z-]+:\s*(write|admin)/.test(code))
     problems.push("a minted token asks for write");
