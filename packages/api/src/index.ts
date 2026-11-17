@@ -556,6 +556,15 @@ export {
   listReactionRules,
   type ReactionRuleView,
 } from "./services/reactions/list-reaction-rules.js";
+// Reactions W3: the roll-up a relation declares (its effect, its source of
+// declarations), each rule's pause, and the pass that seeds their rows.
+export { rollUpReactionEffect } from "./services/reactions/roll-up-effect.js";
+export { relationReactionSource } from "./services/reactions/relation-reactions.js";
+export { reactionEnabledStates } from "./services/reactions/reaction-rule-rows.js";
+export {
+  convergeReactionRules,
+  convergeReactionRulesSafely,
+} from "./services/reactions/reaction-rules-compile.js";
 // Exported for @synap/jobs' `registerStatusWatcherRunner` IoC slot (W6): the
 // hourly watcher that raises late / approaching / stuck / hold-review signals.
 export {

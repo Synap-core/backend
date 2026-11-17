@@ -23,6 +23,9 @@
  *            ledger its own row carries (`stage_history`, 0382); its wait
  *            episodes (`readWaitEpisodes`, 0386) merged in by when each
  *            opened, every subject asked about in ONE read;
+ *   reactions the rules around it (`status-reactions.ts`): those that fire
+ *            when it moves and those that move it, each with its last
+ *            outcome and, for a roll-up, its parts' "3 of 5 done";
  *   links    a goal's or a session's `serves` edges, each end the reader sees;
  *   rollup   a goal's tree down `serves` (`readGoalTreeRollups`);
  *   signals  the status signals (`status_signal_raised`) still open;
@@ -224,6 +227,12 @@ export interface StatusOf {
    * moves its step offers ({@link StatusOfMove}).
    */
   moves?: StatusOfMove[];
+  /**
+   * On `include: ["reactions"]` (every type): the rules around it — those
+   * that fire when it moves, those that move it (`status-reactions.ts`).
+   */
+  reactions?:
+    import("@synap-core/types/units").StatusOfReaction[] | Unavailable;
   /** Things only: the roles it wears that the reader may see. */
   roles?: StatusOfRole[] | Unavailable;
   /** Things only: the account it works at, when the reader may read it. */
@@ -1120,11 +1129,40 @@ export async function readStatusOf(
     );
   }
 
+  // The rules around each subject: every one asked about in ONE read of the
+  // rule list (`status-reactions.ts`).
+  const reacted = wants("reactions")
+    ? import("./status-reactions.js").then((m) =>
+        m.readStatusReactions(userId, [
+          ...things.map((t) => ({
+            id: t.id,
+            type: "entity" as const,
+            profileId: t.profileId ?? null,
+          })),
+          ...goals.map((g) => ({ id: g.id, type: "goal" as const })),
+          ...sessions.map((x) => ({ id: x.id, type: "session" as const })),
+          ...runs.map((r) => ({ id: r.id, type: "run" as const })),
+        ])
+      )
+    : null;
+  reacted?.catch(() => undefined);
+  const withReactions = async (a: StatusOf): Promise<StatusOf> =>
+    reacted
+      ? {
+          ...a,
+          reactions: await orUnavailable(
+            reacted.then((m) => m.get(a.id) ?? [])
+          ),
+        }
+      : a;
+
   return Promise.all(
-    asked.map(
-      (id): Promise<StatusOfAnswer> =>
-        answers.get(id) ?? Promise.resolve({ id, type: "unknown" })
-    )
+    asked.map((id): Promise<StatusOfAnswer> => {
+      const answer = answers.get(id);
+      return answer
+        ? answer.then(withReactions)
+        : Promise.resolve({ id, type: "unknown" });
+    })
   );
 }
 

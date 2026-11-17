@@ -89,7 +89,7 @@ export function registerRuleExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const { readRuleScope, readRuleSeed } =
+      const { readRuleScope, readRuleSeed, readRuleReaction } =
         await import("../../../services/rules/index.js");
       const { readExpiresAt } =
         await import("../../../services/rules/expiry.js");
@@ -147,6 +147,10 @@ export function registerRuleExecutors(): void {
         // by its key and would install it a second time.
         ...(readRuleSeed(innerData.seed)
           ? { seed: readRuleSeed(innerData.seed)! }
+          : {}),
+        // A reaction's rule approves INTO one (the compile pass finds it).
+        ...(readRuleReaction(innerData.reaction)
+          ? { reaction: readRuleReaction(innerData.reaction)! }
           : {}),
       });
 
@@ -243,7 +247,7 @@ export function registerRuleExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const { readRuleScope, readRuleSeed } =
+      const { readRuleScope, readRuleSeed, readRuleReaction } =
         await import("../../../services/rules/index.js");
       const { readExpiresAt } =
         await import("../../../services/rules/expiry.js");
