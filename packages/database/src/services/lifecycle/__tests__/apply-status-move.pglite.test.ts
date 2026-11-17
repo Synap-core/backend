@@ -160,7 +160,7 @@ describe("applyStatusMove", () => {
     });
   });
 
-  it("a move a rule caused carries its cause on the transition (reactions W2)", async () => {
+  it("a move a rule caused carries its cause on the transition", async () => {
     const r = await applyStatusMove(db, {
       target: await target(dealId),
       to: "won",

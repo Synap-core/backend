@@ -2,8 +2,8 @@
  * Connection Sync Approval Worker
  *
  * On-demand queue. Enqueued by the `connection-sync-approval` reactor in
- * @synap/events for every `proposal.approved` emit (and by the approval path for
- * a pod-wide one). Loads the proposal and, when it is a connection's
+ * @synap/events for every proposal's transition into `approved`, pod-wide
+ * included. Loads the proposal and, when it is a connection's
  * `import.graph` with "keep syncing" on and the approver owns the connection,
  * mints the connection's `auto` governance rule through the one helper
  * (`applyConnectionSyncApprovalForProposal`, @synap/database).

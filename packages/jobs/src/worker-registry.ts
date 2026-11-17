@@ -141,7 +141,7 @@ export const workerRegistry: WorkerMetadata[] = [
     id: "connection-sync-approval",
     name: "Connection Sync Approval",
     description:
-      "On-demand (enqueued by the connection-sync-approval reactor for every proposal.approved). When the approved proposal is a connection's import.graph carrying data.connectionSync with keepSyncing on, and the approver owns the connection, ensures exactly one active `auto` governance rule targeting that connection (source_proposal_id lineage). Idempotent; no-op for every other proposal.",
+      "On-demand (enqueued by the connection-sync-approval reactor for every proposal transition into approved, pod-wide included). When the approved proposal is a connection's import.graph carrying data.connectionSync with keepSyncing on, and the approver owns the connection, ensures exactly one active `auto` governance rule targeting that connection (source_proposal_id lineage). Idempotent; no-op for every other proposal.",
     triggers: ["queue:connection-sync-approval"],
     outputs: [],
     category: "ai",

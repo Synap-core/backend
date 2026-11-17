@@ -120,9 +120,9 @@ export interface MoveStatusInput {
    */
   atSessionBirth?: boolean;
   /**
-   * The move that caused this one (reactions W2): a reaction's move, or the
-   * approval replay of a move a reaction proposed. Stamped on the transition
-   * so its history says "moved because X moved".
+   * The move that caused this one: a reaction's move, or the approval replay of
+   * a move a reaction proposed. Stamped on the transition so its history says
+   * "moved because X moved".
    */
   cause?: TransitionCause | null;
   /**

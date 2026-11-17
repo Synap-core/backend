@@ -1,7 +1,7 @@
 /**
- * The slot transition (reactions W1): a slot's status is DERIVED
- * (`slotStatusOf`), so a door owes a `slot` transition only for a slot whose
- * derived status changed between what it locked and what it wrote. Pure.
+ * The slot transition: a slot's status is DERIVED (`slotStatusOf`), so a door
+ * owes a `slot` transition only for a slot whose derived status changed between
+ * what it locked and what it wrote. Pure.
  */
 import { describe, it, expect } from "vitest";
 import { slotTransitionsOf } from "../slot-transition.js";
@@ -50,7 +50,7 @@ describe("slotTransitionsOf", () => {
     });
   });
 
-  it("a move a rule caused carries its cause (reactions W2)", () => {
+  it("a move a rule caused carries its cause", () => {
     const cause = {
       reactionId: "rule-1",
       transitionId: "t-src",

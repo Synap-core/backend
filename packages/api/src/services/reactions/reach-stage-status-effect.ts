@@ -8,7 +8,7 @@
  * `onApproved`, through THE status door (`moveStatus`, via
  * `writeStageReachedStatus`), with the reaction's `cause`.
  *
- * Whichever door delivered the slot owes its transition (reactions W1): the
+ * Whichever door delivered the slot owes its transition: the
  * approval tail, auto-approve, attest, answer, evidence, a recorded merge, a
  * child run, and default 3 meeting it by its ref (M2b) — so every one of them
  * reaches the stage here, and none calls the writer itself.

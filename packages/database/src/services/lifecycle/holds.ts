@@ -337,7 +337,7 @@ async function statusesNow(
     t.subjectType === "focus_session" ? t.subjectId : null
   );
   // A run's pause (`waiting_on_you`, `stale`, `proposed`) records a hold
-  // too (reactions W1). Proposals and slots have no paused status.
+  // too. Proposals and slots have no paused status.
   const runs = ids((t) =>
     t.subjectType === "playbook_run" ? t.subjectId : null
   );

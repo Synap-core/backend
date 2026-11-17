@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * WHEN THIS MOVES — the rules around one thing, on its page (plan 7d71ddcc
- * W3, decision D8: the person's word is "Rules"). ONE read:
- * `lifecycle.statusOf({ ids: [id], include: ["reactions"] })`, shaped by the
- * pure model (`../rules-around-model.ts`):
+ * WHEN THIS MOVES — the rules around one thing, on its page (decision D8: the
+ * person's word is "Rules"). ONE read: `lifecycle.statusOf({ ids: [id],
+ * include: ["reactions"] })`, shaped by the pure model
+ * (`../rules-around-model.ts`):
  *   1. a rule that MOVES it (a roll-up of its parts) with the parts'
  *      "3 of 5 done", first: will it move on its own, and how close is it;
  *   2. the rules its own moves set off.
