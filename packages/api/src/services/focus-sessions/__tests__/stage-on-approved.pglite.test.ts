@@ -14,7 +14,12 @@
  *  - a stage's declared outputs all delivered reach its status; one still
  *    owed reaches nothing;
  *  - an UNGATED advance out of a stage with no outputs reaches nothing (the
- *    rule's third case: no signal, no write).
+ *    rule's third case: no signal, no write);
+ *  - the REAL settle doors reach it: a recorded merge
+ *    (`satisfyPullRequestByMerge`) and claim evidence
+ *    (`satisfyClaimsByEvidence`) close the stage's required output and the
+ *    subject reaches its status — also when the run already moved on to the
+ *    next stage; a merge of another pull request reaches nothing.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -145,6 +150,11 @@ import {
   writeGatePassStatuses,
   writeStageReachedStatus,
 } from "../stage-subject-status.js";
+import {
+  satisfyClaimsByEvidence,
+  satisfyPullRequestByMerge,
+} from "../satisfy-expected-output.js";
+import { parsePullRequestRef } from "@synap-core/types";
 
 const migration = (f: string) =>
   readFileSync(
@@ -197,7 +207,8 @@ async function seedPost(status: string) {
 async function runOn(
   subject: string,
   stage: string,
-  expectedOutputs: unknown[] = []
+  expectedOutputs: unknown[] = [],
+  stages: readonly unknown[] = STAGES
 ): Promise<{
   id: string;
   playbookId: string;
@@ -211,7 +222,7 @@ async function runOn(
        (id, workspace_id, created_by, name, goal_template, executor, stages, criteria, expected_outputs, params, subject_profile, version, status, created_at, updated_at)
      values ($1, null, $2, 'Produce Content', 'Make it', 'is-agent',
              $3::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $4::jsonb, 1, 'active', now(), now())`,
-    [playbookId, USER, JSON.stringify(STAGES), JSON.stringify(subjectProfile)]
+    [playbookId, USER, JSON.stringify(stages), JSON.stringify(subjectProfile)]
   );
   const id = randomUUID();
   await q(
@@ -229,7 +240,7 @@ async function runOn(
       playbookId,
       id,
       USER,
-      JSON.stringify({ version: 1, stages: STAGES, subjectProfile }),
+      JSON.stringify({ version: 1, stages, subjectProfile }),
     ]
   );
   return { id, playbookId, subjectEntityId: subject, workspaceId: null };
@@ -411,6 +422,104 @@ describe("no signal, no write (the rule's third case)", () => {
     // brief's onApproved (Briefed) is never written by entering script, and
     // script enters no status of its own.
     expect(await statusOf(post)).toBe("Idea");
+    expect(await movesOf(post)).toEqual([]);
+  });
+});
+
+/**
+ * Fix a finding's `merged` stage, its D2 shape (with a post status standing in
+ * for `fixed`): a REQUIRED pull request output, reached when that pull request
+ * merges (or a claim with its own url is evidenced).
+ */
+const PR_URL = "https://github.com/Synap-core/backend/pull/4242";
+const MERGE_STAGES = [
+  { key: "fix", name: "Fix it", subjectStatus: "Briefed" },
+  {
+    key: "merged",
+    name: "Fix merged",
+    onApproved: "Scripted",
+    expectedOutputs: [{ kind: "pull_request", label: "Merged fix" }],
+  },
+  { key: "verified", name: "Live and verified" },
+];
+const prSlot = (extra: Record<string, unknown> = {}) => ({
+  kind: "pull_request",
+  label: "Merged fix",
+  status: "pending",
+  ref: { url: PR_URL },
+  ...extra,
+});
+
+describe("the settle doors reach the stage's status (approval signal 1, through the real doors)", () => {
+  it("a recorded MERGE of the slot's pull request reaches it", async () => {
+    const post = await seedPost("Briefed");
+    const session = await runOn(post, "merged", [prSlot()], MERGE_STAGES);
+    const out = await satisfyPullRequestByMerge({
+      sessionId: session.id,
+      userId: USER,
+      pr: parsePullRequestRef(PR_URL)!,
+    });
+    expect(out.satisfied.map((x) => x.label)).toEqual(["Merged fix"]);
+    expect(await statusOf(post)).toBe("Scripted");
+    expect(await movesOf(post)).toEqual([["Scripted", session.id]]);
+  });
+
+  it("the run already moved on to the next stage: the merge still reaches the stage whose work it was", async () => {
+    const post = await seedPost("Briefed");
+    const session = await runOn(post, "verified", [prSlot()], MERGE_STAGES);
+    await satisfyPullRequestByMerge({
+      sessionId: session.id,
+      userId: USER,
+      pr: parsePullRequestRef(PR_URL)!,
+    });
+    expect(await statusOf(post)).toBe("Scripted");
+    expect(await movesOf(post)).toEqual([["Scripted", session.id]]);
+  });
+
+  it("claim EVIDENCE (the slot claimed done with its own url) reaches it", async () => {
+    const post = await seedPost("Briefed");
+    const session = await runOn(
+      post,
+      "merged",
+      [prSlot({ claimedDone: true })],
+      MERGE_STAGES
+    );
+    const out = await satisfyClaimsByEvidence({
+      sessionId: session.id,
+      userId: USER,
+    });
+    expect(out.satisfied.map((x) => x.label)).toEqual(["Merged fix"]);
+    expect(await statusOf(post)).toBe("Scripted");
+  });
+
+  it("NEGATIVE: a merge of ANOTHER pull request closes nothing and reaches nothing", async () => {
+    const post = await seedPost("Briefed");
+    const session = await runOn(post, "merged", [prSlot()], MERGE_STAGES);
+    const out = await satisfyPullRequestByMerge({
+      sessionId: session.id,
+      userId: USER,
+      pr: parsePullRequestRef(
+        "https://github.com/Synap-core/backend/pull/4243"
+      )!,
+    });
+    expect(out.satisfied).toEqual([]);
+    expect(await statusOf(post)).toBe("Briefed");
+    expect(await movesOf(post)).toEqual([]);
+  });
+
+  it("NEGATIVE: a subject already past the stage is never moved back by a late merge", async () => {
+    const post = await seedPost("In Draft");
+    const stages = [
+      ...MERGE_STAGES.slice(0, 2),
+      { key: "verified", name: "Live and verified", subjectStatus: "In Draft" },
+    ];
+    const session = await runOn(post, "verified", [prSlot()], stages);
+    await satisfyPullRequestByMerge({
+      sessionId: session.id,
+      userId: USER,
+      pr: parsePullRequestRef(PR_URL)!,
+    });
+    expect(await statusOf(post)).toBe("In Draft");
     expect(await movesOf(post)).toEqual([]);
   });
 });
