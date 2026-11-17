@@ -67,6 +67,7 @@ import {
   openRoomQuestionConditions,
   setSessionStatus,
   setRunStatus,
+  oweSlotTransitions,
   LIVE_RUN_STATUSES,
   workUnitActorOf,
   type WorkUnitActor,
@@ -887,6 +888,18 @@ export async function completeFocusSession(
             : {}),
       },
     });
+    // The slots the close retired moved (→ retired): owed in the close's own
+    // transaction (reactions W1). Nothing when the close retired none.
+    if (retirement && rows.length > 0) {
+      await oweSlotTransitions(tx, {
+        sessionId,
+        before: lockedOutputs,
+        after: retirement.outputs,
+        actor:
+          params.actor ?? workUnitActorOf(params.userId, params.agentUserId),
+        reason: `Its session was ${terminalStatus}.`,
+      });
+    }
     return rows;
   });
 

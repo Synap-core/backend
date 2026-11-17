@@ -27,6 +27,7 @@ import {
   and,
   drizzleSql,
   LifecycleConflictError,
+  oweSlotTransitions,
   workUnitActorOf,
   writeSessionPatch,
   personTouchedSubjectIds,
@@ -2813,6 +2814,15 @@ export async function updateFocusSession(
         blockedByThisPatch = newlyBlockedSlots(current, applied.outputs);
         outputsBefore = current;
         outputsAfter = applied.outputs;
+        // A slot whose derived status moved (an agent withdrew it, a
+        // hand-over through the list) owes its transition in this same
+        // transaction (reactions W1).
+        await oweSlotTransitions(tx, {
+          sessionId,
+          before: current,
+          after: applied.outputs,
+          actor: workUnitActorOf(userId, agentUserId),
+        });
       }
       // The one session status write when `set` carries a status.
       return writeSessionPatch(tx, {

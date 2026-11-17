@@ -71,7 +71,13 @@
  * dressing it as approval lineage.
  */
 
-import { db, focusSessions, eq, and } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  eq,
+  and,
+  oweSlotTransitions,
+} from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
@@ -210,6 +216,16 @@ export async function satisfyExpectedOutputs(
       .update(focusSessions)
       .set({ expectedOutputs: next, updatedAt: new Date() })
       .where(eq(focusSessions.id, sessionId));
+    // The delivered slot's derived status moved: owed here, in the same
+    // transaction (reactions W1).
+    await oweSlotTransitions(tx, {
+      sessionId,
+      before: current,
+      after: next,
+      actor: { kind: "system" },
+      reason: "Its approved proposal delivered it.",
+      proposalId,
+    });
 
     return { satisfied: [current[index]!.label] };
   });
@@ -544,6 +560,15 @@ export async function attestExpectedOutput(
       .update(focusSessions)
       .set({ expectedOutputs: next, updatedAt: now })
       .where(eq(focusSessions.id, sessionId));
+    // The delivered slot's derived status moved: owed here, in the same
+    // transaction (reactions W1).
+    await oweSlotTransitions(tx, {
+      sessionId,
+      before: current,
+      after: next,
+      actor: { kind: "human", userId },
+      reason: "The person attested it.",
+    });
 
     // The history row commits iff the attestation does.
     await logEvent(
@@ -951,6 +976,15 @@ export async function satisfyClaimsByEvidence(params: {
         .update(focusSessions)
         .set({ expectedOutputs: next, updatedAt: now })
         .where(eq(focusSessions.id, sessionId));
+      // The delivered slot's derived status moved: owed here, in the same
+      // transaction (reactions W1).
+      await oweSlotTransitions(tx, {
+        sessionId,
+        before: current,
+        after: next,
+        actor: { kind: "system" },
+        reason: "Its evidence delivered it.",
+      });
       const currentKeys = deriveSlotKeys(current);
       return {
         satisfied: picks.map((p) => ({
@@ -1064,6 +1098,15 @@ export async function satisfyPullRequestByMerge(params: {
         .update(focusSessions)
         .set({ expectedOutputs: next, updatedAt: now })
         .where(eq(focusSessions.id, sessionId));
+      // The delivered slot's derived status moved: owed here, in the same
+      // transaction (reactions W1).
+      await oweSlotTransitions(tx, {
+        sessionId,
+        before: current,
+        after: next,
+        actor: { kind: "system" },
+        reason: "Its pull request merged.",
+      });
       const currentKeys = deriveSlotKeys(current);
       return {
         satisfied: picks.map((p) => ({
@@ -1216,6 +1259,15 @@ export async function satisfyStageSlotsFromChild(params: {
         .update(focusSessions)
         .set({ expectedOutputs: next, updatedAt: now })
         .where(eq(focusSessions.id, sessionId));
+      // The delivered slot's derived status moved: owed here, in the same
+      // transaction (reactions W1).
+      await oweSlotTransitions(tx, {
+        sessionId,
+        before: current,
+        after: next,
+        actor: { kind: "system" },
+        reason: "A child run delivered it.",
+      });
       const currentKeys = deriveSlotKeys(current);
       return {
         satisfied: picks.map((p) => ({
