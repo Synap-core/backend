@@ -1629,10 +1629,18 @@
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["moves", "history", "links", "rollup", "signals", "work"]
+              "enum": [
+                "moves",
+                "history",
+                "reactions",
+                "links",
+                "rollup",
+                "signals",
+                "work"
+              ]
             },
-            "maxItems": 6,
-            "description": "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals; work = where its sessions and runs stand. An unknown part is refused."
+            "maxItems": 7,
+            "description": "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals; reactions = the rules that fire when it moves or move it, with a roll-up's progress; work = where its sessions and runs stand. An unknown part is refused."
           },
           "only": {
             "type": "string",
