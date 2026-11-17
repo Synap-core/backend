@@ -19776,9 +19776,11 @@ export interface PacketDecision {
  * `waiting_on` (a wait on someone or something, its `waitKind` saying whose
  * ball), `step` (a thing's next step on its path, `to`), `judge_review` (a
  * goal's claims wait on its judge) and `start_work` (no open session works
- * on a goal).
+ * on a goal). `stopped_early` is a session's that ENDED before its last
+ * declared stage (wave 0, plan 7d71ddcc): the person decides whether to run
+ * it again.
  */
-export type NextMoveKind = "agent_slot" | "blocker_dropped" | "judge_review" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "pull_request" | "ready_to_close" | "start_work" | "step" | "undeclared" | "unknown" | "waiting_on" | "waiting_on_hold" | "waiting_on_session";
+export type NextMoveKind = "agent_slot" | "blocker_dropped" | "judge_review" | "message_waiting" | "none" | "owed_slot" | "pending_proposal" | "pull_request" | "ready_to_close" | "start_work" | "step" | "stopped_early" | "undeclared" | "unknown" | "waiting_on" | "waiting_on_hold" | "waiting_on_session";
 export interface ContinuationNextMove {
 	kind: NextMoveKind;
 	/** Who acts: the person, the AI, or nobody. */
@@ -48453,7 +48455,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionId: string | null;
 				startedAt: Date;
 				status: PlaybookRunStatus;
-				stopReason: "budget" | null;
+				stopReason: "budget" | "stages_left" | null;
 				summary: string | null;
 				workspaceId: string | null;
 			}[];
@@ -49861,7 +49863,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					sessionId: string | null;
 					startedAt: Date;
 					status: PlaybookRunStatus;
-					stopReason: "budget" | null;
+					stopReason: "budget" | "stages_left" | null;
 					summary: string | null;
 					workspaceId: string | null;
 				} | null;
@@ -49890,7 +49892,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					sessionId: string | null;
 					startedAt: Date;
 					status: PlaybookRunStatus;
-					stopReason: "budget" | null;
+					stopReason: "budget" | "stages_left" | null;
 					summary: string | null;
 					workspaceId: string | null;
 				} | null;
@@ -49989,7 +49991,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					sessionId: string | null;
 					startedAt: Date;
 					status: PlaybookRunStatus;
-					stopReason: "budget" | null;
+					stopReason: "budget" | "stages_left" | null;
 					summary: string | null;
 					workspaceId: string | null;
 				} | null;
