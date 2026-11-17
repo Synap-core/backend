@@ -69,6 +69,7 @@ import {
 } from "@synap/database";
 import type {
   Playbook,
+  PlaybookRun,
   FocusSession,
   Automation,
 } from "@synap/database/schema";
@@ -158,6 +159,11 @@ import {
   resolveRunChoice,
   handedToLine,
 } from "../services/playbooks/run-playbook.js";
+import {
+  alreadyRunningMessage,
+  findLiveRunOfSubject,
+  type AlreadyRunningReason,
+} from "../services/playbooks/live-run-of-subject.js";
 import { PRE_APPROVAL_HELD_LINE } from "../services/playbooks/pre-approved-run.js";
 import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
 import {
@@ -322,6 +328,32 @@ async function resolveVisibleSubjectId(
     code: "NOT_FOUND",
     message: `Subject entity ${subjectId} not found in this workspace`,
   });
+}
+
+/**
+ * The fields of `playbooks.run`'s `status: "already_running"` answer (the
+ * person already has a live run of the playbook on the subject, one live run
+ * per object): NOTHING started. `session` is the live run to open, `run` its
+ * newest ledger row (null for an agent's draft that waits for the person),
+ * `reason` why nothing started. The status literal stays at each return in
+ * `run` itself, where `write-door-outcome-contract.test.ts` reads the
+ * door's statuses.
+ */
+function alreadyRunningFields(
+  playbookName: string,
+  live: {
+    session: FocusSession;
+    run: PlaybookRun | null;
+    reason: AlreadyRunningReason;
+  }
+) {
+  return {
+    run: live.run,
+    session: live.session as FocusSession | null,
+    reason: live.reason,
+    message: alreadyRunningMessage(playbookName, live.reason),
+    proposalId: null as string | null,
+  };
 }
 
 // ── Shared input schemas ─────────────────────────────────────────────────────
@@ -3035,6 +3067,15 @@ export const playbooksRouter = router({
          * `handToAgentId`.
          */
         trial: trialRunInputSchema.optional(),
+        /**
+         * ONE LIVE RUN PER OBJECT (founder, 2026-11-16): while the caller's
+         * person already has a live run of this playbook on `subjectId`, a
+         * run answers `status: "already_running"` with that run and starts
+         * nothing. `true` starts a second run anyway (the person's explicit
+         * "start another"); that run does not hold the object's live slot.
+         * Carried on the proposal `data` so an approved run keeps it.
+         */
+        startAnother: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -3146,6 +3187,30 @@ export const playbooksRouter = router({
         input.subjectId,
         runWorkspaceId
       );
+
+      // ONE LIVE RUN PER OBJECT (founder, 2026-11-16, decisions 1–4): a
+      // person's run of this playbook on this subject, without "start
+      // another", holds the object's one live slot. While the person already
+      // has a live run of it there (an agent's draft waiting for them
+      // included), the answer is that run: before anything is checked,
+      // proposed or started, so a duplicate is never filed for review either.
+      // `runPlaybook` asks again (the approved replay comes back through
+      // here) and the 0427 index floors the race. Never for a trial.
+      const oneLivePerSubject =
+        !input.startAnother && !input.trial && !!subjectId;
+      if (oneLivePerSubject) {
+        const live = await findLiveRunOfSubject({
+          playbookId: playbook.id,
+          subjectId: subjectId!,
+          userId: ctx.userId,
+        });
+        if (live) {
+          return {
+            ...alreadyRunningFields(playbook.name, live),
+            status: "already_running" as const,
+          };
+        }
+      }
 
       // D3 preflight — a playbook that depends on installed-but-not-enabled
       // skills says so BEFORE anything launches (and before a run proposal is
@@ -3360,6 +3425,8 @@ export const playbooksRouter = router({
           ...(input.stageRunners ? { stageRunners: input.stageRunners } : {}),
           // A gated trial stays a trial once approved.
           ...(input.trial ? { trial: input.trial } : {}),
+          // A gated "start another" stays one once approved.
+          ...(input.startAnother ? { startAnother: true } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -3435,6 +3502,9 @@ export const playbooksRouter = router({
         ...(input.agentUserId && "preApprovedByRuleId" in perm
           ? { preApprovedByRuleId: perm.preApprovedByRuleId }
           : {}),
+        // One live run per object: this door's person run holds the slot
+        // (see `oneLivePerSubject` above). Only this door sets it.
+        ...(oneLivePerSubject ? { oneLivePerSubject: true } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
@@ -3443,6 +3513,21 @@ export const playbooksRouter = router({
       });
       const { run, session, parentLink, skipped, held, heldBecause, handedTo } =
         started;
+
+      // A live run was found by the spine (the read above raced it, or a
+      // concurrent start won the insert): nothing started, the live run is
+      // the answer — never "Playbook run started" with no run.
+      if (started.alreadyRunning) {
+        return {
+          ...alreadyRunningFields(playbook.name, {
+            session: started.session,
+            run: started.run,
+            reason: started.alreadyRunning.reason,
+          }),
+          status: "already_running" as const,
+          ...(runnerOffer ? { runnerOffer } : {}),
+        };
+      }
 
       // ONE-SHOT (`executor: "generate"`): no session. The draft was filed as
       // a proposal on the subject, answered here at once so the app shows it

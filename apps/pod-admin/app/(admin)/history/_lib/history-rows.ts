@@ -27,7 +27,7 @@ import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
 import {
   proposalRequesterParts,
   type ProposalRequesterFacts,
-} from "../../../proposal/[id]/proposal-requester";
+} from "@synap-core/types/proposals";
 
 /** The `proposals.list` fields a row reads, structurally. */
 export interface HistoryProposal extends ProposalRequesterFacts {

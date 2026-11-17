@@ -7,7 +7,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/health",
+}));
 vi.mock("../../../../lib/trpc", () => ({ trpc: {} }));
 
 import { HealthBody, type HealthHandlers } from "./health-view";
@@ -105,7 +108,9 @@ describe("HealthBody states", () => {
       }),
     });
     expect(out).toContain("Memory pressure is high since 22:40");
-    expect(out).toContain('href="/runs"');
+    // Runs left the console: the door opens Work in the app.
+    expect(out).not.toContain('href="/runs"');
+    expect(out).toContain('href="synap://open/app/sessions?view=moving"');
     expect(out).toContain('href="/rules"');
     expect(out).toContain('href="/agents"');
     expect(out).toContain("Restart a service");

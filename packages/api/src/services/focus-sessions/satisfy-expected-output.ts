@@ -78,6 +78,7 @@ import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import {
   askFingerprint,
   effectiveSlotAsk,
+  isDeclinedValue,
   resolveAskResolution,
 } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
@@ -90,6 +91,7 @@ import {
   readCriteria,
   type ExpectedOutput,
   type SessionCriterion,
+  type SlotAnswerValue,
 } from "@synap/playbooks";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
@@ -638,13 +640,18 @@ export async function attestExpectedOutput(
  * here. A confirm / choose / form is an answer, not a deed: `null`. A
  * machine-checked criterion (evidence / capability / judge) keeps its own
  * `verify`: the person saying "I did this" is not the measurement it
- * declared. Pure.
+ * declared. A REFUSAL (`value.type === "declined"`) meets nothing: the
+ * person said no to the deed, so the criterion is never graded pass on it.
+ * Pure.
  */
 export function criterionMetBy(
   outputs: readonly ExpectedOutput[],
   index: number,
-  criteria: readonly Pick<SessionCriterion, "key" | "check">[]
+  criteria: readonly Pick<SessionCriterion, "key" | "check">[],
+  /** The answer that would meet it; absent for an attest ("I did this"). */
+  value?: SlotAnswerValue
 ): string | null {
+  if (isDeclinedValue(value)) return null;
   const slot = outputs[index];
   if (!slot || slot.owner !== "human" || slot.kind === CRITERION_SLOT_KIND) {
     return null;

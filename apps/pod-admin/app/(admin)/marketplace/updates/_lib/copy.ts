@@ -27,6 +27,12 @@ export const en = {
   "group.choice.meta": "You edited what the catalog changed",
   "group.consent.meta": "The update changes existing records",
   "group.review.meta": "Nobody edited what changed",
+  "group.approval.meta": "Approve the proposals first, then update",
+  "approval.waiting":
+    "{n, plural, one {Waiting on # proposal} other {Waiting on # proposals}}",
+  "approval.proposal": "Proposal {n}",
+  "holds.failed":
+    "Couldn’t check whether any update waits on a proposal or on your OK.",
   "group.nothing.meta": "You edited it; the catalog has not changed it",
   "group.unreadable": "Can’t check",
   "group.unreadable.meta":
@@ -230,6 +236,13 @@ export const fr: Catalog<typeof en> = {
   "group.choice.meta": "Vous avez modifié ce que le catalogue a changé",
   "group.consent.meta": "La mise à jour modifie des fiches existantes",
   "group.review.meta": "Personne n’a modifié ce qui a changé",
+  "group.approval.meta":
+    "Approuvez d’abord les propositions, puis mettez à jour",
+  "approval.waiting":
+    "{n, plural, one {En attente de # proposition} other {En attente de # propositions}}",
+  "approval.proposal": "Proposition {n}",
+  "holds.failed":
+    "Impossible de vérifier si une mise à jour attend une proposition ou votre accord.",
   "group.nothing.meta": "Vous l’avez modifié ; le catalogue ne l’a pas changé",
   "group.unreadable": "Vérification impossible",
   "group.unreadable.meta":

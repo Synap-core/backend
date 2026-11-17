@@ -7,6 +7,7 @@ import {
   type PresenceProof,
 } from "@synap-core/types/presence";
 import { z } from "@hono/zod-openapi";
+import type { Context } from "hono";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
@@ -47,6 +48,7 @@ import {
   type DevApprovalType,
 } from "../../../services/proposals/dev-approval.js";
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
+import { assertMayDecideProposal } from "../../proposals/review-authority.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import {
   PROPOSAL_IDS_FILTER_MAX,
@@ -384,6 +386,63 @@ export function registerProposalsRoutes(app: HubHono): void {
       404: { description: "Proposal not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
+  });
+
+  const itemDoorRequest = {
+    params: z.object({
+      id: z.string(),
+      itemRef: z
+        .string()
+        .describe(
+          "The item's ref in the proposal: `$opN` / an op `ref` for an entity, `$relN` for a relation, or an item pack's `items[].ref`."
+        ),
+    }),
+  };
+  const itemDoorResponses = {
+    200: {
+      description: "Item decision recorded",
+      schema: z.object({
+        success: z.boolean(),
+        proposalId: z.string(),
+        itemRef: z.string(),
+      }),
+    },
+    400: { description: "Bad request", schema: ErrorSchema },
+    403: { description: "Forbidden", schema: ErrorSchema },
+    404: { description: "Proposal not found", schema: ErrorSchema },
+    409: {
+      description: "The proposal is no longer pending, or names no such item",
+      schema: ErrorSchema,
+    },
+    500: { description: "Internal error", schema: ErrorSchema },
+  };
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/proposals/{id}/items/{itemRef}/reject",
+    tags: ["Proposals"],
+    summary: "Drop one item of a pending proposal",
+    description:
+      "Drops ONE item of a pending proposal (a candidate of a prospect list, one entity of a capture), at once and durably: the rest of the proposal stays pending, and approving it later leaves this item out. Delegates to the canonical `proposals.rejectItem` tRPC mutation (same review authority and key fences as rejecting the whole proposal).",
+    request: {
+      ...itemDoorRequest,
+      body: z.object({
+        reason: z.string().optional(),
+        reasonCode: z.enum(PROPOSAL_REJECTION_REASONS).optional(),
+      }),
+    },
+    responses: itemDoorResponses,
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/proposals/{id}/items/{itemRef}/restore",
+    tags: ["Proposals"],
+    summary: "Restore one dropped item of a pending proposal",
+    description:
+      "Undoes a drop: the item is part of the pending proposal again. Delegates to the canonical `proposals.restoreItem` tRPC mutation.",
+    request: itemDoorRequest,
+    responses: itemDoorResponses,
   });
 
   registerOpenApi(app, {
@@ -932,6 +991,108 @@ export function registerProposalsRoutes(app: HubHono): void {
         httpStatusForTrpcError(err)
       );
     }
+  });
+
+  /**
+   * POST /proposals/:id/items/:itemRef/reject and /restore
+   * Drop (and undo the drop of) ONE item of a pending proposal: how a pod app
+   * keeps or drops one candidate of a prospect list without deciding the
+   * whole batch. Delegates to the canonical `proposals.rejectItem` /
+   * `restoreItem` tRPC mutations, so the review authority (the person's
+   * review ladder, an agent key only on its own work) and the key's fences
+   * (`proposal.reject` on the proposal's own space or project) are the
+   * in-pod door's, unchanged.
+   */
+  const proposalItemDoor = async (
+    c: Context<any, any>,
+    act: "reject" | "restore"
+  ) => {
+    const proposalId = c.req.param("id")!;
+    const itemRef = c.req.param("itemRef")!;
+    let reason: string | undefined;
+    let reasonCode: string | undefined;
+    if (act === "reject") {
+      const jsonRead = await readJsonBody(c);
+      if (!jsonRead.ok) return jsonRead.res;
+      const body = (jsonRead.body ?? {}) as Record<string, unknown>;
+      reason = typeof body.reason === "string" ? body.reason : undefined;
+      reasonCode =
+        typeof body.reasonCode === "string" ? body.reasonCode : undefined;
+    }
+    try {
+      const userId = c.get("userId") as string;
+      const scopes = c.get("scopes") as string[];
+      const resolvedId = await resolveProposalId(userId, proposalId);
+      const ctx = await createHubProtocolCallerContext(userId, scopes);
+      const caller = mainProposalsRouter.createCaller(
+        ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
+      );
+      if (act === "reject") {
+        // reasonCode is checked against PROPOSAL_REJECTION_REASONS by the
+        // procedure's zod enum.
+        await caller.rejectItem({
+          proposalId: resolvedId,
+          itemRef,
+          reason,
+          reasonCode: reasonCode as
+            (typeof PROPOSAL_REJECTION_REASONS)[number] | undefined,
+        });
+      } else {
+        await caller.restoreItem({ proposalId: resolvedId, itemRef });
+      }
+      return c.json({ success: true, proposalId: resolvedId, itemRef }, 200);
+    } catch (err) {
+      logger.error(
+        { err, proposalId, itemRef, act },
+        "proposal item door failed"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  };
+
+  app.post("/proposals/:id/items/:itemRef/reject", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    // The key's decision right first, before any read (as the in-pod door's
+    // first statement); the procedure then bounds it to the proposal's own
+    // space, project or object (assertCanReviewProposal).
+    try {
+      assertMayDecideProposal("reject", "reject");
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Forbidden" },
+        httpStatusForTrpcError(err)
+      );
+    }
+    return proposalItemDoor(c, "reject");
+  });
+
+  app.post("/proposals/:id/items/:itemRef/restore", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    // The key's decision right first, before any read (as the in-pod door's
+    // first statement); the procedure then bounds it to the proposal's own
+    // space, project or object (assertCanReviewProposal).
+    try {
+      assertMayDecideProposal("reject", "restore");
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Forbidden" },
+        httpStatusForTrpcError(err)
+      );
+    }
+    return proposalItemDoor(c, "restore");
   });
 
   // ── OpenAPI metadata for the typed dev-loop gate door ────────────────────

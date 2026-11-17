@@ -1326,6 +1326,36 @@
                             "type": "string",
                             "minLength": 1,
                             "maxLength": 120
+                          },
+                          "purpose": {
+                            "type": "object",
+                            "properties": {
+                              "for": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "tool": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              },
+                              "action": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              },
+                              "on": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              }
+                            },
+                            "required": ["for", "tool"]
+                          },
+                          "uses": {
+                            "type": "string",
+                            "enum": ["once", "session"]
                           }
                         },
                         "required": ["kind", "name"]
@@ -2828,6 +2858,11 @@
             },
             "required": ["kind", "hint"],
             "additionalProperties": {}
+          },
+          "unreadable": {
+            "type": "boolean",
+            "enum": [true],
+            "description": "The pod could not read this pending proposal's manifest (not in the catalog cache, and the by-key catalog read failed): what it needs is UNKNOWN. `params` is then empty and `blocking` true; never read it as 'nothing needed'."
           }
         },
         "required": ["params", "blocking"]
@@ -2843,6 +2878,15 @@
           "secret": {
             "type": "boolean",
             "description": "Prompt masked. The VALUE is never on the wire."
+          },
+          "obtain": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string" },
+              "steps": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["steps"],
+            "description": "How a person gets this value: numbered steps (at most 7) and the https page they start on, from the capability manifest."
           },
           "satisfied": {
             "type": "boolean",
@@ -3544,6 +3588,201 @@
           "supersededBy": { "type": "string" }
         },
         "required": ["substrate", "id", "title", "supersededBy"]
+      },
+      "FindResult": {
+        "type": "object",
+        "properties": {
+          "intent": { "type": "string" },
+          "lens": {
+            "type": "object",
+            "properties": { "workspaceId": { "type": ["string", "null"] } },
+            "required": ["workspaceId"]
+          },
+          "scoring": { "type": "object", "additionalProperties": {} },
+          "coverage": { "type": "object", "additionalProperties": {} },
+          "capabilities": { "type": "object", "additionalProperties": {} },
+          "intents": { "type": "object", "additionalProperties": {} },
+          "marketplace": { "type": "object", "additionalProperties": {} },
+          "playbooks": { "type": "object", "additionalProperties": {} },
+          "spaces": { "type": "object", "additionalProperties": {} },
+          "noConfidentMatch": { "type": "object", "additionalProperties": {} },
+          "skills": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "automations": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "sessions": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "goals": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "projects": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "views": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          },
+          "documents": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "matches": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/FoundObject" }
+                  }
+                },
+                "required": ["matches"]
+              },
+              {
+                "type": "object",
+                "properties": { "error": { "type": "string" } },
+                "required": ["error"]
+              }
+            ]
+          }
+        },
+        "required": ["intent", "lens", "scoring", "coverage"]
+      },
+      "FoundObject": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string" },
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "why": { "type": ["string", "null"] },
+          "open": { "type": "string" },
+          "ref": { "type": "string" },
+          "workspaceId": { "type": ["string", "null"] },
+          "score": { "type": "number" },
+          "confidence": { "type": "number" },
+          "match": {
+            "type": "object",
+            "properties": {
+              "terms": { "type": "array", "items": { "type": "string" } },
+              "fields": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["terms", "fields"]
+          },
+          "termCoverage": {
+            "type": "object",
+            "properties": {
+              "hit": { "type": "number" },
+              "of": { "type": "number" }
+            },
+            "required": ["hit", "of"]
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "title",
+          "why",
+          "open",
+          "workspaceId",
+          "score",
+          "confidence",
+          "match",
+          "termCoverage"
+        ]
       },
       "Command": {
         "type": "object",
@@ -4810,7 +5049,11 @@
           "triggerType": {
             "$ref": "#/components/schemas/AutomationTriggerType"
           },
-          "triggerConfig": { "type": "object", "additionalProperties": {} },
+          "triggerConfig": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Trigger settings (eventPattern, filters, expression, ...). audience: whose events a POD-WIDE automation answers to: 'me' (default; your own events and your agents') or 'everyone' (any member's, in a space you can see). A space automation ignores it."
+          },
           "flowDefinition": { "$ref": "#/components/schemas/FlowDefinition" },
           "status": { "$ref": "#/components/schemas/AutomationStatus" },
           "metadata": { "type": "object", "additionalProperties": {} }
@@ -4848,7 +5091,11 @@
           "triggerType": {
             "$ref": "#/components/schemas/AutomationTriggerType"
           },
-          "triggerConfig": { "type": "object", "additionalProperties": {} },
+          "triggerConfig": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Trigger settings (eventPattern, filters, expression, ...). audience: whose events a POD-WIDE automation answers to: 'me' (default; your own events and your agents') or 'everyone' (any member's, in a space you can see). A space automation ignores it."
+          },
           "flowDefinition": { "$ref": "#/components/schemas/FlowDefinition" },
           "status": { "$ref": "#/components/schemas/AutomationStatus" },
           "metadata": { "type": "object", "additionalProperties": {} }
@@ -5391,9 +5638,22 @@
           "status": {
             "type": "string",
             "enum": ["connected", "reconnection_required", "disconnected"]
+          },
+          "pausedUntil": { "type": ["string", "null"] },
+          "pausedReason": {
+            "type": ["string", "null"],
+            "enum": ["rate_limited", "restricted", null]
           }
         },
-        "required": ["id", "externalId", "provider", "displayName", "status"]
+        "required": [
+          "id",
+          "externalId",
+          "provider",
+          "displayName",
+          "status",
+          "pausedUntil",
+          "pausedReason"
+        ]
       },
       "MessagingNotConfigured": {
         "type": "object",
@@ -6720,6 +6980,13 @@
           "unreadable"
         ]
       },
+      "InstallationRequestApplied": {
+        "anyOf": [
+          { "$ref": "#/components/schemas/InstallationRequested" },
+          { "$ref": "#/components/schemas/InstallationInstalledOnPod" },
+          { "$ref": "#/components/schemas/InstallationAlreadyOnPod" }
+        ]
+      },
       "InstallationRequested": {
         "type": "object",
         "properties": {
@@ -6728,6 +6995,19 @@
           "jobId": { "type": ["string", "null"] }
         },
         "required": ["status", "installationId", "jobId"]
+      },
+      "InstallationInstalledOnPod": {
+        "type": "object",
+        "properties": { "status": { "type": "string", "enum": ["installed"] } },
+        "required": ["status"]
+      },
+      "InstallationAlreadyOnPod": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["already_on_pod"] },
+          "capabilityKey": { "type": "string" }
+        },
+        "required": ["status", "capabilityKey"]
       },
       "InstallationRequestProposed": {
         "type": "object",
@@ -10467,7 +10747,7 @@
         "tags": ["Entities"],
         "summary": "Type-aware hybrid retrieval (Synap Retrieval Engine)",
         "deprecated": true,
-        "description": "DEPRECATED — prefer POST /knowledge/ask, whose semantic lane calls the exact same retrieve() SRE. Still functional for existing integrations. Infers entity type(s) + property hints from the query, fuses unscoped + type-scoped recall (RRF), and returns ranked entities plus the inferred understanding. Phase 1 of the SRE.",
+        "description": "DEPRECATED — prefer POST /knowledge/search, whose semantic lane calls the exact same retrieve() SRE. Still functional for existing integrations. Infers entity type(s) + property hints from the query, fuses unscoped + type-scoped recall (RRF), and returns ranked entities plus the inferred understanding. Phase 1 of the SRE.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -12284,7 +12564,7 @@
       "get": {
         "tags": ["Search"],
         "summary": "Search a single Typesense collection",
-        "description": "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
+        "description": "DEPRECATED — prefer POST /knowledge/search, which routes across all substrates. Still functional for existing integrations.",
         "deprecated": true,
         "security": [{ "bearerAuth": [] }],
         "parameters": [
@@ -12365,7 +12645,7 @@
       "get": {
         "tags": ["Search"],
         "summary": "Cross-collection Typesense search",
-        "description": "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
+        "description": "DEPRECATED — prefer POST /knowledge/search, which routes across all substrates. Still functional for existing integrations.",
         "deprecated": true,
         "security": [{ "bearerAuth": [] }],
         "parameters": [
@@ -12450,7 +12730,7 @@
       "get": {
         "tags": ["Search"],
         "summary": "Search documents only",
-        "description": "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
+        "description": "DEPRECATED — prefer POST /knowledge/search, which routes across all substrates. Still functional for existing integrations.",
         "deprecated": true,
         "security": [{ "bearerAuth": [] }],
         "parameters": [
@@ -12525,7 +12805,7 @@
       "get": {
         "tags": ["Search"],
         "summary": "PGVector semantic search",
-        "description": "DEPRECATED — prefer POST /knowledge/ask (the SRE already uses pgvector internally as one signal). Disabled on shared pods (returns empty / 503 when VECTOR_SEARCH_ENABLED=false).",
+        "description": "DEPRECATED — prefer POST /knowledge/search (the SRE already uses pgvector internally as one signal). Disabled on shared pods (returns empty / 503 when VECTOR_SEARCH_ENABLED=false).",
         "deprecated": true,
         "security": [{ "bearerAuth": [] }],
         "parameters": [
@@ -13704,6 +13984,199 @@
           },
           "404": {
             "description": "Proposal not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/proposals/{id}/items/{itemRef}/reject": {
+      "post": {
+        "tags": ["Proposals"],
+        "summary": "Drop one item of a pending proposal",
+        "description": "Drops ONE item of a pending proposal (a candidate of a prospect list, one entity of a capture), at once and durably: the rest of the proposal stays pending, and approving it later leaves this item out. Delegates to the canonical `proposals.rejectItem` tRPC mutation (same review authority and key fences as rejecting the whole proposal).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The item's ref in the proposal: `$opN` / an op `ref` for an entity, `$relN` for a relation, or an item pack's `items[].ref`."
+            },
+            "required": true,
+            "description": "The item's ref in the proposal: `$opN` / an op `ref` for an entity, `$relN` for a relation, or an item pack's `items[].ref`.",
+            "name": "itemRef",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": { "type": "string" },
+                  "reasonCode": {
+                    "type": "string",
+                    "enum": [
+                      "wrong_entity",
+                      "duplicate",
+                      "wrong_kind_or_facet",
+                      "wrong_link_type",
+                      "wrong_workspace",
+                      "bad_data",
+                      "not_relevant",
+                      "other"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Item decision recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "proposalId": { "type": "string" },
+                    "itemRef": { "type": "string" }
+                  },
+                  "required": ["success", "proposalId", "itemRef"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Proposal not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The proposal is no longer pending, or names no such item",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/proposals/{id}/items/{itemRef}/restore": {
+      "post": {
+        "tags": ["Proposals"],
+        "summary": "Restore one dropped item of a pending proposal",
+        "description": "Undoes a drop: the item is part of the pending proposal again. Delegates to the canonical `proposals.restoreItem` tRPC mutation.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "The item's ref in the proposal: `$opN` / an op `ref` for an entity, `$relN` for a relation, or an item pack's `items[].ref`."
+            },
+            "required": true,
+            "description": "The item's ref in the proposal: `$opN` / an op `ref` for an entity, `$relN` for a relation, or an item pack's `items[].ref`.",
+            "name": "itemRef",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Item decision recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "proposalId": { "type": "string" },
+                    "itemRef": { "type": "string" }
+                  },
+                  "required": ["success", "proposalId", "itemRef"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Proposal not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The proposal is no longer pending, or names no such item",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -15666,7 +16139,25 @@
                             },
                             "required": { "type": "boolean" },
                             "default": {},
-                            "description": { "type": "string" }
+                            "description": { "type": "string" },
+                            "obtain": {
+                              "type": "object",
+                              "properties": {
+                                "url": { "type": "string", "maxLength": 2000 },
+                                "steps": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 7
+                                }
+                              },
+                              "required": ["steps"],
+                              "additionalProperties": false
+                            }
                           },
                           "required": ["name"]
                         }
@@ -16571,6 +17062,36 @@
                                                     "type": "string",
                                                     "minLength": 1,
                                                     "maxLength": 120
+                                                  },
+                                                  "purpose": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "for": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 200
+                                                      },
+                                                      "tool": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      },
+                                                      "action": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      },
+                                                      "on": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      }
+                                                    },
+                                                    "required": ["for", "tool"]
+                                                  },
+                                                  "uses": {
+                                                    "type": "string",
+                                                    "enum": ["once", "session"]
                                                   }
                                                 },
                                                 "required": ["kind", "name"]
@@ -17471,6 +17992,42 @@
                                                           "type": "string",
                                                           "minLength": 1,
                                                           "maxLength": 120
+                                                        },
+                                                        "purpose": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "for": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 200
+                                                            },
+                                                            "tool": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            },
+                                                            "action": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            },
+                                                            "on": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "for",
+                                                            "tool"
+                                                          ]
+                                                        },
+                                                        "uses": {
+                                                          "type": "string",
+                                                          "enum": [
+                                                            "once",
+                                                            "session"
+                                                          ]
                                                         }
                                                       },
                                                       "required": [
@@ -18702,6 +19259,42 @@
                                                         "type": "string",
                                                         "minLength": 1,
                                                         "maxLength": 120
+                                                      },
+                                                      "purpose": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "for": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 200
+                                                          },
+                                                          "tool": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          },
+                                                          "action": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          },
+                                                          "on": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "for",
+                                                          "tool"
+                                                        ]
+                                                      },
+                                                      "uses": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                          "once",
+                                                          "session"
+                                                        ]
                                                       }
                                                     },
                                                     "required": ["kind", "name"]
@@ -20134,7 +20727,19 @@
                                 "type": { "type": "string" },
                                 "required": { "type": "boolean" },
                                 "description": { "type": "string" },
-                                "secret": { "type": "boolean" }
+                                "secret": { "type": "boolean" },
+                                "obtain": {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": { "type": "string" },
+                                    "steps": {
+                                      "type": "array",
+                                      "items": { "type": "string" }
+                                    }
+                                  },
+                                  "required": ["steps"],
+                                  "description": "How a person gets this value: numbered steps (at most 7) and the https page they start on, from the capability manifest."
+                                }
                               },
                               "required": ["name"]
                             }
@@ -21742,6 +22347,36 @@
                                                     "type": "string",
                                                     "minLength": 1,
                                                     "maxLength": 120
+                                                  },
+                                                  "purpose": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "for": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 200
+                                                      },
+                                                      "tool": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      },
+                                                      "action": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      },
+                                                      "on": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      }
+                                                    },
+                                                    "required": ["for", "tool"]
+                                                  },
+                                                  "uses": {
+                                                    "type": "string",
+                                                    "enum": ["once", "session"]
                                                   }
                                                 },
                                                 "required": ["kind", "name"]
@@ -22642,6 +23277,42 @@
                                                           "type": "string",
                                                           "minLength": 1,
                                                           "maxLength": 120
+                                                        },
+                                                        "purpose": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "for": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 200
+                                                            },
+                                                            "tool": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            },
+                                                            "action": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            },
+                                                            "on": {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 120
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "for",
+                                                            "tool"
+                                                          ]
+                                                        },
+                                                        "uses": {
+                                                          "type": "string",
+                                                          "enum": [
+                                                            "once",
+                                                            "session"
+                                                          ]
                                                         }
                                                       },
                                                       "required": [
@@ -23873,6 +24544,42 @@
                                                         "type": "string",
                                                         "minLength": 1,
                                                         "maxLength": 120
+                                                      },
+                                                      "purpose": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "for": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 200
+                                                          },
+                                                          "tool": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          },
+                                                          "action": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          },
+                                                          "on": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 120
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "for",
+                                                          "tool"
+                                                        ]
+                                                      },
+                                                      "uses": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                          "once",
+                                                          "session"
+                                                        ]
                                                       }
                                                     },
                                                     "required": ["kind", "name"]
@@ -25387,7 +26094,7 @@
         "tags": ["Knowledge"],
         "summary": "Full-text search knowledge entries",
         "deprecated": true,
-        "description": "DEPRECATED — prefer POST /knowledge/ask, whose procedural lane calls the exact same searchFullText. Still functional for existing integrations.",
+        "description": "DEPRECATED — prefer POST /knowledge/search, whose procedural lane calls the exact same searchFullText. Still functional for existing integrations.",
         "parameters": [
           {
             "schema": { "type": "string" },
@@ -26092,7 +26799,7 @@
     "/knowledge/ask": {
       "post": {
         "tags": ["Knowledge"],
-        "summary": "DEPRECATED alias of /knowledge/search — raw retrieval door",
+        "summary": "DEPRECATED alias of POST /knowledge/search — raw retrieval door",
         "deprecated": true,
         "description": "DEPRECATED alias of POST /knowledge/search; retained for back-compat. Runs the exact same retrieval handler. Prefer POST /knowledge/search (retrieval) or POST /knowledge/answer (synthesized).",
         "requestBody": {
@@ -26571,6 +27278,78 @@
           },
           "500": {
             "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/find": {
+      "get": {
+        "tags": ["Knowledge"],
+        "summary": "Find what is there for this: verbs, playbooks, spaces, objects",
+        "description": "The find door (the same service as MCP synap_find and tRPC knowledge.find): runnable capabilities, intents, playbooks, spaces, and the objects that can be opened (skills and rules, automations, sessions, goals, projects, views, documents), each object with its `open` link. A catalog absent from the answer was not searched; `matches: []` was searched and nothing fit; `error` means that catalog's read failed. To recall CONTENT (entities, runbooks, captures) use POST /knowledge/search. Requires hub-protocol.read.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "minLength": 1, "maxLength": 2000 },
+            "required": true,
+            "name": "query",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Comma-separated, some of: capabilities, intents, playbooks, spaces, skills, automations, sessions, goals, projects, views, documents. Omit for all."
+            },
+            "required": false,
+            "description": "Comma-separated, some of: capabilities, intents, playbooks, spaces, skills, automations, sessions, goals, projects, views, documents. Omit for all.",
+            "name": "catalogs",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 25 },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What was found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FindResult" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope, outside the grant, or a space you cannot read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "The find failed",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -27919,6 +28698,292 @@
           },
           "404": {
             "description": "Site not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apps/access-requests": {
+      "post": {
+        "tags": ["Apps"],
+        "summary": "A pod app asks its person for one more thing",
+        "description": "With the app's own token. Each pair is a permission the app's client-id document declares, in one space (by id or by the template it was made from) the person may give it. Files ONE ask the person answers from a card; allowing it ADDS the pairs to what the app holds. A pair the app already holds, already asked for, or that the person declined less than 30 days ago is not asked again. An ask waits 7 days.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "requests": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "permission": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120,
+                              "description": "A permission the app's client-id document declares."
+                            },
+                            "workspaceId": {
+                              "type": "string",
+                              "format": "uuid",
+                              "description": "The space, by id."
+                            }
+                          },
+                          "required": ["permission", "workspaceId"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "permission": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120,
+                              "description": "A permission the app's client-id document declares."
+                            },
+                            "template": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                              "description": "The space, by the template it was made from."
+                            }
+                          },
+                          "required": ["permission", "template"]
+                        }
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 16
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 300,
+                    "description": "Why the app needs it, shown to the person as the app's words."
+                  }
+                },
+                "required": ["requests"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Nothing new to ask: each pair's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": ["string", "null"],
+                      "description": "The ask filed now; null when every pair was already given, already asked, or declined less than 30 days ago."
+                    },
+                    "status": {
+                      "type": ["string", "null"],
+                      "enum": [
+                        "pending",
+                        "allowed",
+                        "declined",
+                        "expired",
+                        null
+                      ]
+                    },
+                    "reviewUrl": { "type": ["string", "null"] },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" },
+                          "state": {
+                            "type": "string",
+                            "enum": ["asked", "given", "open", "quiet"],
+                            "description": "asked: in the ask filed now; given: the app holds it; open: an earlier ask still waits for it; quiet: the person said Not now less than 30 days ago."
+                          },
+                          "askId": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName",
+                          "state"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "reviewUrl",
+                    "expiresAt",
+                    "pairs"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The ask, filed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": ["string", "null"],
+                      "description": "The ask filed now; null when every pair was already given, already asked, or declined less than 30 days ago."
+                    },
+                    "status": {
+                      "type": ["string", "null"],
+                      "enum": [
+                        "pending",
+                        "allowed",
+                        "declined",
+                        "expired",
+                        null
+                      ]
+                    },
+                    "reviewUrl": { "type": ["string", "null"] },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" },
+                          "state": {
+                            "type": "string",
+                            "enum": ["asked", "given", "open", "quiet"],
+                            "description": "asked: in the ask filed now; given: the app holds it; open: an earlier ask still waits for it; quiet: the person said Not now less than 30 days ago."
+                          },
+                          "askId": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName",
+                          "state"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "reviewUrl",
+                    "expiresAt",
+                    "pairs"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a pod app's own token (NOT_A_POD_APP), a permission its document does not declare (ASK_NOT_DECLARED), or a space the person cannot give it (ASK_NOT_ON_OFFER)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apps/access-requests/{id}": {
+      "get": {
+        "tags": ["Apps"],
+        "summary": "What became of an app's ask",
+        "description": "With the app's own token: pending, allowed, declined (Not now) or expired. An app reads only its own asks.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ask",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "status": {
+                      "type": "string",
+                      "enum": ["pending", "allowed", "declined", "expired"]
+                    },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName"
+                        ]
+                      }
+                    },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "decidedAt": { "type": ["string", "null"] }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "pairs",
+                    "expiresAt",
+                    "decidedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a pod app's own token",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ask of this app",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -29727,6 +30792,36 @@
                                                 "type": "string",
                                                 "minLength": 1,
                                                 "maxLength": 120
+                                              },
+                                              "purpose": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "for": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 200
+                                                  },
+                                                  "tool": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 120
+                                                  },
+                                                  "action": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 120
+                                                  },
+                                                  "on": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 120
+                                                  }
+                                                },
+                                                "required": ["for", "tool"]
+                                              },
+                                              "uses": {
+                                                "type": "string",
+                                                "enum": ["once", "session"]
                                               }
                                             },
                                             "required": ["kind", "name"]
@@ -30868,6 +31963,36 @@
                                               "type": "string",
                                               "minLength": 1,
                                               "maxLength": 120
+                                            },
+                                            "purpose": {
+                                              "type": "object",
+                                              "properties": {
+                                                "for": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                },
+                                                "tool": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120
+                                                },
+                                                "action": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120
+                                                },
+                                                "on": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120
+                                                }
+                                              },
+                                              "required": ["for", "tool"]
+                                            },
+                                            "uses": {
+                                              "type": "string",
+                                              "enum": ["once", "session"]
                                             }
                                           },
                                           "required": ["kind", "name"]
@@ -32078,7 +33203,7 @@
       "post": {
         "tags": ["Playbooks"],
         "summary": "Run a playbook",
-        "description": "Launches a playbook via its executor. Governed: an agent launch gets 202 `status: 'proposed'`. A playbook that depends on skills not enabled yet returns `status: 'blocked'` with `unenabledSkills` and `enableProposals` — nothing ran. Same door as MCP synap_run_playbook.",
+        "description": "Launches a playbook via its executor. Governed: an agent launch gets 202 `status: 'proposed'`. A playbook that depends on skills not enabled yet returns `status: 'blocked'` with `unenabledSkills` and `enableProposals` — nothing ran. While you already have a live run of the playbook on `subjectId` (or an agent's draft of it waiting for you), it returns `status: 'already_running'` with that run's `session`, its `run` (null for a draft) and a `reason` (`live_run` | `draft_awaiting_acceptance`) — nothing started; pass `startAnother: true` to start a second run. Same door as MCP synap_run_playbook.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -32483,6 +33608,10 @@
                     },
                     "required": ["guidanceOverride"],
                     "description": "Try draft rules without making them current: { guidanceOverride: { <current version id>: <draft id> } }. The drafts render in place of those versions, the run is on Synap AI, and every write, send and save in it is refused. The drafted text is the agent's last reply: GET /runs/{runId}?flowType=playbook, playbookDetail.trial.draftedText. A person's act: refused for an agent, with remember or with handToAgentId."
+                  },
+                  "startAnother": {
+                    "type": "boolean",
+                    "description": "Start a second run even though one of this playbook is live on the subject. Without it, a live run (or an agent's draft of it waiting for you) comes back as status already_running with its session, and nothing starts."
                   }
                 }
               }
@@ -39647,6 +40776,36 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "purpose": {
+                                          "type": "object",
+                                          "properties": {
+                                            "for": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "tool": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "action": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "on": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            }
+                                          },
+                                          "required": ["for", "tool"]
+                                        },
+                                        "uses": {
+                                          "type": "string",
+                                          "enum": ["once", "session"]
                                         }
                                       },
                                       "required": ["kind", "name"]
@@ -40165,6 +41324,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -40431,7 +41604,11 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
-                            "confirmedAt": { "type": "string" }
+                            "confirmedAt": { "type": "string" },
+                            "askFingerprint": {
+                              "type": "string",
+                              "maxLength": 64
+                            }
                           },
                           "required": [
                             "text",
@@ -40719,6 +41896,20 @@
                                       }
                                     },
                                     "required": ["type", "ref"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["declined"]
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "maxLength": 2000
+                                      }
+                                    },
+                                    "required": ["type"]
                                   }
                                 ]
                               },
@@ -40989,7 +42180,11 @@
                                 "maxLength": 64
                               },
                               "quote": { "type": "string", "maxLength": 2000 },
-                              "confirmedAt": { "type": "string" }
+                              "confirmedAt": { "type": "string" },
+                              "askFingerprint": {
+                                "type": "string",
+                                "maxLength": 64
+                              }
                             },
                             "required": [
                               "text",
@@ -41275,6 +42470,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -41903,6 +43112,36 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "purpose": {
+                                          "type": "object",
+                                          "properties": {
+                                            "for": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "tool": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "action": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "on": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            }
+                                          },
+                                          "required": ["for", "tool"]
+                                        },
+                                        "uses": {
+                                          "type": "string",
+                                          "enum": ["once", "session"]
                                         }
                                       },
                                       "required": ["kind", "name"]
@@ -43656,6 +44895,36 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "purpose": {
+                                          "type": "object",
+                                          "properties": {
+                                            "for": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "tool": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "action": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "on": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            }
+                                          },
+                                          "required": ["for", "tool"]
+                                        },
+                                        "uses": {
+                                          "type": "string",
+                                          "enum": ["once", "session"]
                                         }
                                       },
                                       "required": ["kind", "name"]
@@ -44174,6 +45443,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -44440,7 +45723,11 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
-                            "confirmedAt": { "type": "string" }
+                            "confirmedAt": { "type": "string" },
+                            "askFingerprint": {
+                              "type": "string",
+                              "maxLength": 64
+                            }
                           },
                           "required": [
                             "text",
@@ -44728,6 +46015,20 @@
                                       }
                                     },
                                     "required": ["type", "ref"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["declined"]
+                                      },
+                                      "reason": {
+                                        "type": "string",
+                                        "maxLength": 2000
+                                      }
+                                    },
+                                    "required": ["type"]
                                   }
                                 ]
                               },
@@ -44998,7 +46299,11 @@
                                 "maxLength": 64
                               },
                               "quote": { "type": "string", "maxLength": 2000 },
-                              "confirmedAt": { "type": "string" }
+                              "confirmedAt": { "type": "string" },
+                              "askFingerprint": {
+                                "type": "string",
+                                "maxLength": 64
+                              }
                             },
                             "required": [
                               "text",
@@ -45284,6 +46589,20 @@
                                     }
                                   },
                                   "required": ["type", "ref"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["declined"]
+                                    },
+                                    "reason": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    }
+                                  },
+                                  "required": ["type"]
                                 }
                               ]
                             },
@@ -45912,6 +47231,36 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "purpose": {
+                                          "type": "object",
+                                          "properties": {
+                                            "for": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "tool": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "action": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            },
+                                            "on": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            }
+                                          },
+                                          "required": ["for", "tool"]
+                                        },
+                                        "uses": {
+                                          "type": "string",
+                                          "enum": ["once", "session"]
                                         }
                                       },
                                       "required": ["kind", "name"]
@@ -47333,6 +48682,36 @@
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 120
+                                  },
+                                  "purpose": {
+                                    "type": "object",
+                                    "properties": {
+                                      "for": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "tool": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120
+                                      },
+                                      "action": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120
+                                      },
+                                      "on": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120
+                                      }
+                                    },
+                                    "required": ["for", "tool"]
+                                  },
+                                  "uses": {
+                                    "type": "string",
+                                    "enum": ["once", "session"]
                                   }
                                 },
                                 "required": ["kind", "name"]
@@ -47901,6 +49280,14 @@
                           }
                         },
                         "required": ["type", "ref"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["declined"] },
+                          "reason": { "type": "string", "maxLength": 2000 }
+                        },
+                        "required": ["type"]
                       }
                     ]
                   },
@@ -47913,6 +49300,10 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 200
+                  },
+                  "secretUses": {
+                    "type": "string",
+                    "enum": ["once", "session"]
                   },
                   "confirmRelayed": { "type": "boolean", "enum": [true] },
                   "rejectRelayed": { "type": "boolean", "enum": [true] },
@@ -48286,6 +49677,14 @@
                           }
                         },
                         "required": ["type", "ref"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["declined"] },
+                          "reason": { "type": "string", "maxLength": 2000 }
+                        },
+                        "required": ["type"]
                       }
                     ]
                   },
@@ -50262,7 +51661,7 @@
       "get": {
         "tags": ["Attention"],
         "summary": "What really needs the person, and where everything else went",
-        "description": "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days; one row per ask, `needsYouRows` draws one per session), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads. A key bounded by a grant needs `session.read`: one that reads sessions, proposals, rooms and records everywhere gets the whole read; any other gets only the asks and sessions of the spaces, projects and objects its grant names, the proposals only with `proposal.read`, and `withheld` names the halves it did not read (`notifications`, the person's own `captures`, `invites` and access requests). `withheld` is absent for the whole read.",
+        "description": "`signals.needsYou` — THE needs-you rule (decision E): `rows.needs_you` is the headline; `rows.working` (an agent is on it), `rows.stopped` (no agent for 7 days; one row per ask, `needsYouRows` draws one per session), `rows.review_later`, `rows.from_system` (no real asker) and `rows.changes_to_review` (pending proposals nothing waits on) are its folds. `count` is `signals.count` over the same read, with `count.folds`. Read this instead of re-deriving needs-you from session reads. A key bounded by a grant needs `session.read`: one that reads sessions, proposals, rooms and records everywhere gets the whole read; any other gets only the asks and sessions of the spaces, projects and objects its grant names, the proposals only with `proposal.read`, and `withheld` names the halves it did not read (`notifications`, the person's own `captures`, `invites` and access requests). `withheld` is absent for the whole read. `include=context` adds `context` (`NeedsYouContextRead`, `@synap-core/types/needs-you`): per session its newest `timelineItems` (default 4) timeline items, what the agent does meanwhile and the open sessions that wait on it; per row its session, its proposals' waits and its `subject` (the object it is about, under the caller's read floor; absent when it names none the caller can read), read once for the page; a part whose read failed is `{status: 'unreadable'}`.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -50293,6 +51692,18 @@
             "schema": { "type": "integer", "minimum": 1, "maximum": 200 },
             "required": false,
             "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "enum": ["context"] },
+            "required": false,
+            "name": "include",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 20 },
+            "required": false,
+            "name": "timelineItems",
             "in": "query"
           }
         ],
@@ -53133,7 +54544,7 @@
     "/installations/request": {
       "post": {
         "tags": ["Installations"],
-        "summary": "Ask for a capability on one of your computers: install, update to a version, check or remove. An agent's install, update or removal becomes a proposal",
+        "summary": "Ask for a capability on one of your computers (install, update to a version, check or remove), or on the pod itself (`computer: \"pod\"`, install only, from Synap's catalog). An agent's install, update or removal becomes a proposal",
         "requestBody": {
           "content": {
             "application/json": {
@@ -53143,11 +54554,11 @@
         },
         "responses": {
           "200": {
-            "description": "Applied (`approved`): the asked state is recorded and the job, when one is due, is queued",
+            "description": "Applied. On a computer (`approved`): the asked state is recorded and the job, when one is due, is queued. On the pod (`computer: \"pod\"`): `installed` (added from Synap's catalog), or `already_on_pod`",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InstallationRequested"
+                  "$ref": "#/components/schemas/InstallationRequestApplied"
                 }
               }
             }
@@ -53187,7 +54598,7 @@
             }
           },
           "409": {
-            "description": "The computer cannot take it (\"Installs from the pod\" is off, or its placement refuses it), or nothing is installed to check or remove",
+            "description": "The computer cannot take it (\"Installs from the pod\" is off, or its placement refuses it), or nothing is installed to check or remove. On the pod (`computer: \"pod\"`): an action other than install, or a capability that runs only on a computer (`code: CANNOT_INSTALL`)",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

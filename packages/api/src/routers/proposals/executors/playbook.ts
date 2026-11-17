@@ -58,9 +58,20 @@ export function missingRunArgs(input: {
  * `playbooks.run`, shown after "Couldn't apply — ". Each one says what to do.
  */
 export function notStartedReason(result: {
-  status: "proposed" | "blocked" | "skipped" | "draft";
+  status: "proposed" | "blocked" | "skipped" | "draft" | "already_running";
   message: string;
+  session?: { id?: unknown } | null;
 }): string {
+  if (result.status === "already_running") {
+    // One live run per object: the person already has a live run of this
+    // playbook on this record, so approving would start a second one. The
+    // claim is released: approve again once that run has ended.
+    const id =
+      typeof result.session?.id === "string"
+        ? ` (session ${result.session.id})`
+        : "";
+    return `this playbook is already running on this record${id}, so approving did not start a second run — open that run, or approve again once it has ended`;
+  }
   if (result.status === "proposed") {
     // The approver's OWN check refused (the agent's policy is not consulted on
     // an approved replay), so this one really is about their role.
@@ -586,9 +597,12 @@ export function registerPlaybookExecutors(): void {
   //
   // ⚠️ IDEMPOTENCY — verified, and the standard guard is NOT sufficient.
   // `runPlaybook` is NOT idempotent on this path: its `idempotentBySubject`
-  // reuse is OPT-IN and `playbooks.run` never sets it ("manual runs leave this
-  // false so each click starts fresh"). Two approvals would mint two sessions,
-  // two channels, two ledger rows and two executor dispatches. The sibling
+  // reuse is OPT-IN and `playbooks.run` never sets it. The door's ONE LIVE RUN
+  // PER OBJECT guard (`oneLivePerSubject`, founder 2026-11-16) answers a
+  // second run of the playbook on the same subject `already_running`, but a
+  // run with no subject or asked as "start another" still starts each time:
+  // two approvals would mint two sessions, two channels, two ledger rows and
+  // two executor dispatches. The sibling
   // `status === APPROVED` guard is a read-then-write and races a double-click,
   // so it is kept only as the cheap short-circuit; the real floor is
   // `dispatchExternalOnce`, this directory's CAS-claim primitive for an
@@ -825,6 +839,10 @@ export function registerPlaybookExecutors(): void {
                 },
               }
             : {}),
+          // A run asked as "start another" stays one once approved; without
+          // it the door answers `already_running` while a run is live on the
+          // subject (one live run per object).
+          ...(inner.startAnother === true ? { startAnother: true } : {}),
         });
       // ONE RUN PER SUBJECT for a RULE's run (an activator's proposal): the
       // filing step already files none while a run of this playbook is in
@@ -832,8 +850,11 @@ export function registerPlaybookExecutors(): void {
       // check at approval, for a proposal that was waiting when that run
       // started (live: 100d7d65, filed while run 12dbd086 was open on Video
       // 01). Approving it would start a DUPLICATE run, so nothing is started
-      // and the refusal names the open run. A person's own run proposal is
-      // theirs to repeat; a batch keeps its own per-subject receipt.
+      // and the refusal names the open run. A person's own run proposal goes
+      // to the run door, which answers `already_running` while THEIR run of it
+      // is live on the subject (one live run per object, founder 2026-11-16)
+      // unless it was asked as "start another"; a batch keeps its own
+      // per-subject receipt.
       const singleSubject =
         subjects.length <= 1 ? (subjects[0] ?? carriedSubjectId) : undefined;
       if (raw.source === "automation" && singleSubject) {

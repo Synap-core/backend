@@ -1025,7 +1025,22 @@ export interface SlotAskFormSpec {
 export type SlotAskProvide =
   | { kind: "connection"; service: string }
   | { kind: "file"; accept?: string[] }
-  | { kind: "secret"; name: string };
+  | {
+      kind: "secret";
+      name: string;
+      /** What it is for, declared. Mirrors `AskSecretPurpose` (@synap-core/types/ask). */
+      purpose?: SlotAskSecretPurpose;
+      /** One read, or until the job closes (the default). Mirrors `PROVIDE_SECRET_USES`. */
+      uses?: "once" | "session";
+    };
+
+/** Mirrors `AskSecretPurpose` (@synap-core/types/ask): short words, never the secret. */
+export interface SlotAskSecretPurpose {
+  for: string;
+  tool: string;
+  action?: string;
+  on?: string;
+}
 
 /** A `provide` answer stores a REFERENCE, never the value. */
 export type SlotProvideRef =
@@ -1047,7 +1062,12 @@ export type SlotAnswerValue =
       then?: SlotAskOption;
     }
   | { type: "form"; values: Record<string, unknown> }
-  | { type: "provide"; ref: SlotProvideRef };
+  | { type: "provide"; ref: SlotProvideRef }
+  /**
+   * The person REFUSED the ask (`@synap-core/types/ask` `./declined.ts`):
+   * taken on every mode, grants nothing, keeps the slot's blocker.
+   */
+  | { type: "declined"; reason?: string };
 
 /**
  * WHERE an answer came from — STRUCTURAL MIRROR of `AnswerProvenance`
@@ -1122,6 +1142,14 @@ export interface SlotAnswer extends SlotAnswerProvenance {
    * carried no ask, and on every answer recorded before snapshots existed.
    */
   askSnapshot?: SlotAskSnapshot;
+  /**
+   * A REFUSAL only (`value.type === "declined"`): `askFingerprint` of the ask
+   * the person refused (the slot's effective ask, as shown). The block doors
+   * refuse an identical re-ask while this answer stands (api
+   * `declined-reask.ts`); the hand-back clears the ask itself, so this is the
+   * only record of WHICH ask was refused. Server-stamped with the answer.
+   */
+  askFingerprint?: string;
 }
 
 /** How many prior answers a slot keeps on `answerHistory`. */
@@ -2328,6 +2356,20 @@ export interface CapabilityVerbState extends ToolVerb {
 // created. These contracts are pure shapes — NO I/O, NO zod — mirroring the
 // rest of this package; the Hub-REST door + service own validation.
 
+/**
+ * How a PERSON gets a param's value (a key, a token): the numbered steps and
+ * the page they start on. Read by the install proposal's setup row (finding
+ * 91a3bfd3), never by the applier. Same bounds as an `act` ask (at most 7
+ * steps of at most 200 characters; an https `url`), validated by the Hub
+ * door's `ParamObtainSchema` (`services/capabilities/param-obtain.ts`).
+ */
+export interface CapabilityParamObtain {
+  /** Where the steps start, e.g. the provider's API keys page. https only. */
+  url?: string;
+  /** What to do there, in order. 1 to 7 steps. */
+  steps: string[];
+}
+
 /** A declared parameter the applier fills from the `params` map. */
 export interface CapabilityParamSpec {
   name: string;
@@ -2336,6 +2378,8 @@ export interface CapabilityParamSpec {
   required?: boolean;
   default?: unknown;
   description?: string;
+  /** How the person gets this value. See {@link CapabilityParamObtain}. */
+  obtain?: CapabilityParamObtain;
 }
 
 /**

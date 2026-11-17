@@ -291,6 +291,11 @@ export async function runPlaybookDoor(
      * drafts render in place, nothing is written. A person's act.
      */
     trial?: { guidanceOverride: Record<string, string> };
+    /**
+     * Start a second run although one is live on the subject (`playbooks.run`
+     * `startAnother`); otherwise the live run comes back as `already_running`.
+     */
+    startAnother?: boolean;
     /** Provenance label of the door (`mcp`, `hub-rest`). */
     source: string;
   }
@@ -422,6 +427,7 @@ export async function runPlaybookDoor(
       : {}),
     ...(input.remember ? { remember: true } : {}),
     ...(input.trial ? { trial: input.trial } : {}),
+    ...(input.startAnother ? { startAnother: true } : {}),
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,

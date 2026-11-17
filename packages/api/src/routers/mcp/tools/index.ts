@@ -6728,7 +6728,7 @@ export const tools = {
             triggerConfig: {
               type: "object",
               description:
-                "Trigger settings. cron → { expression: '0 9 * * *' }. event → { eventPattern: 'entity.create.completed', filters: { ... } }. FILTERS GRAMMAR (enforced — a filter the runtime cannot evaluate is REJECTED, because an automation with an unevaluable filter installs as 'active' and then never fires): each key is a dot-notation path into the event data ('profileSlug', 'channel.contextObjectType'); each value is EITHER a plain string/number/boolean/null (exact match) OR an operator object — $eq, $ne, $in (non-empty array), $gt, $gte, $lt, $lte (numeric). E.g. { profileSlug: 'person' }, { profileSlug: { $in: ['person','contact'] } }, { score: { $gt: 30 } }. ENTITY PROPERTIES ARE FLAT: 'entity.update.completed' spreads the entity's changed properties onto event data under their BARE slug, so the key is 'score' — NOT 'properties.score', which resolves to undefined and silently never matches. A bare array value and a nested object value are BOTH rejected: use $in for several values, and a dot-notation key to reach nested data.",
+                "Trigger settings. cron → { expression: '0 9 * * *' }. event → { eventPattern: 'entity.create.completed', filters: { ... } }. FILTERS GRAMMAR (enforced — a filter the runtime cannot evaluate is REJECTED, because an automation with an unevaluable filter installs as 'active' and then never fires): each key is a dot-notation path into the event data ('profileSlug', 'channel.contextObjectType'); each value is EITHER a plain string/number/boolean/null (exact match) OR an operator object — $eq, $ne, $in (non-empty array), $gt, $gte, $lt, $lte (numeric). E.g. { profileSlug: 'person' }, { profileSlug: { $in: ['person','contact'] } }, { score: { $gt: 30 } }. ENTITY PROPERTIES ARE FLAT: 'entity.update.completed' spreads the entity's changed properties onto event data under their BARE slug, so the key is 'score' — NOT 'properties.score', which resolves to undefined and silently never matches. A bare array value and a nested object value are BOTH rejected: use $in for several values, and a dot-notation key to reach nested data. audience (pod-wide): 'me' (default) or 'everyone'.",
             },
             flowDefinition: {
               type: "object",
@@ -6893,7 +6893,7 @@ export const tools = {
           openWorldHint: true,
         },
         description:
-          'LAUNCH a playbook via its executor (discover via synap_list_playbooks) — instantiates a session + run channel + playbook_run and dispatches to the playbook\'s executor (is-agent | external-agent | hybrid). Pass playbookId OR an unambiguous playbookName/name (multi-match returns candidates — never a silent pick). Write home: workspaceId if set, else the playbook\'s workspace, else subject/session; pod-wide playbooks with no home reject (pass workspaceId). This LAUNCHES the executor — it is not the same as opening a working session from the template. Governed outcomes: status="draft" (an agent\'s launch, the usual outcome: the run is the person\'s DRAFT and does NOT start until they accept it in their sessions — `session` is returned, `run` is null; tell the person, do not retry), status="proposed" (a rule or a limit asks first — SUCCESS, pass on reviewUrl, do not retry), status="blocked" (nothing ran: the playbook uses skills that are not enabled yet; `unenabledSkills` names them and `enableProposals` carries ONE enable request per pack — relay the message and run it again only after that is approved), status="running" (it started; `run` + `session` are returned), status="generated" (one-shot: no session; its draft is a proposal on the subject, pass on generated.reviewUrl, do not retry), status="skipped" (nothing ran and nothing is queued — the record\'s last run failed recently and is cooling down, or no pinned record was ready; read `message`, do not retry in a loop and do not report it as started).',
+          'LAUNCH a playbook via its executor (discover via synap_list_playbooks): a session + run channel + playbook_run, dispatched to its executor (is-agent | external-agent | hybrid). Pass playbookId OR an unambiguous playbookName/name (several matches return candidates, never a silent pick). Write home: workspaceId, else the playbook\'s workspace, else subject/session; a pod-wide playbook with no home is refused (pass workspaceId). It LAUNCHES the executor, unlike opening a working session from the template. Outcomes, none to retry: status="draft" (an agent\'s launch, the usual one: the person\'s DRAFT, not started until they accept it; `session` returned, `run` null; tell them), "proposed" (a rule or limit asks first: SUCCESS, pass on reviewUrl), "blocked" (nothing ran: skills not enabled; `unenabledSkills` names them, `enableProposals` holds one enable request per pack; run again once approved), "running" (`run` + `session`), "already_running" (nothing started: the person has a live run or draft of it on this subject; `session` is it, `reason` says which; startAnother only if they asked for a second run), "generated" (one-shot, no session: its draft is a proposal on the subject; pass on generated.reviewUrl), "skipped" (nothing ran: the record\'s last run failed recently, or no pinned record was ready; read `message`, never report it as started).',
         inputSchema: {
           type: "object",
           properties: {
@@ -6965,6 +6965,11 @@ export const tools = {
               description: "Who runs it (system/synap/processes).",
             },
             stageRunners: { description: "Per stage key (same skill)." },
+            startAnother: {
+              type: "boolean",
+              description:
+                "Start a second run although one is live on the subject.",
+            },
           },
           required: [],
         },

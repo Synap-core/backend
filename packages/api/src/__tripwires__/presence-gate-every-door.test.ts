@@ -700,6 +700,8 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
   const SENSITIVE_ROUTER_CALLERS: Record<string, string> = {
     "routers/hub-protocol/rest/vault.ts":
       "secretsVaultRouter.deleteSecret only (takes power away)",
+    "routers/proposals.ts":
+      "secretsVaultRouter.create only, in proposals.repair's setup arm (a person storing a key they hold; create is no SENSITIVE_ACTIONS path, and the arm refuses an agent or a key and asks a fresh sign-in itself, assertFreshAuthentication)",
   };
 
   it("a server-side caller of a sensitive router names the check it rests on (presenceChecked)", () => {

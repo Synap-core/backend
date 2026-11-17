@@ -191,8 +191,24 @@ describe("content is drawn, never injected", () => {
       join(proposalDir, "ProposedDocumentBody.tsx"),
       join(proposalDir, "DocumentUpdateChanges.tsx"),
     ];
+    // A connected object's stored HTML file is drawn by the preview too
+    // (no bridge): it is another object's file, not this page's own body.
+    const connectedSite = join(
+      "app",
+      "_lib",
+      "object",
+      "connected-objects.tsx"
+    );
     expect(sites.sort()).toEqual(
-      [pageSite, embedSite, previewDoor, ...proposalSites].sort()
+      [pageSite, embedSite, previewDoor, connectedSite, ...proposalSites].sort()
+    );
+    // The connected-objects site draws through the PREVIEW (no bridge) only:
+    // never the bridged frame, section or body.
+    const connectedBody =
+      FILES.find((f) => f.path === connectedSite)?.body ?? "";
+    expect(connectedBody).toContain("<HtmlPagePreview");
+    expect(connectedBody).not.toMatch(
+      /\b(?:HtmlFrame|SandboxedFrame|HtmlPageSection|HtmlPageBody)\b/
     );
     // Non-vacuity: the preview never answers pod reads.
     expect(FILES.find((f) => f.path === previewDoor)?.body).toContain(

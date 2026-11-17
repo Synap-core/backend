@@ -68,7 +68,11 @@ import {
   listHolds,
   sessionStageRuns,
 } from "@synap/database";
-import { questionDisposition } from "@synap-core/types/ask";
+import {
+  declinedReasonOf,
+  isDeclinedValue,
+  questionDisposition,
+} from "@synap-core/types/ask";
 import {
   questionShortId,
   readRoomPostMeta,
@@ -1128,6 +1132,34 @@ export function isOpenAgentSlot(slot: ExpectedOutput): boolean {
     slot.retiredAt == null &&
     slot.claimedDone !== true
   );
+}
+
+/**
+ * What the agent can do now: its open slots (`isOpenAgentSlot`). An ANSWERED
+ * slot is the agent's most actionable work (the person already replied), so
+ * it leads (stable sort: declaration order otherwise). ONE rule for the
+ * packet's `aiCanDo` and the needs-you context's "Meanwhile".
+ */
+export function aiCanDoItems(all: readonly ExpectedOutput[]): PacketSlotItem[] {
+  return all
+    .filter(isOpenAgentSlot)
+    .map((s): PacketSlotItem => ({
+      label: s.label,
+      kind: s.kind,
+      ...kindIdentity(s.kind),
+      ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
+      ...(s.answer
+        ? {
+            answer: {
+              text: s.answer.text,
+              answeredAt: s.answer.answeredAt,
+              messageId: s.answer.messageId,
+              ...(s.answer.value ? { value: s.answer.value } : {}),
+            },
+          }
+        : {}),
+    }))
+    .sort((a, b) => Number(!!b.answer) - Number(!!a.answer));
 }
 
 /** The session's step entries, with the agent's and the computer's names. */
@@ -2369,6 +2401,11 @@ function readLastCompletion(
  * A blocker as a next move names it: its title in quotes, or — unnamed or not
  * visible — "the <noun>" through the vocabulary door (no a/an guessing).
  */
+/** The person's words in a next-move reason: at most 140 characters. */
+function clip140(text: string): string {
+  return text.length > 140 ? `${text.slice(0, 140)}…` : text;
+}
+
 function blockerName(b: OpenBlocker): string {
   return b.title
     ? `"${b.title}"`
@@ -2666,16 +2703,25 @@ export function deriveNextMove(input: {
       : [];
   if (ownSlots[0]) {
     const s = ownSlots[0];
+    // The person REFUSED the ask: the next move is a new plan, never the
+    // same question again (the ask doors refuse an identical re-ask).
+    if (s.answer && isDeclinedValue(s.answer.value)) {
+      const reason = declinedReasonOf(s.answer);
+      return {
+        kind: "agent_slot",
+        actor: "ai",
+        label: `Re-plan "${s.label}"`,
+        reason:
+          `The person refused your ask${reason ? `: "${clip140(reason)}"` : ""}. ` +
+          "Do it another way, ask something new, withdraw the slot (retireOutput), or close the session failed.",
+      };
+    }
     if (s.answer) {
-      const said =
-        s.answer.text.length > 140
-          ? `${s.answer.text.slice(0, 140)}…`
-          : s.answer.text;
       return {
         kind: "agent_slot",
         actor: "ai",
         label: `Continue "${s.label}"`,
-        reason: `The person answered: "${said}"`,
+        reason: `The person answered: "${clip140(s.answer.text)}"`,
       };
     }
     return {
@@ -2869,29 +2915,7 @@ export async function projectContinuationPacket(
   const blockers = section(
     owed.filter((s) => s.blockedReason !== undefined).map(owedItem)
   );
-  // An ANSWERED slot is the agent's most actionable work — the person already
-  // replied — so it leads (stable sort: declaration order otherwise).
-  const aiCanDo = section(
-    all
-      .filter(isOpenAgentSlot)
-      .map((s): PacketSlotItem => ({
-        label: s.label,
-        kind: s.kind,
-        ...kindIdentity(s.kind),
-        ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
-        ...(s.answer
-          ? {
-              answer: {
-                text: s.answer.text,
-                answeredAt: s.answer.answeredAt,
-                messageId: s.answer.messageId,
-                ...(s.answer.value ? { value: s.answer.value } : {}),
-              },
-            }
-          : {}),
-      }))
-      .sort((a, b) => Number(!!b.answer) - Number(!!a.answer))
-  );
+  const aiCanDo = section(aiCanDoItems(all));
 
   // One rejected promise, shared: `outputs` and `alreadyDone` each turn it into
   // their own `unavailable` below.

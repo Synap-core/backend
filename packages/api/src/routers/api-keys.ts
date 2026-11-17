@@ -223,6 +223,9 @@ const oauthAuthorizeParamsSchema = z.object({
   // /authorize's signed request time (`auth_req`), for
   // `prompt=login` / `max_age=0`.
   authRequest: z.string().max(128).optional(),
+  // A pod app's `synap_ask` (the short consent, plan 647ebfd4 option C):
+  // at most 16 pairs of a permission and a space id or template slug.
+  synapAsk: z.string().max(4096).optional(),
 });
 
 /**

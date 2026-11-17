@@ -1,16 +1,14 @@
 /**
- * The pure half of `/runs`: which board a filter reads, how a flow and a run
- * read as rows, and whether a filtered board is complete. The page only
- * fetches and draws.
+ * How a flow and a run read as rows: the pure half the rules, templates,
+ * tool and run pages share (the `/runs` page itself left the console with
+ * Runs, `WORK_MOVED_TO_APP`).
  *
  * Two reads, two shapes. `runs.groups` is one row per FLOW (rules and
  * templates — the ledgers whose runs instantiate something reusable), with
  * exact counts over the whole ledger. `runs.list` is one row per RUN across
- * every ledger (sessions, tools, AI turns…), which is what "Running" and the
- * failed-AI-turns view need: those runs have no flow to group under.
+ * every ledger (sessions, tools, AI turns…).
  */
 
-import { isRecentFailure } from "@synap-core/types/run-activity";
 import { humanizeToken, resolveObjectNoun } from "@synap-core/types/vocabulary";
 import type { StatusKind } from "../../components/status-pill";
 import {
@@ -19,55 +17,6 @@ import {
   oneLine,
   shortId,
 } from "../../../../lib/format";
-
-export const RUN_FILTERS = [
-  { key: "all", label: "All" },
-  { key: "failing", label: "Failing" },
-  { key: "running", label: "Running" },
-  { key: "chat", label: "Failed AI turns" },
-] as const;
-
-export type RunFilter = (typeof RUN_FILTERS)[number]["key"];
-
-export function runFilterOf(raw: string | null | undefined): RunFilter {
-  return RUN_FILTERS.find((f) => f.key === raw)?.key ?? "all";
-}
-
-/** The `runs.list` input each per-run filter reads; null = the flow board. */
-export function runListInput(
-  filter: RunFilter
-): { status: "running" } | { flowType: "chat"; status: "failed" } | null {
-  switch (filter) {
-    case "running":
-      return { status: "running" };
-    case "chat":
-      return { flowType: "chat", status: "failed" };
-    default:
-      return null;
-  }
-}
-
-/** One tool's runs: the `runs.list` tool lens. */
-export type ToolRunsInput = {
-  flowType: "capability";
-  scope: { capabilityId: string } | { skillId: string };
-};
-
-/**
- * `?capability=<id>` / `?skill=<id>` (a tool page's "Show all") → the tool
- * lens, or null. A malformed id is no lens, never a request the pod refuses.
- */
-export function toolRunsInput(params: {
-  get(key: string): string | null;
-}): ToolRunsInput | null {
-  const capabilityId = params.get("capability");
-  if (capabilityId && isUuid(capabilityId))
-    return { flowType: "capability", scope: { capabilityId } };
-  const skillId = params.get("skill");
-  if (skillId && isUuid(skillId))
-    return { flowType: "capability", scope: { skillId } };
-  return null;
-}
 
 /**
  * A ledger's noun. Registry kinds read through the vocabulary ("Rule",
@@ -83,14 +32,6 @@ export function flowNoun(flowType: string): string {
     default:
       return resolveObjectNoun(flowType);
   }
-}
-
-/** Where a flow's own page is in the console, when it has one. */
-export function flowHref(flowType: string, flowId: string): string | null {
-  const id = encodeURIComponent(flowId);
-  if (flowType === "automation") return `/rules/${id}`;
-  if (flowType === "playbook") return `/templates/${id}`;
-  return null;
 }
 
 /** The `runs.groups` columns a flow row reads. */
@@ -167,25 +108,6 @@ export function flowHealthPill(
   if ((group.runningCount ?? 0) > 0)
     return { kind: "healthy", label: "Running" };
   return { kind: "healthy", label: "Working" };
-}
-
-/**
- * Has the Failing board seen every failing flow?
- *
- * Groups arrive newest latest-run first, and a flow that failed this week ran
- * this week — so once the loaded groups reach a flow whose latest run is
- * older than the window, nothing further down can be failing. Until then the
- * board must keep paging or say it may be incomplete.
- */
-export function failingBoardComplete(
-  loaded: readonly Pick<FlowGroupFacts, "latestStartedAt">[],
-  hasMore: boolean,
-  now: Date
-): boolean {
-  if (!hasMore) return true;
-  const last = loaded.at(-1);
-  if (!last) return false;
-  return !isRecentFailure({ startedAt: last.latestStartedAt }, now.getTime());
 }
 
 /** The `UnifiedRun` columns a run row reads. */

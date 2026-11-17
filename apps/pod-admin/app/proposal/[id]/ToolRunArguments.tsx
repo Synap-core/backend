@@ -33,7 +33,7 @@ function Value({ value, t }: { value: ToolRunValue; t: T }) {
           href={value.href}
           target="_blank"
           rel="noreferrer noopener"
-          className="break-all text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary"
+          className="rq-ink break-all underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
         >
           {value.text}
         </a>
@@ -58,7 +58,7 @@ function Value({ value, t }: { value: ToolRunValue; t: T }) {
       return <em className="text-foreground/50">{t("toolRun.empty")}</em>;
     case "secret":
       return (
-        <span className="inline-flex items-center gap-1 text-foreground/60">
+        <span className="inline-flex items-center gap-1 text-foreground/70">
           <Lock aria-hidden className="h-3.5 w-3.5" />
           {t("toolRun.secret")}
         </span>
@@ -72,13 +72,13 @@ function Argument({ arg, t }: { arg: ToolRunArgument; t: T }) {
       data-tool-run-arg={arg.key}
       className={`flex min-w-0 flex-col gap-1 ${arg.wide ? "col-span-full" : ""}`}
     >
-      <dt className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+      <dt className="text-[12.5px] font-medium text-foreground/70">
         {arg.label}
       </dt>
       <dd className="flex min-w-0 flex-col gap-1 text-[13px] leading-relaxed text-foreground/90">
         <Value value={arg.value} t={t} />
         {arg.description && (
-          <span className="text-[12px] text-foreground/55">
+          <span className="text-[12px] text-foreground/70">
             {arg.description}
           </span>
         )}

@@ -79,7 +79,16 @@ vi.mock("../services/capabilities/marketplace-install.js", async (orig) => ({
   lookupCatalogEntry: vi.fn(async () => ({
     definition: {
       params: [
-        { name: "apiKey", label: "API Key", type: "password", required: true },
+        {
+          name: "apiKey",
+          label: "API Key",
+          type: "password",
+          required: true,
+          obtain: {
+            url: "https://acme.test/settings/keys",
+            steps: ["Open Settings", "Create a key"],
+          },
+        },
         { name: "region", label: "Region", type: "string", required: false },
       ],
       tools: [],
@@ -108,6 +117,11 @@ const SETUP: ProposalSetup = {
       type: "password",
       required: true,
       secret: true,
+      // How to get it (manifest `obtain`): the wire schema must accept it.
+      obtain: {
+        url: "https://acme.test/settings/keys",
+        steps: ["Open Settings", "Create a key"],
+      },
       satisfied: false,
     },
   ],
@@ -287,6 +301,11 @@ describe("door 5 — MCP synap_list_proposals (behavioural)", () => {
     expect(setup, "setup was produced by NOBODY on the MCP door").toBeDefined();
     expect(setup!.params.map((p) => p.name)).toContain("apiKey");
     expect(setup!.params.find((p) => p.name === "apiKey")!.secret).toBe(true);
+    // The manifest's steps to get the key reach the reviewer with the row.
+    expect(setup!.params.find((p) => p.name === "apiKey")!.obtain).toEqual({
+      url: "https://acme.test/settings/keys",
+      steps: ["Open Settings", "Create a key"],
+    });
     expect(raw).not.toContain(SECRET_VALUE);
   });
 

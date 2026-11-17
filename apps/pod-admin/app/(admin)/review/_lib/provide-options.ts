@@ -22,13 +22,17 @@ import {
   ASK_COPY,
   provideAccountChoices,
   provideExpectedGranteeId,
-  provideGrantNote,
   providePrePickedAccount,
   provideSecretAccessLine,
   type AskProvideKind,
   type ProvideAccountChoice,
   type ProvideSecretGrant,
+  type ProvideSecretGrantOffer,
+  type ProvideSecretUses,
+  type ProvideStandingGrant,
+  provideSecretUsesMinutes,
 } from "@synap-core/types/ask";
+import type { ProvideSecretUse } from "../../../_lib/request/api";
 
 export type ProvideOptions =
   inferRouterOutputs<AppRouter>["focusSessions"]["provideOptions"];
@@ -45,6 +49,19 @@ export interface SecretChoice {
   ref: string;
   name: string;
   type: string;
+  /**
+   * The asking agent ALREADY holds a permanent grant on this secret: handing
+   * it over writes nothing new (finding ebc40493). Null = a new bounded read.
+   */
+  standingGrant: ProvideStandingGrant | null;
+}
+
+/** What the agent declared it will do with the secret (`provide.purpose`). */
+export interface SecretPurposeView {
+  for: string;
+  tool: string;
+  action: string | null;
+  on: string | null;
 }
 
 export interface SecretSheet {
@@ -54,13 +71,53 @@ export interface SecretSheet {
   choices: SecretChoice[];
   /** Pre-picked: the one whose name is the asked name, when exactly one is. */
   initialRef: string | null;
-  /** What handing one over lets the asking agent do. */
-  grantNote: string;
   /**
-   * The agent named in `grantNote`, sent back on the answer: the pod grants
-   * the read only if that agent is still the one asking.
+   * The agent the card names, sent back on the answer: the pod grants the
+   * read only if that agent is still the one asking.
    */
   expectedGranteeId: string | null;
+  /** The pod's offer: who will read it, for how long. */
+  grant: ProvideSecretGrantOffer;
+  /** The agent that will read it; null = no agent can yet. */
+  agentName: string | null;
+  /** What the agent said it is for; null = it did not say (never inferred). */
+  purpose: SecretPurposeView | null;
+  /** The reads the ask asked for: the card's default (`This session only`). */
+  uses: ProvideSecretUses;
+}
+
+/**
+ * The honest secret card for the pick (plan d717d6ac §4): what the agent
+ * declared, who reads it, and for how long. A standing grant on the picked
+ * secret is said as such, never as an hour. The words are the component's;
+ * the facts are here.
+ */
+export interface SecretCardView {
+  purpose: SecretPurposeView | null;
+  usedBy: string | null;
+  /** How long the read lasts: a new `once` / `session` read, or `standing`; null = no agent can read it yet. */
+  until: "once" | "session" | "standing" | null;
+  /** The person may pick once or session (a new grant to an agent). */
+  canPickUses: boolean;
+  /** The minutes a new grant of the picked reads lasts at most. */
+  minutes: number;
+}
+
+export function secretCard(
+  sheet: SecretSheet,
+  pickedRef: string | null,
+  uses: ProvideSecretUses
+): SecretCardView {
+  const picked = sheet.choices.find((c) => c.ref === pickedRef) ?? null;
+  const grants = sheet.grant.status === "will_grant";
+  const standing = grants && !!picked?.standingGrant;
+  return {
+    purpose: sheet.purpose,
+    usedBy: sheet.agentName,
+    until: !grants ? null : standing ? "standing" : uses,
+    canPickUses: grants && !standing,
+    minutes: provideSecretUsesMinutes(uses),
+  };
 }
 
 function secretSheet(o: Of<"secret">): SecretSheet {
@@ -75,10 +132,24 @@ function secretSheet(o: Of<"secret">): SecretSheet {
       ref: r.ref,
       name: r.name,
       type: r.type.replace(/[_-]+/g, " "),
+      standingGrant: r.standingGrant ?? null,
     })),
     initialRef: named.length === 1 ? named[0].ref : null,
-    grantNote: provideGrantNote(o.secret.grant),
     expectedGranteeId: provideExpectedGranteeId(o.secret.grant),
+    grant: o.secret.grant,
+    agentName:
+      o.secret.grant.status === "will_grant" ? o.secret.grant.agentName : null,
+    purpose: o.secret.purpose
+      ? {
+          for: o.secret.purpose.for,
+          tool: o.secret.purpose.tool,
+          action: o.secret.purpose.action ?? null,
+          on: o.secret.purpose.on ?? null,
+        }
+      : null,
+    uses:
+      (o.secret.grant.status === "will_grant" ? o.secret.grant.uses : null) ??
+      "session",
   };
 }
 
@@ -224,4 +295,34 @@ export function connectedReceipt(serviceName: string): ProvideReceipt {
     title: `${serviceName} connected`,
     description: "Your answer went to the agent.",
   };
+}
+
+// ─── What became of a secret ────────────────────────────────────────────────
+
+/**
+ * Where a handed-over secret stands, from the pod's own fields
+ * (`focusSessions.provideSecretUse`): still readable (with the grant Take
+ * back revokes, and whether it is a STANDING one the agent held before this
+ * ask), taken back (only when `revokedAt` is set), used up (`useCount >=
+ * maxUses`), or ended at its expiry. Never "Taken back" for a grant that
+ * only ran out.
+ */
+export type SecretUseState =
+  | { kind: "active"; grantId: string; standing: boolean }
+  | { kind: "takenBack" }
+  | { kind: "usedUp" }
+  | { kind: "ended"; at: string | null };
+
+export function secretUseState(use: ProvideSecretUse): SecretUseState {
+  if (use.revokedAt) return { kind: "takenBack" };
+  if (use.active && use.takeBack) {
+    return {
+      kind: "active",
+      grantId: use.takeBack.grantId,
+      standing: use.uses === "standing",
+    };
+  }
+  if (use.maxUses !== null && use.useCount >= use.maxUses)
+    return { kind: "usedUp" };
+  return { kind: "ended", at: use.expiresAt };
 }

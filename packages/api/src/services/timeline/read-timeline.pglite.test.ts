@@ -66,7 +66,11 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import type { DevTimelineEvent } from "@synap-core/types/units";
-import { readTimeline, timelineSubjectOf } from "./read-timeline.js";
+import {
+  readSessionTimelines,
+  readTimeline,
+  timelineSubjectOf,
+} from "./read-timeline.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -88,6 +92,7 @@ const OTHER = "user-other";
 const BE = "Synap-core/backend";
 const S = { mine: randomUUID(), sibling: randomUUID(), others: randomUUID() };
 const PROPOSAL = randomUUID();
+const AGENT = "agent-timeline";
 const NOW = Date.now();
 const at = (min: number) => new Date(NOW + min * 60_000);
 const HEAD = "c".repeat(40);
@@ -110,6 +115,28 @@ async function devFact(
     `insert into events (id, type, user_id, subject_id, subject_type, data, timestamp)
      values ($1, $2, $3, $4, 'observation', $5::jsonb, $6)`,
     [randomUUID(), type, user, randomUUID(), JSON.stringify(data), at(min)]
+  );
+}
+
+/** A slot history row as the ask doors write it (`logEvent`, on the session). */
+async function slotRow(
+  sessionId: string,
+  user: string,
+  action: string,
+  min: number,
+  data: Record<string, unknown>
+) {
+  await q(
+    `insert into events (id, type, user_id, subject_id, subject_type, data, timestamp)
+     values ($1, $2, $3, $4, 'focus_session', $5::jsonb, $6)`,
+    [
+      randomUUID(),
+      `focus_session.${action}.completed`,
+      user,
+      sessionId,
+      JSON.stringify({ sessionId, ...data }),
+      at(min),
+    ]
   );
 }
 
@@ -245,6 +272,47 @@ beforeAll(async () => {
      values ($1, $2, 'rejected', '{"_summary":"Close the session"}'::jsonb, $3, $4, $5, 'not yet')`,
     [PROPOSAL, S.mine, at(-12), at(-8), USER]
   );
+
+  // The asks of the sibling session, as the ask doors record them.
+  await q(
+    `insert into users (id, email, name, user_type) values ($1, $2, 'Scout', 'agent')`,
+    [AGENT, `${AGENT}@test`]
+  );
+  await slotRow(S.sibling, USER, "slot_asked", -9, {
+    expectedLabel: "Pick the target",
+    ask: { mode: "choose", options: [] },
+    blockedReason: "decision",
+    askedByAgentUserId: AGENT,
+  });
+  // "Not mine" (review a089b624 S3), as `notMineSessionSlot` writes it.
+  await slotRow(S.sibling, USER, "slot_handed_back", -8, {
+    expectedLabel: "Budget",
+    handedBackBy: USER,
+    blockedReason: "decision",
+  });
+  await slotRow(S.sibling, USER, "slot_answered", -7, {
+    expectedLabel: "Pick the target",
+    answeredBy: USER,
+    handedBack: true,
+    value: { type: "chip", chip: { label: "Staging" } },
+  });
+  await slotRow(S.sibling, USER, "question_withdrawn", -6, {
+    expectedLabel: "Token",
+    withdrawnBy: AGENT,
+    note: "found it in the vault",
+  });
+  await slotRow(S.sibling, USER, "slot_attested", -5, {
+    expectedLabel: "Rotate the key",
+    attestedBy: USER,
+  });
+  await slotRow(S.sibling, USER, "relay_corrected", -4, {
+    expectedLabel: "Pick the target",
+  });
+  // Another person's row on my session: past the events floor.
+  await slotRow(S.sibling, OTHER, "slot_answered", -3, {
+    expectedLabel: "Pick the target",
+    answeredBy: OTHER,
+  });
 });
 
 const kinds = (events: readonly DevTimelineEvent[]) =>
@@ -339,5 +407,101 @@ describe("readTimeline on PGlite", () => {
       "pr_opened",
     ]);
     expect(events.some((e) => e.kind === "pr_merged")).toBe(false);
+  });
+});
+
+describe("the slots' history in the session timeline", () => {
+  it("asked, handed back, answered, withdrawn, attested and corrected, each by who acted, under the events floor", async () => {
+    const t = await readTimeline(
+      { kind: "session", id: S.sibling },
+      { userId: USER, isHubProtocol: true }
+    );
+    const events = t!.events as DevTimelineEvent[];
+    expect(kinds(events)).toEqual([
+      "relay_corrected",
+      "slot_attested",
+      "question_withdrawn",
+      "slot_answered",
+      "slot_handed_back",
+      "slot_asked",
+      "checks_finished", // its devbox job (-19)
+      "session_started",
+    ]);
+    const asked = events.find((e) => e.kind === "slot_asked")!;
+    expect(asked).toMatchObject({
+      slot: "Pick the target",
+      askMode: "choose",
+      blockedReason: "decision",
+      actor: { kind: "agent", id: AGENT, name: "Scout" },
+      refs: { sessionId: S.sibling, slotLabel: "Pick the target" },
+    });
+    expect(events.find((e) => e.kind === "slot_answered")).toMatchObject({
+      answerType: "chip",
+      handedBack: true,
+      relayed: false,
+      actor: { kind: "human", id: USER, isViewer: true },
+    });
+    expect(events.find((e) => e.kind === "question_withdrawn")).toMatchObject({
+      slot: "Token",
+      note: "found it in the vault",
+      actor: { kind: "agent", id: AGENT },
+    });
+    expect(events.find((e) => e.kind === "slot_attested")).toMatchObject({
+      slot: "Rotate the key",
+      actor: { kind: "human", id: USER },
+    });
+    expect(events.find((e) => e.kind === "slot_handed_back")).toMatchObject({
+      slot: "Budget",
+      actor: { kind: "human", id: USER, isViewer: true },
+      refs: { sessionId: S.sibling, slotLabel: "Budget" },
+    });
+  });
+});
+
+describe("readSessionTimelines — a page of sessions in a fixed number of queries", () => {
+  const reader = { userId: USER, isHubProtocol: true } as const;
+
+  it("each session keeps its own newest events; a session past the cap says older events exist", async () => {
+    const page = await readSessionTimelines(
+      [S.mine, S.sibling, S.others],
+      reader,
+      2
+    );
+    // Another person's session is absent, never an empty timeline.
+    expect([...page.keys()].sort()).toEqual([S.mine, S.sibling].sort());
+    const sibling = page.get(S.sibling)!;
+    // At most 2 rows per SOURCE: the two newest slot rows, its one job, its start.
+    expect(kinds(sibling.events)).toEqual([
+      "relay_corrected",
+      "slot_attested",
+      "checks_finished",
+      "session_started",
+    ]);
+    expect(sibling.truncated).toBe(true);
+    // Three dev facts, two kept: the PR's opening (the oldest) is past the cap.
+    const mine = page.get(S.mine)!;
+    expect(mine.truncated).toBe(true);
+    expect(kinds(mine.events)).not.toContain("pr_opened");
+  });
+
+  it("the one-session door is the same projection, at the source cap", async () => {
+    const page = await readSessionTimelines([S.mine, S.sibling], reader);
+    for (const id of [S.mine, S.sibling]) {
+      const door = await readTimeline({ kind: "session", id }, reader);
+      expect(page.get(id)!.events).toEqual(door!.events);
+      expect(page.get(id)!.truncated).toBe(false);
+    }
+  });
+
+  it("reads as many times for three sessions as for one", async () => {
+    const spy = vi.spyOn(h.client!, "query");
+    await readSessionTimelines([S.mine], reader, 4);
+    const one = spy.mock.calls.length;
+    spy.mockClear();
+    await readSessionTimelines([S.mine, S.sibling, S.others], reader, 4);
+    const three = spy.mock.calls.length;
+    spy.mockRestore();
+    expect(one).toBeGreaterThan(0);
+    expect(three).toBe(one);
   });
 });

@@ -40,6 +40,8 @@ export * from "./page-only.js";
 // What a part that acts on its own can reach, and the words for it (the
 // marketplace preflight says the same).
 export * from "./reach.js";
+// Who is asking for a proposal, in one line (`proposalRequester`).
+export * from "./requester.js";
 export type {
   ProposalToolRun,
   ProposalToolRunParameter,

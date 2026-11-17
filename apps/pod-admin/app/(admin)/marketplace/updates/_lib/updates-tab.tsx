@@ -28,23 +28,24 @@ import {
   ResourceRowSkeleton,
 } from "../../../components/resource-row";
 import {
-  packageUpdateNeedsLabel,
   type PackageUpdateSummary,
   type PackageUpdateUnreadable,
 } from "./contract";
 import { en, fr } from "./copy";
 import { UpdateMark } from "./update-mark";
-import { groupMarkLabel, rowSecondary } from "./update-words";
+import { groupHeading, groupMarkLabel, rowSecondary } from "./update-words";
 import {
   UNREADABLE_MARK,
   groupMark,
   groupUpdates,
   updatesNeedingNothing,
   type UpdateGroup,
+  type UpdateHold,
 } from "./updates-model";
 import {
   useApplyPackageUpdate,
   usePackageUpdateList,
+  useUpdateHolds,
 } from "./use-package-updates";
 
 const CATALOGS = { en, fr };
@@ -61,6 +62,7 @@ export function UpdatesTab() {
   const t = useT(CATALOGS);
   const locale = useConsoleLocale();
   const list = usePackageUpdateList();
+  const { holds, failed: holdsFailed } = useUpdateHolds();
 
   if (list.isLoading) {
     return (
@@ -78,13 +80,18 @@ export function UpdatesTab() {
     );
   }
 
-  const { groups, current } = groupUpdates(list.data.updates);
+  const { groups, current } = groupUpdates(list.data.updates, holds);
   const unreadable = list.data.unreadable;
   const checked = formatRelative(list.dataUpdatedAt, Date.now(), { locale });
 
   return (
     <div className="flex flex-col gap-6">
-      <BatchApply list={list.data.updates} />
+      {holdsFailed && (
+        <p role="alert" className="text-[12.5px] text-status-stale">
+          {t("holds.failed")}
+        </p>
+      )}
+      <BatchApply list={list.data.updates} holds={holds} />
 
       {groups.length === 0 && unreadable.length === 0 && (
         <div className="flex items-center gap-2 rounded-lg px-3 py-6 text-[13px] text-foreground/75">
@@ -103,7 +110,7 @@ export function UpdatesTab() {
               id={`updates-${group}`}
               className="text-[14px] font-medium tracking-tight text-foreground"
             >
-              {packageUpdateNeedsLabel(group)}
+              {groupHeading(group)}
             </h2>
             <span className="text-[12px] text-foreground/65">
               <GroupMeta group={group} />
@@ -112,7 +119,7 @@ export function UpdatesTab() {
           <ul className="flex flex-col divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10">
             {items.map((s) => (
               <li key={s.slug}>
-                <UpdateRow summary={s} group={group} />
+                <UpdateRow summary={s} group={group} hold={holds.get(s.slug)} />
               </li>
             ))}
           </ul>
@@ -169,6 +176,8 @@ function GroupMeta({ group }: { group: UpdateGroup }) {
       return <>{t("group.choice.meta")}</>;
     case "consent":
       return <>{t("group.consent.meta")}</>;
+    case "approval":
+      return <>{t("group.approval.meta")}</>;
     case "review":
       return <>{t("group.review.meta")}</>;
     case "nothing":
@@ -179,35 +188,56 @@ function GroupMeta({ group }: { group: UpdateGroup }) {
 function UpdateRow({
   summary,
   group,
+  hold,
 }: {
   summary: PackageUpdateSummary;
   group: UpdateGroup;
+  hold?: UpdateHold;
 }) {
   const t = useT(CATALOGS);
   const Icon = kindIcon(summary.kind);
+  const proposalIds = group === "approval" ? (hold?.proposalIds ?? []) : [];
   return (
-    <Link
-      href={packageUpdateHref(summary.slug)}
-      // One pod round trip per prefetch (`proxy.ts`): a long list would spend
-      // the rate-limit bucket on pages nobody opens (catalog-tab.tsx).
-      prefetch={false}
-      className="group flex min-h-14 flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 transition-colors hover:bg-content2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
-    >
-      <Icon
-        aria-hidden
-        className="h-4 w-4 shrink-0 text-foreground/40"
-        strokeWidth={2}
-      />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-[13px] font-medium text-foreground">
-          {summary.name}
+    <div>
+      <Link
+        href={packageUpdateHref(summary.slug)}
+        // One pod round trip per prefetch (`proxy.ts`): a long list would spend
+        // the rate-limit bucket on pages nobody opens (catalog-tab.tsx).
+        prefetch={false}
+        className="group flex min-h-14 flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 transition-colors hover:bg-content2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
+      >
+        <Icon
+          aria-hidden
+          className="h-4 w-4 shrink-0 text-foreground/40"
+          strokeWidth={2}
+        />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[13px] font-medium text-foreground">
+            {summary.name}
+          </span>
+          <span className="truncate text-[11.5px] text-foreground/65">
+            {rowSecondary(t, summary)}
+          </span>
         </span>
-        <span className="truncate text-[11.5px] text-foreground/65">
-          {rowSecondary(t, summary)}
-        </span>
-      </span>
-      <UpdateMark mark={groupMark(group)} label={groupMarkLabel(t, group)} />
-    </Link>
+        <UpdateMark mark={groupMark(group)} label={groupMarkLabel(t, group)} />
+      </Link>
+      {proposalIds.length > 0 && (
+        // Each proposal is its own door: approving them is the next step.
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pb-2 pl-10 text-[11.5px] text-foreground/65">
+          <span>{t("approval.waiting", { n: proposalIds.length })}</span>
+          {proposalIds.map((id, i) => (
+            <Link
+              key={id}
+              href={`/proposal/${encodeURIComponent(id)}`}
+              prefetch={false}
+              className="text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            >
+              {t("approval.proposal", { n: i + 1 })}
+            </Link>
+          ))}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -249,11 +279,17 @@ type BatchState =
  * door as the Review page, one after the other, with no choice to send.
  * Hidden when there are none (OMIT).
  */
-function BatchApply({ list }: { list: readonly PackageUpdateSummary[] }) {
+function BatchApply({
+  list,
+  holds,
+}: {
+  list: readonly PackageUpdateSummary[];
+  holds: ReadonlyMap<string, UpdateHold>;
+}) {
   const t = useT(CATALOGS);
   const apply = useApplyPackageUpdate();
   const [state, setState] = useState<BatchState>({ kind: "idle" });
-  const ready = updatesNeedingNothing(list);
+  const ready = updatesNeedingNothing(list, holds);
 
   async function run() {
     const total = ready.length;

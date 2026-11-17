@@ -71,6 +71,10 @@ import {
   unblocksAdvisedMessage,
 } from "./slot-asked-event.js";
 import { restatedAskHints } from "./ask-text.js";
+import {
+  DECLINED_REASK_MESSAGE,
+  isIdenticalReaskOfDecline,
+} from "./declined-reask.js";
 
 export interface BlockExpectedOutputParams {
   sessionId: string;
@@ -148,7 +152,11 @@ export type BlockExpectedOutputResult =
    * would put an undoorable card on the board and believe otherwise.
    */
   | { status: "ref_unreachable"; reason: string }
-  /** The ask's `answerBy` is already past (`isAskAnswerByPast`): refused, nothing changed. */
+  /**
+   * The ask's `answerBy` is already past (`isAskAnswerByPast`), or it is the
+   * very ask the person refused while that refusal stands
+   * (`isIdenticalReaskOfDecline`): refused, nothing changed.
+   */
   | { status: "ask_refused"; reason: string }
   | {
       status: "blocked" | "unblocked";
@@ -162,6 +170,11 @@ export type BlockExpectedOutputResult =
       blockGuidelines?: BlockGuidance;
       /** Block only: the ask's prompt only repeats the label (`ask-text.ts`). */
       hint?: string;
+      /**
+       * Unblock only: the slot as it was UNDER the lock, just before the hand
+       * back (so a caller reads who held it from the same row it changed).
+       */
+      before?: ExpectedOutput;
       /**
        * Block only: what the pod did not keep as sent, while the block landed.
        * Today: an agent's hand-over that said nothing it unblocks, stamped
@@ -219,6 +232,26 @@ export async function blockExpectedOutput(
   // is P0, whose push breaks through Focus (review 5 Nov 2026).
   if (isAskAnswerByPast(params.ask?.answerBy)) {
     return { status: "ask_refused", reason: ASK_ANSWER_BY_PAST_MESSAGE };
+  }
+
+  // The person REFUSED this exact ask and the refusal stands: asking it again
+  // is refused, judged on the slot as it WOULD be stamped (`declined-reask.ts`).
+  if (
+    isIdenticalReaskOfDecline(
+      slot,
+      stampBlocked(
+        [slot],
+        slot.label,
+        params.blockedReason,
+        params.why,
+        undefined,
+        params.ref,
+        params.ask,
+        params.unblocks
+      )[0]!
+    )
+  ) {
+    return { status: "ask_refused", reason: DECLINED_REASK_MESSAGE };
   }
 
   // ONE door for the ref floor — the same `isOutputRefVisible` the attach-output
@@ -360,13 +393,25 @@ export async function unblockExpectedOutput(
   if (!loaded.ok) return loaded.result;
   const { slot } = loaded;
 
+  const locked: { before?: ExpectedOutput } = {};
   const stamped = await updateExpectedOutputsLocked(
     params.sessionId,
-    (current) => stampUnblocked(current, slot.label)
+    (current) => {
+      const wanted = normalizeExpectedLabel(slot.label);
+      locked.before = current.find(
+        (o) => normalizeExpectedLabel(o?.label) === wanted
+      );
+      return stampUnblocked(current, slot.label);
+    }
   );
   if (!stamped) return { status: "not_found" };
 
-  return { status: "unblocked", expectedLabel: slot.label, kind: slot.kind };
+  return {
+    status: "unblocked",
+    expectedLabel: slot.label,
+    kind: slot.kind,
+    ...(locked.before ? { before: locked.before } : {}),
+  };
 }
 
 /**
@@ -465,11 +510,17 @@ export function stampBlocked(
  * agent's run clears it (`blockerOutlivesHandBack`) it STAYS: the slot is now
  * the agent's runnable blocker and the thing stays blocked until that run
  * delivers the slot.
+ *
+ * `keepBlocker`: the person REFUSED the ask (`{ type: "declined" }`). The
+ * slot goes back to the agent, but nothing moved, so the blocker stays
+ * whatever clears it: dropping `blocks` there would show the thing unblocked
+ * (`deriveThingBlocker`) on a no.
  * Pure.
  */
 export function stampUnblocked(
   outputs: ExpectedOutput[],
-  label: string
+  label: string,
+  opts: { keepBlocker?: boolean } = {}
 ): ExpectedOutput[] {
   const wanted = normalizeExpectedLabel(label);
   return outputs.map((o) => {
@@ -486,7 +537,7 @@ export function stampUnblocked(
       pendingRelay: _pendingRelay,
       ...rest
     } = o;
-    if (blockerOutlivesHandBack(o.clearedBy)) return rest;
+    if (opts.keepBlocker || blockerOutlivesHandBack(o.clearedBy)) return rest;
     const {
       blocks: _blocks,
       blockerKey: _blockerKey,

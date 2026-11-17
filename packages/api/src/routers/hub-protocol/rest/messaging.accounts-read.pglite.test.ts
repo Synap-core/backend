@@ -160,7 +160,7 @@ beforeEach(() => {
 });
 
 describe("GET /messaging/accounts — what an app learns about connected accounts", () => {
-  it("each row is exactly {id, externalId, provider, displayName, status}: no credential, no extra field", async () => {
+  it("each row is exactly {id, externalId, provider, displayName, status, pausedUntil, pausedReason}: no credential, no extra field", async () => {
     const res = await read();
     expect(res.status).toBe(200);
     const rows = (await res.json()) as Array<Record<string, unknown>>;
@@ -170,6 +170,8 @@ describe("GET /messaging/accounts — what an app learns about connected account
         "displayName",
         "externalId",
         "id",
+        "pausedReason",
+        "pausedUntil",
         "provider",
         "status",
       ]);
@@ -223,6 +225,42 @@ describe("GET /messaging/accounts — what an app learns about connected account
     expect(rows.map((r) => [r.externalId, r.displayName, r.status])).toEqual([
       ["acc_carol", "Carol", "connected"],
     ]);
+  });
+
+  it("a LinkedIn account LinkedIn paused shows until when and why; a pause that ended, and an account never paused, show null", async () => {
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    await q(`update messaging_accounts set metadata = $1 where id = 'acc-li'`, [
+      JSON.stringify({
+        linkedinPause: { until, reason: "rate_limited", at: until },
+      }),
+    ]);
+    await q(`update messaging_accounts set metadata = $1 where id = 'acc-gm'`, [
+      JSON.stringify({
+        linkedinPause: {
+          until: new Date(Date.now() - 1000).toISOString(),
+          reason: "rate_limited",
+          at: until,
+        },
+      }),
+    ]);
+    try {
+      const rows = (await (await read()).json()) as Array<
+        Record<string, unknown>
+      >;
+      const by = Object.fromEntries(rows.map((r) => [r.provider, r]));
+      expect(by.linkedin).toMatchObject({
+        pausedUntil: until,
+        pausedReason: "rate_limited",
+      });
+      expect(by.gmail).toMatchObject({
+        pausedUntil: null,
+        pausedReason: null,
+      });
+    } finally {
+      await q(
+        `update messaging_accounts set metadata = null where id in ('acc-li', 'acc-gm')`
+      );
+    }
   });
 
   it("a failed live read is a 503, never the stored 'connected'", async () => {

@@ -22,6 +22,14 @@ export const PROVIDE_CONNECT_META_KEY = "provideConnect";
 /** The vault reads a provide answer granted for this session (`provide-secret-grant.ts`). */
 export const PROVIDE_GRANTS_META_KEY = "provideGrants";
 
+/**
+ * Which vault grant answered each secret slot, by slot label
+ * (`provide-secret-grant.ts`): `{ grantId, secretId, agentUserId, uses }`.
+ * Server-owned: a forged one would point the card's use line and its Take
+ * back at another grant.
+ */
+export const PROVIDE_SECRET_SLOT_GRANTS_META_KEY = "provideSecretGrantBySlot";
+
 /** The dev-loop gates' approval receipt (`dev-approval.ts` executor). */
 export const DEV_LOOP_METADATA_KEY = "devLoop";
 
@@ -72,6 +80,7 @@ export const MESSAGE_WAKE_META_KEY = "messageWake";
 export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   PROVIDE_CONNECT_META_KEY,
   PROVIDE_GRANTS_META_KEY,
+  PROVIDE_SECRET_SLOT_GRANTS_META_KEY,
   "governance",
   "clientKey",
   "automationChainContext",

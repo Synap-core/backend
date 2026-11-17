@@ -18,7 +18,9 @@
  *     with a non-empty string `decisionId` AND an answer object whose
  *     `askSnapshot.mode` is confirm / choose, never on a criterion's grade
  *     slot. Each half missing is a row: a NULL in the SQL test must keep the
- *     slot owed, never drop it.
+ *     slot owed, never drop it. A REFUSED decision (`answer.value.type`
+ *     `declined`) is never decided, even with a `decisionId` (an ask opened
+ *     for a decision carries one before anyone answers).
  *
  * The SQL and the TypeScript rule cannot be one declaration (Postgres runs
  * the one, Node the other), which is why this parity test exists at all.
@@ -51,6 +53,12 @@ const DECIDED_CHOOSE = {
 const DECIDED_CONFIRM = {
   text: "Yes",
   askSnapshot: { mode: "confirm", chosenKey: "yes" },
+};
+/** The person REFUSED the choose: an answer, never a decision. */
+const REFUSED_CHOOSE = {
+  text: "Refused: not this quarter",
+  value: { type: "declined", reason: "not this quarter" },
+  askSnapshot: { mode: "choose", chosenKey: null },
 };
 
 const ROWS: ReadonlyArray<{ rulesOut: string; slot: Record<string, unknown> }> =
@@ -114,6 +122,29 @@ const ROWS: ReadonlyArray<{ rulesOut: string; slot: Record<string, unknown> }> =
     {
       rulesOut: "an answered confirm with its decision filed read as owed",
       slot: { owner: "human", decisionId: "d-1", answer: DECIDED_CONFIRM },
+    },
+    {
+      rulesOut: "a refused choose with a decisionId read as decided",
+      slot: { owner: "human", decisionId: "d-1", answer: REFUSED_CHOOSE },
+    },
+    {
+      rulesOut: "a refused confirm with a decisionId read as decided",
+      slot: {
+        owner: "human",
+        decisionId: "d-1",
+        answer: {
+          ...REFUSED_CHOOSE,
+          askSnapshot: { mode: "confirm", chosenKey: null },
+        },
+      },
+    },
+    {
+      rulesOut: "a value of another type read as a refusal",
+      slot: {
+        owner: "human",
+        decisionId: "d-1",
+        answer: { ...DECIDED_CHOOSE, value: { type: "chip" } },
+      },
     },
     {
       rulesOut: "a decisionId alone read as decided (the ask is still open)",
@@ -214,6 +245,26 @@ describe("owed-slot SQL === deliverableOwedBy(slot) === 'you'", () => {
     // The SQL can still see a literal owed slot, and a literal non-owed one.
     expect(await sqlOwed({ owner: "human" })).toBe(true);
     expect(await sqlOwed({ owner: "agent" })).toBe(false);
+  });
+
+  it("a refused decision stays owed in the SQL itself, not only in parity", async () => {
+    // Parity alone proves sameness: both sides reverted together would agree
+    // on "decided". This pins the right answer on the SQL side.
+    expect(
+      await sqlOwed({
+        owner: "human",
+        decisionId: "d-1",
+        answer: REFUSED_CHOOSE,
+      })
+    ).toBe(true);
+    // …and a real decision still is not owed (the clause did not swallow it).
+    expect(
+      await sqlOwed({
+        owner: "human",
+        decisionId: "d-1",
+        answer: DECIDED_CHOOSE,
+      })
+    ).toBe(false);
   });
 
   it("agrees on every discriminating row", async () => {

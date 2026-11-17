@@ -16,11 +16,13 @@ import {
   computerHref,
   consoleRedirects,
   DIAGNOSE_DESTINATION,
+  DIAGNOSE_IN_APP,
   NAV_ITEMS,
   navItem,
   navHref,
   pendingIssuerHref,
   SEARCH_DESTINATION,
+  WORK_MOVED_TO_APP,
   type NavId,
 } from "../lib/console-nav";
 import {
@@ -140,7 +142,7 @@ describe("every door has a nav home", () => {
     }
   });
 
-  it("maps every diagnose section the server emits to a nav item", () => {
+  it("maps every diagnose section the server emits to a nav item or the app's Work", () => {
     // Read from the server's source, not a copy: a section added there must
     // be placed here before Home can route it.
     const dir = fileURLToPath(
@@ -153,10 +155,16 @@ describe("every door has a nav home", () => {
       for (const m of src.matchAll(/\bkey:\s*"([a-z_]+)"/g)) keys.add(m[1]);
     }
     expect(keys.size).toBeGreaterThan(5);
-    const unplaced = [...keys].filter((k) => !(k in DIAGNOSE_DESTINATION));
+    const unplaced = [...keys].filter(
+      (k) => !(k in DIAGNOSE_DESTINATION) && !DIAGNOSE_IN_APP.has(k)
+    );
     expect(unplaced).toEqual([]);
     for (const [key, nav] of Object.entries(DIAGNOSE_DESTINATION)) {
       expect(NAV_IDS.has(nav), key).toBe(true);
+      expect(DIAGNOSE_IN_APP.has(key), `${key} placed twice`).toBe(false);
+    }
+    for (const key of DIAGNOSE_IN_APP) {
+      expect(keys.has(key), `${key} is not a server section`).toBe(true);
     }
   });
 });
@@ -176,6 +184,19 @@ describe("the client link contract (@synap-core/types/console)", () => {
       (typeof CONSOLE_PAGES)[keyof typeof CONSOLE_PAGES],
     ]
   >;
+
+  it("names no page that left the console for the app", () => {
+    // Jobs and Runs (`WORK_MOVED_TO_APP`): a client link to one would only
+    // ever reach a redirect. Their pages are gone, too.
+    const moved = WORK_MOVED_TO_APP.filter((r) => !r.has).map((r) => r.source);
+    expect(moved).toEqual(expect.arrayContaining(["/sessions", "/runs"]));
+    expect(pages.filter(([, p]) => moved.includes(p.path))).toEqual([]);
+    for (const path of moved.filter((m) => !m.includes(":"))) {
+      expect(existsSync(join(appDir, "(admin)", path, "page.tsx")), path).toBe(
+        false
+      );
+    }
+  });
 
   /** The source directory of a console route (nav pages live in `(admin)`). */
   function routeDir(path: string): string {

@@ -729,9 +729,12 @@ describe("(6) focus_session/create — the reference effect receipt", () => {
     );
     expect(src).toMatch(/rows:\s*insertedSessions\.length/);
     expect(src).toMatch(/ids:\s*insertedSessions\.map\(/);
-    // The writer hands back the statement's own row (null on a conflict).
+    // The writer hands back the statement's own row (null on a conflict). A
+    // run that holds its object's live slot (0427) arbitrates on the id only,
+    // so the one-live-run conflict throws instead of reading as a replay; it
+    // is still the statement's own `.returning()`.
     expect(writerSrc).toMatch(
-      /const \[kept\] = await insert\.onConflictDoNothing\(\)\.returning\(\);\s*return kept \?\? null;/
+      /const \[kept\] = await \(\s*row\.oneLivePerSubject === true\s*\?\s*insert\.onConflictDoNothing\(\{ target: focusSessions\.id \}\)\s*:\s*insert\.onConflictDoNothing\(\)\s*\)\.returning\(\);\s*return kept \?\? null;/
     );
   });
 

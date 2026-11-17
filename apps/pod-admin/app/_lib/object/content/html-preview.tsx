@@ -27,11 +27,14 @@ export function HtmlPagePreview({
   html,
   title,
   workspaceId = null,
+  note,
 }: {
   html: string;
   title: string;
   /** The space the page will live in, when known. */
   workspaceId?: string | null;
+  /** Replaces the default "reads nothing until approved" line. */
+  note?: string;
 }) {
   const t = frameT();
   const [view, setView] = useState<HtmlPageView>("page");
@@ -45,7 +48,9 @@ export function HtmlPagePreview({
       className="flex min-w-0 flex-col gap-2 rounded-md bg-background/60 p-2 ring-1 ring-inset ring-foreground/10"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[12px] text-foreground/60">{t("preview.note")}</p>
+        <p className="text-[12px] text-foreground/60">
+          {note === undefined ? t("preview.note") : note}
+        </p>
         <div className="flex items-center gap-2">
           {view === "page" && !tooLarge && (
             <Button

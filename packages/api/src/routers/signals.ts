@@ -94,7 +94,14 @@ import {
   LENS_CAPS,
   type LensPagePicks,
 } from "@synap-core/types/lens";
-import { needsYouFoldOf, needsYouRows } from "@synap-core/types/needs-you";
+import {
+  NEEDS_YOU_INCLUDE,
+  needsYouFoldOf,
+  needsYouRows,
+  REQUEST_CONTEXT_TIMELINE_MAX,
+  type NeedsYouContextRead,
+  type NeedsYouInclude,
+} from "@synap-core/types/needs-you";
 import {
   NEEDS_YOU_FOLDS,
   type NeedsYouFold,
@@ -1507,13 +1514,18 @@ export function needsYouWithheld(
  */
 async function readNeedsYouClassified(
   ctx: SignalsCtx,
-  input: SignalScopeInput & { limit: number }
+  input: SignalScopeInput & {
+    limit: number;
+    include?: readonly NeedsYouInclude[];
+    timelineItems?: number;
+  }
 ): Promise<{
   lens: "needs-you";
   count: ReturnType<typeof countOf>;
   rows: NeedsYouClassifiedRows;
   truncated: boolean;
   withheld?: SignalSubRead[];
+  context?: NeedsYouContextRead;
 }> {
   const withheld = needsYouWithheld(getRequestGrant());
   const attention = await readAttention(
@@ -1543,6 +1555,20 @@ async function readNeedsYouClassified(
       return [fold, list.slice(0, input.limit)];
     })
   ) as NeedsYouClassifiedRows;
+  // The page's request context (`include: ["context"]`), read ONCE for every
+  // row of every fold (`readNeedsYouContext`). Absent unless asked: the
+  // answer is byte-for-byte what it was for every caller that does not ask.
+  // Loaded lazily: the context's readers (the timeline, the packet's rule)
+  // stay out of this router's import graph for every read that does not ask.
+  const context = input.include?.includes("context")
+    ? await (
+        await import("../services/signals/needs-you-context.js")
+      ).readNeedsYouContext(Object.values(rows).flat(), {
+        userId: requireUserId(ctx.userId),
+        roster: rosterReadFor(ctx),
+        ...(input.timelineItems ? { timelineItems: input.timelineItems } : {}),
+      })
+    : undefined;
   return {
     lens: "needs-you",
     count,
@@ -1552,6 +1578,7 @@ async function readNeedsYouClassified(
     // reads is byte-for-byte what it was before `withheld` existed, so a
     // dependent's `Handler<"signals.needsYou">` still compiles unchanged.
     ...(withheld.length > 0 ? { withheld } : {}),
+    ...(context ? { context } : {}),
   };
 }
 
@@ -2119,6 +2146,22 @@ export const signalsRouter = router({
         .object({
           ...SignalScope,
           limit: z.number().int().min(1).max(200).default(100),
+          /**
+           * `["context"]` adds `context` (`NeedsYouContextRead`): per row and
+           * per session, what a request's story needs (the session's newest
+           * timeline items, what the agent does meanwhile, the sessions that
+           * wait on it, whether an agent waits on a proposal, the object the
+           * request is about), read once for the page. A part whose read
+           * failed is `unreadable`. Omitted: the answer is unchanged.
+           */
+          include: z.array(z.enum(NEEDS_YOU_INCLUDE)).max(1).optional(),
+          /** Timeline items per session in `context` (default 4). */
+          timelineItems: z
+            .number()
+            .int()
+            .min(1)
+            .max(REQUEST_CONTEXT_TIMELINE_MAX)
+            .optional(),
         })
         .default({ limit: 100 })
     )

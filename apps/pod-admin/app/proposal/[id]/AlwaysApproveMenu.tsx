@@ -27,7 +27,7 @@
  * it is closed and never shows a raw exception. No Undo: taking the decision
  * back would leave its rule standing.
  *
- * "Reject and never allow…" (`RejectNeverMenu`) writes one pod-wide `deny` row
+ * "Refuse and never allow…" (`RejectNeverMenu`) writes one pod-wide `deny` row
  * for this agent and this act (`deriveGovernanceNeverOption`, never a
  * wildcard), then rejects, so the pod refuses the same write from then on
  * with `DENIED_BY_RULE`, above the floors (decision 956930ad). Pod admin runs
@@ -345,7 +345,7 @@ export function AlwaysApproveMenu({
 }
 
 /**
- * "Reject and never allow…": the request's "Never". Writes the pod-wide deny
+ * "Refuse and never allow…": the request's "Never". Writes the pod-wide deny
  * `deriveGovernanceNeverOption` derives, then rejects. Absent when the
  * request names no agent or no single act (the derivation returns null).
  */

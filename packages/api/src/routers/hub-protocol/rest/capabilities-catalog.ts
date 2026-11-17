@@ -96,6 +96,19 @@ const InstallParamSchema = z.object({
   // Prompt masked. Absent from the declared contract, a client had no way to
   // know an install param carries a secret.
   secret: z.boolean().optional(),
+  // How a person gets this value (the manifest's `obtain`, validated on read
+  // by `readParamObtain`): an agent installing from the catalog shows these
+  // steps beside the field instead of guessing where the key lives.
+  obtain: z
+    .object({
+      url: z.string().optional(),
+      steps: z.array(z.string()),
+    })
+    .optional()
+    .describe(
+      "How a person gets this value: numbered steps (at most 7) and the " +
+        "https page they start on, from the capability manifest."
+    ),
 });
 
 const CapabilityCardSchema = z.object({

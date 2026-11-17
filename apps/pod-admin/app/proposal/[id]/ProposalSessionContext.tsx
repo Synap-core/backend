@@ -76,7 +76,7 @@ const VERDICT_ICON: Record<StatusKind, { icon: LucideIcon; tone: string }> = {
   healthy: { icon: CircleCheck, tone: "text-status-healthy" },
   down: { icon: CircleX, tone: "text-status-down" },
   stale: { icon: CircleDashed, tone: "text-status-stale" },
-  unknown: { icon: CircleDashed, tone: "text-foreground/55" },
+  unknown: { icon: CircleDashed, tone: "text-foreground/70" },
 };
 
 const ICON = "h-3.5 w-3.5 shrink-0 text-foreground/55";
@@ -336,7 +336,7 @@ function QueueRow({ label, children }: { label: string; children: ReactNode }) {
       data-review-queue=""
       className="mt-1 flex min-w-0 flex-col gap-1.5 border-t border-foreground/[0.06] pt-3"
     >
-      <span className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+      <span className="text-[12.5px] font-medium text-foreground/70">
         {label}
       </span>
       {children}

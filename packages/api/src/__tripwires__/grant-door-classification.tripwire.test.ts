@@ -28,7 +28,9 @@
  * (`GATED_ELSEWHERE`, whose own source must name a gate), a write only a
  * computer's own runner may make (`COMPUTER_RUNNER_WRITES`: a privileged
  * scope no grant carries, and a refusal of every principal that is not the
- * computer), or in the shrink-only baseline of routes nobody has classified yet
+ * computer), a write that only FILES an ask its person decides
+ * (`ASK_ONLY_WRITES`: its helper files a pending proposal and applies none of
+ * what approving does), or in the shrink-only baseline of routes nobody has classified yet
  * (`grant-door-write-baseline.ts`). A NEW route in none of them fails, a
  * baseline row that is now classified or gone fails, and the baseline's cap
  * only goes down. The fence still lets a baselined POST through at run time:
@@ -167,7 +169,11 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
  * revise core's key check (`assertMayReviseProposal`: a key revising a
  * proposal it did not file needs the approve right on that proposal's own
  * space, project or object), which `mergeProposalRevision` runs on every
- * revision.
+ * revision; and the decision right (`assertMayDecideProposal`: a key that
+ * drops or restores an item of a proposal needs `proposal.reject`, then the
+ * procedure it calls bounds it to the proposal's own space, project or object
+ * through `assertCanReviewProposal`, pinned by
+ * `proposal-decision-grant.tripwire.test.ts`).
  */
 const GATES = [
   "checkPermissionOrPropose",
@@ -178,6 +184,7 @@ const GATES = [
   "assertChannelWrite",
   "canWriteFacet",
   "assertMayReviseProposal",
+  "assertMayDecideProposal",
 ] as const;
 type Gate = (typeof GATES)[number];
 
@@ -497,6 +504,41 @@ const COMPUTER_RUNNER_WRITES: Readonly<
   ])
 );
 
+/**
+ * Writes that only FILE an ask its person decides (plan 647ebfd4 option C,
+ * 16 Nov 2026). The handler calls `via`; `via` files a PENDING proposal
+ * (`createPendingProposal`, never the gate ladder, which could answer
+ * `granted`) and names none of `APPROVAL_EFFECTS`, what approving the ask
+ * does. The gate is the approval itself: the person's tap, through the
+ * approve door (the agent-approver floor, the executor's owner check and its
+ * re-check of what may be given). Checked below.
+ */
+const ASK_ONLY_WRITES: Readonly<
+  Record<
+    string,
+    {
+      via: string;
+      load: () => Promise<Record<string, unknown>>;
+      why: string;
+    }
+  >
+> = {
+  "POST /apps/access-requests": {
+    via: "fileAppAccessAsk",
+    load: () => import("../services/app-access-ask.js"),
+    why: "a pod app asks its person for one more thing: one pending app/connect of mode add, applied only by the person's approval (the executor re-checks the document, the offer and the person's reach)",
+  },
+};
+
+/** What approving an app's ask does: an ask-only helper names none of them. */
+const APPROVAL_EFFECTS = [
+  "setApprovedRequests",
+  "addApprovedRequests",
+  "applyApprovedReach",
+  "attachGrantsOrRevoke",
+  "applyProposalApproval",
+] as const;
+
 /** `router.procedure` names a handler calls (`caller.entities.createEntity(`). */
 function trpcCallsOf(source: string): string[] {
   return [...source.matchAll(/\.([a-zA-Z]+)\.([a-zA-Z]+)\s*\(/g)].map(
@@ -511,6 +553,7 @@ type NonGetClass =
   | "gated-trpc"
   | "gated-elsewhere"
   | "computer-runner"
+  | "ask-only"
   | "unclassified";
 
 /** How a served non-GET route is bounded, from the fence and its own code. */
@@ -529,6 +572,8 @@ export function nonGetRouteClass(r: ServedRoute): NonGetClass {
     return "gated-elsewhere";
   const runner = COMPUTER_RUNNER_WRITES[`${r.method} ${r.path}`];
   if (runner && callOf(runner.via).test(r.source)) return "computer-runner";
+  const ask = ASK_ONLY_WRITES[`${r.method} ${r.path}`];
+  if (ask && callOf(ask.via).test(r.source)) return "ask-only";
   return "unclassified";
 }
 
@@ -554,6 +599,7 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     expect(count("computer-runner")).toBe(
       Object.keys(COMPUTER_RUNNER_WRITES).length
     );
+    expect(count("ask-only")).toBe(Object.keys(ASK_ONLY_WRITES).length);
   });
 
   it("a new non-GET route is classified: a declared read or a named gate", () => {
@@ -632,6 +678,26 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     expect(broken).toEqual([]);
   });
 
+  it("every ASK_ONLY_WRITES row is served, named by its handler, and its helper only files a pending ask", async () => {
+    const byKey = new Map(nonGet.map((r) => [keyOf(r), r]));
+    const broken: string[] = [];
+    for (const [key, row] of Object.entries(ASK_ONLY_WRITES)) {
+      const r = byKey.get(key);
+      if (!r || !callOf(row.via).test(r.source)) {
+        broken.push(`${key}: handler does not call ${row.via}`);
+        continue;
+      }
+      const helper = (await row.load())[row.via];
+      const src = typeof helper === "function" ? String(helper) : "";
+      if (!callOf("createPendingProposal").test(src))
+        broken.push(`${key}: ${row.via} files no pending proposal`);
+      for (const effect of APPROVAL_EFFECTS)
+        if (callOf(effect).test(src))
+          broken.push(`${key}: ${row.via} applies ${effect} itself`);
+    }
+    expect(broken).toEqual([]);
+  });
+
   it("self-check: the classifier sees gates, gated tRPC mutations and helpers", () => {
     const write = (source: string, path = "/zz-not-a-route"): ServedRoute => ({
       method: "POST",
@@ -669,6 +735,15 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     ).toBe("computer-runner");
     expect(
       nonGetRouteClass(write("return c.json({ ok: true })", "/host-jobs/lease"))
+    ).toBe("unclassified");
+    // An ASK_ONLY_WRITES row counts only while its handler calls the helper.
+    expect(
+      nonGetRouteClass(
+        write("await fileAppAccessAsk(input)", "/apps/access-requests")
+      )
+    ).toBe("ask-only");
+    expect(
+      nonGetRouteClass(write("return c.json({})", "/apps/access-requests"))
     ).toBe("unclassified");
     // A declared read is a read, whatever its source.
     expect(nonGetRouteClass(write("", "/packages/preflight"))).toBe("read");

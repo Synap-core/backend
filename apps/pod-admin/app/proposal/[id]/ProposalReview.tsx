@@ -32,7 +32,8 @@ export function ProposalReview({
   podHost?: string;
   identity?: string;
 }) {
-  const { query, sourceExits, workspaceName } = useProposalReview(proposalId);
+  const { query, sourceExits, sourceState, workspaceName } =
+    useProposalReview(proposalId);
   const utils = trpc.useUtils();
   // Decided HERE — what `afterDecisionShown` reads.
   const [decided, setDecided] = useState(false);
@@ -145,6 +146,7 @@ export function ProposalReview({
         <ProposalReviewBody
           proposal={p}
           sourceExits={sourceExits}
+          sourceState={sourceState}
           workspaceName={workspaceName}
           identity={identity}
           onDecided={() => {
@@ -171,10 +173,10 @@ export function ProposalReview({
 }
 
 /**
- * The decision bar pinned to the window's bottom: Approve and Reject stay in
- * reach under a long review (a 106-record capture read 34,545 px). Spans the
- * card body's padding, on the card's own ground made opaque (the page under
- * it plus the card's 4% tint), so nothing scrolls visibly beneath it.
+ * The decision bar pinned to the window's bottom: Approve and Refuse stay in
+ * reach under a long review (a 106-record capture read 34,545 px). The
+ * story's own footer, spanning the card body's padding, on the card's own
+ * surface (`STORY_FOOTER`'s `bg-content1`), so nothing scrolls visibly
+ * beneath it and it never runs past the card's edge.
  */
-const DECISION_BAR_PIN =
-  "bottom-0 -mx-7 bg-background bg-[linear-gradient(hsl(var(--heroui-foreground)/0.04),hsl(var(--heroui-foreground)/0.04))] px-7 py-3";
+const DECISION_BAR_PIN = "bottom-0 -mx-7 px-7 py-3";

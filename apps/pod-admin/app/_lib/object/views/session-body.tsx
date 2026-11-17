@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * One session — the ONE body, drawn in two frames: `/open/session/:id`
- * (the receiver card, any reader of the session) and `/sessions/:id` (the
- * console, with a breadcrumb back to the list). The frame owns only the
+ * One session — the ONE body, drawn in a frame: `/open/session/:id` (the
+ * receiver card, any reader of the session; the console's `/sessions/:id`
+ * redirects there since Jobs left the console). The frame owns only the
  * chrome — how loading, a failure and the page itself are wrapped, and where a
  * session lives in it; everything the reader sees and can do is decided here,
  * once, so the two pages cannot drift.
@@ -263,8 +263,7 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
       ? session.continuation.project.project
       : null;
   // Where it came from and what it spawned: each a door to that session's
-  // page in this frame (the console's `/sessions/:id`, the receiver's
-  // `/open/session/:id`).
+  // page in this frame (`/open/session/:id`).
   const parent = sessionParent(session.continuation.parent);
   const children = sessionChildren(session.continuation.children);
   const sessionHref = (sid: string) =>

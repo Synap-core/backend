@@ -36,14 +36,9 @@ interface ConsolePage {
 export const CONSOLE_PAGES = {
   home: { path: "/home", audience: "member", focus: false, verb: "see-all" },
   review: { path: "/review", audience: "member", focus: true, verb: "review" },
-  sessions: {
-    path: "/sessions",
-    audience: "admin",
-    focus: true,
-    verb: "see-all",
-  },
+  // Jobs (`/sessions`) and Runs (`/runs`) left the console (founder, 16 Nov
+  // 2026): the work is done in the apps, so no client links to them.
   rules: { path: "/rules", audience: "admin", focus: true, verb: "see-all" },
-  runs: { path: "/runs", audience: "admin", focus: true, verb: "see-all" },
   agents: { path: "/agents", audience: "admin", focus: true, verb: "see-all" },
   governance: {
     path: "/governance/agents",

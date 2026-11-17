@@ -1180,7 +1180,19 @@ export type HubSlotAsk = (
       provide:
         | { kind: "connection"; service: string }
         | { kind: "file"; accept?: string[] }
-        | { kind: "secret"; name: string };
+        | {
+            kind: "secret";
+            name: string;
+            /** What it is for, declared; short words, never the secret. */
+            purpose?: {
+              for: string;
+              tool: string;
+              action?: string;
+              on?: string;
+            };
+            /** One read, or until the job closes (the default). */
+            uses?: "once" | "session";
+          };
     }
 ) & {
   /**
@@ -1238,7 +1250,13 @@ export type HubSlotAnswerValue =
         | { kind: "secret"; vaultRef: string }
         | { kind: "connection"; connectionId: string }
         | { kind: "file"; fileId: string };
-    };
+    }
+  /**
+   * The person REFUSED the ask (mirrors the `declined` arm of
+   * `AskAnswerValue`): nothing was handed over; `reason` is theirs, for you.
+   * Do not ask the same again: re-plan, withdraw the slot, or close failed.
+   */
+  | { type: "declined"; reason?: string };
 
 /** A person's answer to an agent's question about one slot (pod-stamped). */
 export interface HubSlotAnswer {
@@ -3191,6 +3209,11 @@ export interface RunPlaybookInput {
    * unknown, paused or acts for someone else.
    */
   handToAgentId?: string;
+  /**
+   * Start a second run although one of this playbook is live on the subject.
+   * Without it, a live run comes back as `status: "already_running"`.
+   */
+  startAnother?: boolean;
 }
 
 /** One request to enable a pack a blocked playbook depends on. */
@@ -3240,6 +3263,21 @@ export type HubRunPlaybookResult =
         [key: string]: unknown;
       }>;
       enableProposals: HubCapabilityEnableOffer[];
+    }
+  | {
+      /**
+       * Nothing started: you already have a live run of this playbook on the
+       * subject (`live_run`), or an agent's draft of it waits for you
+       * (`draft_awaiting_acceptance`). `session` is that run; `run` its
+       * newest ledger row, null for a draft. Pass `startAnother` to start a
+       * second run.
+       */
+      status: "already_running";
+      run: Record<string, unknown> | null;
+      session: Record<string, unknown>;
+      proposalId: null;
+      reason: "live_run" | "draft_awaiting_acceptance";
+      message: string;
     };
 
 // ─── Skills / Rules (prompt-injecting authoring doors) ───────────────────────

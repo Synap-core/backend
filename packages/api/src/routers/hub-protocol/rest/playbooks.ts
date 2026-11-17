@@ -218,6 +218,12 @@ const RunPlaybookBodySchema = z.object({
     .describe(
       "Try draft rules without making them current: { guidanceOverride: { <current version id>: <draft id> } }. The drafts render in place of those versions, the run is on Synap AI, and every write, send and save in it is refused. The drafted text is the agent's last reply: GET /runs/{runId}?flowType=playbook, playbookDetail.trial.draftedText. A person's act: refused for an agent, with remember or with handToAgentId."
     ),
+  startAnother: z
+    .boolean()
+    .optional()
+    .describe(
+      "Start a second run even though one of this playbook is live on the subject. Without it, a live run (or an agent's draft of it waiting for you) comes back as status already_running with its session, and nothing starts."
+    ),
 });
 
 // PlaybookRunChoice (@synap-core/types/agents), spelled out so the generated
@@ -482,7 +488,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
     tags: ["Playbooks"],
     summary: "Run a playbook",
     description:
-      "Launches a playbook via its executor. Governed: an agent launch gets 202 `status: 'proposed'`. A playbook that depends on skills not enabled yet returns `status: 'blocked'` with `unenabledSkills` and `enableProposals` — nothing ran. Same door as MCP synap_run_playbook.",
+      "Launches a playbook via its executor. Governed: an agent launch gets 202 `status: 'proposed'`. A playbook that depends on skills not enabled yet returns `status: 'blocked'` with `unenabledSkills` and `enableProposals` — nothing ran. While you already have a live run of the playbook on `subjectId` (or an agent's draft of it waiting for you), it returns `status: 'already_running'` with that run's `session`, its `run` (null for a draft) and a `reason` (`live_run` | `draft_awaiting_acceptance`) — nothing started; pass `startAnother: true` to start a second run. Same door as MCP synap_run_playbook.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: RunPlaybookBodySchema,
@@ -901,7 +907,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
 
   /**
    * POST /playbooks/:id/run
-   * Body: { workspaceId?, subjectId?, params?, agentIds?, reasoning?, agentUserId?, projectId?, trackId?, trackStage?, handToAgentId? }
+   * Body: { workspaceId?, subjectId?, params?, agentIds?, reasoning?, agentUserId?, projectId?, trackId?, trackStage?, handToAgentId?, startAnother? }
    */
   app.post("/playbooks/:id/run", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -941,6 +947,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
             : {}),
           remember: body.remember,
           ...(body.trial ? { trial: body.trial } : {}),
+          ...(body.startAnother ? { startAnother: true } : {}),
           source: "hub-rest",
         }
       );

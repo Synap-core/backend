@@ -161,7 +161,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     summary: "Full-text search knowledge entries",
     deprecated: true,
     description:
-      "DEPRECATED — prefer POST /knowledge/ask, whose procedural lane calls the exact same searchFullText. Still functional for existing integrations.",
+      "DEPRECATED — prefer POST /knowledge/search, whose procedural lane calls the exact same searchFullText. Still functional for existing integrations.",
     request: {
       query: z.object({
         q: z.string().optional(),
@@ -961,7 +961,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     method: "post",
     path: "/knowledge/ask",
     tags: ["Knowledge"],
-    summary: "DEPRECATED alias of /knowledge/search — raw retrieval door",
+    summary: "DEPRECATED alias of POST /knowledge/search — raw retrieval door",
     deprecated: true,
     description:
       "DEPRECATED alias of POST /knowledge/search; retained for back-compat. " +
@@ -1018,7 +1018,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
 
   // ── POST /knowledge/answer ────────────────────────────────────────────────
   // The "answer" door (tier-2 = retrieve + synthesize). Same retrieval as
-  // /knowledge/ask (the ONE read door), then ONE focused LLM call in the IS to
+  // POST /knowledge/search (the ONE read door), then ONE focused LLM call in the IS to
   // synthesize a direct answer over the matched context. Explicit doors:
   // `ask` = search (raw matches), `answer` = synthesized. If synthesis is
   // unavailable the answer is null but sources are still returned so callers
