@@ -419,11 +419,11 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
   stage: {
     subjectStatus: deriveJsonSchema(
       playbookStageSchema.shape.subjectStatus.unwrap(),
-      "The in-progress status the subject holds WHILE this stage is worked (In Draft, Review, in_progress): entering the stage writes it. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one. A result status (Scripted, Published, sent, won) goes in onApproved instead."
+      "Entering this stage writes this in-progress status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
     ),
     onApproved: deriveJsonSchema(
       playbookStageSchema.shape.onApproved.unwrap(),
-      "The result status the subject REACHES when this stage's work is approved: its expectedOutputs all delivered, else the next stage's gate passing. An existing option. The subject holding it means the run stands at the NEXT stage. A stage with neither outputs nor a gated next stage is never written by the engine: the person or worker who finishes it moves the subject."
+      "The result status the subject reaches when this stage's work is approved (its outputs delivered, else the next gate passing). An existing option. More: load_skill system/synap/processes."
     ),
     gate: deriveJsonSchema(
       playbookStageSchema.shape.gate.unwrap(),
