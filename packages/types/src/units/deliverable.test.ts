@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  newestOwedFirst,
   deliverableOwedBy,
   isDecidedByAnswer,
   isDeliverableDelivered,
@@ -350,5 +351,22 @@ describe("a refused ask is never decided, never delivered", () => {
         answer: { ...REFUSED, value: { type: "chip" } },
       })
     ).toBe(true);
+  });
+});
+
+describe("newestOwedFirst", () => {
+  it("orders by owedSince, newest first; none last; ties keep their order", () => {
+    const slots = [
+      { k: "a", owedSince: "2026-11-01T00:00:00Z" },
+      { k: "b", owedSince: null },
+      { k: "c", owedSince: "2026-11-10T00:00:00Z" },
+      { k: "d", owedSince: "2026-11-01T00:00:00Z" },
+    ];
+    expect([...slots].sort(newestOwedFirst).map((s) => s.k)).toEqual([
+      "c",
+      "a",
+      "d",
+      "b",
+    ]);
   });
 });

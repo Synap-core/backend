@@ -325,6 +325,8 @@ function statusMovedEvent(
       reason: t.reason ?? null,
       hold: t.hold ?? null,
       ...(t.role ? { role: t.role } : {}),
+      // "Moved because X moved" (reactions W2): the move that caused it.
+      ...(t.cause ? { cause: t.cause } : {}),
       ...(t.actorKind === "system" ? { actor: SYSTEM } : {}),
     },
     actorId: t.actorKind === "agent" ? t.agentUserId : t.userId,

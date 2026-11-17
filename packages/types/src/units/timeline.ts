@@ -31,6 +31,7 @@ import type { CiFinishedStatus } from "../events/dev-loop.js";
 import type { PullRequestChecks } from "../events/pr-state.js";
 import type { LifecycleCategory } from "../lifecycle/option.js";
 import type { RecordedHold } from "../lifecycle/hold.js";
+import type { TransitionCause } from "../lifecycle/index.js";
 import type { TrackHistoryEvent } from "./track-history.js";
 
 export const TIMELINE_SUBJECT_KINDS = [
@@ -96,6 +97,12 @@ export type DevTimelineEvent = DevTimelineEventBase &
         hold: RecordedHold | null;
         /** A thing's ROLE moved (its slug); absent for its own status. */
         role?: string;
+        /**
+         * Another move caused this one (a rule fired on it, reactions W2):
+         * the rule, the move that fired it, its chain and depth. Absent on a
+         * move nobody's move caused. "Moved because X moved."
+         */
+        cause?: TransitionCause;
       }
     | {
         kind: "pr_opened" | "pr_merged" | "pr_closed";

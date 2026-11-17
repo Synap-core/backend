@@ -33,7 +33,11 @@ import {
   assertHoldWaitRefOwned,
   listHolds,
 } from "../services/lifecycle/holds.js";
-import { decideMoveHold, type Hold } from "@synap-core/types/lifecycle";
+import {
+  decideMoveHold,
+  type Hold,
+  type TransitionCause,
+} from "@synap-core/types/lifecycle";
 import type {
   ProjectTrack,
   ProjectTrackDefinitionSnapshot,
@@ -298,6 +302,8 @@ export class TrackRepository extends BaseRepository<
       occurredAt?: Date | null;
       /** A replay: the app its proposal was filed by (`proposals.app_id`). */
       appId?: string | null;
+      /** The move that caused this one (a reaction, reactions W2). */
+      cause?: TransitionCause | null;
     },
     userId: string
   ): Promise<ProjectTrack | null> {
@@ -376,6 +382,7 @@ export class TrackRepository extends BaseRepository<
           occurredAt: params.occurredAt,
           hold: decided.hold,
           appId: params.appId,
+          cause: params.cause,
           workspaceId: project?.workspaceId ?? null,
           projectId: flipped.projectId,
           trackId: flipped.id,

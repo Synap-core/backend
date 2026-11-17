@@ -2090,6 +2090,12 @@ export type DevTimelineEvent = DevTimelineEventBase & ({
 	title: string;
 } | {
 	category: LifecycleCategory;
+	/**
+	 * Another move caused this one (a rule fired on it, reactions W2):
+	 * the rule, the move that fired it, its chain and depth. Absent on a
+	 * move nobody's move caused. "Moved because X moved."
+	 */
+	cause?: TransitionCause;
 	from: string | null;
 	/** What a pause waits on and how it resumes; null for any other move. */
 	hold: RecordedHold | null;
