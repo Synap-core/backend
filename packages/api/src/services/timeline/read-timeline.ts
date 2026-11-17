@@ -287,10 +287,18 @@ async function finish(
   out: readonly Pending[],
   viewer: string
 ): Promise<DevTimelineEvent[]> {
+  return newestFirst(await nameActors(out, viewer));
+}
+
+/** Every actor (and runner computer) in ONE users read; the input's order. */
+async function nameActors(
+  out: readonly Pending[],
+  viewer: string
+): Promise<DevTimelineEvent[]> {
   const rows = await loadActorRows(
     out.flatMap((p) => [p.actorId, p.computerId])
   );
-  const named = out.map((p) => {
+  return out.map((p) => {
     const e = {
       ...p.event,
       actor:
@@ -307,12 +315,15 @@ async function finish(
       ? { ...e, runner: { ...e.runner, computer } }
       : e;
   });
-  named.sort((a, b) => {
+}
+
+/** Newest first; a tie by id, so a read is stable. */
+function newestFirst(events: DevTimelineEvent[]): DevTimelineEvent[] {
+  return events.sort((a, b) => {
     const t = Date.parse(b.at) - Date.parse(a.at);
     if (t !== 0) return t;
     return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
   });
-  return named;
 }
 
 /** Who reads: the goal history's actor, plus a bound key's workspace. */
@@ -1126,18 +1137,21 @@ export async function readSessionTimelines(
   }
   for (const r of sentPosts) if (keep(r)) pushPost(r.owner, r);
 
-  // Every actor of every session, named in ONE read.
-  const ownerOf = new Map<string, string>();
-  for (const [sessionId, list] of pending) {
-    for (const p of list) ownerOf.set(p.event.id, sessionId);
-  }
-  const named = await finish([...pending.values()].flat(), actor.userId);
+  // Every actor of every session, named in ONE read, then given back to its
+  // session BY POSITION: one event can belong to two sessions of the page (a
+  // session_message is "out" for its sender and "in" for its receiver, with
+  // the same id), so an id cannot say whose it is.
+  const lists = [...pending.entries()];
+  const named = await nameActors(
+    lists.flatMap(([, list]) => list),
+    actor.userId
+  );
   const grouped = new Map<string, DevTimelineEvent[]>();
-  for (const e of named) {
-    const sessionId = ownerOf.get(e.id)!;
-    const list = grouped.get(sessionId) ?? [];
-    list.push(e);
-    grouped.set(sessionId, list);
+  let offset = 0;
+  for (const [sessionId, list] of lists) {
+    const own = named.slice(offset, offset + list.length);
+    grouped.set(sessionId, newestFirst(own));
+    offset += list.length;
   }
   for (const s of sessions) {
     out.set(s.id, {
