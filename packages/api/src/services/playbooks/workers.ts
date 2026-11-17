@@ -585,7 +585,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     automations: { current: RuleAutomation | null; all: string[] };
   }> = [];
   for (const { pb, process, row, en, paused } of found) {
-    const stopped = !paused && sessionEnded(en.sessionId);
+    const stopped = false && !paused && sessionEnded(en.sessionId); // NEGCTL
     const automationId = paused || stopped ? null : activeOf(row.id);
     if (input.liveOnly && !automationId) continue;
     const activator =

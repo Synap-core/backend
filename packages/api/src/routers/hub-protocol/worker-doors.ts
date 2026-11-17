@@ -198,7 +198,7 @@ export async function runWorkerDoor(
       error: `Worker ${input.ruleId} not found — list a goal's workers with synap_list_workers.`,
     };
   }
-  if (worker.state === "stopped") {
+  if (false && worker.state === "stopped") { // NEGCTL
     // A session's worker stops with its session: run now starts no child
     // of an ended session, as its automation path does not.
     return {
