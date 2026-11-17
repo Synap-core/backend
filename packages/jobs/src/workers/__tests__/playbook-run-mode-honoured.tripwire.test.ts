@@ -23,6 +23,12 @@
  *    `PlaybookRunNodeDef.data` declares — the set is parsed from the schema,
  *    so the stage-worker `worker` spec (and any later field) is held to the
  *    same rule as `mode`.
+ * D. (2026-11-17, a session starts a worker) A WHOLESALE call site's cast
+ *    DECLARES every such field too — the loop-child path forwards the node
+ *    data whole, so its fields ride along at run time, but a field missing
+ *    from the cast type is one `executePlaybookRun` cannot be typed to read.
+ *    `parentSessionId` (a session's worker) is pinned by name beside
+ *    `mode` / `worker` / `handToAgentId`.
  *
  * WHAT THIS DOES NOT COVER, measured: it reads source text. It cannot see a
  * call that forwards a WRONG value under the right key (`mode: data.agentType`
@@ -148,7 +154,14 @@ describe("tripwire: every playbook_run path honours the node's mode", () => {
       .filter((k) => k !== "label" && k !== "errorHandling");
     // Non-vacuous: the run fields we know of, including the worker spec.
     expect(declared).toEqual(
-      expect.arrayContaining(["playbookId", "mode", "projectId", "worker"])
+      expect.arrayContaining([
+        "playbookId",
+        "mode",
+        "projectId",
+        "worker",
+        "handToAgentId",
+        "parentSessionId",
+      ])
     );
     const offenders: string[] = [];
     for (const c of calls) {
@@ -157,6 +170,36 @@ describe("tripwire: every playbook_run path honours the node's mode", () => {
       for (const k of declared) {
         if (!new RegExp(`\\b${k}:\\s*\\w+\\.${k}\\b`).test(arg))
           offenders.push(`${c.rel}: drops ${k}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("D. a wholesale call's cast declares EVERY field the node declares (parentSessionId included)", () => {
+    const schema = readFileSync(
+      join(PKGS, "types", "src", "automations", "flow.ts"),
+      "utf8"
+    );
+    const start = schema.indexOf("export interface PlaybookRunNodeDef");
+    const dataOpen = schema.indexOf("data: {", start);
+    const block = firstArg(schema, dataOpen + "data: ".length);
+    const declared = [...block.matchAll(/^ {4}(\w+)\??:/gm)]
+      .map((m) => m[1]!)
+      .filter((k) => k !== "label" && k !== "errorHandling");
+    const wholesale = calls
+      .map((c) => ({
+        rel: c.rel,
+        arg: firstArg(c.src, c.index + "executePlaybookRun(".length),
+      }))
+      .filter((c) => /^\w+\.data\b/.test(c.arg));
+    // Non-vacuous: the loop-child call casts the node data wholesale.
+    expect(wholesale.length).toBeGreaterThanOrEqual(1);
+    expect(declared).toContain("parentSessionId");
+    const offenders: string[] = [];
+    for (const c of wholesale) {
+      for (const k of declared) {
+        if (!new RegExp(`\\b${k}\\?:`).test(c.arg))
+          offenders.push(`${c.rel}: cast does not declare ${k}`);
       }
     }
     expect(offenders).toEqual([]);
