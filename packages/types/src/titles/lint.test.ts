@@ -129,6 +129,35 @@ describe("lintTitle", () => {
     }
   );
 
+  /**
+   * A hex-looking DOCUMENT NUMBER after its marker is the document's name
+   * (ticket dc53c247); every other hex run with digits and letters is still a
+   * hash or id.
+   */
+  const HEX_ROWS: Array<[string, string | undefined, boolean]> = [
+    ["Facture FFA2CF1B", "expense", false],
+    ["Facture n° FFA2CF1B from OVH", "expense", false],
+    ["Invoice #a3f9c2d1 for November hosting", "invoice", false],
+    ["Devis 7E4B2A9C for the kitchen", "document", false],
+    ["Order: 4cf2f111b from the supplier", undefined, false],
+    ["Fix landed in 75dc8e8e for key state", "knowledge", true],
+    ["Session 3f0f85f0 owns the receipt fix", "knowledge", true],
+    ["Reorder 75dc8e8e before the release", "knowledge", true],
+    ["Facture FFA2CF1B fixed by 75dc8e8e", "expense", true],
+  ];
+
+  it.each(HEX_ROWS)(
+    "hash or id check on %j (kind %s) flags: %s",
+    (title, kind, flagged) => {
+      const machinery = lintTitle(title, { kind }).find(
+        (i) => i.code === "machinery"
+      );
+      expect(Boolean(machinery?.message.includes("a hash or id"))).toBe(
+        flagged
+      );
+    }
+  );
+
   it("gives a question more room than a name", () => {
     const q = `Should ${"the relay ".repeat(9)}show it?`;
     expect(q.length).toBeGreaterThan(TITLE_SOFT_MAX);

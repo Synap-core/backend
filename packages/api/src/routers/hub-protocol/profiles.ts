@@ -662,6 +662,10 @@ export const hubProfilesRouter = router({
         return {
           status: "proposed" as const,
           proposalId: perm.proposalId,
+          // A workspace JOIN gate (`isJoinGate`) files a join INSTEAD of the
+          // fields' proposal: the caller must be able to tell (a51e36e4).
+          proposalType: perm.proposalType,
+          ...(perm.deferred ? { deferred: true as const } : {}),
           fields: slugs,
         };
       }
