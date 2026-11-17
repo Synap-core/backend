@@ -116,7 +116,11 @@ vi.mock("../assert-output-ref-visible.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { entities, focusSessions } from "@synap/database";
+import {
+  entities,
+  focusSessions,
+  lifecycleTransitionOutbox,
+} from "@synap/database";
 import { answerExpectedOutput } from "../answer-slot.js";
 import { stampBlocked } from "../block-output.js";
 
@@ -185,7 +189,7 @@ const pick = (sessionId: string, value: string, label: string) =>
 
 describe("answer → decision (W2)", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, entities]) {
+    for (const t of [lifecycleTransitionOutbox, focusSessions, entities]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
   }, 120_000);

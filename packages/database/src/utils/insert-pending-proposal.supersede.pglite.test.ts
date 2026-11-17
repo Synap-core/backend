@@ -30,6 +30,7 @@ import { proposals } from "../schema/proposals.js";
 import { notifications } from "../schema/notifications.js";
 import { messages } from "../schema/messages.js";
 import { focusSessions } from "../schema/focus-sessions.js";
+import { lifecycleTransitionOutbox } from "../schema/lifecycle-transition-outbox.js";
 import { channels } from "../schema/channels.js";
 import { relations } from "../schema/relations.js";
 import {
@@ -93,6 +94,7 @@ const statusOf = async (id: string) =>
 beforeAll(async () => {
   client = new PGlite();
   for (const t of [
+    lifecycleTransitionOutbox,
     proposals,
     notifications,
     messages,

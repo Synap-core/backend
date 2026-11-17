@@ -92,6 +92,11 @@ function chain(result: unknown): any {
 }
 
 const fakeDb: any = {
+  // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+  $with: () => ({ as: () => ({}) }),
+  with() {
+    return this;
+  },
   select: () => chain(state.selectResult),
   update: () => chain([]),
   insert: () => chain([]),

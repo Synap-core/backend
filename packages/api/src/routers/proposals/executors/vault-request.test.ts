@@ -52,6 +52,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       query: {
         secrets: { findMany: vi.fn(async () => h.owned) },
         vaultGrants: { findFirst: vi.fn(async () => undefined) },

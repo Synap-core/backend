@@ -210,6 +210,7 @@ import {
   profileProperties,
   propertyDefs,
   type db as DatabaseHandle,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import type { Context } from "../../../context.js";
 import { updateEntities } from "../update-entities.js";
@@ -248,6 +249,7 @@ function ddlFor(table: PgTable): string {
 async function freshDb() {
   const client = new PGlite();
   for (const table of [
+    lifecycleTransitionOutbox,
     entities,
     relations,
     entityFacets,

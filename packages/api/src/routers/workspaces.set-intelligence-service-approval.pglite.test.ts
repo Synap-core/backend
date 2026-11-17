@@ -74,6 +74,7 @@ import {
   intelligenceServices,
   syncGeneration,
   proposals,
+  lifecycleTransitionOutbox,
 } from "@synap/database/schema";
 import { workspacesRouter } from "./workspaces.js";
 import { proposalExecRegistry } from "./proposals/execution-registry.js";
@@ -167,6 +168,7 @@ async function proposeThenApprove(serviceId: string | null) {
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     workspaces,
     workspaceMembers,
     intelligenceServices,

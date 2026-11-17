@@ -140,6 +140,7 @@ import {
   chatTurns,
   events,
   playbookRuns,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { FOCUS_SESSION_TRIAGE_ACCEPTED_EVENT_TYPE } from "../lifecycle-events.js";
 import { answerSessionSlot, attestSessionSlot } from "../session-answer.js";
@@ -258,6 +259,7 @@ const owedIn = async (sessionId: string, lens: "exclude" | "only") =>
 describe("draft asks: the read and acceptance on engagement", () => {
   beforeAll(async () => {
     for (const t of [
+      lifecycleTransitionOutbox,
       focusSessions,
       notifications,
       notificationPreferences,

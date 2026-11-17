@@ -166,6 +166,7 @@ import {
   workspaces,
   workspaceMembers,
   focusSessions,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { DEFERRED_WRITES_MAX } from "@synap-core/types/proposals/deferred-writes";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
@@ -196,6 +197,7 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     proposals,
     users,
     workspaces,

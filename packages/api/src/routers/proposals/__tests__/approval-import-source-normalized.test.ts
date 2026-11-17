@@ -37,6 +37,11 @@ function statementResult(rows: unknown[]) {
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   db: {
+    // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
     query: { proposals: { findFirst: async () => undefined } },
     insert: () => ({ values: () => statementResult([]) }),
     update: () => ({

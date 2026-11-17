@@ -46,6 +46,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       update: () => ({
         set: (values: { status?: string }) => ({
           where: async () => {
