@@ -926,13 +926,10 @@ export function registerPlaybookExecutors(): void {
           return { delivered: true as const };
         }
         // Nothing started, so the claim is released and the person can approve
-        // again once the reason is fixed.
-        return {
-          delivered: false as const,
-          reason: batch
-            ? "no record in this batch started a run: each one already has this playbook running or could not run — open those runs, or approve again once they have ended"
-            : notStartedReason(result),
-        };
+        // again once the reason is fixed. A batch whose first subject was
+        // already running and whose rest started nothing says the first
+        // subject's reason (approve again once that run has ended).
+        return { delivered: false as const, reason: notStartedReason(result) };
       });
 
       // A run that starts now supersedes an earlier failed attempt: the
