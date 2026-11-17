@@ -247,7 +247,7 @@ export function registerRuleExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const { readRuleScope, readRuleSeed, readRuleReaction } =
+      const { readRuleScope, readRuleSeed } =
         await import("../../../services/rules/index.js");
       const { readExpiresAt } =
         await import("../../../services/rules/expiry.js");
