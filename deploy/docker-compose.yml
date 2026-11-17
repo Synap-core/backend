@@ -133,6 +133,11 @@ x-backend-env: &backend-env
   CP_RSSHUB_PROXY_URL: ${CP_RSSHUB_PROXY_URL:-}
   RSS_FETCH_TIMEOUT_MS: ${RSS_FETCH_TIMEOUT_MS:-30000}
   RSS_FETCH_RETRIES: ${RSS_FETCH_RETRIES:-3}
+  # PDF tools (pod session 8d23e259): the engine's URL. SYNAP_PDF_ENGINE=1 in
+  # deploy/.env starts the `stirling-pdf` service (profile `pdf`) and points
+  # here at it; empty = the engine is off and the pdf.* verbs say so.
+  # STIRLING_URL set by hand points at an engine elsewhere (operator config).
+  STIRLING_URL: ${STIRLING_URL:-${SYNAP_PDF_ENGINE:+http://stirling-pdf:8080}}
   # Library reads & media copies. Empty = the code's default (shared-utils
   # envInt): video copy 1 GiB, 4 light reads at once, 60-min job expiry,
   # 200 AI / billed reads per person per 24h.
@@ -298,12 +303,13 @@ services:
     # Eve-managed pods add `eve-network` (+ aliases) in their own
     # docker-compose.override.yml, which also declares the network. Keeping it
     # out of THIS file is what lets a host without Eve start the backend.
-    # ory-admin: KRATOS_ADMIN_URL. sandbox: RSSHUB_URL (see the
-    # `networks:` block at the end).
+    # ory-admin: KRATOS_ADMIN_URL. sandbox: RSSHUB_URL. pdf-engine:
+    # STIRLING_URL (see the `networks:` block at the end).
     networks:
       - synap-net
       - ory-admin
       - sandbox
+      - pdf-engine
 
   # ============================================================================
   # BACKEND WORKER (pod resilience plan P6 — opt-in, profile `workers`)
@@ -357,11 +363,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    # The jobs reach the same hosts as the API: Ory admin, RSSHub (sandbox).
+    # The jobs reach the same hosts as the API: Ory admin, RSSHub (sandbox),
+    # the PDF engine (an automation runs the pdf.* verbs in a job).
     networks:
       - synap-net
       - ory-admin
       - sandbox
+      - pdf-engine
     profiles:
       - workers
 
@@ -399,11 +407,13 @@ services:
       minio:
         condition: service_healthy
     # Same networks as `backend`: the canary runs the same env (Ory admin URLs,
-    # RSSHUB_URL), so it must reach the same hosts to validate the image.
+    # RSSHUB_URL, STIRLING_URL), so it must reach the same hosts to validate
+    # the image.
     networks:
       - synap-net
       - ory-admin
       - sandbox
+      - pdf-engine
     profiles:
       - canary
 
@@ -1087,6 +1097,47 @@ services:
       retries: 3
 
   # ============================================================================
+  # STIRLING PDF — the PDF tools engine (optional, profile `pdf`)
+  # On with SYNAP_PDF_ENGINE=1 in deploy/.env: `synap` (install, update, apply)
+  # adds `--profile pdf`, and the backend's STIRLING_URL points here.
+  # Built from Stirling-PDF's MIT core by .github/workflows/stirling-pdf-image.yml
+  # (no proprietary module, so no login, metering or licence check). It has NO
+  # auth: it sits alone with its callers on `pdf-engine` (internal, no egress),
+  # publishes no port, and parses untrusted files (LibreOffice, Ghostscript),
+  # hence the sandbox label. Stateless: settings are regenerated at each start.
+  # ============================================================================
+  stirling-pdf:
+    logging: *default-logging
+    image: ghcr.io/synap-core/stirling-pdf:3.3.0-core@sha256:__STIRLING_DIGEST__
+    container_name: ${COMPOSE_PROJECT_NAME:-synap}-stirling-pdf
+    restart: unless-stopped
+    environment:
+      SYSTEM_ENABLEANALYTICS: "false"
+      SYSTEM_SHOWUPDATE: "false"
+      SECURITY_ENABLELOGIN: "false"
+      # The JVM sizes its heap from the container's limit, not the host's.
+      JAVA_CUSTOM_OPTS: -XX:MaxRAMPercentage=60
+    # 2.5 GB: the JVM plus one LibreOffice or OCRmyPDF child at a time. A
+    # bigger job fails inside this box, never by starving the pod.
+    mem_limit: 2560m
+    profiles:
+      - pdf
+    labels:
+      synap.network.zone: sandbox
+    networks:
+      - pdf-engine
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:8080/api/v1/info/status | grep -q UP",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # ============================================================================
   # MONITORING — Dozzle log viewer (optional)
   # Enable with: docker compose --profile monitoring up -d
   # ============================================================================
@@ -1293,8 +1344,11 @@ volumes:
 #   sandbox    services labelled synap.network.zone=sandbox (rsshub,
 #              browserless) with ONLY their callers/callees: backend(+canary).
 #              No database, redis, MinIO, Ory or docker.sock holder.
-# None is `internal: true`: kratos needs SMTP/OIDC egress, the sandbox needs the
-# web. A new service joins synap-net unless it calls/serves one of the above.
+#   pdf-engine stirling-pdf (also labelled sandbox: it parses untrusted files)
+#              with ONLY its callers: backend, backend-worker, backend-canary.
+# Only pdf-engine is `internal: true` (the engine needs no egress): kratos needs
+# SMTP/OIDC egress, the sandbox needs the web. A new service joins synap-net
+# unless it calls/serves one of the above.
 # ============================================================================
 networks:
   synap-net:
@@ -1303,3 +1357,6 @@ networks:
     driver: bridge
   sandbox:
     driver: bridge
+  pdf-engine:
+    driver: bridge
+    internal: true
