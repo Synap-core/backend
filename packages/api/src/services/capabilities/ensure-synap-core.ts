@@ -1307,6 +1307,159 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         properties: {},
       },
     },
+    // ── PDF tools (W1) — the pod's internal PDF engine (Stirling PDF) ───────
+    // Handlers: builtin-verbs.ts → services/pdf/run-pdf-verb.ts. Every verb but
+    // pdf.info makes a NEW governed file linked `derived_from` its source(s).
+    {
+      name: "pdf.ocr",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        'Make a scanned PDF searchable: OCR adds an invisible text layer over each page image. Use when: a PDF\'s text cannot be selected or searched. Don\'t use when: the PDF already has text and you want its words (pdf.to_markdown). Runs on the pod\'s own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file); languages (Tesseract codes, default ["eng"], e.g. ["eng","fra"]); mode (skip-text: only pages with no text, the default; force-ocr: every page). Can take minutes.',
+      parameters: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+          languages: {
+            type: "array",
+            items: { type: "string", pattern: "^[a-z]{3}(?:_[a-z]{3,4})?$" },
+            minItems: 1,
+            maxItems: 10,
+          },
+          mode: { type: "string", enum: ["skip-text", "force-ocr"] },
+        },
+      },
+    },
+    {
+      name: "pdf.compress",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Make a PDF smaller. Use when: a PDF is too heavy to send or store. Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file); level (1 lightest \u2026 9 strongest, default 5).",
+      parameters: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+          level: { type: "integer", minimum: 1, maximum: 9 },
+        },
+      },
+    },
+    {
+      name: "pdf.merge",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Join 2 to 20 PDFs into one, in the order given. The sources are kept as they are. Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileIds (2-20 pod PDF files, in order).",
+      parameters: {
+        type: "object",
+        required: ["fileIds"],
+        properties: {
+          fileIds: {
+            type: "array",
+            items: { type: "string", format: "uuid" },
+            minItems: 2,
+            maxItems: 20,
+          },
+        },
+      },
+    },
+    {
+      name: "pdf.split",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        'Cut a PDF into parts at the pages given: each listed page ends a part ("1-3,5", "all" for one file per page, or "2n"). The parts come back as ONE ZIP of PDF files, stored as one file (mimeType application/zip). Runs on the pod\'s own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file); pages (required).',
+      parameters: {
+        type: "object",
+        required: ["fileId", "pages"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+          pages: { type: "string", minLength: 1, maxLength: 200 },
+        },
+      },
+    },
+    {
+      name: "pdf.redact",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Black out words in a PDF for good: the pages are turned into images after redaction, so the hidden text cannot be recovered (and the result's text is no longer selectable). Use when: a PDF must be shared without names, numbers or other terms. Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file); terms (1-50 words or phrases, one per entry, no newlines); useRegex (terms are regular expressions); wholeWord (match whole words only).",
+      parameters: {
+        type: "object",
+        required: ["fileId", "terms"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+          terms: {
+            type: "array",
+            items: { type: "string", minLength: 1, maxLength: 500 },
+            minItems: 1,
+            maxItems: 50,
+          },
+          useRegex: { type: "boolean" },
+          wholeWord: { type: "boolean" },
+        },
+      },
+    },
+    {
+      name: "pdf.to_pdf",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Turn a pod file into a PDF: an Office document (Word, Excel, PowerPoint, OpenDocument, RTF, CSV, text), an image (PNG, JPEG, GIF, WebP, BMP, TIFF), an HTML page or a Markdown file. Any other type is refused ([UNSUPPORTED_TYPE]). Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (the pod file).",
+      parameters: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
+      name: "pdf.to_markdown",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Turn a PDF's text into a new Markdown file (headings, lists and tables kept where the engine finds them). Use when: you need a PDF's words to read, quote or edit. Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file).",
+      parameters: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
+      name: "pdf.info",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Read a PDF's facts: pages, metadata, encryption and permissions, fonts, images, forms, compliance (PDF/A). READ-ONLY: creates nothing; runs on the pod's own PDF engine and the file never leaves the pod. If the engine is off or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]). Returns { fileId, info } (the engine's JSON report). Args: fileId (a pod PDF file).",
+      parameters: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+        },
+      },
+    },
   ],
 };
 

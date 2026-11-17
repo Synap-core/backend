@@ -51,8 +51,12 @@ export interface ProviderFileRef {
 
 export interface MultipartFileBody {
   encoding: "multipart";
-  /** Text fields, sent first, in insertion order. */
-  fields?: Record<string, string>;
+  /**
+   * Text fields, sent first, in insertion order. An array repeats the field
+   * once per value, in order (a list a form binds field by field, e.g. a PDF
+   * engine's OCR `languages`).
+   */
+  fields?: Record<string, string | readonly string[]>;
   /** File parts, in order. A field name may repeat (`attachments`). */
   files: ReadonlyArray<{ field: string; file: ProviderFileRef }>;
 }
@@ -226,10 +230,15 @@ function encodeMultipart(
 ): EncodedFileBody {
   const fields = fileBody.fields ?? {};
   for (const [name, value] of Object.entries(fields)) {
-    if (!name || typeof value !== "string") {
+    const values = typeof value === "string" ? [value] : value;
+    if (
+      !name ||
+      !Array.isArray(values) ||
+      values.some((v) => typeof v !== "string")
+    ) {
       throw new ProviderFileBodyError(
         "bad_file_body",
-        "Multipart text fields need a name and a string value."
+        "Multipart text fields need a name and a string value (or a list of strings)."
       );
     }
   }
@@ -257,9 +266,11 @@ function encodeMultipart(
 
   async function* parts(): AsyncGenerator<Uint8Array> {
     for (const [name, value] of Object.entries(fields)) {
-      yield enc.encode(
-        `--${boundary}\r\nContent-Disposition: form-data; name="${escapeQuoted(name)}"\r\n\r\n${value}\r\n`
-      );
+      for (const one of typeof value === "string" ? [value] : value) {
+        yield enc.encode(
+          `--${boundary}\r\nContent-Disposition: form-data; name="${escapeQuoted(name)}"\r\n\r\n${one}\r\n`
+        );
+      }
     }
     for (const { field, file } of fileBody.files) {
       // Opened only when the request reaches this part: an idle storage

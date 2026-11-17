@@ -842,7 +842,34 @@ export const systemRouter = router({
       });
     }
 
-    // 5. Trusted issuers startup seed check
+    // 5. PDF engine (Stirling PDF, PDF tools W1). OPTIONAL: a pod that has not
+    // turned it on (no STIRLING_URL) is not unhealthy, so "off" adds no row —
+    // this list's statuses are healthy/degraded/unhealthy only, and a client
+    // reads anything else as a fault. Configured: UP within 3 s, or unhealthy.
+    {
+      const { probePdfEngine } =
+        await import("../services/pdf/stirling-client.js");
+      const start = Date.now();
+      const state = await probePdfEngine();
+      if (state !== "off") {
+        services.push(
+          state === "ok"
+            ? {
+                name: "stirling-pdf",
+                status: "healthy",
+                latency: Date.now() - start,
+              }
+            : {
+                name: "stirling-pdf",
+                status: "unhealthy",
+                message:
+                  "STIRLING_URL is set but the engine did not answer UP at /api/v1/info/status within 3 s",
+              }
+        );
+      }
+    }
+
+    // 6. Trusted issuers startup seed check
     const issuerSeed = getTrustedIssuerSeedHealth();
     services.push({
       name: "TrustedIssuersSeed",
