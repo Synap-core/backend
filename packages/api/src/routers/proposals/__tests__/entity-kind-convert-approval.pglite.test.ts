@@ -114,6 +114,7 @@ import {
   podMembers,
   users,
   type db as DatabaseHandle,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { registerEntityExecutors } from "../executors/entity.js";
 import { proposalExecRegistry } from "../execution-registry.js";
@@ -148,6 +149,7 @@ function ddlFor(table: PgTable): string {
 async function freshDb() {
   const client = new PGlite();
   for (const table of [
+    lifecycleTransitionOutbox,
     entities,
     relations,
     entityFacets,

@@ -46,15 +46,13 @@ export const en = {
     "The previous page isn’t kept for this change, so only the result is shown.",
   "html.unchanged": "The page is the same before and after.",
   openInDesktop: "Open in the Synap desktop app",
-  "decide.cancel": "Cancel",
-  "decide.reason.label": "Reason (optional)",
-  "decide.reason.placeholder": "Why are you rejecting this? The AI sees it.",
   "decide.pickFirst": "Pick the record for each item first.",
   "decide.as": "You decide as {identity} · recorded in the",
   "decide.recorded": "Recorded in the",
   "outcome.approved": "You approved this change: it’s now in your pod.",
   "outcome.auto_approved":
     "This matched an auto-approve rule and is already applied.",
+  // One verb with the bar, its sheet and its consequence: reject.
   "outcome.rejected": "You rejected this: the AI was told why.",
   "outcome.reverted": "This change was undone after it was applied.",
   "outcome.expired":
@@ -85,6 +83,25 @@ export const en = {
   "stopped.kindElsewhere": "It exists in {spaces}.",
   "stopped.kindNowhere": "No other space you can see has it either.",
   "stopped.and": "and",
+  "advanced.proposalId": "Proposal id",
+  "advanced.change": "Change",
+  "advanced.targetId": "Target id",
+  "review.asksFor": "What it asks for",
+  "review.keyAfterApprove":
+    "It gets a key only after you approve, and its writes still follow your review rules.",
+  "review.turnsOnUnread":
+    "{n, plural, one {It also turns on # skill you cannot read.} other {It also turns on # skills you cannot read.}}",
+  "review.why": "Why",
+  "review.noteFrom": "Note from {who}",
+  "review.whoAsks": "Who is asking",
+  "review.note": "Their note",
+  "review.forYou": "you",
+  "undo.cannot": "Approving applies it now, and it cannot be undone from here.",
+  "undo.unknown":
+    "Nobody checked whether this can be undone, so treat it as permanent.",
+  // The door to the object a proposal updates (`UpdatedDoor`): the verb and
+  // the noun bundle, so French says "Ouvrir le constat" / "Ouvrir la tâche".
+  "updated.open": "{verb} {obj}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -127,10 +144,6 @@ export const fr: Catalog<typeof en> = {
     "La page précédente n’est pas conservée pour ce changement : seul le résultat est affiché.",
   "html.unchanged": "La page est identique avant et après.",
   openInDesktop: "Ouvrir dans l’application Synap pour ordinateur",
-  "decide.cancel": "Annuler",
-  "decide.reason.label": "Raison (facultatif)",
-  "decide.reason.placeholder":
-    "Pourquoi rejetez-vous cette demande\u00a0? L’IA la lira.",
   "decide.pickFirst": "Choisissez d’abord la fiche de chaque élément.",
   "decide.as": "Vous décidez en tant que {identity} · enregistré dans",
   "decide.recorded": "Enregistré dans",
@@ -173,6 +186,25 @@ export const fr: Catalog<typeof en> = {
   "stopped.kindElsewhere": "Il existe dans {spaces}.",
   "stopped.kindNowhere": "Aucun autre espace visible ne l’a non plus.",
   "stopped.and": "et",
+  "advanced.proposalId": "Identifiant de la demande",
+  "advanced.change": "Changement",
+  "advanced.targetId": "Identifiant de la cible",
+  "review.asksFor": "Ce qu’elle demande",
+  "review.keyAfterApprove":
+    "Elle ne reçoit une clé qu’après votre approbation, et ses écritures suivent toujours vos règles de revue.",
+  "review.turnsOnUnread":
+    "{n, plural, one {Elle active aussi # compétence que vous ne pouvez pas lire.} other {Elle active aussi # compétences que vous ne pouvez pas lire.}}",
+  "review.why": "Pourquoi",
+  "review.noteFrom": "Note de {who}",
+  "review.whoAsks": "Qui demande",
+  "review.note": "Sa note",
+  "review.forYou": "vous",
+  "undo.cannot":
+    "Approuver l’applique maintenant, et cela ne peut pas être annulé d’ici.",
+  "undo.unknown":
+    "Personne n’a vérifié si cela peut être annulé : considérez-le comme définitif.",
+  "updated.open":
+    "{verb} {objG, select, f {{objV, select, yes {l’{obj}} other {la {obj}}}} m {{objV, select, yes {l’{obj}} other {le {obj}}}} other {l’élément {Obj}}}",
 };
 
 /** The catalog keys of a decided request's one-line outcome. */
@@ -195,7 +227,7 @@ export function proposalPageT() {
  * and the pod-wide ones. The decision's title is the receipt's
  * (`_lib/receipt`).
  *
- * "Reject and never allow…" (`RejectNeverMenu`, same file): stores a deny rule
+ * "Refuse and never allow…" (`RejectNeverMenu`, same file): stores a deny rule
  * for THIS agent and THIS act, pod-wide (`deriveGovernanceNeverOption`), then
  * rejects the request; the pod refuses that act from then on without asking
  * (decision 956930ad). Both rules are taken back in Settings.
@@ -225,7 +257,7 @@ export const alwaysEn = {
   "always.ruleFailed": "Approved, but the rule wasn’t saved",
   "always.ruleFailedHint": "The next request like this one will ask you again.",
   "never.trigger": "Reject and never allow…",
-  "never.menu": "Reject and refuse this from now on",
+  "never.menu": "Reject, and never allow this from now on",
   "never.action.label": "This change from this AI, never",
   "never.action.covers":
     "Refused from now on, without asking you. Your other AIs and other changes still ask.",

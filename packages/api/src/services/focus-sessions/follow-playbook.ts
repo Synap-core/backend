@@ -66,6 +66,8 @@ import {
   desc,
   drizzleSql,
   liveRunStatusWhere,
+  LIVE_RUN_STATUSES,
+  setRunStatus,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import {
@@ -102,6 +104,9 @@ import {
 import { STAGE_GATE_TARGET_TYPE } from "../playbooks/stage-gate.js";
 import { buildDefinitionSnapshot } from "../playbooks/run-playbook.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "follow-playbook" });
 
 /** Where the follow receipt lives on `focus_sessions.metadata`. */
 export const FOLLOWED_AT_METADATA_KEY = "followedAt";
@@ -650,13 +655,28 @@ async function releasePlaybook(
     // `cancelled`, not `failed` or `completed`: the run did not fail and it did
     // not finish. A `failed` row would grade the playbook for a person's change
     // of mind, and the scorecard feeds governance widening.
-    await db
-      .update(playbookRuns)
-      .set({ status: "cancelled", completedAt: new Date() })
-      .where(eq(playbookRuns.id, run.id));
+    // COMPARE-AND-SET: only a run still LIVE is released; one that ended
+    // between the read above and here (a turn completed it, the reaper failed
+    // it) keeps its verdict.
+    const { rows: released } = await setRunStatus(db, {
+      runId: run.id,
+      from: LIVE_RUN_STATUSES,
+      to: "cancelled",
+      // The session's owner let the playbook go.
+      actor: { kind: "human" },
+      reason: "The session stopped following its playbook.",
+      set: { completedAt: new Date() },
+    });
     // `cancelled` is not a failure, so the parent keeps its verdict — routed
     // through the one helper anyway, so every terminal writer is uniform.
-    await settleParentAutomationRunFromChild({ playbookRunId: run.id });
+    if (released.length > 0) {
+      await settleParentAutomationRunFromChild({ playbookRunId: run.id });
+    } else {
+      logger.info(
+        { sessionId: session.id, runId: run.id },
+        "unfollow: the run had already ended; its verdict stands"
+      );
+    }
   }
 
   const keptCriteria = readCriteria(updated?.criteria).length;

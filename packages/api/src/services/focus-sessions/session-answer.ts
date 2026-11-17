@@ -95,12 +95,14 @@ import type {
   SlotPendingRelay,
 } from "@synap/playbooks";
 import {
+  ASK_COPY,
   ASK_LIMITS,
   AskAnswerValueSchema,
   RELAY_SURFACE_MAX_CHARS,
   askFingerprint,
   effectiveAskStakes,
   effectiveSlotAsk,
+  isDeclinedValue,
   resolveAskResolution,
   summarizeAnswer,
   validateAnswerAgainstAsk,
@@ -112,6 +114,7 @@ import {
   type AskAnswerRefusalCode,
   type AskStakes,
   type ProvideSecretGrant,
+  type ProvideSecretUses,
   type QuestionClosed,
 } from "@synap-core/types/ask";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
@@ -149,7 +152,9 @@ import { checkProvideRef } from "./provide-ref.js";
 import {
   grantProvidedSecret,
   planProvidedSecretGrant,
+  recordProvidedSecretAnswer,
   withdrawProvidedSecretGrant,
+  type ProvidedSecretRecord,
 } from "./provide-secret-grant.js";
 import { paramValueFromAnswer } from "./param-slots.js";
 import { criterionVerdictOf } from "./evaluations/record.js";
@@ -159,7 +164,12 @@ import {
   SLOT_ANSWER_TEXT_MAX,
   type AnswerExpectedOutputResult,
 } from "./answer-slot.js";
-import { stampBlocked, stampUnblocked } from "./block-output.js";
+import {
+  stampBlocked,
+  stampUnblocked,
+  unblockExpectedOutput,
+  type BlockExpectedOutputResult,
+} from "./block-output.js";
 import { updateExpectedOutputsLocked } from "./delegate-output.js";
 import { emitSideEffects } from "@synap/events";
 import { logEvent } from "../../lib/event-helpers.js";
@@ -168,6 +178,7 @@ import {
   FOCUS_SESSION_RELAY_CORRECT_ACTION,
   FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE,
   FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE,
+  FOCUS_SESSION_SLOT_HANDED_BACK_EVENT_TYPE,
 } from "./lifecycle-events.js";
 import { isUuid } from "@synap-core/types/property-render";
 
@@ -1096,6 +1107,11 @@ export async function answerSessionSlot(p: {
    */
   expectedGranteeId?: string;
   /**
+   * A secret answer: the reads the person picked (`once` | `session`);
+   * absent, the ask's own `provide.uses`, else `session`.
+   */
+  secretUses?: ProvideSecretUses;
+  /**
    * The person's ONE TAP on a relay that waited for it (`pendingRelay`, a
    * `commitment` an agent relayed — `relaySessionAnswer`): the answer is the
    * relayed one, recorded as theirs (`via: 'tap'` + `confirmedAt`, keeping
@@ -1229,15 +1245,23 @@ export async function answerSessionSlot(p: {
   // the slot follows its own answer rule (hand-back included).
   const met = verdict
     ? null
-    : criterionMetBy(outputs, chosen.index, readCriteria(session.criteria));
+    : criterionMetBy(
+        outputs,
+        chosen.index,
+        readCriteria(session.criteria),
+        value
+      );
 
   // SECRET — handing it over also lets the agent that asked read it, for this
   // session (`provide-secret-grant.ts`). Written BEFORE the answer commits so
   // the receipt says exactly what exists, and taken back below if the commit
-  // is refused. An agent the pod cannot name gets no read; the hand-over
-  // still stands, and the receipt says no agent can read it.
+  // is refused; the slot's link to it and its "used by" row are written only
+  // after the commit (`secretRecord`). An agent the pod cannot name gets no
+  // read; the hand-over still stands, and the receipt says no agent can read
+  // it.
   let secretGrant: ProvideSecretGrant | undefined;
   let createdGrantId: string | null = null;
+  let secretRecord: ProvidedSecretRecord | null = null;
   if (value?.type === "provide" && value.ref.kind === "secret") {
     const secretId = vaultSecretIdOf(value.ref.vaultRef);
     if (secretId) {
@@ -1250,12 +1274,22 @@ export async function answerSessionSlot(p: {
           ? { expectedGranteeId: p.expectedGranteeId }
           : {}),
       });
-      ({ grant: secretGrant, createdGrantId } = await grantProvidedSecret({
+      const secretAsk =
+        ask?.mode === "provide" && ask.provide.kind === "secret"
+          ? ask.provide
+          : null;
+      ({
+        grant: secretGrant,
+        createdGrantId,
+        record: secretRecord,
+      } = await grantProvidedSecret({
         plan,
         secretId,
         ownerId: p.userId,
         sessionId: session.id,
         expectedLabel: label,
+        uses: p.secretUses ?? secretAsk?.uses ?? "session",
+        purpose: secretAsk?.purpose ?? null,
       }));
       text = summarizeAnswer(ask, value, p.text, {
         secretAccess: { grant: secretGrant, now: Date.now() },
@@ -1308,6 +1342,7 @@ export async function answerSessionSlot(p: {
   // attest's tail: a failure is logged and reported in the result, never
   // thrown — a committed answer must not come back as a 500 that invites the
   // person to answer twice.
+  await recordProvidedSecretAnswer(secretRecord);
   let posted = false;
   if (session.channelId && postKey) {
     try {
@@ -1543,6 +1578,90 @@ export async function attestSessionSlot(p: {
   };
 }
 
+// ── Entrance 4: "Not mine" ──────────────────────────────────────────────────
+
+/**
+ * "NOT MINE", whole: the person hands a slot an agent gave them back,
+ * unanswered (`unblockExpectedOutput`, the ONE hand-back stamp), and the door
+ * now SAYS so (finding 278a866a): one `focus_session.slot_handed_back` history
+ * row and one room line as the person ("Not mine: <label>"), so the agent
+ * reads why the slot came back instead of finding it bare. No wake, no
+ * answer, no question claimed: "Not mine" is not an answer (a no to the ask
+ * is Refuse, `{ type: "declined" }`). Both are written only when the slot
+ * really was the person's; the tail is best-effort, after the stamp, like
+ * attest's: a committed hand-back never comes back as a 500.
+ */
+export async function notMineSessionSlot(p: {
+  sessionId: string;
+  /** Owner floor AND the person handing it back. */
+  userId: string;
+  expectedLabel: string;
+}): Promise<BlockExpectedOutputResult> {
+  const session = await db.query.focusSessions.findFirst({
+    where: and(
+      eq(focusSessions.id, p.sessionId),
+      eq(focusSessions.userId, p.userId)
+    ),
+    columns: { id: true, channelId: true },
+  });
+  const result = await unblockExpectedOutput(p);
+  if (result.status !== "unblocked" || !session) return result;
+  // Who held it, read under the unblock's own lock (never a read before it).
+  const slot = result.before;
+  if (slot?.owner !== "human") return result;
+
+  const at = new Date().toISOString();
+  let messageId: string | null = null;
+  if (session.channelId) {
+    try {
+      const posted = await postChannelMessage({
+        channelId: session.channelId,
+        content: ASK_COPY.notMineReceipt(result.expectedLabel),
+        role: "user",
+        triggerAI: false,
+        userId: p.userId,
+        // No key: a key holding the time never dedups, and a key without it
+        // would swallow a later, real hand-back of the same slot. The post
+        // door's short content window guards a fast retry.
+      });
+      messageId = posted.messageId;
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: session.id },
+        "not mine: the room line failed — the slot is handed back"
+      );
+    }
+  }
+  try {
+    await logEvent(
+      p.userId,
+      FOCUS_SESSION_SLOT_HANDED_BACK_EVENT_TYPE,
+      {
+        sessionId: session.id,
+        expectedLabel: result.expectedLabel,
+        kind: result.kind,
+        blockedReason: slot.blockedReason ?? null,
+        askMode: slot.ask?.mode ?? null,
+        askedBy: slot.askedBy ?? null,
+        handedBackBy: p.userId,
+        handedBackAt: at,
+        messageId,
+      },
+      {
+        subjectId: session.id,
+        subjectType: FOCUS_SESSION_SUBJECT_TYPE,
+        source: "api",
+      }
+    );
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: session.id },
+      "not mine: the history row failed — the slot is handed back"
+    );
+  }
+  return result;
+}
+
 /**
  * The answer to STORE for a slot's ask, or the refusal. Pure.
  *
@@ -1582,8 +1701,11 @@ export function resolveAnswer(
       },
     };
   }
-  // An ask-less slot answered with `{type:'text'}` stays a legacy answer.
-  if (!ask) return { text, value: undefined };
+  // An ask-less slot answered with `{type:'text'}` stays a legacy answer. A
+  // REFUSAL keeps its value on any slot: it is what tells the agent "no".
+  if (!ask && !isDeclinedValue(checked.value)) {
+    return { text, value: undefined };
+  }
   return {
     text: summarizeAnswer(ask, checked.value, text),
     value: checked.value,
@@ -2131,6 +2253,17 @@ export async function relaySessionAnswer(p: {
 
   if (p.disposition === "withdrawn") {
     return withdrawRelayedQuestion({ ...p, now, question, slot, facts });
+  }
+
+  // A REFUSAL is the person's own tap for now (plan d717d6ac §3, phase 2
+  // adds a relayed `declined` disposition): an agent cannot say "no" for them.
+  if (isDeclinedValue(p.value)) {
+    return {
+      status: "ask_invalid",
+      code: "wrong_door",
+      message:
+        "A refusal is the person's own answer: it cannot be relayed yet. Relay their words as an answer, or withdraw the question.",
+    };
   }
 
   // 4. ANSWERED — the person's words first.

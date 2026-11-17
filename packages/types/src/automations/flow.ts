@@ -63,6 +63,14 @@ export interface AutomationTriggerConfig {
    */
   filters?: Record<string, unknown>;
 
+  /**
+   * Whose events a POD-WIDE automation answers to: `me` (default — its person's
+   * own events, its person's agents' included) or `everyone` (any pod member's,
+   * in a space its person can see). A space automation ignores it. Grammar and
+   * reader: `readAutomationAudience` (./rule-run-policy.ts), decision 782c862e.
+   */
+  audience?: "me" | "everyone";
+
   // ── cron trigger ───────────────────────────────────────────────────────
   /** Cron expression (e.g. "0 9 * * MON") */
   expression?: string;
@@ -688,6 +696,15 @@ export interface CapabilityNodeDef extends AutomationNodeBase {
     capabilityName?: string;
     /** Verb id = the requiring skill's name (resolves to the backing skill). */
     verbId?: string;
+    /**
+     * Instead of a concrete verb: a NEED ref (`need:<need>` or
+     * `need:<need>/<intent>`, 0426, `@synap-core/types/needs`). At run time
+     * the executor runs the ONE verb the provider the space bound to that need
+     * offers for it; an unfilled need, or a provider with several verbs for it
+     * and no `/<intent>`, fails the step with the reason. `verbId` wins when
+     * both are set.
+     */
+    need?: string;
     verbLabel?: string;
     verbKind?: "read" | "write" | "action";
     granted?: boolean;
@@ -787,6 +804,18 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      * `schedule.handToAgentId`. Absent ⇒ unchanged.
      */
     handToAgentId?: string;
+    /**
+     * PARENT SESSION — the focus session (`focus_sessions.id`) this node's
+     * runs are CHILDREN of. Forwarded to `runPlaybook({ parentSessionId })`,
+     * which writes `run session --spawned_from--> parent` through its one
+     * producer (`recordSessionSpawn`, owner floor on the parent). A node
+     * naming a parent that is no longer open (closed, cancelled, failed, or
+     * gone) starts and files NOTHING (`session_closed`): a session's worker
+     * stops with its session, and nothing on the session moves. Producer: a
+     * SESSION-scoped worker enablement (`workers.enable({ sessionId })`, via
+     * the rule grammar's `__parentSessionId` key). Absent ⇒ unchanged.
+     */
+    parentSessionId?: string;
     /**
      * WHAT this node materializes (read through `readPlaybookRunMode`,
      * `@synap-core/types/automations`, which keeps this union and its runtime

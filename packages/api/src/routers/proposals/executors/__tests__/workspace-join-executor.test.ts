@@ -41,6 +41,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   // The approval writes membership + status in ONE transaction (#6): the tx
   // handle records into the same lists.
   const writer = {
+    // The proposal door's one statement (`WITH … UPDATE`).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
     insert: (table: unknown) => ({
       values: (values: Record<string, unknown>) => ({
         onConflictDoNothing: () => ({
@@ -65,6 +70,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
+      // `writer` carries the proposal door's `$with` / `with` pass-through.
       ...writer,
       transaction: async (fn: (tx: typeof writer) => Promise<unknown>) =>
         fn(writer),

@@ -23,9 +23,16 @@
  *            ledger its own row carries (`stage_history`, 0382); its wait
  *            episodes (`readWaitEpisodes`, 0386) merged in by when each
  *            opened, every subject asked about in ONE read;
+ *   reactions the rules around it (`status-reactions.ts`): those that fire
+ *            when it moves and those that move it, each with its last
+ *            outcome and, for a roll-up, its parts' "3 of 5 done";
  *   links    a goal's or a session's `serves` edges, each end the reader sees;
  *   rollup   a goal's tree down `serves` (`readGoalTreeRollups`);
- *   signals  the status signals (`status_signal_raised`) still open.
+ *   signals  the status signals (`status_signal_raised`) still open;
+ *   work     where its work stands (`status-work.ts`): the sessions and runs
+ *            on a thing or a goal, or the session itself, each from THE
+ *            continuation packet, with its stages, gates, owed asks, stop
+ *            and the person's Continue.
  * A part that could not be read is `unavailable`, never empty.
  *
  * Served by orient's `statusOf` (MCP, Hub REST) and tRPC `lifecycle.statusOf`
@@ -86,6 +93,7 @@ import {
   type StatusOfRole,
   type StatusOfRollup,
   type StatusOfSignal,
+  type StatusOfWork,
   type UnitTone,
   type WaitingOnMark,
   type WaitingOnSource,
@@ -121,6 +129,7 @@ import {
   type NextMoveHoldFact,
 } from "./next-move.js";
 import { readThingRoles, type ThingRoleRow } from "./status-roles.js";
+import type { StatusViewer } from "./status-work.js";
 import {
   sessionStatusFloor,
   statusAccess,
@@ -217,6 +226,12 @@ export interface StatusOf {
    * moves its step offers ({@link StatusOfMove}).
    */
   moves?: StatusOfMove[];
+  /**
+   * On `include: ["reactions"]` (every type): the rules around it — those
+   * that fire when it moves, those that move it (`status-reactions.ts`).
+   */
+  reactions?:
+    import("@synap-core/types/units").StatusOfReaction[] | Unavailable;
   /** Things only: the roles it wears that the reader may see. */
   roles?: StatusOfRole[] | Unavailable;
   /** Things only: the account it works at, when the reader may read it. */
@@ -229,6 +244,11 @@ export interface StatusOf {
   rollup?: StatusOfRollup | Unavailable;
   /** On `include: ["signals"]` (things, goals, sessions): those still open. */
   signals?: StatusOfSignal[] | Unavailable;
+  /**
+   * On `include: ["work"]` (every type): the sessions and runs on it, or the
+   * session itself, and where each stands (`StatusOfWork`).
+   */
+  work?: StatusOfWork | Unavailable;
   link: string;
 }
 
@@ -329,7 +349,15 @@ async function orUnavailable<T>(p: Promise<T>): Promise<T | Unavailable> {
 export async function readStatusOf(
   userId: string,
   rawIds: readonly string[],
-  opts: { include?: readonly StatusOfInclude[] } = {}
+  opts: {
+    include?: readonly StatusOfInclude[];
+    /**
+     * Who reads, as the door knows them (`include: ["work"]` only): what they
+     * may do on each work item is decided by the doors' own checks. Absent =
+     * they may do nothing (no Continue, no gate to decide).
+     */
+    viewer?: StatusViewer;
+  } = {}
 ): Promise<StatusOfAnswer[]> {
   const wants = (part: StatusOfInclude) =>
     opts.include?.includes(part) ?? false;
@@ -781,6 +809,37 @@ export async function readStatusOf(
         }
       : {};
 
+  // Where its work stands: every subject asked about in ONE read.
+  const worked = wants("work")
+    ? import("./status-work.js").then((m) =>
+        m.readStatusWork(
+          userId,
+          {
+            sessions: [
+              ...sessions.map((x) => ({ answerId: x.id, sessionId: x.id })),
+              ...runs.flatMap((r) =>
+                r.sessionId ? [{ answerId: r.id, sessionId: r.sessionId }] : []
+              ),
+            ],
+            things: thingIds,
+            goals: goals.map((g) => g.id),
+          },
+          opts.viewer
+        )
+      )
+    : null;
+  worked?.catch(() => undefined);
+  const workOf = async (
+    id: string
+  ): Promise<{ work?: StatusOfWork | Unavailable }> =>
+    worked
+      ? {
+          work: await orUnavailable(
+            worked.then((m) => m.get(id) ?? { items: [], truncated: false })
+          ),
+        }
+      : {};
+
   const raised = wants("signals")
     ? roles.then((r) =>
         readRaisedSignals([
@@ -923,6 +982,7 @@ export async function readStatusOf(
                   since: null,
                 }))),
           ])),
+          ...(await workOf(t.id)),
           link: openLink(t.id),
         };
       })()
@@ -987,6 +1047,7 @@ export async function readStatusOf(
               since: since.since,
             },
           ])),
+          ...(await workOf(g.id)),
           link: openLink(g.id),
         };
       })()
@@ -1034,6 +1095,7 @@ export async function readStatusOf(
               since: since.since,
             },
           ])),
+          ...(await workOf(s.id)),
           link: openLink(s.id),
         };
       })()
@@ -1056,16 +1118,46 @@ export async function readStatusOf(
         since: iso(r.completedAt ?? r.startedAt),
         sinceMeasured: settled,
         waitingOn: r.sessionId ? await waitingOf(`session:${r.sessionId}`) : [],
+        ...(await workOf(r.id)),
         link: openLink(r.sessionId ?? r.id),
       }))()
     );
   }
 
+  // The rules around each subject: every one asked about in ONE read of the
+  // rule list (`status-reactions.ts`).
+  const reacted = wants("reactions")
+    ? import("./status-reactions.js").then((m) =>
+        m.readStatusReactions(userId, [
+          ...things.map((t) => ({
+            id: t.id,
+            type: "entity" as const,
+            profileId: t.profileId ?? null,
+          })),
+          ...goals.map((g) => ({ id: g.id, type: "goal" as const })),
+          ...sessions.map((x) => ({ id: x.id, type: "session" as const })),
+          ...runs.map((r) => ({ id: r.id, type: "run" as const })),
+        ])
+      )
+    : null;
+  reacted?.catch(() => undefined);
+  const withReactions = async (a: StatusOf): Promise<StatusOf> =>
+    reacted
+      ? {
+          ...a,
+          reactions: await orUnavailable(
+            reacted.then((m) => m.get(a.id) ?? [])
+          ),
+        }
+      : a;
+
   return Promise.all(
-    asked.map(
-      (id): Promise<StatusOfAnswer> =>
-        answers.get(id) ?? Promise.resolve({ id, type: "unknown" })
-    )
+    asked.map((id): Promise<StatusOfAnswer> => {
+      const answer = answers.get(id);
+      return answer
+        ? answer.then(withReactions)
+        : Promise.resolve({ id, type: "unknown" });
+    })
   );
 }
 

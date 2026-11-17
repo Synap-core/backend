@@ -115,6 +115,7 @@ export const TOOL_GROUPS = {
     "synap_evaluate_session",
     "synap_revert_session",
     "synap_rerun_session",
+    "synap_continue_session",
     "synap_promote_session_to_playbook",
   ],
   /** Proposals and trust rules. */

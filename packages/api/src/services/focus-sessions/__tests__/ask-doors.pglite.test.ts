@@ -135,6 +135,7 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
+  lifecycleTransitionOutbox,
   notifications,
   notificationPreferences,
   users,
@@ -339,6 +340,8 @@ describe("W2 typed ask doors", () => {
   beforeAll(async () => {
     for (const t of [
       focusSessions,
+      // Slot doors owe their transition.
+      lifecycleTransitionOutbox,
       notifications,
       notificationPreferences,
       users,

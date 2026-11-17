@@ -69,7 +69,13 @@ vi.mock("../../../../utils/domain-event-bridge.js", async (importOriginal) => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions, proposals, playbooks, entities } from "@synap/database";
+import {
+  focusSessions,
+  proposals,
+  playbooks,
+  entities,
+  lifecycleTransitionOutbox,
+} from "@synap/database";
 import { registerFocusSessionExecutors } from "../focus-session.js";
 import { proposalExecRegistry } from "../../execution-registry.js";
 
@@ -154,7 +160,13 @@ let PLAYBOOK: string;
 let SUBJECT: string;
 
 beforeAll(async () => {
-  for (const t of [focusSessions, proposals, playbooks, entities]) {
+  for (const t of [
+    lifecycleTransitionOutbox,
+    focusSessions,
+    proposals,
+    playbooks,
+    entities,
+  ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
   registerFocusSessionExecutors();

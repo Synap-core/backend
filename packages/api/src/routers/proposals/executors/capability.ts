@@ -39,6 +39,11 @@ import type { ProposalExecutorArgs } from "../execution-registry.js";
 import { recordApprovedAgentStart } from "../../../services/agent-dispatch/approved-start.js";
 import { answeringSkillsWhere } from "../../../services/capabilities/verb-skill.js";
 import { approvalRefusesRun } from "@synap/capability-gate";
+import { keepRowAsRecorded } from "../failure-classification.js";
+import {
+  holdPendingSend,
+  type HeldSend,
+} from "../../../services/channels/held-sends.js";
 
 const logger = createLogger({
   module: "proposal-approve-executors-capability",
@@ -93,6 +98,41 @@ async function loadApprovedRunnableSkill(
     });
   }
   return skillRow;
+}
+
+/**
+ * The at-most-once dispatch of an approved verb run (`dispatchExternalOnce`),
+ * plus one case: a run that did NOT go out because the LinkedIn account it
+ * acts as may not act today (its day's limit, or LinkedIn paused it) stays
+ * PENDING and HELD until then, never APPROVAL_FAILED
+ * (`linkedin-account-limits.ts`, `held-sends.ts`). It holds only on the
+ * hold its own provider call answered (`held`, from `triggerProviderAction`
+ * through the run): any other refusal, e.g. LinkedIn's 422 cannot_resend_yet
+ * on the day's 20th request, fails with LinkedIn's own sentence. An
+ * ambiguous throw keeps its claim as before.
+ */
+async function dispatchHoldingLinkedin(
+  proposalId: string,
+  send: () => Promise<
+    Awaited<ReturnType<Parameters<typeof dispatchExternalOnce>[1]>> & {
+      held?: HeldSend;
+    }
+  >
+): Promise<void> {
+  const state: { held: HeldSend | null } = { held: null };
+  try {
+    await dispatchExternalOnce(proposalId, async () => {
+      const result = await send();
+      if (!result.delivered && result.held) state.held = result.held;
+      return result;
+    });
+  } catch (err) {
+    if (!state.held) throw err;
+    await holdPendingSend(proposalId, state.held);
+    throw keepRowAsRecorded(
+      err instanceof Error ? err : new Error(String(err))
+    );
+  }
 }
 
 /** Register the capability.run / capability.install / capability.enable / capability/run approve executors. */
@@ -226,7 +266,7 @@ export function registerCapabilityExecutors(): void {
       );
 
       // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
-      await dispatchExternalOnce(input.proposalId, async () => {
+      await dispatchHoldingLinkedin(input.proposalId, async () => {
         const runOutcome = await runResolvedSkill(
           skillRow,
           (data.input as Record<string, unknown> | undefined) ?? {},
@@ -264,6 +304,7 @@ export function registerCapabilityExecutors(): void {
               runOutcome.kind === "error" ? runOutcome.errorClass : undefined,
             providerRef:
               runOutcome.kind === "error" ? runOutcome.providerRef : undefined,
+            held: runOutcome.kind === "error" ? runOutcome.held : undefined,
           };
         }
         skillRunResult = runOutcome.result;
@@ -378,7 +419,7 @@ export function registerCapabilityExecutors(): void {
       // claim so Retry re-runs; a throw from runResolvedSkill is ambiguous → the
       // claim is kept (no resend).
       let runResult: unknown;
-      await dispatchExternalOnce(input.proposalId, async () => {
+      await dispatchHoldingLinkedin(input.proposalId, async () => {
         const runOutcome = await runResolvedSkill(skillRow, parameters, {
           userId,
           workspaceId: proposal.workspaceId ?? null,
@@ -431,6 +472,7 @@ export function registerCapabilityExecutors(): void {
             reason: runOutcome.message,
             errorClass: runOutcome.errorClass,
             providerRef: runOutcome.providerRef,
+            held: runOutcome.held,
           };
         }
         runResult = runOutcome.result;

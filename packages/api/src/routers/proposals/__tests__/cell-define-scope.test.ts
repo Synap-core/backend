@@ -32,6 +32,11 @@ vi.mock("../executors/shared.js", () => ({ reportApproved: () => undefined }));
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
+    // The proposal door's one statement (`WITH … UPDATE`).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
     select: () => ({ from: () => ({ where: async () => [] }) }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),
   },

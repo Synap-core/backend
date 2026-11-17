@@ -146,6 +146,7 @@ describe("conformance corpus", () => {
       "columns-in-section.md",
       "columns-degenerate.md",
       "columns-equal-colons.md",
+      "ask.md",
     ]) {
       expect(names).toContain(required);
     }

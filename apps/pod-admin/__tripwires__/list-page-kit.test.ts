@@ -21,15 +21,8 @@ import { stripComments } from "../../../scripts/strip-comments.mjs";
 const APP_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const MIGRATED = [
   "app/(admin)/entities/page.tsx",
-  "app/(admin)/templates/page.tsx",
-  "app/(admin)/runs/page.tsx",
+  "app/(admin)/processes/page.tsx",
 ];
-
-/**
- * Runs keeps ResourceRow's states for `FlowRuns`, the runs expanded inside one
- * flow row: a nested strip, not a list card (justified keep).
- */
-const NESTED_STATES = new Set(["app/(admin)/runs/page.tsx"]);
 
 function source(rel: string): string {
   return stripComments(readFileSync(join(APP_ROOT, rel), "utf8"), "ts");
@@ -42,12 +35,9 @@ describe("migrated list pages use the list kit", () => {
       expect(text).toMatch(/<ListCard\b/);
       expect(text).not.toMatch(/<SectionCard\b/);
     });
-    it.skipIf(NESTED_STATES.has(rel))(
-      `${rel} has no hand-made state ladder`,
-      () => {
-        expect(text).not.toMatch(/<ResourceRow(Skeleton|Error|Empty)\b/);
-      }
-    );
+    it(`${rel} has no hand-made state ladder`, () => {
+      expect(text).not.toMatch(/<ResourceRow(Skeleton|Error|Empty)\b/);
+    });
     it(`${rel} draws no filter with Select or Switch`, () => {
       expect(text).not.toMatch(/<(Select|Switch)\b/);
     });

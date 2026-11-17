@@ -87,7 +87,6 @@ import type { StageSubjectStatusOutcome } from "../services/focus-sessions/stage
 import { delegateExpectedOutput } from "../services/focus-sessions/delegate-output.js";
 import {
   blockExpectedOutput,
-  unblockExpectedOutput,
   type BlockExpectedOutputResult,
 } from "../services/focus-sessions/block-output.js";
 import { BLOCKED_REASONS } from "@synap/playbooks";
@@ -98,6 +97,7 @@ import {
   attestSessionSlot,
   correctRelayedAnswer,
   describeAnswerRefusal,
+  notMineSessionSlot,
   type AttestSessionSlotResult,
 } from "../services/focus-sessions/session-answer.js";
 import {
@@ -105,6 +105,7 @@ import {
   loadOwedProvideAsk,
   readProvideOptions,
 } from "../services/focus-sessions/provide-options.js";
+import { readProvideSecretUse } from "../services/focus-sessions/provide-secret-use.js";
 import {
   askAboutSlot,
   ASK_ABOUT_SLOT_NOTE_MAX,
@@ -113,6 +114,7 @@ import {
   AskAnswerValueSchema,
   ASK_CHANGED_PREFIX,
   ASK_INVALID_PREFIX,
+  PROVIDE_SECRET_USES,
   SLOT_MOVED_ON_PHRASES,
 } from "@synap-core/types/ask";
 import { SLOT_ANSWER_TEXT_MAX } from "../services/focus-sessions/answer-slot.js";
@@ -314,6 +316,12 @@ const AnswerOutputInputSchema = z
      * agent the person was told will read it. No read for anyone else.
      */
     expectedGranteeId: z.string().min(1).max(200).optional(),
+    /**
+     * A secret answer: the reads the person picked (`once` | `session`);
+     * absent, the ask's own. `provideOptions`' `secret.grant.uses` is the
+     * ask's.
+     */
+    secretUses: z.enum(PROVIDE_SECRET_USES).optional(),
     /**
      * The one-tap Confirm of a relay waiting on the slot (`pendingRelay`):
      * the relayed answer becomes the person's. Send no `text` / `value`.
@@ -760,6 +768,44 @@ export const focusSessionsRouter = router({
             ? { rootSessionId: input.rootSessionId }
             : undefined,
       });
+    }),
+  /**
+   * TIMELINE — what happened to a goal, a session or a pull request, newest
+   * first (`TimelineWire`, `@synap-core/types/units`): the tRPC door of the
+   * ONE read behind Hub `GET /timeline` and MCP `synap_get_timeline`
+   * (`services/timeline/read-timeline.ts`), so the Work view's Activity line
+   * (`@synap-core/types/work-view` `activityLine`) reads it on a person's
+   * sign-in too. Same subject parser (`timelineSubjectOf`: exactly one of
+   * `goalId`, `sessionId`, `pr`), same reader and floors as those doors:
+   * sessions owner-only, a goal through the goal history's own floor. A
+   * subject that is not the caller's is NOT_FOUND, never an empty timeline.
+   */
+  timeline: protectedProcedure
+    .input(
+      z.object({
+        goalId: z.string().optional(),
+        sessionId: z.string().optional(),
+        pr: z.string().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      // Loaded on call, as the MCP door does: the read pulls the goal history
+      // and status reads, which this router must not load at import.
+      const { readTimeline, timelineSubjectOf } =
+        await import("../services/timeline/read-timeline.js");
+      const subject = timelineSubjectOf(input);
+      if (!subject.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: subject.error });
+      }
+      const timeline = await readTimeline(subject.subject, {
+        userId: requireUserId(ctx.userId),
+        agentUserId: ctx.agentUserId ?? null,
+        isHubProtocol: ctx.isHubProtocol,
+      });
+      if (!timeline) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
+      }
+      return timeline;
     }),
   /**
    * BROWSE — the full, searchable, paged session list behind "See all".
@@ -1430,6 +1476,33 @@ export const focusSessionsRouter = router({
         reason: input.reason,
         agentUserId: ctx.agentUserId ?? null,
         callerContext: ctx,
+      });
+      if (!result.ok && result.reason === "not_found") {
+        throw new TRPCError({ code: "NOT_FOUND", message: result.message });
+      }
+      return result;
+    }),
+
+  /**
+   * CONTINUE AT <STAGE> — a run that ended or stopped before its last stage
+   * resumes in the SAME session at the stage it stopped on, with a new run
+   * turn (`continue-run.ts`; an ended session is reopened for it). A
+   * person's move: an agent key is refused. Offered when `statusOf`
+   * `include: ["work"]` says `continue`. A refusal (nothing to continue,
+   * another run live on the record, the session moved) comes back as
+   * `{ ok: false, reason, message }`; only an unknown session throws.
+   * Same service and body as Hub `POST /focus-sessions/:id/continue` and MCP
+   * `synap_continue_session`.
+   */
+  continueRun: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { continueStoppedRun } =
+        await import("../services/focus-sessions/continue-run.js");
+      const result = await continueStoppedRun({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        agentUserId: ctx.agentUserId ?? null,
       });
       if (!result.ok && result.reason === "not_found") {
         throw new TRPCError({ code: "NOT_FOUND", message: result.message });
@@ -3142,7 +3215,8 @@ export const focusSessionsRouter = router({
       // A person-only door still bounds a scoped key by its grant: the
       // session's own space + project, as on the answer doors.
       await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
-      const result = await unblockExpectedOutput({
+      // The hand-back, its history row and its room line ("Not mine: …").
+      const result = await notMineSessionSlot({
         sessionId: input.sessionId,
         userId: ctx.userId,
         expectedLabel: input.expectedLabel,
@@ -3312,6 +3386,7 @@ export const focusSessionsRouter = router({
         value: input.value,
         askFingerprint: input.askFingerprint,
         expectedGranteeId: input.expectedGranteeId,
+        secretUses: input.secretUses,
         confirmRelayed: input.confirmRelayed,
       });
       if (result.status === "answered") return { ok: true as const, ...result };
@@ -3362,6 +3437,40 @@ export const focusSessionsRouter = router({
         );
       }
       return readProvideOptions(owed, userId);
+    }),
+
+  /**
+   * WHAT BECAME OF A SECRET handed over for one slot — the card's line after
+   * the answer: how often the agent read it, when last, until when, and the
+   * grant Take back revokes (`secretsVault.revokeGrant`). Owner only, on the
+   * person's own session and secret; never a value (`provide-secret-use.ts`).
+   */
+  provideSecretUse: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().min(1).max(500),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person reads what became of their secret.",
+        });
+      }
+      const read = await readProvideSecretUse({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        expectedLabel: input.expectedLabel,
+      });
+      if (read.status === "not_found") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Session not found",
+        });
+      }
+      return read;
     }),
 
   /**

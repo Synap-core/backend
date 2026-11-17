@@ -13,6 +13,7 @@
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -115,9 +116,17 @@ async function reviewSummary(row: never) {
 }
 
 describe('read time — a stored "Update Template" names its playbook', () => {
-  it("a playbook the viewer can read is named", async () => {
+  it("a playbook the viewer can read is named (a pre-rename summary too)", async () => {
+    // Filed before D1: the stored summary spells the playbook's OLD noun.
     const out = await reviewSummary(updateRow(PB_SEEN, "Update Template"));
-    expect(out.review.summary).toBe('Update Template "Business Model (GRP)"');
+    expect(out.review.summary).toBe(
+      `Update ${resolveObjectNoun("playbook")} "Business Model (GRP)"`
+    );
+    // Filed today: the same bare title in the current noun.
+    const now = await reviewSummary(
+      updateRow(PB_SEEN, `Update ${resolveObjectNoun("playbook")}`)
+    );
+    expect(now.review.summary).toBe(out.review.summary);
   });
 
   it("a playbook the viewer cannot read is never named", async () => {

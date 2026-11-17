@@ -98,6 +98,14 @@
  *    `main-green-<green run id>`; a PR carrying it for that green run is
  *    skipped. (A re-run PR's newest run is also created after the window, so
  *    it no longer reads as a victim either.)
+ * E. A /hold TAKES A QUEUED PR OUT (dequeueReason). A `/hold` only kept a PR
+ *    from being enqueued: #1080 (16 Nov) was enqueued at 22:56Z, held at
+ *    22:58Z and merged at 23:08Z. Every pass now takes out of the queue
+ *    (GraphQL `dequeuePullRequest`) each queued PR whose maintainer's latest
+ *    `/hold` or `/unhold` is `/hold` (holdOf), and comments on it. Only a
+ *    PERSON's enqueue AFTER the hold keeps it in: the founder's prcheck lets
+ *    a held PR go; the bot's own enqueue never does (it raced the hold). An
+ *    `/unhold` lets the next pass enqueue it again (A).
  *
  * ── IDENTITY ─────────────────────────────────────────────────────────────────
  * Events made with the Actions GITHUB_TOKEN start no workflow run (except
@@ -118,7 +126,10 @@
  * .github/workflows/merge-bot.yml: on every completed CI run (a PR's run
  * judges that PR only; a main push run sweeps), every 15 min and on demand
  * (sweep). One concurrency group, so two passes never run at once. A sweep
- * runs D, then A over every open PR.
+ * runs E, D, then A over every open PR. A maintainer's comment holding a
+ * `/hold` line starts a pass at once (issue_comment) that runs E ONLY: it has
+ * its own concurrency group (one per PR, so an unrelated comment's skipped
+ * run never replaces an enqueue pass), and therefore never enqueues.
  *
  * Env: GITHUB_REPOSITORY, GITHUB_EVENT_NAME, GITHUB_EVENT_PATH, GH_TOKEN
  * (reads, checks: write), MERGE_BOT_TOKEN (writes), LAYOUT_TOKEN (optional:
@@ -378,6 +389,38 @@ export function infraHold({ green, now }) {
   if (now < from)
     return `enqueued from ${hhmm(from)}, ${INFRA_HOLD_HOURS} h after its checks went green, unless a maintainer comments /hold (the founder's prcheck enqueues it now)`;
   return null;
+}
+
+/** The merge bot app's login, as an AddedToMergeQueueEvent's `enqueuer` names it. */
+export const MERGE_BOT_LOGIN = "synap-merge-bot";
+const isMergeBot = (login) =>
+  String(login ?? "").replace(/\[bot\]$/, "") === MERGE_BOT_LOGIN;
+
+/** The PR's latest entry into the merge queue: { by, at }, or null. Pure. */
+export function latestEnqueueOf(pr) {
+  let last = null;
+  for (const e of pr?.enqueues?.nodes ?? []) {
+    const at = Date.parse(e?.createdAt ?? "");
+    if (!Number.isFinite(at)) continue;
+    if (!last || at >= last.at) last = { at, by: e?.enqueuer?.login ?? "?" };
+  }
+  return last;
+}
+
+/**
+ * Why a QUEUED PR must leave the queue (E), or null. A maintainer's `/hold`
+ * (holdOf) takes it out, whether it came after the bot's enqueue (#1080,
+ * 16 Nov: enqueued 22:56Z, `/hold` 22:58Z, merged 23:08Z) or the bot's
+ * enqueue raced it. Only a PERSON's enqueue after the hold (the founder's
+ * prcheck, which lets a held PR go) keeps it in. Pure.
+ */
+export function dequeueReason(pr) {
+  if (!pr?.isInMergeQueue) return null;
+  const held = holdOf(pr);
+  if (!held) return null;
+  const entered = latestEnqueueOf(pr);
+  if (entered && !isMergeBot(entered.by) && entered.at > held.at) return null;
+  return `/hold by ${held.by} at ${hhmm(held.at)}${entered ? `, after ${isMergeBot(entered.by) ? "the merge bot" : entered.by} enqueued it at ${hhmm(entered.at)}` : ""}`;
 }
 
 export function isDependabot(pr) {
@@ -793,6 +836,9 @@ const PRS_QUERY = `query($owner: String!, $name: String!, $after: String) {
         timelineItems(last: 20, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {
           nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } }
         }
+        enqueues: timelineItems(last: 5, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT]) {
+          nodes { ... on AddedToMergeQueueEvent { createdAt enqueuer { login } } }
+        }
       }
     }
   }
@@ -802,6 +848,9 @@ const ENQUEUE = `mutation($id: ID!, $oid: GitObjectID!, $jump: Boolean) {
   enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $oid, jump: $jump}) {
     mergeQueueEntry { position state }
   }
+}`;
+const DEQUEUE = `mutation($id: ID!) {
+  dequeuePullRequest(input: {id: $id}) { mergeQueueEntry { state } }
 }`;
 const TO_DRAFT = `mutation($id: ID!) {
   convertPullRequestToDraft(input: {pullRequestId: $id}) { pullRequest { isDraft } }
@@ -917,7 +966,7 @@ export async function runBot({
     env.MERGE_BOT_DRY_RUN === "1";
   const dryRun = askedDry || !botToken;
   const whileRed = env.MERGE_BOT_ENQUEUE_WHILE_RED === "true";
-  const out = { code: 0, enqueued: [], rerun: [], failures: 0 };
+  const out = { code: 0, enqueued: [], rerun: [], dequeued: [], failures: 0 };
   if (!repo) {
     log("::warning::no GITHUB_REPOSITORY: nothing to do");
     return out;
@@ -937,6 +986,30 @@ export async function runBot({
     prs = listOpenPrs(gh, repo, readToken);
   } catch (e) {
     log(`::warning::could not list the open PRs (${e.message}); nothing done`);
+    return out;
+  }
+  // E: every pass takes a held PR out of the queue (it reads nothing more:
+  // comments, queue state and enqueues come with the listing), so a /hold
+  // pass replaced in its concurrency group is answered by the next one.
+  for (const pr of prs) {
+    const why = dequeueReason(pr);
+    if (!why) continue;
+    if (dryRun) {
+      log(`#${pr.number} WOULD leave the merge queue: ${why}`);
+      continue;
+    }
+    if (dequeue(gh, repo, pr, why, botToken, log)) {
+      out.dequeued.push(pr.number);
+      pr.isInMergeQueue = false; // no dependent rides on it in this pass
+    } else out.failures++;
+  }
+  // A /hold comment's pass only dequeues: it runs outside the enqueue
+  // passes' concurrency group, so it must never enqueue.
+  if (event === "issue_comment") {
+    log(
+      `/hold pass: ${out.dequeued.length} taken out of the merge queue${out.dequeued.length ? ` (#${out.dequeued.join(", #")})` : ""}, ${out.failures} write(s) failed`
+    );
+    out.code = out.failures ? 1 : 0;
     return out;
   }
   // The queue as the PR list saw it; a PR enqueued in this pass joins it.
@@ -1074,7 +1147,7 @@ export async function runBot({
     } else out.failures++;
   }
   log(
-    `done: ${out.enqueued.length} enqueued${out.enqueued.length ? ` (#${out.enqueued.join(", #")})` : ""}, ${out.rerun.length} run again${out.rerun.length ? ` (#${out.rerun.join(", #")})` : ""}, ${out.failures} write(s) failed`
+    `done: ${out.dequeued.length ? `${out.dequeued.length} taken out of the queue (#${out.dequeued.join(", #")}), ` : ""}${out.enqueued.length} enqueued${out.enqueued.length ? ` (#${out.enqueued.join(", #")})` : ""}, ${out.rerun.length} run again${out.rerun.length ? ` (#${out.rerun.join(", #")})` : ""}, ${out.failures} write(s) failed`
   );
   out.code = out.failures ? 1 : 0;
   return out;
@@ -1114,6 +1187,38 @@ function enqueue(gh, pr, jump, token, log, how = "") {
   }
   log(`::warning::${tag} could not be enqueued: ${last.message}`);
   return false;
+}
+
+/**
+ * Take a held PR out of the merge queue with the bot's token, then say so on
+ * the PR (a failed comment is logged, never undoes the dequeue). True when it
+ * left the queue.
+ */
+function dequeue(gh, repo, pr, why, token, log) {
+  const tag = `#${pr.number}`;
+  try {
+    gh.graphql(DEQUEUE, { id: pr.id }, { token });
+  } catch (e) {
+    log(
+      `::warning::${tag} could not be taken out of the merge queue: ${e.message}`
+    );
+    return false;
+  }
+  log(`${tag} taken out of the merge queue: ${why}`);
+  try {
+    gh.rest(`repos/${repo}/issues/${pr.number}/comments`, {
+      token,
+      method: "POST",
+      body: {
+        body: `The merge bot took this PR out of the merge queue: ${why}. An \`/unhold\` comment (on its own line) lets the bot enqueue it again; the founder's prcheck enqueues it now (scripts/ci/merge-bot.mjs).`,
+      },
+    });
+  } catch (e) {
+    log(
+      `::warning::${tag} left the queue, but the comment saying so failed (${e.message})`
+    );
+  }
+  return true;
 }
 
 async function victims({

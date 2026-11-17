@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   inFlight: 0,
   maxInFlight: 0,
   failFor: new Set<string>(),
+  /** Subjects whose run is already live: the run door answers `already_running`. */
+  liveFor: new Set<string>(),
   sets: [] as Array<Record<string, unknown>>,
 }));
 
@@ -37,6 +39,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       select: () => chain([{ status: "pending" }]),
       update: () => chain([{ id: "claimed" }]),
       query: {
@@ -64,6 +71,14 @@ vi.mock("../../../playbooks.js", () => ({
         h.runs.push(args);
         if (h.failFor.has(args.subjectId as string)) {
           throw new Error("subject gone");
+        }
+        if (h.liveFor.has(args.subjectId as string)) {
+          return {
+            status: "already_running",
+            session: { id: `live-${args.subjectId as string}` },
+            run: null,
+            message: "already running on this record",
+          };
         }
         return {
           status: "running",
@@ -112,6 +127,7 @@ beforeEach(() => {
   h.inFlight = 0;
   h.maxInFlight = 0;
   h.failFor.clear();
+  h.liveFor.clear();
   h.sets.length = 0;
 });
 
@@ -123,6 +139,7 @@ const stampedRunResult = () =>
           runResult?: {
             started: Array<Record<string, unknown>>;
             failed: string[];
+            skipped?: Array<Record<string, unknown>>;
           };
         }
       | undefined
@@ -156,6 +173,51 @@ describe("approving a batch run proposal", () => {
     expect(h.runs).toHaveLength(4);
     expect(res).toMatchObject({ batch: { started: 3, failed: ["lead-2"] } });
     expect(stampedRunResult()?.failed).toEqual(["lead-2"]);
+  });
+
+  it("a subject whose run is already live is SKIPPED with that run, never failed", async () => {
+    h.liveFor.add("lead-2");
+    const subjects = ["lead-0", "lead-1", "lead-2", "lead-3"];
+    const res = await approve({ subjectId: subjects[0], subjectIds: subjects });
+    expect(h.runs).toHaveLength(4);
+    expect(res).toMatchObject({
+      success: true,
+      batch: { started: 3, failed: [], skipped: ["lead-2"] },
+    });
+    const receipt = stampedRunResult();
+    expect(receipt?.failed).toEqual([]);
+    expect(receipt?.skipped).toEqual([
+      {
+        subjectId: "lead-2",
+        sessionId: "live-lead-2",
+        reason: "already_running",
+      },
+    ]);
+    expect(receipt?.started.map((r) => r.subjectId).sort()).toEqual([
+      "lead-0",
+      "lead-1",
+      "lead-3",
+    ]);
+  });
+
+  it("a batch whose FIRST subject is already running still runs the rest", async () => {
+    h.liveFor.add("lead-0");
+    const subjects = ["lead-0", "lead-1", "lead-2"];
+    const res = await approve({ subjectId: subjects[0], subjectIds: subjects });
+    expect(h.runs.map((r) => r.subjectId).sort()).toEqual(subjects);
+    expect(res).toMatchObject({
+      success: true,
+      batch: { started: 2, failed: [], skipped: ["lead-0"] },
+    });
+    // The session to open next is one the approval STARTED, never the live one.
+    expect(["session-lead-1", "session-lead-2"]).toContain(res.primaryId);
+    expect(stampedRunResult()?.skipped).toEqual([
+      {
+        subjectId: "lead-0",
+        sessionId: "live-lead-0",
+        reason: "already_running",
+      },
+    ]);
   });
 
   it("a single proposal starts exactly its one run and records its session", async () => {

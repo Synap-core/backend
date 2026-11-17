@@ -57,6 +57,11 @@ vi.mock("@synap/database", async (importOriginal) => {
       return { rows: updateReturns, transitions: [] };
     },
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       query: { focusSessions: { findFirst: async () => sessionRow } },
       update: (table: unknown) => ({
         set: (values: Record<string, unknown>) => ({
@@ -77,9 +82,14 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 const subjectWrites = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 vi.mock("../../../../services/focus-sessions/stage-subject-status.js", () => ({
-  writeStageSubjectStatus: async (input: Record<string, unknown>) => {
-    subjectWrites.push(input);
-    return { status: "written", property: "post-status", value: "x" };
+  // The gate pass (decision D2): the stage left reaches its `onApproved`,
+  // then the gated stage's `subjectStatus` — one call, recorded as the
+  // entered stage it writes.
+  writeGatePassStatuses: async (input: Record<string, unknown>) => {
+    subjectWrites.push({ ...input, toStage: input.gatedStage });
+    return {
+      entered: { status: "written", property: "post-status", value: "x" },
+    };
   },
 }));
 
@@ -228,6 +238,23 @@ describe("approval writes the GATED stage's subject status", () => {
     expect(subjectWrites).toEqual([
       expect.objectContaining({ toStage: "review" }),
     ]);
+  });
+
+  it("names the stage LEFT, as the APPROVER, so its onApproved is reached first (D2)", async () => {
+    sessionRow = { ...sessionRow, currentStage: "review" };
+    const a = args();
+    (a.proposal.data as Record<string, unknown>).fromStage = "draft";
+    await proposalExecRegistry.resolveExact(KEY)!.execute(a);
+    expect(subjectWrites).toEqual([
+      expect.objectContaining({
+        gatedStage: "review",
+        fromStage: "draft",
+        userId: "human-1",
+      }),
+    ]);
+    // The approver is a PERSON: no agent attribution rides on the write, so a
+    // humanOnly status is theirs and never a second proposal.
+    expect(subjectWrites[0]).not.toHaveProperty("agentUserId");
   });
 
   it("writes NOTHING once the run moved on (a stale gate never stamps another stage's value)", async () => {

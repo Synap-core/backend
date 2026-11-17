@@ -1025,7 +1025,22 @@ export interface SlotAskFormSpec {
 export type SlotAskProvide =
   | { kind: "connection"; service: string }
   | { kind: "file"; accept?: string[] }
-  | { kind: "secret"; name: string };
+  | {
+      kind: "secret";
+      name: string;
+      /** What it is for, declared. Mirrors `AskSecretPurpose` (@synap-core/types/ask). */
+      purpose?: SlotAskSecretPurpose;
+      /** One read, or until the job closes (the default). Mirrors `PROVIDE_SECRET_USES`. */
+      uses?: "once" | "session";
+    };
+
+/** Mirrors `AskSecretPurpose` (@synap-core/types/ask): short words, never the secret. */
+export interface SlotAskSecretPurpose {
+  for: string;
+  tool: string;
+  action?: string;
+  on?: string;
+}
 
 /** A `provide` answer stores a REFERENCE, never the value. */
 export type SlotProvideRef =
@@ -1047,7 +1062,12 @@ export type SlotAnswerValue =
       then?: SlotAskOption;
     }
   | { type: "form"; values: Record<string, unknown> }
-  | { type: "provide"; ref: SlotProvideRef };
+  | { type: "provide"; ref: SlotProvideRef }
+  /**
+   * The person REFUSED the ask (`@synap-core/types/ask` `./declined.ts`):
+   * taken on every mode, grants nothing, keeps the slot's blocker.
+   */
+  | { type: "declined"; reason?: string };
 
 /**
  * WHERE an answer came from — STRUCTURAL MIRROR of `AnswerProvenance`
@@ -1122,6 +1142,14 @@ export interface SlotAnswer extends SlotAnswerProvenance {
    * carried no ask, and on every answer recorded before snapshots existed.
    */
   askSnapshot?: SlotAskSnapshot;
+  /**
+   * A REFUSAL only (`value.type === "declined"`): `askFingerprint` of the ask
+   * the person refused (the slot's effective ask, as shown). The block doors
+   * refuse an identical re-ask while this answer stands (api
+   * `declined-reask.ts`); the hand-back clears the ask itself, so this is the
+   * only record of WHICH ask was refused. Server-stamped with the answer.
+   */
+  askFingerprint?: string;
 }
 
 /** How many prior answers a slot keeps on `answerHistory`. */
@@ -1403,12 +1431,28 @@ export interface PlaybookStage {
    */
   domain?: string;
   /**
-   * The value of the playbook's `subjectProfile.statusProperty` this stage
-   * CORRESPONDS to. Advancing a run INTO the stage writes it to the run's
-   * subject (governed); the subject ENTERING the value advances an open run on
-   * it to this stage. Absent ⇒ the stage is not tied to the subject lifecycle.
+   * The value of the playbook's `subjectProfile.statusProperty` the subject
+   * holds WHILE this stage is worked (an in-progress status: In Draft,
+   * Review, in_progress). Entering the stage writes it to the run's subject
+   * (governed; a gated stage at its gate's pass); the subject ENTERING the
+   * value advances an open run on it to this stage. Absent ⇒ entering the
+   * stage moves nothing.
    */
   subjectStatus?: string;
+  /**
+   * The value the subject REACHES when this stage's work is APPROVED (a
+   * result status: Scripted, Published, sent, won). Decision D2, 17 Nov 2026.
+   * The approval, in order:
+   *  1. the stage's declared `expectedOutputs` are all delivered (approved,
+   *     attested, answered);
+   *  2. else the NEXT stage's gate passes (the gate approves the work left).
+   * A stage with neither is never written by the engine: the person or the
+   * worker who finishes it moves the subject. Never written on a session's
+   * end (decision 5e377b06). The subject ENTERING the value means the run
+   * stands at the NEXT stage (the last stage: on itself) —
+   * {@link stageForSubjectStatus}. Absent ⇒ approving the stage moves nothing.
+   */
+  onApproved?: string;
   /**
    * Where the run returns when this stage's gate FAILS — a rejected human gate
    * or a check gate that holds. Absent ⇒ today's behaviour (the run pauses).
@@ -1609,29 +1653,88 @@ export function resolveStageRef(
   return byName ? byName.key : null;
 }
 
+/** A stage's declared status value for `field`, trimmed; null when absent. */
+function stageStatusValue(
+  stage: unknown,
+  field: "subjectStatus" | "onApproved"
+): string | null {
+  if (!stage || typeof stage !== "object") return null;
+  const v = (stage as Record<string, unknown>)[field];
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/** A stage's `onApproved` value (trimmed), or null. PURE. */
+export function stageOnApproved(stage: unknown): string | null {
+  return stageStatusValue(stage, "onApproved");
+}
+
 /**
- * The stage a subject status value CORRESPONDS to (`PlaybookStage.subjectStatus`)
- * — the first in declaration order. `null` when no stage covers the value
- * (e.g. a `humanOnlyStatuses` value like "idea").
+ * Who OWNS a subject status value in a stage list, and where a run stands
+ * when its subject holds it (decision D2):
+ *  - `via: "enter"` — a stage's `subjectStatus`: the run stands AT that stage;
+ *  - `via: "reach"` — a stage's `onApproved`: that stage's work is approved,
+ *    so the run stands at the NEXT stage (the last stage: on itself).
+ * First in stage order wins, reading each stage's `subjectStatus` before its
+ * `onApproved` (a stage is entered before it is approved). `null` when no
+ * stage covers the value (e.g. a `humanOnlyStatuses` value like "idea").
+ */
+export interface SubjectStatusOwner {
+  /** The stage that DECLARES the value. */
+  ownerKey: string;
+  via: "enter" | "reach";
+  /** The stage a run on a subject holding the value stands at. */
+  standsAt: string;
+}
+
+export function subjectStatusOwner(
+  stages: readonly unknown[],
+  value: unknown
+): SubjectStatusOwner | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const v = value.trim();
+  const keyed = stages.filter(
+    (s): s is { key: string } =>
+      !!s &&
+      typeof s === "object" &&
+      typeof (s as { key?: unknown }).key === "string"
+  );
+  for (let i = 0; i < keyed.length; i++) {
+    const st = keyed[i]!;
+    if (stageStatusValue(st, "subjectStatus") === v) {
+      return { ownerKey: st.key, via: "enter", standsAt: st.key };
+    }
+    if (stageStatusValue(st, "onApproved") === v) {
+      const next = keyed[i + 1];
+      return {
+        ownerKey: st.key,
+        via: "reach",
+        standsAt: next ? next.key : st.key,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * The stage a run stands at when its subject holds `value` — THE follow's
+ * mapping ({@link subjectStatusOwner}`.standsAt`): the stage whose
+ * `subjectStatus` it is, or the stage AFTER the one whose `onApproved` it is.
+ * `null` when no stage covers the value.
  */
 export function stageForSubjectStatus(
   stages: readonly unknown[],
   value: unknown
 ): string | null {
-  if (typeof value !== "string" || !value.trim()) return null;
-  const v = value.trim();
-  for (const s of stages) {
-    if (!s || typeof s !== "object") continue;
-    const st = s as { key?: unknown; subjectStatus?: unknown };
-    if (
-      typeof st.key === "string" &&
-      typeof st.subjectStatus === "string" &&
-      st.subjectStatus.trim() === v
-    ) {
-      return st.key;
-    }
-  }
-  return null;
+  return subjectStatusOwner(stages, value)?.standsAt ?? null;
+}
+
+/** Does any stage tie the run to its subject's lifecycle (either field)? PURE. */
+export function stagesMapSubjectStatus(stages: readonly unknown[]): boolean {
+  return stages.some(
+    (s) =>
+      stageStatusValue(s, "subjectStatus") !== null ||
+      stageStatusValue(s, "onApproved") !== null
+  );
 }
 
 /**
@@ -2328,6 +2431,20 @@ export interface CapabilityVerbState extends ToolVerb {
 // created. These contracts are pure shapes — NO I/O, NO zod — mirroring the
 // rest of this package; the Hub-REST door + service own validation.
 
+/**
+ * How a PERSON gets a param's value (a key, a token): the numbered steps and
+ * the page they start on. Read by the install proposal's setup row (finding
+ * 91a3bfd3), never by the applier. Same bounds as an `act` ask (at most 7
+ * steps of at most 200 characters; an https `url`), validated by the Hub
+ * door's `ParamObtainSchema` (`services/capabilities/param-obtain.ts`).
+ */
+export interface CapabilityParamObtain {
+  /** Where the steps start, e.g. the provider's API keys page. https only. */
+  url?: string;
+  /** What to do there, in order. 1 to 7 steps. */
+  steps: string[];
+}
+
 /** A declared parameter the applier fills from the `params` map. */
 export interface CapabilityParamSpec {
   name: string;
@@ -2336,6 +2453,8 @@ export interface CapabilityParamSpec {
   required?: boolean;
   default?: unknown;
   description?: string;
+  /** How the person gets this value. See {@link CapabilityParamObtain}. */
+  obtain?: CapabilityParamObtain;
 }
 
 /**
@@ -2637,6 +2756,17 @@ export interface CapabilityDefinition {
    * list-by-producer index ("which capabilities emit event X").
    */
   emits?: string[];
+  /**
+   * The NEEDS this capability fills (0426, founder decision D2): slugs of the
+   * need vocabulary (`@synap-core/types/needs`), e.g. a GitHub pack fills
+   * `["code-host", "gate"]`. Declared by the author and validated by the
+   * catalog and the control plane (each slug a need, and the pack provides at
+   * least one intent the need groups). The pod reads it to find which
+   * installed capability can fill a space's empty need, and which catalog
+   * pack to propose when none can; the applier stamps it on the installed
+   * capability as `metadata.fills`.
+   */
+  fills?: string[];
   /**
    * Where the capability runs and how a computer installs, checks and removes
    * it (installer reconciliation f75fbb48 §3.5): `placement`, `install`,

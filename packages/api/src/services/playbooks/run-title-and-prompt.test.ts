@@ -114,7 +114,19 @@ let db = makeDb();
 // which is what makes the table-identity dispatch above meaningful.
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
-  return { ...actual, getDb: async () => db };
+  return {
+    ...actual,
+    getDb: async () => db,
+    // The run status door is pinned on PGlite (run-status.pglite.test.ts); here
+    // a recorded result is the run as moved.
+    setRunStatus: async (
+      _db: unknown,
+      input: { runId?: string; to: string }
+    ) => ({
+      rows: [{ id: input.runId, status: input.to }],
+      transitions: [],
+    }),
+  };
 });
 vi.mock("@synap-core/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap-core/core")>()),

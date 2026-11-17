@@ -21,6 +21,7 @@ import { filesRouter } from "./routers/files.js";
 import { inboxRouter } from "./routers/inbox.js";
 import { intelligenceRegistryRouter } from "./routers/intelligence-registry.js";
 import { capabilitiesRouter } from "./routers/capabilities.js";
+import { needsRouter } from "./routers/needs.js";
 import { relationsRouter } from "./routers/relations.js";
 import { graphRouter } from "./routers/graph.js";
 import {
@@ -141,6 +142,8 @@ export const coreRouter = router({
   intelligence: intelligenceRouter,
   knowledge: knowledgeRouter,
   capabilities: capabilitiesRouter,
+  // A space's needs, each filled once by one provider (0426).
+  needs: needsRouter,
   relations: relationsRouter,
   graph: graphRouter,
   // Merge the workspace CATALOG procedures (browse + slug-install the

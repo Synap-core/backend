@@ -67,6 +67,15 @@ export function ruleIsFailing(
   return rule.status === "active" && (health?.recentFailedCount ?? 0) > 0;
 }
 
+/**
+ * Live: the Show filter's default ("Active"), and what Processes' footer
+ * counts among the automations outside a process, so its number is the one
+ * the list opens on.
+ */
+export function ruleIsActive(rule: Pick<RuleFacts, "status">): boolean {
+  return rule.status === "active";
+}
+
 export function ruleMatches(
   filter: RuleFilter,
   rule: RuleFacts,
@@ -74,7 +83,7 @@ export function ruleMatches(
 ): boolean {
   switch (filter) {
     case "active":
-      return rule.status === "active";
+      return ruleIsActive(rule);
     case "failing":
       return ruleIsFailing(rule, health);
     case "never-ran":
@@ -172,8 +181,8 @@ export function neverRanCallout(rules: readonly RuleFacts[]): string | null {
     .map(([name, n]) => (n > 1 ? `“${name}” ×${n}` : `“${name}”`));
   const head =
     idle.length === 1
-      ? "1 rule has never run."
-      : `${idle.length} rules have never run.`;
+      ? "1 automation has never run."
+      : `${idle.length} automations have never run.`;
   return `${head} Their trigger has not happened yet, or points at something that no longer exists — e.g. ${top.join(", ")}.`;
 }
 
@@ -185,4 +194,19 @@ export function runResultMessage(
   return result.status === "proposed"
     ? `Running “${name}” was proposed for review — it starts once someone approves it.`
     : `“${name}” started a run.`;
+}
+
+/**
+ * `?process=outside` (Processes' door): only the automations that belong to
+ * no process. `outside` is the pod's own list (`playbooks.processes`
+ * `automationsOutsideProcess`); while it is unread (null) nothing passes, and
+ * the page explains the failed read instead of showing an empty list.
+ */
+export function ruleInProcessScope(
+  ruleId: string,
+  processFilter: "outside" | null,
+  outside: ReadonlySet<string> | null
+): boolean {
+  if (processFilter === null) return true;
+  return outside?.has(ruleId) ?? false;
 }

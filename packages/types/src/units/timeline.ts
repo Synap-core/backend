@@ -8,8 +8,10 @@
  *                 step moves, checks, its sessions, decisions, status moves;
  *   session       its start, its status moves with their holds (the
  *                 transition log, `lifecycle_transition_outbox`), the dev
- *                 facts of its PRs and devbox jobs (`dev.pr_*`, `ci.finished`)
- *                 and the decisions filed in it;
+ *                 facts of its PRs and devbox jobs (`dev.pr_*`, `ci.finished`),
+ *                 the decisions filed in it, and what happened to its slots'
+ *                 asks (asked, answered, attested, a relay corrected, a
+ *                 question withdrawn: the `focus_session.slot_*` history rows);
  *   pull_request  the dev facts about it (`dev.pr_*`, the CI runs on its
  *                 heads);
  *   entity        a thing's status moves and its visible roles' (the
@@ -29,6 +31,7 @@ import type { CiFinishedStatus } from "../events/dev-loop.js";
 import type { PullRequestChecks } from "../events/pr-state.js";
 import type { LifecycleCategory } from "../lifecycle/option.js";
 import type { RecordedHold } from "../lifecycle/hold.js";
+import type { TransitionCause } from "../lifecycle/index.js";
 import type { TrackHistoryEvent } from "./track-history.js";
 
 export const TIMELINE_SUBJECT_KINDS = [
@@ -47,6 +50,12 @@ export const DEV_TIMELINE_EVENT_KINDS = [
   "checks_finished",
   "decision_asked",
   "decision_answered",
+  "slot_asked",
+  "slot_answered",
+  "slot_attested",
+  "relay_corrected",
+  "question_withdrawn",
+  "slot_handed_back",
 ] as const;
 export type DevTimelineEventKind = (typeof DEV_TIMELINE_EVENT_KINDS)[number];
 
@@ -56,6 +65,8 @@ export interface DevTimelineRefs {
   proposalId?: string;
   /** A pull request or a CI run's page. */
   url?: string;
+  /** The session slot an ask event is about (its label): a door to the ask. */
+  slotLabel?: string;
 }
 
 /** Below this, a record time is the occurrence time (no "recorded at"). */
@@ -86,6 +97,12 @@ export type DevTimelineEvent = DevTimelineEventBase &
         hold: RecordedHold | null;
         /** A thing's ROLE moved (its slug); absent for its own status. */
         role?: string;
+        /**
+         * Another move caused this one (a rule fired on it): the rule, the move
+         * that fired it, its chain and depth. Absent on a move nobody's move
+         * caused. "Moved because X moved."
+         */
+        cause?: TransitionCause;
       }
     | {
         kind: "pr_opened" | "pr_merged" | "pr_closed";
@@ -114,6 +131,50 @@ export type DevTimelineEvent = DevTimelineEventBase &
         /** `approved` | `rejected` | `reverted` | `approval_failed`. */
         decision: string;
         note: string | null;
+      }
+    | {
+        /** An agent (or the pod) posed an ask to the person on a slot. */
+        kind: "slot_asked";
+        /** The slot's label, as the agent wrote it. */
+        slot: string;
+        /** The ask's mode (`confirm`, `choose`, `form`, `act`, `provide`); null = a bare hand-over. */
+        askMode: string | null;
+        /** The class of what unblocks it (`credential`, `decision`…); null = not said. */
+        blockedReason: string | null;
+      }
+    | {
+        /** The person answered the ask on a slot. An answer is input, never a delivery. */
+        kind: "slot_answered";
+        slot: string;
+        /** The typed answer's `type` (`confirm`, `chip`, `form`, `provide`, `text`…); null = free text. A string: a newer pod may answer a type this build does not know. */
+        answerType: string | null;
+        /** The slot went back to the agent with the answer. */
+        handedBack: boolean;
+        /** An agent relayed the person's words from a chat. */
+        relayed: boolean;
+      }
+    | {
+        /** The person said "I did this" about a slot they owed: it is delivered. */
+        kind: "slot_attested";
+        slot: string;
+      }
+    | {
+        /** The person said "Not what I said" about a relayed answer: the ask is theirs again. */
+        kind: "relay_corrected";
+        /** null when the relay named no slot. */
+        slot: string | null;
+      }
+    | {
+        /** The agent took back a question it asked the person. */
+        kind: "question_withdrawn";
+        slot: string | null;
+        /** The agent's reason, as written; null = none given. */
+        note: string | null;
+      }
+    | {
+        /** The person said "Not mine" about a slot an agent handed them: it is the agent's again, unanswered. */
+        kind: "slot_handed_back";
+        slot: string;
       }
   );
 

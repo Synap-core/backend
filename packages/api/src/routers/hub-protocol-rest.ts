@@ -52,6 +52,7 @@ import {
   registerHealthDependenciesRoutes,
   registerIdentityRoutes,
   registerKnowledgeRoutes,
+  registerFindRoutes,
   registerMcpServersRoutes,
   registerMemoryRoutes,
   registerNotificationsRoutes,
@@ -96,6 +97,7 @@ import {
   registerWorkspacesEnsureTemplateRoutes,
   registerWorkspaceOpsRoutes,
   registerInstalledRoutes,
+  registerNeedsRoutes,
   registerPackageUpdatesRoutes,
   registerCatalogRefreshRoutes,
   registerMessagingRoutes,
@@ -314,6 +316,7 @@ registerWorkspacesEnsureTemplateRoutes(app); // /workspaces/ensure-template (Con
 registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/context
 registerWorkspaceOpsRoutes(app); // governed archive/restore/rename, /entities/move, /profiles/grant-access (R8a)
 registerInstalledRoutes(app); // /installed — the ONE read door over the install ledgers
+registerNeedsRoutes(app); // /workspaces/:id/needs — a space's needs, each filled once (0426)
 registerPackageUpdatesRoutes(app); // /package-updates — one update's plan and its apply (S2/S3)
 registerCatalogRefreshRoutes(app); // POST /catalog/refresh — the official catalog sync now (pod admins)
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.
@@ -340,6 +343,7 @@ registerCapabilityConnectionsRoutes(app); // GET/POST/PATCH/DELETE /capabilities
 registerLoopsRoutes(app); // POST /loops/apply (loop / autonomy-template applier)
 registerMemoryRoutes(app); // /memory*
 registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse
+registerFindRoutes(app); // GET /find (the one find door, as MCP synap_find)
 registerCommandsRoutes(app); // /commands*, /commands/execute
 registerAgentUsersRoutes(app); // /agent-users
 registerAgentConfigsRoutes(app); // /agent-configs
@@ -378,7 +382,7 @@ registerEntityShareRoutes(app); // /entity-share/deliver (CP JWT auth)
 registerDeviceRoutes(app); // /setup/device, /setup/device/token — RFC 8628 device door (unauthenticated, MACHINE-IDENTITY-PLAN W2)
 registerSetupRoutes(app); // /setup/agent (provisioning auth)
 registerMcpRedeemRoutes(app); // /mcp/redeem (CP-MCP consent-code → claude-web key), /mcp/revoke (disconnect)
-registerAgentsRoutes(app); // /agents/sync
+registerAgentsRoutes(app); // /agents/sync, /agents/access-requests
 registerMessagingRoutes(app); // /messaging/*
 registerDiscordRoutes(app); // /discord/agent-turn
 registerDiscordIdentityRoutes(app); // /discord/identity, /discord/identity/members, /discord/identity/link

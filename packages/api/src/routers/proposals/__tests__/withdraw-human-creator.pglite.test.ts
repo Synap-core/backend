@@ -84,6 +84,7 @@ import {
   focusSessions,
   documents,
   documentVersions,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { proposalsRouter } from "../../proposals.js";
 import { proposalReasonBucket } from "../../../services/proposals/reason-bucket.js";
@@ -156,7 +157,13 @@ const callerFor = (userId: string) =>
 
 describe("proposals.withdraw — the human creator of an agent-less proposal", () => {
   beforeAll(async () => {
-    for (const t of [proposals, focusSessions, documents, documentVersions]) {
+    for (const t of [
+      lifecycleTransitionOutbox,
+      proposals,
+      focusSessions,
+      documents,
+      documentVersions,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
   });

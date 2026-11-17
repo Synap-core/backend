@@ -7,10 +7,12 @@
  *                  the ladder's ONE table (`GOVERNANCE_REASON_RULE_REACH`).
  *                  "Asks by default" / "Always asks a person" are gone: a
  *                  pending proposal already waits on the person.
- *   `undoMark`   — what approving cannot take back. Undo is the default, so
- *                  an undoable change draws NOTHING (founder, 2026-10-23: "Can
- *                  be undone … we will not need to showcase that"); only the
- *                  pod's own `revertable: false` earns a mark.
+ *   `undoMark`   — what approving cannot take back, read through the ONE
+ *                  shared risk rule (`needsYouRisk`): an undoable change
+ *                  draws NOTHING (founder, 2026-10-23: "Can be undone … we
+ *                  will not need to showcase that"); `revertable: false` AND
+ *                  an unmeasured one are marked (founder default D6, 16 Nov
+ *                  2026: nobody checked, so nobody can promise an undo).
  *
  * The change itself is `proposal-record-model.ts`.
  */
@@ -19,6 +21,9 @@ import { isUuid } from "../../../lib/format";
 import { objectReadsWide } from "../../_lib/object/object-width";
 import { governanceReasonMark } from "@synap-core/types/proposals";
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
+import { needsYouRisk } from "@synap-core/types/needs-you";
+import { proposalPageT } from "./copy";
+import type { UnitTone } from "@synap-core/types/units";
 
 /** One field of the pod's diff, read structurally. */
 export interface ProposalChangeInput {
@@ -30,7 +35,8 @@ export interface ProposalChangeInput {
   drift?: "unchanged" | "changed_since" | "unknown";
 }
 
-export type ReviewTone = "warning" | "primary" | "default" | "success";
+/** A mark's tone: the shared token (`UnitTone`), drawn by `app/_lib/tone.ts`. */
+export type ReviewTone = UnitTone;
 
 /** A state, said as a short label; its sentence is disclosed on press. */
 export interface ReviewMark {
@@ -59,23 +65,27 @@ export function reasonMark(code: string | null | undefined): ReviewMark | null {
       ]
     : undefined;
   const tone: ReviewTone =
-    reach === "rule" || reach === "below" ? "default" : "warning";
+    reach === "rule" || reach === "below" ? "textSecondary" : "warning";
   return { tone, label: named.label, sentence: named.sentence };
 }
 
 /**
  * The one consequence worth a mark: approving cannot be undone. `revertable`
- * is the pod's answer for this proposal (`revertableForRow`); `true` and
- * unknown draw nothing — undo is the default, and an unknown is not promised.
+ * is the pod's answer for this proposal (`revertableForRow`); the rule is the
+ * shared `needsYouRisk` (D6): `true` draws nothing, `false` AND unknown are
+ * marked, because an unmeasured undo is not one anybody can promise.
  */
 export function undoMark(
   revertable: boolean | null | undefined
 ): ReviewMark | null {
-  if (revertable !== false) return null;
+  const risk = needsYouRisk({ kind: "proposal", revertable });
+  if (!risk) return null;
+  const t = proposalPageT();
   return {
-    tone: "warning",
-    label: "Can't be undone",
-    sentence: "Approving applies it now, and it cannot be undone from here.",
+    tone: risk.tone,
+    label: risk.label,
+    // Unmeasured is said as unmeasured: nobody checked (S12).
+    sentence: revertable === false ? t("undo.cannot") : t("undo.unknown"),
   };
 }
 

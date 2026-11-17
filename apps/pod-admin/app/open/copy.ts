@@ -46,6 +46,18 @@ export const en = {
   "view.shows.layoutOver": "{layout} view of {noun}.",
   "view.shows.layout": "{layout} view.",
   "view.shows.unknown": "A saved view.",
+  "connected.title": "Connected",
+  "connected.loading": "Loading what this is connected to…",
+  "connected.failed": "The connected objects couldn’t be read.",
+  "connected.empty": "Nothing is connected yet. It could connect to",
+  "connected.retry": "Try again",
+  "connected.hidden": "Not visible to you",
+  "connected.pageNote": "Shown without reading your pod.",
+  "connected.reversed": "points here",
+  "connected.previewFailed": "Preview couldn’t be read.",
+  "connected.showAll": "Show all {n}",
+  "connected.showLess": "Show fewer",
+  "connected.untitled": "Untitled",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -87,6 +99,18 @@ export const fr: Catalog<typeof en> = {
   "view.shows.layoutOver": "Vue {layout} de {noun}.",
   "view.shows.layout": "Vue {layout}.",
   "view.shows.unknown": "Une vue enregistrée.",
+  "connected.title": "Objets liés",
+  "connected.loading": "Chargement des liens…",
+  "connected.failed": "Les objets liés n’ont pas pu être lus.",
+  "connected.empty": "Rien n’est encore lié. Il pourrait l’être à",
+  "connected.retry": "Réessayer",
+  "connected.hidden": "Non visible pour vous",
+  "connected.pageNote": "Affichée sans lire votre pod.",
+  "connected.reversed": "pointe ici",
+  "connected.previewFailed": "L’aperçu n’a pas pu être lu.",
+  "connected.showAll": "Tout afficher ({n})",
+  "connected.showLess": "En afficher moins",
+  "connected.untitled": "Sans titre",
 };
 
 /** `/open`'s translator, in the ambient catalog locale. */

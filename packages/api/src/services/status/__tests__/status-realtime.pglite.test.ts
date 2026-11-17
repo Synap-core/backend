@@ -83,6 +83,12 @@ const F_SHARED = randomUUID();
 const G_MINE = randomUUID();
 const S_MINE = randomUUID();
 const S_THEIRS = randomUUID();
+/** A run driving my session; a session-less run in the shared space. */
+const R_MINE = randomUUID();
+const R_SHARED = randomUUID();
+/** A proposal in my space; one in the shared space. */
+const PR_MINE = randomUUID();
+const PR_SHARED = randomUUID();
 
 let client: PGlite;
 const q = (sql: string, params: unknown[] = []) => client.query(sql, params);
@@ -170,6 +176,27 @@ beforeAll(async () => {
       [id, owner, project]
     );
   }
+  const PLAYBOOK = randomUUID();
+  for (const [id, ws, session] of [
+    [R_MINE, null, S_MINE],
+    [R_SHARED, W_SHARED, null],
+  ] as const) {
+    await q(
+      `insert into playbook_runs (id, workspace_id, playbook_id, session_id, executor, status, created_by)
+       values ($1, $2, $3, $4, 'is-agent', 'running', $5)`,
+      [id, ws, PLAYBOOK, session, ME]
+    );
+  }
+  for (const [id, ws] of [
+    [PR_MINE, W_MINE],
+    [PR_SHARED, W_SHARED],
+  ] as const) {
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status, created_at, updated_at)
+       values ($1, $2, 'entity', $3, 'entity/update', '{}'::jsonb, 'pending', now(), now())`,
+      [id, ws, E_MINE]
+    );
+  }
   await q(
     `insert into profiles (id, slug, display_name, profile_kind, entity_scope) values ($1, 'deal', 'Deal', 'kind', 'workspace')`,
     [KIND]
@@ -254,6 +281,27 @@ describe("the audience of a status event is statusOf's floor", () => {
     expect(await statusAudience({ type: "session", id: S_THEIRS })).toEqual([
       OTHER,
     ]);
+  });
+
+  it("a run reaches its session's readers; a session-less run the space's", async () => {
+    expect(await statusAudience({ type: "run", id: R_MINE })).toEqual([ME]);
+    expect(
+      (await statusAudience({ type: "run", id: R_SHARED })).sort()
+    ).toEqual([ME, OTHER].sort());
+    expect(await statusAudience({ type: "run", id: randomUUID() })).toEqual([]);
+  });
+
+  it("a proposal reaches its space's members; a slot its session's readers", async () => {
+    expect(await statusAudience({ type: "proposal", id: PR_MINE })).toEqual([
+      ME,
+    ]);
+    expect(
+      (await statusAudience({ type: "proposal", id: PR_SHARED })).sort()
+    ).toEqual([ME, OTHER].sort());
+    expect(
+      await statusAudience({ type: "slot", id: `${S_THEIRS}/brief` })
+    ).toEqual([OTHER]);
+    expect(await statusAudience({ type: "slot", id: "no-slash" })).toEqual([]);
   });
 
   it("for every subject and every user, it agrees with readStatusOf", async () => {
@@ -403,6 +451,45 @@ describe("on the wire", () => {
       [ME, "goal"],
       [OTHER, "session"],
     ]);
+  });
+
+  it("a run's, a proposal's and a slot's move speak their own words", async () => {
+    await pushStatusTransition(
+      transitionRow("playbook_run", R_MINE, {
+        from: "running",
+        to: "waiting_on_you",
+      })
+    );
+    await pushStatusTransition(
+      transitionRow("proposal", PR_MINE, {
+        from: "pending",
+        to: "approved",
+        category: "done",
+      })
+    );
+    await pushStatusTransition(
+      transitionRow("slot", `${S_THEIRS}/brief`, {
+        from: "owed",
+        to: "answered",
+        category: "done",
+      })
+    );
+    expect(
+      bodies().map((b) => [
+        b.userId,
+        (b.data as Record<string, unknown>).subjectType,
+        (b.data as Record<string, unknown>).subjectId,
+      ])
+    ).toEqual([
+      [ME, "run", R_MINE],
+      [ME, "proposal", PR_MINE],
+      [OTHER, "slot", `${S_THEIRS}/brief`],
+    ]);
+    for (const b of bodies()) {
+      expect(validateEmitPayload(b.event as string, b.data)).toEqual({
+        ok: true,
+      });
+    }
   });
 
   it("a raised signal reaches its readers only, with no words", async () => {

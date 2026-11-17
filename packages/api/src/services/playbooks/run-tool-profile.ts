@@ -8,9 +8,12 @@
  * active, that list (a subset of the playbook's) replaces the playbook's.
  *
  * Each declared entry is, in this order: a run tool (an IS tool name, sent
- * as is in `tools`); an intent slug (the verbs serving it on this pod); else
- * a capability by name or id, or a verb id (its verbs). Verbs reach the run
- * through `run_capability`, narrowed to them by the IS.
+ * as is in `tools`); a NEED ref (`need:<need>[/<intent>]`, 0426: the verbs of
+ * the provider the run's space bound to it, `resolveNeedRefVerbs`); an intent
+ * slug (the verbs serving it on this pod); else a capability by name or id,
+ * or a verb id (its verbs). Verbs reach the run through `run_capability`,
+ * narrowed to them by the IS. A need the space has not filled offers nothing
+ * and is said in `missing`, never dropped silently.
  *
  * Founder rule (2026-11-05, pod finding 3fb5dae8): "We never send all the
  * tools. That's the goal of the playbooks itself."
@@ -39,6 +42,7 @@ import { isKnownIntent } from "@synap-core/types/capability-intents";
 import type { RunToolProfile } from "@synap/intelligence-client";
 import {
   activeToolsList,
+  isNeedToolEntry,
   isRunToolName,
   readToolsList,
   runClassOf,
@@ -49,6 +53,11 @@ import {
 } from "@synap/playbooks";
 import type { IntentVerbMatch } from "../capabilities/capability-intent-index.js";
 import { activeStageTier } from "./run-stage-tier.js";
+import {
+  needResolutionReason,
+  resolveNeedRefVerbs,
+  type SpaceNeedBindings,
+} from "../needs/space-needs.js";
 
 const logger = createLogger({ module: "run-tool-profile" });
 
@@ -57,8 +66,10 @@ export interface GrantableCapability {
   kind?: string;
   id: string;
   name: string;
+  /** The container (`capabilities.id`) this brick belongs to: a need's provider. */
+  containerId?: string | null;
   /** `kind` = the registry's read / write / action axis (a trial keeps reads). */
-  verbs?: ReadonlyArray<{ id: string; kind?: string }>;
+  verbs?: ReadonlyArray<{ id: string; kind?: string; intent?: string | null }>;
 }
 
 export interface RunToolProfileDeps {
@@ -82,6 +93,11 @@ export interface RunToolProfileDeps {
     index: ReadonlyMap<string, readonly IntentVerbMatch[]>;
     capabilities: readonly GrantableCapability[];
   }>;
+  /**
+   * The space's need bindings (`space-needs.ts`); throws when unread. Absent:
+   * the real read (`defaultDeps`).
+   */
+  readSpaceNeeds?(workspaceId: string): Promise<SpaceNeedBindings>;
 }
 
 /** The real reads (exported so a test can swap ONE of them). */
@@ -125,7 +141,35 @@ export const defaultDeps: RunToolProfileDeps = {
     const capabilities = await listCapabilities(lens, { limit: null });
     return { index: foldVerbsByIntent(capabilities), capabilities };
   },
+  async readSpaceNeeds(workspaceId) {
+    const { readSpaceNeedBindings } = await import("../needs/space-needs.js");
+    return readSpaceNeedBindings(workspaceId);
+  },
 };
+
+/**
+ * The verbs each declared need ref resolves to in the run's space, and the
+ * reason for each that resolves to nothing. PURE. A run with no space has
+ * no binding: every need is unfilled.
+ */
+export function foldNeedVerbs(
+  needs: readonly string[],
+  bindings: SpaceNeedBindings,
+  capabilities: readonly GrantableCapability[],
+  readsOnly = false
+): { verbs: string[]; missing: Array<{ entry: string; reason: string }> } {
+  const verbs: string[] = [];
+  const missing: Array<{ entry: string; reason: string }> = [];
+  for (const entry of needs) {
+    const r = resolveNeedRefVerbs(entry, bindings, capabilities, readsOnly);
+    if (r.status === "ok") {
+      for (const v of r.verbs) if (!verbs.includes(v)) verbs.push(v);
+    } else {
+      missing.push({ entry, reason: needResolutionReason(r) });
+    }
+  }
+  return { verbs, missing };
+}
 
 /**
  * The verbs of the capabilities a list names. PURE. An entry names a
@@ -272,17 +316,42 @@ export async function resolveRunToolProfile(
     const tools =
       runClass === "one-shot" ? [] : runTurnToolNames(runClass, declared);
     const rest = declared.filter((t) => !isRunToolName(t));
-    intents = rest.filter((t) => isKnownIntent(t));
-    const named = rest.filter((t) => !isKnownIntent(t));
+    const needs = rest.filter((t) => isNeedToolEntry(t));
+    intents = rest.filter((t) => !isNeedToolEntry(t) && isKnownIntent(t));
+    const named = rest.filter((t) => !isNeedToolEntry(t) && !isKnownIntent(t));
     let verbs: string[] = [];
+    let missing: Array<{ entry: string; reason: string }> = [];
     if (runClass !== "one-shot" && rest.length > 0) {
-      const registry = await deps.readRegistry({
-        workspaceId: input.workspaceId,
-        userId: input.userId,
-      });
+      const [registry, bindings] = await Promise.all([
+        deps.readRegistry({
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+        }),
+        needs.length > 0 && input.workspaceId
+          ? (deps.readSpaceNeeds ?? defaultDeps.readSpaceNeeds!)(
+              input.workspaceId
+            )
+          : (new Map() as SpaceNeedBindings),
+      ]);
       const index = trial ? readVerbsOnly(registry.index) : registry.index;
+      const needVerbs = foldNeedVerbs(
+        needs,
+        bindings,
+        registry.capabilities,
+        trial
+      );
+      missing = needVerbs.missing;
+      for (const m of missing) {
+        logger.warn(
+          { playbookId: input.playbookId, entry: m.entry, reason: m.reason },
+          "run-tool-profile: a declared need resolves to nothing in this space — not offered"
+        );
+      }
       verbs = foldRunVerbs(
-        namedVerbs(named, registry.capabilities, trial),
+        [
+          ...needVerbs.verbs,
+          ...namedVerbs(named, registry.capabilities, trial),
+        ],
         intents,
         index
       );
@@ -308,6 +377,7 @@ export async function resolveRunToolProfile(
       verbs,
       capabilitiesRead: "ok",
       ...(tier ? { tier } : {}),
+      ...(missing.length > 0 ? { missing } : {}),
     };
   } catch (err) {
     logger.error(

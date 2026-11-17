@@ -34,13 +34,105 @@ import {
  * and carries no edit of yours is `current`, counted in one reassuring line
  * rather than listed.
  */
-export type UpdateGroup = PackageUpdateNeeds;
+export type UpdateGroup = PackageUpdateNeeds | "approval";
 
-export const UPDATE_GROUPS: readonly UpdateGroup[] = PACKAGE_UPDATE_NEEDS;
+/**
+ * Most to least urgent. `approval` (the update waits on proposals a person
+ * must approve first) sits after the pod's `consent` and `choice`: those are
+ * answered on the Review page, this one on the proposals' own pages.
+ */
+export const UPDATE_GROUPS: readonly UpdateGroup[] = [
+  "consent",
+  "choice",
+  "approval",
+  ...PACKAGE_UPDATE_NEEDS.filter((n) => n !== "consent" && n !== "choice"),
+];
 
+// ─── What a space's template is held on ─────────────────────────────────────
+
+/**
+ * The pod's template-health row, the fields this page reads (`workspaces.
+ * templateHealth`, the same rows MCP `template_health` and the CLI serve).
+ * `packageSlug` joins a row to its update.
+ */
+export interface TemplateHealthHold {
+  packageSlug: string | null;
+  state: string | null;
+  /** Live pending proposals the last apply waits on. */
+  awaitingApproval: readonly string[];
+  /** The data changes the update is held for; `null` = none. */
+  pendingDataChanges: unknown | null;
+  /** An agent's pending "update this space" proposal; `null` = none. */
+  updateProposal: { id: string } | null;
+}
+
+/**
+ * What stops an update from applying with one click, as the pod says.
+ * `consent`: it is held on changes to records a person must agree to.
+ * `proposalIds`: pending proposals a person must approve first (the last
+ * apply's, and an agent's update request), in that order, each once.
+ */
+export interface UpdateHold {
+  consent: boolean;
+  proposalIds: string[];
+}
+
+/**
+ * The holds by package slug, read from the pod's health rows, never guessed:
+ * `pendingDataChanges` is consent; `awaitingApproval` (only while `state` is
+ * `awaiting-approval`: the pod reads it `layer-2-not-run` once all are
+ * decided) and `updateProposal` are proposals to approve. A package with no
+ * hold is absent.
+ */
+export function updateHolds(
+  rows: readonly TemplateHealthHold[]
+): Map<string, UpdateHold> {
+  const out = new Map<string, UpdateHold>();
+  for (const row of rows) {
+    if (!row.packageSlug) continue;
+    const ids = [
+      ...(row.state === "awaiting-approval" ? row.awaitingApproval : []),
+      ...(row.updateProposal ? [row.updateProposal.id] : []),
+    ];
+    const hold: UpdateHold = {
+      consent: row.pendingDataChanges != null,
+      proposalIds: [...new Set(ids)],
+    };
+    if (!hold.consent && hold.proposalIds.length === 0) continue;
+    // Two spaces on one template: the holds add up.
+    const prev = out.get(row.packageSlug);
+    out.set(
+      row.packageSlug,
+      prev
+        ? {
+            consent: prev.consent || hold.consent,
+            proposalIds: [
+              ...new Set([...prev.proposalIds, ...hold.proposalIds]),
+            ],
+          }
+        : hold
+    );
+  }
+  return out;
+}
+
+export type UpdateHolds = ReadonlyMap<string, UpdateHold>;
+
+/**
+ * The group an update sits in. The pod's `needs` leads; a hold only moves an
+ * update that would read "Ready" or a choice: consent outranks the rest (the
+ * pod's own order), then approval.
+ */
 export function updateGroupOf(
-  s: Pick<PackageUpdateSummary, "needs" | "counts">
+  s: Pick<PackageUpdateSummary, "needs" | "counts"> &
+    Partial<Pick<PackageUpdateSummary, "slug">>,
+  holds?: UpdateHolds
 ): UpdateGroup | "current" {
+  const hold = s.slug ? holds?.get(s.slug) : undefined;
+  if (hold?.consent) return "consent";
+  if (hold && hold.proposalIds.length > 0 && s.needs !== "consent") {
+    if (s.needs === "review" || s.needs === "nothing") return "approval";
+  }
   if (s.needs === "nothing" && s.counts.yours === 0) return "current";
   return s.needs;
 }
@@ -54,13 +146,16 @@ export interface UpdateGroupItems {
  * The list's sections: empty groups omitted (OMIT, ui-composition §2), each
  * sorted by name so a reload keeps rows in place; `current` counted apart.
  */
-export function groupUpdates(list: readonly PackageUpdateSummary[]): {
+export function groupUpdates(
+  list: readonly PackageUpdateSummary[],
+  holds?: UpdateHolds
+): {
   groups: UpdateGroupItems[];
   current: PackageUpdateSummary[];
 } {
   const by = new Map<UpdateGroup | "current", PackageUpdateSummary[]>();
   for (const s of list) {
-    const g = updateGroupOf(s);
+    const g = updateGroupOf(s, holds);
     by.set(g, [...(by.get(g) ?? []), s]);
   }
   const byName = (a: PackageUpdateSummary, b: PackageUpdateSummary) =>
@@ -78,6 +173,7 @@ export function groupUpdates(list: readonly PackageUpdateSummary[]): {
 const WAITING: ReadonlySet<UpdateGroup> = new Set([
   "consent",
   "choice",
+  "approval",
   "review",
 ]);
 
@@ -86,9 +182,10 @@ const WAITING: ReadonlySet<UpdateGroup> = new Set([
  * Review page's queue ("2 of 4", previous, next).
  */
 export function waitingUpdates(
-  list: readonly PackageUpdateSummary[]
+  list: readonly PackageUpdateSummary[],
+  holds?: UpdateHolds
 ): PackageUpdateSummary[] {
-  return groupUpdates(list)
+  return groupUpdates(list, holds)
     .groups.filter((g) => WAITING.has(g.group))
     .flatMap((g) => g.items);
 }
@@ -99,10 +196,11 @@ export function waitingUpdates(
  * opened and applied on its own page, never in a batch.
  */
 export function updatesNeedingNothing(
-  list: readonly PackageUpdateSummary[]
+  list: readonly PackageUpdateSummary[],
+  holds?: UpdateHolds
 ): PackageUpdateSummary[] {
   return (
-    groupUpdates(list)
+    groupUpdates(list, holds)
       .groups.find((g) => g.group === "review")
       ?.items.filter((s) => s.comparedBy !== "package") ?? []
   );
@@ -130,9 +228,10 @@ export interface QueuePosition {
 /** Where `slug` sits among the waiting updates, or null when it is not one. */
 export function queuePosition(
   list: readonly PackageUpdateSummary[],
-  slug: string
+  slug: string,
+  holds?: UpdateHolds
 ): QueuePosition | null {
-  const queue = waitingUpdates(list);
+  const queue = waitingUpdates(list, holds);
   const i = queue.findIndex((s) => s.slug === slug);
   if (i === -1) return null;
   return {
@@ -146,9 +245,10 @@ export function queuePosition(
 /** The next waiting update after `slug` once it is decided, or null. */
 export function nextAfter(
   list: readonly PackageUpdateSummary[],
-  slug: string
+  slug: string,
+  holds?: UpdateHolds
 ): string | null {
-  return waitingUpdates(list).find((s) => s.slug !== slug)?.slug ?? null;
+  return waitingUpdates(list, holds).find((s) => s.slug !== slug)?.slug ?? null;
 }
 
 // ─── Marks ───────────────────────────────────────────────────────────────────
@@ -160,7 +260,7 @@ export function nextAfter(
  */
 export type MarkTone = "choose" | "catalog" | "yours" | "same" | "consent";
 export type MarkGlyph =
-  "merge" | "arrive" | "pen" | "equal" | "records" | "alert";
+  "merge" | "arrive" | "pen" | "equal" | "records" | "alert" | "approval";
 
 export interface Mark {
   tone: MarkTone;
@@ -182,6 +282,7 @@ export function fieldMark(state: PackageFieldState): Mark {
 const GROUP_MARKS: Readonly<Record<UpdateGroup | "current", Mark>> = {
   choice: FIELD_MARKS.both,
   consent: { tone: "consent", glyph: "records" },
+  approval: { tone: "choose", glyph: "approval" },
   review: FIELD_MARKS.updates,
   nothing: FIELD_MARKS.yours,
   current: FIELD_MARKS.same,

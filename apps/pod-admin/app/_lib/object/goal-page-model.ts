@@ -13,31 +13,17 @@ import type {
   GoalWriteResult,
 } from "@synap-core/types/goal";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
-import type { UnitTone } from "@synap-core/types/units";
 import type { StatusKind } from "../../(admin)/components/status-pill";
+import { unitTonePill } from "../../(admin)/components/status-tone";
 import { sessionStatusMark } from "./session-status";
 
-/**
- * A goal mark as a console pill. The console has four pill kinds; a mark's
- * tone is the shared unit tone. A quiet tone (closed as retired, dropped)
- * reads as `unknown` (grey), never as healthy.
- */
-const PILL_FOR_TONE: Record<UnitTone, StatusKind> = {
-  primary: "healthy",
-  ai: "healthy",
-  info: "healthy",
-  success: "healthy",
-  warning: "stale",
-  error: "down",
-  textSecondary: "unknown",
-  textMuted: "unknown",
-};
+/** A goal mark as a console pill (the one unit-tone map, `unitTonePill`). */
 
 export function goalPill(mark: GoalMarkView): {
   kind: StatusKind;
   label: string;
 } {
-  return { kind: PILL_FOR_TONE[mark.tone] ?? "unknown", label: mark.label };
+  return { kind: unitTonePill(mark.tone), label: mark.label };
 }
 
 /** How many sessions the page lists before "Open in app" takes over. */

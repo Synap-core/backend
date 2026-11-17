@@ -31,6 +31,13 @@ function statementResult(rows: unknown[]) {
 }
 
 const dbStub = {
+  // The proposal door's one statement (`WITH … UPDATE`).
+
+  $with: () => ({ as: () => ({}) }),
+
+  with() {
+    return this;
+  },
   query: { proposals: { findFirst: async () => undefined } },
   insert: () => ({ values: () => statementResult([]) }),
   update: () => ({

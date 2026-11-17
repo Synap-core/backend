@@ -121,7 +121,12 @@ vi.mock("@synap/events", async (importOriginal) => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { documents, documentVersions, proposals } from "@synap/database/schema";
+import {
+  documents,
+  documentVersions,
+  proposals,
+  lifecycleTransitionOutbox,
+} from "@synap/database/schema";
 
 const { applyProposalApproval } = await import("../apply-approval.js");
 
@@ -211,7 +216,12 @@ async function state() {
 }
 
 beforeAll(async () => {
-  for (const t of [documents, documentVersions, proposals])
+  for (const t of [
+    lifecycleTransitionOutbox,
+    documents,
+    documentVersions,
+    proposals,
+  ])
     await h.client!.exec(ddlFor(t as PgTable));
 });
 

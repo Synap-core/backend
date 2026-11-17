@@ -370,6 +370,23 @@ describe("set_title — the name, never the body", () => {
   });
 });
 
+describe("insert_embed — the directive enum is unchanged by synap-ask", () => {
+  const op = (directive: string) => ({
+    op: "insert_embed",
+    directive,
+    ref: { sessionId: "s", slot: "x" },
+  });
+
+  it("accepts the three embeds it always did, and refuses synap-ask (written as markdown for now)", () => {
+    for (const d of ["synap-entity", "synap-view", "synap-cell"]) {
+      expect(DocumentPatchOpsSchema.safeParse([op(d)]).success).toBe(true);
+    }
+    expect(DocumentPatchOpsSchema.safeParse([op("synap-ask")]).success).toBe(
+      false
+    );
+  });
+});
+
 describe("insert_embed — the embed is written for the writer (serializeEmbed)", () => {
   const ENTITY = "8f14e45f-ceea-4e7d-9b2a-1c2d3e4f5a6b";
   const cell = {

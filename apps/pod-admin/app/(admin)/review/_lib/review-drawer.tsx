@@ -35,11 +35,14 @@ import { Check, Info, X } from "lucide-react";
 import { AdvancedPanel } from "../../../_lib/object/advanced-panel";
 import { formatRelative, formatTimestamp } from "../../../../lib/format";
 import { trpc } from "../../../../lib/trpc";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  buildObjectActionTitle,
+  resolveActionLabel,
+} from "@synap-core/types/vocabulary";
 import { useApproveIssuer } from "../../../_lib/presence/use-request-doors";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { DetailDrawer } from "../../components/detail-drawer";
-import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
+import { proposalRequester } from "@synap-core/types/proposals";
 import { proposalPageT } from "../../../proposal/[id]/copy";
 import { requestReadFailure } from "../../../proposal/[id]/request-read-failure";
 import { RequestUnreadable } from "../../../proposal/[id]/RequestUnreadable";
@@ -67,6 +70,15 @@ import {
   type TrustedIssuerScope,
 } from "./issuer-review";
 import { AskAnswer } from "./ask-answer";
+import type { LensRow } from "@synap-core/types/lens";
+import { requestStory, type RequestStory } from "@synap-core/types/needs-you";
+import type { StoryRead } from "../../../_lib/request/request-story-view";
+import type { RequestContext } from "../../../_lib/request/use-request-context";
+import { RequestKindTile } from "../../../_lib/request/request-row-lines";
+import type { RequestFamily } from "../../../_lib/request/family";
+import { useConsoleLocale, useT } from "../../../../lib/i18n/locale-provider";
+import { REQUEST_CATALOGS } from "../../../_lib/request/copy";
+import { DRAWER_CATALOGS, NAME_MARK, drawerT } from "./drawer-copy";
 import type { AskSlot } from "./ask-detail";
 import type { ReviewDetail } from "./review-rows";
 
@@ -82,7 +94,28 @@ export interface OpenReview {
   detail: DrawerDetail;
   /** The decision's title; for an ask, the question (`askCardView`). */
   title: string;
+  /**
+   * The row's shared lens row, when a Review row opened it: what its story
+   * (`requestStory`) is told from. Absent for a `?focus=` on a request no
+   * longer waiting: the review then reads its own (a proposal) or none.
+   */
+  lens?: LensRow;
+  /** The request's family: its kind tile beside the title (the row's own). */
+  family?: RequestFamily;
+  /** The tile's accessible name (the row's kind noun). */
+  noun?: string;
+  /**
+   * One sentence under the title: what it is for (the ask's why). When it
+   * is drawn, the ask does not draw its why again (`showContext`).
+   */
+  sentence?: string | null;
 }
+
+/** The page's request context read (`useRequestContext`), shared by every open request. */
+export type ReviewStoryContext = Pick<
+  RequestContext,
+  "context" | "read" | "refetch" | "updatedAt"
+>;
 
 interface ReviewFrameProps {
   open: OpenReview | null;
@@ -92,18 +125,32 @@ interface ReviewFrameProps {
   liveAsk: AskSlot | null;
   /** An open ask was answered, done or handed back. */
   onAskSettled: () => void;
+  /** The page's context read; absent where no page read it (a test, a host). */
+  storyContext?: ReviewStoryContext;
 }
 
 export type DetailProps = Omit<ReviewFrameProps, "open"> & { open: OpenReview };
 
 /** Below `lg`: the decision in a modal drawer over the list. */
 export function ReviewDrawer({ open, ...rest }: ReviewFrameProps) {
+  const rt = useT(REQUEST_CATALOGS);
   return (
     <DetailDrawer
       isOpen={open !== null}
       onClose={rest.onClose}
-      title={open?.title ?? "Review"}
-      titleLines={2}
+      title={open?.title ?? rt("detail.fallbackTitle")}
+      // The ONE head the dock draws too: the kind tile, the title, what it
+      // is for (code review M2).
+      header={
+        open ? (
+          <RequestHeader
+            family={open.family}
+            noun={open.noun}
+            title={open.title}
+            sentence={open.sentence ?? null}
+          />
+        ) : undefined
+      }
       size="lg"
     >
       {open && <ReviewDetail open={open} {...rest} />}
@@ -120,30 +167,85 @@ export function ReviewDock({ open, ...rest }: ReviewFrameProps) {
   if (!open) return null;
   const { onClose } = rest;
   return (
+    <DockFrame open={open} onClose={onClose}>
+      <ReviewDetail open={open} {...rest} />
+    </DockFrame>
+  );
+}
+
+function DockFrame({
+  open,
+  onClose,
+  children,
+}: {
+  open: OpenReview;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const rt = useT(REQUEST_CATALOGS);
+  return (
     <aside
       aria-label={open.title}
-      className="sticky top-4 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-col overflow-hidden rounded-lg bg-content1 ring-1 ring-inset ring-foreground/10"
+      className="sticky top-4 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-col overflow-hidden rounded-xl bg-content1 ring-1 ring-inset ring-foreground/10"
     >
-      <div className="flex items-center gap-3 border-b border-foreground/[0.06] px-6 py-4">
-        <h2 className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-medium text-foreground">
-          {open.title}
-        </h2>
+      <div className="flex items-start gap-3 px-6 pb-2 pt-6">
+        <RequestHeader
+          family={open.family}
+          noun={open.noun}
+          title={open.title}
+          sentence={open.sentence ?? null}
+        />
         <Button
           isIconOnly
           size="sm"
           variant="light"
           radius="full"
           onPress={onClose}
-          aria-label="Close details"
-          className="shrink-0 text-foreground/65 hover:text-foreground"
+          aria-label={rt("detail.close")}
+          className="min-h-11 min-w-11 shrink-0 text-foreground/70 hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <ReviewDetail open={open} {...rest} />
-      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">{children}</div>
     </aside>
+  );
+}
+
+/**
+ * The detail's head: the request's kind tile beside its title (the row's own
+ * mark, one grammar on the row and here), the title in the heading face, and
+ * one sentence for what it is for. No eyebrow (page-grammar §5).
+ */
+function RequestHeader({
+  family,
+  noun,
+  title,
+  sentence,
+}: {
+  family?: RequestFamily;
+  noun?: string;
+  title: string;
+  sentence: string | null;
+}) {
+  return (
+    <header className="flex min-w-0 flex-1 flex-col gap-1.5">
+      <div className="flex min-w-0 items-start gap-3">
+        {family && (
+          <span className="mt-1">
+            <RequestKindTile family={family} noun={noun ?? title} />
+          </span>
+        )}
+        <h2 className="line-clamp-3 min-w-0 break-words font-heading text-[24px] font-medium leading-tight text-foreground">
+          {title}
+        </h2>
+      </div>
+      {sentence && (
+        <p className="text-[15px] leading-relaxed text-foreground/80">
+          {sentence}
+        </p>
+      )}
+    </header>
   );
 }
 
@@ -162,8 +264,11 @@ function ReviewDetail({
   onClose,
   liveAsk,
   onAskSettled,
+  storyContext,
 }: DetailProps) {
   const { detail } = open;
+  const locale = useConsoleLocale();
+  const story = useOpenStory(open.lens, storyContext, locale);
   return (
     <>
       {detail.kind === "ask" && (
@@ -173,8 +278,13 @@ function ReviewDetail({
           live={liveAsk}
           onSettled={onAskSettled}
           onClose={onClose}
-          // The frame's title IS the question: read once.
+          // The frame's title IS the question, and its sentence the why:
+          // each read once.
           showHeading={false}
+          showContext={!open.sentence}
+          story={story}
+          identity={viewer.identity}
+          barClassName={DECISION_BAR_PIN}
         />
       )}
       {detail.kind === "proposal" && (
@@ -183,6 +293,7 @@ function ReviewDetail({
           proposalId={detail.proposalId}
           viewer={viewer}
           onClose={onClose}
+          story={story}
         />
       )}
       {detail.kind === "issuer" && (
@@ -205,6 +316,48 @@ function ReviewDetail({
   );
 }
 
+/**
+ * The open request's story, from the row it was opened on and the page's one
+ * context read. While the read is in flight (or failed) the story still has
+ * its Now and what the row itself says comes next. A row the read does not
+ * cover yet (it arrived after the cached read) is read again ONCE, and stays
+ * "reading" meanwhile: an uncovered row is not a failed read (S1). Covered
+ * by neither read, it tells only what the row itself carries.
+ */
+function useOpenStory(
+  lens: LensRow | undefined,
+  ctx: ReviewStoryContext | undefined,
+  locale: ReturnType<typeof useConsoleLocale>
+): { story: RequestStory | null; read: StoryRead } | undefined {
+  const covered =
+    !!lens && !!ctx?.context && Object.hasOwn(ctx.context.rows, lens.key);
+  const uncovered = !!lens && ctx?.read.status === "ok" && !covered;
+  // Once PER ROW: the re-read is keyed by the row it was asked for, so the
+  // next uncovered row is read again too.
+  const [asked, setAsked] = useState<{ key: string; at: number } | null>(null);
+  const askedAt = lens && asked?.key === lens.key ? asked.at : null;
+  useEffect(() => {
+    if (uncovered && askedAt === null && ctx && lens) {
+      setAsked({ key: lens.key, at: ctx.updatedAt });
+      ctx.refetch();
+    }
+  }, [uncovered, askedAt, ctx, lens]);
+  if (!lens || !ctx) return undefined;
+  if (uncovered) {
+    const reread = askedAt !== null && ctx.updatedAt > askedAt;
+    return reread
+      ? { story: requestStory(lens, null, { locale }), read: { status: "off" } }
+      : {
+          story: requestStory(lens, null, { locale }),
+          read: { status: "loading" },
+        };
+  }
+  return {
+    story: requestStory(lens, ctx.context, { locale }),
+    read: ctx.read,
+  };
+}
+
 // ─── Shared parts ────────────────────────────────────────────────────────────
 
 /** The five trust signals, in the order a careful reviewer asks them. */
@@ -221,31 +374,29 @@ function TrustSignals({
   viewer: ReviewViewer;
   when: ReactNode;
 }) {
+  const t = useT(DRAWER_CATALOGS);
   const rows: Array<[string, ReactNode]> = [
-    ["Who is asking", who],
-    ["What it will be able to do", what],
-    ["Where", where],
+    [t("trust.who"), who],
+    [t("trust.what"), what],
+    [t("trust.where"), where],
     [
-      "Who approves",
-      viewer.identity ? (
-        <>
-          You are signed in as{" "}
-          <strong className="font-medium text-foreground">
-            {viewer.identity}
-          </strong>
-          . Your decision is recorded in the Audit log.
-        </>
-      ) : (
-        "You. Your decision is recorded in the Audit log."
-      ),
+      t("trust.approver"),
+      viewer.identity
+        ? withMark(
+            t("trust.approverNamed", { mark: NAME_MARK }),
+            <strong className="font-medium text-foreground">
+              {viewer.identity}
+            </strong>
+          )
+        : t("trust.approverYou"),
     ],
-    ["When and from where", when],
+    [t("trust.when"), when],
   ];
   return (
     <dl className="flex flex-col gap-3">
       {rows.map(([label, value]) => (
         <div key={label} className="flex flex-col gap-0.5">
-          <dt className="text-[12px] font-medium text-foreground/65">
+          <dt className="text-[12px] font-medium text-foreground/70">
             {label}
           </dt>
           <dd className="text-[13px] leading-relaxed text-foreground/85">
@@ -257,27 +408,47 @@ function TrustSignals({
   );
 }
 
-/** "Your pod pod.example.com, Builder space only." */
-function podWhere(viewer: ReviewViewer, scope: string): ReactNode {
+/**
+ * A catalog sentence with ONE name drawn in its own type (bold, mono) where
+ * the message holds `{mark}` (`NAME_MARK`): the words stay one message.
+ */
+function withMark(sentence: string, mark: ReactNode): ReactNode {
+  const [before, after] = sentence.split(NAME_MARK);
   return (
     <>
-      Your pod{" "}
-      {viewer.podHost ? (
-        <span className="font-mono text-[12px]">{viewer.podHost}</span>
-      ) : null}
-      {viewer.podHost ? ", " : ""}
-      {scope}
+      {before}
+      {mark}
+      {after}
     </>
   );
 }
 
+/** "Your pod pod.example.com, Builder space only." `space` null = the whole pod. */
+function PodWhere({
+  viewer,
+  space,
+}: {
+  viewer: ReviewViewer;
+  space: string | null;
+}) {
+  const t = useT(DRAWER_CATALOGS);
+  const scope = space ? t("where.space", { space }) : t("where.everywhere");
+  return viewer.podHost
+    ? withMark(
+        t("where.podHost", { mark: NAME_MARK, scope }),
+        <span className="font-mono text-[12px]">{viewer.podHost}</span>
+      )
+    : t("where.pod", { scope });
+}
+
 function WhyApproval({ children }: { children: ReactNode }) {
+  const t = useT(DRAWER_CATALOGS);
   return (
     <p className="flex items-start gap-2 rounded-lg bg-foreground/[0.03] px-3 py-2.5 text-[12.5px] leading-relaxed text-foreground/75 ring-1 ring-inset ring-foreground/10">
       <Info aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span>
         <span className="font-medium text-foreground/85">
-          Why this needs approval.
+          {t("approval.lead")}
         </span>{" "}
         {children}
       </span>
@@ -318,9 +489,10 @@ function Unreadable({ message }: { message: string }) {
 }
 
 /**
- * Approve + Reject-with-reason, for the kinds whose receiver has no decision
- * card of its own to reuse here. The reason is required: it is what the
- * requester reads.
+ * Approve + Reject with a reason, for the kinds whose receiver has no
+ * decision card of its own to reuse here. A grant request is rejected, as a
+ * proposal is (the verb follows the object), through the vocabulary door.
+ * The reason is required: it is what the requester reads.
  */
 function DecideButtons({
   approveLabel,
@@ -342,6 +514,7 @@ function DecideButtons({
   onReject: (reason: string) => void;
   minReason?: number;
 }) {
+  const t = useT(DRAWER_CATALOGS);
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const busy = approving || rejecting;
@@ -352,8 +525,8 @@ function DecideButtons({
           <Textarea
             value={reason}
             onValueChange={setReason}
-            label="Reason"
-            description="The requester sees this, so say what would change your mind."
+            label={t("decide.reason")}
+            description={t("decide.reasonHint")}
             minRows={2}
             isDisabled={busy}
           />
@@ -365,7 +538,7 @@ function DecideButtons({
               isDisabled={busy || reason.trim().length < minReason}
               onPress={() => onReject(reason.trim())}
             >
-              Confirm reject
+              {t("decide.confirmReject")}
             </Button>
             <Button
               variant="light"
@@ -373,7 +546,7 @@ function DecideButtons({
               isDisabled={busy}
               onPress={() => setOpen(false)}
             >
-              Cancel
+              {t("decide.cancel")}
             </Button>
           </div>
         </div>
@@ -401,7 +574,7 @@ function DecideButtons({
           isDisabled={busy}
           onPress={() => setOpen(true)}
         >
-          Reject with reason…
+          {t("decide.reject", { verb: resolveActionLabel("reject") })}
         </Button>
       </div>
     </DecisionBar>
@@ -429,6 +602,9 @@ function agentConnectOf(
 ): { keyId: string; agentType: string; name: string | null } | null {
   if (p.targetType !== "agent" || p.proposalType !== "connect") return null;
   const d = (p.data ?? {}) as Record<string, unknown>;
+  // An agent asking for one more thing (`mode: "add"`) names a key that is
+  // already connected: it is decided as a proposal, not a new connection.
+  if (d.mode === "add") return null;
   if (typeof d.keyId !== "string") return null;
   return {
     keyId: d.keyId,
@@ -441,12 +617,15 @@ function ProposalBody({
   proposalId,
   viewer,
   onClose,
+  story,
 }: {
   proposalId: string;
   viewer: ReviewViewer;
   onClose: () => void;
+  story?: { story: RequestStory | null; read: StoryRead };
 }) {
-  const { query, sourceExits, workspaceName } = useProposalReview(proposalId);
+  const { query, sourceExits, sourceState, workspaceName } =
+    useProposalReview(proposalId);
   const afterDecision = useAfterDecision();
   useEffect(() => {
     if (query.error) redirectToLoginIfUnauthorized(query.error);
@@ -478,15 +657,18 @@ function ProposalBody({
         agent={agent}
         proposalId={p.id}
         requester={proposalRequester(p)}
-        where={podWhere(
-          viewer,
-          workspaceName ? `${workspaceName} space only.` : "across the pod."
-        )}
+        where={<PodWhere viewer={viewer} space={workspaceName ?? null} />}
         when={
-          <>
-            {formatTimestamp(p.createdAt)} ({formatRelative(p.createdAt)})
-            {from.length > 0 ? `, from ${from.join(", ")}` : ""}.
-          </>
+          from.length > 0
+            ? drawerT()("agent.whenFrom", {
+                at: formatTimestamp(p.createdAt),
+                ago: formatRelative(p.createdAt),
+                from: from.join(", "),
+              })
+            : drawerT()("agent.when", {
+                at: formatTimestamp(p.createdAt),
+                ago: formatRelative(p.createdAt),
+              })
         }
         viewer={viewer}
         onDone={() => {
@@ -503,6 +685,7 @@ function ProposalBody({
     <ProposalReviewBody
       proposal={p}
       sourceExits={sourceExits}
+      sourceState={sourceState}
       workspaceName={workspaceName}
       identity={viewer.identity}
       onDecided={() => {
@@ -510,6 +693,7 @@ function ProposalBody({
         void query.refetch();
       }}
       barClassName={DECISION_BAR_PIN}
+      story={story}
     />
   );
 }
@@ -531,6 +715,8 @@ function AgentConnectBody({
   viewer: ReviewViewer;
   onDone: () => void;
 }) {
+  const rt = useT(REQUEST_CATALOGS);
+  const t = useT(DRAWER_CATALOGS);
   const agent = useAgentConnect(facts.keyId, facts.agentType);
   const { step } = agent;
   useEffect(() => {
@@ -538,7 +724,7 @@ function AgentConnectBody({
       addToast({ title: step.outcome.title, color: "success" });
       onDone();
     } else if (step.kind === "rejected") {
-      addToast({ title: "Connection rejected", color: "default" });
+      addToast({ title: drawerT()("agent.rejected"), color: "default" });
       onDone();
     }
     // `onDone` is a fresh closure each render; the step is what changes.
@@ -547,33 +733,30 @@ function AgentConnectBody({
   return (
     <div className="flex flex-col gap-5 pb-4">
       <TrustSignals
-        who={
-          <>
-            An agent named{" "}
-            <strong className="font-medium text-foreground">
-              {agent.connections?.title ?? facts.name ?? "this agent"}
-            </strong>
-            {requester ? `, connected by ${requester}` : ""}.
-          </>
-        }
-        what="Everything listed below, and nothing else. Its writes still follow your review rules."
+        who={withMark(
+          requester
+            ? t("agent.whoBy", { mark: NAME_MARK, requester })
+            : t("agent.who", { mark: NAME_MARK }),
+          <strong className="font-medium text-foreground">
+            {agent.connections?.title ?? facts.name ?? t("agent.unnamed")}
+          </strong>
+        )}
+        what={t("agent.what")}
         where={where}
         viewer={viewer}
         when={when}
       />
-      <WhyApproval>
-        New agents need a person to approve their access.
-      </WhyApproval>
+      <WhyApproval>{t("agent.needsApproval")}</WhyApproval>
       {step.kind === "error" && (
-        <Alert color="danger" title="Couldn't process the request">
+        <Alert color="danger" title={t("agent.failed")}>
           {step.message}
         </Alert>
       )}
       <AgentConnectDecision agent={agent} agentType={facts.agentType} />
       <AdvancedPanel
         ids={[
-          { label: "Proposal id", value: proposalId },
-          { label: "Key id", value: facts.keyId },
+          { label: rt("detail.proposalId"), value: proposalId },
+          { label: t("agent.keyId"), value: facts.keyId },
         ]}
       />
     </div>
@@ -596,6 +779,7 @@ function IssuerBody({
   });
   const utils = trpc.useUtils();
   const afterDecision = useAfterDecision();
+  const t = useT(DRAWER_CATALOGS);
   const [scopes, setScopes] = useState<TrustedIssuerScope[]>(
     DEFAULT_ISSUER_SCOPES
   );
@@ -613,7 +797,7 @@ function IssuerBody({
       // failure, so say so calmly and refresh to what is true now.
       if (err.data?.code === "CONFLICT") {
         addToast({
-          title: "Already decided",
+          title: t("decide.alreadyDecided"),
           description: err.message,
           color: "default",
         });
@@ -637,61 +821,64 @@ function IssuerBody({
         : null;
     },
     {
-      onSuccess: () => done("Issuer approved", "success"),
-      onError: fail("Approval failed"),
+      onSuccess: () => done(t("issuer.approved"), "success"),
+      onError: fail(t("issuer.approveFailed")),
     }
   );
   const reject = trpc.trustedIssuers.reject.useMutation({
-    onSuccess: () => done("Issuer rejected", "default"),
-    onError: fail("Reject failed"),
+    onSuccess: () => done(t("issuer.rejected"), "default"),
+    onError: fail(t("issuer.rejectFailed")),
   });
 
-  if (list.isLoading) return <Loading label="Reading the issuer…" />;
+  if (list.isLoading) return <Loading label={t("issuer.loading")} />;
   const issuer = list.data?.find((i) => i.id === issuerId);
   if (list.error || !issuer)
-    return (
-      <Unreadable message="This issuer couldn't be loaded — it may already have been decided." />
-    );
+    return <Unreadable message={t("issuer.unreadable")} />;
   const via = (issuer.initialRequestData as { requestedVia?: unknown } | null)
     ?.requestedVia;
 
   return (
     <div className="flex flex-col gap-5 pb-4">
       <TrustSignals
-        who={
+        who={withMark(
+          t("issuer.who", { mark: NAME_MARK }),
           <>
-            An outside service,{" "}
             <strong className="font-medium text-foreground">
               {issuer.displayName}
             </strong>{" "}
-            (<span className="font-mono text-[12px]">{issuer.issuerUrl}</span>
-            ), asking that the identity tokens it signs be accepted here.
+            (<span className="font-mono text-[12px]">{issuer.issuerUrl}</span>)
           </>
-        }
-        what="Only the scopes you tick below."
-        where={podWhere(viewer, "across the pod.")}
+        )}
+        what={t("issuer.what")}
+        where={<PodWhere viewer={viewer} space={null} />}
         viewer={viewer}
         when={
-          <>
-            {formatTimestamp(issuer.createdAt)} (
-            {formatRelative(issuer.createdAt)})
-            {typeof via === "string" ? `, from a ${via} request` : ""}.
-          </>
+          typeof via === "string"
+            ? t("issuer.whenVia", {
+                at: formatTimestamp(issuer.createdAt),
+                ago: formatRelative(issuer.createdAt),
+                via,
+              })
+            : t("issuer.when", {
+                at: formatTimestamp(issuer.createdAt),
+                ago: formatRelative(issuer.createdAt),
+              })
         }
       />
-      <WhyApproval>
-        An outside service can vouch for who is calling this pod only after a
-        pod admin trusts it, and only for what you allow.
-      </WhyApproval>
+      <WhyApproval>{t("issuer.needsApproval")}</WhyApproval>
       {issuer.status !== "pending" ? (
-        <Alert color="default" variant="flat" title="Already decided">
-          This issuer is no longer waiting for approval.
+        <Alert
+          color="default"
+          variant="flat"
+          title={t("decide.alreadyDecided")}
+        >
+          {t("issuer.notPending")}
         </Alert>
       ) : (
         <>
           <div className="flex flex-col gap-2">
             <p className="text-[12.5px] font-medium text-foreground">
-              Allowed scopes
+              {t("issuer.scopes")}
             </p>
             <IssuerScopePicker
               selected={scopes}
@@ -700,7 +887,7 @@ function IssuerBody({
             />
           </div>
           <DecideButtons
-            approveLabel="Approve access"
+            approveLabel={t("issuer.approve")}
             canApprove={scopes.length > 0}
             approving={approve.isPending}
             rejecting={reject.isPending}
@@ -713,8 +900,8 @@ function IssuerBody({
       )}
       <AdvancedPanel
         ids={[
-          { label: "Issuer id", value: issuer.id },
-          { label: "Issuer URL", value: issuer.issuerUrl },
+          { label: t("issuer.id"), value: issuer.id },
+          { label: t("issuer.url"), value: issuer.issuerUrl },
         ]}
         raw={issuer.initialRequestData ?? undefined}
       />
@@ -736,14 +923,15 @@ function AppRequestBody({
   // No return-to-app redirect here: the requester's browser is elsewhere,
   // and the receiver page is what sends it back. A decision closes the drawer.
   const afterDecision = useAfterDecision();
+  const t = useT(DRAWER_CATALOGS);
   const review = useConnectionRequest(requestId, {
     onApproved: () => {
-      addToast({ title: "Origin allowed", color: "success" });
+      addToast({ title: drawerT()("app.allowed"), color: "success" });
       afterDecision();
       onClose();
     },
     onRejected: () => {
-      addToast({ title: "Request declined", color: "default" });
+      addToast({ title: drawerT()("app.rejected"), color: "default" });
       afterDecision();
       onClose();
     },
@@ -754,12 +942,10 @@ function AppRequestBody({
     if (request.error) redirectToLoginIfUnauthorized(request.error);
   }, [request.error]);
 
-  if (request.isLoading) return <Loading label="Reading the request…" />;
+  if (request.isLoading) return <Loading label={t("app.loading")} />;
   const data = request.data;
   if (request.error || !data)
-    return (
-      <Unreadable message="This request couldn't be opened — it may have expired or already been decided." />
-    );
+    return <Unreadable message={t("app.unreadable")} />;
   const isPending = data.status === "pending";
 
   // An account link: the decision is about a person, not an origin.
@@ -770,7 +956,7 @@ function AppRequestBody({
           <p className="text-sm font-medium text-foreground">
             {gate.link.heading}
           </p>
-          <p className="text-sm text-foreground/65">{gate.link.body}</p>
+          <p className="text-sm text-foreground/70">{gate.link.body}</p>
         </div>
         {gate.needsAcknowledge && isPending && data.canReview ? (
           <UnverifiedAccountNotice
@@ -781,7 +967,7 @@ function AppRequestBody({
         ) : null}
         <ConnectionRequestDetails data={data} isPending={isPending} />
         {review.actionError && (
-          <Alert color="danger" title="Action couldn’t be completed">
+          <Alert color="danger" title={t("decide.failed")}>
             {review.actionError}
           </Alert>
         )}
@@ -799,8 +985,8 @@ function AppRequestBody({
         ) : null}
         <AdvancedPanel
           ids={[
-            { label: "Request id", value: data.id },
-            { label: "App id", value: data.clientId },
+            { label: t("app.requestId"), value: data.id },
+            { label: t("app.appId"), value: data.clientId },
           ]}
         />
       </div>
@@ -810,48 +996,40 @@ function AppRequestBody({
   return (
     <div className="flex flex-col gap-5 pb-4">
       <TrustSignals
-        who={
-          <>
-            An app named{" "}
-            <strong className="font-medium text-foreground">
-              {data.displayName}
-            </strong>
-            {data.publisherUrl ? `, published by ${data.publisherUrl}` : ""}.
-          </>
-        }
-        what={
-          <>
-            Call this pod&apos;s API from{" "}
-            <span className="font-mono text-[12px]">
-              {data.requestedOrigin}
-            </span>{" "}
-            in a browser. No data access and no membership — people still need
-            to be members.
-          </>
-        }
-        where={podWhere(viewer, "across the pod.")}
+        who={withMark(
+          data.publisherUrl
+            ? t("app.whoBy", {
+                mark: NAME_MARK,
+                publisher: data.publisherUrl,
+              })
+            : t("app.who", { mark: NAME_MARK }),
+          <strong className="font-medium text-foreground">
+            {data.displayName}
+          </strong>
+        )}
+        what={withMark(
+          t("app.what", { mark: NAME_MARK }),
+          <span className="font-mono text-[12px]">{data.requestedOrigin}</span>
+        )}
+        where={<PodWhere viewer={viewer} space={null} />}
         viewer={viewer}
-        when={<>Waiting now; the request expires {requestExpiry(data)}.</>}
+        when={t("app.when", { expiry: requestExpiry(data) })}
       />
-      <WhyApproval>
-        A website can call this pod from a browser only after an owner allows
-        its exact address.
-      </WhyApproval>
+      <WhyApproval>{t("app.needsApproval")}</WhyApproval>
       <ConnectionRequestDetails data={data} isPending={isPending} />
       {matchesApprovedConnection(data) && (
-        <Alert color="success" variant="flat" title="Already allowed">
-          This origin is already on the allowlist for this app; the requester
-          only needs to choose Check connection.
+        <Alert color="success" variant="flat" title={t("app.alreadyAllowed")}>
+          {t("app.alreadyAllowedBody")}
         </Alert>
       )}
       {review.actionError && (
-        <Alert color="danger" title="Action couldn’t be completed">
+        <Alert color="danger" title={t("decide.failed")}>
           {review.actionError}
         </Alert>
       )}
       {isPending && data.canReview ? (
         <DecideButtons
-          approveLabel="Allow this origin"
+          approveLabel={t("app.approve")}
           approving={review.approving}
           rejecting={review.rejecting}
           onApprove={review.approve}
@@ -861,8 +1039,8 @@ function AppRequestBody({
       ) : null}
       <AdvancedPanel
         ids={[
-          { label: "Request id", value: data.id },
-          { label: "App id", value: data.clientId },
+          { label: t("app.requestId"), value: data.id },
+          { label: t("app.appId"), value: data.clientId },
         ]}
       />
     </div>

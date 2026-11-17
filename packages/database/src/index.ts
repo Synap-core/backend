@@ -197,6 +197,7 @@ export {
   findCapabilityGrant,
   resolveCapabilityGrant,
   incrementGrant,
+  consumeSecretGrantRead,
   VaultGrantError,
   assertGrantScoped,
   UnscopedVaultGrantError,
@@ -490,8 +491,33 @@ export {
   type SetSessionStatusResult,
 } from "./services/lifecycle/session-status.js";
 export {
+  RUN_PAUSE_DEFAULT_HOLD,
+  setRunStatus,
+  type RunColumnsPatch,
+  type SetRunStatusInput,
+  type SetRunStatusResult,
+} from "./services/lifecycle/run-status.js";
+export {
+  REACTION_LOG_SUBJECT_TYPE,
+  REACTION_OUTCOMES,
+  listReactionOutcomes,
+  reactionLogEventType,
+  recordReactionOutcomes,
+  type ReactionLogEntry,
+  type ReactionLogRow,
+  type ReactionOutcome,
+} from "./services/lifecycle/reaction-log.js";
+export {
+  oweSlotTransitions,
+  slotTransitionsOf,
+  type SlotForTransition,
+  type SlotSessionPlace,
+} from "./services/lifecycle/slot-transition.js";
+export {
   buildWorkUnitTransition,
+  transitionBaseOf,
   workUnitActorOf,
+  type TransitionBaseInput,
   type WorkUnitActor,
 } from "./services/lifecycle/work-unit-transition.js";
 export {

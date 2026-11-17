@@ -329,3 +329,147 @@ describe("foldRunVerbs", () => {
     ).toEqual(["gmail_send", "x", "postiz_schedule_post"]);
   });
 });
+
+describe("resolveRunToolProfile — a need ref resolves through the run's space (0426)", () => {
+  const needRegistry: Registry = {
+    index,
+    capabilities: [
+      ...capabilities,
+      {
+        kind: "tool",
+        id: "cap-gh",
+        name: "GitHub",
+        verbs: [
+          { id: "github_pr_checks", kind: "read", intent: "fetch_record" },
+          { id: "github_merge", kind: "action", intent: "run_external_job" },
+        ],
+      },
+    ],
+  };
+  const boundTo = (provider: string | null) =>
+    vi.fn(
+      async () =>
+        new Map([
+          [
+            "code-host",
+            {
+              bindingId: "b1",
+              need: "code-host",
+              providerCapabilityId: provider,
+              providerName: "GitHub",
+              setBy: "u-1",
+              updatedAt: new Date(),
+            },
+          ],
+        ])
+    );
+
+  it("offers the verbs of the provider the space bound, read in the RUN's space", async () => {
+    const readSpaceNeeds = boundTo("cap-gh");
+    const p = await resolveRunToolProfile(
+      input,
+      deps(
+        { tools: ["need:code-host/fetch_record"] },
+        { readRegistry: vi.fn(async () => needRegistry), readSpaceNeeds }
+      )
+    );
+    expect(p.verbs).toEqual(["github_pr_checks"]);
+    expect(p.missing).toBeUndefined();
+    expect(readSpaceNeeds).toHaveBeenCalledWith("ws-run");
+    // A need ref is never an intent on the wire.
+    expect(p.intents).toEqual([]);
+  });
+
+  it("an unfilled need offers nothing and is SAID in `missing`, never dropped", async () => {
+    const p = await resolveRunToolProfile(
+      input,
+      deps(
+        { tools: ["need:payments", "publish_post"] },
+        {
+          readRegistry: vi.fn(async () => needRegistry),
+          readSpaceNeeds: boundTo("cap-gh"),
+        }
+      )
+    );
+    expect(p.verbs).toEqual(["postiz_schedule_post"]);
+    expect(p.missing).toEqual([
+      {
+        entry: "need:payments",
+        reason: expect.stringMatching(/Payments.*not filled in this space/),
+      },
+    ]);
+  });
+
+  it("a run with no space has no binding: its needs are missing, the read is not made", async () => {
+    const readSpaceNeeds = boundTo("cap-gh");
+    const p = await resolveRunToolProfile(
+      { ...input, workspaceId: null },
+      deps(
+        { tools: ["need:code-host"] },
+        { readRegistry: vi.fn(async () => needRegistry), readSpaceNeeds }
+      )
+    );
+    expect(readSpaceNeeds).not.toHaveBeenCalled();
+    expect(p.verbs).toEqual([]);
+    expect(p.missing?.map((m) => m.entry)).toEqual(["need:code-host"]);
+  });
+
+  it("a failed binding read is `failed` with the floor, never a calm empty list", async () => {
+    const p = await resolveRunToolProfile(
+      input,
+      deps(
+        { tools: ["need:code-host"] },
+        {
+          readRegistry: vi.fn(async () => needRegistry),
+          readSpaceNeeds: vi.fn(async () => {
+            throw new Error("db down");
+          }),
+        }
+      )
+    );
+    expect(p.capabilitiesRead).toBe("failed");
+    expect(p.verbs).toEqual([]);
+  });
+});
+
+describe("a playbook converted from a named verb to need: still resolves on upgrade (0426)", () => {
+  it("with NO binding row, the space's one filling provider's verbs are offered", async () => {
+    const { withImplicitBindings } = await import("../needs/space-needs.js");
+    // "Ship a change" named github_pr_checks; it now names need:code-host. The
+    // pod has no binding yet; GitHub is the only installed code-host filler.
+    const registryWithGh: Registry = {
+      index,
+      capabilities: [
+        ...capabilities,
+        {
+          kind: "tool",
+          id: "cap-gh",
+          name: "GitHub",
+          verbs: [
+            { id: "github_pr_checks", kind: "read", intent: "fetch_record" },
+          ],
+        },
+      ],
+    };
+    const p = await resolveRunToolProfile(
+      input,
+      deps(
+        { tools: ["need:code-host/fetch_record"] },
+        {
+          readRegistry: vi.fn(async () => registryWithGh),
+          readSpaceNeeds: vi.fn(async () =>
+            withImplicitBindings(new Map(), [
+              {
+                id: "cap-gh",
+                name: "GitHub",
+                metadata: { fills: ["code-host"] },
+              },
+            ])
+          ),
+        }
+      )
+    );
+    expect(p.verbs).toEqual(["github_pr_checks"]);
+    expect(p.missing).toBeUndefined();
+  });
+});

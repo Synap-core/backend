@@ -119,6 +119,30 @@ const REFUSED = (reason: string): FencedReadDoor => ({
 const FLOW_OF = NARROWED("entity", []);
 
 /**
+ * THE PROCESS READ (`services/playbooks/process-read.ts`, Process wave W2):
+ * one playbook seen whole composes its automations, its run sessions, its
+ * skills and the tools covering its needs, beside the playbook. Hub
+ * `GET /playbooks/:id/process` and `GET /processes` declare those subjects;
+ * MCP `synap_list_playbooks({ playbookId })` (classified `playbook`) attaches
+ * the process only for a key this door bounds, and says `processWithheld`
+ * otherwise (`processReadableByGrant`).
+ */
+export const PROCESS_READ = READS(
+  "playbook",
+  "automation",
+  "session",
+  "skill",
+  "tool"
+);
+
+/** May this request's key read a whole process (null grant = a person, always)? */
+export function processReadableByGrant(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return !isFencedGrant(grant) || grantBoundsDoor(PROCESS_READ, grant!);
+}
+
+/**
  * The board read (`readBoardScene`): Hub `GET /whiteboards/:viewId/scene` and
  * MCP `synap_read_board` call the same function, so they share this one
  * declaration.
@@ -178,6 +202,22 @@ const THREAD_CONTEXT = READS("channel", "entity", "document");
  * orchestrator)`. The door of what it returns: a channel row.
  */
 const GET_CHANNEL = READS("channel");
+
+/**
+ * The find door (`findForCaller`): MCP `synap_find` and Hub `GET /find` call
+ * the same function, so they share this one declaration. The subjects are
+ * the catalogs that read on the person's floor with no grant clause:
+ * runnable verbs (`tool`, `command`), playbooks, and automations. The object
+ * catalogs (skills and rules, automations, sessions, goals, projects, views,
+ * documents; `find-objects.ts`) AND the key's grant row by row
+ * (`grantReadPredicate`; guarded by
+ * `services/capabilities/__tests__/find-objects.grants.pglite.test.ts`),
+ * except skills, which have no read subject yet (as LOAD_SKILL). The spaces
+ * catalog reads the person's member spaces (name, purpose, kinds), which no
+ * subject here names (`/workspaces` declares entity, project, proposal). A key
+ * pinned to a space, project or object never passes it.
+ */
+const FIND = READS("tool", "command", "playbook", "automation");
 
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
@@ -385,6 +425,10 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // An app whose grant does not yet reach a space must read whether its
   // person allowed it.
   route("/apps/access-requests/:id"),
+  // An agent reads its OWN ask the same way (`readAgentAccessAsk`,
+  // services/agent-access-ask.ts): an ask of the agent whose key calls,
+  // filed for the person the key acts for (else 404) — no row a grant bounds.
+  route("/agents/access-requests/:id"),
   /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
   // The built-in skill packages' SKILL.md files, read from the image's
@@ -698,6 +742,14 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // views, skills and automations; `/:slug` plans one of them over the same
   // rows. Without it a computer's key (finding de33a075) could not run
   // `synap market update`, which reads this list.
+  // A space's needs (0426): the playbooks and automations of the space that
+  // name a need, the space's bindings (`installation_bindings`, read under
+  // `installation`) and the installed capabilities that could fill one
+  // (`tool`).
+  [
+    /^\/workspaces\/[^/]+\/needs\/?$/,
+    READS("playbook", "automation", "installation", "tool"),
+  ],
   [
     /^\/package-updates\/?$/,
     READS("proposal", "tool", "view", "skill", "automation"),
@@ -775,6 +827,10 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // runs: `scopedDb`, subject `playbook`); flows without `playbook.read`
   // and the workers (no seam) come back `withheld`. Same as MCP `synap_get_flow`.
   [/^\/flow\/?$/, FLOW_OF],
+  // THE PROCESS READ (one playbook whole, or a space's process cards): see
+  // `PROCESS_READ` for the subjects it composes.
+  [route("/playbooks/:id/process"), PROCESS_READ],
+  [/^\/processes\/?$/, PROCESS_READ],
   // `readWorkRelease` (services/dev-loop/work-release.ts), narrowed by the
   // read itself (`workReleaseReach`): a key reading every subject unbounded
   // gets it whole; one pinned to spaces gets the snapshots and sessions its
@@ -820,6 +876,8 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // entities (`loadProfileFill`). The same rule as MCP `synap_list_profiles`,
   // plus the relation vocabulary.
   [/^\/discover\/?$/, READS("entity", "relation_def")],
+  // Find by words (`findForCaller`): the same door as MCP `synap_find` (FIND).
+  [/^\/find\/?$/, FIND],
   // Full-text recall of remembered facts: the twin of POST /memory/search.
   // GET only: every other /memory route is an owner-wide write
   // (GRANT_OWNER_WIDE_REST_WRITES).
@@ -1068,7 +1126,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
     "project"
   ),
   synap_orient: ORIENT,
-  synap_find: READS("tool", "command", "playbook", "automation"),
+  // Same door as `GET /find` (FIND).
+  synap_find: FIND,
   synap_get_entity: READS("entity", "relation", "facet", "document"),
   synap_get_graph: READS(
     "entity",
@@ -1174,6 +1233,7 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_evaluate_session: WRITE,
     synap_complete_session: WRITE,
     synap_rerun_session: WRITE,
+    synap_continue_session: WRITE,
     // Not read-only only because an agent's read stamps the "Picked up"
     // receipt: it RETURNS the person's answers and the session's changes. The
     // same door as its REST twin, GET /focus-sessions/:id/answers/wait

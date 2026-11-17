@@ -78,10 +78,36 @@ export function findLifecycleOption(
 /**
  * What a transition is ABOUT. An entity (a kind's lifecycle, or a role's on
  * its facet) moves through the `moveStatus` door; a goal (`project_tracks`)
- * through its own compare-and-set; a focus session through `setSessionStatus`.
- * All three write the SAME shape below, through the same outbox.
+ * through its own compare-and-set; a focus session through `setSessionStatus`;
+ * a playbook run through `setRunStatus`; a proposal through
+ * `transitionProposal`; an owed slot (a session's declared output, whose
+ * status is DERIVED, `slotStatusOf`) through the slot doors, which owe a move
+ * when its derived status changes. All six write the SAME shape
+ * below, through the same outbox.
  */
-export type TransitionSubjectType = "entity" | "track" | "focus_session";
+export const TRANSITION_SUBJECT_TYPES = [
+  "entity",
+  "track",
+  "focus_session",
+  "playbook_run",
+  "proposal",
+  "slot",
+] as const;
+export type TransitionSubjectType = (typeof TRANSITION_SUBJECT_TYPES)[number];
+
+/**
+ * WHY a move happened when another move caused it: the reaction that fired, the
+ * transition that fired it, the chain it belongs to and how deep in that chain
+ * it is. Absent on a move nobody's move caused. It says why, never whether: the
+ * reactions guards read its chain and depth, the history shows it, and it is
+ * never part of what makes a move a move.
+ */
+export interface TransitionCause {
+  reactionId?: string;
+  transitionId: string;
+  chainId: string;
+  depth: number;
+}
 
 /**
  * ONE TRANSITION SHAPE (status-flow plan W1): what every status move carries,
@@ -139,6 +165,8 @@ export interface TransitionBase {
    * moves, whose statuses declare no waits).
    */
   wait?: TransitionWait;
+  /** The move that caused this one; absent otherwise. */
+  cause?: TransitionCause;
 }
 
 /** Who made a move, for attribution (`TransitionBase.actorClass`). */
@@ -170,9 +198,63 @@ export interface WorkUnitTransitionPayload extends TransitionBase {
   trackId: string | null;
 }
 
+/**
+ * The payload of `playbook_run.transition.completed`: a run's status moved
+ * (`setRunStatus`). `subjectId` is the run; `sessionId` the session it drives
+ * (null once that session is gone); `stopReason` why a run that stopped
+ * early stopped (`budget`, `stages_left`), so a reaction or a breaker can
+ * filter on it.
+ */
+export interface RunTransitionPayload extends TransitionBase {
+  subjectType: "playbook_run";
+  playbookId: string;
+  projectId: string | null;
+  trackId: string | null;
+  stopReason: string | null;
+}
+
+/**
+ * The document section a `document/*` proposal addresses: the document it
+ * patches and the section ids its ops name (empty when the ops name none).
+ */
+export interface ProposalSectionRef {
+  documentId: string;
+  sectionIds: string[];
+}
+
+/**
+ * The payload of `proposal.transition.completed`: a proposal's status moved
+ * (`transitionProposal`). `subjectId` is the proposal; `proposalId` is the
+ * same id. `section` is set for a `document/*` proposal (a proposed section
+ * joins the door as its proposal).
+ */
+export interface ProposalTransitionPayload extends TransitionBase {
+  subjectType: "proposal";
+  proposalType: string;
+  targetType: string;
+  targetId: string;
+  section: ProposalSectionRef | null;
+}
+
+/**
+ * The payload of `slot.transition.completed`: an owed slot's DERIVED status
+ * moved (`slotStatusOf`). `subjectId` is `<session id>/<slot key>`;
+ * `sessionId` the session that declares it.
+ */
+export interface SlotTransitionPayload extends TransitionBase {
+  subjectType: "slot";
+  slotKey: string;
+  projectId: string | null;
+  trackId: string | null;
+}
+
 /** Any transition, discriminated on `subjectType`. */
 export type AnyTransitionPayload =
-  LifecycleTransitionPayload | WorkUnitTransitionPayload;
+  | LifecycleTransitionPayload
+  | WorkUnitTransitionPayload
+  | RunTransitionPayload
+  | ProposalTransitionPayload
+  | SlotTransitionPayload;
 
 export {
   HOLD_DEV_MOVES_HELP,

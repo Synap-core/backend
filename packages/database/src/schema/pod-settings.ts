@@ -349,6 +349,15 @@ export interface PodSettingsBlob {
   controlPlaneEntitlementSync?: ControlPlaneEntitlementSync;
   onboardingMilestones?: OnboardingMilestonesSetting;
   onboardingMilestonesSync?: OnboardingMilestonesSync;
+  /**
+   * The reactions compile pass's memory (api
+   * `services/reactions/reaction-rules-compile.ts`): which rule row each
+   * reaction produced, and whether the pass retired it — what tells the
+   * owner's pause or deletion apart from the pass's own retirement.
+   */
+  reactionRules?: {
+    rules: Record<string, { ruleId: string; retired?: true }>;
+  };
   [k: string]: unknown;
 }
 

@@ -20,7 +20,10 @@ import {
   deepResolveTemplates,
   resolveInputMapping,
 } from "../template-resolve.js";
-import { dispatchViaCapabilityRouter } from "../capability-dispatch.js";
+import {
+  dispatchViaCapabilityRouter,
+  resolveNeedVerbViaPod,
+} from "../capability-dispatch.js";
 import {
   guardProducerEffect,
   PolicyBlockedError,
@@ -290,6 +293,8 @@ export async function executeCapabilityNode(
   data: {
     capabilityId?: string;
     verbId?: string;
+    /** A need ref instead of a verb (0426): the space's bound provider's verb. */
+    need?: string;
     inputMapping?: Record<string, string>;
     connectionSelector?: {
       connectionId?: string;
@@ -312,7 +317,20 @@ export async function executeCapabilityNode(
     automationRun?: { sessionId: string; agentUserId: string | null } | null;
   }
 ): Promise<unknown> {
-  const verbId = data.verbId;
+  let verbId = data.verbId;
+  if (!verbId && data.need) {
+    // A NEED (0426): the verb the provider this space bound to it offers.
+    // No provider, or no single verb for it, fails the step with the reason.
+    const resolved = await resolveNeedVerbViaPod({
+      need: data.need,
+      workspaceId: opts.workspaceId,
+      userId: opts.ownerId,
+    });
+    if ("reason" in resolved) {
+      throw new Error(`Capability node cannot run: ${resolved.reason}`);
+    }
+    verbId = resolved.verbId;
+  }
   if (!verbId) throw new Error("Capability node has no verbId");
 
   // The verb is `<subjectType>.<action>` shaped (e.g. `mail.send`) — split so the

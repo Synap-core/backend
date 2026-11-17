@@ -52,6 +52,9 @@ const UNFILLED_BY_DESIGN: Record<string, string> = {
   // (which apps/api calls at boot) registers the hold-resume reactor (W4).
   registerHoldResumeReactor:
     "registers a jobs-owned reactor from registerAllWorkers, which boot calls",
+  // The reactions reactor: the same, registered by registerAllWorkers.
+  registerReactionsReactor:
+    "registers a jobs-owned reactor from registerAllWorkers, which boot calls",
 };
 
 function read(file: string): string {

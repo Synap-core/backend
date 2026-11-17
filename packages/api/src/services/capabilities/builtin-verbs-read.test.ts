@@ -117,6 +117,28 @@ vi.mock("../../utils/resolve-or-create-channel.js", () => ({
 const patch = vi.hoisted(() => ({
   apply: vi.fn(async (input: unknown) => ({ status: "applied", input })),
 }));
+// The session side of a document question: an in-memory session, so the REAL
+// materializer rules run behind the verb (see the `document.update` questions).
+const askSession = vi.hoisted(() => ({
+  filed: [] as Array<{ sessionId: string; slots: unknown[] }>,
+  stored: [] as unknown[],
+}));
+vi.mock("../document-patch/ask-slots.js", () => ({
+  readAskSession: async () => ({
+    status: "active",
+    expectedOutputs: askSession.stored as never[],
+  }),
+  buildAskSlot: async (spec: Record<string, unknown>) => ({
+    kind: "ask",
+    owner: "human",
+    ...spec,
+  }),
+  fileAskSlots: async (a: { sessionId: string; slots: unknown[] }) => {
+    askSession.filed.push({ sessionId: a.sessionId, slots: a.slots });
+    askSession.stored.push(...a.slots);
+    return { status: "updated" };
+  },
+}));
 vi.mock("../document-patch/apply-document-patch.js", () => ({
   applyDocumentPatch: patch.apply,
   loadPatchDocument: async () => ({ contentRevision: 7 }),
@@ -217,6 +239,10 @@ describe("W6 read/resolve verbs — registry", () => {
       // accounts (labels and ids), the account source of send_message's input
       // map. Reads only; the send itself (messaging.send) stays gated.
       "messaging.accounts",
+      // pdf.info (PDF tools W1) reads one PDF the caller may read and returns
+      // the pod's own engine's report; it creates nothing. The other pdf.*
+      // verbs make a new file and stay gated.
+      "pdf.info",
       // snippet.render reads a snippet (and a subject's fields) through the
       // caller's floor and returns text; it writes nothing.
       "snippet.render",
@@ -340,6 +366,8 @@ describe("document.update — through the patch door, never the editor save", ()
       ],
       allowRemovingEmbeds: undefined,
       provenanceSessionId: "run-1",
+      // `sessionId` here may be body-named: provenance, never a verified session.
+      ambientSessionId: null,
     });
   });
 
@@ -379,6 +407,65 @@ describe("document.update — through the patch door, never the editor save", ()
       provenanceSessionId: "run-1",
     });
     expect(input).not.toHaveProperty("systemAuthor");
+  });
+
+  describe("a question written through the verb", () => {
+    const RUN = "6f1c2b0e-0a52-4c4e-9d33-2d6c0f6d9a11";
+    const DEFINITION = [
+      ":::synap-ask",
+      "```json",
+      JSON.stringify({
+        key: "ship-it",
+        label: "Ship it?",
+        ask: { mode: "confirm" },
+      }),
+      "```",
+      "",
+      "Ship it?",
+      ":::",
+    ].join("\n");
+    /** The patch door's materialization, with the rules the real door applies. */
+    beforeEach(() => {
+      askSession.filed = [];
+      askSession.stored = [];
+      patch.apply.mockImplementationOnce((async (input: {
+        ops: never;
+        userId: string;
+        agentUserId: string;
+        ambientSessionId?: string | null;
+        provenanceSessionId?: string | null;
+      }) => {
+        const { materializeAskDefinitionsInOps } =
+          await import("../document-patch/materialize-asks.js");
+        return materializeAskDefinitionsInOps(input.ops, {
+          userId: input.userId,
+          agentUserId: input.agentUserId,
+          sessionId: input.ambientSessionId ?? null,
+          namedSessionId: input.provenanceSessionId ?? null,
+        });
+      }) as never);
+    });
+    const run = (ctx: Record<string, unknown>) =>
+      BUILTIN_VERBS["document.update"]!(
+        { documentId: DOC, ops: [{ op: "append", body: DEFINITION }] },
+        { userId: "u1", workspaceId: null, ...ctx } as never
+      );
+
+    it("an agent run's definition is filed on the run's OWN session", async () => {
+      await run({
+        agentUserId: "agent-1",
+        automationRun: { sessionId: RUN, agentUserId: "agent-1" },
+      });
+      expect(askSession.filed).toHaveLength(1);
+      expect(askSession.filed[0]!.sessionId).toBe(RUN);
+    });
+
+    it("with no run session (a REST call naming a sessionId) it is refused, nothing filed", async () => {
+      await expect(
+        run({ agentUserId: "agent-1", sessionId: RUN })
+      ).rejects.toThrow(/synap_start_session/);
+      expect(askSession.filed).toEqual([]);
+    });
   });
 
   it("a calling agent's own identity and session win over the run's", async () => {

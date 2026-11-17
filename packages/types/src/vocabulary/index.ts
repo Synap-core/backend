@@ -57,6 +57,13 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
+import type { ProcessStepRunnerKind } from "../processes/steps.js";
+import type { ProcessNeed } from "../processes/read.js";
+import { canonicalNeedSlug, parseNeedRef } from "../needs/index.js";
+import type {
+  ProcessHealth,
+  ProcessHealthReason,
+} from "../processes/health.js";
 import type { SessionVerdict } from "../focus-sessions/verdict.js";
 import type { RunnerState } from "../units/runner-state.js";
 import type {
@@ -314,6 +321,8 @@ const ACTION_VERB_ROWS = {
   link: { imperative: "Link", past: "Linked", present: "Links" },
   unlink: { imperative: "Unlink", past: "Unlinked" },
   attach: { imperative: "Attach", past: "Attached" },
+  // A space's need filled by a provider (0426, the `workspace/bind_need` door).
+  bind_need: { imperative: "Fill need", past: "Filled need" },
   // "Add to <session>" (a capture offered to a running session) — `add`
   // humanized to "Add" in BOTH moods, so the receipt read "Add to X".
   add: { imperative: "Add", past: "Added" },
@@ -449,6 +458,8 @@ const ACTION_VERB_ROWS = {
   // `blocked_by` edge. Dotted keys, so a bare `stop` or `release` elsewhere
   // keeps its own reading (pause, resume and rerun share their bare rows).
   "session.stop": { imperative: "Stop", past: "Stopped" },
+  // A run that stopped before its last stage resumes at it (plan 7d71ddcc).
+  "session.continue": { imperative: "Continue", past: "Continued" },
   "session.wait_on": { imperative: "Wait on", past: "Waited on" },
   "session.release": {
     imperative: "Stop waiting on",
@@ -636,6 +647,16 @@ const ACTION_VERB_ROWS = {
     past: "Declined",
     progressive: "Declining",
   },
+  // The person's NO to an agent's ask, on every mode (founder, 16 Nov 2026,
+  // plan d717d6ac §3): the stored answer is `{ type: "declined" }`
+  // (`@synap-core/types/ask`). Not `decline` (a connection asking for reach)
+  // and not `reject` (a proposal): the ask closes as refused, the reason goes
+  // to the agent, nothing is handed over.
+  refuse: {
+    imperative: "Refuse",
+    past: "Refused",
+    progressive: "Refusing",
+  },
   // Cutting a connection's sign-in (an account, a channel, an agent's keys).
   // Reversible by connecting again — never "Deleted".
   disconnect: {
@@ -662,6 +683,10 @@ const ACTION_VERB_ROWS = {
   // into a channel (`channel_message.created`).
   ask: { imperative: "Ask", past: "Asked", progressive: "Asking" },
   attest: { imperative: "Mark done", past: "Marked done" },
+  // The person's "Not mine" on a slot an agent handed them
+  // (`focus_session.slot_handed_back`): the slot is the agent's again,
+  // unanswered. Not an answer and not a refusal.
+  hand_back: { imperative: "Hand back", past: "Handed back" },
   post: { imperative: "Post", past: "Posted", progressive: "Posting" },
   see_failure: { imperative: "See what failed", past: "Saw what failed" },
   turn_on: {
@@ -1070,6 +1095,18 @@ export function resolveObjectNoun(
     translatedWord(`kind.${slug}.one`, catalogLocaleOf(locale)) ??
     englishNoun(slug).one
   );
+}
+
+/**
+ * The English words a kind was called before a rename (`formerLabels` on its
+ * registry row), to RECOGNISE durable stored text that still spells them
+ * (never to show them). Empty for a kind never renamed or unknown.
+ */
+export function resolveFormerObjectNouns(
+  kind: string | null | undefined
+): readonly string[] {
+  if (!kind) return [];
+  return OBJECT_KINDS[canonicalKind(kind)]?.formerLabels ?? [];
 }
 
 function canonicalKind(kind: string): string {
@@ -1604,6 +1641,26 @@ export function resolveToolKindLabel(kind: string | null | undefined): string {
   const key = kind.toLowerCase();
   const canonical = OBJECT_KIND_ALIASES[key] ?? key;
   return TOOL_KIND_LABELS[canonical] ?? humanizeToken(canonical);
+}
+
+/**
+ * The plural of {@link TOOL_KIND_LABELS}, for a block that lists several of
+ * one kind. A process's instruction skills ("What agents load",
+ * `ProcessRead.skills`) are "Skills": the noun for instructions an agent
+ * follows, distinct from the umbrella "Tool" (founder D2), which stays the
+ * noun of lists, counts and mentions.
+ */
+export const TOOL_KIND_PLURALS: Readonly<Record<string, string>> = {
+  skill: "Skills",
+  capability: "Capabilities",
+  tool: "Integrations",
+};
+
+export function resolveToolKindPlural(kind: string | null | undefined): string {
+  if (!kind) return "";
+  const key = kind.toLowerCase();
+  const canonical = OBJECT_KIND_ALIASES[key] ?? key;
+  return TOOL_KIND_PLURALS[canonical] ?? humanizeToken(canonical);
 }
 
 /**
@@ -2470,6 +2527,79 @@ export const WAIT_KIND_LABELS = {
 export type WaitKindLabelRows = typeof WAIT_KIND_LABELS;
 
 /**
+ * Who moves a process step on, in a person's words (`PROCESS_STEP_RUNNER_KINDS`,
+ * `classifyStepRunner`, `@synap-core/types/processes`): the step strip's and
+ * pod admin's runner mark, beside the gate's words (`trackStepGateLabel`,
+ * `@synap-core/types/units`), which it never repeats. `automatic` is declared and
+ * unreachable until W2b declares "an automation moves this step". Keyed by
+ * EVERY kind.
+ */
+export const STEP_RUNNER_KIND_LABELS = {
+  person: "You",
+  ai: "An agent",
+  automatic: "Runs by itself",
+} as const satisfies Readonly<Record<ProcessStepRunnerKind, string>>;
+
+/** The step runner rows, exactly typed: the keys of the `stepRunner.*` catalog. */
+export type StepRunnerKindLabelRows = typeof STEP_RUNNER_KIND_LABELS;
+
+/**
+ * A NEED's name (0426, `NEEDS` in `@synap-core/types/needs`): what a process
+ * read, the need picker and a run's "missing" line call it. Keyed by EVERY
+ * need slug; `needs-labels.test.ts` pins each English word to `NEEDS`' own
+ * label, so the two never drift.
+ */
+export const NEED_LABELS = {
+  "code-host": "Code host",
+  "deploy-target": "Deploy target",
+  gate: "Gate",
+  payments: "Payments",
+  messaging: "Messaging",
+  email: "Email",
+  calendar: "Calendar",
+  "file-store": "File store",
+  "media-generation": "Media generation",
+  "social-publishing": "Social publishing",
+  "linkedin-reach": "LinkedIn reach",
+  analytics: "Analytics",
+} as const;
+
+/** The need rows, exactly typed: the keys of the `need.*` catalog. */
+export type NeedLabelRows = typeof NEED_LABELS;
+
+/**
+ * A capability INTENT's short name (`CAPABILITY_INTENTS`), for a process
+ * read's need entry and a need ref's `/<intent>`: a noun phrase, never the
+ * consent sentence (`intentRunLabel`). Keyed by EVERY intent
+ * (`needs-labels.test.ts`).
+ */
+export const INTENT_LABELS = {
+  search_external: "Search outside sources",
+  find_people: "Find people",
+  enrich_entity: "Enrich records",
+  fetch_record: "Fetch a record",
+  list_records: "List records",
+  send_message: "Send a message",
+  request_connection: "Request a connection",
+  schedule_event: "Schedule an event",
+  manage_file: "Manage files",
+  generate_media: "Generate media",
+  capture_into_pod: "Bring data into the pod",
+  run_external_job: "Run an outside job",
+  connect_account: "Connect an account",
+  publish_post: "Publish a post",
+  delegate_agent_task: "Hand a task to an agent",
+  read_webpage: "Read a web page",
+  search_web: "Search the web",
+  edit_video: "Edit a video",
+  transcribe_media: "Transcribe media",
+  download_media: "Download media",
+} as const;
+
+/** The intent rows, exactly typed: the keys of the `intent.*` catalog. */
+export type IntentLabelRows = typeof INTENT_LABELS;
+
+/**
  * What a session's runner says it is doing (0384, `RUNNER_STATES`), in a
  * person's words: the mark a session page and a needs-you row wear (decision
  * D-R1). Keyed by EVERY state: a word with no label stops the build.
@@ -2570,6 +2700,166 @@ export function resolveWaitKindLabel(
   return (
     translatedWord(`waitKind.${key}`, catalogLocaleOf(opts?.locale)) ??
     WAIT_KIND_LABELS[key as keyof WaitKindLabelRows]
+  );
+}
+
+/**
+ * The words for who moves a step on (`person` | `ai` | `automatic`, the
+ * answer of `classifyStepRunner`), in `opts.locale` (else the ambient catalog
+ * locale), through `stepRunner.<kind>`. Unknown kinds humanize; none is "".
+ */
+export function resolveStepRunnerLabel(
+  kind: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!kind) return "";
+  const key = kind.trim().toLowerCase();
+  if (!Object.hasOwn(STEP_RUNNER_KIND_LABELS, key)) return humanizeToken(kind);
+  return (
+    translatedWord(`stepRunner.${key}`, catalogLocaleOf(opts?.locale)) ??
+    STEP_RUNNER_KIND_LABELS[key as keyof StepRunnerKindLabelRows]
+  );
+}
+
+/**
+ * A need's name (`code-host` → "Code host"), in `opts.locale` (else the
+ * ambient catalog locale), through `need.<slug>`. An alias reads as its need;
+ * an unknown slug humanizes; none is "".
+ */
+export function resolveNeedLabel(
+  slug: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!slug) return "";
+  const key = canonicalNeedSlug(slug);
+  if (!key || !Object.hasOwn(NEED_LABELS, key)) return humanizeToken(slug);
+  return (
+    translatedWord(`need.${key}`, catalogLocaleOf(opts?.locale)) ??
+    NEED_LABELS[key as keyof NeedLabelRows]
+  );
+}
+
+/**
+ * An intent's short name (`fetch_record` → "Fetch a record"), in
+ * `opts.locale` (else the ambient catalog locale), through `intent.<slug>`.
+ * An unknown slug humanizes; none is "".
+ */
+export function resolveIntentLabel(
+  intent: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!intent) return "";
+  const key = intent.trim();
+  if (!Object.hasOwn(INTENT_LABELS, key)) return humanizeToken(intent);
+  return (
+    translatedWord(`intent.${key}`, catalogLocaleOf(opts?.locale)) ??
+    INTENT_LABELS[key as keyof IntentLabelRows]
+  );
+}
+
+/**
+ * The words a process read's need entry wears (`ProcessNeed`), never its raw
+ * token: a `need:` entry → the need's name, and its `/<intent>` as
+ * `intentLabel`; an intent entry → the intent's name; a capability entry →
+ * the capability's name when the read found it, else null (the surface then
+ * says "a tool it names"). The pod fills `label`/`intentLabel` in English; a
+ * surface in another locale calls this with its locale. PURE.
+ */
+export function resolveProcessNeedLabels(
+  need: Pick<ProcessNeed, "slug" | "kind"> & {
+    providers?: ProcessNeed["providers"];
+  },
+  opts?: { locale?: Locale }
+): { label: string | null; intentLabel: string | null } {
+  if (need.kind === "need") {
+    const ref = parseNeedRef(need.slug);
+    if (!ref) {
+      return {
+        label: humanizeToken(need.slug.replace(/^need:/, "")),
+        intentLabel: null,
+      };
+    }
+    return {
+      label: resolveNeedLabel(ref.need, opts),
+      intentLabel: ref.intent ? resolveIntentLabel(ref.intent, opts) : null,
+    };
+  }
+  if (need.kind === "intent") {
+    return { label: resolveIntentLabel(need.slug, opts), intentLabel: null };
+  }
+  return {
+    label: need.providers?.[0]?.capabilityName ?? null,
+    intentLabel: null,
+  };
+}
+
+/**
+ * A process health's LABEL (its pill / mark text), from its reason code, in
+ * `opts.locale` (else the ambient catalog locale). `waiting_on_you` reads the
+ * status label door (`resolveStatusLabel("waiting_on_you")`). An unknown code
+ * (a newer pod) humanizes, never leaks.
+ */
+export function resolveProcessHealthLabel(
+  health: Pick<ProcessHealth, "reason">,
+  opts?: { locale?: Locale }
+): string {
+  const locale = catalogLocaleOf(opts?.locale);
+  if (health.reason === "waiting_on_you") {
+    return resolveStatusLabel("waiting_on_you", locale);
+  }
+  if (!isProcessHealthReason(health.reason)) {
+    return humanizeToken(health.reason);
+  }
+  return sentences(locale)(
+    `vocabulary.processHealth.${health.reason}.label` as ProcessHealthLabelKey
+  );
+}
+
+/**
+ * A process health's REASON sentence (the why under the label), from its code
+ * and, for `latest_unresolved`, the status it names (through
+ * `resolveStatusLabel`). An unknown code humanizes.
+ */
+export function resolveProcessHealthReason(
+  health: Pick<ProcessHealth, "reason" | "latestStatus">,
+  opts?: { locale?: Locale }
+): string {
+  const locale = catalogLocaleOf(opts?.locale);
+  if (!isProcessHealthReason(health.reason)) {
+    return humanizeToken(health.reason);
+  }
+  const t = sentences(locale);
+  if (health.reason === "latest_unresolved") {
+    return t("vocabulary.processHealth.latest_unresolved.reason", {
+      status: resolveStatusLabel(health.latestStatus ?? "", locale),
+    });
+  }
+  return t(
+    `vocabulary.processHealth.${health.reason}.reason` as ProcessHealthPlainReasonKey
+  );
+}
+
+type ProcessHealthLabelKey = `vocabulary.processHealth.${Exclude<
+  ProcessHealthReason,
+  "waiting_on_you"
+>}.label`;
+type ProcessHealthPlainReasonKey = `vocabulary.processHealth.${Exclude<
+  ProcessHealthReason,
+  "latest_unresolved"
+>}.reason`;
+// COVERAGE FLOOR: a reason code without its words does not build.
+type _ProcessHealthWordsCovered = [
+  ProcessHealthLabelKey | ProcessHealthPlainReasonKey,
+] extends [keyof VocabularySentencesEn]
+  ? true
+  : never;
+const _processHealthWordsCovered: _ProcessHealthWordsCovered = true;
+void _processHealthWordsCovered;
+
+function isProcessHealthReason(code: string): code is ProcessHealthReason {
+  return Object.hasOwn(
+    vocabularySentencesEn,
+    `vocabulary.processHealth.${code}.reason`
   );
 }
 
@@ -3541,6 +3831,20 @@ export function resolveHandedToLabel(
   return sentences(catalogLocaleOf(locale))("vocabulary.handedTo", { name });
 }
 
+/**
+ * A job's child jobs folded on its Activity line: "3 jobs started from here"
+ * (plan 5207fbb6, `@synap-core/types/work-view` `jobBranches`
+ * `descendants`). A child job is a Job, never a "branch" on screen.
+ */
+export function resolveJobsStartedHereLabel(
+  n: number,
+  locale?: Locale
+): string {
+  return sentences(catalogLocaleOf(locale))("vocabulary.job.startedHere", {
+    n,
+  });
+}
+
 // ─── The one-line aim of a sitting (decision D3, 2026-10-23) ────────────────
 
 /**
@@ -4123,6 +4427,9 @@ export const vocabularyEn = buildVocabularyEn({
   needsYouNouns: NEEDS_YOU_ITEM_NOUNS,
   runnerStates: RUNNER_STATE_LABELS,
   waitKinds: WAIT_KIND_LABELS,
+  stepRunners: STEP_RUNNER_KIND_LABELS,
+  needs: NEED_LABELS,
+  intents: INTENT_LABELS,
 });
 
 /** Every locale's vocabulary catalog, for `createT` and the parity test. */

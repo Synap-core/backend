@@ -4517,6 +4517,13 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "playbook_id" uuid;
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_playbook_id"
   ON "focus_sessions" ("playbook_id")
   WHERE "playbook_id" IS NOT NULL;
+-- 0427: one live run per object. A run started by the run door holds its
+-- object's one live slot; at most one live slot-holder per (playbook,
+-- subject, owner).
+ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "one_live_per_subject" boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS "uniq_focus_sessions_one_live_run"
+  ON "focus_sessions" ("playbook_id", "subject_entity_id", "user_id")
+  WHERE "one_live_per_subject" AND "status" IN ('active', 'paused', 'forming', 'stale');
 
 -- ── Playbook Runs (0129_playbook_runs.sql catch-up) ───────────────────────────
 -- The run ledger — one row per execution of a Playbook (executor spine, P3).
@@ -4559,7 +4566,9 @@ CREATE INDEX IF NOT EXISTS "idx_playbook_runs_external_agent_active"
 -- ── Playbook Automations (0179_playbook_automations.sql catch-up) ─────────────
 -- First-class, editable composition of a playbook's automations (promotes the
 -- read-only `automation --member_of--> playbook` link edges). Soft links: no FK
--- to playbooks or automations (enforced at the application layer).
+-- to playbooks or automations (enforced at the application layer). Since 0425
+-- the ONE store of a playbook's automations: its schedule (role `schedule`),
+-- its canvas flow (`flow`), its activators (`activator`), its members.
 CREATE TABLE IF NOT EXISTS "playbook_automations" (
   "id"            uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "playbook_id"   uuid        NOT NULL,
@@ -4956,6 +4965,8 @@ ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispat
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispatch_daily';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_pending_approvals';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_irreversible_sends_daily';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'linkedin_invitations_daily';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'linkedin_actions_daily';
 CREATE TABLE IF NOT EXISTS "governance_ceilings" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "axis"                governance_ceiling_axis NOT NULL,
@@ -5007,9 +5018,8 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "title" varchar(200);  -- 
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- 0291: the ABSTRACT intents a playbook needs the pod to be able to do
--- (capability_intents vocabulary). WHAT IT NEEDS, not what the pod has: a
--- playbook may declare an intent nothing installed serves, and that gap is
--- what a later install is checked against — so it is reported, never rejected.
+-- (capability_intents vocabulary). Unread and unwritten since 0419 folded it
+-- into `tools`; kept until a release carrying 0419 has shipped (forward-only).
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "required_intents" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "guidance" jsonb NOT NULL DEFAULT '[]'::jsonb;  -- 0411 (the rules a playbook follows, by kind or skill ref)
 -- 0416: who runs a playbook by default (a PlaybookRunner; NULL = nobody
@@ -5244,6 +5254,46 @@ CREATE TABLE IF NOT EXISTS "capability_intents" (
 );
 -- 0368: the ONE input shape of an intent (JSON Schema); its seed is in 0368.
 ALTER TABLE "capability_intents" ADD COLUMN IF NOT EXISTS "input_schema" jsonb;
+
+-- Needs (0426): what a space needs filled, once, by one provider. A named
+-- group of capability intents; packs declare which they fill.
+CREATE TABLE IF NOT EXISTS "needs" (
+  "slug"        text        PRIMARY KEY,
+  "label"       text        NOT NULL,
+  "description" text        NOT NULL,
+  "intents"     text[]      NOT NULL DEFAULT '{}',
+  "aliases"     text[]      NOT NULL DEFAULT '{}',
+  "created_at"  timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "needs_slug_check" CHECK ("slug" ~ '^[a-z][a-z0-9-]{0,63}$')
+);
+
+INSERT INTO "needs" ("slug", "label", "description", "intents", "aliases")
+VALUES
+  ('code-host', 'Code host', 'Where the code lives: repositories, branches, pull requests.',
+   ARRAY['fetch_record', 'list_records', 'run_external_job'], ARRAY['git-host', 'repository']),
+  ('deploy-target', 'Deploy target', 'Where a change is deployed and served.',
+   ARRAY['run_external_job', 'fetch_record'], ARRAY['hosting']),
+  ('gate', 'Gate', 'What checks a change before it lands: tests, typecheck, CI.',
+   ARRAY['run_external_job', 'fetch_record'], ARRAY['ci']),
+  ('payments', 'Payments', 'Where money is charged and recorded.',
+   ARRAY['list_records', 'fetch_record'], ARRAY[]::text[]),
+  ('messaging', 'Messaging', 'Where messages are sent to people outside the pod.',
+   ARRAY['send_message', 'request_connection'], ARRAY['chat']),
+  ('email', 'Email', 'The mailbox that sends and reads email.',
+   ARRAY['send_message', 'list_records', 'fetch_record'], ARRAY['mail']),
+  ('calendar', 'Calendar', 'Where meetings and events are scheduled.',
+   ARRAY['schedule_event', 'list_records'], ARRAY[]::text[]),
+  ('file-store', 'File store', 'Where files are kept outside the pod.',
+   ARRAY['manage_file', 'fetch_record', 'list_records'], ARRAY['storage', 'drive']),
+  ('media-generation', 'Media generation', 'What makes and edits images, video and audio.',
+   ARRAY['generate_media', 'edit_video', 'transcribe_media'], ARRAY['media']),
+  ('social-publishing', 'Social publishing', 'Where posts are published to social networks.',
+   ARRAY['publish_post'], ARRAY['social']),
+  ('linkedin-reach', 'LinkedIn reach', 'What finds people and reaches them on LinkedIn.',
+   ARRAY['find_people', 'request_connection', 'send_message', 'enrich_entity'], ARRAY['linkedin']),
+  ('analytics', 'Analytics', 'Where usage and traffic are measured.',
+   ARRAY['list_records', 'fetch_record'], ARRAY[]::text[])
+ON CONFLICT ("slug") DO NOTHING;
 
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.
@@ -5920,8 +5970,9 @@ ALTER TABLE "presence_challenges"
   ADD COLUMN IF NOT EXISTS "grant_session" text;
 
 -- 0409: installations — capabilities installed on the person's own computers,
--- of kind service or tool (installations, installation_bindings, host_jobs,
--- intent_defaults). Read floor = the owner. Mirrors 0409_installations.sql.
+-- of kind service or tool (installations, installation_bindings, host_jobs).
+-- Read floor = the owner. Mirrors 0409_installations.sql; 0426 retired
+-- intent_defaults and widened installation_bindings to a space's need binding.
 CREATE TABLE IF NOT EXISTS "installations" (
   "id"                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"            text        NOT NULL,
@@ -6034,6 +6085,41 @@ CREATE INDEX IF NOT EXISTS "idx_installation_bindings_provider"
   ON "installation_bindings" ("provider_capability_id")
   WHERE "provider_capability_id" IS NOT NULL;
 
+-- 0426: a row with NO installation is a space's need binding (D3): the space,
+-- the need slug in need_key, the provider. One live binding per (space, need).
+ALTER TABLE "installation_bindings" ALTER COLUMN "installation_id" DROP NOT NULL;
+ALTER TABLE "installation_bindings" ALTER COLUMN "intent" DROP NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'installation_bindings_scope_check'
+  ) THEN
+    ALTER TABLE "installation_bindings" ADD CONSTRAINT "installation_bindings_scope_check"
+      CHECK (
+        ("installation_id" IS NOT NULL AND "intent" IS NOT NULL)
+        OR ("installation_id" IS NULL AND "workspace_id" IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+-- 0426: who chose the provider (person | automatic).
+ALTER TABLE "installation_bindings" ADD COLUMN IF NOT EXISTS "origin" text NOT NULL DEFAULT 'person';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'installation_bindings_origin_check'
+  ) THEN
+    ALTER TABLE "installation_bindings" ADD CONSTRAINT "installation_bindings_origin_check"
+      CHECK ("origin" IN ('person', 'automatic'));
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_installation_bindings_space_need"
+  ON "installation_bindings" ("workspace_id", "need_key")
+  WHERE "installation_id" IS NULL AND "state" <> 'revoked';
+
 CREATE TABLE IF NOT EXISTS "host_jobs" (
   "id"                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   "kind"               text        NOT NULL,
@@ -6103,6 +6189,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_host_jobs_one_open_lifecycle_per_installat
 CREATE INDEX IF NOT EXISTS "idx_host_jobs_user_queued"
   ON "host_jobs" ("user_id", "queued_at" DESC);
 
+-- intent_defaults (0409): retired by 0426 (no code declares it); dropped by a
+-- later contract-step migration once 0426 has shipped (forward-only).
 CREATE TABLE IF NOT EXISTS "intent_defaults" (
   "id"                     uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"                text        NOT NULL,

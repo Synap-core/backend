@@ -887,3 +887,33 @@ describe("flowValidationErrorMessage", () => {
     expect(msg).toContain("verbId");
   });
 });
+
+describe("validateFlowDefinition — a capability node may name a need (0426)", () => {
+  const capNode = (data: Record<string, unknown>) => ({
+    nodes: [{ id: "cap", type: "capability", position: { x: 0, y: 0 }, data }],
+    edges: [],
+  });
+
+  it("a known need (and intent) with no verb is valid: the verb is the space's provider's", () => {
+    const r = validateFlowDefinition(
+      capNode({ need: "need:deploy-target/run_external_job" })
+    );
+    expect(r.errors.map((e) => e.code)).not.toContain(
+      "capability_missing_verbId"
+    );
+    expect(r.errors.map((e) => e.code)).not.toContain(
+      "capability_unknown_need"
+    );
+  });
+
+  it("an unknown need is refused with its reason", () => {
+    const r = validateFlowDefinition(capNode({ need: "need:deploy-targte" }));
+    expect(r.valid).toBe(false);
+    expect(r.errors.map((e) => e.code)).toContain("capability_unknown_need");
+  });
+
+  it("neither verb nor need is still missing a verb", () => {
+    const r = validateFlowDefinition(capNode({}));
+    expect(r.errors.map((e) => e.code)).toContain("capability_missing_verbId");
+  });
+});

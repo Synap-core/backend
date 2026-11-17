@@ -52,6 +52,7 @@ import {
   isTerminalLifecycleCategory,
   resolveOccurredAt,
   type Hold,
+  type TransitionCause,
 } from "@synap-core/types/lifecycle";
 import { createLogger } from "@synap-core/core";
 import {
@@ -118,6 +119,20 @@ export interface MoveStatusInput {
    * reopen. Set ONLY by the birth writer; no request input reaches it.
    */
   atSessionBirth?: boolean;
+  /**
+   * The move that caused this one: a reaction's move, or the approval replay of
+   * a move a reaction proposed. Stamped on the transition so its history says
+   * "moved because X moved".
+   */
+  cause?: TransitionCause | null;
+  /**
+   * The POD files this move as a PROPOSAL instead of making it (reactions
+   * D3: a reaction's move into done or lost is proposed by default). Only a
+   * `system` move takes it; the proposal is the pod's (`createdBy` this
+   * `system:<producer>` marker), filed for `actor.userId` to decide, and its
+   * approval replays the move as the approver's, with `cause`.
+   */
+  proposeAs?: `system:${string}`;
 }
 
 const AI_SOURCES = new Set(["ai", "intelligence", "agent"]);
@@ -382,8 +397,13 @@ export async function moveStatus(
   }
 
   const governanceWorkspaceId = target.workspaceId ?? input.workspaceId ?? null;
+  // A system move the pod files for the person to decide (reactions D3).
+  const podProposes = input.actor.kind === "system" && Boolean(input.proposeAs);
   let receiptId: string | undefined;
-  if (input.actor.kind !== "system" && !input.approvedProposalId) {
+  if (
+    (input.actor.kind !== "system" || podProposes) &&
+    !input.approvedProposalId
+  ) {
     // FB1020 B3: an agent closing its OWN FRESH task (same key, last 24 h,
     // untouched by a person) may be applied by the pod's own-organise class
     // row; every other terminal move proposes by default (2.85), as before.
@@ -409,6 +429,8 @@ export async function moveStatus(
       // Replayed with the move (the approval keeps them).
       ...(hold ? { hold } : {}),
       ...(occurredAt ? { occurredAt: occurredAt.toISOString() } : {}),
+      // Why a reaction moved it (the replay restamps it, entity-transition.ts).
+      ...(input.cause ? { cause: input.cause } : {}),
     };
     // The key's grant is checked on the row's own workspace — a pod-wide
     // entity is pod-scope, never the caller's lens (S7). A ROLE's move is a
@@ -445,11 +467,15 @@ export async function moveStatus(
       subjectType: "entity",
       action: "transition",
       // An unattributed agent reaches the anonymous AI ladder; never "user".
+      // The pod's own proposal takes the same ladder, where a forced
+      // proposal is honoured (as the goal loop files its next run).
       source: agent
         ? input.actor.agentUserId
           ? "agent"
           : "intelligence"
-        : "user",
+        : podProposes
+          ? "intelligence"
+          : "user",
       lifecycleMove: {
         ...lifecycleMove,
         // A reopen: from a done/lost option to an open one, read from the
@@ -459,7 +485,8 @@ export async function moveStatus(
           !isTerminalLifecycleCategory(toCategory),
         ...(input.atSessionBirth ? { atSessionBirth: true } : {}),
       },
-      forcePropose: input.forcePropose,
+      forcePropose: podProposes ? true : input.forcePropose,
+      ...(podProposes ? { machineAuthor: input.proposeAs } : {}),
       ...(ownWorkOrganise ? { ownWorkOrganise: true } : {}),
       reasoning:
         input.reason ??
@@ -513,6 +540,14 @@ export async function moveStatus(
         proposalType: perm.proposalType,
       };
     }
+    if (podProposes) {
+      // Asked to propose, the gate granted instead: the move is NOT made
+      // (fail closed — D3 says the person decides it).
+      return {
+        status: "denied",
+        reason: "The move could not be filed for review, so it was not made.",
+      };
+    }
     receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
   }
 
@@ -529,6 +564,7 @@ export async function moveStatus(
     hold,
     occurredAt,
     appId: input.appId,
+    cause: input.cause,
   });
   if (result.status === "moved") {
     // Owed in the move's transaction; a failed delivery stays owed (sweeper).

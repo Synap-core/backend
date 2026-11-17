@@ -17,7 +17,14 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import { db, and, eq, drizzleSql, playbookRuns } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  drizzleSql,
+  playbookRuns,
+  setRunStatus,
+} from "@synap/database";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import { AgentBindingError, resolveAgentBinding } from "./agent-binding.js";
@@ -69,10 +76,9 @@ export async function recordApprovedAgentStart(p: {
     const { externalId, url } = externalRefFromStartResult(p.result);
     const service = resolveServiceName(binding.provider);
     // Claimed in the WHERE clause, so a double approve records once.
+    // The status half of the claim (`proposed`) is the door's compare-and-set.
     const claimable = and(
-      eq(playbookRuns.id, runId),
       eq(playbookRuns.executor, "external-agent"),
-      eq(playbookRuns.status, "proposed"),
       // Nothing recorded yet, or the PENDING start the executor recorded
       // (`status: 'pending_start'`) — never a hand-off already recorded.
       drizzleSql`(${playbookRuns.externalAgent} IS NULL OR ${playbookRuns.externalAgent}->>'status' = 'pending_start')`
@@ -81,16 +87,15 @@ export async function recordApprovedAgentStart(p: {
       // Same decision as the direct start: no task id ⇒ nothing to poll, answer
       // or cancel, so the run FAILS rather than sitting `running` untracked.
       const error = noTaskIdMessage(await agentDisplayName(agentUserId), url);
-      const failedRun = await db
-        .update(playbookRuns)
-        .set({
-          status: "failed",
-          completedAt: new Date(),
-          error,
-          externalAgent: null,
-        })
-        .where(claimable)
-        .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
+      const { rows: failedRun } = await setRunStatus(db, {
+        runId,
+        where: claimable,
+        from: "proposed",
+        to: "failed",
+        actor: { kind: "system" },
+        reason: "The agent's start returned no task id.",
+        set: { completedAt: new Date(), error, externalAgent: null },
+      });
       if (failedRun.length === 0) {
         return {
           status: "skipped",
@@ -117,16 +122,15 @@ export async function recordApprovedAgentStart(p: {
       startedAt: new Date().toISOString(),
     };
     const summary = `dispatched to ${service} (${externalId})`;
-    const claimed = await db
-      .update(playbookRuns)
-      .set({
-        status: "running",
-        completedAt: null,
-        summary,
-        externalAgent: ref,
-      })
-      .where(claimable)
-      .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
+    const { rows: claimed } = await setRunStatus(db, {
+      runId,
+      where: claimable,
+      from: "proposed",
+      to: "running",
+      actor: { kind: "system" },
+      reason: `Approved: handed to the ${service} agent.`,
+      set: { completedAt: null, summary, externalAgent: ref },
+    });
     if (claimed.length === 0) {
       return {
         status: "skipped",

@@ -104,6 +104,36 @@ describe("app/connect proposal words", () => {
     );
   });
 
+  // Rules out: an AI's ask for one more thing (`agent/connect` of mode
+  // "add", services/agent-access-ask.ts) titled as a whole new connection.
+  it("an AI's additive ask reads '<agent> asks to <verb> in <space>'", () => {
+    const ask = describeAppConnectProposal(
+      {
+        targetType: "agent",
+        proposalType: "connect",
+        data: {
+          agentUserId: "u1",
+          keyId: "k1",
+          name: "Claude Code on devbox",
+          mode: "add",
+          requests: [
+            {
+              permission: "entity.note.update",
+              workspaceId: "ws-fin",
+              workspaceName: "Finance",
+            },
+          ],
+        },
+      },
+      NAMES
+    )!;
+    expect(ask.holderKind).toBe("agent");
+    expect(ask.mode).toBe("add");
+    expect(ask.title).toBe(
+      "Claude Code on devbox asks to update notes in Finance"
+    );
+  });
+
   it("is null for other proposals and for unreadable data (fallback, not a half sentence)", () => {
     expect(
       isAppConnectProposal({ targetType: "app", proposalType: "revoke" })

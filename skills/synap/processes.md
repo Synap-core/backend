@@ -4,7 +4,7 @@
 
 A process = `synap_create_playbook` with `subjectProfileSlug`; it FOLLOWS the
 lifecycle the kind or role declares (omit `statusProperty`, or name that same
-property). Each stage's `subjectStatus` is an EXISTING option of it (read it
+property). Each stage's `subjectStatus` (entered) and `onApproved` (reached when its work is approved) is an EXISTING option of it (read it
 with `synap_list_profiles` first — never invent one); `gate: {kind: 'human'}` at
 every commitment, `onFail: {toStage}` for rework; typed `expectedOutputs`
 (`kind`, `label`, `relationToSubject`); workers = `activators` (`on`, `size`,
@@ -12,6 +12,18 @@ default `mode: 'propose'`). What you create is POD-LOCAL, never an official
 template.
 
 <!-- brief:end -->
+
+## Reading a process whole
+
+`synap_list_playbooks({ playbookId })` returns the playbook in full (goal
+template, stages, criteria, expected outputs) plus `process`, the playbook seen
+whole: what starts it (its automations and workers), its steps, its checks, what
+it moves (the subject kind's states and the step that owns each), its needs (each
+`filled`, `empty` or `unknown` against the space's tools), its skills, its runs
+(counts, recent sessions) and its health (a state and a reason code). A part the
+pod could not read is named in `unavailable` and reads null or `unknown`, never
+empty. `processWithheld` replaces it when your key's grant does not read every
+part (automations, sessions, skills, tools).
 
 ## Writing a process (a playbook that follows a kind's lifecycle)
 
@@ -46,7 +58,8 @@ proposal; the review is the catalog commit.
 | ------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `subjectProfile.profileSlug`    | playbook                       | The kind or role the process works.                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `subjectProfile.statusProperty` | playbook                       | Omit it: the pod follows the profile's declared lifecycle. If you name it, name that same property. A status worker on a role with no declared lifecycle is refused.                                                                                                                                                                                                                                                                  |
-| `stages[].subjectStatus`        | stage                          | Entering the stage moves the subject to this option, through the door. Must be an **existing option** of the lifecycle — never invent one.                                                                                                                                                                                                                                                                                            |
+| `stages[].subjectStatus`        | stage                          | The IN-PROGRESS status (In Draft, Review): entering the stage moves the subject to it, through the door. Must be an **existing option** of the lifecycle — never invent one.                                                                                                                                                                                                                                                          |
+| `stages[].onApproved`           | stage                          | The RESULT status (Scripted, Published, sent, won): reached when the stage's work is APPROVED — its `expectedOutputs` all delivered, else the next stage's gate passing. The subject holding it means the run stands at the NEXT stage. With neither, nothing writes it: whoever finishes the stage moves the subject. Must be an **existing option**.                                                                                |
 | `stages[].gate`                 | stage                          | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status.                                                                                                |
 | `stages[].onFail`               | stage                          | `{toStage: <key>}` — where a rejected gate sends the run (rework loop).                                                                                                                                                                                                                                                                                                                                                               |
 | `stages[].criteria`             | stage                          | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                                                                                                                 |

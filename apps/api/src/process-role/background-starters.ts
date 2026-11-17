@@ -657,6 +657,7 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
       {
         const {
           registerCapabilityExecutor,
+          registerNeedVerbResolver,
           registerPlaybookRunner,
           registerPlaybookReadinessGate,
           registerSessionScheduler,
@@ -718,6 +719,10 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/utils/session-close.js");
         const { registerHoldResumeFollowUp } =
           await import("@synap/jobs/workers/hold-resume.js");
+        const { registerReactionEffect } =
+          await import("@synap/jobs/utils/reaction-effects.js");
+        const { registerReactionSource, registerReactionStateSource } =
+          await import("@synap/jobs/utils/reactions.js");
         const { registerStatusWatcherRunner } =
           await import("@synap/jobs/workers/status-watcher-cron.js");
         const { registerStageAdvancer } =
@@ -728,6 +733,9 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/intelligence-health-check.js");
         const api = await import("@synap/api");
         registerCapabilityExecutor((input) => api.executeCapability(input));
+        // ONE need resolver (0426): an automation `capability` node that names
+        // a need runs the verb of the provider its space bound to it.
+        registerNeedVerbResolver((input) => api.resolveNeedVerb(input));
         // ONE playbook-run spine: the scheduled path (@synap/jobs) delegates
         // to api's runPlaybook via this slot, so is-agent | external-agent |
         // hybrid all dispatch through the executor spine + triggerAutoRespond.
@@ -767,6 +775,20 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         registerHoldResumeFollowUp((resumed) =>
           api.holdResumeFollowUp(resumed)
         );
+        // The reactions reactor: the effect whose door is api-side — an outcome
+        // met wherever it was filed (pod default 3) goes through THE done door.
+        // Unfilled, its writes are skipped and logged `effect_unavailable`.
+        registerReactionEffect(api.meetOutcomesReactionEffect);
+        // Pod default D2 (approval signal 1): a stage's approved work moves its
+        // subject to the stage's `onApproved`, through the status door.
+        registerReactionEffect(api.reachStageStatusReactionEffect);
+        // A parent rolls up along a relation that declares it (pod
+        // default 1) through THE thing's door; the relations' declarations
+        // join the one list; and each rule's pause is its row in the rule
+        // list (draft = paused), read back here.
+        registerReactionEffect(api.rollUpReactionEffect);
+        registerReactionSource(api.relationReactionSource);
+        registerReactionStateSource(() => api.reactionEnabledStates());
         // The status watcher (W6): late, approaching, stuck and
         // hold-review signals, raised once per episode, owner told.
         registerStatusWatcherRunner(() => api.runStatusWatcher());

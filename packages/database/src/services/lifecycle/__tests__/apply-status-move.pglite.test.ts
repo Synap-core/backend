@@ -160,6 +160,34 @@ describe("applyStatusMove", () => {
     });
   });
 
+  it("a move a rule caused carries its cause on the transition", async () => {
+    const r = await applyStatusMove(db, {
+      target: await target(dealId),
+      to: "won",
+      actor: { kind: "system", userId: "u1" },
+      cause: {
+        reactionId: "rule-1",
+        transitionId: "t-src",
+        chainId: "t-src",
+        depth: 1,
+      },
+    });
+    expect(r.status).toBe("moved");
+    if (r.status !== "moved") return;
+    expect(r.transition.cause).toEqual({
+      reactionId: "rule-1",
+      transitionId: "t-src",
+      chainId: "t-src",
+      depth: 1,
+    });
+    const back = await applyStatusMove(db, {
+      target: await target(dealId),
+      to: "negotiating",
+      actor: { kind: "system", userId: "u1" },
+    });
+    expect(back.status === "moved" && "cause" in back.transition).toBe(false);
+  });
+
   it("an agent with a stale belief gets a conflict and writes nothing", async () => {
     const r = await applyStatusMove(db, {
       target: await target(dealId),

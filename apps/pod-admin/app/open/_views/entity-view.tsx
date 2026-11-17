@@ -16,12 +16,19 @@
  * the one image door; when the body document IS that media it is not read
  * again as text.
  *
+ * The work on it (`WorkSection`, `statusOf` work): the sessions and runs on
+ * it, a run that stopped early first with its Continue; omitted when none.
+ *
  * `entities.get` re-checks access server-side; no admin role is involved.
  * The body document is read through `documents.get` on the viewer's own
  * floor: a body they cannot read says so, and shows nothing; a body that
  * failed to load says so with a retry. A stored HTML file (an uploaded
  * report) is a body that RUNS: its page in the isolated frame, its source a
  * toggle away (`content/html-frame`).
+ *
+ * The rules around it (`RulesAroundSection`, `statusOf` reactions): a
+ * roll-up that moves it, with its parts' "3 of 5 done", then the rules its
+ * own moves set off; omitted when none.
  */
 
 import { Chip } from "@heroui/react";
@@ -49,6 +56,10 @@ import {
 } from "../open-model";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
+import { ConnectedObjects } from "../../_lib/object/connected-objects";
+import { WorkSection } from "../../_lib/object/views/work-section";
+import { objectPage } from "../../_lib/object/content/markdown-model";
+import { RulesAroundSection } from "../../_lib/object/views/rules-around-section";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
@@ -142,6 +153,16 @@ export function EntityView({ id }: { id: string }) {
   const summaryShownBelow =
     summary.propertySlug !== null && proseKeys.includes(summary.propertySlug);
   const openInApp = <OpenInAppLink type="entity" id={id} />;
+  const hasBody = Boolean(entity.documentId) && !bodyIsMedia;
+  // With a body of its own, what it is connected to follows the body.
+  const connected = (
+    <ConnectedObjects
+      key={id}
+      entityId={id}
+      kind={profileSlug}
+      definitions={data.effectiveProperties}
+    />
+  );
 
   return (
     <OpenObject
@@ -195,6 +216,12 @@ export function EntityView({ id }: { id: string }) {
           ))}
         </div>
       )}
+      {/* Work waiting on the reader leads the fields; omitted when none. */}
+      <WorkSection
+        subjectId={id}
+        self={false}
+        sessionHref={(sid) => objectPage("session", sid)}
+      />
       <FieldList
         plan={plan}
         omit={[
@@ -210,7 +237,9 @@ export function EntityView({ id }: { id: string }) {
           openInApp={openInApp}
         />
       ))}
-      {entity.documentId && !bodyIsMedia && (
+      <RulesAroundSection thingId={id} />
+      {!hasBody && connected}
+      {hasBody && (
         <DocumentContentSection
           title="Content"
           content={body.content}
@@ -218,6 +247,7 @@ export function EntityView({ id }: { id: string }) {
           onRetry={body.retry}
         />
       )}
+      {hasBody && connected}
     </OpenObject>
   );
 }

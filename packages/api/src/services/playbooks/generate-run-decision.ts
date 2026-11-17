@@ -18,9 +18,9 @@ import {
   db,
   drizzleSql,
   eq,
-  inArray,
   playbookRuns,
   proposals,
+  setRunStatus,
 } from "@synap/database";
 import type { PlaybookRunStatus } from "@synap/database/schema";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
@@ -79,20 +79,19 @@ export async function settleGenerateRunOnDecision(
     const runId = await runOfProposal(proposalId);
     if (!runId) return null;
     const move = MOVES[decision];
-    const [moved] = await db
-      .update(playbookRuns)
-      .set({
-        status: move.to,
-        completedAt: move.terminal ? new Date() : null,
-      })
-      .where(
-        and(
-          eq(playbookRuns.id, runId),
-          eq(playbookRuns.executor, "generate"),
-          inArray(playbookRuns.status, move.from)
-        )
-      )
-      .returning({ status: playbookRuns.status });
+    const {
+      rows: [moved],
+    } = await setRunStatus(db, {
+      runId,
+      where: eq(playbookRuns.executor, "generate"),
+      from: move.from,
+      to: move.to,
+      // A consequence of the person's decision on the draft.
+      actor: { kind: "system" },
+      reason: `Its draft was ${decision}.`,
+      proposalId,
+      set: { completedAt: move.terminal ? new Date() : null },
+    });
     // A terminal child of an automation run settles its parent (never throws).
     if (moved && move.terminal)
       await settleParentAutomationRunFromChild({ playbookRunId: runId });

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  newestOwedFirst,
   deliverableOwedBy,
   isDecidedByAnswer,
   isDeliverableDelivered,
@@ -295,5 +296,77 @@ describe("a decision the person answered is delivered", () => {
     const asked = { kind: "decision", decisionId: "d-1", owner: "human" };
     expect(isDeliverableOutstanding(asked)).toBe(true);
     expect(deliverableOwedBy(asked)).toBe("you");
+  });
+});
+
+/**
+ * A REFUSAL (`answer.value.type === "declined"`) never reads as decided: the
+ * person said no, which decides nothing. The discriminating input is a
+ * refused decision that ALREADY carries a `decisionId` (an ask opened for a
+ * decision has one before anyone answers) and a confirm/choose snapshot —
+ * every other clause of `isDecidedByAnswer` says "decided" on it. Rival ruled
+ * out: "a decisionId + a confirm/choose answer is a decision".
+ */
+describe("a refused ask is never decided, never delivered", () => {
+  const REFUSED = {
+    text: "Refused: not this quarter",
+    value: { type: "declined", reason: "not this quarter" },
+    askSnapshot: { mode: "choose", chosenKey: null },
+  };
+  const refused: DeliverableFacts = {
+    kind: "decision",
+    decisionId: "d-1",
+    answer: REFUSED,
+  };
+
+  it("is not decided, not delivered, still outstanding (the agent's)", () => {
+    expect(isDecidedByAnswer(refused)).toBe(false);
+    expect(
+      isDecidedByAnswer({
+        ...refused,
+        answer: { ...REFUSED, askSnapshot: { mode: "confirm" } },
+      })
+    ).toBe(false);
+    expect(isDeliverableDelivered(refused)).toBe(false);
+    expect(isDeliverableOutstanding(refused)).toBe(true);
+    expect(deliverableOwedBy(refused)).toBe("session");
+    expect(tallyDeliverables([refused])).toEqual({
+      done: 0,
+      total: 1,
+      owedByYou: 0,
+    });
+  });
+
+  it("reads blocked on the refusal, on an open session and a finished one", () => {
+    for (const sessionTerminal of [false, true]) {
+      const view = resolveDeliverableState(refused, { sessionTerminal });
+      expect(view.state).toBe("blocked");
+    }
+  });
+
+  it("the same answer with a real pick is still a decision (no over-reach)", () => {
+    expect(
+      isDecidedByAnswer({
+        ...refused,
+        answer: { ...REFUSED, value: { type: "chip" } },
+      })
+    ).toBe(true);
+  });
+});
+
+describe("newestOwedFirst", () => {
+  it("orders by owedSince, newest first; none last; ties keep their order", () => {
+    const slots = [
+      { k: "a", owedSince: "2026-11-01T00:00:00Z" },
+      { k: "b", owedSince: null },
+      { k: "c", owedSince: "2026-11-10T00:00:00Z" },
+      { k: "d", owedSince: "2026-11-01T00:00:00Z" },
+    ];
+    expect([...slots].sort(newestOwedFirst).map((s) => s.k)).toEqual([
+      "c",
+      "a",
+      "d",
+      "b",
+    ]);
   });
 });

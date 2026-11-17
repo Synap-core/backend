@@ -8,14 +8,20 @@
  *     test that mocked them would prove only that a mock returns what it was
  *     told to. The `secret` flag in particular is derived by the real
  *     `extractInstallParams` name/type heuristic, never restated here.
- *   · Only the two I/O leaves are mocked: `lookupCatalogEntry` (a DB read) and
- *     `loadConnState` (a DB read + a Nango round-trip).
+ *   · Only the I/O leaves are mocked: `lookupCatalogEntry` (a DB read),
+ *     `fetchCPCapabilityTemplate` (the by-key catalog read, a Control Plane
+ *     round-trip) and `loadConnState` (a DB read + a Nango round-trip).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   lookupCatalogEntry: vi.fn(),
+  fetchCPCapabilityTemplate: vi.fn(),
   loadConnState: vi.fn(),
+}));
+
+vi.mock("../capabilities/cp-template-client.js", () => ({
+  fetchCPCapabilityTemplate: h.fetchCPCapabilityTemplate,
 }));
 
 vi.mock("../capabilities/marketplace-install.js", () => ({
@@ -33,6 +39,7 @@ import {
   redactSecretParams,
   proposalSetupFields,
   withProposalSetup,
+  resetSetupDefinitionMemo,
   REDACTED_PARAM,
   type ProposalSetup,
 } from "./proposal-setup.js";
@@ -79,17 +86,26 @@ const NANGO_TEMPLATE = {
 function installRow(
   id: string,
   params: Record<string, unknown>,
-  slug = "acme"
+  slug = "acme",
+  extra: { status?: string; source?: string } = {}
 ) {
   return {
     id,
     proposalType: "capability.install",
     targetType: "capability",
-    data: { slug, kind: "capability", params },
+    ...(extra.status ? { status: extra.status } : {}),
+    data: {
+      slug,
+      kind: "capability",
+      params,
+      ...(extra.source ? { source: extra.source } : {}),
+    },
   };
 }
 
 beforeEach(() => {
+  resetSetupDefinitionMemo();
+  h.fetchCPCapabilityTemplate.mockReset();
   h.lookupCatalogEntry.mockReset();
   h.loadConnState.mockReset();
   h.loadConnState.mockResolvedValue(EMPTY_CONN);
@@ -318,12 +334,90 @@ describe("derivation", () => {
     expect(out.get("p1")!.blocking).toBe(false);
   });
 
-  it("a catalog cache MISS yields NO entry — never an invented empty setup", async () => {
+  it("a DECIDED row's cache MISS yields NO entry, and no catalog round-trip", async () => {
     h.lookupCatalogEntry.mockResolvedValue(null);
-    const out = await resolveProposalSetups([installRow("p1", {})], "u1");
-    // Absent ≠ `{blocking:false}`. We do not know the manifest, so we make no
-    // claim that the proposal is ready.
+    const out = await resolveProposalSetups(
+      [installRow("p1", {}, "acme", { status: "approved" })],
+      "u1"
+    );
+    // Absent ≠ `{blocking:false}`; and a history page never pays a CP read.
     expect(out.has("p1")).toBe(false);
+    expect(h.fetchCPCapabilityTemplate).not.toHaveBeenCalled();
+  });
+
+  // Proposal eaa77f7d: github-merge is opt-in (`syncByDefault:false`), never
+  // in the cache; its approval re-resolved it by key and failed "Needs setup:
+  // GitHub token", while every read door showed no setup at all.
+  it("a PENDING row's cache miss is read by key: the setup the approval will check", async () => {
+    h.lookupCatalogEntry.mockResolvedValue(null);
+    h.fetchCPCapabilityTemplate.mockResolvedValue(VAULT_TEMPLATE);
+    const out = await resolveProposalSetups(
+      [
+        installRow("p1", {}, "acme", {
+          status: "approval_failed",
+          source: "synap",
+        }),
+      ],
+      "u1"
+    );
+    expect(h.fetchCPCapabilityTemplate).toHaveBeenCalledWith("acme");
+    const s = out.get("p1")!;
+    expect(s.unreadable).toBeUndefined();
+    expect(s.blocking).toBe(true);
+    expect(s.params.map((p) => p.name)).toEqual(["apiKey", "baseUrl"]);
+  });
+
+  it("a PENDING row whose manifest no read finds is UNREADABLE, never absent", async () => {
+    h.lookupCatalogEntry.mockResolvedValue(null);
+    h.fetchCPCapabilityTemplate.mockResolvedValue(null);
+    const out = await resolveProposalSetups(
+      [installRow("p1", {}, "acme", { status: "pending" })],
+      "u1"
+    );
+    expect(out.get("p1")).toEqual({
+      params: [],
+      blocking: true,
+      unreadable: true,
+    });
+  });
+
+  it("a by-key read that THROWS (a refused signature, a dead CP) is unreadable too", async () => {
+    h.lookupCatalogEntry.mockRejectedValue(new Error("cache down"));
+    h.fetchCPCapabilityTemplate.mockRejectedValue(new Error("unsigned"));
+    const out = await resolveProposalSetups(
+      [installRow("p1", {}, "acme", { status: "pending" })],
+      "u1"
+    );
+    expect(out.get("p1")?.unreadable).toBe(true);
+  });
+
+  it("an ADDED source's miss is not read from the official catalog by key", async () => {
+    h.lookupCatalogEntry.mockResolvedValue(null);
+    const out = await resolveProposalSetups(
+      [
+        installRow("p1", {}, "acme", {
+          status: "pending",
+          source: "acme-market",
+        }),
+      ],
+      "u1"
+    );
+    expect(h.lookupCatalogEntry).toHaveBeenCalledWith(
+      "capability",
+      "acme",
+      "acme-market"
+    );
+    expect(h.fetchCPCapabilityTemplate).not.toHaveBeenCalled();
+    expect(out.get("p1")?.unreadable).toBe(true);
+  });
+
+  it("the by-key read is memoized per slug: a polled list does not re-fetch", async () => {
+    h.lookupCatalogEntry.mockResolvedValue(null);
+    h.fetchCPCapabilityTemplate.mockResolvedValue(VAULT_TEMPLATE);
+    const rows = [installRow("p1", {}, "acme", { status: "pending" })];
+    await resolveProposalSetups(rows, "u1");
+    await resolveProposalSetups(rows, "u1");
+    expect(h.fetchCPCapabilityTemplate).toHaveBeenCalledTimes(1);
   });
 
   it("a non-capability kind (automation/template/cell) has no manifest gap", async () => {
@@ -476,6 +570,21 @@ describe("a row whose setup cannot be derived is STILL redacted", () => {
       JSON.stringify(proposalSetupFields(row.id, row.data, setups))
     ).not.toContain(LEAK);
     expect(JSON.stringify(withProposalSetup(row, setups))).not.toContain(LEAK);
+  });
+
+  it("an UNREADABLE setup (pending row) still masks by name", async () => {
+    h.lookupCatalogEntry.mockResolvedValue(null);
+    h.fetchCPCapabilityTemplate.mockResolvedValue(null);
+    const row = installRow("p1", { apiKey: LEAK, region: "eu" }, "nope", {
+      status: "pending",
+    });
+    const setups = await resolveProposalSetups([row], "u1");
+    const stamped = withProposalSetup(row, setups);
+    expect(stamped.setup?.unreadable).toBe(true);
+    expect(JSON.stringify(stamped)).not.toContain(LEAK);
+    expect(
+      (stamped.data as { params: Record<string, unknown> }).params.region
+    ).toBe("eu");
   });
 
   it("covers the name spellings an invented slug can carry, and keeps a ref", async () => {

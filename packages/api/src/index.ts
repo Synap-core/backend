@@ -550,6 +550,21 @@ export { registerGoalLoopReactor } from "./services/tracks/goal-loop-reactor.js"
 // Exported for @synap/jobs' `registerHoldResumeFollowUp` IoC slot (W4): what
 // a goal's or a session's hold resume owes after the move.
 export { holdResumeFollowUp } from "./services/lifecycle/hold-resume-follow-up.js";
+export { meetOutcomesReactionEffect } from "./services/reactions/meet-outcomes-effect.js";
+export { reachStageStatusReactionEffect } from "./services/reactions/reach-stage-status-effect.js";
+export {
+  listReactionRules,
+  type ReactionRuleView,
+} from "./services/reactions/list-reaction-rules.js";
+// Reactions: the roll-up a relation declares (its effect, its source of
+// declarations), each rule's pause, and the pass that seeds their rows.
+export { rollUpReactionEffect } from "./services/reactions/roll-up-effect.js";
+export { relationReactionSource } from "./services/reactions/relation-reactions.js";
+export { reactionEnabledStates } from "./services/reactions/reaction-rule-rows.js";
+export {
+  convergeReactionRules,
+  convergeReactionRulesSafely,
+} from "./services/reactions/reaction-rules-compile.js";
 // Exported for @synap/jobs' `registerStatusWatcherRunner` IoC slot (W6): the
 // hourly watcher that raises late / approaching / stuck / hold-review signals.
 export {
@@ -578,6 +593,10 @@ export {
   executeCapability,
   type ExecuteCapabilityResult,
 } from "./services/capabilities/execute-capability.js";
+// A need ref → the verb its space's bound provider runs (0426): the jobs slot.
+export { resolveNeedVerb } from "./services/needs/space-needs.js";
+// The boot backfill of the spaces' need bindings (0426).
+export { backfillSpaceNeedBindings } from "./services/needs/space-need-coverage.js";
 // Exported for @synap/jobs' `registerSessionCloser` IoC slot. A session's
 // TERMINAL status has ONE door (@synap-core/types/focus-sessions) — three job
 // workers stamped `status:'closed'` with a raw UPDATE and skipped the review

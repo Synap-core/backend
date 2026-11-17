@@ -259,9 +259,9 @@ export const PackageApplySchema = z.object({
    */
   intent: workspaceIntentDefinitionSchema.optional(),
   /**
-   * What the space needs to function → `settings.taskIntents` (the
-   * declared-intent sink, `createWorkspaceFromDefinition`). Declared for the
-   * same reason as `intent`: an undeclared key is stripped here.
+   * @deprecated 0426: accepted so an older template still installs, and no
+   * longer persisted (a space's needs are derived from the `need:` refs of
+   * its processes, `services/needs`).
    */
   taskIntents: z.array(z.string()).optional(),
   sourceRoles: z

@@ -24,10 +24,12 @@ import {
   entities,
   focusSessions,
   playbookRuns,
+  setRunStatus,
 } from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
 import type { PlaybookStage, RunResult } from "@synap/playbooks";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import { isDeclinedValue } from "@synap-core/types/ask";
 import { resolveExecutor } from "../playbooks/executors/registry.js";
 import { recordExecutorResult } from "../playbooks/run-playbook.js";
 import { runPromptFor } from "../playbooks/playbook-lifecycle.js";
@@ -65,17 +67,17 @@ export async function redispatchAfterAgentChoice(
   if (!failed) return { status: "nothing_to_redispatch" };
 
   // CLAIM — only the claimer dispatches.
-  const [run] = await db
-    .update(playbookRuns)
-    .set({ status: "running", error: null, completedAt: null })
-    .where(
-      and(
-        eq(playbookRuns.id, failed.id),
-        eq(playbookRuns.status, "failed"),
-        drizzleSql`${playbookRuns.externalAgent} IS NULL`
-      )
-    )
-    .returning();
+  const {
+    rows: [run],
+  } = await setRunStatus(db, {
+    runId: failed.id,
+    where: drizzleSql`${playbookRuns.externalAgent} IS NULL`,
+    from: "failed",
+    to: "running",
+    actor: { kind: "system" },
+    reason: "The person chose an agent: dispatched again.",
+    set: { error: null, completedAt: null },
+  });
   if (!run) return { status: "nothing_to_redispatch" };
 
   const session = await db.query.focusSessions.findFirst({
@@ -202,6 +204,8 @@ export const agentChoiceRedispatchReactor: Reactor = {
     payload.subjectType === "focus_session" &&
     payload.action === "slot_answered" &&
     payload.data?.kind === PARAM_SLOT_KIND &&
+    // A refusal names no agent: re-dispatching would fail and ask again.
+    !isDeclinedValue(payload.data?.value) &&
     normalizeExpectedLabel(
       payload.data?.expectedLabel as string | undefined
     ) === normalizeExpectedLabel(CHOOSE_AGENT_SLOT_LABEL),

@@ -17,11 +17,11 @@ describe("template kind (X1)", () => {
   it("labels rows through the vocabulary door; NULL scope reads as session", () => {
     expect(templateKindFields("project")).toEqual({
       scope: "project",
-      templateKind: "Goal template",
+      templateKind: "Goal process",
     });
     expect(templateKindFields(null)).toEqual({
       scope: "session",
-      templateKind: "Work template",
+      templateKind: "Process",
     });
   });
 

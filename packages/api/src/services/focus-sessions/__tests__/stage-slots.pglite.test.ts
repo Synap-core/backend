@@ -38,6 +38,7 @@ vi.mock("../../playbooks/stage-gate.js", () => ({
 }));
 vi.mock("../stage-subject-status.js", () => ({
   writeStageSubjectStatus: async () => undefined,
+  writeGatePassStatuses: async () => ({ entered: undefined }),
 }));
 vi.mock("../../links/links-service.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),

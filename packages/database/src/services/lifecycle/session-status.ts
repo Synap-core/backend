@@ -37,6 +37,7 @@ import {
   decideMoveHold,
   type Hold,
   type RecordedHold,
+  type TransitionCause,
   type WorkUnitTransitionPayload,
 } from "@synap-core/types/lifecycle";
 import type * as schema from "../../schema/index.js";
@@ -96,6 +97,8 @@ export interface SetSessionStatusInput {
   occurredAt?: Date | null;
   /** A replay: the app its proposal was filed by (`proposals.app_id`). */
   appId?: string | null;
+  /** The move that caused this one (a reaction). */
+  cause?: TransitionCause | null;
 }
 
 export interface SetSessionStatusResult {
@@ -210,6 +213,7 @@ export async function setSessionStatus(
           occurredAt: input.occurredAt,
           hold: holds.get(row.id) ?? null,
           appId: input.appId,
+          cause: input.cause,
         });
       });
     await insertTransitionOutbox(tx, transitions);

@@ -211,7 +211,7 @@ const COVERAGE: Record<ObjectKind, Coverage> = {
             score: 3,
             reason: `You mentioned "${WORD}"`,
             scope: "session",
-            templateKind: "Work template",
+            templateKind: "Process",
           },
         ],
         optOut: "pass templateId: null",

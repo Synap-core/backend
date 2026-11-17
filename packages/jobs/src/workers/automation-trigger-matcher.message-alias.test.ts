@@ -74,6 +74,17 @@ vi.mock("@synap-core/core", async (importOriginal) => ({
 // Operators return inspectable markers so the WHERE predicate SHAPE (owner-floor)
 // is assertable, matching the pod-wide test's harness.
 vi.mock("@synap/database", async (importOriginal) => ({
+  // The pod-wide branch answers to the event's PERSON (decision 782c862e):
+  // the event actor alone here, no person lookup consuming select results.
+  actorsOfSamePerson: async (_db: unknown, id: string) => [id],
+  personsOfOwners: async () => new Map(),
+  podWideAutomationAnswersTo: (actorIds: string[]) => ({
+    op: "and",
+    args: [
+      { op: "isNull", col: "workspace_id" },
+      { op: "podWideAudience", actorIds },
+    ],
+  }),
   // matchMessageShape moved into @synap/database (the shared shape-matcher door,
   // reused by the guideline resolver). It's a PURE function — pull the REAL one
   // from the actual module so the worker's shape gate runs for real; everything
@@ -159,7 +170,7 @@ function firedAutomationIds(): string[] {
 
 type Marker = { op?: string; col?: unknown; args?: unknown[] };
 
-/** The pod-wide branch must be `and(isNull(workspace_id), eq(created_by, …))`. */
+/** The pod-wide branch must be `and(isNull(workspace_id), <person-bound audience>)`. */
 function podWideBranchIsOwnerBound(node: unknown, col: string): boolean {
   if (node == null || typeof node !== "object") return false;
   const n = node as Marker;
@@ -167,7 +178,7 @@ function podWideBranchIsOwnerBound(node: unknown, col: string): boolean {
     const args = (n.args ?? []) as Marker[];
     if (
       args.some((a) => a?.op === "isNull" && a.col === col) &&
-      args.some((a) => a?.op === "eq" && a.col === "created_by")
+      args.some((a) => a?.op === "podWideAudience")
     ) {
       return true;
     }

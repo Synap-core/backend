@@ -1,0 +1,182 @@
+name: Stirling PDF engine image
+
+# Builds the PDF engine that the pod's `pdf` Compose profile runs (PDF tools,
+# pod session 8d23e259; founder decision f65761a3, 17 Nov 2026: "Stirling,
+# the GitHub repo").
+#
+# What it builds: Stirling-PDF from github.com/Stirling-Tools/Stirling-PDF at
+# a release tag, with STIRLING_FLAVOR=core. That flavour leaves the
+# `app/proprietary` module out of the jar (upstream settings.gradle and
+# app/core/build.gradle), so the image holds only the MIT core: every PDF tool
+# (OCR, compress, merge, split, redact, Office/HTML/Markdown to PDF, PDF to
+# Markdown) and NO metering, user cap, licence check, login or MCP server.
+# It has no auth of its own: it must only ever be reachable by the pod's
+# backend (its own internal network, no published port).
+#
+# The runtime layer is Stirling's published base image
+# (stirlingtools/stirling-pdf-base: LibreOffice, Tesseract, OCRmyPDF, Calibre,
+# Ghostscript, QPDF), pinned by digest in their Dockerfile. Those tools keep
+# their own licences; the image description says where their sources are.
+#
+# Manual only. A new version is published here, then adopted by a reviewed
+# change of the digest in deploy/docker-compose.yml: nothing pulls a tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Stirling-PDF release to build, without the v (e.g. 3.3.0)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stirling-pdf-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/synap-core/stirling-pdf
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check the version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must look like 3.3.0, got '$VERSION'"
+            exit 1
+          fi
+
+      - name: Check out Stirling-PDF v${{ inputs.version }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Stirling-Tools/Stirling-PDF
+          ref: v${{ inputs.version }}
+          path: stirling
+          persist-credentials: false
+
+      # The flavour switch is upstream's. If they rename or drop it, a build
+      # would silently fall back to the proprietary default: refuse instead.
+      - name: Check the core flavour still exists upstream
+        working-directory: stirling
+        run: |
+          grep -q "case 'core':" settings.gradle || { echo "::error::settings.gradle has no 'core' flavour any more"; exit 1; }
+          grep -q "if (!gradle.ext.disableAdditional)" app/core/build.gradle || { echo "::error::app/core/build.gradle no longer gates :proprietary on the flavour"; exit 1; }
+          grep -q "ARG STIRLING_FLAVOR" docker/embedded/Dockerfile || { echo "::error::docker/embedded/Dockerfile no longer takes STIRLING_FLAVOR"; exit 1; }
+          echo "upstream_sha=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (core flavour)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: stirling
+          file: stirling/docker/embedded/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          provenance: false
+          tags: ${{ env.IMAGE }}:${{ inputs.version }}-core-${{ matrix.arch }}
+          build-args: |
+            STIRLING_FLAVOR=core
+            BUILD_PORTAL=false
+            VERSION_TAG=v${{ inputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/Synap-core/backend
+            org.opencontainers.image.url=https://github.com/Stirling-Tools/Stirling-PDF
+            org.opencontainers.image.version=${{ inputs.version }}-core
+            org.opencontainers.image.revision=${{ env.upstream_sha }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.description=Stirling-PDF v${{ inputs.version }} built from its MIT core (STIRLING_FLAVOR=core, no app/proprietary) on stirlingtools/stirling-pdf-base. The bundled tools (LibreOffice, Tesseract, OCRmyPDF, Calibre, Ghostscript, QPDF) keep their own licences; their sources are those of the Ubuntu noble packages and the upstream projects named in Stirling-PDF docker/base/Dockerfile.
+
+      # The image must hold no proprietary code, and the two tools PDF tools
+      # leans on most must work: Markdown to PDF (WeasyPrint) and OCR
+      # (OCRmyPDF + Tesseract) on the PDF that conversion produced.
+      - name: Smoke test
+        env:
+          REF: ${{ env.IMAGE }}:${{ inputs.version }}-core-${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker pull "$REF"
+          if docker run --rm --entrypoint sh "$REF" -c 'find / -xdev \( -name "*proprietary*.jar" -o -path "*stirling/software/proprietary*" \) 2>/dev/null | head -n 1' | grep -q .; then
+            echo "::error::the image holds proprietary code"
+            exit 1
+          fi
+          docker run -d --name engine -p 127.0.0.1:8080:8080 \
+            -e SYSTEM_ENABLEANALYTICS=false -e SYSTEM_SHOWUPDATE=false \
+            -e JAVA_CUSTOM_OPTS=-XX:MaxRAMPercentage=60 --memory 2560m "$REF"
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/api/v1/info/status | grep -q UP; then break; fi
+            sleep 5
+          done
+          curl -fsS http://127.0.0.1:8080/api/v1/info/status | grep -q UP || { docker logs engine | tail -n 80; exit 1; }
+          printf '# Synap PDF engine smoke\n\nHello from the Stirling core build.\n' > smoke.md
+          curl -fsS -F "fileInput=@smoke.md;type=text/markdown" \
+            http://127.0.0.1:8080/api/v1/convert/markdown/pdf -o smoke.pdf
+          head -c 5 smoke.pdf | grep -q '%PDF-' || { echo "::error::Markdown to PDF did not return a PDF"; exit 1; }
+          curl -fsS -F "fileInput=@smoke.pdf;type=application/pdf" -F "languages=eng" -F "ocrType=force-ocr" -F "ocrRenderType=sandwich" \
+            http://127.0.0.1:8080/api/v1/misc/ocr-pdf -o smoke-ocr.pdf
+          head -c 5 smoke-ocr.pdf | grep -q '%PDF-' || { echo "::error::OCR did not return a PDF"; docker logs engine | tail -n 80; exit 1; }
+          docker stats --no-stream --format '{{.MemUsage}}' engine | tee -a "$GITHUB_STEP_SUMMARY"
+          docker rm -f engine
+
+  publish:
+    name: Publish the multi-arch image
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Join the two architectures and print the digest to pin
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "$IMAGE:$VERSION-core" \
+            "$IMAGE:$VERSION-core-amd64" "$IMAGE:$VERSION-core-arm64"
+          DIGEST="$(docker buildx imagetools inspect "$IMAGE:$VERSION-core" --format '{{json .Manifest}}' | jq -r .digest)"
+          {
+            echo "## Stirling PDF engine $VERSION-core"
+            echo
+            echo "Pin this in deploy/docker-compose.yml (service \`stirling-pdf\`):"
+            echo
+            echo '```'
+            echo "$IMAGE:$VERSION-core@$DIGEST"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

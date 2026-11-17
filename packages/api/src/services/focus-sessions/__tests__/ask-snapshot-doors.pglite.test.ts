@@ -70,7 +70,7 @@ vi.mock("../assert-output-ref-visible.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions } from "@synap/database";
+import { focusSessions, lifecycleTransitionOutbox } from "@synap/database";
 import { answerExpectedOutput } from "../answer-slot.js";
 import { blockExpectedOutput } from "../block-output.js";
 import {
@@ -123,6 +123,10 @@ const slotOf = async (id: string) =>
 describe("the ask is kept when answered (W1)", () => {
   beforeAll(async () => {
     await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
+    // The slot and proposal doors owe their transition.
+    await h.client!.exec(
+      ddlFor(lifecycleTransitionOutbox as unknown as PgTable)
+    );
   }, 120_000);
   afterAll(async () => h.client?.close());
   beforeEach(() => {

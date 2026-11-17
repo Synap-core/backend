@@ -121,6 +121,21 @@ const CATEGORY_GLYPH: Record<LifecycleCategory, GoalGlyph> = {
 };
 
 /**
+ * The mark of a lifecycle CATEGORY on its own: the category's tone
+ * (`LIFECYCLE_CATEGORY_TONE`) and glyph. What a status move wears where no
+ * goal verdict applies (a job's Activity line, `@synap-core/types/work-view`).
+ */
+export function lifecycleCategoryMark(category: LifecycleCategory): {
+  tone: UnitTone;
+  glyph: GoalGlyph;
+} {
+  return {
+    tone: LIFECYCLE_CATEGORY_TONE[category],
+    glyph: CATEGORY_GLYPH[category],
+  };
+}
+
+/**
  * How a goal ENDED outranks its category for the mark: "Closed · Not met" in
  * the done category's success tone would read as a win. Keyed by every
  * verdict, so a new verdict stops the build until it has a mark.
@@ -173,8 +188,7 @@ export function goalStatusMark(goal: {
   }
   return {
     state: goal.status,
-    tone: LIFECYCLE_CATEGORY_TONE[category],
-    glyph: CATEGORY_GLYPH[category],
+    ...lifecycleCategoryMark(category),
     label: statusWord,
   };
 }

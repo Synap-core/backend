@@ -18,6 +18,7 @@ export { registerWorkspaceOpsRoutes } from "./workspace-ops.js";
 // else, so folding the helpers below into this one would make the file read as
 // an orphaned route.
 export { registerInstalledRoutes } from "./installed.js";
+export { registerNeedsRoutes } from "./needs.js";
 export {
   packageSlugFromCellTypeKey,
   INSTALLED_KINDS,
@@ -51,6 +52,7 @@ export { registerCapabilityConnectionsRoutes } from "./capability-connections.js
 export { registerLoopsRoutes } from "./loops.js";
 export { registerMemoryRoutes } from "./memory.js";
 export { registerKnowledgeRoutes } from "./knowledge.js";
+export { registerFindRoutes } from "./find.js";
 export { registerCommandsRoutes } from "./commands.js";
 export { registerAgentUsersRoutes } from "./agent-users.js";
 export { registerAgentConfigsRoutes } from "./agent-configs.js";

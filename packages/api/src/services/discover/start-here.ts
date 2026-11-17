@@ -436,11 +436,17 @@ async function readStatusRollup(p: {
 async function readStatusOfSection(
   userId: string,
   ids: string[],
-  include?: readonly StatusOfInclude[]
+  include: readonly StatusOfInclude[] | undefined,
+  agentUserId: string | null
 ): Promise<StartHere["statusOf"]> {
   try {
     const { readStatusOf } = await import("../status/status-read.js");
-    return await readStatusOf(userId, ids, include ? { include } : {});
+    return await readStatusOf(userId, ids, {
+      ...(include ? { include } : {}),
+      // Both orient doors (MCP, Hub REST) are Hub Protocol doors: no session
+      // roster (`rosterReadFor`), so the stricter review verdict.
+      viewer: { agentUserId, roster: false },
+    });
   } catch (err) {
     logger.warn({ err }, "orient: statusOf NOT read — unavailable");
     return UNAVAILABLE;
@@ -550,7 +556,12 @@ export async function buildStartHere(p: {
         })
       : Promise.resolve(undefined),
     p.statusOf?.length
-      ? readStatusOfSection(p.userId, p.statusOf, p.statusOfInclude)
+      ? readStatusOfSection(
+          p.userId,
+          p.statusOf,
+          p.statusOfInclude,
+          p.agentUserId ?? null
+        )
       : Promise.resolve(undefined),
   ]);
   const pendingReview = foldPendingReview(p.pending);

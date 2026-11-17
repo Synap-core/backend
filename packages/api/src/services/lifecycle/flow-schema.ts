@@ -37,14 +37,23 @@ export const flowStageRefSchema = z.object({
   gate: z.enum(["human", "check", "awaits"]).nullable(),
   /** Who runs the flow (`playbooks.executor`). */
   executor: z.string(),
+  /**
+   * How this stage OWNS the state it is listed under (decision D2): `enter`
+   * — its `subjectStatus`, held while it is worked; `reach` — its
+   * `onApproved`, reached when its work is approved (the run then stands at
+   * the next stage). Present on a state's `owners`; absent on other refs.
+   */
+  via: z.enum(["enter", "reach"]).optional(),
 });
 
 export const flowStageSchema = z.object({
   key: z.string(),
   name: z.string(),
   category: z.enum(STAGE_CATEGORIES),
-  /** The status this stage writes / follows; null = not tied to the lifecycle. */
+  /** The status entering this stage writes / follows; null = none. */
   subjectStatus: z.string().nullable(),
+  /** The status this stage's approved work reaches (D2); null = none. */
+  onApproved: z.string().nullable(),
   gate: flowStageRefSchema.shape.gate,
 });
 
@@ -54,7 +63,8 @@ export const flowWorkerSchema = z.object({
   mode: z.enum(["run", "propose"]),
   scope: z.enum(WORKER_SCOPES),
   projectId: z.string().nullable(),
-  state: z.enum(["running", "paused"]),
+  /** `stopped`: a session's worker whose session ended. */
+  state: z.enum(["running", "paused", "stopped"]),
 });
 
 export const flowOfFlowSchema = z.object({
@@ -66,7 +76,7 @@ export const flowOfFlowSchema = z.object({
   version: z.number(),
   executor: z.string(),
   stages: z.array(flowStageSchema),
-  /** Declared states a stage of this flow owns, in stage order. */
+  /** Declared states a stage of this flow owns (enters or reaches), in stage order. */
   owns: z.array(z.string()),
   /** Stage statuses the lifecycle does not declare (a renamed state). */
   undeclaredStatuses: z.array(z.string()),

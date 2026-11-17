@@ -42,6 +42,7 @@
  *       (a JUDGEMENT of the agent's claim, whoever owns the slot — it
  *       outranks the owner: the act asked is "check this", not "make this")
  *   the person's                        → owed from you  → needs_you
+ *   the person refused its ask          → blocked on "Refused: …" → blocked
  *   handed back by its delegate         → blocked on the reason → blocked
  *   the session's, session still open   → running        → working
  *   the session's, session finished     → never started  → not_started
@@ -52,6 +53,12 @@
  */
 
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
+import type { LifecycleCategory } from "../lifecycle/option.js";
+import {
+  declinedAnswerText,
+  declinedReasonOf,
+  isDeclinedAnswer,
+} from "../ask/declined.js";
 import {
   resolveUnitState,
   type UnitStateInput,
@@ -103,6 +110,11 @@ export const DECIDING_ASK_MODES = ["confirm", "choose"] as const;
  *     words with no ask file none).
  * A criterion's grade slot never counts, though its ask is a choose: it is a
  * verdict on the agent's work, discharged by the grade door, not a decision.
+ * A REFUSAL never counts either (`answer.value.type === "declined"`,
+ * `../ask/declined.ts`): the person said no to the ask, which decides
+ * nothing, so the slot stays owed (by the agent, after the hand-back). A
+ * decision ask OPENED FOR a decision already carries `decisionId` before any
+ * answer, which is why the value is read, not only the filing.
  *
  * READ-TIME, so a slot answered before the rule existed reads delivered too,
  * and a re-answer or a relay correction moves it with no second write. The
@@ -126,6 +138,7 @@ export function isDecidedByAnswer(
   if (!answer || typeof answer !== "object" || Array.isArray(answer)) {
     return false;
   }
+  if (isDeclinedAnswer(answer)) return false;
   const snapshot = (answer as { askSnapshot?: unknown }).askSnapshot;
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
     return false;
@@ -208,6 +221,89 @@ export function deliverableOwedBy(
   return slot.owner === "human" ? "you" : "session";
 }
 
+/**
+ * NEWEST OWED FIRST: the order every "what does the person owe, latest
+ * first" read uses (orient's owed-by-person rows, the slot a stopped run
+ * waits on). `owedSince` is an ISO instant, so text order is time order; a
+ * slot with none sorts last. A comparator for `Array.prototype.sort` (stable:
+ * ties keep their order).
+ */
+export function newestOwedFirst(
+  a: { owedSince?: string | null },
+  b: { owedSince?: string | null }
+): number {
+  const x = a.owedSince ?? "";
+  const y = b.owedSince ?? "";
+  return x < y ? 1 : x > y ? -1 : 0;
+}
+
+/**
+ * A slot's STATUS as a transition subject: DERIVED from the owed rule above,
+ * never stored — a slot has no status column, and gets none. The doors that
+ * change it (answer, block, unblock, satisfy, attest, retire, delegate, the
+ * decision-ask reactor) owe a `slot` transition when this value changes
+ * (`oweSlotTransitions`, @synap/database).
+ *
+ *   owed      outstanding and the person's (`deliverableOwedBy` = you): the
+ *             ask is open;
+ *   pending   outstanding and the session's, never answered; or optional and
+ *             unfilled (owed by nobody, not made either);
+ *   answered  the person answered it and it went back to the session, which
+ *             still owes the slot (an answer that filed its decision is
+ *             already `done`);
+ *   done      delivered (`isDeliverableDelivered`);
+ *   retired   let go without being delivered (`retiredAt`).
+ */
+export const SLOT_STATUSES = [
+  "owed",
+  "pending",
+  "answered",
+  "done",
+  "retired",
+] as const;
+export type SlotStatus = (typeof SLOT_STATUSES)[number];
+
+/**
+ * THE slot lifecycle (founder decision D9, 17 Nov 2026): owed = open,
+ * answered or done = done, retired = lost. A slot the session owes is `open`
+ * too: it is owed, by the agent.
+ */
+export const SLOT_STATUS_DECLARATION = {
+  owed: { category: "open" },
+  pending: { category: "open" },
+  answered: { category: "done" },
+  done: { category: "done" },
+  retired: { category: "lost" },
+} as const satisfies Record<SlotStatus, { category: LifecycleCategory }>;
+
+/** The fields {@link slotStatusOf} reads. */
+export type SlotStatusFacts = FloorFacts & Pick<DeliverableFacts, "owner">;
+
+/** One slot → its derived status. Delivered wins over retired, as the floor reads it. */
+export function slotStatusOf(slot: SlotStatusFacts): SlotStatus {
+  if (isDeliverableDelivered(slot)) return "done";
+  if (slot.retiredAt != null) return "retired";
+  if (deliverableOwedBy(slot) === "you") return "owed";
+  const answer = slot.answer;
+  const answered =
+    answer != null &&
+    (typeof answer !== "object" || Object.keys(answer).length > 0);
+  return answered ? "answered" : "pending";
+}
+
+/**
+ * A slot's transition subject id: `<session id>/<slot key>` (the label when
+ * the slot has no key) — the `answer:` wait's spelling without its prefix, so
+ * a hold may wait on `slot:<session id>/<key>`.
+ */
+export function slotSubjectId(
+  sessionId: string,
+  slot: { key?: string | null; label?: string | null }
+): string | null {
+  const name = slot.key || slot.label;
+  return name ? `${sessionId}/${name}` : null;
+}
+
 /** The session a deliverable belongs to — the one fact the slot cannot carry. */
 export interface DeliverableContext {
   /**
@@ -232,6 +328,12 @@ export function deliverableUnitInput(
   if (owedBy === null) return { terminal: true };
   if (slot.claimedDone) return { pendingDecisions: 1 };
   if (owedBy === "you") return { owedFromYou: 1 };
+  // The person REFUSED the ask: the agent owes a new plan, and the slot says
+  // why it is stuck, on an open session and a finished one alike (a refused
+  // slot of a closed session must not read "never started").
+  if (isDeclinedAnswer(slot.answer)) {
+    return { blockedBy: declinedAnswerText(declinedReasonOf(slot.answer)) };
+  }
   if (slot.returnedReason) return { blockedBy: slot.returnedReason };
   if (ctx.sessionTerminal) return { everStarted: false };
   return { running: true };

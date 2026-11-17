@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * One session — the ONE body, drawn in two frames: `/open/session/:id`
- * (the receiver card, any reader of the session) and `/sessions/:id` (the
- * console, with a breadcrumb back to the list). The frame owns only the
+ * One session — the ONE body, drawn in a frame: `/open/session/:id` (the
+ * receiver card, any reader of the session; the console's `/sessions/:id`
+ * redirects there since Jobs left the console). The frame owns only the
  * chrome — how loading, a failure and the page itself are wrapped, and where a
  * session lives in it; everything the reader sees and can do is decided here,
  * once, so the two pages cannot drift.
@@ -30,7 +30,9 @@
  * (chips, each a door); what it waits
  * on the owner for — the agents' questions and blockers, answered in place,
  * and the changes it proposed, each a door to its review
- * (`session-needs-you.tsx`); what it left — its report
+ * (`session-needs-you.tsx`), led by where its run stands — the stages, the
+ * gates waiting, a stop and its Continue (`work-section.tsx`, `statusOf`
+ * work); what it left — its report
  * (`focusSessions.document`), its outputs (`focusSessions.outputs`, 5 then
  * "Show all") and the sessions it spawned (the packet's `children`, the rest
  * through `focusSessions.browse` by `parentSessionId`); its
@@ -65,6 +67,7 @@ import {
   MoreHorizontal,
   Pause,
   Play,
+  RotateCw,
   TriangleAlert,
   UserRound,
   type LucideIcon,
@@ -126,6 +129,8 @@ import {
   ProposedChangesSection,
 } from "./session-needs-you";
 import { RoomPanel } from "./room-panel";
+import { useWorkRead, WorkSection } from "./work-section";
+import { gatesDrawnAbove, restartPlace } from "../work-model";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { OpenInAppLink } from "../open-in-app-link";
 import { useReauthOnUnauthorized } from "../use-reauth";
@@ -198,6 +203,10 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
 
   const moves = useSessionMoves(id);
   const [confirming, setConfirming] = useState<SessionMove | null>(null);
+  // Where its work stands (the same read the section below draws): a run the
+  // reader may continue keeps ONE restart at rest, and its gate cards are not
+  // listed again under Proposed changes.
+  const work = useWorkRead(id);
 
   // Two mutations, not one with a flag: the dry run's pending state must
   // never spin the real run's confirm button (`ConfirmModal.isPending`).
@@ -263,8 +272,7 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
       ? session.continuation.project.project
       : null;
   // Where it came from and what it spawned: each a door to that session's
-  // page in this frame (the console's `/sessions/:id`, the receiver's
-  // `/open/session/:id`).
+  // page in this frame (`/open/session/:id`).
   const parent = sessionParent(session.continuation.parent);
   const children = sessionChildren(session.continuation.children);
   const sessionHref = (sid: string) =>
@@ -275,6 +283,16 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
     m.confirm ? setConfirming(m) : moves.run(m);
   const canRerun =
     owner && !sessionCanCancel(session.status) && session.rerun?.available;
+  // Continue (the section below) resumes THIS session where it stopped; Run
+  // again starts a NEW one. When Continue is on offer it is the restart at
+  // rest, and Run again waits in More, saying the difference.
+  const restart = restartPlace({
+    canRerun: !!canRerun,
+    loading: work.query.isLoading,
+    read: work.read,
+  });
+  const previewRerun = () =>
+    rerunPreview.mutate({ sessionId: id, mode: "add", dryRun: true });
   const canRevert = owner && sessionCanRevert(session.status);
   // Named, not inlined: `exit-door.test.ts` reads "Pending: x." as a dead
   // control naming a missing procedure.
@@ -317,27 +335,39 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
         >
           {primary.label}
         </Button>
-      ) : canRerun ? (
+      ) : restart === "header" ? (
         <Button
           size="sm"
           radius="md"
           color="primary"
           variant="flat"
           isLoading={rerunPreview.isPending}
-          onPress={() =>
-            rerunPreview.mutate({ sessionId: id, mode: "add", dryRun: true })
-          }
+          onPress={previewRerun}
         >
           Run again
         </Button>
       ) : undefined,
       secondaryActions: (
         <>
-          {more.length > 0 && (
+          {(more.length > 0 || restart === "more") && (
             <MoreMoves
               moves={more}
-              busy={moves.pending !== null}
+              busy={moves.pending !== null || rerunPreview.isPending}
               onPick={pick}
+              extra={
+                restart === "more"
+                  ? [
+                      {
+                        key: "rerun",
+                        label: "Run again",
+                        description:
+                          "Start a new session from the first stage. Continue picks this one up where it stopped.",
+                        icon: RotateCw,
+                        onPress: previewRerun,
+                      },
+                    ]
+                  : []
+              }
             />
           )}
           <OpenInAppLink type="session" id={id} />
@@ -471,8 +501,15 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
           </p>
         )}
 
+        <WorkSection subjectId={id} self sessionHref={sessionHref} />
         {owner && <NeedsYouSection sessionId={id} gradedInRail={railGraded} />}
-        <ProposedChangesSection sessionId={id} />
+        <ProposedChangesSection
+          sessionId={id}
+          drawnAbove={gatesDrawnAbove({
+            loading: work.query.isLoading,
+            read: work.read,
+          })}
+        />
 
         {report.isLoading ? (
           <DocumentContentSection title="Report" content={null} />
@@ -614,14 +651,26 @@ function When({ at }: { at: Date | string | null | undefined }) {
 }
 
 /** The moves after the primary, in the header's overflow menu. */
+/** An action in More that is not a status move (Run again). */
+interface MoreExtra {
+  key: string;
+  label: string;
+  /** One line saying how it differs from what is on the page. */
+  description: string;
+  icon: LucideIcon;
+  onPress: () => void;
+}
+
 function MoreMoves({
   moves,
   busy,
   onPick,
+  extra = [],
 }: {
   moves: SessionMove[];
   busy: boolean;
   onPick: (m: SessionMove) => void;
+  extra?: MoreExtra[];
 }) {
   return (
     <Dropdown>
@@ -631,32 +680,45 @@ function MoreMoves({
           size="sm"
           variant="light"
           radius="md"
-          aria-label="Change status"
-          title="Change status"
+          aria-label="More"
+          title="More"
           isDisabled={busy}
         >
           <MoreHorizontal className="h-4 w-4" />
         </Button>
       </DropdownTrigger>
       <DropdownMenu
-        aria-label="Change status"
+        aria-label="More"
         onAction={(key) => {
-          const m = moves.find((x) => x.key === key);
+          const x = extra.find((e) => e.key === key);
+          if (x) return x.onPress();
+          const m = moves.find((y) => y.key === key);
           if (m) onPick(m);
         }}
       >
-        {moves.map((m) => {
-          const Icon = MOVE_ICON[m.key];
-          return (
+        {[
+          ...moves.map((m) => {
+            const Icon = MOVE_ICON[m.key];
+            return (
+              <DropdownItem
+                key={m.key}
+                color={m.confirm ? "warning" : "default"}
+                startContent={<Icon aria-hidden className="h-3.5 w-3.5" />}
+              >
+                {m.label}
+              </DropdownItem>
+            );
+          }),
+          ...extra.map((x) => (
             <DropdownItem
-              key={m.key}
-              color={m.confirm ? "warning" : "default"}
-              startContent={<Icon aria-hidden className="h-3.5 w-3.5" />}
+              key={x.key}
+              description={x.description}
+              startContent={<x.icon aria-hidden className="h-3.5 w-3.5" />}
             >
-              {m.label}
+              {x.label}
             </DropdownItem>
-          );
-        })}
+          )),
+        ]}
       </DropdownMenu>
     </Dropdown>
   );

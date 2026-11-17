@@ -47,9 +47,11 @@ const ListQuery = z
   .object({
     trackId: z.string().uuid().optional(),
     projectId: z.string().uuid().optional(),
+    /** The workers a session started (not the caller's attribution). */
+    scopeSessionId: z.string().uuid().optional(),
   })
-  .refine((q) => !!q.trackId || !!q.projectId, {
-    message: "trackId (the goal) or projectId is required",
+  .refine((q) => !!q.trackId || !!q.projectId || !!q.scopeSessionId, {
+    message: "trackId (the goal), projectId or scopeSessionId is required",
   });
 
 const EnableBody = z
@@ -62,10 +64,20 @@ const EnableBody = z
     mode: workerModeSchema.optional(),
     trackId: z.string().uuid().optional(),
     projectId: z.string().uuid().optional(),
+    /**
+     * A session the caller owns: its worker's runs are that session's
+     * children. Not `sessionId`, the caller's attribution elsewhere.
+     */
+    scopeSessionId: z.string().uuid().optional(),
     agentUserId: z.string().optional(),
   })
-  .refine((b) => !!b.trackId || !!b.projectId, {
-    message: "Enable a worker for a goal (trackId) or a project (projectId).",
+  .refine((b) => !!b.trackId || !!b.projectId || !!b.scopeSessionId, {
+    message:
+      "Enable a worker for a goal (trackId), a project (projectId) or a session (scopeSessionId).",
+  })
+  .refine((b) => !b.scopeSessionId || (!b.trackId && !b.projectId), {
+    message:
+      "A session's worker is filed where the session is: give scopeSessionId alone.",
   })
   .refine((b) => !b.activatorKey !== !b.schedule, {
     message: "Name the worker: its activatorKey or a schedule.",
@@ -134,6 +146,11 @@ function render<T>(c: HubContext, outcome: WorkerDoorOutcome<T>) {
         },
         409
       );
+    case "refused":
+      return c.json(
+        { error: outcome.error, reasonCode: outcome.reasonCode },
+        409
+      );
   }
 }
 
@@ -195,6 +212,9 @@ export function registerWorkersRoutes(app: HubHono): void {
           ...(parsed.data.trackId ? { trackId: parsed.data.trackId } : {}),
           ...(parsed.data.projectId
             ? { projectId: parsed.data.projectId }
+            : {}),
+          ...(parsed.data.scopeSessionId
+            ? { scopeSessionId: parsed.data.scopeSessionId }
             : {}),
         })
       );

@@ -192,7 +192,28 @@ export interface RuleMetadata {
    * does not was edited by its owner and is never overwritten.
    */
   seed?: RuleSeed;
+  /**
+   * A REACTION's rule (decision D1): the row that makes a rule the reactions
+   * reactor applies (a built-in one, or one a relation declares) visible and
+   * pausable in the ONE rule list. It has no automation half: the reactor runs
+   * it, never the matcher. Draft = paused. Seeded by the compile pass
+   * (`services/reactions/reaction-rules-compile.ts`).
+   */
+  reaction?: RuleReaction;
   createdAt: string;
+}
+
+/** See {@link RuleMetadata.reaction}. */
+export interface RuleReaction {
+  /** The reaction's stable id (`builtin:…`, `declared:rollup:…`). */
+  id: string;
+}
+
+/** Re-validate a stored reaction blob — stored JSONB is data. */
+export function readRuleReaction(raw: unknown): RuleReaction | null {
+  if (!raw || typeof raw !== "object") return null;
+  const id = (raw as { id?: unknown }).id;
+  return typeof id === "string" && id ? { id } : null;
 }
 
 /** See {@link RuleMetadata.seed}. */
@@ -276,6 +297,9 @@ export function readRuleMetadata(
     ...(readRuleSeed(candidate.seed)
       ? { seed: readRuleSeed(candidate.seed)! }
       : {}),
+    ...(readRuleReaction(candidate.reaction)
+      ? { reaction: readRuleReaction(candidate.reaction)! }
+      : {}),
     createdAt: candidate.createdAt ?? new Date(0).toISOString(),
   };
 }
@@ -336,6 +360,8 @@ export function buildRuleMetadata(input: {
   sentence?: unknown;
   /** Template provenance + three-way marker (template-installed rules only). */
   seed?: RuleSeed;
+  /** The reaction this rule makes visible and pausable (no automation). */
+  reaction?: RuleReaction;
   now?: Date;
 }): RuleMetadata {
   const expiresAt = normalizeExpiresAt(input.expiresAt);
@@ -357,6 +383,7 @@ export function buildRuleMetadata(input: {
       ? { sentence: input.sentence }
       : {}),
     ...(input.seed ? { seed: input.seed } : {}),
+    ...(input.reaction ? { reaction: input.reaction } : {}),
     createdAt: (input.now ?? new Date()).toISOString(),
   };
 }

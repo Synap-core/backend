@@ -58,6 +58,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   db,
   focusSessions,
+  lifecycleTransitionOutbox,
   proposals,
   users,
   links,
@@ -116,6 +117,8 @@ async function row() {
 beforeAll(async () => {
   for (const t of [
     focusSessions,
+    // Slot doors owe their transition.
+    lifecycleTransitionOutbox,
     proposals,
     users,
     links,

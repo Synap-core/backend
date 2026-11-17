@@ -69,6 +69,7 @@ import {
 } from "@synap/database";
 import type {
   Playbook,
+  PlaybookRun,
   FocusSession,
   Automation,
 } from "@synap/database/schema";
@@ -158,6 +159,11 @@ import {
   resolveRunChoice,
   handedToLine,
 } from "../services/playbooks/run-playbook.js";
+import {
+  alreadyRunningMessage,
+  findLiveRunOfSubject,
+  type AlreadyRunningReason,
+} from "../services/playbooks/live-run-of-subject.js";
 import { PRE_APPROVAL_HELD_LINE } from "../services/playbooks/pre-approved-run.js";
 import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
 import {
@@ -173,6 +179,17 @@ import {
   materializePlaybookCronAutomation,
   findNonArchivedAutomationByName,
 } from "../services/playbooks/cron-automation.js";
+import {
+  FLOW_ROLE,
+  addPlaybookAutomation,
+  readDriverAutomationId,
+  setDriverAutomation,
+} from "../services/playbooks/playbook-automation-links.js";
+import {
+  listProcesses,
+  processReaderOf,
+  readProcess,
+} from "../services/playbooks/process-read.js";
 import {
   describeGoalPlaceholderProblems,
   findGoalPlaceholderProblems,
@@ -311,6 +328,108 @@ async function resolveVisibleSubjectId(
     code: "NOT_FOUND",
     message: `Subject entity ${subjectId} not found in this workspace`,
   });
+}
+
+/**
+ * The fields of `playbooks.run`'s `status: "already_running"` answer (the
+ * person already has a live run of the playbook on the subject, one live run
+ * per object): NOTHING started. `session` is the live run to open, `run` its
+ * newest ledger row (null for an agent's draft that waits for the person),
+ * `reason` why nothing started. The status literal stays at each return in
+ * `run` itself, where `write-door-outcome-contract.test.ts` reads the
+ * door's statuses.
+ */
+function alreadyRunningFields(
+  playbookName: string,
+  live: {
+    session: FocusSession;
+    run: PlaybookRun | null;
+    reason: AlreadyRunningReason;
+  }
+) {
+  return {
+    run: live.run,
+    session: live.session as FocusSession | null,
+    reason: live.reason,
+    message: alreadyRunningMessage(playbookName, live.reason),
+    proposalId: null as string | null,
+  };
+}
+
+/** The run choice a `playbooks.run` call carries, as its checks read it. */
+interface RunChoiceAsked {
+  handToAgentId?: string;
+  runOn?: "synap_ai";
+  remember?: boolean;
+  agentUserId?: string;
+}
+
+/**
+ * RUN CHOICE — refuse a choice this run cannot take (an agent nobody could
+ * hand it to, Synap AI on a playbook that runs only on agents, or both at
+ * once), and a `remember` that an agent asked for or that names nothing,
+ * with exactly the arguments `runPlaybook` resolves the choice with again
+ * when the run starts.
+ */
+async function assertRunChoice(args: {
+  input: RunChoiceAsked;
+  ctxAgentUserId: string | null | undefined;
+  userId: string;
+  workspaceId: string;
+  playbook: Playbook;
+}): Promise<void> {
+  const { input } = args;
+  if (input.handToAgentId || input.runOn) {
+    await resolveRunChoice({
+      userId: args.userId,
+      workspaceId: args.workspaceId,
+      agentUserId: input.agentUserId,
+      handToAgentId: input.handToAgentId,
+      runOn: input.runOn,
+      playbook: args.playbook,
+    });
+  }
+  if (input.remember) {
+    if (input.agentUserId || args.ctxAgentUserId) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "Only a person can choose who runs this from now on — an agent cannot.",
+        cause: { reasonCode: "PERSON_ONLY" },
+      });
+    }
+    if (!input.runOn && !input.handToAgentId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          'Nothing to remember: pass runOn "synap_ai" or handToAgentId with remember.',
+      });
+    }
+  }
+}
+
+/**
+ * Remember the person's run choice for this playbook (`remember`, checked by
+ * {@link assertRunChoice}) so the next launch does not ask
+ * (`readPlaybookRunChoice`). The playbook's own runner comes before a
+ * remembered choice: when it names another, the answer is the offer to make
+ * this one its runner. Null when nothing is to be remembered.
+ */
+async function rememberRunChoice(args: {
+  input: RunChoiceAsked;
+  userId: string;
+  playbook: Playbook;
+}): Promise<RunnerOffer | null> {
+  if (!args.input.remember) return null;
+  const remembered: RunChoice = args.input.handToAgentId
+    ? { executor: "external-agent", agentUserId: args.input.handToAgentId }
+    : { executor: "is-agent" };
+  await setRunChoice({
+    callerId: args.userId,
+    playbookId: args.playbook.id,
+    choice: remembered,
+  });
+  return runnerOfferFor(args.playbook, remembered);
 }
 
 // ── Shared input schemas ─────────────────────────────────────────────────────
@@ -786,36 +905,14 @@ const playbookAutomationsRouter = router({
         };
       }
 
-      // 5. First-class join row (role/sortOrder live here — the links edge
-      // below can't carry them).
-      await database
-        .insert(playbookAutomations)
-        .values({
-          playbookId: input.playbookId,
-          automationId: input.automationId,
-          role: input.role ?? null,
-          sortOrder: input.sortOrder ?? null,
-        })
-        .onConflictDoNothing({
-          target: [
-            playbookAutomations.playbookId,
-            playbookAutomations.automationId,
-          ],
-        });
-
-      // 6. Symmetric `links` edge (transition — createLinks also dual-writes
-      // the join row above, so this is a no-op there and just keeps the
-      // read-only graph view in sync).
-      await createLinks([
-        {
-          workspaceId: playbook.workspaceId,
-          fromType: "automation",
-          fromId: input.automationId,
-          toType: "playbook",
-          toId: input.playbookId,
-          linkType: "member_of",
-        },
-      ]);
+      // 5. The ONE link (0425): the join row. The legacy
+      // `automation --member_of--> playbook` edge is no longer written.
+      await addPlaybookAutomation(database, {
+        playbookId: input.playbookId,
+        automationId: input.automationId,
+        role: input.role ?? null,
+        sortOrder: input.sortOrder ?? null,
+      });
 
       return {
         status: "added" as const,
@@ -1923,6 +2020,48 @@ export const playbooksRouter = router({
     }),
 
   /**
+   * ONE process, whole (Process wave plan 0adf8352, W2): the playbook seen as
+   * a Process — definition, what starts it, steps, checks, what it moves, its
+   * needs with coverage, its skills, its runs and health — composed by the ONE
+   * process read (`services/playbooks/process-read.ts`), the same read the Hub
+   * REST door and MCP `synap_list_playbooks({ playbookId })` return. A part
+   * that could not be read is named in `unavailable`, never answered empty.
+   * Contract: `@synap-core/types/processes` `ProcessRead`.
+   */
+  process: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const read = await readProcess(processReaderOf(ctx), input.playbookId);
+      if (!read) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+      return read;
+    }),
+
+  /**
+   * A space's process index (`ProcessIndex`): the cards (`ProcessSummary`)
+   * and the automations outside any process, or every visible one when no
+   * space is named (`null` = pod-wide only). User-floored. Archived
+   * playbooks and automations are left out.
+   */
+  processes: protectedProcedure
+    .input(
+      z
+        .object({ workspaceId: z.string().uuid().nullable().optional() })
+        .optional()
+    )
+    .query(async ({ ctx, input }) =>
+      listProcesses(processReaderOf(ctx), {
+        ...(input?.workspaceId !== undefined
+          ? { workspaceId: input.workspaceId }
+          : {}),
+      })
+    ),
+
+  /**
    * Create a new playbook. Governance-gated: AI callers (agentUserId set) route
    * through checkPermissionOrPropose; on "proposed" the row is NOT written.
    */
@@ -2218,8 +2357,8 @@ export const playbooksRouter = router({
           agentUserId: input.agentUserId,
         });
 
-        // S1: a scheduled playbook maintains ONE backing cron automation (stamped
-        // on flow_automation_id) that the existing automation-cron-scheduler fires.
+        // S1: a scheduled playbook maintains ONE backing cron automation (its
+        // `schedule` row in playbook_automations) that the cron scheduler fires.
         await materializePlaybookCronAutomation(created, {
           userId: input.agentUserId ?? ctx.userId,
         });
@@ -2605,7 +2744,7 @@ export const playbooksRouter = router({
       warnUnresolvedGoalReferences(updated);
 
       // S1: re-reconcile the backing cron automation against the new schedule.
-      // Idempotent — re-points/updates the SAME row via flow_automation_id, or
+      // Idempotent — re-points/updates the SAME row (the playbook's driver), or
       // tears it down when the schedule was cleared/disabled.
       //
       // Only a schedule or status CHANGE may arm it. An adoption / metadata
@@ -3004,6 +3143,15 @@ export const playbooksRouter = router({
          * `handToAgentId`.
          */
         trial: trialRunInputSchema.optional(),
+        /**
+         * ONE LIVE RUN PER OBJECT (founder, 2026-11-16): while the caller's
+         * person already has a live run of this playbook on `subjectId`, a
+         * run answers `status: "already_running"` with that run and starts
+         * nothing. `true` starts a second run anyway (the person's explicit
+         * "start another"); that run does not hold the object's live slot.
+         * Carried on the proposal `data` so an approved run keeps it.
+         */
+        startAnother: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -3052,6 +3200,13 @@ export const playbooksRouter = router({
           ownerId: ctx.userId,
           runner: input.runner,
           playbook,
+          // Before the run's space is resolved below: the explicit, the
+          // playbook's or the ambient one, for a `need:` entry of `requires`.
+          workspaceId:
+            input.workspaceId ??
+            playbook.workspaceId ??
+            ctx.workspaceId ??
+            null,
         });
         if (mapped.handToAgentId) input.handToAgentId = mapped.handToAgentId;
         if (mapped.runOn) input.runOn = mapped.runOn;
@@ -3115,6 +3270,48 @@ export const playbooksRouter = router({
         input.subjectId,
         runWorkspaceId
       );
+
+      // ONE LIVE RUN PER OBJECT (founder, 2026-11-16, decisions 1–4): a
+      // person's run of this playbook on this subject, without "start
+      // another", holds the object's one live slot. While the person already
+      // has a live run of it there (an agent's draft waiting for them
+      // included), the answer is that run: before anything is checked,
+      // proposed or started, so a duplicate is never filed for review either.
+      // `runPlaybook` asks again (the approved replay comes back through
+      // here) and the 0427 index floors the race. Never for a trial.
+      const oneLivePerSubject =
+        !input.startAnother && !input.trial && !!subjectId;
+      if (oneLivePerSubject) {
+        const live = await findLiveRunOfSubject({
+          playbookId: playbook.id,
+          subjectId: subjectId!,
+          userId: ctx.userId,
+        });
+        if (live) {
+          // "Run it this way and remember" is the person's choice for the
+          // playbook, not for this click: it is kept although nothing starts
+          // (checked exactly as below; person-only, the write floor above
+          // already ran). Nothing else is checked or proposed.
+          const runChoiceArgs = {
+            input,
+            userId: ctx.userId,
+            playbook,
+          };
+          if (input.remember) {
+            await assertRunChoice({
+              ...runChoiceArgs,
+              ctxAgentUserId: ctx.agentUserId,
+              workspaceId: runWorkspaceId,
+            });
+          }
+          const runnerOffer = await rememberRunChoice(runChoiceArgs);
+          return {
+            ...alreadyRunningFields(playbook.name, live),
+            status: "already_running" as const,
+            ...(runnerOffer ? { runnerOffer } : {}),
+          };
+        }
+      }
 
       // D3 preflight — a playbook that depends on installed-but-not-enabled
       // skills says so BEFORE anything launches (and before a run proposal is
@@ -3204,37 +3401,15 @@ export const playbooksRouter = router({
         }
       }
 
-      // RUN CHOICE — refuse a choice this run cannot take (an agent nobody
-      // could hand it to, Synap AI on a playbook that runs only on agents, or
-      // both at once) BEFORE a proposal is filed (same placement as FILING
-      // above), with exactly the arguments `runPlaybook` resolves it with
-      // again when the run starts.
-      if (input.handToAgentId || input.runOn) {
-        await resolveRunChoice({
-          userId: ctx.userId,
-          agentUserId: input.agentUserId,
-          handToAgentId: input.handToAgentId,
-          runOn: input.runOn,
-          playbook,
-        });
-      }
-      if (input.remember) {
-        if (input.agentUserId || ctx.agentUserId) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message:
-              "Only a person can choose who runs this from now on — an agent cannot.",
-            cause: { reasonCode: "PERSON_ONLY" },
-          });
-        }
-        if (!input.runOn && !input.handToAgentId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              'Nothing to remember: pass runOn "synap_ai" or handToAgentId with remember.',
-          });
-        }
-      }
+      // RUN CHOICE — refused BEFORE a proposal is filed (same placement as
+      // FILING above).
+      await assertRunChoice({
+        input,
+        ctxAgentUserId: ctx.agentUserId,
+        userId: ctx.userId,
+        workspaceId: runWorkspaceId,
+        playbook,
+      });
 
       // TOOLS — refuse a run whose tools lack what a step declares BEFORE a
       // proposal is filed for a run that could never start (`runPlaybook`
@@ -3242,6 +3417,7 @@ export const playbooksRouter = router({
       if (declaresStepTools(playbook)) {
         const choice = await resolveRunChoice({
           userId: ctx.userId,
+          workspaceId: runWorkspaceId,
           agentUserId: input.agentUserId,
           handToAgentId: input.handToAgentId,
           runOn: input.runOn,
@@ -3329,6 +3505,8 @@ export const playbooksRouter = router({
           ...(input.stageRunners ? { stageRunners: input.stageRunners } : {}),
           // A gated trial stays a trial once approved.
           ...(input.trial ? { trial: input.trial } : {}),
+          // A gated "start another" stays one once approved.
+          ...(input.startAnother ? { startAnother: true } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -3337,20 +3515,11 @@ export const playbooksRouter = router({
       // The person's choice is remembered once the run is allowed, before it
       // starts, so this run already follows it and the next launch does not
       // ask (`readPlaybookRunChoice`).
-      // The playbook's own runner comes before a remembered choice: when it
-      // names another, the reply offers to make this one its runner.
-      let runnerOffer: RunnerOffer | null = null;
-      if (input.remember) {
-        const remembered: RunChoice = input.handToAgentId
-          ? { executor: "external-agent", agentUserId: input.handToAgentId }
-          : { executor: "is-agent" };
-        await setRunChoice({
-          callerId: ctx.userId,
-          playbookId: playbook.id,
-          choice: remembered,
-        });
-        runnerOffer = runnerOfferFor(playbook, remembered);
-      }
+      const runnerOffer = await rememberRunChoice({
+        input,
+        userId: ctx.userId,
+        playbook,
+      });
       if ("proposalId" in perm) {
         return {
           run: null,
@@ -3404,6 +3573,9 @@ export const playbooksRouter = router({
         ...(input.agentUserId && "preApprovedByRuleId" in perm
           ? { preApprovedByRuleId: perm.preApprovedByRuleId }
           : {}),
+        // One live run per object: this door's person run holds the slot
+        // (see `oneLivePerSubject` above). Only this door sets it.
+        ...(oneLivePerSubject ? { oneLivePerSubject: true } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
@@ -3412,6 +3584,21 @@ export const playbooksRouter = router({
       });
       const { run, session, parentLink, skipped, held, heldBecause, handedTo } =
         started;
+
+      // A live run was found by the spine (the read above raced it, or a
+      // concurrent start won the insert): nothing started, the live run is
+      // the answer — never "Playbook run started" with no run.
+      if (started.alreadyRunning) {
+        return {
+          ...alreadyRunningFields(playbook.name, {
+            session: started.session,
+            run: started.run,
+            reason: started.alreadyRunning.reason,
+          }),
+          status: "already_running" as const,
+          ...(runnerOffer ? { runnerOffer } : {}),
+        };
+      }
 
       // ONE-SHOT (`executor: "generate"`): no session. The draft was filed as
       // a proposal on the subject, answered here at once so the app shows it
@@ -3476,9 +3663,10 @@ export const playbooksRouter = router({
 
   /**
    * Get the flow graph for a playbook (Option-C model: playbook references an
-   * automation that owns the flow definition via `flow_automation_id`).
+   * automation that owns the flow definition: its driving automation, the
+   * `schedule`/`flow` row in `playbook_automations`, 0425).
    *
-   * If `flow_automation_id` is set → load that automation's flowDefinition.
+   * If it has one → load that automation's flowDefinition.
    * If NOT set → return a lazy starter graph (NOT persisted) seeded from the
    * playbook's name and goalTemplate. `automationId: null` signals the caller
    * that no automation exists yet (saveFlow will create one on first save).
@@ -3548,11 +3736,13 @@ export const playbooksRouter = router({
         });
       }
 
-      // Existing automation → return its persisted flow.
-      if (playbook.flowAutomationId) {
-        const database = await getDb();
+      // Existing automation → return its persisted flow. The driving
+      // automation is the playbook's `schedule`/`flow` join row (0425).
+      const database = await getDb();
+      const driverId = await readDriverAutomationId(database, playbook.id);
+      if (driverId) {
         const automation = await database.query.automations.findFirst({
-          where: eq(automations.id, playbook.flowAutomationId),
+          where: eq(automations.id, driverId),
         });
         if (automation) {
           return {
@@ -3606,11 +3796,13 @@ export const playbooksRouter = router({
   /**
    * Save the flow graph for a playbook (Option-C model).
    *
-   * If `flow_automation_id` is already set → update that automation's
-   * flowDefinition in-place.
-   * If NOT set → create a new "manual" draft automation, stamp
-   * `playbooks.flow_automation_id`, and write an `automation --activates-->
-   * playbook` link edge.
+   * If the playbook has a driving automation (its `schedule`/`flow` row in
+   * `playbook_automations`, 0425) → update that automation's flowDefinition
+   * in-place.
+   * If NOT → create a new "manual" draft automation and link it with role
+   * `flow` (the ONE link; `flow_automation_id` is still written beside it for
+   * one release). The `automation --activates--> playbook` edge it used to
+   * write had no reader and is no longer written.
    *
    * Governance-gated (mirrors `update`): write-gate on the LOADED playbook's
    * workspaceId + checkPermissionOrPropose. On "proposed" returns without
@@ -3690,14 +3882,15 @@ export const playbooksRouter = router({
       const flowDef = input.flowDefinition as FlowDefinition;
 
       // 4a. Existing automation → update its flowDefinition in-place.
-      if (existing.flowAutomationId) {
+      const driverId = await readDriverAutomationId(database, existing.id);
+      if (driverId) {
         await database
           .update(automations)
           .set({ flowDefinition: flowDef, updatedAt: new Date() })
-          .where(eq(automations.id, existing.flowAutomationId));
+          .where(eq(automations.id, driverId));
 
         return {
-          automationId: existing.flowAutomationId as string,
+          automationId: driverId,
           status: "updated" as const,
           message: "Flow definition updated",
           proposalId: null as string | null,
@@ -3707,7 +3900,7 @@ export const playbooksRouter = router({
       // 4b. No automation yet → create one, stamp playbook, write link edge.
       // 23505 recovery against automations_workspace_name_active_uq (0230): a
       // non-archived automation of this name may already exist (the playbook's
-      // backing row survived a flow_automation_id reset). Adopt it and persist
+      // backing row survived a schedule teardown). Adopt it and persist
       // THIS flow onto it — saveFlow's whole contract — rather than 500-ing or
       // cloning. Case-insensitive identity handled by findNonArchivedAutomationByName.
       let automationId: string;
@@ -3742,23 +3935,12 @@ export const playbooksRouter = router({
         automationId = winner.id;
       }
 
-      // Stamp the playbook with the new automation id.
-      await database
-        .update(playbooks)
-        .set({ flowAutomationId: automationId, updatedAt: new Date() })
-        .where(eq(playbooks.id, existing.id));
-
-      // Write the `automation --activates--> playbook` link edge (idempotent).
-      await createLinks([
-        {
-          workspaceId: existing.workspaceId,
-          fromType: "automation",
-          fromId: automationId,
-          toType: "playbook",
-          toId: existing.id,
-          linkType: "activates",
-        },
-      ]);
+      // The ONE link (0425): the canvas flow is the playbook's `flow` row.
+      await setDriverAutomation(database, {
+        playbookId: existing.id,
+        automationId,
+        role: FLOW_ROLE,
+      });
 
       return {
         automationId: automationId as string,

@@ -64,11 +64,11 @@ describe("matchSessionTemplate — template kind on every candidate", () => {
     const byId = Object.fromEntries(out.candidates.map((c) => [c.id, c]));
     expect(byId["pb-track"]).toMatchObject({
       scope: "project",
-      templateKind: "Goal template",
+      templateKind: "Goal process",
     });
     expect(byId["pb-twin"]).toMatchObject({
       scope: "session",
-      templateKind: "Work template",
+      templateKind: "Process",
     });
   });
 
@@ -105,7 +105,7 @@ describe("matchSessionTemplate — template kind on every candidate", () => {
     });
     expect(session.candidates.map((c) => c.id)).toEqual(["pb-twin"]);
     expect(
-      session.candidates.some((c) => c.templateKind === "Goal template")
+      session.candidates.some((c) => c.templateKind === "Goal process")
     ).toBe(false);
     const find = await matchSessionTemplate(input);
     expect(find.candidates.map((c) => c.id)).toContain("pb-track");

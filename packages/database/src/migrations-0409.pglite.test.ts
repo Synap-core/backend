@@ -9,6 +9,11 @@
  * never be a remembered provider choice; a deleted provider takes its
  * remembered default with it while an installation keeps its history; and
  * schema-coherence names every table.
+ *
+ * 0426 retired `intent_defaults` (never wired; the space's need binding
+ * replaces it: the drizzle schema no longer declares it, the table stays until
+ * its contract-step drop) and widened `installation_bindings` to a space's
+ * need binding: the drizzle schema checks below run with 0426 applied.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -32,12 +37,16 @@ import {
   HOST_JOB_KINDS,
   HOST_JOB_STATUSES,
 } from "./schema/host-jobs.js";
-import { intentDefaults } from "./schema/intent-defaults.js";
 import { REQUIRED_COLUMNS } from "./utils/schema-coherence.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const M0409 = readFileSync(
   resolve(HERE, "../migrations/0409_installations.sql"),
+  "utf8"
+);
+/** 0426 widens installation_bindings (space need binding), drops intent_defaults. */
+const M0426 = readFileSync(
+  resolve(HERE, "../migrations/0426_needs.sql"),
   "utf8"
 );
 /** 0415 renames the one-open-job index (hosted verb runs queue beside it). */
@@ -58,9 +67,8 @@ const STUBS = `
 
 const TABLES: Array<{ table: PgTable; columns: number }> = [
   { table: installations, columns: 30 },
-  { table: installationBindings, columns: 21 },
+  { table: installationBindings, columns: 22 },
   { table: hostJobs, columns: 31 },
-  { table: intentDefaults, columns: 9 },
 ];
 
 async function fresh(): Promise<PGlite> {
@@ -89,8 +97,9 @@ describe("migration 0409 — installations", () => {
     await pg.exec(STUBS);
     await pg.exec(M0409);
     await pg.exec(M0409);
-    // The drizzle schema declares the indexes as they stand after 0415.
+    // The drizzle schema declares the indexes as they stand after 0415 and 0426.
     await pg.exec(M0415);
+    await pg.exec(M0426);
     for (const { table, columns } of TABLES) {
       const cfg = getTableConfig(table);
       const declared = cfg.columns.map((c) => c.name);
@@ -325,7 +334,7 @@ describe("migration 0409 — installations", () => {
     await pg.close();
   }, 60_000);
 
-  it("a deleted provider takes its default; an installation keeps its history", async () => {
+  it("(0409 history) a deleted provider takes its default; an installation keeps its history", async () => {
     const pg = await fresh();
     const cap = randomUUID();
     await pg.query(`INSERT INTO capabilities VALUES ($1)`, [cap]);

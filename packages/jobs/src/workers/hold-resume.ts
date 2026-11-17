@@ -16,11 +16,11 @@
  *     `@synap-core/types`) over the facts the hold's owner recorded.
  *   - `until.moves` naming a WAIT (`answer:<session>/<slot>`,
  *     `proposal:<id>`, plan 07f8a997 W1 part C): the answer door
- *     (`answerExpectedOutput`) and the review door (`emitProposalReviewed`)
- *     send this queue `waits` when one lands, the reactor below sends it when
- *     a pause that names a wait is recorded (the Inngest trap: an answer given
- *     BEFORE the wait began must still resume it, at once), and the hourly
- *     sweep re-checks every wait hold. Met = the slot of a session the hold's
+ *     (`answerExpectedOutput`) sends this queue `waits` when an answer lands;
+ *     the reactor below sends it on every proposal's transition (a decision,
+ *     an expiry, a withdrawal) and when a pause that names a wait is recorded
+ *     (the Inngest trap: an answer given BEFORE the wait began must still
+ *     resume it, at once); the hourly sweep re-checks every wait hold. Met = the slot of a session the hold's
  *     OWNER owns carries an answer, or the proposal (filed under a session the
  *     owner owns) is no longer pending (`waitHoldsMet`).
  *
@@ -50,6 +50,7 @@ import {
   listHolds,
   proposals,
   resolveStatusMoveTarget,
+  setRunStatus,
   setSessionStatus,
   sql,
   type CurrentHold,
@@ -60,6 +61,7 @@ import {
   registerReactor,
   type Reactor,
 } from "@synap/events";
+import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
 import { createLogger } from "@synap-core/core";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
 import type { SessionStatus } from "@synap-core/types/focus-sessions";
@@ -77,7 +79,10 @@ import {
   holdDevRefMet,
   type DevLoopEventRowLike,
 } from "@synap-core/types";
-import type { ProjectTrackStatus } from "@synap/database/schema";
+import type {
+  PlaybookRunStatus,
+  ProjectTrackStatus,
+} from "@synap/database/schema";
 
 const logger = createLogger({ module: "hold-resume" });
 
@@ -396,7 +401,12 @@ export async function handleHoldResume(
   let held: Array<{ h: CurrentHold; reason: string }>;
   if (moved) {
     held = (await listHolds(db, { awaiting: moved }, now))
-      .filter((h) => holdWokenBy(h.hold.until, moved))
+      // A WAIT (`proposal:<id>`, `answer:…`) is resumed only by the wait
+      // check, which re-reads the owner floor: a proposal's own transition
+      // names the same ref, and sends that check instead.
+      .filter(
+        (h) => !isWaitHold(h.hold.until) && holdWokenBy(h.hold.until, moved)
+      )
       .map((h) => ({
         h,
         reason: `What it waited on (${moved.subjectType}:${moved.subjectId}) moved to ${moved.to}.`,
@@ -512,6 +522,12 @@ function waitReason(moves: string): string {
     : `What it waited on (${moves}) was decided.`;
 }
 
+function isWaitHold(until: CurrentHold["hold"]["until"]): boolean {
+  return (
+    until != null && "moves" in until && parseHoldWaitRef(until.moves) != null
+  );
+}
+
 /** Move one held thing back to the status its pause began from; false when it did not move. */
 async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
   const to = h.hold.resumeTo;
@@ -590,6 +606,33 @@ async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
       if (rows.length > 0) await followUp(h, to);
       return rows.length > 0;
     }
+    case "playbook_run": {
+      // A run's own door. A run's pause resumes to where it was (live, as a
+      // rule); a run that a pause leaves into a verdict settles its parent
+      // like every terminal writer (tripwire playbook-run-terminal-settles-parent).
+      const { rows, transitions } = await setRunStatus(db, {
+        runId: h.subjectId,
+        from: h.status as PlaybookRunStatus,
+        to: to as PlaybookRunStatus,
+        actor: { kind: "system" },
+        reason,
+      });
+      for (const t of transitions) {
+        await dispatchLifecycleTransition(t.transitionId);
+      }
+      if (
+        transitions.some((t) => t.category === "done" || t.category === "lost")
+      ) {
+        await settleParentAutomationRunFromChild({
+          playbookRunId: h.subjectId,
+        });
+      }
+      return rows.length > 0;
+    }
+    // A proposal or a slot never pauses: nothing of theirs is held.
+    case "proposal":
+    case "slot":
+      return false;
   }
 }
 
@@ -647,6 +690,20 @@ export const holdResumeReactor: Reactor = {
       until && typeof until === "object" && "moves" in until
         ? parseHoldWaitRef(String((until as { moves: unknown }).moves))
         : null;
+    // A proposal moved: the holds that wait on it as a WAIT (`proposal:<id>`)
+    // are checked now, through the owner-floored wait read, whatever moved it
+    // (an expiry, a withdrawal, an approval).
+    if (payload.subjectType === "proposal") {
+      await boss.send(
+        HOLD_RESUME_QUEUE,
+        {
+          waits: { proposalId: payload.subjectId },
+        } satisfies HoldResumeJobData,
+        payload.eventId
+          ? { singletonKey: `hold-resume:proposal:${payload.eventId}` }
+          : {}
+      );
+    }
     if (d.category === "paused" && waitsOn) {
       await boss.send(
         HOLD_RESUME_QUEUE,

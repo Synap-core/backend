@@ -19,6 +19,7 @@
  * the governed definition door (a person applies; an agent proposes).
  */
 
+import { resolveRequiresNeeds } from "../needs/space-needs.js";
 import { TRPCError } from "@trpc/server";
 import type { RunChoice } from "@synap-core/types/agents";
 import { runnerChoices, type PlaybookRunner } from "@synap/playbooks";
@@ -37,6 +38,8 @@ export async function mapRunnerAtRun(input: {
   ownerId: string;
   runner: PlaybookRunner;
   playbook: Pick<Playbook, "executor"> & Partial<Pick<Playbook, "requires">>;
+  /** The run's space: a `need:` entry of `requires` names its bound provider. */
+  workspaceId?: string | null;
 }): Promise<RunnerAtRun> {
   const choices = runnerChoices(input.runner);
   const only = choices.length === 1 ? choices[0] : undefined;
@@ -48,7 +51,10 @@ export async function mapRunnerAtRun(input: {
   const resolved = await resolveRunner({
     ownerId: input.ownerId,
     runner: input.runner,
-    requires: requiresOf(input.playbook),
+    requires: await resolveRequiresNeeds(
+      requiresOf(input.playbook),
+      input.workspaceId
+    ),
     synapAiAllowed: input.playbook.executor !== "external-agent",
   });
   const chosen = resolved.chosen;

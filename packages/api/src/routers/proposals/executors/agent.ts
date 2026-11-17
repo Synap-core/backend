@@ -14,6 +14,13 @@
  * IDENTITY: only the human the key acts for, or a pod admin, may approve
  * (FORBIDDEN otherwise). A key already rejected or replaced is a CONFLICT.
  *
+ * ADDITIVE (`data.mode = "add"`): an agent's live key asked for one MORE
+ * thing (`services/agent-access-ask.ts`). Approving adds the pairs to THAT
+ * key's grants only, then clips them to its computer
+ * (`approveAgentAccessAsk`); only the person the key acts for may approve,
+ * a key revoked or replaced since is a CONFLICT (`ASK_KEY_GONE`), and the
+ * agent's limits and the person's reach are re-checked at the tap.
+ *
  * `agent/updateCapabilities` — an edit of an agent's limits that the gate
  * turned into a proposal (`agentUsers.update`, ADMIN-floored). Approval sets
  * the proposed capabilities and re-grants the agent's live keys
@@ -46,6 +53,11 @@ import {
   requestsWithin,
 } from "../../../services/agent-connect.js";
 import { applyAgentCapabilities } from "../../../services/agent-identity-service.js";
+import { approveAgentAccessAsk } from "../../../services/agent-access-ask.js";
+import {
+  APP_CONNECT_ADD_MODE,
+  isAddMode,
+} from "../../../services/app-access-ask.js";
 import {
   itemPackAlreadyApproved,
   markItemPackApproved,
@@ -89,11 +101,77 @@ export function registerAgentExecutors(): void {
       }
 
       const [alreadyDone] = await db
-        .select({ status: proposals.status })
+        .select({ status: proposals.status, expiresAt: proposals.expiresAt })
         .from(proposals)
         .where(eq(proposals.id, input.proposalId));
       if (alreadyDone?.status === ProposalStatus.APPROVED) {
         return { success: true, alreadyApproved: true };
+      }
+
+      // An agent asked for one MORE thing: add the pairs to the key that
+      // asked, never activate or replace a key.
+      if (isAddMode(proposal.data)) {
+        const { added, cutByComputer } = await approveAgentAccessAsk({
+          payload,
+          approverId: userId,
+          expiresAt: alreadyDone?.expiresAt ?? null,
+        });
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
+        await auditLog({
+          subjectType: "agent_user",
+          action: "update",
+          phase: "completed",
+          subjectId: payload.agentUserId,
+          userId,
+          workspaceId: null,
+          data: {
+            keyId: payload.keyId,
+            proposalId: input.proposalId,
+            mode: APP_CONNECT_ADD_MODE,
+            added,
+            cutByComputer,
+          },
+        });
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return {
+          success: true,
+          primaryId: payload.keyId,
+          effect:
+            added.length > 0
+              ? {
+                  applied: "verified" as const,
+                  rows: added.length,
+                  ids: [payload.keyId],
+                  subject: "grants",
+                }
+              : {
+                  applied: "none" as const,
+                  reason:
+                    "Its computer does not have this access, so the agent cannot hold it either.",
+                },
+          ...(cutByComputer.length > 0
+            ? {
+                refusals: cutByComputer.map(
+                  (r) =>
+                    `Not added: ${r.permission} in ${r.workspaceName || "that space"}: its computer does not have it.`
+                ),
+              }
+            : {}),
+        };
       }
 
       const outcome = await approvePendingAgentKey({

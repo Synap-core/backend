@@ -28,6 +28,11 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * hand-listed copy missed `stale` (D6, 2026-10-11) and read the reaper's
  * non-terminal stale sweep as an unsettled terminal write.
  *
+ * Every status write goes through the ONE run door, `setRunStatus(db, { …, to:
+ * X, … })` (tripwire `run-status-one-writer`): a call whose `to:` is a terminal
+ * literal or any non-literal is a terminal stamp too. The door itself lives in
+ * @synap/database, which cannot reach the helper, so its CALLERS settle.
+ *
  * A file passes when it calls the helper at least as many times as it stamps.
  *
  * ── WHAT IT DOES NOT SEE (measured) ─────────────────────────────────────────
@@ -65,9 +70,55 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/** The argument list of each `setRunStatus(` call (balanced parentheses). */
+function runDoorCalls(src: string): string[] {
+  const out: string[] = [];
+  for (const m of src.matchAll(/\bsetRunStatus\(/g)) {
+    let depth = 1;
+    let i = m.index! + m[0].length;
+    const start = i;
+    for (; i < src.length && depth > 0; i++) {
+      if (src[i] === "(") depth++;
+      else if (src[i] === ")") depth--;
+    }
+    out.push(src.slice(start, i - 1));
+  }
+  return out;
+}
+
+/** The outermost object literal of a call's arguments, nested braces dropped. */
+function topLevelKeys(args: string): string {
+  const open = args.indexOf("{");
+  if (open === -1) return "";
+  let depth = 0;
+  let out = "";
+  for (const ch of args.slice(open)) {
+    if (ch === "{") {
+      depth++;
+      continue;
+    }
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) break;
+      continue;
+    }
+    if (depth === 1) out += ch;
+  }
+  return out;
+}
+
 /** Count terminal stamps in a (comment-stripped) source. */
 function terminalStamps(src: string): string[] {
   const found: string[] = [];
+  for (const args of runDoorCalls(src)) {
+    // Skip the declaration itself (`export async function setRunStatus(`).
+    if (/^\s*db\s*:/.test(args)) continue;
+    const to = /\bto\s*:\s*([^,\n]+)/.exec(topLevelKeys(args));
+    if (!to) continue;
+    const value = to[1]!.trim();
+    if (NON_TERMINAL.has(value)) continue;
+    found.push(value);
+  }
   SET_ON_RUNS.lastIndex = 0;
   for (const m of src.matchAll(SET_ON_RUNS)) {
     const status = /\bstatus\s*:\s*([^,\n}]+)/.exec(m[1]!);
@@ -117,6 +168,15 @@ describe("tripwire: a playbook_runs terminal writer settles the parent automatio
       await db.update(playbookRuns).set({ status: "stale" }).where(x);
       await db.update(playbookRuns).set({ summary: "x" }).where(x);`;
     expect(terminalStamps(LIVE)).toEqual([]);
+    // The run door: its `to:` is read, a nested `set:` is not.
+    const DOOR = `
+      await setRunStatus(db, { runId, from: LIVE_RUN_STATUSES, to: "failed",
+        set: { completedAt: new Date(), error: fn(a, b) } });
+      await setRunStatus(tx, { runId, from: "cancelled", to: "running",
+        set: { completedAt: null } });
+      await setRunStatus(db, { where: x, from: move.from, to: move.to });
+    `;
+    expect(terminalStamps(DOOR)).toEqual(['"failed"', "move.to"]);
   });
 
   it("finds every known terminal writer (non-vacuity) and no raw-SQL writer", () => {

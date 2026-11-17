@@ -4,7 +4,8 @@
  * by a recorder (the door has its own suites). The event payloads are the
  * shapes the emitters produce: `entity.update.completed` with flat
  * `changed.<k>` / `<k>` / `previous.<k>` keys (routers/entities/mutate.ts), and
- * `proposal.rejected.completed` with the proposal id as subject.
+ * `proposal.transition.completed` (the proposal door's transition: subject =
+ * the proposal, `from` / `to` flat in `data`).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -127,6 +128,7 @@ vi.mock("@synap/events", async () => {
     await vi.importActual<typeof import("@synap/events")>("@synap/events");
   return {
     LIFECYCLE_TRANSITION_EVENT_TYPE: actual.LIFECYCLE_TRANSITION_EVENT_TYPE,
+    TRANSITION_EVENT_TYPES: actual.TRANSITION_EVENT_TYPES,
     isDualEmittedStatusUpdate: actual.isDualEmittedStatusUpdate,
   };
 });
@@ -305,6 +307,70 @@ describe("subject status → run stage", () => {
   });
 });
 
+describe("a REACHED status (onApproved, decision D2) → the NEXT stage", () => {
+  // Win a deal, its D2 shape: `send` reaches "proposed" (Proposal sent) once
+  // its work is done; `await-answer` is where the run then stands.
+  const DEAL = [
+    { key: "qualify", name: "Qualify", subjectStatus: "draft" },
+    { key: "write", name: "Write", gate: { kind: "check" } },
+    {
+      key: "send",
+      name: "Send",
+      gate: { kind: "human" },
+      onApproved: "proposed",
+    },
+    { key: "await-answer", name: "Await answer" },
+    {
+      key: "negotiate",
+      name: "Negotiate",
+      subjectStatus: "negotiating",
+      gate: { kind: "check" },
+      onApproved: "won",
+    },
+    { key: "won", name: "Won", gate: { kind: "human" } },
+  ];
+  beforeEach(() => {
+    h.proc = {
+      stages: DEAL,
+      statusProperty: "post-status",
+      humanOnlyStatuses: [],
+    };
+  });
+
+  it("a person's board move to the reached status lands the run on the stage AFTER its owner", async () => {
+    h.sessions = [session("send")];
+    const out = await entered("proposed", "draft");
+    expect(h.advances).toEqual([
+      expect.objectContaining({ toStage: "await-answer", stageWrite: "door" }),
+    ]);
+    expect(out[0]).toMatchObject({ kind: "followed", backward: false });
+  });
+
+  it("from further back, the same move lands on the same stage (never back on its owner)", async () => {
+    h.sessions = [session("qualify")];
+    await entered("proposed", "draft");
+    expect(h.advances.map((a) => a.toStage)).toEqual(["await-answer"]);
+  });
+
+  it("an ENTERED status still lands on its own stage", async () => {
+    h.sessions = [session("await-answer")];
+    await entered("negotiating", "proposed");
+    expect(h.advances.map((a) => a.toStage)).toEqual(["negotiate"]);
+  });
+
+  it("the reached status of a stage whose next is human-gated lands on that gate (entering files it)", async () => {
+    h.sessions = [session("negotiate")];
+    await entered("won", "negotiating");
+    expect(h.advances.map((a) => a.toStage)).toEqual(["won"]);
+  });
+
+  it("a run already at the stage the reached status names does not move (the gate pass's own write)", async () => {
+    h.sessions = [session("await-answer")];
+    await entered("proposed", "draft");
+    expect(h.advances).toEqual([]);
+  });
+});
+
 describe("an AGENT's status write never walks a human gate", () => {
   it("a forward jump over a human-gated stage stops AT that stage (the door files its gate), as the agent", async () => {
     h.sessions = [session("draft")];
@@ -341,22 +407,39 @@ describe("an AGENT's status write never walks a human gate", () => {
   });
 });
 
+/** A proposal's move, as the door owes it (`transitionProposal`). */
+const proposalMoved = (id: string, from: string, to: string) => ({
+  eventType: "proposal.transition.completed",
+  subjectId: id,
+  userId: "owner-1",
+  workspaceId: "ws-1",
+  data: { subjectType: "proposal", subjectId: id, from, to },
+});
+/** The review door's old event for the same decision, still sent for rules. */
+const reviewed = (id: string, status: "approved" | "rejected") => ({
+  eventType: `proposal.${status}.completed`,
+  subjectId: id,
+  userId: "owner-1",
+  workspaceId: "ws-1",
+  data: { proposalStatus: status },
+});
+
 describe("rejected human gate → onFail", () => {
-  it("un-pauses and returns the held run to its stage's onFail", async () => {
+  const gate = (stageKey: string) => {
     h.proposal = {
       targetType: "focus_session",
       targetId: "sess-1",
       proposalType: "playbook.stage_gate",
-      data: { sessionId: "sess-1", stageKey: "publish" },
+      data: { sessionId: "sess-1", stageKey },
     };
+  };
+
+  it("un-pauses and returns the held run to its stage's onFail", async () => {
+    gate("publish");
     h.sessions = [session("publish", { status: "paused" })];
-    const out = await syncProcessOnEvent({
-      eventType: "proposal.rejected.completed",
-      subjectId: "prop-1",
-      userId: "owner-1",
-      workspaceId: "ws-1",
-      data: { proposalStatus: "rejected" },
-    });
+    const out = await syncProcessOnEvent(
+      proposalMoved("prop-1", "pending", "rejected")
+    );
     expect(h.updates).toEqual([
       expect.objectContaining({ status: "active", from: "paused" }),
     ]);
@@ -371,20 +454,28 @@ describe("rejected human gate → onFail", () => {
     ]);
   });
 
+  it("one rejection = its transition + the old `proposal.rejected` event ⇒ exactly ONE onFail", async () => {
+    gate("publish");
+    h.sessions = [session("publish", { status: "paused" })];
+    await syncProcessOnEvent(proposalMoved("prop-1", "pending", "rejected"));
+    await syncProcessOnEvent(reviewed("prop-1", "rejected"));
+    expect(h.updates).toHaveLength(1);
+    expect(h.advances).toHaveLength(1);
+  });
+
+  it("a move that is not a rejection returns nothing (approved, expired)", async () => {
+    gate("publish");
+    h.sessions = [session("publish", { status: "paused" })];
+    await syncProcessOnEvent(proposalMoved("prop-1", "pending", "approved"));
+    await syncProcessOnEvent(proposalMoved("prop-1", "pending", "expired"));
+    expect(h.updates).toEqual([]);
+    expect(h.advances).toEqual([]);
+  });
+
   it("a gate on a stage WITHOUT onFail leaves the run paused (today's behaviour)", async () => {
-    h.proposal = {
-      targetType: "focus_session",
-      targetId: "sess-1",
-      proposalType: "playbook.stage_gate",
-      data: { stageKey: "draft" },
-    };
+    gate("draft");
     h.sessions = [session("draft", { status: "paused" })];
-    await syncProcessOnEvent({
-      eventType: "proposal.rejected.completed",
-      subjectId: "prop-1",
-      userId: "owner-1",
-      data: {},
-    });
+    await syncProcessOnEvent(proposalMoved("prop-1", "pending", "rejected"));
     expect(h.updates).toEqual([]);
     expect(h.advances).toEqual([]);
   });
@@ -616,24 +707,19 @@ describe("worker targets (work model L4/L5): a move settles the thing in each wo
 });
 
 /**
- * arch F12: a decided proposal of a worker drains its backlog — the fires it
- * HELD are released (the release itself: worker-backlog-release.pglite).
+ * arch F12: a worker's proposal leaving pending drains its backlog — the fires
+ * it HELD are released (the release itself: worker-backlog-release.pglite).
  */
-describe("a decided worker proposal releases the held fires", () => {
+describe("a worker proposal leaving pending releases the held fires", () => {
   beforeEach(() => {
     h.released = [];
     h.proposal = null;
   });
-  for (const eventType of [
-    "proposal.approved.completed",
-    "proposal.rejected.completed",
-  ]) {
-    it(`${eventType} of a worker's proposal → release`, async () => {
-      const out = await syncProcessOnEvent({
-        eventType,
-        subjectId: "p-worker",
-        userId: "u1",
-      });
+  for (const to of ["approved", "rejected", "expired", "withdrawn"]) {
+    it(`pending → ${to} of a worker's proposal → release`, async () => {
+      const out = await syncProcessOnEvent(
+        proposalMoved("p-worker", "pending", to)
+      );
       expect(h.released).toEqual(["auto-w"]);
       expect(out).toContainEqual({
         kind: "backlog_released",
@@ -642,12 +728,21 @@ describe("a decided worker proposal releases the held fires", () => {
       });
     });
   }
+
+  it("one approval = its transition + the old `proposal.approved` event ⇒ exactly ONE release", async () => {
+    await syncProcessOnEvent(proposalMoved("p-worker", "pending", "approved"));
+    await syncProcessOnEvent(reviewed("p-worker", "approved"));
+    expect(h.released).toEqual(["auto-w"]);
+  });
+
+  it("a move that does not leave pending makes no room: nothing", async () => {
+    await syncProcessOnEvent(proposalMoved("p-worker", "approved", "reverted"));
+    await syncProcessOnEvent(proposalMoved("p-worker", "rejected", "pending"));
+    expect(h.released).toEqual([]);
+  });
+
   it("a proposal that is not a worker's → nothing", async () => {
-    await syncProcessOnEvent({
-      eventType: "proposal.approved.completed",
-      subjectId: "p-other",
-      userId: "u1",
-    });
+    await syncProcessOnEvent(proposalMoved("p-other", "pending", "approved"));
     expect(h.released).toEqual([]);
   });
 });

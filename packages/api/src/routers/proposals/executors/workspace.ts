@@ -551,6 +551,84 @@ export function registerWorkspaceExecutors(): void {
     },
   });
 
+  // ── workspace / bind_need ────────────────────────────────────────────────────
+  // (0426, founder decision D3) An agent's choice of the provider that fills a
+  // space's need (tRPC `needs.bind` / Hub `PUT /workspaces/:id/needs/:need`)
+  // lands here on approval. Applies through the SAME `applySpaceNeedBinding`
+  // the granted path calls, as the APPROVER. Without this executor the `*/*`
+  // catch-all would flip the proposal APPROVED and never bind the need.
+  //
+  // DATA-SHAPE NOTE: the gate stores `{ need, providerCapabilityId }` in
+  // `data.data`; the space is `proposal.workspaceId` (the one the gate checked).
+  registerProposalExecutor({
+    key: "workspace/bind_need",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const workspaceId = proposal.workspaceId ?? null;
+      const need = typeof innerData.need === "string" ? innerData.need : null;
+      const provider = innerData.providerCapabilityId;
+      if (
+        !workspaceId ||
+        !need ||
+        !(provider === null || typeof provider === "string")
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Need binding proposal is missing its workspace, need or providerCapabilityId",
+        });
+      }
+
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const {
+        applySpaceNeedBinding,
+        providerServesNeedIntent,
+        SpaceNeedBindError,
+      } = await import("../../../services/needs/space-needs.js");
+      try {
+        await applySpaceNeedBinding({
+          workspaceId,
+          need,
+          providerCapabilityId: provider,
+          userId,
+          servesIntent: (providerId, def) =>
+            providerServesNeedIntent({ workspaceId, userId }, providerId, def),
+        });
+      } catch (err) {
+        if (err instanceof SpaceNeedBindError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
+      }
+
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
   // ── workspace / configure_public_projection ─────────────────────────────────
   // A gated Hub `PATCH /workspaces/:id/public-projection` (agent-authored, or a
   // member whose role lacks `write`) lands here on approval. Opting a workspace

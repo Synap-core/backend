@@ -14,10 +14,10 @@
  *                      checks collapse into one disclosure. Pending trusted
  *                      issuers are decisions: they wait in Review. The review
  *                      backlog is left to the requests card (`homeSections`).
- *   3. Requests      — a short peek into Review, never a second queue: the
- *                      SAME read as Review (`signals.list` needs-you) and its
- *                      count (`signals.count`), so Home shows one number
- *                      (audit abbc7a19 PA-D-13). Every row and the count lead into `/review`.
+ *   3. Requests      — Review's count (`signals.count`) as one door into
+ *                      `/review` (loading, none and a failed count each said
+ *                      apart) and, on a desktop, one link to Work in the
+ *                      desktop app (`_lib/requests-card.tsx`).
  *   4. Pod at a glance — sync, backups and contents as three compact rows;
  *                      the operator's, shown with "All tools" on.
  *
@@ -61,6 +61,7 @@ import {
   ExitFallback,
   rowHref,
   useAppOpenAttempt,
+  useIsPhone,
   usePlacedExit,
 } from "../../../lib/exit-link";
 import {
@@ -68,27 +69,24 @@ import {
   humanizeBytes,
   truncateMiddle,
 } from "../../../lib/format";
-import { navHref } from "../../../lib/console-nav";
 import { useConsoleLocale, useT } from "../../../lib/i18n/locale-provider";
-import type { Exit } from "../../../lib/open-in";
+import { WORK_EXIT, type Exit } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { PageHeader, PageShell } from "../components/page-header";
 import { SecurityNudge } from "../components/recovery-codes-nudge";
 import {
   ResourceRow,
-  ResourceRowEmpty,
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { DIAGNOSE_QUERY_OPTIONS } from "../../../lib/diagnose-query";
-import { useConsoleBadges } from "../components/side-nav-badges";
+import { useNeedsYouCount } from "../components/side-nav-badges";
 import { useConsoleRole } from "../components/side-nav-role";
 import { useAllTools } from "../components/all-tools";
-import { kindIcon } from "../../_lib/object/kind-icon";
-import { reviewRows } from "../review/_lib/review-rows";
 import { en, fr } from "./_lib/copy";
 import { MorningBriefCard } from "./_lib/morning-brief";
+import { RequestsCardView, requestsCount } from "./_lib/requests-card";
 import { StatusPill, type StatusKind } from "../components/status-pill";
 import { HEALTH_PILL } from "../components/status-tone";
 import {
@@ -527,83 +525,26 @@ function PassingChecks({
   );
 }
 
-// ─── 3. Requests (a peek into Review) ─────────────────────────────────
-
-/** How many waiting requests the peek names before "See all". */
-const QUEUE_PEEK = 4;
+// ─── 3. Requests (a count door, and Work in the desktop app) ──────────
 
 function RequestsCard() {
   const t = useT(CATALOGS);
-  const locale = useConsoleLocale();
-  // THE needs-you read Review draws (`signals.list`), so the peek and the
-  // count below range over the same population (audit abbc7a19 PA-D-13): it can never say
-  // "nothing waiting" beside "See all 3".
-  const { data, isLoading, isError, refetch } = trpc.signals.list.useQuery(
-    { lens: "needs-you", limit: QUEUE_PEEK },
-    { staleTime: 15_000 }
-  );
-  // The count is Review's own (`signals.count`, via the nav's badge read), so
-  // "See all N" always equals the number on the Requests badge.
-  const reviewCount = useConsoleBadges().review;
-  const rows = reviewRows(data?.signals ?? [], new Map());
-
+  // Review's own count (`signals.count`, the nav badge's read): "See all N"
+  // always equals the number on the Requests badge.
+  const count = useNeedsYouCount();
+  // On a phone the desktop app is not there to open (`placeExit` says
+  // "nowhere"): no link, rather than an empty slot.
+  const onPhone = useIsPhone();
   return (
-    <SectionCard
-      title={t("requests.title")}
-      hint={t("requests.hint")}
-      actions={
-        <Button
-          as={Link}
-          href={navHref("review")}
-          size="sm"
-          variant="flat"
-          radius="md"
-          endContent={<ChevronRight className="h-3 w-3" />}
-        >
-          {!reviewCount
-            ? t("requests.open")
-            : reviewCount.text.endsWith("+")
-              ? t("requests.seeAllFloor", { n: reviewCount.count })
-              : t("requests.seeAll", { n: reviewCount.count })}
-        </Button>
+    <RequestsCardView
+      state={requestsCount(count)}
+      onRetry={() => void count.refetch()}
+      workLink={
+        onPhone ? null : (
+          <ActionLink exit={WORK_EXIT.all} label={t("requests.work")} />
+        )
       }
-    >
-      {isLoading ? (
-        <ResourceRowSkeleton count={2} />
-      ) : isError || !data ? (
-        <ResourceRowError
-          message={t("requests.failed")}
-          onRetry={() => void refetch()}
-        />
-      ) : rows.length === 0 ? (
-        <ResourceRowEmpty message={t("requests.empty")} />
-      ) : (
-        <div className="-mx-2 divide-y divide-foreground/[0.05]">
-          {rows.map((row) => (
-            // Each row opens the same request inside Review — one queue,
-            // with its drawer and batch rules, rather than a second one.
-            <Link
-              key={row.key}
-              href={navHref("review", { focus: row.key })}
-              className="block rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 hover:bg-content2/50"
-            >
-              <ResourceRow
-                Icon={kindIcon(row.nounKind)}
-                primary={row.title}
-                secondary={[
-                  row.who,
-                  row.where,
-                  formatRelativeIn(row.occurredAt, Date.now(), { locale }),
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-                wrap
-              />
-            </Link>
-          ))}
-        </div>
-      )}
-    </SectionCard>
+    />
   );
 }
 

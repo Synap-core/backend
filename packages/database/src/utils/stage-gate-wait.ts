@@ -12,7 +12,9 @@
  *  - A session that DOES end (a person closes it, cancels it, it fails) takes
  *    its pending gates with it: they are EXPIRED, stamped why
  *    ({@link expirePendingStageGatesOfEndedSessions}), so no approval is left
- *    that could only lead nowhere.
+ *    that could only lead nowhere. Gates a session left pending before that
+ *    rule, or through a race with its end, are expired the same way by the
+ *    6-hourly sweep ({@link expireOrphanedStageGates}).
  *
  * The types are `STAGE_GATE_PROPOSAL_TYPES` (@synap/playbooks), mirrored: this
  * package does not import playbooks. `awaited-gate-types.parity.test.ts`
@@ -20,6 +22,9 @@
  */
 import { and, eq, inArray, sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
+import type { db } from "../client-pg.js";
+import { focusSessions } from "../schema/focus-sessions.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 import {
   transitionProposal,
@@ -72,4 +77,52 @@ export async function expirePendingStageGatesOfEndedSessions(
     ),
   }).returning({ id: proposals.id });
   return rows.map((r) => r.id);
+}
+
+/**
+ * Expire the pending stage gates whose session has ALREADY ended. The backstop
+ * of {@link expirePendingStageGatesOfEndedSessions}: that one runs when a
+ * session ends, so a gate left pending before it existed (or by a race with
+ * the end) stays approvable, and its approval can only fail ("This run ended
+ * (closed) before its stage gate was answered", playbook-stage-gate.ts).
+ * Live, 16 Nov 2026: three gates of runs closed on 9 Nov were approved and
+ * failed; gate 491def0c on closed session 432f5ac2 was still pending.
+ * Terminal = `TERMINAL_SESSION_STATUSES`, the rule the approval refuses on;
+ * a paused, stale or active session keeps its gates. Returns the ids expired.
+ */
+export async function expireOrphanedStageGates(
+  executor: Pick<typeof db, "selectDistinct" | "update">
+): Promise<string[]> {
+  const orphans = await executor
+    .selectDistinct({
+      sessionId: focusSessions.id,
+      status: focusSessions.status,
+    })
+    .from(proposals)
+    .innerJoin(
+      focusSessions,
+      eq(drizzleSql`${focusSessions.id}::text`, proposals.targetId)
+    )
+    .where(
+      and(
+        eq(proposals.targetType, "focus_session"),
+        eq(proposals.status, ProposalStatus.PENDING),
+        inArray(proposals.proposalType, [...STAGE_GATE_PROPOSAL_TYPES_MIRROR]),
+        inArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES])
+      )
+    );
+  const byStatus = new Map<string, string[]>();
+  for (const o of orphans) {
+    byStatus.set(o.status, [...(byStatus.get(o.status) ?? []), o.sessionId]);
+  }
+  const expired: string[] = [];
+  for (const [endedAs, sessionIds] of byStatus) {
+    expired.push(
+      ...(await expirePendingStageGatesOfEndedSessions(executor, {
+        sessionIds,
+        endedAs,
+      }))
+    );
+  }
+  return expired;
 }

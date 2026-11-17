@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ruleInProcessScope,
   neverRanCallout,
   ruleCounts,
   ruleFilterOf,
@@ -151,7 +152,7 @@ describe("phrases", () => {
       rule({ ...idle, id: "3", name: "Win and hand off" }),
       rule({ id: "4", name: "Busy rule" }),
     ]);
-    expect(text).toMatch(/^3 rules have never run\./);
+    expect(text).toMatch(/^3 automations have never run\./);
     expect(text).toContain("“Generate report” ×2, “Win and hand off”");
     expect(text).not.toContain("Busy rule");
     expect(neverRanCallout([rule()])).toBeNull();
@@ -164,5 +165,20 @@ describe("phrases", () => {
     expect(runResultMessage("Digest", { status: "triggered" })).toBe(
       "“Digest” started a run."
     );
+  });
+});
+
+describe("ruleInProcessScope", () => {
+  const outside = new Set(["a1"]);
+  it("keeps every rule with no process filter", () => {
+    expect(ruleInProcessScope("b2", null, outside)).toBe(true);
+    expect(ruleInProcessScope("b2", null, null)).toBe(true);
+  });
+  it("keeps only the pod's outside-a-process rules under ?process=outside", () => {
+    expect(ruleInProcessScope("a1", "outside", outside)).toBe(true);
+    expect(ruleInProcessScope("b2", "outside", outside)).toBe(false);
+  });
+  it("passes nothing while that list is unread (never guessed)", () => {
+    expect(ruleInProcessScope("a1", "outside", null)).toBe(false);
   });
 });

@@ -162,6 +162,7 @@ import {
   tools,
   playbookRuns,
   sessionStageRuns,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
 import { type RunTurnsState } from "../run-turn-end.js";
@@ -341,6 +342,7 @@ const questions = async (channelId: string) =>
 describe("the pod raises a stage's ask at the stage's end; runs never ask", () => {
   beforeAll(async () => {
     for (const t of [
+      lifecycleTransitionOutbox,
       focusSessions,
       notifications,
       notificationPreferences,
@@ -461,7 +463,11 @@ describe("the pod raises a stage's ask at the stage's end; runs never ask", () =
     // The turn context stays inside the turn-context contract.
     expect(TurnContextSchema.safeParse({ entries }).success).toBe(true);
 
-    // ── the woken turn ends: nothing left to ask, the run completes ───────
+    // ── the woken turn moves the run to its last stage (`update_run`) and
+    // ends: nothing left to ask, no stage left, the run completes ─────────
+    await q(`update focus_sessions set current_stage = 'plan' where id = $1`, [
+      sessionId,
+    ]);
     const done = await completeRun(sessionId, COMPLETED("turn-2"));
     expect(done.json).toEqual({ status: "completed" });
     expect((await runRow(runId)).status).toBe("completed");
@@ -478,11 +484,15 @@ describe("the pod raises a stage's ask at the stage's end; runs never ask", () =
     expect(await owed(sessionId)).toHaveLength(1);
   });
 
-  it("a run whose stages declare NO ask completes exactly as before: no slot, no question", async () => {
+  it("a run at its LAST stage whose stages declare NO ask completes exactly as before: no slot, no question", async () => {
     const plain = WEEKLY_STAGES.map((s) =>
       Object.fromEntries(Object.entries(s).filter(([k]) => k !== "endAsk"))
     );
-    const { sessionId, channelId, runId } = await seedRun(plain);
+    // On an earlier stage the turn would be a stop (stages left:
+    // `run-turn-end-stages-left.pglite.test.ts`).
+    const { sessionId, channelId, runId } = await seedRun(plain, {
+      currentStage: "plan",
+    });
     const r = await completeRun(sessionId, COMPLETED("turn-p"));
     expect(r.json).toEqual({ status: "completed" });
     expect((await runRow(runId)).status).toBe("completed");
@@ -506,10 +516,12 @@ describe("the pod raises a stage's ask at the stage's end; runs never ask", () =
       },
       { key: "active", name: "Active", category: "completed" },
     ];
+    // Before the gate: no ask, and the run is not done either (stages left):
+    // its turn's end is a stop, continued on its own.
     const before = await seedRun(gated);
     expect(
       (await completeRun(before.sessionId, COMPLETED("g-1"))).json
-    ).toEqual({ status: "completed" });
+    ).toEqual({ status: "continued" });
     expect(await owed(before.sessionId)).toHaveLength(0);
 
     const at = await seedRun(gated, { currentStage: "send" });

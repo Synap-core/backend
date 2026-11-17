@@ -27,6 +27,7 @@ import {
   and,
   drizzleSql,
   LifecycleConflictError,
+  oweSlotTransitions,
   workUnitActorOf,
   writeSessionPatch,
   personTouchedSubjectIds,
@@ -86,6 +87,11 @@ import type {
 } from "@synap-core/types/units";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { restatedAskHints, withoutRestatedWhy } from "./ask-text.js";
+import {
+  declinedReaskError,
+  isIdenticalReaskOfDecline,
+  type ReaskSlotLite,
+} from "./declined-reask.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { sessionGoalPayload } from "./session-update-goal.js";
@@ -420,6 +426,12 @@ export type UpdateFocusSessionResult =
        */
       subjectMove?: StageSubjectStatusOutcome;
       /**
+       * The status the stage LEFT reached because the entered stage's check
+       * gate passed on this advance (decision D2: its `onApproved`), written
+       * before `subjectMove`. Absent when nothing was reached.
+       */
+      subjectReached?: StageSubjectStatusOutcome;
+      /**
        * Who works the stage a `currentStage` advance entered (the stage
        * runner, `enterStage`): its runner, the hand-off, the tools it waits on.
        */
@@ -499,6 +511,9 @@ const slotAnswerWireSchema = z.object({
   // here so an echo keeps it: an undeclared nested key is stripped at the
   // parse, and the stripped echo then reads as a forged answer.
   ...AnswerProvenanceSchema.shape,
+  // A refusal's record of WHICH ask was refused (`declined-reask.ts`).
+  // Round-trip only, declared so an echo keeps the re-ask guard armed.
+  askFingerprint: z.string().max(64).optional(),
 });
 
 /**
@@ -1124,6 +1139,29 @@ export function pastAnswerByError(labels: string[]): string {
     .map((l) => `"${l}"`)
     .join(", ");
   return `Refused: ${named}: ${ASK_ANSWER_BY_PAST_MESSAGE} Nothing was changed.`;
+}
+
+/**
+ * The labels of incoming slots that hand the person back the very ask they
+ * REFUSED, while that refusal stands (`isIdenticalReaskOfDecline`,
+ * `declined-reask.ts`) — refused at write like a past deadline. Judged on the
+ * slot as the patch would leave it (the stored twin with the item over it). Pure.
+ */
+export function declinedReaskLabels(
+  current: OutputItem[],
+  incoming: readonly (OutputItem | undefined)[]
+): string[] {
+  const { twinOf } = storedTwins(current);
+  return incoming
+    .filter((item): item is OutputItem => {
+      if (!item) return false;
+      const twin = twinOf(item);
+      return isIdenticalReaskOfDecline(
+        twin as ReaskSlotLite | undefined,
+        { ...twin, ...item } as ReaskSlotLite
+      );
+    })
+    .map((item) => item.label);
 }
 
 /** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
@@ -2144,6 +2182,11 @@ export async function updateFocusSession(
       if (past.length > 0) {
         return { status: "denied", reason: pastAnswerByError(past) };
       }
+      // The very ask the person refused, asked again while the no stands.
+      const reasked = declinedReaskLabels(stored, declared as OutputItem[]);
+      if (reasked.length > 0) {
+        return { status: "denied", reason: declinedReaskError(reasked) };
+      }
     }
   }
 
@@ -2777,6 +2820,15 @@ export async function updateFocusSession(
         blockedByThisPatch = newlyBlockedSlots(current, applied.outputs);
         outputsBefore = current;
         outputsAfter = applied.outputs;
+        // A slot whose derived status moved (an agent withdrew it, a
+        // hand-over through the list) owes its transition in this same
+        // transaction.
+        await oweSlotTransitions(tx, {
+          sessionId,
+          before: current,
+          after: applied.outputs,
+          actor: workUnitActorOf(userId, agentUserId),
+        });
       }
       // The one session status write when `set` carries a status.
       return writeSessionPatch(tx, {
@@ -2907,6 +2959,7 @@ export async function updateFocusSession(
   // above (inside the outputs row lock); the door must not write it a second time.
   let gatedStatus: typeof updated.status | undefined;
   let subjectMove: StageSubjectStatusOutcome | undefined;
+  let subjectReached: StageSubjectStatusOutcome | undefined;
   let stageRun: EnterStageResult | undefined;
   if (params.currentStage !== undefined) {
     const { advanceSessionStage } = await import("./advance-stage.js");
@@ -2937,6 +2990,7 @@ export async function updateFocusSession(
     // for a move: a move that did not happen is never silent.
     const { reportedSubjectMove } = await import("./stage-subject-status.js");
     subjectMove = reportedSubjectMove(advance.subjectStatus);
+    subjectReached = reportedSubjectMove(advance.subjectReached);
   }
 
   // ── FOLLOW / RELEASE A PLAYBOOK ─────────────────────────────────────────────
@@ -3096,6 +3150,7 @@ export async function updateFocusSession(
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
     ...(targetsWrite ? { targets: targetsWrite } : {}),
     ...(subjectMove ? { subjectMove } : {}),
+    ...(subjectReached ? { subjectReached } : {}),
     ...(stageRun ? { stageRun } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),

@@ -254,6 +254,11 @@ export interface IntentCoverageResult {
 }
 
 /**
+ * @deprecated 0426: `settings.taskIntents` is retired; a space's needs are
+ * derived from its processes (`services/needs/space-need-coverage.ts`,
+ * `workspaceNeedCoverage`). Nothing writes the key any more; this read and
+ * {@link workspaceIntentCoverage} go with the types field next release.
+ *
  * Read a workspace's DECLARED `taskIntents`.
  *
  * ⚠️ WHY THE READ CAN FAIL LOUDLY. This is the difference that the codebase's
@@ -289,6 +294,8 @@ export async function readWorkspaceTaskIntents(input: {
 }
 
 /**
+ * @deprecated 0426: use `workspaceNeedCoverage` (`services/needs`).
+ *
  * Join a workspace's DECLARED intents against what its installed capabilities
  * PROVIDE, under ONE lens. Pure and I/O-free at its core (see
  * `foldIntentCoverage`) so the join is testable without a database; this wrapper

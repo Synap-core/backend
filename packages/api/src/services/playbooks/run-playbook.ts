@@ -40,6 +40,9 @@ import {
   countWorkerPendingApprovals,
   listWorkerTargetsInFlight,
   startedByAgentPatch,
+  LIVE_RUN_STATUSES,
+  setRunStatus,
+  uniqueViolationConstraint,
   type PlaybookRunWorkerSpec,
 } from "@synap/database";
 import type {
@@ -54,6 +57,7 @@ import {
   ChannelMemberKind,
   ChannelMemberRole,
   FocusSessionStatus,
+  ONE_LIVE_RUN_INDEX,
 } from "@synap/database/schema";
 import { enrollRoomMember } from "../messaging/enroll-room-member.js";
 import { notifySessionNeedsYou } from "../focus-sessions/notify-needs-you.js";
@@ -141,6 +145,11 @@ import {
 } from "./pre-approved-run.js";
 import type { GeneratedRunAnswer } from "./generate-run.js";
 import { runSubjectMatches } from "./run-subject.js";
+import {
+  findLiveRunOfSubject,
+  type AlreadyRunningReason,
+  type LiveRunOfSubject,
+} from "./live-run-of-subject.js";
 
 const logger = createLogger({ module: "run-playbook" });
 
@@ -262,10 +271,30 @@ export interface RunPlaybookInput {
   /**
    * Idempotency by subject: when true AND `subjectId` is set, reuse the existing
    * active session for this playbook+subject instead of starting a new run. Makes
-   * a scheduled playbook_run safe (start-if-missing, no-op-if-present). Manual
-   * runs leave this false so each click starts a fresh run.
+   * a scheduled playbook_run safe (start-if-missing, no-op-if-present), and
+   * holds a subject whose latest run failed recently (the cooldown). The
+   * automation path's flag; a person's run uses `oneLivePerSubject` instead,
+   * which has no cooldown.
    */
   idempotentBySubject?: boolean;
+  /**
+   * ONE LIVE RUN PER OBJECT (founder, 2026-11-16): set ONLY by the run door
+   * (`playbooks.run`, and so Hub REST, MCP and the approved replay) for a
+   * person's run without "start another". With `subjectId`: when this person
+   * already has a live run of the playbook on the subject
+   * (`findLiveRunOfSubject`), nothing starts and the result is
+   * `alreadyRunning` with that run; otherwise the run's session holds the
+   * object's live slot (`focus_sessions.one_live_per_subject`), and a
+   * concurrent start that loses the race on the 0427 index gets the same
+   * answer. No cooldown: a failed run never blocks a person's click.
+   *
+   * Never set by fan-out (`forEach`) children, hand-off children, the static
+   * / rotating fan-out items after the first, give-to-agent, automations,
+   * redispatch or rerun: they start their own sessions exactly as before.
+   * Ignored for a trial, a one-shot (`generate`) run and a run with no
+   * subject.
+   */
+  oneLivePerSubject?: boolean;
   /**
    * A TRIAL run (the rule lab, design b199a3a4 slice 1b, `trial-run.ts`): the
    * drafts render in place of the current versions they name, the session is
@@ -447,6 +476,27 @@ type PlaybookRunStarted = {
   skipped?: undefined;
   /** Present only on a one-shot run (`executor: "generate"`). */
   generated?: undefined;
+  /** Present only when a live run was found instead (`oneLivePerSubject`). */
+  alreadyRunning?: undefined;
+};
+
+/**
+ * ONE LIVE RUN PER OBJECT: the person already has a live run of this playbook
+ * on the subject (`RunPlaybookInput.oneLivePerSubject`), so NOTHING started —
+ * no session, room, run row or dispatch. `session` is the live one (the run
+ * to open); `run` its newest ledger row, null for a held draft.
+ */
+type PlaybookRunAlreadyRunning = {
+  run: PlaybookRun | null;
+  session: FocusSession;
+  alreadyRunning: { reason: AlreadyRunningReason };
+  reused?: undefined;
+  skipped?: undefined;
+  generated?: undefined;
+  parentLink?: undefined;
+  held?: undefined;
+  heldBecause?: undefined;
+  handedTo?: undefined;
 };
 
 /**
@@ -464,6 +514,7 @@ type PlaybookRunGenerated = {
   held?: undefined;
   heldBecause?: undefined;
   handedTo?: undefined;
+  alreadyRunning?: undefined;
 };
 
 /** Who a run was handed to, as the run reply names it. */
@@ -476,6 +527,7 @@ export interface RunHandedTo {
 export type RunPlaybookResult =
   | PlaybookRunStarted
   | PlaybookRunGenerated
+  | PlaybookRunAlreadyRunning
   | {
       /** A pinned playbook had nobody eligible and the fallback matched nothing.
        *  No session, no run, no event stamp. */
@@ -497,6 +549,7 @@ export type RunPlaybookResult =
       heldBecause?: undefined;
       handedTo?: undefined;
       generated?: undefined;
+      alreadyRunning?: undefined;
     };
 
 /**
@@ -695,53 +748,69 @@ function readInputStrategy(value: unknown): InputStrategy {
  *   - none / static-empty → exactly ONE run with the caller's params (the
  *     baseline behavior; `static` with items fans one run per item).
  *   - static  → one run per declared item.
- *   - rotating → advance a cursor stored in `playbook.metadata.inputCursor`
- *     (NO new column) and run for the CURRENT item only.
+ *   - rotating → run for the CURRENT item only; `advanceCursor` moves the
+ *     cursor stored in the strategy (NO new column) to the next item. The
+ *     caller advances it once the run is not a duplicate that lost the race
+ *     to a live run (one live run per object): a click that started nothing
+ *     must not skip an item.
  *   - query   → TODO(P-query): resolve `sourceSubscriptionId` into a live item
  *     set. Not yet implemented — runs ONCE with the caller's params so the
  *     playbook still fires (we do NOT fabricate items).
  *   - pinned  → exactly ONE run. The subject is chosen before this function
  *     (caller, else the pin list, else one fallback row). No fan-out.
  *
- * Returns the per-run `input` payloads, capped at MAX_INPUT_FANOUT.
+ * Returns the per-run `input` payloads, capped at MAX_INPUT_FANOUT, and the
+ * cursor advance (a no-op for every strategy but `rotating`).
  */
 async function resolveInputItems(
   playbook: Playbook,
   baseParams: Record<string, unknown>
-): Promise<Array<Record<string, unknown>>> {
+): Promise<{
+  items: Array<Record<string, unknown>>;
+  advanceCursor: () => Promise<void>;
+}> {
   const strategy = readInputStrategy(playbook.inputStrategy);
+  const noCursor = async () => undefined;
 
   switch (strategy.kind) {
     case "none":
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
 
     case "static": {
       const items = strategy.items ?? [];
-      if (items.length === 0) return [baseParams];
-      return items
-        .slice(0, MAX_INPUT_FANOUT)
-        .map((item) => ({ ...baseParams, item }));
+      if (items.length === 0)
+        return { items: [baseParams], advanceCursor: noCursor };
+      return {
+        items: items
+          .slice(0, MAX_INPUT_FANOUT)
+          .map((item) => ({ ...baseParams, item })),
+        advanceCursor: noCursor,
+      };
     }
 
     case "rotating": {
       const items = strategy.items ?? [];
-      if (items.length === 0) return [baseParams];
+      if (items.length === 0)
+        return { items: [baseParams], advanceCursor: noCursor };
       const cursor = typeof strategy.cursor === "number" ? strategy.cursor : 0;
       const idx = ((cursor % items.length) + items.length) % items.length;
       const item = items[idx];
 
-      // Persist the advanced cursor back into the strategy (JSONB, no new column).
-      const db = await getDb();
-      const nextStrategy: InputStrategy = {
-        ...strategy,
-        cursor: (idx + 1) % items.length,
+      // Persist the advanced cursor back into the strategy (JSONB, no new
+      // column), when the caller says the run counts.
+      const advanceCursor = async () => {
+        const db = await getDb();
+        const nextStrategy: InputStrategy = {
+          ...strategy,
+          cursor: (idx + 1) % items.length,
+        };
+        await db
+          .update(playbooks)
+          .set({ inputStrategy: nextStrategy, updatedAt: new Date() })
+          .where(eq(playbooks.id, playbook.id));
       };
-      await db
-        .update(playbooks)
-        .set({ inputStrategy: nextStrategy, updatedAt: new Date() })
-        .where(eq(playbooks.id, playbook.id));
 
-      return [{ ...baseParams, item }];
+      return { items: [{ ...baseParams, item }], advanceCursor };
     }
 
     case "query": {
@@ -756,15 +825,27 @@ async function resolveInputItems(
         },
         "inputStrategy 'query' not yet implemented — running once with caller params"
       );
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
     }
 
     case "pinned":
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
 
     default:
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
   }
+}
+
+/**
+ * The run lost the race on the one-live-run index (0427) to a run that has
+ * since ended: `executeSingleRun` answers it with a CONFLICT whose cause is
+ * the unique violation. Like an `alreadyRunning` answer, it started nothing.
+ */
+function lostOneLiveRunRace(err: unknown): boolean {
+  return (
+    err instanceof TRPCError &&
+    uniqueViolationConstraint(err.cause) === ONE_LIVE_RUN_INDEX
+  );
 }
 
 /**
@@ -1057,6 +1138,8 @@ export async function resolveRunChoice(
   > & {
     playbook: Pick<Playbook, "id" | "executor"> &
       Partial<Pick<Playbook, "runner" | "requires">>;
+    /** The run's space: a `need:` entry of `requires` names its bound provider. */
+    workspaceId?: string | null;
   }
 ): Promise<ResolvedRunChoice> {
   // A one-shot (`generate`) playbook is run by the pod itself: Synap AI.
@@ -1112,7 +1195,11 @@ export async function resolveRunChoice(
   }
 
   // 2. The playbook's own runner.
-  const requires = requiresOf(input.playbook);
+  const { resolveRequiresNeeds } = await import("../needs/space-needs.js");
+  const requires = await resolveRequiresNeeds(
+    requiresOf(input.playbook),
+    input.workspaceId
+  );
   const authored =
     input.playbook.runner !== null && input.playbook.runner !== undefined
       ? await resolveRunner({
@@ -1429,6 +1516,7 @@ export async function runPlaybook(
       }
     : await resolveRunChoice({
         userId: input.userId,
+        workspaceId: input.workspaceId,
         agentUserId: input.agentUserId,
         handToAgentId: input.handToAgentId,
         runOn: input.runOn,
@@ -1520,30 +1608,65 @@ export async function runPlaybook(
     workspaceId: input.workspaceId,
   });
 
+  // ONE LIVE RUN PER OBJECT: the person's live run of this playbook on the
+  // subject comes back instead of a second one — before a rotating cursor
+  // advances and before anything is written. The index (0427) is the floor
+  // under this read: see `executeSingleRun`.
+  const oneLive =
+    runInput.oneLivePerSubject === true &&
+    !oneShot &&
+    !input.trial &&
+    typeof runInput.subjectId === "string" &&
+    runInput.subjectId !== "";
+  runInput = { ...runInput, oneLivePerSubject: oneLive };
+  if (oneLive) {
+    const live = await findLiveRunOfSubject({
+      playbookId: playbook.id,
+      subjectId: runInput.subjectId!,
+      userId: input.userId,
+    });
+    if (live) return alreadyRunningResult(live);
+  }
+
   // S9: resolve the input strategy into per-run param payloads. The first item
   // is the primary (returned) run; the rest fan out as side effects.
-  const runItems = await resolveInputItems(
+  const { items: runItems, advanceCursor } = await resolveInputItems(
     playbook,
     (runInput.params ?? {}) as Record<string, unknown>
   );
 
-  const primary = await executeSingleRun(
-    playbook,
-    runInput,
-    runItems[0] ?? {},
-    filing,
-    undefined,
-    handOff,
-    runOn
-  );
+  // A rotating cursor advances for every run that counts, a failed one
+  // included (as before), but never for a click that lost the race to a live
+  // run: that click started nothing, so moving the cursor would skip an item.
+  let primary: RunPlaybookResult;
+  try {
+    primary = await executeSingleRun(
+      playbook,
+      runInput,
+      runItems[0] ?? {},
+      filing,
+      undefined,
+      handOff,
+      runOn
+    );
+  } catch (err) {
+    if (!lostOneLiveRunRace(err)) await advanceCursor();
+    throw err;
+  }
+  // Lost the race to a concurrent start: that run is the answer, and its own
+  // call fans out the other items.
+  if (primary.alreadyRunning) return primary;
+  await advanceCursor();
 
   // Fan-out: additional items each get their own session/channel/run. Failures
-  // are logged but never abort the primary result. A trial is ONE run.
+  // are logged but never abort the primary result. A trial is ONE run. Only
+  // the primary run holds the object's live slot: the items are parts of the
+  // same click, never a second run of it.
   for (let i = 1; !input.trial && i < runItems.length; i++) {
     try {
       await executeSingleRun(
         playbook,
-        runInput,
+        { ...runInput, oneLivePerSubject: false },
         runItems[i],
         filing,
         undefined,
@@ -1575,12 +1698,24 @@ export function handedToLine(h: RunHandedTo | undefined): string {
       : ` It is handed to ${who}.`;
 }
 
+/** The result of a run that did not start because one is live (`oneLivePerSubject`). */
+function alreadyRunningResult(
+  live: LiveRunOfSubject
+): PlaybookRunAlreadyRunning {
+  return {
+    run: live.run,
+    session: live.session,
+    alreadyRunning: { reason: live.reason },
+  };
+}
+
 /** Names the hand-off on a run that started or was held with it. */
 function withHandedTo(
   result: RunPlaybookResult,
   handOff: RunHandOff | null
 ): RunPlaybookResult {
-  if (!handOff || !result.session || result.reused) return result;
+  if (!handOff || !result.session || result.reused || result.alreadyRunning)
+    return result;
   return {
     ...result,
     handedTo: {
@@ -1713,13 +1848,23 @@ async function executeSingleRun(
   // a playbook_run safe on a schedule (e.g. a daily client-sync that ensures every
   // client has a session): start-if-missing, no-op-if-present. Reuse spans every
   // in-flight state (see IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES) so a stuck
-  // subject the reaper aged active→'stale' is not re-dispatched daily. Opt-in;
-  // manual runs leave `idempotentBySubject` false so each click starts fresh.
+  // subject the reaper aged active→'stale' is not re-dispatched daily. Opt-in:
+  // the AUTOMATION path's flag, with its failed-run cooldown below. A person's
+  // run never comes here — its reuse is `oneLivePerSubject` (one live run per
+  // object, per person, no cooldown), answered in `runPlaybook` before any
+  // item resolves and floored by the 0427 index at the insert below.
   if (input.idempotentBySubject && input.subjectId) {
     const existing = await db.query.focusSessions.findFirst({
       where: and(
         eq(focusSessions.playbookId, playbook.id),
         eq(focusSessions.subjectEntityId, input.subjectId),
+        // The OWNER's run only (the session's owner is always the person the
+        // run is for, `actorId` below). Without it, an automation of one
+        // member of a shared space was answered with ANOTHER member's private
+        // session of a pod-wide playbook on the same record: its id and room
+        // landed in the automation's step output, and the owner's run never
+        // started. The same key as a person's one live run per object.
+        eq(focusSessions.userId, input.userId),
         // Reuse any IN-FLIGHT session (active/paused/stale/forming), not just
         // 'active': a stuck subject whose session the focus-session reaper aged
         // active→'stale' must NOT re-spawn a fresh run on the next daily cron.
@@ -1819,7 +1964,13 @@ async function executeSingleRun(
   // 1. Instantiate the runtime session (no channel yet — wired below). The goal
   // is resolved by the caller's resolver when provided (scheduled path resolves
   // against the automation StepContext), else substituted against `params`.
-  const session = await instantiateSession({
+  // A person's run (`oneLivePerSubject`) is born holding the object's live
+  // slot; the session insert is the run's first write, so a start that loses
+  // the race on the 0427 index has written nothing and answers with the run
+  // that won.
+  const oneLive = input.oneLivePerSubject === true && !!input.subjectId;
+  const born = await instantiateSession({
+    ...(oneLive ? { oneLivePerSubject: true } : {}),
     playbookId: playbook.id,
     // The session's stages and slots come from the pinned version too.
     ...(input.pinnedVersion !== undefined
@@ -1861,7 +2012,30 @@ async function executeSingleRun(
         ? resolveGoal(input.goalTemplateOverride, params, playbook.id)
         : undefined),
     metadata: sessionMetadata,
-  });
+  }).then(
+    (created) => ({ created }),
+    async (err: unknown) => {
+      if (oneLive && uniqueViolationConstraint(err) === ONE_LIVE_RUN_INDEX) {
+        const live = await findLiveRunOfSubject({
+          playbookId: playbook.id,
+          subjectId: input.subjectId!,
+          userId: input.userId,
+        });
+        if (live) return { live };
+        // The run that won ended between its insert and this read: the
+        // object is free again, and the person's next click starts a run.
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Another run of this playbook on this record was starting at the same moment. Run it again.",
+          cause: err,
+        });
+      }
+      throw err;
+    }
+  );
+  if ("live" in born) return alreadyRunningResult(born.live);
+  const session = born.created;
 
   // The batch's TARGETS, born with the session (before any agent can act on
   // them): one `session --targets--> entity` edge per thing, no result yet,
@@ -2123,10 +2297,11 @@ function readHeldRun(metadata: unknown): HeldRun | null {
  * Steps 4–6 of a run, on a session whose channel is wired: the run ledger row,
  * the subject's enrollment, the granted capabilities, the executor dispatch and
  * the ONE result write. Shared by a run that starts at once
- * ({@link executeSingleRun}) and a held run the person just accepted
- * ({@link startHeldRun}) — one dispatch path, never two.
+ * ({@link executeSingleRun}), a held run the person just accepted
+ * ({@link startHeldRun}) and a stopped run the person continues at its stage
+ * (`continue-run.ts`) — one dispatch path, never three.
  */
-async function dispatchRunOnSession(p: {
+export async function dispatchRunOnSession(p: {
   playbook: Playbook;
   sessionId: string;
   channelId: string;
@@ -2330,6 +2505,7 @@ export async function startHeldRun(
   // The person's remembered choice applies too: it is their run now.
   const { handOff, runOn, persona } = await resolveRunChoice({
     userId: session.userId,
+    workspaceId: session.workspaceId,
     handToAgentId: held.handToAgentId ?? null,
     runOn: held.runOn,
     playbook,
@@ -2569,6 +2745,15 @@ async function latestRunFailedWithinCooldown(
  * external-agent hand-off stores its `externalAgent` receipt. The ONE write
  * after `Executor.run`, for `runPlaybook` and for a re-dispatch of the same
  * run (`services/agent-dispatch/redispatch-on-choice.ts`).
+ *
+ * COMPARE-AND-SET: written only onto a run that is still LIVE. Every caller
+ * writes onto a run it holds live — `runPlaybook` and the one-shot
+ * `generate-run` insert it `running`, the re-dispatch claims it `failed →
+ * running` — so LIVE is the one expected set, and no caller needs another.
+ * An executor call can be long, and the run can end under it (the person
+ * cancels the session, an IS turn completes it first): that verdict stands.
+ * Then nothing is written or settled, it is logged, and the run is returned
+ * as it now stands, so the caller reports the truth.
  */
 export async function recordExecutorResult(
   runId: string,
@@ -2582,21 +2767,35 @@ export async function recordExecutorResult(
   const externalAgentPatch = result.externalAgent
     ? { externalAgent: result.externalAgent }
     : {};
-  const [updated] = await db
-    .update(playbookRuns)
-    .set({
-      status: result.status,
+  const {
+    rows: [updated],
+  } = await setRunStatus(db, {
+    runId,
+    from: LIVE_RUN_STATUSES,
+    to: result.status,
+    // The executor reports; the run's own door records it.
+    actor: { kind: "system" },
+    set: {
       summary: result.summary ?? null,
       error: result.error ?? null,
       completedAt: terminal ? new Date() : null,
       // The hand-off receipt of an external-agent dispatch (0315) — what the
       // status poll and the cancel door read. Absent for every other executor.
-      // (Built outside this literal: the terminal-settles tripwire parses a
-      // brace-free `.set({...})`, and a nested object would blind it.)
       ...externalAgentPatch,
-    })
-    .where(eq(playbookRuns.id, runId))
-    .returning();
+    },
+  });
+  if (!updated) {
+    const [current] = await db
+      .select()
+      .from(playbookRuns)
+      .where(eq(playbookRuns.id, runId))
+      .limit(1);
+    logger.warn(
+      { runId, wanted: result.status, status: current?.status ?? null },
+      "recordExecutorResult: the run was no longer live; its verdict stands and the executor's result was not written"
+    );
+    return current as PlaybookRun;
+  }
   // A failed child of an automation run settles its parent (never throws).
   if (terminal)
     await settleParentAutomationRunFromChild({ playbookRunId: runId });

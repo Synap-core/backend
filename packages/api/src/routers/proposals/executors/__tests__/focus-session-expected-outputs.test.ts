@@ -54,14 +54,26 @@ vi.mock("@synap/database", async (importOriginal) => {
         from: () => b,
         where: () => b,
         for: async () => [{ expectedOutputs: lockedOutputs }],
+        // A slot transition's session read: none here.
+        limit: async () => [],
       };
       return b;
     },
     update,
+    // The proposal door's one statement (`WITH … UPDATE`).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
   };
   return {
     ...actual,
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       query: { focusSessions: { findFirst: async () => sessionRow } },
       // Two reads go through `db.select`: the executor's idempotency read
       // (awaited after `.where`: this proposal is still pending) and the undo

@@ -34,6 +34,7 @@ import {
   like,
   lt,
   transitionProposal,
+  expireOrphanedStageGates,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
@@ -316,12 +317,43 @@ export async function expireLapsedProposals(
   } catch (err) {
     logger.warn({ err }, "expiry: app-ask scan failed (retried next run)");
   }
+  // The same for an AI's ask for one more thing (`agent/connect` of mode
+  // "add", services/agent-access-ask.ts), lazy for the same cycle.
+  try {
+    const { lapsedAgentAskIds } = await import("../agent-access-ask.js");
+    for (const id of await lapsedAgentAskIds(now)) {
+      if (!lapsed.includes(id)) lapsed.push(id);
+    }
+  } catch (err) {
+    logger.warn({ err }, "expiry: agent-ask scan failed (retried next run)");
+  }
   const seen = new Set(pending.map((p) => p.id));
   const candidates = [...pending, ...guestRows.filter((g) => !seen.has(g.id))];
 
+  // Stage gates of a session that already ENDED: their approval can only fail
+  // (the session's end expires its gates since 9 Nov; these were left before
+  // that, or by a race). Expired here by the same door, stamped
+  // `expiredBy: "session_ended"`. Same failure rule as the scans above.
+  let orphanedGates: string[] = [];
+  try {
+    orphanedGates = await expireOrphanedStageGates(db);
+  } catch (err) {
+    logger.warn(
+      { err },
+      "expiry: orphaned stage-gate scan failed (retried next run)"
+    );
+  }
+  if (orphanedGates.length > 0) {
+    markProposalNotificationsActioned(orphanedGates);
+    logger.info(
+      { expired: orphanedGates.length, proposalIds: orphanedGates },
+      "expired stage gates of sessions that had already ended"
+    );
+  }
+
   if (lapsed.length === 0) {
     await scrubExpiredGuestPayloadsSafely();
-    return { scanned: pending.length, expired: 0 };
+    return { scanned: pending.length, expired: orphanedGates.length };
   }
 
   // Chunked, and re-asserting PENDING in the WHERE: a human may have approved
@@ -361,7 +393,7 @@ export async function expireLapsedProposals(
     { scanned: pending.length, expired },
     "expired lapsed proposals (moment passed, never decided)"
   );
-  return { scanned: pending.length, expired };
+  return { scanned: pending.length, expired: expired + orphanedGates.length };
 }
 
 /**

@@ -28,6 +28,11 @@ vi.mock("@synap-core/core", async (importOriginal) => ({
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
+    // The proposal door's one statement (`WITH … UPDATE`).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
     update: () => ({
       set: () => ({
         where: () => ({ returning: async () => [{ id: "p1" }] }),

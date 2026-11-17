@@ -81,14 +81,16 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "kind.skill.other": "Outils",
   "kind.automation.one": "Automatisation",
   "kind.automation.other": "Automatisations",
-  "kind.playbook.one": "Modèle",
-  "kind.playbook.other": "Modèles",
+  "kind.playbook.one": "Processus",
+  "kind.playbook.other": "Processus",
   "kind.capability.one": "Outil",
   "kind.capability.other": "Outils",
   "kind.command.one": "Commande",
   "kind.command.other": "Commandes",
   "kind.tool.one": "Outil",
   "kind.tool.other": "Outils",
+  "kind.need.one": "Besoin",
+  "kind.need.other": "Besoins",
   "kind.application.one": "App connectée",
   "kind.application.other": "Apps connectées",
   "kind.issuer.one": "Émetteur de confiance",
@@ -213,6 +215,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.attach.past": "Joint",
   "action.add.imperative": "Ajouter",
   "action.add.past": "Ajouté",
+  "action.bind_need.imperative": "Pourvoir le besoin",
+  "action.bind_need.past": "Besoin pourvu",
   "action.detach.imperative": "Détacher",
   "action.detach.past": "Détaché",
   "action.remove.imperative": "Enlever",
@@ -301,6 +305,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.terminal.open.past": "Terminal ouvert",
   "action.session.stop.imperative": "Arrêter",
   "action.session.stop.past": "Arrêté",
+  "action.session.continue.imperative": "Continuer",
+  "action.session.continue.past": "Continué",
   "action.session.wait_on.imperative": "Attendre",
   "action.session.wait_on.past": "Mis en attente de",
   "action.session.release.imperative": "Ne plus attendre",
@@ -424,6 +430,9 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.decline.imperative": "Refuser",
   "action.decline.past": "Refusé",
   "action.decline.progressive": "Refus en cours",
+  "action.refuse.imperative": "Refuser",
+  "action.refuse.past": "Refusé",
+  "action.refuse.progressive": "Refus en cours",
   "action.disconnect.imperative": "Déconnecter",
   "action.disconnect.past": "Déconnecté",
   "action.disconnect.progressive": "Déconnexion en cours",
@@ -438,6 +447,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.ask.progressive": "Demande en cours",
   "action.attest.imperative": "Marquer comme fait",
   "action.attest.past": "Marqué comme fait",
+  "action.hand_back.imperative": "Rendre",
+  "action.hand_back.past": "Rendu",
   "action.post.imperative": "Poster",
   "action.post.past": "Posté",
   "action.post.progressive": "Publication en cours",
@@ -582,6 +593,44 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "waitKind.another_work": "Autre travail",
   "waitKind.date": "Une date",
   "waitKind.nobody": "Personne",
+  // ── Step runners: `stepRunner.<kind>` (who moves a step on) ──
+  "stepRunner.person": "Vous",
+  "stepRunner.ai": "Un agent",
+  "stepRunner.automatic": "S’exécute tout seul",
+  // ── Needs (0426): `need.<slug>` (a need's name) ──
+  "need.code-host": "Hébergement du code",
+  "need.deploy-target": "Cible de déploiement",
+  "need.gate": "Contrôle",
+  "need.payments": "Paiements",
+  "need.messaging": "Messagerie",
+  "need.email": "E-mail",
+  "need.calendar": "Agenda",
+  "need.file-store": "Stockage de fichiers",
+  "need.media-generation": "Génération de médias",
+  "need.social-publishing": "Publication sur les réseaux",
+  "need.linkedin-reach": "Prospection LinkedIn",
+  "need.analytics": "Statistiques",
+  // ── Intents: `intent.<slug>` (an intent's short name, never the consent sentence) ──
+  "intent.search_external": "Chercher dans des sources externes",
+  "intent.find_people": "Trouver des personnes",
+  "intent.enrich_entity": "Enrichir des fiches",
+  "intent.fetch_record": "Récupérer une fiche",
+  "intent.list_records": "Lister des fiches",
+  "intent.send_message": "Envoyer un message",
+  "intent.request_connection": "Demander une mise en relation",
+  "intent.schedule_event": "Planifier un événement",
+  "intent.manage_file": "Gérer des fichiers",
+  "intent.generate_media": "Générer des médias",
+  "intent.capture_into_pod": "Importer des données dans le pod",
+  "intent.run_external_job": "Lancer une tâche externe",
+  "intent.connect_account": "Connecter un compte",
+  "intent.publish_post": "Publier un post",
+  "intent.delegate_agent_task": "Confier une tâche à un agent",
+  "intent.read_webpage": "Lire une page web",
+  "intent.search_web": "Chercher sur le web",
+  "intent.edit_video": "Monter une vidéo",
+  "intent.transcribe_media": "Transcrire un média",
+  "intent.download_media": "Télécharger un média",
   // ── Needs-you counts: `needsYou.count.<kind>` (French counts 0 and 1 as
   // singular; `many` is a whole number of millions: "1000000 de décisions") ──
   "needsYou.count.decision":
@@ -677,10 +726,10 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "vocabulary.runner.needs_answer.named": "Attend la réponse de {name}",
   "vocabulary.runner.needs_answer.unnamed": "Attend une réponse",
   "vocabulary.offer.everySpace": "{offer} dans tous les espaces",
-  "vocabulary.templateNoun.goal.one": "Modèle d’objectif",
-  "vocabulary.templateNoun.goal.other": "Modèles d’objectif",
-  "vocabulary.templateNoun.work.one": "Modèle de travail",
-  "vocabulary.templateNoun.work.other": "Modèles de travail",
+  "vocabulary.templateNoun.goal.one": "Processus d’objectif",
+  "vocabulary.templateNoun.goal.other": "Processus d’objectif",
+  "vocabulary.templateNoun.work.one": "Processus",
+  "vocabulary.templateNoun.work.other": "Processus",
   "vocabulary.templateNoun.space.one": "Modèle d’espace",
   "vocabulary.templateNoun.space.other": "Modèles d’espace",
   "vocabulary.packageNoun.template.one": "Modèle",
@@ -691,6 +740,49 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
     "Ajouter des packs et des modèles à votre pod",
   "vocabulary.needsYou.count.uncurated":
     "{n, plural, one {# {noun}} many {# de {nouns}} other {# {nouns}}}",
+  // ── Process health: `vocabulary.processHealth.<code>.label|reason` ──
+  "vocabulary.processHealth.config_invalid.label": "Erreur de configuration",
+  "vocabulary.processHealth.config_invalid.reason":
+    "La définition enregistrée est invalide ou ne peut pas être activée.",
+  "vocabulary.processHealth.running.label": "En cours",
+  "vocabulary.processHealth.running.reason":
+    "Au moins une exécution est en cours.",
+  "vocabulary.processHealth.running_after_failure.label":
+    "En cours · l’exécution précédente a échoué",
+  "vocabulary.processHealth.running_after_failure.reason":
+    "Une exécution est en cours après l’échec du dernier résultat connu.",
+  "vocabulary.processHealth.waiting_on_you.reason":
+    "La dernière exécution est en pause jusqu’à ce que vous répondiez à ce que sa session vous a demandé.",
+  "vocabulary.processHealth.blocked_by_policy.label": "Bloqué par une règle",
+  "vocabulary.processHealth.blocked_by_policy.reason":
+    "La gouvernance a refusé l’effet de la dernière exécution — elle attend votre revue.",
+  "vocabulary.processHealth.latest_failed.label": "Dernière exécution en échec",
+  "vocabulary.processHealth.latest_failed.reason":
+    "Aucun résultat réussi plus récent ne résout le dernier échec.",
+  "vocabulary.processHealth.draft.label": "Brouillon",
+  "vocabulary.processHealth.draft.reason":
+    "La définition doit encore être complétée ou activée.",
+  "vocabulary.processHealth.paused.label": "En pause",
+  "vocabulary.processHealth.paused.reason":
+    "La définition est en pause et ne lancera pas de nouvelle exécution.",
+  "vocabulary.processHealth.archived.label": "Archivé",
+  "vocabulary.processHealth.archived.reason":
+    "La définition est archivée et ne lancera pas de nouvelle exécution.",
+  "vocabulary.processHealth.healthy.label": "En bonne santé",
+  "vocabulary.processHealth.healthy.reason":
+    "Le dernier résultat connu s’est terminé sans échec.",
+  "vocabulary.processHealth.latest_unresolved.label":
+    "Dernier statut non résolu",
+  "vocabulary.processHealth.latest_unresolved.reason":
+    "La dernière exécution est «\u00a0{status}\u00a0»\u00a0; Synap ne peut pas encore la classer comme réussie ou en échec.",
+  "vocabulary.processHealth.never_run.label": "Jamais exécuté",
+  "vocabulary.processHealth.never_run.reason":
+    "Cette définition enregistrée n’a encore aucune exécution.",
+  "vocabulary.processHealth.not_enough_activity.label": "Statut inconnu",
+  "vocabulary.processHealth.not_enough_activity.reason":
+    "Il n’y a pas assez d’activité chargée pour déterminer l’état actuel.",
+  "vocabulary.job.startedHere":
+    "{n, plural, one {# travail lancé d’ici} many {# de travaux lancés d’ici} other {# travaux lancés d’ici}}",
 };
 
 /** A noun's grammar in French: what a sentence agrees with. */
@@ -742,6 +834,7 @@ export const vocabularyFrNouns: Readonly<Record<NounSlug, FrenchNounGrammar>> =
     capability: { gender: "m", elides: true },
     command: { gender: "f", elides: false },
     tool: { gender: "m", elides: true },
+    need: { gender: "m", elides: false },
     application: { gender: "f", elides: true },
     issuer: { gender: "m", elides: true },
     run: { gender: "f", elides: true },

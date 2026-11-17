@@ -8,6 +8,8 @@ import {
   eq,
   inArray,
   getWorkspaceMembership,
+  LIVE_RUN_STATUSES,
+  setRunStatus,
   transitionProposal,
 } from "@synap/database";
 // `createLinks` is the ONE link door and it lives in @synap/api, not
@@ -20,7 +22,10 @@ import { isLikelyUUID } from "@synap-core/types/proposals";
 import type { GuidanceDeclaration } from "@synap-core/types/guidance";
 import type { PlaybookRunner } from "@synap/playbooks";
 import type { Context } from "../../../context.js";
-import { registerProposalExecutor } from "../execution-registry.js";
+import {
+  registerProposalExecutor,
+  type ProposalEffect,
+} from "../execution-registry.js";
 import {
   assertApplied,
   dispatchExternalOnce,
@@ -58,9 +63,20 @@ export function missingRunArgs(input: {
  * `playbooks.run`, shown after "Couldn't apply — ". Each one says what to do.
  */
 export function notStartedReason(result: {
-  status: "proposed" | "blocked" | "skipped" | "draft";
+  status: "proposed" | "blocked" | "skipped" | "draft" | "already_running";
   message: string;
+  session?: { id?: unknown } | null;
 }): string {
+  if (result.status === "already_running") {
+    // One live run per object: the person already has a live run of this
+    // playbook on this record, so approving would start a second one. The
+    // claim is released: approve again once that run has ended.
+    const id =
+      typeof result.session?.id === "string"
+        ? ` (session ${result.session.id})`
+        : "";
+    return `this playbook is already running on this record${id}, so approving did not start a second run — open that run, or approve again once it has ended`;
+  }
   if (result.status === "proposed") {
     // The approver's OWN check refused (the agent's policy is not consulted on
     // an approved replay), so this one really is about their role.
@@ -586,9 +602,12 @@ export function registerPlaybookExecutors(): void {
   //
   // ⚠️ IDEMPOTENCY — verified, and the standard guard is NOT sufficient.
   // `runPlaybook` is NOT idempotent on this path: its `idempotentBySubject`
-  // reuse is OPT-IN and `playbooks.run` never sets it ("manual runs leave this
-  // false so each click starts fresh"). Two approvals would mint two sessions,
-  // two channels, two ledger rows and two executor dispatches. The sibling
+  // reuse is OPT-IN and `playbooks.run` never sets it. The door's ONE LIVE RUN
+  // PER OBJECT guard (`oneLivePerSubject`, founder 2026-11-16) answers a
+  // second run of the playbook on the same subject `already_running`, but a
+  // run with no subject or asked as "start another" still starts each time:
+  // two approvals would mint two sessions, two channels, two ledger rows and
+  // two executor dispatches. The sibling
   // `status === APPROVED` guard is a read-then-write and races a double-click,
   // so it is kept only as the cheap short-circuit; the real floor is
   // `dispatchExternalOnce`, this directory's CAS-claim primitive for an
@@ -825,6 +844,10 @@ export function registerPlaybookExecutors(): void {
                 },
               }
             : {}),
+          // A run asked as "start another" stays one once approved; without
+          // it the door answers `already_running` while a run is live on the
+          // subject (one live run per object).
+          ...(inner.startAnother === true ? { startAnother: true } : {}),
         });
       // ONE RUN PER SUBJECT for a RULE's run (an activator's proposal): the
       // filing step already files none while a run of this playbook is in
@@ -832,8 +855,11 @@ export function registerPlaybookExecutors(): void {
       // check at approval, for a proposal that was waiting when that run
       // started (live: 100d7d65, filed while run 12dbd086 was open on Video
       // 01). Approving it would start a DUPLICATE run, so nothing is started
-      // and the refusal names the open run. A person's own run proposal is
-      // theirs to repeat; a batch keeps its own per-subject receipt.
+      // and the refusal names the open run. A person's own run proposal goes
+      // to the run door, which answers `already_running` while THEIR run of it
+      // is live on the subject (one live run per object, founder 2026-11-16)
+      // unless it was asked as "start another"; a batch keeps its own
+      // per-subject receipt.
       const singleSubject =
         subjects.length <= 1 ? (subjects[0] ?? carriedSubjectId) : undefined;
       if (raw.source === "automation" && singleSubject) {
@@ -871,14 +897,28 @@ export function registerPlaybookExecutors(): void {
         // run that STARTED and finished at once: delivered like `running`.
         const started =
           result.status === "running" || result.status === "generated";
-        if (started && subjects.length > 1) {
+        // A BATCH whose first subject already has its run live (one live run
+        // per object): that subject is skipped, never failed, and the rest of
+        // the batch still runs. A single proposal's `already_running` stays a
+        // refusal below (nothing started, the claim is released).
+        const firstSkipped =
+          !started &&
+          subjects.length > 1 &&
+          result.status === "already_running";
+        if ((started || firstSkipped) && subjects.length > 1) {
           batch = await runBatchRest(
             subjects.slice(1),
             runFor,
-            startedRun(subjects[0]!, result)
+            started
+              ? { started: [startedRun(subjects[0]!, result)], failed: [] }
+              : {
+                  started: [],
+                  failed: [],
+                  skipped: [skippedRun(subjects[0]!, result)],
+                }
           );
         }
-        if (started) {
+        if (started || (batch && batch.started.length > 0)) {
           receipt = batch ?? {
             started: [startedRun(firstSubject, result)],
             failed: [],
@@ -886,7 +926,9 @@ export function registerPlaybookExecutors(): void {
           return { delivered: true as const };
         }
         // Nothing started, so the claim is released and the person can approve
-        // again once the reason is fixed.
+        // again once the reason is fixed. A batch whose first subject was
+        // already running and whose rest started nothing says the first
+        // subject's reason (approve again once that run has ended).
         return { delivered: false as const, reason: notStartedReason(result) };
       });
 
@@ -927,7 +969,15 @@ export function registerPlaybookExecutors(): void {
         // The approve response's "what this created" (REST/CLI callers).
         ...(firstSessionId ? { primaryId: firstSessionId } : {}),
         ...(batch
-          ? { batch: { started: batch.started.length, failed: batch.failed } }
+          ? {
+              batch: {
+                started: batch.started.length,
+                failed: batch.failed,
+                ...(batch.skipped
+                  ? { skipped: batch.skipped.map((s) => s.subjectId) }
+                  : {}),
+              },
+            }
           : {}),
       };
     },
@@ -1017,23 +1067,52 @@ export function registerPlaybookExecutors(): void {
         nextStatus === "failed" ||
         nextStatus === "proposed";
 
-      await db
-        .update(playbookRuns)
-        .set({
-          status: nextStatus,
+      // COMPARE-AND-SET: the approval replays the update only onto a run that
+      // is still LIVE, as the direct capture does (`applyRunCapture`). The
+      // run was read above without a status floor, and the person may approve
+      // long after it was filed: a run cancelled or finished since keeps its
+      // verdict, and the receipt says nothing was written.
+      const { rows: written } = await setRunStatus(db, {
+        runId,
+        from: LIVE_RUN_STATUSES,
+        to: nextStatus,
+        // The person approved the agent's capture: theirs, with its proposal.
+        actor: { kind: "human", userId },
+        proposalId: input.proposalId,
+        set: {
           summary: (inner.summary as string | undefined) ?? run.summary,
           error: (inner.error as string | undefined) ?? run.error,
           completedAt: terminal ? new Date() : run.completedAt,
-        })
-        .where(eq(playbookRuns.id, runId));
+        },
+      });
       // A failed child of an automation run settles its parent (never throws).
-      if (terminal)
+      if (terminal && written.length > 0)
         await settleParentAutomationRunFromChild({ playbookRunId: runId });
+      const effect: ProposalEffect =
+        written.length > 0
+          ? {
+              applied: "verified",
+              rows: written.length,
+              ids: written.map((r) => r.id),
+              subject: "playbook_run",
+            }
+          : {
+              applied: "none",
+              reason:
+                "The run had already ended (cancelled or finished) when this update was " +
+                "approved, so it keeps its verdict. The proposal is answered; nothing was changed.",
+            };
 
       // `session → produced → entity` provenance, workspace-validated and
-      // capped exactly as the direct path does.
+      // capped exactly as the direct path does — only onto the run the
+      // update landed on (an ended run's record is not rewritten).
       const producedEntityIds = inner.producedEntityIds as string[] | undefined;
-      if (run.sessionId && run.workspaceId && producedEntityIds?.length) {
+      if (
+        written.length > 0 &&
+        run.sessionId &&
+        run.workspaceId &&
+        producedEntityIds?.length
+      ) {
         const requested = producedEntityIds.slice(0, 100);
         const found = await db.query.entities.findMany({
           where: inArray(entities.id, requested),
@@ -1074,7 +1153,7 @@ export function registerPlaybookExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      return { success: true, effect };
     },
   });
 
@@ -1158,10 +1237,24 @@ export interface StartedRun {
   runId?: string;
 }
 
+/**
+ * A subject of a batch approval that started nothing because the person
+ * already has a live run of the playbook on it (the run door's
+ * `already_running`, one live run per object): skipped, never failed. The
+ * live session is the run to open.
+ */
+export interface SkippedRun {
+  subjectId: string;
+  sessionId?: string;
+  reason: "already_running";
+}
+
 /** What a run approval started — stamped on the proposal as `data.runResult`. */
 export interface BatchRunReceipt {
   started: StartedRun[];
   failed: string[];
+  /** Present only when a subject was skipped (its run was already live). */
+  skipped?: SkippedRun[];
 }
 
 function startedRun(
@@ -1179,19 +1272,32 @@ function startedRun(
   };
 }
 
+function skippedRun(subjectId: string, result: unknown): SkippedRun {
+  const r = result as { session?: { id?: unknown } | null };
+  return {
+    subjectId,
+    ...(typeof r.session?.id === "string" ? { sessionId: r.session.id } : {}),
+    reason: "already_running",
+  };
+}
+
 /**
- * Start the rest of a batch's runs, {@link BATCH_RUN_CONCURRENCY} at a time.
- * A subject whose run fails (deleted since, no longer visible) is reported,
- * never allowed to stop its siblings: the approval stands for every subject
- * that can still run. Every started run is returned with its session.
+ * Start the rest of a batch's runs, {@link BATCH_RUN_CONCURRENCY} at a time,
+ * on top of what the first subject did (`seed`). A subject whose run fails
+ * (deleted since, no longer visible) is reported, never allowed to stop its
+ * siblings: the approval stands for every subject that can still run. A
+ * subject whose run is already live (`already_running`) is SKIPPED with that
+ * session, never counted as failed. Every started run is returned with its
+ * session.
  */
 export async function runBatchRest(
   subjects: string[],
   runFor: (subjectId: string) => Promise<{ status: string }>,
-  first: StartedRun
+  seed: BatchRunReceipt
 ): Promise<BatchRunReceipt> {
-  const started: StartedRun[] = [first];
-  const failed: string[] = [];
+  const started: StartedRun[] = [...seed.started];
+  const failed: string[] = [...seed.failed];
+  const skipped: SkippedRun[] = [...(seed.skipped ?? [])];
   let next = 0;
   const worker = async () => {
     while (next < subjects.length) {
@@ -1201,6 +1307,8 @@ export async function runBatchRest(
         // `generated`: a one-shot run filed its draft (it has no session).
         if (r.status === "running" || r.status === "generated")
           started.push(startedRun(subjectId, r));
+        else if (r.status === "already_running")
+          skipped.push(skippedRun(subjectId, r));
         else failed.push(subjectId);
       } catch {
         failed.push(subjectId);
@@ -1213,5 +1321,5 @@ export async function runBatchRest(
       worker
     )
   );
-  return { started, failed };
+  return { started, failed, ...(skipped.length > 0 ? { skipped } : {}) };
 }

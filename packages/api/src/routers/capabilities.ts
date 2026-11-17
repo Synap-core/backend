@@ -542,7 +542,8 @@ async function findDependentProcesses(
         status: playbooks.status,
       })
       .from(playbooks)
-      .leftJoin(
+      // The ONE playbook → automation link (0425): the join table only.
+      .innerJoin(
         playbookAutomations,
         eq(playbookAutomations.playbookId, playbooks.id)
       )
@@ -555,10 +556,7 @@ async function findDependentProcesses(
                 eq(playbooks.workspaceId, workspaceId)
               )
             : undefined,
-          or(
-            inArray(playbooks.flowAutomationId, matchedAutomationIds),
-            inArray(playbookAutomations.automationId, matchedAutomationIds)
-          )
+          inArray(playbookAutomations.automationId, matchedAutomationIds)
         )
       )
       .orderBy(playbooks.name);
@@ -1572,11 +1570,11 @@ export const capabilitiesRouter = router({
    * ALSO surfaces playbooks that use the verb — TRANSITIVELY, via the
    * automation(s) they're composed with. A playbook has no `flowDefinition`
    * of its own (see `packages/database/src/schema/playbooks.ts`): its only
-   * link to a capability-verb node is through the automation it drives
-   * (`flowAutomationId`, the legacy single-automation link) or the automations
-   * it composes (`playbook_automations`, the first-class join table). So "a
-   * playbook uses this capability" means "a matching automation from above is
-   * that playbook's `flowAutomationId` OR is joined via `playbook_automations`" —
+   * link to a capability-verb node is through its automations, read from
+   * `playbook_automations` ONLY (0425: the one playbook → automation link; its
+   * schedule and canvas flow are rows there too). So "a playbook uses this
+   * capability" means "a matching automation from above is joined to it via
+   * `playbook_automations`" —
    * never a direct verbId on the playbook row (there isn't one; a false direct
    * backlink would be worse than this correct transitive one).
    *
@@ -1595,9 +1593,8 @@ export const capabilitiesRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
-      // Two soft links can carry a playbook match: the legacy single
-      // `flowAutomationId` and the first-class `playbook_automations` join table.
-      // Both, plus the access floor, live in `findDependentProcesses` — the ONE
+      // The playbook match is the `playbook_automations` join (0425: the one
+      // link), plus the access floor, in `findDependentProcesses` — the ONE
       // implementation this door and `blastRadius` share.
       const { automationRows, playbookRows } = await findDependentProcesses(
         ctx,

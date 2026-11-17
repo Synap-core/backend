@@ -141,6 +141,7 @@ import {
   governanceCeilings,
   profiles,
   profileWorkspaceAccess,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -173,6 +174,7 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     proposals,
     users,
     workspaces,

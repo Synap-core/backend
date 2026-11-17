@@ -119,6 +119,7 @@ import {
   resolveProposalAction,
 } from "@synap-core/types/proposals";
 import { broadcastNotification } from "@synap/jobs";
+import { queueReceiptReactions } from "@synap/jobs/workers/reactions.js";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { notifyProposalCreatedOrdered } from "../notifications/notify-proposal-created-ordered.js";
@@ -146,6 +147,7 @@ import {
   slotKeyAt,
 } from "../services/focus-sessions/slot-keys.js";
 import { reviveSessionForWrite } from "../services/focus-sessions/revive-stale-session.js";
+import { isDoNotContactSetWrite } from "../services/channels/do-not-contact-fields.js";
 import { stampWritingRunner } from "../services/focus-sessions/session-runners.js";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
 import { logEvent } from "../lib/event-helpers.js";
@@ -216,6 +218,34 @@ function isFocusSessionLifecycleClose(
 ): boolean {
   if (subjectType !== "focus_session" || action !== "update") return false;
   return data?.status === "closed";
+}
+
+/**
+ * DE-ESCALATION escape: an entity update that ONLY SETS a person's
+ * do-not-contact flag (`isDoNotContactSetWrite`, proven from `data`, never
+ * from a caller's word) executes where the agent ladder would propose it.
+ * Setting the flag only reduces what the pod does: the send door then refuses
+ * every message to that person (`services/channels/do-not-contact.ts`), and an
+ * opt-out an app records must hold at once (CNIL), like pausing an automation
+ * (ticket 68aeb326). NOT a bypass of anything else: a deny (RBAC, the key's
+ * grant, a person's "Never" rule) has already returned, an untrusted issuer
+ * has already proposed, and an explicit `opts.forcePropose` still proposes.
+ * Clearing the flag is never this (the update door proposes it for an app or
+ * an agent, `routers/entities/mutate.ts`). The execute path stamps its
+ * receipt with Undo, so the person sees it and can lift it.
+ */
+function isDoNotContactSetEscape(opts: {
+  subjectType: string;
+  action: string;
+  data?: Record<string, unknown>;
+  forcePropose?: boolean;
+}): boolean {
+  return (
+    opts.forcePropose !== true &&
+    opts.subjectType === "entity" &&
+    opts.action === "update" &&
+    isDoNotContactSetWrite(opts.data)
+  );
 }
 
 /**
@@ -2357,9 +2387,10 @@ async function evaluatePermission(
       // now run focus_session/update → complete, but the escape still prefers
       // auto-execute so complete is not blocked under agent all-writes.
       const lifecycleCloseEscape =
-        opts.ignoreSessionForcePropose === true &&
-        opts.forcePropose !== true &&
-        isFocusSessionLifecycleClose(subjectType, action, data);
+        (opts.ignoreSessionForcePropose === true &&
+          opts.forcePropose !== true &&
+          isFocusSessionLifecycleClose(subjectType, action, data)) ||
+        isDoNotContactSetEscape(opts);
 
       if (gov.decision === "propose" && !lifecycleCloseEscape) {
         if (dryRun) return DRY_RUN_PROPOSE;
@@ -2589,6 +2620,9 @@ async function evaluatePermission(
           // `.completed` event (events.proposal_id, 0231) — proving this agent
           // write WAS governed (auto-approved), not an ungoverned direct write.
           autoApprovedProposalId = receipt?.id;
+          // Born decided, so its insert owes no transition: the rules that
+          // listen to an approval (pod default 3) are queued here instead.
+          if (receipt?.id) await queueReceiptReactions(receipt.id);
         } catch (err) {
           logger.error(
             { err, workspaceId, agentUserId, eventKey },
@@ -2796,6 +2830,9 @@ async function evaluatePermission(
         );
       }
 
+      // Setting a person's do-not-contact flag only restricts: it executes.
+      if (!autoExecute && isDoNotContactSetEscape(opts)) autoExecute = true;
+
       if (autoExecute) {
         // DRY RUN: the verdict is "execute"; skip the receipt INSERT (the only
         // side effect on this branch) and report it.
@@ -2916,6 +2953,8 @@ async function evaluatePermission(
             })
             .returning({ id: proposals.id });
           autoApprovedProposalId = receipt?.id;
+          // Born decided: the rules that listen to an approval are queued here.
+          if (receipt?.id) await queueReceiptReactions(receipt.id);
         } catch (err) {
           logger.error(
             { err, workspaceId, userId, eventKey },

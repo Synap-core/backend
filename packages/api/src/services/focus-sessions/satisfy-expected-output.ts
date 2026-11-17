@@ -71,13 +71,20 @@
  * dressing it as approval lineage.
  */
 
-import { db, focusSessions, eq, and } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  eq,
+  and,
+  oweSlotTransitions,
+} from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import {
   askFingerprint,
   effectiveSlotAsk,
+  isDeclinedValue,
   resolveAskResolution,
 } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
@@ -87,10 +94,14 @@ import {
   type PullRequestRef,
 } from "@synap-core/types";
 import {
+  OUTPUT_REF_KINDS,
   readCriteria,
   type ExpectedOutput,
+  type OutputRefKind,
   type SessionCriterion,
+  type SlotAnswerValue,
 } from "@synap/playbooks";
+import type { TransitionCause } from "@synap-core/types/lifecycle";
 import { logEvent } from "../../lib/event-helpers.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import {
@@ -110,7 +121,7 @@ import {
 const attestLogger = createLogger({ module: "attest-slot" });
 
 /** How long after close an approval still counts as satisfying this session. */
-const RECENTLY_CLOSED_MS = 24 * 60 * 60 * 1000;
+export const RECENTLY_CLOSED_MS = 24 * 60 * 60 * 1000;
 
 export interface SatisfyExpectedOutputsParams {
   sessionId: string;
@@ -208,6 +219,14 @@ export async function satisfyExpectedOutputs(
       .update(focusSessions)
       .set({ expectedOutputs: next, updatedAt: new Date() })
       .where(eq(focusSessions.id, sessionId));
+    await oweSlotTransitions(tx, {
+      sessionId,
+      before: current,
+      after: next,
+      actor: { kind: "system" },
+      reason: "Its approved proposal delivered it.",
+      proposalId,
+    });
 
     return { satisfied: [current[index]!.label] };
   });
@@ -542,6 +561,13 @@ export async function attestExpectedOutput(
       .update(focusSessions)
       .set({ expectedOutputs: next, updatedAt: now })
       .where(eq(focusSessions.id, sessionId));
+    await oweSlotTransitions(tx, {
+      sessionId,
+      before: current,
+      after: next,
+      actor: { kind: "human", userId },
+      reason: "The person attested it.",
+    });
 
     // The history row commits iff the attestation does.
     await logEvent(
@@ -638,13 +664,18 @@ export async function attestExpectedOutput(
  * here. A confirm / choose / form is an answer, not a deed: `null`. A
  * machine-checked criterion (evidence / capability / judge) keeps its own
  * `verify`: the person saying "I did this" is not the measurement it
- * declared. Pure.
+ * declared. A REFUSAL (`value.type === "declined"`) meets nothing: the
+ * person said no to the deed, so the criterion is never graded pass on it.
+ * Pure.
  */
 export function criterionMetBy(
   outputs: readonly ExpectedOutput[],
   index: number,
-  criteria: readonly Pick<SessionCriterion, "key" | "check">[]
+  criteria: readonly Pick<SessionCriterion, "key" | "check">[],
+  /** The answer that would meet it; absent for an attest ("I did this"). */
+  value?: SlotAnswerValue
 ): string | null {
+  if (isDeclinedValue(value)) return null;
   const slot = outputs[index];
   if (!slot || slot.owner !== "human" || slot.kind === CRITERION_SLOT_KIND) {
     return null;
@@ -944,6 +975,13 @@ export async function satisfyClaimsByEvidence(params: {
         .update(focusSessions)
         .set({ expectedOutputs: next, updatedAt: now })
         .where(eq(focusSessions.id, sessionId));
+      await oweSlotTransitions(tx, {
+        sessionId,
+        before: current,
+        after: next,
+        actor: { kind: "system" },
+        reason: "Its evidence delivered it.",
+      });
       const currentKeys = deriveSlotKeys(current);
       return {
         satisfied: picks.map((p) => ({
@@ -1057,6 +1095,13 @@ export async function satisfyPullRequestByMerge(params: {
         .update(focusSessions)
         .set({ expectedOutputs: next, updatedAt: now })
         .where(eq(focusSessions.id, sessionId));
+      await oweSlotTransitions(tx, {
+        sessionId,
+        before: current,
+        after: next,
+        actor: { kind: "system" },
+        reason: "Its pull request merged.",
+      });
       const currentKeys = deriveSlotKeys(current);
       return {
         satisfied: picks.map((p) => ({
@@ -1209,12 +1254,191 @@ export async function satisfyStageSlotsFromChild(params: {
         .update(focusSessions)
         .set({ expectedOutputs: next, updatedAt: now })
         .where(eq(focusSessions.id, sessionId));
+      await oweSlotTransitions(tx, {
+        sessionId,
+        before: current,
+        after: next,
+        actor: { kind: "system" },
+        reason: "A child run delivered it.",
+      });
       const currentKeys = deriveSlotKeys(current);
       return {
         satisfied: picks.map((p) => ({
           key: currentKeys[p.index]!,
           label: current[p.index]!.label,
           evidence: p.evidence,
+        })),
+        outputs: next,
+      };
+    })
+    .then(async (r) => {
+      if (r.satisfied.length > 0) {
+        await linkSatisfiedOutputsToSubject({ sessionId, now });
+      }
+      return r;
+    });
+}
+
+// ── THE SIXTH PATH: AN APPROVAL OF WHAT THE OUTCOME POINTS AT ──
+
+/** The in-pod object an outcome points at (`ExpectedOutput.ref`, `{kind,id}`). */
+export interface OutcomeRefTarget {
+  kind: OutputRefKind;
+  id: string;
+}
+
+/**
+ * The object an approved proposal delivers, as an outcome `ref` names it: its
+ * target, when the target is a kind a `ref` can name (`OUTPUT_REF_KINDS`:
+ * a document, an entity, a playbook…). Null otherwise. Pure.
+ */
+export function outcomeRefOfProposal(p: {
+  targetType: string | null | undefined;
+  targetId: string | null | undefined;
+}): OutcomeRefTarget | null {
+  const kind = (OUTPUT_REF_KINDS as readonly string[]).includes(
+    p.targetType ?? ""
+  )
+    ? (p.targetType as OutputRefKind)
+    : null;
+  return kind && p.targetId ? { kind, id: p.targetId } : null;
+}
+
+function slotRefIs(slot: ExpectedOutput, ref: OutcomeRefTarget): boolean {
+  const own = slot.ref;
+  return Boolean(
+    own &&
+    "kind" in own &&
+    own.kind === ref.kind &&
+    typeof own.id === "string" &&
+    own.id.toLowerCase() === ref.id.toLowerCase()
+  );
+}
+
+/**
+ * WHICH outcomes an approval of `ref` meets. Pure. A slot is met only when
+ * ALL hold:
+ *   - its key is `slotKey`, when given;
+ *   - its OWN `ref` is that object (`{kind, id}`, same kind, same id);
+ *   - it is not already done and not retired;
+ *   - it is NOT the person's (`owner: 'human'`): a person checks their own;
+ *   - no CRITERION shares its key (that criterion's evaluator checks it).
+ * No claim is needed: the approval is the person's acceptance of the object,
+ * and the slot named that object as what it waits for.
+ */
+export function selectSlotsMetByRef(
+  outputs: readonly ExpectedOutput[],
+  ref: OutcomeRefTarget,
+  criterionKeys: ReadonlySet<string>,
+  slotKey?: string
+): Array<{ index: number; key: string }> {
+  const keys = deriveSlotKeys(outputs);
+  const out: Array<{ index: number; key: string }> = [];
+  outputs.forEach((slot, index) => {
+    const key = keys[index];
+    if (!slot || !key) return;
+    if (slotKey !== undefined && key !== slotKey) return;
+    if (slot.status === "done" || slot.retiredAt != null) return;
+    if (slot.owner === "human") return;
+    if (criterionKeys.has(key)) return;
+    if (slotRefIs(slot, ref)) out.push({ index, key });
+  });
+  return out;
+}
+
+/**
+ * A session whose outcomes an approval elsewhere may still meet: not ended
+ * as cancelled or failed, and open, or closed within {@link RECENTLY_CLOSED_MS}
+ * (an approval days after the close says nothing about that session). Pure.
+ */
+export function sessionMayBeMetByRef(
+  s: { status: string; closedAt: Date | string | null },
+  now: Date = new Date()
+): boolean {
+  if (s.status === "cancelled" || s.status === "failed") return false;
+  if (s.status !== "closed") return true;
+  const closedAgeMs = s.closedAt
+    ? now.getTime() - new Date(s.closedAt).getTime()
+    : 0;
+  return closedAgeMs <= RECENTLY_CLOSED_MS;
+}
+
+/**
+ * THE APPROVAL MET ANYWHERE — an outcome is met wherever it was filed (pod
+ * default 3). An approved proposal used to meet only a slot of
+ * the session it was FILED under, by claim (`satisfyExpectedOutputs`); four
+ * approved recipe proposals filed under an ambient session left the work
+ * session's outcomes — whose `ref` named those very playbooks — Pending for
+ * 7 days (incident 4a741e36). Called by the `reactions` reactor
+ * (`builtin:outcome-met-where-filed`) for every session of the proposal's
+ * owner that declares an outcome pointing at what it approved.
+ *
+ * Owner-floored (`userId`). Open sessions, or closed within the approval
+ * window ({@link RECENTLY_CLOSED_MS}), as the approval path. Stamps `done`
+ * with the approval's lineage (`satisfiedByProposalId`, `stampSatisfied`) and
+ * owes each slot's transition with the reaction's `cause`. Idempotent: a slot
+ * already done is never re-stamped.
+ */
+export async function satisfyOutputsByRef(params: {
+  sessionId: string;
+  userId: string;
+  ref: OutcomeRefTarget;
+  proposalId: string;
+  slotKey?: string;
+  cause?: TransitionCause | null;
+  now?: Date;
+}): Promise<SatisfyClaimsByEvidenceResult> {
+  const { sessionId, userId, ref, proposalId, slotKey } = params;
+  const now = params.now ?? new Date();
+  return db
+    .transaction(async (tx): Promise<SatisfyClaimsByEvidenceResult> => {
+      const [locked] = await tx
+        .select({
+          expectedOutputs: focusSessions.expectedOutputs,
+          criteria: focusSessions.criteria,
+          status: focusSessions.status,
+          closedAt: focusSessions.closedAt,
+        })
+        .from(focusSessions)
+        .where(
+          and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+        )
+        .for("update");
+      if (!locked || !sessionMayBeMetByRef(locked, now)) {
+        return { satisfied: [] };
+      }
+      const current: ExpectedOutput[] = Array.isArray(locked.expectedOutputs)
+        ? (locked.expectedOutputs as ExpectedOutput[])
+        : [];
+      const picks = selectSlotsMetByRef(
+        current,
+        ref,
+        new Set(readCriteria(locked.criteria).map((c) => c.key)),
+        slotKey
+      );
+      if (picks.length === 0) return { satisfied: [] };
+      let next = current;
+      for (const p of picks) next = stampSatisfied(next, p.index, proposalId);
+      await tx
+        .update(focusSessions)
+        .set({ expectedOutputs: next, updatedAt: now })
+        .where(eq(focusSessions.id, sessionId));
+      // The met slots' derived status moved: owed here, in the same
+      // transaction, with the move that caused it.
+      await oweSlotTransitions(tx, {
+        sessionId,
+        before: current,
+        after: next,
+        actor: { kind: "system" },
+        reason: "What it points at was approved.",
+        proposalId,
+        cause: params.cause ?? null,
+      });
+      return {
+        satisfied: picks.map((p) => ({
+          key: p.key,
+          label: current[p.index]!.label,
+          evidence: { kind: "ref" as const, id: `${ref.kind}:${ref.id}` },
         })),
         outputs: next,
       };

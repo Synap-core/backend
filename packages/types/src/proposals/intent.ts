@@ -620,16 +620,16 @@ export interface AppConnectSummary {
   /** Who asks: an app (`app/connect`) or an AI (`agent/connect`). */
   holderKind: "app" | "agent";
   /**
-   * "add" when the app asks for one MORE thing (`data.mode`, plan 647ebfd4
-   * option C): approving adds these pairs to what it already holds. Absent
+   * "add" when the app (or the AI's key) asks for one MORE thing (`data.mode`,
+   * plan 647ebfd4 option C): approving adds these pairs to what it already holds. Absent
    * for a request whose approval replaces the whole set.
    */
   mode?: "add";
 }
 
 /**
- * The card's title for an app asking for one more thing, "Content Studio
- * asks to read notes in Content OS": each space's line in grant words
+ * The card's title for an app (or an AI) asking for one more thing, "Content
+ * Studio asks to read notes in Content OS": each space's line in grant words
  * (`summarizeGrant`, the vocabulary door) said mid-sentence. null when a line
  * is not in one space (an ask is always per space; anything else keeps the
  * generic title).
@@ -720,10 +720,11 @@ export function summarizeAppConnectRequest(input: {
       return { workspaceId, place, what, where, text: `${what} · ${where}` };
     }
   );
+  // An app's ask or an AI's (`agent/connect` of mode "add") reads the same:
+  // "<holder> asks to <verb> in <space>".
   const title =
-    (input.mode === "add" && holderKind === "app"
-      ? addAskTitle(input.appName, lines)
-      : null) ?? `${input.appName} asks for access`;
+    (input.mode === "add" ? addAskTitle(input.appName, lines) : null) ??
+    `${input.appName} asks for access`;
   const access = describeAccess(
     accessModel(grantsOfRequests(input.requests), holderKind),
     { names }

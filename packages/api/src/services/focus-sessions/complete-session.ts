@@ -66,6 +66,9 @@ import {
   closeOpenRoomQuestions,
   openRoomQuestionConditions,
   setSessionStatus,
+  setRunStatus,
+  oweSlotTransitions,
+  LIVE_RUN_STATUSES,
   workUnitActorOf,
   type WorkUnitActor,
 } from "@synap/database";
@@ -724,16 +727,31 @@ export async function completeFocusSession(
         : terminalStatus === "cancelled"
           ? "cancelled"
           : "completed";
-    await db
-      .update(playbookRuns)
-      .set({
-        status: runStatus,
+    // COMPARE-AND-SET: the run was read LIVE above, but a turn's end, the
+    // reaper or a cancel can settle it between that read and this write. Its
+    // verdict then stands (a run that completed is not re-stamped `cancelled`
+    // by a late close), and nothing is settled again.
+    const { rows: ended } = await setRunStatus(db, {
+      runId: run.id,
+      from: LIVE_RUN_STATUSES,
+      to: runStatus,
+      // The same mover as the session's own close.
+      actor: params.actor ?? workUnitActorOf(params.userId, params.agentUserId),
+      reason: `Its session was ${terminalStatus}.`,
+      set: {
         completedAt: new Date(),
         error: runStatus === "failed" ? SESSION_FAILED_RUN_ERROR : null,
-      })
-      .where(eq(playbookRuns.id, run.id));
-    // The parent automation run settles from its children (never throws).
-    await settleParentAutomationRunFromChild({ playbookRunId: run.id });
+      },
+    });
+    if (ended.length > 0) {
+      // The parent automation run settles from its children (never throws).
+      await settleParentAutomationRunFromChild({ playbookRunId: run.id });
+    } else {
+      logger.info(
+        { sessionId, runId: run.id, wanted: runStatus },
+        "complete-session: the run was settled by another writer first; its verdict stands"
+      );
+    }
   }
 
   // THE owed floor (`isDeliverableOutstanding`): a retired or OPTIONAL slot is
@@ -870,6 +888,18 @@ export async function completeFocusSession(
             : {}),
       },
     });
+    // The slots the close retired moved (→ retired): owed in the close's own
+    // transaction. Nothing when the close retired none.
+    if (retirement && rows.length > 0) {
+      await oweSlotTransitions(tx, {
+        sessionId,
+        before: lockedOutputs,
+        after: retirement.outputs,
+        actor:
+          params.actor ?? workUnitActorOf(params.userId, params.agentUserId),
+        reason: `Its session was ${terminalStatus}.`,
+      });
+    }
     return rows;
   });
 

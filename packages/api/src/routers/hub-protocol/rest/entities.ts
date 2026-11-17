@@ -1573,7 +1573,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     summary: "Type-aware hybrid retrieval (Synap Retrieval Engine)",
     deprecated: true,
     description:
-      "DEPRECATED — prefer POST /knowledge/ask, whose semantic lane calls the exact same retrieve() SRE. Still functional for existing integrations. " +
+      "DEPRECATED — prefer POST /knowledge/search, whose semantic lane calls the exact same retrieve() SRE. Still functional for existing integrations. " +
       "Infers entity type(s) + property hints from the query, fuses unscoped + " +
       "type-scoped recall (RRF), and returns ranked entities plus the inferred " +
       "understanding. Phase 1 of the SRE.",

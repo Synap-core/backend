@@ -111,7 +111,15 @@ vi.mock("../../../lib/event-helpers.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions } from "@synap/database";
+import {
+  events,
+  focusSessions,
+  lifecycleTransitionOutbox,
+} from "@synap/database";
+import {
+  OUTCOME_MET_REACTION_ID,
+  registerReactionStateSource,
+} from "@synap/jobs/utils/reactions.js";
 import { sweepMergedPullRequest } from "../merge-sweeper.js";
 import { resolvePullRequestSessions } from "../pr-session-resolver.js";
 import { runDevLoopObservation } from "../run-observation.js";
@@ -193,9 +201,28 @@ const job = (
 
 beforeAll(async () => {
   await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
+  // The slot doors owe their transition.
+  await h.client!.exec(ddlFor(lifecycleTransitionOutbox as unknown as PgTable));
+  // The reaction log.
+  await h.client!.exec(ddlFor(events as unknown as PgTable));
 }, 120_000);
 afterAll(async () => {
   await h.client?.close();
+});
+
+/**
+ * Pod default 3 ("an outcome is met wherever it was filed") is
+ * a rule the person can pause. The suites below were written for the sweep
+ * WITHOUT it: they run with it paused, so they keep testing the governed path
+ * a session the body does not name takes then. The default-3 suite at the end
+ * turns it on.
+ */
+let metAnywhere = false;
+beforeEach(() => {
+  metAnywhere = false;
+  registerReactionStateSource(
+    async () => new Map([[OUTCOME_MET_REACTION_ID, metAnywhere]])
+  );
 });
 
 describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
@@ -906,6 +933,122 @@ describe("the pod completes the outcome the merged PR names, outside the key's g
           url: prUrl(1107),
           body: body(id),
           base: "feat/parent",
+          intoDefault: false,
+        }),
+        EVENT_ONLY_KEY
+      )
+    );
+    expect(r).toMatchObject({
+      outcomes: [{ sessionId: id, result: "not_default_base" }],
+    });
+    expect((await stored(id))[0]!.status ?? "pending").toBe("pending");
+  });
+});
+
+describe("pod default 3 on: a merge meets the outcome in EVERY session that points at the PR", () => {
+  beforeEach(() => {
+    metAnywhere = true;
+    h.perm.length = 0;
+    h.notices.length = 0;
+    h.evaluations.length = 0;
+    h.verdict = { granted: true };
+  });
+
+  const EVENT_ONLY_KEY = {
+    scopes: [{ permissions: ["event.create"] }],
+    clientId: "app-obs",
+  };
+
+  it("an event.create-only key: the pod meets the outcome of a session the body does not name, checked against its own ref, and logs the rule", async () => {
+    const named = await seed([prSlot(1201)]);
+    const elsewhere = await seed([prSlot(1201)]);
+    const r = await runDevLoopObservation({
+      ...job(
+        "dev.pr_merged",
+        merged({
+          number: 1201,
+          url: prUrl(1201),
+          body: `Does it.\n\nPod session: ${named}\n`,
+        }),
+        EVENT_ONLY_KEY
+      ),
+      eventId: "ev-1201",
+    });
+    expect(r).toMatchObject({
+      status: "swept",
+      outcomes: expect.arrayContaining([
+        {
+          sessionId: named,
+          slotKey: "pr-backend-1201",
+          via: "outcome_ref",
+          result: "completed",
+          by: "pod",
+        },
+        {
+          sessionId: elsewhere,
+          slotKey: "pr-backend-1201",
+          via: "outcome_ref",
+          result: "completed",
+          by: "pod",
+        },
+      ]),
+    });
+    for (const id of [named, elsewhere]) {
+      expect((await stored(id))[0]).toMatchObject({
+        status: "done",
+        satisfiedByEvidence: { kind: "ref", id: prUrl(1201) },
+      });
+    }
+    // The key's grant was never asked to stretch.
+    expect(h.perm).toHaveLength(0);
+    // The rule's log says it met the other session's outcome (the named one
+    // is the merge door's own act, as before).
+    const log = await q<{ subject_id: string; data: Record<string, unknown> }>(
+      `select subject_id, data from events where subject_type = 'reaction'`
+    );
+    expect(log.rows).toEqual([
+      expect.objectContaining({
+        subject_id: OUTCOME_MET_REACTION_ID,
+        data: expect.objectContaining({
+          outcome: "applied",
+          source: "pr:Synap-core/backend#1201",
+          target: `slot:${elsewhere}/pr-backend-1201`,
+        }),
+      }),
+    ]);
+  });
+
+  it("never a slot whose own ref is another PR, the person's slot, or one a criterion checks", async () => {
+    const persons = await seed([prSlot(1202, { owner: "human" })]);
+    const checked = await seed([prSlot(1202)], {
+      criteria: [
+        {
+          key: "pr-backend-1202",
+          statement: "Merged and green",
+          check: { kind: "judge" },
+        },
+      ],
+    });
+    await runDevLoopObservation(
+      job(
+        "dev.pr_merged",
+        merged({ number: 1202, url: prUrl(1202) }),
+        EVENT_ONLY_KEY
+      )
+    );
+    expect((await stored(persons))[0]!.status ?? "pending").toBe("pending");
+    expect((await stored(checked))[0]!.status ?? "pending").toBe("pending");
+  });
+
+  it("a merge into another branch still meets nothing", async () => {
+    const id = await seed([prSlot(1203)]);
+    const r = await runDevLoopObservation(
+      job(
+        "dev.pr_merged",
+        merged({
+          number: 1203,
+          url: prUrl(1203),
+          base: "feat/x",
           intoDefault: false,
         }),
         EVENT_ONLY_KEY

@@ -27,6 +27,8 @@
  *                the session is evaluated).
  */
 
+import { looksLikeNeedRef } from "@synap-core/types/needs";
+import { resolveNeedVerb } from "../../needs/space-needs.js";
 import {
   db,
   focusSessions,
@@ -281,8 +283,28 @@ export async function evaluateSession(
         ...(posted.detail ? { rationale: posted.detail } : {}),
       });
     } else if (c.check.kind === "capability") {
+      // A NEED ref (`need:gate/fetch_record`, 0426): the verb the provider the
+      // session's space bound to it. Not filled (or no single verb): the
+      // criterion is not graded, and the reason is said, never a silent pass.
+      let verbId = c.check.capability;
+      if (verbId && looksLikeNeedRef(verbId)) {
+        const resolved = await resolveNeedVerb({
+          need: verbId,
+          workspaceId: session.workspaceId,
+          userId,
+        });
+        if ("reason" in resolved) {
+          results.push({
+            key: c.key,
+            status: "skipped",
+            reason: resolved.reason,
+          });
+          continue;
+        }
+        verbId = resolved.verbId;
+      }
       const run = await executeCapability({
-        verbId: c.check.capability,
+        verbId,
         parameters: {
           sessionId,
           criterionKey: c.key,
@@ -301,7 +323,7 @@ export async function evaluateSession(
         sessionId,
       });
       const { verdict, rationale } = capabilityVerdict(run);
-      await record(c, verdict, { evaluatorId: c.check.capability, rationale });
+      await record(c, verdict, { evaluatorId: verbId, rationale });
     } else if (c.check.kind === "judge") {
       judged.push(c);
     }
@@ -545,8 +567,9 @@ export async function gradeCriterionAfterAct(params: {
  * criterion of the stage it left passes. Called after every evaluation and every
  * human grade — re-running the check IS the resume, no proposal involved.
  * Guarded on `status = 'paused'` so a session a person paused for another reason
- * (no `checkGate` record) is never resumed by it. Resuming writes the gated
- * stage's `subjectStatus` (the pass the advance door was waiting for).
+ * (no `checkGate` record) is never resumed by it. Resuming writes the judged
+ * stage's `onApproved`, then the gated stage's `subjectStatus` (the pass the
+ * advance door was waiting for).
  */
 export async function resumeCheckGateIfMet(params: {
   sessionId: string;
@@ -592,18 +615,20 @@ export async function resumeCheckGateIfMet(params: {
     },
   });
   if (resumed.length === 0) return false;
-  // The gate PASSED: the gated stage's `subjectStatus` is written now — the
-  // advance door held it while the check failed. Only while the run still
-  // stands on that stage; a skip/failure never un-resumes.
+  // The gate PASSED: the stage it judged (`fromStage`) reached its
+  // `onApproved`, then the gated stage's `subjectStatus` is written now — the
+  // advance door held both while the check failed (decision D2). Only while
+  // the run still stands on that stage; a skip/failure never un-resumes.
   if (
     typeof gate.stageKey === "string" &&
     session.currentStage === gate.stageKey
   ) {
-    const { writeStageSubjectStatus } =
+    const { writeGatePassStatuses } =
       await import("../stage-subject-status.js");
-    await writeStageSubjectStatus({
+    await writeGatePassStatuses({
       session,
-      toStage: gate.stageKey,
+      gatedStage: gate.stageKey,
+      fromStage: gate.fromStage,
       userId: params.userId,
     });
     // The gate passed: the stage now RUNS (`enterStage`, never throws).

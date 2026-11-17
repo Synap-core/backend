@@ -169,7 +169,11 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
  * revise core's key check (`assertMayReviseProposal`: a key revising a
  * proposal it did not file needs the approve right on that proposal's own
  * space, project or object), which `mergeProposalRevision` runs on every
- * revision.
+ * revision; and the decision right (`assertMayDecideProposal`: a key that
+ * drops or restores an item of a proposal needs `proposal.reject`, then the
+ * procedure it calls bounds it to the proposal's own space, project or object
+ * through `assertCanReviewProposal`, pinned by
+ * `proposal-decision-grant.tripwire.test.ts`).
  */
 const GATES = [
   "checkPermissionOrPropose",
@@ -180,6 +184,7 @@ const GATES = [
   "assertChannelWrite",
   "canWriteFacet",
   "assertMayReviseProposal",
+  "assertMayDecideProposal",
 ] as const;
 type Gate = (typeof GATES)[number];
 
@@ -372,6 +377,11 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../services/playbooks/set-run-choice.js"),
     why: "playbook.set_run_choice through checkPermissionOrPropose (an agent's choice is a proposal)",
   },
+  "PUT /workspaces/:workspaceId/needs/:need": {
+    via: "bindSpaceNeedThroughGate",
+    load: () => import("../services/needs/space-need-door.js"),
+    why: "workspace.bind_need through checkPermissionOrPropose (an agent's choice of provider is a proposal), shared with tRPC needs.bind",
+  },
   "POST /projects": {
     via: "createProjectGoverned",
     load: () => import("../services/projects/create-project.js"),
@@ -411,6 +421,11 @@ const GATED_ELSEWHERE: Readonly<
     via: "proposeChannelBind",
     load: () => import("../utils/propose-channel-bind.js"),
     why: "binding a channel is proposed through the gate",
+  },
+  "POST /focus-sessions/:id/continue": {
+    via: "continueStoppedRun",
+    load: () => import("../services/focus-sessions/continue-run.js"),
+    why: "a person continues a stopped run: the key's grant bounds it as a session update (grantWriteDenial); an agent key is refused",
   },
   "POST /focus-sessions": {
     via: "createFocusSession",
@@ -526,15 +541,24 @@ const ASK_ONLY_WRITES: Readonly<
     load: () => import("../services/app-access-ask.js"),
     why: "a pod app asks its person for one more thing: one pending app/connect of mode add, applied only by the person's approval (the executor re-checks the document, the offer and the person's reach)",
   },
+  "POST /agents/access-requests": {
+    via: "fileAgentAccessAsk",
+    load: () => import("../services/agent-access-ask.js"),
+    why: "an agent's key asks its person for one more thing: one pending agent/connect of mode add, applied only by the person's approval (the executor re-checks the key, the agent's limits and the person's reach, then clips to the computer)",
+  },
 };
 
-/** What approving an app's ask does: an ask-only helper names none of them. */
+/** What approving an ask does: an ask-only helper names none of them. */
 const APPROVAL_EFFECTS = [
   "setApprovedRequests",
   "addApprovedRequests",
   "applyApprovedReach",
   "attachGrantsOrRevoke",
   "applyProposalApproval",
+  // An agent's ask (`approveAgentAccessAsk`): the grant write and the clip.
+  "approveAgentAccessAsk",
+  "attachMany",
+  "clipHostedAgentGrants",
 ] as const;
 
 /** `router.procedure` names a handler calls (`caller.entities.createEntity(`). */

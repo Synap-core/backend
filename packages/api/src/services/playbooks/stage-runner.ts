@@ -527,9 +527,11 @@ async function enterStageUnsafe(p: {
         : [null, "self"];
   const runOn = (run.runOn as RunOn | null) ?? null;
   const runAgent = runOn?.agentUserId ?? null;
-  const requires = requiresOf(
-    run.definitionSnapshot as { requires?: unknown } | null,
-    stage
+  // A `need:` entry names the provider the session's space bound (0426).
+  const { resolveRequiresNeeds } = await import("../needs/space-needs.js");
+  const requires = await resolveRequiresNeeds(
+    requiresOf(run.definitionSnapshot as { requires?: unknown } | null, stage),
+    session.workspaceId
   );
 
   let holder: string | null = runAgent;

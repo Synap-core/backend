@@ -22,6 +22,7 @@ import {
   proposedMessageFor,
 } from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
+import { stampPlaybookRunIds } from "../services/automations/playbook-run-ids.js";
 import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
@@ -64,6 +65,7 @@ import { validateTriggerFilters } from "@synap-core/types/automations/filter-ope
 import {
   actionPhrase,
   eventPatternWhenText,
+  readAutomationAudience,
   readMaxAiDispatchesPerDay,
   readMaxRunsPerDay,
   unfilteredAiFanoutError,
@@ -354,6 +356,31 @@ async function injectSkillIdsFromNames(
 }
 
 /**
+ * Resolve a by-name `playbook_run` node to its id at save
+ * (`stampPlaybookRunIds`, the one rule; Process wave W2: one link per
+ * relation), looked up through the validator's own access
+ * (`playbookValidationAccess`: what the author may reference, archived out).
+ */
+async function injectPlaybookIdsFromNames(
+  flow: { nodes: Array<Record<string, unknown>>; edges: unknown[] },
+  workspaceId: string | null | undefined,
+  userId: string
+): Promise<void> {
+  await stampPlaybookRunIds(flow, (names) =>
+    scopedDb(playbookValidationAccess(userId, workspaceId)).findMany<{
+      id: string;
+      name: string;
+    }>(playbooks, {
+      columns: { id: true, name: true },
+      where: and(
+        ne(playbooks.status, "archived"),
+        inArray(playbooks.name, [...names])
+      ),
+    })
+  );
+}
+
+/**
  * Load only the catalog references carried by one submitted flow, then expose
  * them through the pure validator's synchronous resolver contract. This keeps
  * validation at the author door without turning every create/update into an
@@ -632,6 +659,24 @@ function assertValidDailyCap(triggerConfig: unknown): void {
 }
 
 /**
+ * CREATE/UPDATE-DOOR GATE for `triggerConfig.audience` — the SAME reader the
+ * trigger matcher selects with (`readAutomationAudience`), so the door never
+ * stores an audience the runtime would read as something else. `everyone` is
+ * a governed field like any other: an agent's create lands as a draft and its
+ * activation always proposes (`proposeAgentActivation`), and an agent's update
+ * goes through `gateAgentAutomationChange`; nothing here bypasses either.
+ */
+const TRIGGER_CONFIG_DESCRIPTION =
+  "Trigger settings. audience: whose events a POD-WIDE automation answers to — 'me' (default; the person's own events and their agents') or 'everyone' (any member's, in a space the person can see).";
+
+function assertValidAudience(triggerConfig: unknown): void {
+  const result = readAutomationAudience(triggerConfig);
+  if (!result.ok) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: result.error });
+  }
+}
+
+/**
  * CREATE/UPDATE-DOOR GATE for an AI fan-out over an unfiltered `query` — THE
  * rule (`unfilteredAiFanoutError`, @synap-core/types/automations). Only the
  * flow being submitted is checked; a stored automation is never rewritten.
@@ -690,6 +735,7 @@ async function prepareAutomationForMaterialization(
     assertValidTriggerFilters(input.triggerConfig.filters);
   }
   assertValidDailyCap(input.triggerConfig);
+  assertValidAudience(input.triggerConfig);
 
   const resolvers = await loadFlowValidationResolvers(
     database,
@@ -707,6 +753,11 @@ async function prepareAutomationForMaterialization(
   // final materialization, so every persisted flow dispatches by stable id.
   await injectSkillIdsFromNames(
     database,
+    input.flowDefinition,
+    input.workspaceId,
+    createdBy
+  );
+  await injectPlaybookIdsFromNames(
     input.flowDefinition,
     input.workspaceId,
     createdBy
@@ -2442,7 +2493,12 @@ export const automationsRouter = router({
           name: z.string().min(1).max(200),
           description: z.string().optional(),
           triggerType: z.enum(["event", "cron", "webhook", "manual"]),
-          triggerConfig: z.record(z.string(), z.unknown()).default({}),
+          // `audience` (pod-wide only): "me" (default) | "everyone" — see
+          // `assertValidAudience`; validated with the rest of the trigger.
+          triggerConfig: z
+            .record(z.string(), z.unknown())
+            .default({})
+            .describe(TRIGGER_CONFIG_DESCRIPTION),
           flowDefinition: z.object({
             nodes: z.array(z.record(z.string(), z.unknown())),
             edges: z.array(z.record(z.string(), z.unknown())),
@@ -2624,7 +2680,10 @@ export const automationsRouter = router({
         name: z.string().min(1).max(200).optional(),
         description: z.string().optional(),
         triggerType: z.enum(["event", "cron", "webhook", "manual"]).optional(),
-        triggerConfig: z.record(z.string(), z.unknown()).optional(),
+        triggerConfig: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe(TRIGGER_CONFIG_DESCRIPTION),
         flowDefinition: z
           .object({
             nodes: z.array(z.record(z.string(), z.unknown())),
@@ -2718,6 +2777,7 @@ export const automationsRouter = router({
           );
         }
         assertValidDailyCap(input.triggerConfig);
+        assertValidAudience(input.triggerConfig);
         // A malformed source declaration is refused before any proposal.
         declaredWebhookSource(effectiveTriggerType, input.triggerConfig);
       }
@@ -2748,6 +2808,11 @@ export const automationsRouter = router({
         // matching create's pre-persist normalization.
         await injectSkillIdsFromNames(
           database,
+          input.flowDefinition,
+          existing.workspaceId,
+          existing.createdBy
+        );
+        await injectPlaybookIdsFromNames(
           input.flowDefinition,
           existing.workspaceId,
           existing.createdBy

@@ -283,6 +283,9 @@ export const RELATION_EDGE_ROLES = {
   affiliated_with: RELATED,
   knows: RELATED,
   discussed_with: RELATED,
+  // new file --derived_from--> source (PDF tools W1): from the new file, the
+  // source is where it came from; from the source, the copy is what it became.
+  derived_from: { outgoing: "cameFrom", incoming: "became" },
   embedded_in: RELATED,
   visualized_in: RELATED,
 } as const satisfies Readonly<Record<string, EdgeRole>>;

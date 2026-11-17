@@ -30,7 +30,7 @@ export function ProposedDocumentBody({
   if (/^\uFEFF?\s*<(?:!doctype\s+html|html[\s>])/i.test(content)) {
     return (
       <div data-proposed-document="" className="flex min-w-0 flex-col gap-2">
-        <span className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+        <span className="text-[12.5px] font-medium text-foreground/70">
           Content
         </span>
         <HtmlPagePreview html={content} title="Document preview" />
@@ -41,7 +41,7 @@ export function ProposedDocumentBody({
   const shown = open ? full : preview;
   return (
     <div data-proposed-document="" className="flex min-w-0 flex-col gap-2">
-      <span className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+      <span className="text-[12.5px] font-medium text-foreground/70">
         Content
       </span>
       <div

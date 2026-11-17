@@ -70,6 +70,7 @@ import {
   readRunSubjectIds,
   ruleBatchRunSentence,
 } from "@synap-core/types/proposals";
+import { queueReceiptReactions } from "../workers/reactions.js";
 
 const logger = createLogger({ module: "automation-governance" });
 
@@ -483,7 +484,9 @@ async function recordAutomationAutoApproveReceipt(opts: {
       sessionId: opts.sessionId ?? null,
     });
 
+    const receiptId = randomUUID();
     await db.insert(proposals).values({
+      id: receiptId,
       workspaceId: opts.workspaceId,
       targetType: AUTO_APPROVE_RECEIPT_TARGET_TYPE,
       targetId: automationRunId,
@@ -520,6 +523,9 @@ async function recordAutomationAutoApproveReceipt(opts: {
       // this is `{}` today; spread here so the one rule holds at every door.
       ...callingKeyAttribution(),
     });
+    // Born decided: the rules that listen to an approval are queued here
+    // (its insert owes no transition). Best-effort, never throws.
+    await queueReceiptReactions(receiptId);
     receiptedRuns.add(automationRunId);
     if (receiptedRuns.size > RECEIPTED_RUNS_MAX) {
       const oldest = receiptedRuns.values().next();
@@ -955,6 +961,8 @@ export async function proposeRulePlaybookRun(opts: {
   /** Filing the approved run is born into (replayed by the approval executor). */
   projectId?: string;
   trackId?: string;
+  /** The session the approved run is a child of (a session's worker). */
+  parentSessionId?: string;
   sessionId?: string;
   stepRunId?: string;
   nodeId?: string;
@@ -1192,6 +1200,7 @@ async function fileRulePlaybookRunProposal(
     ...(opts.agentType ? { agentType: opts.agentType } : {}),
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
     ...(opts.trackId ? { trackId: opts.trackId } : {}),
+    ...(opts.parentSessionId ? { parentSessionId: opts.parentSessionId } : {}),
     // A batch proposal lists its subjects; `subjectId` stays the first, so a
     // batch of one reads (and runs) exactly like a single proposal.
     ...(opts.batchId && subjectId ? { subjectIds: [subjectId] } : {}),

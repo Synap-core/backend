@@ -69,7 +69,7 @@ import {
   provideAcceptAttribute,
   type AskCardAnswer,
   type AskCardAsker,
-  type AskProvideRef,
+  type AskSettleKind,
 } from "@synap-core/types/ask";
 import { POD_URL, trpc } from "../../../../lib/trpc";
 import {
@@ -77,6 +77,8 @@ import {
   redirectToLoginIfUnauthorized,
 } from "../../../../lib/auth-redirect";
 import { humanizeBytes, readableError } from "../../../../lib/format";
+import { useT } from "../../../../lib/i18n/locale-provider";
+import { REQUEST_CATALOGS } from "../../../_lib/request/copy";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import {
   ExitFallback,
@@ -87,6 +89,7 @@ import {
   usePlacedExit,
 } from "../../../../lib/exit-link";
 import { kindIcon } from "../../../_lib/object/kind-icon";
+import { toneTextClass } from "../../../_lib/tone";
 import { chipColor } from "../../../apps/_lib/app-view";
 import { ErrorNote } from "../../../_lib/copy-button";
 import { ResourceRowSkeleton } from "../../components/resource-row";
@@ -97,12 +100,13 @@ import {
   askView,
   relayCall,
   relayWaitingView,
+  slotRefOf,
+  withSlotLabel,
   formFieldErrors,
   initialFormDraft,
   slotCall,
   type AnswerCall,
   type AskControlView,
-  type AskDraft,
   type AskSlot,
   type FormDraft,
   type FormFieldView,
@@ -116,7 +120,6 @@ import {
   type ConnectionSheet,
   type FileSheet,
   type ProvideReceipt,
-  type SecretSheet,
 } from "./provide-options";
 import {
   CONNECT_IDLE,
@@ -130,10 +133,34 @@ import {
   type ConnectWait,
 } from "./provide-connect";
 import { AskContext } from "./ask-context";
+import {
+  OpenInAppLink,
+  RADIO_CARD,
+  SECTION_LABEL,
+  type ControlsProps,
+  type DoorError,
+  type ProvideControlProps,
+} from "./ask-kit";
+import { SecretFacts, SecretProvide } from "./secret-provide";
+import { SecretHandedOver } from "./secret-handed-over";
+import { RefuseSheet, RefuseTrigger } from "../../../_lib/request/refuse-sheet";
+import {
+  DecisionBarSlot,
+  DecisionFooter,
+  InDecisionBar,
+} from "../../../_lib/request/decision-footer";
+import type { RequestStory } from "@synap-core/types/needs-you";
+import {
+  RequestStoryView,
+  StoryDepth,
+  RequestHead,
+  storyHeadParts,
+  type StoryRead,
+} from "../../../_lib/request/request-story-view";
 import { fileProblem, uploadProvidedFile } from "./provide-file";
 
-/** A door's error, as tRPC hands it over. */
-type DoorError = { message: string; data?: { code?: string | null } | null };
+/** How a card settled: the receipt a host may draw ("Answer sent", "Marked as done"…). */
+export type { AskSettleKind };
 
 export interface AskAnswerProps {
   /** The question as it read when the reader opened it. */
@@ -141,7 +168,7 @@ export interface AskAnswerProps {
   /** The question as the pod holds it now (null = no longer owed). */
   live: AskSlot | null;
   /** Answered, done or handed back: the page closes this and moves on. */
-  onSettled: () => void;
+  onSettled: (kind: AskSettleKind) => void;
   onClose: () => void;
   /**
    * The asker's door to its session. Off on the session's own page, where it
@@ -158,6 +185,22 @@ export interface AskAnswerProps {
    * is asked (a criterion's grade under its own statement, in a session's rail).
    */
   showContext?: boolean;
+  /**
+   * The page already shows the answer as it lands (an embedded card keeps its
+   * own receipt): skip the success toast. Refusals still toast. Default off.
+   */
+  quietReceipt?: boolean;
+  /** Draw "Message the agent". Off where the card sits inside a document. Default on. */
+  showTalk?: boolean;
+  /**
+   * The request's story (Review's detail): the ask is drawn inside it, its
+   * asker in the story's head. Absent (a session's own page): the ask alone.
+   */
+  story?: { story: RequestStory | null; read: StoryRead };
+  /** Who the reader is signed in as: the decision bar's "You decide as". */
+  identity?: string;
+  /** The host's pin for the decision bar (the story's footer). */
+  barClassName?: string;
 }
 
 /** Every read an answer changes: the rows, the badges, Sessions, Home. */
@@ -180,6 +223,11 @@ export function AskAnswer({
   sessionDoor = true,
   showHeading = true,
   showContext = true,
+  quietReceipt = false,
+  showTalk = true,
+  story,
+  identity,
+  barClassName = "",
 }: AskAnswerProps) {
   // What the reader sees stays put until they choose to see the new question:
   // a poll must never swap the options under a half-made answer.
@@ -188,6 +236,11 @@ export function AskAnswer({
   const view = askView(seen);
   const [failure, setFailure] = useState<string | null>(null);
   const [asked, setAsked] = useState(false);
+  /** A secret was handed over with a read: show what became of it. */
+  const [handedOver, setHandedOver] = useState(false);
+  const rt = useT(REQUEST_CATALOGS);
+  /** The Refuse sheet is open in place of the controls. */
+  const [refusing, setRefusing] = useState(false);
 
   const utils = trpc.useUtils();
 
@@ -195,16 +248,16 @@ export function AskAnswer({
     refreshAfterAnswer(utils, seen.sessionId);
   }
 
-  function settled(receipt: ProvideReceipt) {
-    addToast({ color: "success", ...receipt });
+  function settled(receipt: ProvideReceipt, kind: AskSettleKind = "answered") {
+    if (!quietReceipt) addToast({ color: "success", ...receipt });
     refresh();
-    onSettled();
+    onSettled(kind);
   }
 
   /** `kept`: said with the refusal when something already went through. */
   function refused(err: DoorError, kept: string | null = null) {
     if (redirectToLoginIfUnauthorized(err)) return;
-    const refusal = classifyAskRefusal(err.message);
+    const refusal = classifyAskRefusal(withSlotLabel(err.message, seen));
     if (refusal.kind === "failed") {
       setFailure(kept ? `${refusal.message} ${kept}` : refusal.message);
       return;
@@ -224,17 +277,40 @@ export function AskAnswer({
   /** Said with a refused provide answer: what already went through stays. */
   const keptIfRefused = useRef<string | null>(null);
   const answer = trpc.focusSessions.answerOutput.useMutation({
-    onSuccess: (data, call) =>
+    onSuccess: (data, call) => {
+      const value = call.value;
+      if (value?.type === "declined") {
+        // The agent reads the same words: the answer's own summary.
+        settled({ title: ASK_COPY.refusedReceipt(value.reason) }, "refused");
+        return;
+      }
+      const grant = "secretGrant" in data ? data.secretGrant : undefined;
+      if (
+        value?.type === "provide" &&
+        value.ref.kind === "secret" &&
+        grant?.status === "granted"
+      ) {
+        // A secret an agent may now read: the card stays to say what became
+        // of it (read how often, until when) and to take it back.
+        addToast({
+          color: "success",
+          ...provideReceipt("secret", { secretGrant: grant }, Date.now()),
+        });
+        refresh();
+        setHandedOver(true);
+        return;
+      }
       settled(
-        call.value?.type === "provide"
+        value?.type === "provide"
           ? provideReceipt(
-              call.value.ref.kind,
+              value.ref.kind,
               // Only an answered provide carries the grant; a correction never does.
               "secretGrant" in data ? data : {},
               Date.now()
             )
-          : { title: "Answer sent" }
-      ),
+          : { title: rt("ask.sent") }
+      );
+    },
     // A refused file answer leaves the uploaded file where it was saved.
     onError: (err, call) =>
       refused(
@@ -245,11 +321,11 @@ export function AskAnswer({
       ),
   });
   const attest = trpc.focusSessions.attestOutput.useMutation({
-    onSuccess: () => settled({ title: "Marked as done" }),
+    onSuccess: () => settled({ title: rt("ask.markedDone") }, "attested"),
     onError: (err) => refused(err),
   });
   const handBack = trpc.focusSessions.unblockOutput.useMutation({
-    onSuccess: () => settled({ title: "Handed back to the agent" }),
+    onSuccess: () => settled({ title: rt("ask.handedBack") }, "handed-back"),
     onError: (err) => refused(err),
   });
   // A relay waiting on the tap: Confirm makes it the person's answer; "Not
@@ -286,6 +362,26 @@ export function AskAnswer({
     answer.mutate(call);
   }
 
+  // A secret ask's sheet (the same `provideOptions` read its control makes,
+  // cached): what the agent declared, for the story's depth.
+  const isSecret =
+    view.control.mode === "provide" && view.control.kind === "secret";
+  // The decision bar's verb row, once drawn (`DecisionFooter` `verbsSlot`).
+  const [barSlot, setBarSlot] = useState<HTMLDivElement | null>(null);
+  const secretOptions = trpc.focusSessions.provideOptions.useQuery(
+    {
+      sessionId: seen.sessionId,
+      expectedLabel: slotRefOf(seen),
+      askFingerprint: askFingerprint(seen.ask),
+    },
+    { enabled: !!story && isSecret, retry: false, staleTime: 30_000 }
+  );
+  const secretSheetRead = secretOptions.data
+    ? provideSheet(secretOptions.data)
+    : null;
+  const secretSheet =
+    secretSheetRead?.kind === "secret" ? secretSheetRead : null;
+
   const roomExit = openIn({
     kind: "object",
     objectKind: "session",
@@ -300,41 +396,63 @@ export function AskAnswer({
     )
     .find((exit) => exit.isDesktopLink);
 
-  return (
-    <div className="flex flex-col gap-5 pb-4">
-      <div className="flex flex-col gap-2">
-        {showHeading && (
-          <h3 className="line-clamp-2 text-balance font-heading text-[17px] font-medium leading-snug text-foreground">
-            {view.heading}
-          </h3>
+  // "Refuse…", the same trigger on every mode, beside the control's verb.
+  const refuseTrigger = (
+    <RefuseTrigger
+      kind={
+        view.control.mode === "provide" && view.control.kind === "secret"
+          ? "secret"
+          : "ask"
+      }
+      isDisabled={busy || staleness === "changed"}
+      onPress={() => setRefusing(true)}
+    />
+  );
+  /** What refusing does, one sentence (the shared card's). */
+  const consequence =
+    staleness !== "gone" && !handedOver ? view.refuse.consequence : null;
+  const handedOverBlock = handedOver ? (
+    <SecretHandedOver
+      slot={slotCall(seen)}
+      onDone={() => onSettled("answered")}
+    />
+  ) : null;
+  const headBlock = (
+    <div className="flex flex-col gap-2">
+      {showHeading && (
+        <h3 className="line-clamp-2 text-balance font-heading text-[17px] font-medium leading-snug text-foreground">
+          {view.heading}
+        </h3>
+      )}
+      {showContext && view.context && (
+        <Section label={ASK_COPY.whyHeading}>
+          <AskContext context={view.context} />
+        </Section>
+      )}
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-foreground/80">
+        {view.asker && !story && (
+          <>
+            <AskerMark asker={view.asker} sessionDoor={sessionDoor} />
+            <span aria-hidden>·</span>
+          </>
         )}
-        {showContext && view.context && (
-          <Section label={ASK_COPY.whyHeading}>
-            <AskContext context={view.context} />
-          </Section>
-        )}
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-foreground/65">
-          {view.asker && (
-            <>
-              <AskerMark asker={view.asker} sessionDoor={sessionDoor} />
-              <span aria-hidden>·</span>
-            </>
-          )}
-          <span
-            aria-hidden
-            className={`tabular-nums ${TONE_TEXT[view.ageFate.tone] ?? "text-foreground/65"}`}
-          >
-            {view.ageFate.label}
-          </span>
-          <span className="sr-only">{view.ageFate.spoken}</span>
+        <span
+          aria-hidden
+          className={`tabular-nums ${toneTextClass(view.ageFate.tone)}`}
+        >
+          {view.ageFate.label}
+        </span>
+        <span className="sr-only">{view.ageFate.spoken}</span>
+      </p>
+      {view.claimedDone && (
+        <p className="text-[13px] text-foreground/80">
+          {rt("ask.claimedDone")}
         </p>
-        {view.claimedDone && (
-          <p className="text-[12.5px] text-foreground/65">
-            The agent says it did this after all. Check before you answer.
-          </p>
-        )}
-      </div>
-
+      )}
+    </div>
+  );
+  const lookedAtBlock = (
+    <>
       {view.lookedAt.length > 0 && (
         <Section label={ASK_COPY.lookedAt}>
           <div className="flex flex-wrap gap-1.5">
@@ -347,7 +465,10 @@ export function AskAnswer({
           )}
         </Section>
       )}
-
+    </>
+  );
+  const decisionBlock = (
+    <>
       {staleness === "changed" && live && (
         <Alert
           color="warning"
@@ -362,7 +483,7 @@ export function AskAnswer({
                 setFailure(null);
               }}
             >
-              Show the current question
+              {rt("ask.showCurrent")}
             </Button>
           }
         />
@@ -370,7 +491,7 @@ export function AskAnswer({
 
       {staleness === "gone" ? (
         <Alert color="default" variant="flat" title={ASK_COPY.movedOn}>
-          It was answered, handed back, or the session ended.
+          {rt("ask.movedOnBody")}
         </Alert>
       ) : (
         <>
@@ -387,11 +508,35 @@ export function AskAnswer({
           {relayDropped && (
             // The one-line receipt: nothing was recorded, and the ask below
             // is the person's to answer in their own words.
-            <p role="status" className="text-[12.5px] text-foreground/65">
+            <p role="status" className="text-[12.5px] text-foreground/70">
               {ASK_COPY.relayRejectedReceipt}
             </p>
           )}
-          {relayWaiting ? (
+          {refusing ? (
+            // ONE Refuse sheet for every request (`RefuseSheet`): reasons
+            // fitted to the ask, the person's own words, Keep it open.
+            <RefuseSheet
+              kind={
+                view.control.mode === "provide" &&
+                view.control.kind === "secret"
+                  ? "secret"
+                  : "ask"
+              }
+              busy={busy || staleness === "changed"}
+              pending={
+                answer.isPending && answer.variables?.value?.type === "declined"
+              }
+              onRefuse={(reason) => {
+                const built = answerCall(seen, { type: "declined", reason });
+                if (!built.ok) {
+                  setFailure(built.message);
+                  return;
+                }
+                send(built.call);
+              }}
+              onCancel={() => setRefusing(false)}
+            />
+          ) : relayWaiting ? (
             <RelayWaiting
               view={relayWaiting}
               busy={busy || staleness === "changed"}
@@ -415,7 +560,13 @@ export function AskAnswer({
               slot={seen}
               control={view.control}
               busy={busy || staleness === "changed"}
-              pending={answer.isPending}
+              // A refusal in flight is not an answer: Give does not spin.
+              pending={
+                answer.isPending && answer.variables?.value?.type !== "declined"
+              }
+              // In the story, Refuse is the decision bar's (a secret's Give
+              // joins it there, `InDecisionBar`); alone, it sits by the verb.
+              refuse={story && !isSecret ? undefined : refuseTrigger}
               onAnswer={(draft) => {
                 const built = answerCall(seen, draft);
                 if (!built.ok) {
@@ -434,7 +585,7 @@ export function AskAnswer({
                 setFailure(null);
                 handBack.mutate({
                   sessionId: seen.sessionId,
-                  expectedLabel: seen.label,
+                  expectedLabel: slotRefOf(seen),
                 });
               }}
               handingBack={handBack.isPending}
@@ -446,42 +597,148 @@ export function AskAnswer({
                 }
                 keptIfRefused.current = extras?.keptIfRefused ?? null;
                 const expectedGranteeId = extras?.expectedGranteeId;
-                send(
-                  expectedGranteeId
-                    ? { ...built.call, expectedGranteeId }
-                    : built.call
-                );
+                send({
+                  ...built.call,
+                  ...(expectedGranteeId ? { expectedGranteeId } : {}),
+                  ...(extras?.secretUses
+                    ? { secretUses: extras.secretUses }
+                    : {}),
+                });
               }}
               onStale={refused}
               onFailure={setFailure}
               onConnected={(serviceName) =>
                 settled(connectedReceipt(serviceName))
               }
+              onAskWhatFor={() =>
+                askAbout.mutate({
+                  ...slotCall(seen),
+                  note: rt("secret.askWhatForNote"),
+                })
+              }
+              askedWhatFor={asked}
             />
           )}
         </>
       )}
+    </>
+  );
+  const talkBlock = !showTalk ? null : (
+    <div className="flex flex-col gap-2">
+      {asked && (
+        <>
+          <p className="text-[13px] text-foreground/80">
+            {rt("ask.messageSent")}
+          </p>
+          <ExitLink exit={roomExit} label={rt("ask.openConversation")} />
+        </>
+      )}
+      <MessageAgent
+        busy={busy}
+        sending={askAbout.isPending}
+        gone={staleness === "gone"}
+        onSend={(text) => {
+          setFailure(null);
+          askAbout.mutate({ ...slotCall(seen), note: text });
+        }}
+        sent={askAbout.isSuccess ? askAbout.submittedAt : 0}
+      />
+    </div>
+  );
 
-      <div className="flex flex-col gap-2 border-t border-foreground/[0.06] pt-4">
-        {asked && (
-          <>
-            <p className="text-[12.5px] text-foreground/75">
-              Your message is in the session room, where the agent reads it.
-            </p>
-            <ExitLink exit={roomExit} label="Open the conversation" />
-          </>
-        )}
-        <MessageAgent
-          busy={busy}
-          sending={askAbout.isPending}
-          gone={staleness === "gone"}
-          onSend={(text) => {
-            setFailure(null);
-            askAbout.mutate({ ...slotCall(seen), note: text });
-          }}
-          sent={askAbout.isSuccess ? askAbout.submittedAt : 0}
-        />
-      </div>
+  if (story) {
+    // The ask as ONE story (option B), in the frame a proposal uses too: who
+    // asked and for what in the head (with the ask's age and what silence
+    // does), the question's answer in Now, what it unblocks in Next, the
+    // decision bar as the story's footer; what the agent looked at, what it
+    // declared for a secret and talking it through behind Show.
+    // The bar's verbs: Refuse, beside the control's own verb when it has
+    // state to keep (a secret's Give lands here through `InDecisionBar`).
+    // Nothing while the Refuse sheet is open or nothing is left to decide.
+    const barVerbs =
+      !refusing && !isSecret && !handedOverBlock && staleness !== "gone"
+        ? refuseTrigger
+        : null;
+    return (
+      <DecisionBarSlot.Provider value={barSlot}>
+        <div className="pb-4">
+          <RequestStoryView
+            story={story.story}
+            read={story.read}
+            head={
+              // ONE head (founder, 17 Nov 2026): agent, for you, session and
+              // age as chips; what silence does stays a quiet line.
+              <RequestHead
+                parts={storyHeadParts(story.story, {
+                  name: null,
+                  text: rt("head.forYou"),
+                  you: true,
+                })}
+                extra={
+                  <span
+                    data-ask-fate=""
+                    className={`text-[12.5px] ${toneTextClass(view.ageFate.tone)}`}
+                  >
+                    {view.ageFate.fateLabel}
+                  </span>
+                }
+              />
+            }
+            footer={
+              <DecisionFooter
+                identity={identity}
+                verbs={barVerbs}
+                verbsSlot={setBarSlot}
+                consequence={refusing ? null : consequence}
+                className={`sticky ${barClassName}`}
+              />
+            }
+            depth={
+              <StoryDepth>
+                {lookedAtBlock}
+                {secretSheet && (
+                  <SecretFacts sheet={secretSheet} sessionId={seen.sessionId} />
+                )}
+                {talkBlock}
+              </StoryDepth>
+            }
+          >
+            {(showContext || view.claimedDone) && (
+              <div className="flex flex-col gap-2">
+                {showContext && view.context && (
+                  <Section label={ASK_COPY.whyHeading}>
+                    <AskContext context={view.context} />
+                  </Section>
+                )}
+                {view.claimedDone && (
+                  <p className="text-[13px] text-foreground/80">
+                    {rt("ask.claimedDone")}
+                  </p>
+                )}
+              </div>
+            )}
+            {handedOverBlock ?? decisionBlock}
+          </RequestStoryView>
+        </div>
+      </DecisionBarSlot.Provider>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-5 pb-4">
+      {headBlock}
+      {lookedAtBlock}
+      {handedOverBlock ?? decisionBlock}
+      {consequence && !refusing && (
+        <p data-review-refusing="" className="text-[13px] text-foreground/80">
+          {consequence}
+        </p>
+      )}
+      {talkBlock && (
+        <div className="border-t border-foreground/[0.06] pt-4">
+          {talkBlock}
+        </div>
+      )}
     </div>
   );
 }
@@ -507,7 +764,7 @@ function RelayWaiting({
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1">
         <p
-          className={`text-[12.5px] font-medium ${TONE_TEXT[view.mark.tone] ?? "text-foreground/80"}`}
+          className={`text-[12.5px] font-medium ${toneTextClass(view.mark.tone)}`}
         >
           {view.mark.label}
         </p>
@@ -551,13 +808,6 @@ function RelayWaiting({
     </div>
   );
 }
-
-/** Each age + fate tone, as the console's text colour. */
-const TONE_TEXT: Readonly<Record<string, string>> = {
-  warning: "text-warning-600",
-  textMuted: "text-foreground/55",
-  textSecondary: "text-foreground/65",
-};
 
 /**
  * Who asked, as a mark: the agent by name (its session is the door), or what
@@ -667,35 +917,26 @@ function LookedAtChip({ item }: { item: LookedAtItem }) {
 
 // ─── The controls, one per mode ─────────────────────────────────────────────
 
-interface ControlsProps {
-  slot: AskSlot;
-  control: AskControlView;
-  busy: boolean;
-  /** The answer call is in flight. */
-  pending: boolean;
-  /** Returns field errors to show, or null when the answer went out. */
-  onAnswer: (draft: AskDraft) => Record<string, string> | null;
-  onAttest: () => void;
-  attesting: boolean;
-  onHandBack: () => void;
-  handingBack: boolean;
-  /**
-   * Hand over a reference (a vault secret, a connection, a file); a secret
-   * carries the agent the person was told will read it, an upload what to say
-   * if the answer is then refused.
-   */
-  onProvide: (
-    ref: AskProvideRef,
-    extras?: { expectedGranteeId?: string; keptIfRefused?: string }
-  ) => void;
-  /** A door refused: stale (moved on, changed) or a failure, as the pod said. */
-  onStale: (err: DoorError) => void;
-  onFailure: (message: string | null) => void;
-  /** The pod answered the slot itself with a new connection. */
-  onConnected: (serviceName: string) => void;
+/**
+ * The control for the ask's mode, with "Refuse…" in the row under its verb
+ * (a secret draws it beside Give itself).
+ */
+function Controls(props: ControlsProps) {
+  const own = <ControlFor {...props} />;
+  const inline =
+    props.control.mode === "provide" && props.control.kind === "secret";
+  return inline || !props.refuse ? (
+    own
+  ) : (
+    <div className="flex flex-col gap-3">
+      {own}
+      <div className="flex flex-wrap items-center gap-2">{props.refuse}</div>
+    </div>
+  );
 }
 
-function Controls(props: ControlsProps) {
+function ControlFor(props: ControlsProps) {
+  const rt = useT(REQUEST_CATALOGS);
   const { control } = props;
   switch (control.mode) {
     case "confirm":
@@ -707,12 +948,12 @@ function Controls(props: ControlsProps) {
     case "act":
       return (
         <div className="flex flex-col gap-3">
-          <Section label="What to do">
+          <Section label={rt("ask.whatToDo")}>
             {control.url && (
               <a
                 href={control.url}
                 {...externalProps(control.url)}
-                className="inline-flex items-start gap-1.5 break-all rounded-sm font-mono text-[12px] text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                className="inline-flex items-start gap-1.5 break-all rounded-sm font-mono text-[12px] rq-ink underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 {control.url}
                 <ArrowUpRight
@@ -780,6 +1021,7 @@ function ConfirmControl({
   pending,
   onAnswer,
 }: ControlsProps & { answers: AskCardAnswer[] }) {
+  const rt = useT(REQUEST_CATALOGS);
   const [note, setNote] = useState("");
   const [picked, setPicked] = useState<boolean | null>(null);
   const press = (confirmed: boolean) => {
@@ -788,7 +1030,9 @@ function ConfirmControl({
   };
   return (
     <fieldset className="flex flex-col gap-3">
-      <legend className={`mb-2 ${SECTION_LABEL}`}>Your answer</legend>
+      <legend className={`mb-2 ${SECTION_LABEL}`}>
+        {rt("ask.yourAnswer")}
+      </legend>
       {/* Above the pair, as on desktop and phone: a note rides with the
           answer it qualifies, so it is written before the tap sends it. */}
       <NoteField value={note} onChange={setNote} busy={busy} />
@@ -818,7 +1062,7 @@ function ConfirmControl({
                 {a.label}
               </Button>
               {(a.recommended || a.description) && (
-                <p className="flex flex-wrap items-center gap-1.5 px-0.5 text-[12px] leading-snug text-foreground/65">
+                <p className="flex flex-wrap items-center gap-1.5 px-0.5 text-[12px] leading-snug text-foreground/70">
                   {a.recommended && <RecommendedChip />}
                   {a.description && (
                     <span className="text-pretty">{a.description}</span>
@@ -874,6 +1118,7 @@ function MessageAgent({
   sent: number;
   onSend: (text: string) => void;
 }) {
+  const rt = useT(REQUEST_CATALOGS);
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [clearedFor, setClearedFor] = useState(0);
@@ -891,7 +1136,7 @@ function MessageAgent({
           isDisabled={busy || gone}
           onPress={() => setOpen(true)}
         >
-          Message the agent
+          {rt("ask.messageAgent")}
         </Button>
       </div>
     );
@@ -901,7 +1146,7 @@ function MessageAgent({
       <Textarea
         size="sm"
         minRows={2}
-        label="Your message to the agent"
+        label={rt("ask.messageLabel")}
         value={text}
         onValueChange={setText}
         isDisabled={busy}
@@ -917,7 +1162,7 @@ function MessageAgent({
           isDisabled={busy || gone || text.trim().length === 0}
           onPress={() => onSend(text.trim())}
         >
-          Send
+          {rt("ask.messageSend")}
         </Button>
         <Button
           size="sm"
@@ -928,7 +1173,7 @@ function MessageAgent({
             setOpen(false);
           }}
         >
-          Cancel
+          {rt("ask.messageCancel")}
         </Button>
       </div>
     </div>
@@ -986,6 +1231,7 @@ function ChooseControl({
 }: ControlsProps & {
   control: Extract<AskControlView, { mode: "choose" }>;
 }) {
+  const rt = useT(REQUEST_CATALOGS);
   const [key, setKey] = useState<string>(control.initialKey ?? "");
   const [other, setOther] = useState("");
   const [note, setNote] = useState("");
@@ -994,7 +1240,7 @@ function ChooseControl({
   return (
     <div className="flex flex-col gap-3">
       <RadioGroup
-        label="Your answer · choose one"
+        label={rt("ask.chooseOne")}
         value={key}
         onValueChange={setKey}
         isDisabled={busy}
@@ -1019,10 +1265,12 @@ function ChooseControl({
         {control.allowOther && (
           <Radio
             value={OTHER_KEY}
-            description="Answer in your own words"
+            description={rt("ask.otherHint")}
             classNames={RADIO_CARD}
           >
-            <span className="text-[13px] text-foreground">Something else…</span>
+            <span className="text-[13px] text-foreground">
+              {rt("ask.other")}
+            </span>
           </Radio>
         )}
       </RadioGroup>
@@ -1030,7 +1278,7 @@ function ChooseControl({
         <Textarea
           size="sm"
           minRows={1}
-          label="Your own answer"
+          label={rt("ask.ownAnswer")}
           value={other}
           onValueChange={setOther}
           isDisabled={busy}
@@ -1042,7 +1290,7 @@ function ChooseControl({
           <Textarea
             size="sm"
             minRows={1}
-            label="Add details (optional)"
+            label={rt("ask.addDetails")}
             value={note}
             onValueChange={setNote}
             isDisabled={busy}
@@ -1065,23 +1313,13 @@ function ChooseControl({
   );
 }
 
-/** The small caps label over a group of controls. */
-const SECTION_LABEL =
-  "text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/65";
-
-/** A radio drawn as a card: the whole box is the hit area. */
-const RADIO_CARD = {
-  base: "m-0 w-full max-w-full items-start rounded-lg px-3 py-2.5 ring-1 ring-inset ring-foreground/10 data-[selected=true]:bg-primary/[0.06] data-[selected=true]:ring-primary/50",
-  labelWrapper: "ml-2 min-w-0",
-  description: "text-[12px] text-foreground/65",
-};
-
 function FormControl({
   control,
   busy,
   pending,
   onAnswer,
 }: ControlsProps & { control: Extract<AskControlView, { mode: "form" }> }) {
+  const rt = useT(REQUEST_CATALOGS);
   const [draft, setDraft] = useState<FormDraft>(() =>
     initialFormDraft(control.fields)
   );
@@ -1102,7 +1340,9 @@ function FormControl({
         setErrors(onAnswer({ type: "form", draft }) ?? {});
       }}
     >
-      <div className={SECTION_LABEL}>{control.title ?? "Your answer"}</div>
+      <div className={SECTION_LABEL}>
+        {control.title ?? rt("ask.yourAnswer")}
+      </div>
       {control.note && (
         <p className="text-[12.5px] text-foreground/75">{control.note}</p>
       )}
@@ -1224,13 +1464,14 @@ function FieldInput({
 
 /** No typed ask: the answer in words, or "I did this" / "Not mine". */
 function LegacyControl(props: ControlsProps) {
+  const rt = useT(REQUEST_CATALOGS);
   const { busy, pending, onAnswer } = props;
   const [text, setText] = useState("");
   return (
     <div className="flex flex-col gap-3">
       <Textarea
-        label="Your answer"
-        placeholder="Write your answer for the agent"
+        label={rt("ask.yourAnswer")}
+        placeholder={rt("ask.answerPlaceholder")}
         minRows={2}
         value={text}
         onValueChange={setText}
@@ -1247,7 +1488,7 @@ function LegacyControl(props: ControlsProps) {
           Send answer
         </Button>
       </div>
-      <p className="text-[12px] text-foreground/65">
+      <p className="text-[12px] text-foreground/70">
         Or, if there is nothing to say:
       </p>
       <DidThisPair {...props} />
@@ -1257,22 +1498,19 @@ function LegacyControl(props: ControlsProps) {
 
 // ─── Provide: hand something over ───────────────────────────────────────────
 
-type ProvideControlProps = ControlsProps & {
-  control: Extract<AskControlView, { mode: "provide" }>;
-};
-
 /**
  * What the person can hand over, read from the pod (`provideOptions`), and
  * the control for its kind. The read is refused like the answer door: a
  * question that moved on or changed is said as such, never as an error.
  */
 function ProvideControl(props: ProvideControlProps) {
+  const rt = useT(REQUEST_CATALOGS);
   const { slot, onStale, onConnected } = props;
   const [wait, dispatch] = useReducer(connectReducer, CONNECT_IDLE);
   const options = trpc.focusSessions.provideOptions.useQuery(
     {
       sessionId: slot.sessionId,
-      expectedLabel: slot.label,
+      expectedLabel: slotRefOf(slot),
       askFingerprint: askFingerprint(slot.ask),
     },
     { retry: false, staleTime: 30_000 }
@@ -1304,26 +1542,32 @@ function ProvideControl(props: ProvideControlProps) {
     // Once per refused read; the wait and sheet are read as they were then.
   }, [options.error]);
 
+  // A secret draws Refuse beside Give; until its sheet is read, under this.
+  const ownRefuse = props.control.kind === "secret" ? props.refuse : null;
   if (options.isLoading) {
     return (
-      <div aria-busy="true" aria-label="Loading what you can hand over">
-        <ResourceRowSkeleton count={2} />
+      <div className="flex flex-col gap-3">
+        <div aria-busy="true" aria-label={rt("ask.provideLoading")}>
+          <ResourceRowSkeleton count={2} />
+        </div>
+        {ownRefuse && <InDecisionBar>{ownRefuse}</InDecisionBar>}
       </div>
     );
   }
   if (!sheet) {
-    if (refusal?.kind !== "failed") return null;
+    if (refusal?.kind !== "failed")
+      return ownRefuse ? <InDecisionBar>{ownRefuse}</InDecisionBar> : null;
     return (
       <div className="flex flex-col items-start gap-2">
+        {ownRefuse && <InDecisionBar>{ownRefuse}</InDecisionBar>}
         <ErrorNote
           message={
-            readableError(options.error?.message) ??
-            "Couldn't load what you can hand over."
+            readableError(options.error?.message) ?? rt("ask.provideUnreadable")
           }
           detail={options.error?.message}
         />
         <Button size="sm" variant="flat" onPress={() => void options.refetch()}>
-          Try again
+          {rt("story.retry")}
         </Button>
       </div>
     );
@@ -1351,92 +1595,6 @@ function ProvideControl(props: ProvideControlProps) {
   }
 }
 
-/** "Open in app" — where a new secret, or a larger file, is added. */
-function OpenInAppLink({ sessionId }: { sessionId: string }) {
-  return (
-    <ExitLink
-      exit={openIn({
-        kind: "objectInApp",
-        objectKind: "session",
-        id: sessionId,
-      })}
-      label="Open in app"
-    />
-  );
-}
-
-/** One of the person's EXISTING secrets; a new one is added in the app. */
-function SecretProvide({
-  slot,
-  sheet,
-  busy,
-  pending,
-  onProvide,
-}: ProvideControlProps & { sheet: SecretSheet }) {
-  const [ref, setRef] = useState(sheet.initialRef ?? "");
-  const has = sheet.choices.length > 0;
-  return (
-    <div className="flex flex-col gap-3">
-      {has ? (
-        <>
-          <RadioGroup
-            label={ASK_COPY.providePickSecret}
-            value={ref}
-            onValueChange={setRef}
-            isDisabled={busy}
-            classNames={{ label: SECTION_LABEL, wrapper: "gap-2" }}
-          >
-            {sheet.choices.map((c) => (
-              <Radio
-                key={c.ref}
-                value={c.ref}
-                description={c.type}
-                classNames={RADIO_CARD}
-              >
-                <span className="break-all text-[13px] text-foreground">
-                  {c.name}
-                </span>
-              </Radio>
-            ))}
-          </RadioGroup>
-          <p className="text-[12.5px] leading-relaxed text-foreground/75">
-            {sheet.grantNote}
-          </p>
-          <div>
-            <Button
-              color="primary"
-              className="min-h-10"
-              startContent={<Check className="h-4 w-4" />}
-              isLoading={pending}
-              isDisabled={busy || !ref}
-              onPress={() =>
-                onProvide(
-                  { kind: "secret", vaultRef: ref },
-                  sheet.expectedGranteeId
-                    ? { expectedGranteeId: sheet.expectedGranteeId }
-                    : undefined
-                )
-              }
-            >
-              Hand over this secret
-            </Button>
-          </div>
-        </>
-      ) : (
-        <p className="text-[13px] text-foreground/85">
-          You have no secrets in your vault that you could hand over.
-        </p>
-      )}
-      <div className="flex flex-col gap-1 border-t border-foreground/[0.06] pt-3">
-        <p className="text-[12.5px] text-foreground/65">
-          {ASK_COPY.provideAddSecretInApp}
-        </p>
-        <OpenInAppLink sessionId={slot.sessionId} />
-      </div>
-    </div>
-  );
-}
-
 /**
  * An account already connected (several → the person confirms which,
  * nothing pre-picked; a signed-out one can't be picked), or a new one. A new one opens the service's sign-in
@@ -1461,6 +1619,7 @@ function ConnectionProvide({
   /** Re-read the options; the connection ids, or null when the read failed. */
   refetch: () => Promise<string[] | null>;
 }) {
+  const rt = useT(REQUEST_CATALOGS);
   const [id, setId] = useState(sheet.initialId ?? "");
   const utils = trpc.useUtils();
   const start = trpc.connectors.session.useMutation();
@@ -1504,7 +1663,7 @@ function ConnectionProvide({
       connectSessionCall({
         providerId: sheet.connectProviderId,
         sessionId: slot.sessionId,
-        expectedLabel: slot.label,
+        expectedLabel: slotRefOf(slot),
         askFingerprint: askFingerprint(slot.ask),
       }),
       {
@@ -1555,7 +1714,7 @@ function ConnectionProvide({
             href={wait.link}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 self-start rounded-sm text-[13px] text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="inline-flex items-center gap-1 self-start rounded-sm text-[13px] rq-ink underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             Open the {service} sign-in
             <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
@@ -1619,7 +1778,7 @@ function ConnectionProvide({
                 onProvide({ kind: "connection", connectionId: id })
               }
             >
-              Use this account
+              {rt("ask.useAccount")}
             </Button>
           </div>
         </>
@@ -1660,6 +1819,7 @@ function FileProvide({
   pending,
   onProvide,
 }: ProvideControlProps & { sheet: FileSheet }) {
+  const rt = useT(REQUEST_CATALOGS);
   const input = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -1669,11 +1829,7 @@ function FileProvide({
   if (!landing.ok) {
     return (
       <div className="flex flex-col gap-2">
-        <Alert
-          color="warning"
-          variant="flat"
-          title="There is nowhere to save the file"
-        >
+        <Alert color="warning" variant="flat" title={rt("ask.fileNowhere")}>
           {landing.message}
         </Alert>
         <OpenInAppLink sessionId={slot.sessionId} />
@@ -1727,7 +1883,7 @@ function FileProvide({
           <FileUp className="h-4 w-4 shrink-0 text-foreground/65" aria-hidden />
           <span className="min-w-0 flex-1 break-all text-[13px] text-foreground">
             {file.name}
-            <span className="text-foreground/65">
+            <span className="text-foreground/70">
               {" "}
               · {humanizeBytes(file.size)}
             </span>
@@ -1750,7 +1906,7 @@ function FileProvide({
             isDisabled={busy}
             onPress={() => input.current?.click()}
           >
-            Choose a file
+            {rt("ask.chooseFile")}
           </Button>
         </div>
       )}
@@ -1769,7 +1925,7 @@ function FileProvide({
             isDisabled={busy || uploading || problem !== null}
             onPress={() => void send()}
           >
-            Upload and send
+            {rt("ask.uploadSend")}
           </Button>
         </div>
       )}

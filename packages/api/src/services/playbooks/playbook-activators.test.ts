@@ -215,6 +215,7 @@ import {
   ACTIVATOR_COMPILE_VERSION,
   activatorRuleDecl,
   applyPlaybookActivators,
+  parseWorkerEnablementKey,
   workerEnablementKey,
   workerSeedTemplate,
 } from "./playbook-activators.js";
@@ -1031,6 +1032,88 @@ describe("stage workers (work model L4)", () => {
       reason: "disabled by a person — left off",
     });
     expect((rule.metadata.rule as Row).draft).toBe(true);
+  });
+});
+
+describe("a SESSION starts a worker: its enablement key and compiled node", () => {
+  it("the key round-trips every form, the session one included", () => {
+    const forms = [
+      // project (unchanged)
+      { activatorKey: "created", projectId: "p-1" },
+      {
+        activatorKey: "enters_status:in review",
+        projectId: "p-1",
+        trackId: "t-1",
+      },
+      // session: filed in a project / a goal, or unfiled (works over the space)
+      { activatorKey: "created", projectId: "p-1", sessionId: "s-1" },
+      {
+        activatorKey: "schedule:0 9 * * 1",
+        projectId: "p-1",
+        trackId: "t-1",
+        sessionId: "s-1",
+      },
+      { activatorKey: "count:ready", sessionId: "s-1" },
+    ];
+    for (const f of forms) {
+      expect(parseWorkerEnablementKey(workerEnablementKey(f))).toEqual({
+        activatorKey: f.activatorKey,
+        projectId: f.projectId ?? null,
+        trackId: f.trackId ?? null,
+        sessionId: f.sessionId ?? null,
+      });
+    }
+    // A project key's text is unchanged (installed seeds keep matching).
+    expect(
+      workerEnablementKey({ activatorKey: "created", projectId: "p-1" })
+    ).toBe("created@project:p-1");
+    // Negative control: a session key is not a project key without one.
+    expect(
+      workerEnablementKey({ activatorKey: "created", sessionId: "s-1" })
+    ).toBe("created@session:s-1");
+    expect(parseWorkerEnablementKey("created")).toBeNull();
+    expect(parseWorkerEnablementKey("@session:s-1")).toBeNull();
+    expect(() => workerEnablementKey({ activatorKey: "created" })).toThrow();
+  });
+
+  it("the compiled decl of a session enablement carries parentSessionId (and its filing); a project one does not", () => {
+    const decl = (scope: Parameters<typeof activatorRuleDecl>[0]["scope"]) =>
+      activatorRuleDecl({
+        activator: TWO[1] as never,
+        playbookId: PB,
+        playbookName: "Repurpose",
+        profileSlug: "post",
+        statusProperty: "post-status",
+        subject: { profileKind: "kind", lifecycleProperty: null },
+        scope,
+      }) as {
+        intent: string;
+        sentence: { actions: Array<{ config: Record<string, unknown> }> };
+      };
+    const filed = decl({
+      projectId: "proj-1",
+      trackId: "trk-1",
+      parentSessionId: "sess-1",
+    });
+    expect(filed.sentence.actions[0]!.config).toMatchObject({
+      __parentSessionId: "sess-1",
+      __projectId: "proj-1",
+      __trackId: "trk-1",
+    });
+    expect(filed.intent).toBe(
+      'When a post enters "published" for this session, run "Repurpose" on it.'
+    );
+    const loose = decl({ projectId: null, parentSessionId: "sess-1" });
+    expect(loose.sentence.actions[0]!.config.__parentSessionId).toBe("sess-1");
+    expect(loose.sentence.actions[0]!.config).not.toHaveProperty("__projectId");
+    // A project enablement compiles exactly as before: no parent.
+    const project = decl({ projectId: "proj-1" });
+    expect(project.sentence.actions[0]!.config).not.toHaveProperty(
+      "__parentSessionId"
+    );
+    expect(project.intent).toBe(
+      'When a post enters "published" in this project, run "Repurpose" on it.'
+    );
   });
 });
 

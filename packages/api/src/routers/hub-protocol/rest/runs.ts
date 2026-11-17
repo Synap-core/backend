@@ -23,6 +23,7 @@ import {
   focusSessions,
   getRequestGrant,
   playbookRuns,
+  workUnitActorOf,
 } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { applyRunCapture } from "../../../services/runs/apply-run-capture.js";
@@ -493,6 +494,10 @@ export function registerRunsRoutes(app: HubHono): void {
         error: body.error,
         producedEntityIds: body.producedEntityIds,
         usedCapabilities: body.usedCapabilities,
+        actor: workUnitActorOf(
+          acting.userId,
+          agentUserId !== acting.userId ? agentUserId : null
+        ),
       });
       if (!updated) {
         // The run reached a verdict in between (cancelled / finished): no

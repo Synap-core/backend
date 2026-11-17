@@ -44,6 +44,17 @@ const h = vi.hoisted(() => ({
   receiptId: null as string | null,
   /** What was stamped on a receipt (`stampAutoApprovedCreate`). */
   stamped: [] as Array<{ receiptId?: string; record: unknown }>,
+  /** The slot port the ask materializer files through (a fake: the REAL door has its own suites). */
+  askSlots: [] as Array<Record<string, unknown>>,
+  askSession: "active" as string | null,
+  askMode: "updated" as "updated" | "proposed",
+  /** Governance denies the write (preview and gate alike). */
+  deny: false,
+  /** The real gate denies although the dry run did not (state moved in between). */
+  denyGateOnly: false,
+  /** The agent is at its pending-proposal cap. */
+  atCap: false,
+  previews: 0,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -105,6 +116,15 @@ vi.mock("@synap/storage", () => ({
 vi.mock("@synap/events", () => ({ emitSideEffects: async () => undefined }));
 
 vi.mock("../../utils/permission-check.js", () => ({
+  previewPermissionDecision: async (opts: { agentUserId?: string }) => {
+    h.previews += 1;
+    if (h.deny) return { decision: "deny", reason: "denied by rule" };
+    return opts.agentUserId && !h.agentAutoApply
+      ? { decision: "propose" }
+      : { decision: "execute" };
+  },
+  refuseAtAgentPendingCap: async () =>
+    h.atCap ? { denied: true, reason: "proposal cap reached" } : null,
   checkPermissionOrPropose: async (opts: {
     agentUserId?: string;
     action: string;
@@ -116,6 +136,8 @@ vi.mock("../../utils/permission-check.js", () => ({
       forcePropose: opts.forcePropose,
       data: opts.data,
     });
+    if (h.deny || h.denyGateOnly)
+      return { denied: true, reason: "denied by rule" };
     if (!opts.agentUserId || (h.agentAutoApply && !opts.forcePropose))
       return h.receiptId && opts.agentUserId
         ? { granted: true, autoApprovedProposalId: h.receiptId }
@@ -141,6 +163,27 @@ vi.mock("../proposals/stamp-materialized.js", async (importOriginal) => ({
     record: unknown;
   }) => {
     h.stamped.push({ receiptId: a.receiptId, record: a.record });
+  },
+}));
+
+// The ask materializer runs REAL (parse, validate, rewrite, refusals); only the
+// session side is a fake, so the test sees what the door filed and where. The
+// real slot door has its own suite (`materialize-asks.pglite.test.ts`).
+vi.mock("./ask-slots.js", () => ({
+  readAskSession: async () =>
+    h.askSession === null
+      ? null
+      : { status: h.askSession, expectedOutputs: h.askSlots },
+  buildAskSlot: async (spec: Record<string, unknown>) => ({
+    kind: "ask",
+    owner: "human",
+    ...spec,
+  }),
+  fileAskSlots: async (a: { slots: Array<Record<string, unknown>> }) => {
+    if (h.askMode === "proposed")
+      return { status: "proposed", proposalId: "slot-prop" };
+    h.askSlots.push(...a.slots);
+    return { status: "updated" };
   },
 }));
 
@@ -301,6 +344,13 @@ beforeEach(() => {
   h.readable = new Set();
   h.receiptId = null;
   h.stamped = [];
+  h.askSlots = [];
+  h.askSession = "active";
+  h.askMode = "updated";
+  h.deny = false;
+  h.denyGateOnly = false;
+  h.atCap = false;
+  h.previews = 0;
 });
 
 describe("applyDocumentPatch — a person's patch applies", () => {
@@ -1423,5 +1473,199 @@ describe("document edit Undo (decision 6c5e9642): put back only what still holds
     };
     await undoDocumentEdit({ edit: documentEdit, userId: USER });
     expect((await row(id)).content).toBe(SECTIONED);
+  });
+});
+
+describe("applyDocumentPatch — an agent's question DEFINITION is materialized", () => {
+  const SESSION = "6f1c2b0e-0a52-4c4e-9d33-2d6c0f6d9a11";
+  const OTHER_SESSION = "0a0a0a0a-0a52-4c4e-9d33-2d6c0f6d9a11";
+  const ASK = JSON.stringify({
+    key: "which-database",
+    label: "Which database?",
+    ask: {
+      mode: "choose",
+      options: [{ label: "PostgreSQL" }, { label: "SQLite" }],
+    },
+  });
+  const DEFINITION = [
+    ":::synap-ask",
+    "```json",
+    ASK,
+    "```",
+    "",
+    "Which database?",
+    ":::",
+  ].join("\n");
+  const op = { op: "append", body: DEFINITION } as const;
+  const asAgent = (documentId: string, extra: Record<string, unknown> = {}) =>
+    applyDocumentPatch({
+      userId: USER,
+      agentUserId: AGENT,
+      ambientSessionId: SESSION,
+      provenanceSessionId: SESSION,
+      documentId,
+      ops: [op],
+      ...extra,
+    });
+
+  it("an applied write stores the REFERENCE form and files the slot on the author's session", async () => {
+    const id = await newDocument();
+    h.agentAutoApply = true;
+    const res = await asAgent(id);
+    expect(res.status).toBe("applied");
+    const { content } = await row(id);
+    expect(content).toContain(`sessionId="${SESSION}"`);
+    expect(content).toContain(`slot="which-database"`);
+    expect(content).not.toContain("```json");
+    expect(h.askSlots).toHaveLength(1);
+    expect(h.askSlots[0]).toMatchObject({
+      key: "which-database",
+      owner: "human",
+    });
+  });
+
+  it("a proposal carries the REWRITTEN ops and exactly one slot; the approval adds none", async () => {
+    const id = await newDocument();
+    const res = await asAgent(id);
+    expect(res.status).toBe("proposed");
+    expect(h.askSlots).toHaveLength(1);
+    const data = h.gate[h.gate.length - 1]!.data as {
+      ops: Array<{ body: string }>;
+    };
+    expect(data.ops[0]!.body).toContain(`slot="which-database"`);
+    expect(data.ops[0]!.body).not.toContain("```json");
+    const applied = await applyApprovedDocumentPatch(
+      { targetId: id, agentUserId: AGENT, data } as never,
+      USER
+    );
+    expect(applied).toBeTruthy();
+    expect(h.askSlots).toHaveLength(1);
+    const { content } = await row(id);
+    expect(content).toContain(`slot="which-database"`);
+    expect(content).not.toContain("```json");
+  });
+
+  it("DENIED by governance: no slot is filed and nothing is stored", async () => {
+    const id = await newDocument();
+    h.deny = true;
+    await expect(asAgent(id)).rejects.toThrow(/denied by rule/);
+    expect(h.askSlots).toEqual([]);
+    expect((await row(id)).content).toBe(BODY);
+    expect(h.previews).toBe(1);
+  });
+
+  it("an agent AT its proposal cap: refused before filing (the dry run skips the cap), no slot", async () => {
+    const id = await newDocument();
+    h.atCap = true;
+    await expect(asAgent(id)).rejects.toThrow(/proposal cap reached/);
+    expect(h.askSlots).toEqual([]);
+    expect(h.gate).toEqual([]);
+  });
+
+  it("an auto-applied write is not subject to the cap check", async () => {
+    const id = await newDocument();
+    h.agentAutoApply = true;
+    h.atCap = true;
+    expect((await asAgent(id)).status).toBe("applied");
+  });
+
+  it("the real gate denying after a clean dry run leaves the question owed; the retry reuses it", async () => {
+    const id = await newDocument();
+    h.denyGateOnly = true;
+    await expect(asAgent(id)).rejects.toThrow(/denied by rule/);
+    expect(h.askSlots).toHaveLength(1);
+    expect((await row(id)).content).toBe(BODY);
+    h.denyGateOnly = false;
+    h.agentAutoApply = true;
+    expect((await asAgent(id)).status).toBe("applied");
+    expect(h.askSlots).toHaveLength(1);
+  });
+
+  it("a stale base (409) files no slot", async () => {
+    const id = await newDocument();
+    await expect(asAgent(id, { baseRevision: 0 })).rejects.toThrow();
+    expect(h.askSlots).toEqual([]);
+    expect(h.previews).toBe(0);
+  });
+
+  it("a rejected proposal leaves the question owed; the same write sent again reuses it", async () => {
+    const id = await newDocument();
+    await asAgent(id);
+    await asAgent(id);
+    expect(h.askSlots).toHaveLength(1);
+  });
+
+  it("no verified session: refused with the fix, nothing written, no slot", async () => {
+    const id = await newDocument();
+    h.agentAutoApply = true;
+    await expect(
+      applyDocumentPatch({
+        userId: USER,
+        agentUserId: AGENT,
+        // A REST body may name a session, but it is provenance, not verified.
+        provenanceSessionId: SESSION,
+        documentId: id,
+        ops: [op],
+      })
+    ).rejects.toThrow(/synap_start_session/);
+    expect((await row(id)).content).toBe(BODY);
+    expect(h.askSlots).toEqual([]);
+  });
+
+  it("an explicit session that differs from the verified one is refused; the matching one passes", async () => {
+    const id = await newDocument();
+    h.agentAutoApply = true;
+    await expect(
+      asAgent(id, { provenanceSessionId: OTHER_SESSION })
+    ).rejects.toThrow(/names session 0a0a0a0a/);
+    expect(h.askSlots).toEqual([]);
+    expect((await asAgent(id)).status).toBe("applied");
+  });
+
+  it("the session door pointed at ANOTHER session than the ambient one is refused", async () => {
+    const id = await newDocument();
+    h.agentAutoApply = true;
+    await expect(
+      applyDocumentPatch({
+        userId: USER,
+        agentUserId: AGENT,
+        documentId: id,
+        session: {
+          sessionId: OTHER_SESSION,
+          workspaceId: null,
+          sessionState: "active",
+          ambientSessionId: SESSION,
+        },
+        ops: [{ op: "upsert_section", id: "q", title: "Q", body: DEFINITION }],
+      })
+    ).rejects.toThrow(/names session 0a0a0a0a/);
+    expect(h.askSlots).toEqual([]);
+  });
+
+  it("a person's write holding a definition is stored as written (the reader flags it)", async () => {
+    const id = await newDocument();
+    const res = await applyDocumentPatch({
+      userId: USER,
+      documentId: id,
+      baseRevision: 1,
+      ops: [op],
+    });
+    expect(res.status).toBe("applied");
+    expect((await row(id)).content).toContain("```json");
+    expect(h.askSlots).toEqual([]);
+    expect(h.previews).toBe(0);
+  });
+
+  it("the pod's own system write is never materialized", async () => {
+    const id = await newDocument();
+    await applyDocumentPatch({
+      userId: USER,
+      systemAuthor: "pod",
+      ambientSessionId: SESSION,
+      documentId: id,
+      ops: [op],
+    } as never);
+    expect(h.askSlots).toEqual([]);
+    expect(h.previews).toBe(0);
   });
 });

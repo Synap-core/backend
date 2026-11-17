@@ -124,6 +124,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
   playbooks,
+  playbookAutomations,
   playbookVersions,
   projects,
   proposals,
@@ -135,6 +136,7 @@ import {
   podMembers,
   projectMembers,
   trackParticipants,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { buildHandlers } from "../../../routers/mcp/handlers/build.js";
@@ -174,6 +176,7 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     focusSessions,
     proposals,
     users,
@@ -183,6 +186,9 @@ beforeAll(async () => {
     playbooks,
     // Every kept version of a playbook (0416): the create door writes it.
     playbookVersions,
+    // The ONE playbook → automation link (0425): the create door reads a
+    // playbook's driving automation from it.
+    playbookAutomations,
     projects,
     sessionEvaluations,
     podMembers,

@@ -97,6 +97,7 @@ import {
   focusSessions,
   links,
   users,
+  lifecycleTransitionOutbox,
 } from "@synap/database/schema";
 import { installAgentTemplate } from "./install.js";
 import {
@@ -212,6 +213,7 @@ const DEF = (harness: string, worker = false) => ({
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     agentConfigs,
     agentTemplates,
     apiKeys,

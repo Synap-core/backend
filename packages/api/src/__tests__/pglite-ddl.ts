@@ -65,9 +65,27 @@ export function pgliteTableDdl(table: PgTable): string {
   return `create table "${cfg.name}" (${cols.join(", ")});`;
 }
 
-/** The DDL for several tables, in order. */
+/**
+ * The tables whose status door OWES a transition in the same statement or
+ * transaction: a proposal's (`transitionProposal`), a run's (`setRunStatus`), a
+ * session's and its slots' (`setSessionStatus`, `oweSlotTransitions`). A
+ * fixture that stands one of them up gets the outbox with it, so the next door
+ * that owes does not break it again.
+ */
+const OWING_TABLES: readonly PgTable[] = [
+  schema.proposals,
+  schema.playbookRuns,
+  schema.focusSessions,
+];
+
+/** The DDL for several tables, in order (plus the outbox an owing table needs). */
 export function pgliteSchemaDdl(tables: readonly PgTable[]): string {
-  return tables.map(pgliteTableDdl).join("\n");
+  const owes =
+    tables.some((t) => OWING_TABLES.includes(t)) &&
+    !tables.includes(schema.lifecycleTransitionOutbox);
+  return [...tables, ...(owes ? [schema.lifecycleTransitionOutbox] : [])]
+    .map(pgliteTableDdl)
+    .join("\n");
 }
 
 /**

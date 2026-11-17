@@ -60,6 +60,9 @@ vi.mock("@synap/database", async (importOriginal) => {
     schema: {
       focusSessions: actual.focusSessions as never,
       playbooks: actual.playbooks as never,
+      // The cron reconcile re-reads its backing row by id on a repeat
+      // schedule (its `schedule` link in playbook_automations, 0425).
+      automations: actual.automations as never,
       entities: actual.entities as never,
       channels: actual.channels as never,
       users: actual.users as never,
@@ -145,7 +148,6 @@ async function compiledRunNode(schedule: { handToAgentId?: string }) {
       workspaceId: WS,
       name: "Weekly account review",
       status: "active",
-      flowAutomationId: null,
       subjectProfile: { profileSlug: "company", filter: "status = active" },
       schedule: { cron: "0 9 * * MON", enabled: true, ...schedule },
     },

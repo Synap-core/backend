@@ -9,6 +9,7 @@ import {
   isNull,
   entities,
   events,
+  focusSessions,
   countWorkerPendingApprovals,
   WORKER_HELD_OUTPUT_KEY,
   type PlaybookRunWorkerSpec,
@@ -35,6 +36,7 @@ import {
   readPlaybookRunMode,
   type PlaybookRunMode,
 } from "@synap-core/types/automations";
+import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import { resolveInputMapping, resolveTemplate } from "../template-resolve.js";
 import { findInFlightRunSession } from "../../utils/run-in-flight.js";
 import { logger } from "../automation-executor-logger.js";
@@ -142,6 +144,15 @@ export async function executePlaybookRun(
      */
     handToAgentId?: string;
     /**
+     * PARENT SESSION — the session this node's runs are children of (a
+     * SESSION-scoped worker). Forwarded to the spine, which writes the
+     * `spawned_from` edge (owner floor on the parent); a parent that is no
+     * longer open makes this step start and file nothing (`session_closed`,
+     * checked below, before every mode). Declared on
+     * `PlaybookRunNodeDef.data`. Absent ⇒ unchanged.
+     */
+    parentSessionId?: string;
+    /**
      * WHAT this node materializes at its slot.
      *
      * - absent / `"run"` — an unattended RUN: session + channel + `playbook_runs`
@@ -198,6 +209,37 @@ export async function executePlaybookRun(
     throw new Error(
       `playbook_run: handToAgentId hands a RUN to an agent, but this node's mode is "${mode}" — refusing to drop the hand-off`
     );
+  }
+
+  // The scheduler door has no parent input: an appointment cannot be a
+  // session's child. Fail by name rather than drop the lineage the node asked
+  // for (no producer writes this pair today: a session worker runs or proposes).
+  if (data.parentSessionId?.trim() && mode === "appointment") {
+    throw new Error(
+      "playbook_run: parentSessionId files a run as a session's child, but this node's mode is \"appointment\" — refusing to drop the parent"
+    );
+  }
+
+  // A SESSION's worker stops with its session: a parent that is no longer
+  // open (closed, cancelled, failed, or gone) gets no more children — no run,
+  // no appointment, no proposal. Nothing on the session is moved (a session
+  // end moves nothing, decision 5e377b06); the rule simply files nothing.
+  // Before every mode, so propose and run agree.
+  const parentSessionId = data.parentSessionId?.trim() || undefined;
+  if (parentSessionId) {
+    const parent = isUuid(parentSessionId)
+      ? await db.query.focusSessions.findFirst({
+          columns: { status: true },
+          where: eq(focusSessions.id, parentSessionId),
+        })
+      : undefined;
+    if (!parent || isTerminalSessionStatus(parent.status)) {
+      return {
+        status: "skipped",
+        reason: AUTOMATION_SKIP_REASONS.sessionClosed,
+        parentSessionId,
+      };
+    }
   }
 
   // The confused-deputy guard protects an UNGOVERNED launch: an agent-produced
@@ -383,6 +425,9 @@ export async function executePlaybookRun(
       ...(data.agentType ? { agentType: data.agentType } : {}),
       ...(data.projectId ? { projectId: data.projectId } : {}),
       ...(data.trackId ? { trackId: data.trackId } : {}),
+      // A session's worker: the approved run is a child of that session
+      // (the `playbook/run` replay reads `parentSessionId`).
+      ...(parentSessionId ? { parentSessionId } : {}),
       sessionId: automationContext.focusSessionId,
       stepRunId: attribution?.stepRunId,
       nodeId: attribution?.nodeId,
@@ -557,6 +602,10 @@ export async function executePlaybookRun(
     // exists, puts it on the roster and skips the playbook's executor.
     // Omitted when absent so an ordinary node is byte-identical to before.
     ...(handToAgentId ? { handToAgentId } : {}),
+    // A session's worker: the run is spawned FROM that session (the spine's
+    // `recordSessionSpawn`). Omitted when absent so an ordinary node is
+    // byte-identical to before.
+    ...(parentSessionId ? { parentSessionId } : {}),
     // A worker node: the spine gates the fire and sizes the run. Its
     // automation is what the backlog / in-flight / ceiling counts key on.
     ...(data.worker

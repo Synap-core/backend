@@ -82,7 +82,7 @@ vi.mock("../accept-on-engagement.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions } from "@synap/database";
+import { focusSessions, lifecycleTransitionOutbox } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { askFingerprint, askRowRegion } from "@synap-core/types/ask";
 import { answerSessionSlot, attestSessionSlot } from "../session-answer.js";
@@ -140,6 +140,10 @@ const stored = async (id: string): Promise<ExpectedOutput[]> =>
 describe("a decision slot is never closed by a bare 'I did this' (#12)", () => {
   beforeAll(async () => {
     await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
+    // The slot doors owe their transition.
+    await h.client!.exec(
+      ddlFor(lifecycleTransitionOutbox as unknown as PgTable)
+    );
   }, 120_000);
   afterAll(async () => h.client?.close());
   beforeEach(() => {

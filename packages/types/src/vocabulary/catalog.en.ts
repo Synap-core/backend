@@ -8,7 +8,8 @@
  *   `NEEDS_YOU_ITEM_NOUNS`), so English has ONE home and each row's rationale
  *   stays beside it. Keys are today's tokens: `kind.<slug>.one|other`,
  *   `action.<token>.imperative|past|progressive|present`, `status.<token>`,
- *   `needsYou.count.<kind>`, `runner.<state>`, `waitKind.<kind>`. A row added to a table is a key of this catalog,
+ *   `needsYou.count.<kind>`, `runner.<state>`, `waitKind.<kind>`,
+ *   `stepRunner.<kind>`, `need.<slug>`, `intent.<slug>`. A row added to a table is a key of this catalog,
  *   and `Catalog<VocabularyEn>` then refuses every translation without it;
  * - the SENTENCES the door used to splice by hand (titles, button labels,
  *   "Private …", "Handed to …"), written here as messages. A sentence that
@@ -27,6 +28,9 @@ import type {
   RunnerStateLabelRows,
   StatusLabelRows,
   WaitKindLabelRows,
+  StepRunnerKindLabelRows,
+  NeedLabelRows,
+  IntentLabelRows,
 } from "./index.js";
 import type { ObjectKindRows } from "./object-kinds.js";
 
@@ -54,6 +58,9 @@ type NeedsYouCountKey = `needsYou.count.${keyof NeedsYouItemNounRows & string}`;
 type RunnerStateKey = `runner.${keyof RunnerStateLabelRows & string}`;
 
 type WaitKindKey = `waitKind.${keyof WaitKindLabelRows & string}`;
+type StepRunnerKey = `stepRunner.${keyof StepRunnerKindLabelRows & string}`;
+type NeedKey = `need.${keyof NeedLabelRows & string}`;
+type IntentKey = `intent.${keyof IntentLabelRows & string}`;
 
 /**
  * The door's sentences. Each English text reproduces what the door returned
@@ -129,10 +136,10 @@ export const vocabularySentencesEn = {
   // `resolveNextRungOfferLabel`: a trust offer that reaches every space.
   "vocabulary.offer.everySpace": "{offer} in every space",
   // `resolveTemplateNoun`: a template's noun, derived from its scope.
-  "vocabulary.templateNoun.goal.one": "Goal template",
-  "vocabulary.templateNoun.goal.other": "Goal templates",
-  "vocabulary.templateNoun.work.one": "Work template",
-  "vocabulary.templateNoun.work.other": "Work templates",
+  "vocabulary.templateNoun.goal.one": "Goal process",
+  "vocabulary.templateNoun.goal.other": "Goal processes",
+  "vocabulary.templateNoun.work.one": "Process",
+  "vocabulary.templateNoun.work.other": "Processes",
   "vocabulary.templateNoun.space.one": "Space template",
   "vocabulary.templateNoun.space.other": "Space templates",
   // `resolvePackageNoun`: what installs, named by what it holds (founder,
@@ -150,6 +157,55 @@ export const vocabularySentencesEn = {
   // humanized token, counted with English plural rules.
   "vocabulary.needsYou.count.uncurated":
     "{n, plural, one {# {noun}} other {# {nouns}}}",
+  // `resolveProcessHealthLabel` / `resolveProcessHealthReason`: a process
+  // health's words, keyed by its reason code (`PROCESS_HEALTH_REASONS`,
+  // `@synap-core/types/processes`). `waiting_on_you`'s label is the status
+  // label door's (`status.waiting_on_you`), so it has no row here.
+  "vocabulary.processHealth.config_invalid.label": "Configuration error",
+  "vocabulary.processHealth.config_invalid.reason":
+    "The saved definition is invalid or cannot be activated.",
+  "vocabulary.processHealth.running.label": "Running",
+  "vocabulary.processHealth.running.reason":
+    "At least one execution is currently in progress.",
+  "vocabulary.processHealth.running_after_failure.label":
+    "Running · previous run failed",
+  "vocabulary.processHealth.running_after_failure.reason":
+    "An execution is in progress after the previous known outcome failed.",
+  "vocabulary.processHealth.waiting_on_you.reason":
+    "The latest run is paused until you answer what its session asked of you.",
+  "vocabulary.processHealth.blocked_by_policy.label": "Blocked by policy",
+  "vocabulary.processHealth.blocked_by_policy.reason":
+    "Governance refused the latest run’s effect — it needs your review.",
+  "vocabulary.processHealth.latest_failed.label": "Latest run failed",
+  "vocabulary.processHealth.latest_failed.reason":
+    "No newer successful outcome resolves the latest failure.",
+  "vocabulary.processHealth.draft.label": "Draft",
+  "vocabulary.processHealth.draft.reason":
+    "The definition still needs to be completed or activated.",
+  "vocabulary.processHealth.paused.label": "Paused",
+  "vocabulary.processHealth.paused.reason":
+    "The definition is paused and will not start new runs.",
+  "vocabulary.processHealth.archived.label": "Archived",
+  "vocabulary.processHealth.archived.reason":
+    "The definition is archived and will not start new runs.",
+  "vocabulary.processHealth.healthy.label": "Healthy",
+  "vocabulary.processHealth.healthy.reason":
+    "The latest known outcome completed without failure.",
+  "vocabulary.processHealth.latest_unresolved.label":
+    "Latest status unresolved",
+  "vocabulary.processHealth.latest_unresolved.reason":
+    "The latest execution is {status}; Synap cannot classify it as healthy or failed yet.",
+  "vocabulary.processHealth.never_run.label": "Never run",
+  "vocabulary.processHealth.never_run.reason":
+    "This saved definition has no executions yet.",
+  "vocabulary.processHealth.not_enough_activity.label": "Status unknown",
+  "vocabulary.processHealth.not_enough_activity.reason":
+    "There is not enough loaded activity to determine current health.",
+  // `resolveJobsStartedHereLabel`: a job's folded child jobs on its Activity
+  // line (plan 5207fbb6: a child job is drawn as a fork, never named a
+  // "branch"), counted with the Job word.
+  "vocabulary.job.startedHere":
+    "{n, plural, one {# job started from here} other {# jobs started from here}}",
 } as const;
 
 export type VocabularySentencesEn = typeof vocabularySentencesEn;
@@ -162,7 +218,10 @@ export type VocabularyEn = Readonly<
     | StatusKey
     | NeedsYouCountKey
     | RunnerStateKey
-    | WaitKindKey,
+    | WaitKindKey
+    | StepRunnerKey
+    | NeedKey
+    | IntentKey,
     string
   >
 > &
@@ -180,6 +239,9 @@ export interface VocabularyTables {
   readonly needsYouNouns: Readonly<Record<string, readonly [string, string]>>;
   readonly runnerStates: Readonly<Record<string, string>>;
   readonly waitKinds: Readonly<Record<string, string>>;
+  readonly stepRunners: Readonly<Record<string, string>>;
+  readonly needs: Readonly<Record<string, string>>;
+  readonly intents: Readonly<Record<string, string>>;
 }
 
 /**
@@ -219,6 +281,15 @@ export function buildVocabularyEn(tables: VocabularyTables): VocabularyEn {
   }
   for (const [kind, label] of Object.entries(tables.waitKinds)) {
     words[`waitKind.${kind}`] = label;
+  }
+  for (const [kind, label] of Object.entries(tables.stepRunners)) {
+    words[`stepRunner.${kind}`] = label;
+  }
+  for (const [slug, label] of Object.entries(tables.needs)) {
+    words[`need.${slug}`] = label;
+  }
+  for (const [slug, label] of Object.entries(tables.intents)) {
+    words[`intent.${slug}`] = label;
   }
   return { ...words, ...vocabularySentencesEn } as VocabularyEn;
 }

@@ -1111,6 +1111,63 @@ export const skillsRouter = router({
       return result;
     }),
 
+  /**
+   * The RULES the pod's reactions reactor applies (decision D8: the person sees
+   * one "Rules" list): the built-in ones and the ones a relation declares, each
+   * with WHEN → VIA → DO in words, on or paused, its owner and what it did
+   * lately (applied, proposed, skipped with why). Read beside
+   * `automations.listPage` by the Rules page. Floored: a declared rule in a
+   * space the reader is not in is not listed; the log is theirs.
+   */
+  listReactionRules: protectedProcedure
+    .input(
+      z
+        .object({
+          /** Log rows per rule (default 5). */
+          recent: z.number().int().min(0).max(50).default(5),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { listReactionRules } =
+        await import("../services/reactions/list-reaction-rules.js");
+      const rules = await listReactionRules({
+        userId,
+        recent: input?.recent ?? 5,
+      });
+      // The declaration stays server-side: the list reads words, not shapes.
+      return rules.map(({ declaration, ...view }) => ({
+        ...view,
+        declaredOn: declaration.declaredOn ?? null,
+      }));
+    }),
+
+  /**
+   * Pause or resume one of those rules, through THE governed rule door
+   * (`updateRuleGoverned`: draft = paused). An agent's key proposes.
+   */
+  setReactionRule: protectedProcedure
+    .input(z.object({ id: z.string().min(1).max(300), on: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { setReactionRuleOn } =
+        await import("../services/reactions/reaction-rules-compile.js");
+      const result = await setReactionRuleOn({
+        userId,
+        ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+        reactionId: input.id,
+        on: input.on,
+      });
+      if (result.status === "not_found") {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Rule not found" });
+      }
+      if (result.status === "denied") {
+        throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+      }
+      return result;
+    }),
+
   getRule: protectedProcedure
     .input(
       z.object({

@@ -264,8 +264,11 @@ beforeEach(async () => {
   vi.mocked(updateRuleGoverned).mockClear();
 });
 
-const enable = (o: { projectId?: string; trackId?: string }) =>
-  enableWorker({ userId: USER, playbookId: PB, activatorKey: KEY, ...o });
+const enable = (o: {
+  projectId?: string;
+  trackId?: string;
+  sessionId?: string;
+}) => enableWorker({ userId: USER, playbookId: PB, activatorKey: KEY, ...o });
 const refusal = (p: Promise<unknown>) =>
   p.then(
     () => null,
@@ -298,6 +301,7 @@ describe("enableWorker — overlap is refused, naming the holder", () => {
         scope: "space",
         projectId: null,
         trackId: null,
+        sessionId: null,
       },
     });
     // Refused BEFORE anything was written.
@@ -497,7 +501,13 @@ describe("setWorkerPaused — FB2 item 4: resume runs the overlap check", () => 
       )
     ).toEqual({
       code: WORKER_SCOPE_OVERLAP,
-      holder: { ruleId: p1, scope: "project", projectId: P1, trackId: null },
+      holder: {
+        ruleId: p1,
+        scope: "project",
+        projectId: P1,
+        trackId: null,
+        sessionId: null,
+      },
     });
     expect(updateRuleGoverned).not.toHaveBeenCalled();
   });
@@ -1097,5 +1107,196 @@ describe("enableWorker — a 'How often?' clock", () => {
         PB_FREE,
       ]);
     }
+  });
+});
+
+describe("a SESSION starts a worker (scope `session`)", () => {
+  const S_MINE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+  const S_THEIRS = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2";
+  const S_ENDED = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3";
+  const S_LOOSE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4";
+
+  beforeEach(async () => {
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, track_id, goal, status) values
+         ($1, $5, $6, $7, $8, 'mine', 'active'),
+         ($2, 'user-2', $6, $7, null, 'theirs', 'active'),
+         ($3, $5, $6, $7, null, 'ended', 'closed'),
+         ($4, $5, $6, null, null, 'unfiled', 'active')`,
+      [S_MINE, S_THEIRS, S_ENDED, S_LOOSE, USER, WS, P1, T1]
+    );
+  });
+  const created = () =>
+    vi.mocked(createRuleGoverned).mock.calls.at(-1)![0] as unknown as {
+      scope: { projectId?: string };
+      seed: { key: string };
+      sentence: { actions: Array<{ config: Record<string, unknown> }> };
+    };
+  const countRules = async () =>
+    (
+      (await q(`select count(*)::int as n from skills`)).rows[0] as {
+        n: number;
+      }
+    ).n;
+
+  it("a session the caller does not own is NOT_FOUND, and nothing is written", async () => {
+    // Negative control: without the owner floor this enable succeeds.
+    await expect(enable({ sessionId: S_THEIRS })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(enable({ sessionId: "not-a-uuid" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(await countRules()).toBe(0);
+  });
+
+  it("an ENDED session is refused: its worker would never run", async () => {
+    await expect(enable({ sessionId: S_ENDED })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+    expect(await countRules()).toBe(0);
+  });
+
+  it("a session is named alone — never beside a project or goal", async () => {
+    await expect(
+      enableWorker({
+        userId: USER,
+        playbookId: PB,
+        activatorKey: KEY,
+        sessionId: S_MINE,
+        projectId: P2,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(await countRules()).toBe(0);
+  });
+
+  it("my session: filed where the session is, every run its child, listed as a session worker", async () => {
+    const res = (await enableWorker({
+      userId: USER,
+      playbookId: PB,
+      activatorKey: KEY,
+      sessionId: S_MINE,
+    })) as { status: string; ruleId: string };
+    expect(res.status).toBe("enabled");
+    const call = created();
+    expect(call.seed.key).toBe(
+      `${KEY}@project:${P1}@track:${T1}@session:${S_MINE}`
+    );
+    expect(call.scope.projectId).toBe(P1);
+    // The compiled node carries the parent (negative control: absent before
+    // the session scope existed) and the session's filing.
+    expect(call.sentence.actions[0]!.config).toMatchObject({
+      __parentSessionId: S_MINE,
+      __projectId: P1,
+      __trackId: T1,
+    });
+    const [w] = await listEnabledWorkers({ userId: USER, sessionId: S_MINE });
+    expect(w).toMatchObject({
+      ruleId: res.ruleId,
+      scope: "session",
+      sessionId: S_MINE,
+      projectId: P1,
+      trackId: T1,
+    });
+    // Another session's filter does not see it.
+    expect(
+      await listEnabledWorkers({ userId: USER, sessionId: S_LOOSE })
+    ).toEqual([]);
+  });
+
+  it("when its session ends, the worker reads as STOPPED (derived, nothing stored), and no longer live", async () => {
+    const res = (await enableWorker({
+      userId: USER,
+      playbookId: PB,
+      activatorKey: KEY,
+      sessionId: S_MINE,
+    })) as { status: string; ruleId: string };
+    const [open] = await listEnabledWorkers({
+      userId: USER,
+      sessionId: S_MINE,
+    });
+    expect(open!.state).toBe("running");
+
+    await q(`update focus_sessions set status = 'closed' where id = $1`, [
+      S_MINE,
+    ]);
+    // Negative control: without the session read this stays "running".
+    const [ended] = await listEnabledWorkers({
+      userId: USER,
+      sessionId: S_MINE,
+    });
+    expect(ended).toMatchObject({
+      ruleId: res.ruleId,
+      state: "stopped",
+      automationId: null,
+    });
+    expect(
+      await listEnabledWorkers({
+        userId: USER,
+        sessionId: S_MINE,
+        liveOnly: true,
+      })
+    ).toEqual([]);
+    // Its rule was not touched: the state is read, never written.
+    const [rule] = (
+      await q(`select metadata from skills where id = $1`, [res.ruleId])
+    ).rows as Array<{ metadata: { rule: { draft?: boolean } } }>;
+    expect(rule!.metadata.rule.draft).toBeUndefined();
+  });
+
+  it("an unfiled session's worker works over the space: no project lens, no filing", async () => {
+    await enableWorker({
+      userId: USER,
+      playbookId: PB,
+      activatorKey: KEY,
+      sessionId: S_LOOSE,
+    });
+    const call = created();
+    expect(call.seed.key).toBe(`${KEY}@session:${S_LOOSE}`);
+    expect(call.scope).not.toHaveProperty("projectId");
+    const node = call.sentence.actions[0]!.config;
+    expect(node.__parentSessionId).toBe(S_LOOSE);
+    expect(node).not.toHaveProperty("__projectId");
+  });
+
+  it("overlaps like its project: a live project enablement holds it back, and it holds a project back", async () => {
+    const p1 = await projectRule("00000000-0000-4000-8000-0000000000bb", P1);
+    const out = await refusal(enable({ sessionId: S_MINE }));
+    expect(out?.code).toBe(WORKER_SCOPE_OVERLAP);
+    expect(out?.holder).toMatchObject({ ruleId: p1, scope: "project" });
+    await q(`delete from skills`);
+    await enable({ sessionId: S_LOOSE });
+    const back = await refusal(enable({ projectId: P2 }));
+    expect(back?.code).toBe(WORKER_SCOPE_OVERLAP);
+    expect(back?.holder).toMatchObject({
+      scope: "session",
+      sessionId: S_LOOSE,
+      projectId: null,
+    });
+  });
+
+  it("the activator pass recompiles a session enablement from its key alone: unchanged", async () => {
+    const res = (await enableWorker({
+      userId: USER,
+      playbookId: PB,
+      activatorKey: KEY,
+      sessionId: S_MINE,
+    })) as { ruleId: string };
+    const real = await vi.importActual<
+      typeof import("../playbook-activators.js")
+    >("../playbook-activators.js");
+    vi.mocked(updateRuleGoverned).mockClear();
+    const pass = await real.applyPlaybookActivators({
+      playbookId: PB,
+      userId: USER,
+    });
+    // Negative control: a key that lost the session recompiles WITHOUT the
+    // parent, so the hash moves and the rule is rewritten ("updated").
+    expect(pass.outcomes).toContainEqual(
+      expect.objectContaining({ ruleId: res.ruleId, status: "unchanged" })
+    );
+    expect(updateRuleGoverned).not.toHaveBeenCalledWith(
+      expect.objectContaining({ ruleId: res.ruleId })
+    );
   });
 });

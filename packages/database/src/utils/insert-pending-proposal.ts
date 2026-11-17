@@ -324,15 +324,44 @@ const VOLATILE_DEDUP_KEYS = new Set([
 
 /**
  * What makes two proposed creates the SAME record: the record the create door
- * handed the gate, minus its per-attempt minted `id`. The ONE rule both the
- * dedup hash (two pending copies) and `expirePendingCreatesOfLandedRecord`
- * (a pending copy of a record that has since landed) apply.
+ * handed the gate, minus its per-attempt minted `id` and minus the install
+ * clock on its package source-link (`metadata.marketSource.installedAt`). The
+ * ONE rule both the dedup hash (two pending copies) and
+ * `expirePendingCreatesOfLandedRecord` (a pending copy of a record that has
+ * since landed) apply.
+ *
+ * The install clock: every package install/update run stamps
+ * `installedAt: new Date().toISOString()` into the source-link it writes on a
+ * created playbook (`package-apply-post-workspace.ts`, via
+ * `stampPlaybookMarketSource`; the same `marketSource` shape is built by
+ * `services/capabilities/market-source.ts`). It is when the run happened, not
+ * what the record is: with it in the hash, each `synap templates update`
+ * filed a fresh pending `create playbook` beside the last one (live
+ * 2026-11-16: seven pending copies of three playbooks). Only that one leaf is
+ * dropped: the rest of `marketSource` (package slug, version, baseline) is
+ * the record's content and still tells two creates apart.
  */
 export function createdRecordIdentity(
   record: Record<string, unknown>
 ): Record<string, unknown> {
   const { id: _mintedId, ...rest } = record;
-  return rest;
+  return withoutInstallClock(rest);
+}
+
+/** `record` without `metadata.marketSource.installedAt`, never mutating it. */
+function withoutInstallClock(
+  record: Record<string, unknown>
+): Record<string, unknown> {
+  const metadata = record.metadata;
+  if (!isPlainObject(metadata)) return record;
+  const source = metadata.marketSource;
+  if (!isPlainObject(source) || !("installedAt" in source)) return record;
+  const { installedAt: _installClock, ...sourceRest } = source;
+  return { ...record, metadata: { ...metadata, marketSource: sourceRest } };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
@@ -378,19 +407,25 @@ export function computeProposalDedupHash(p: {
   // other keys (a `summary` property, a `reasoning` field) are the change.
   // Without this every agent entity create hashed uniquely (live 2026-10-18:
   // three byte-identical decision creates filed as three pending rows).
+  //
+  // Any OTHER action (an update's patch) keeps its `id` — it names the
+  // target, which the hash carries anyway — but drops the install clock the
+  // same way: a package reconcile replays the whole source-link on every
+  // run (`reconcile-installed-playbooks.ts` → `playbooks.update` with
+  // `metadata.marketSource`), so with the clock in the hash each
+  // `synap templates update` filed a fresh pending update beside the last.
   const record = payload.data;
   if (
-    isCreate &&
     // The REQUEST ENVELOPE `checkPermissionOrPropose` writes —
     // `{ requestId, targetType, changeType, data: <the record>, … }` — rather
     // than a flat record. The guard reads any object (it widens its argument
     // back to a record itself); the cast only meets its parameter type.
     isRequestShapedProposalData(p.data as unknown as StoredProposalData) &&
-    record !== null &&
-    typeof record === "object" &&
-    !Array.isArray(record)
+    isPlainObject(record)
   ) {
-    payload.data = createdRecordIdentity(record as Record<string, unknown>);
+    payload.data = isCreate
+      ? createdRecordIdentity(record)
+      : withoutInstallClock(record);
   }
   const canonical = {
     workspaceId: p.workspaceId ?? null,

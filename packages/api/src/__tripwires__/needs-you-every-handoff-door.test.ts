@@ -87,6 +87,11 @@ const EXEMPT: Record<string, string> = {
     "`synap_ask_person` builds the owed slot and writes it THROUGH " +
     "`updateFocusSession` (`expectedOutputs`), which notifies. A second push " +
     "here would be two pushes for one hand-off.",
+  "services/document-patch/ask-slots.ts":
+    "A question written in a document: it files the owed slot THROUGH " +
+    "`updateFocusSession` (`expectedOutputs`), exactly as `synap_ask_person` " +
+    "does, and that notifies. A second push here would be two pushes for one " +
+    "hand-off (pinned end to end in `materialize-asks.pglite.test.ts`).",
   "services/agent-dispatch/poll-external-agents.ts":
     "The approval card's owed slot is announced by the QUESTION card posted " +
     "right after it as the agent (`postDispatchNotice` kind 'question' → " +

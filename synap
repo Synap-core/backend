@@ -715,6 +715,28 @@ split_workers_converge() { # after the backend is up: start or remove backend-wo
     fi
 }
 
+# ── the PDF tools engine (pod session 8d23e259) ───────────────────────────────
+# ONE switch, SYNAP_PDF_ENGINE in deploy/.env, read by compose and here with
+# the same rule as SYNAP_SPLIT_WORKERS: any non-empty value is on. Compose
+# points the backend's STIRLING_URL at the service; `synap` (install, update,
+# apply) starts it, or removes a leftover one when off (its 2.5 GB come back).
+# `up -d` also moves it to the digest the compose file pins after an update.
+# Never fatal: an engine that cannot start costs PDF tools, never the pod
+# (the pdf.* verbs then say the engine is down).
+pdf_engine_enabled() { [ -n "$(_pod_agent_setting SYNAP_PDF_ENGINE)" ]; }
+
+pdf_engine_converge() {
+    if pdf_engine_enabled; then
+        docker compose --profile pdf up -d --no-deps stirling-pdf \
+            || echo -e "${YELLOW}⚠️  the PDF engine did not start (SYNAP_PDF_ENGINE is on): docker compose --profile pdf logs stirling-pdf${NC}"
+    elif [ -n "$(docker compose --profile pdf ps -a -q stirling-pdf 2>/dev/null)" ]; then
+        echo -e "${BLUE}  SYNAP_PDF_ENGINE is off: removing stirling-pdf${NC}"
+        docker compose --profile pdf rm -sf stirling-pdf >/dev/null \
+            || echo -e "${YELLOW}⚠️  could not remove stirling-pdf: docker compose --profile pdf rm -sf stirling-pdf${NC}"
+    fi
+    return 0
+}
+
 _is_canonical_https_url() {
     local value="$1"
     local authority="${value#https://}"
@@ -3423,6 +3445,7 @@ EOF
         echo -e "${RED}❌ backend-worker did not start (SYNAP_SPLIT_WORKERS is on): docker compose --profile workers logs backend-worker${NC}"
         exit 1
     }
+    pdf_engine_converge
 
     # Reapply auth schema. On a brand-new volume this is a no-op (compose's
     # depends_on already ran kratos-migrate to completion).
@@ -5006,6 +5029,7 @@ _ue_bring_up_rest() { # every non-backend service; never stops half-way
     # SYNAP_SPLIT_WORKERS off: a backend-worker left from when it was on would
     # keep working jobs on the previous release. (On, UE_SERVICES started it.)
     split_workers_enabled || split_workers_converge || failed=1
+    pdf_engine_converge
     return "$failed"
 }
 
@@ -6177,6 +6201,8 @@ cmd_apply() {
             echo -e "${RED}❌ apply: backend-worker did not start — docker compose --profile workers logs backend-worker${NC}" >&2
             exit 1
         }
+        # SYNAP_PDF_ENGINE: the engine follows the switch too (never fatal).
+        pdf_engine_converge
     fi
     # kratos.yml is a bind-mounted FILE: compose cannot see its content change.
     if [ "$kratos_before" != "$kratos_after" ] && printf '%s\n' "${running[@]}" | grep -qx kratos; then

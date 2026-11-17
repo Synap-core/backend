@@ -109,7 +109,9 @@ const INBOX_FILTER: Record<string, "question" | "routine" | "broken"> = {
 };
 /** No registry row carries this word, and why. */
 const NO_ROW: Record<string, string> = {
-  Template: "derived — resolveTemplateNoun(scope), checked below",
+  // D1 (founder, 2026-11-16): a playbook is a Process ("Template" now names
+  // only a space template).
+  Process: "derived — resolveTemplateNoun(scope), checked below",
   Work: "no noun by design; the action is 'Start work'",
   Approvals: "governance rules are not an object kind in the registry",
   "To review":
@@ -190,7 +192,7 @@ describe("tripwire: concepts.md is classified against the vocabulary", () => {
     }
   });
 
-  it("the template nouns the glossary names are the vocabulary's", () => {
+  it("the process nouns the glossary names are the vocabulary's", () => {
     const text = readFileSync(CONCEPTS, "utf8").toLowerCase();
     for (const scope of ["session", "project"] as const) {
       expect(text).toContain(resolveTemplateNoun(scope).toLowerCase());

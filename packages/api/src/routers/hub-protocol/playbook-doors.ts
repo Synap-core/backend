@@ -291,6 +291,11 @@ export async function runPlaybookDoor(
      * drafts render in place, nothing is written. A person's act.
      */
     trial?: { guidanceOverride: Record<string, string> };
+    /**
+     * Start a second run although one is live on the subject (`playbooks.run`
+     * `startAnother`); otherwise the live run comes back as `already_running`.
+     */
+    startAnother?: boolean;
     /** Provenance label of the door (`mcp`, `hub-rest`). */
     source: string;
   }
@@ -422,6 +427,7 @@ export async function runPlaybookDoor(
       : {}),
     ...(input.remember ? { remember: true } : {}),
     ...(input.trial ? { trial: input.trial } : {}),
+    ...(input.startAnother ? { startAnother: true } : {}),
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,
@@ -469,6 +475,43 @@ export async function getPlaybookDoor(
   const caller = await callerFor(identity, null);
   const result = await caller.get({ id: playbookId.trim() });
   return { kind: "result", result };
+}
+
+/**
+ * ONE process, whole (`playbooks.process`, the ONE process read): the Hub door
+ * of the Process view (Process wave W2). Same floor as `get`: a playbook the
+ * caller cannot see THROWS the procedure's NOT_FOUND (there is no other
+ * outcome, so it returns the read itself).
+ */
+export async function getProcessDoor(
+  identity: PlaybookDoorIdentity,
+  playbookId: string
+): Promise<
+  Awaited<
+    ReturnType<ReturnType<typeof playbooksRouter.createCaller>["process"]>
+  >
+> {
+  const caller = await callerFor(identity, null);
+  return caller.process({ playbookId: playbookId.trim() });
+}
+
+/**
+ * A space's process index (`playbooks.processes`): the cards and the
+ * automations outside any process, or every visible one (`workspaceId`
+ * omitted; `null` = pod-wide only).
+ */
+export async function listProcessesDoor(
+  identity: PlaybookDoorIdentity,
+  input: { workspaceId?: string | null }
+): Promise<
+  Awaited<
+    ReturnType<ReturnType<typeof playbooksRouter.createCaller>["processes"]>
+  >
+> {
+  const caller = await callerFor(identity, null);
+  return caller.processes(
+    input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}
+  );
 }
 
 /**
