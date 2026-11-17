@@ -1818,3 +1818,20 @@ export {
   type DecisionRecordOption,
   type DecisionRecordView,
 } from "./decision-record.js";
+
+/** The `:::synap-ask` embed's one read model, receipt rules and copy — see `./embed.ts`. */
+export {
+  ASK_EMBED_HIDDEN_CODES,
+  askCardReceipt,
+  askEmbedRead,
+  askEmbedRef,
+  findAskSlot,
+  receiptStands,
+  type AskCardEvent,
+  type AskEmbedSource,
+  type AskReceipt,
+  type AskSettleKind,
+  type EmbedAskRead,
+  type StoredAskSlot,
+} from "./embed.js";
+export { askEmbedCopy } from "./embed-copy.js";
