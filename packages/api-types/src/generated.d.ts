@@ -12017,8 +12017,10 @@ export interface ProcessStep {
 	requires: string[];
 	/** human | check | awaits | null. */
 	gate: string | null;
-	/** The subject status this step moves the subject to, if any. */
+	/** The status entering this step moves the subject to, if any. */
 	subjectStatus: string | null;
+	/** The status this step's approved work reaches (decision D2), if any. */
+	onApproved: string | null;
 }
 export interface ProcessCriterion {
 	key: string;
@@ -26227,7 +26229,7 @@ export type StageSubjectStatusOutcome = {
 	value: string;
 	via?: "status_door";
 } | {
-	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_ahead" | "subject_not_found";
+	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_on_approved" | "stage_has_no_subject_status" | "stage_not_found" | "subject_ahead" | "subject_not_found";
 	status: "skipped";
 } | {
 	/** The compare-and-set found another status: a person's move won. */
@@ -39673,6 +39675,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						gate: "awaits" | "check" | "human" | null;
 						key: string;
 						name: string;
+						onApproved: string | null;
 						subjectStatus: string | null;
 					}[];
 					undeclaredStatuses: string[];
@@ -39745,6 +39748,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								playbookName: string;
 								stageKey: string;
 								stageName: string;
+								via?: "enter" | "reach" | undefined;
 							}[];
 							to: string;
 						} | null;
@@ -39773,6 +39777,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						playbookName: string;
 						stageKey: string;
 						stageName: string;
+						via?: "enter" | "reach" | undefined;
 					}[];
 					stuck: number | null;
 					tone: string;
@@ -39834,6 +39839,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								playbookName: string;
 								stageKey: string;
 								stageName: string;
+								via?: "enter" | "reach" | undefined;
 							}[];
 							to: string;
 						} | null;
@@ -42706,6 +42712,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					lessons?: string[] | undefined;
 					domain?: string | undefined;
 					subjectStatus?: string | undefined;
+					onApproved?: string | undefined;
 					onFail?: {
 						toStage: string;
 					} | undefined;
@@ -50062,6 +50069,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					lessons?: string[] | undefined;
 					domain?: string | undefined;
 					subjectStatus?: string | undefined;
+					onApproved?: string | undefined;
 					onFail?: {
 						toStage: string;
 					} | undefined;
@@ -51474,6 +51482,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					lessons?: string[] | undefined;
 					domain?: string | undefined;
 					subjectStatus?: string | undefined;
+					onApproved?: string | undefined;
 					onFail?: {
 						toStage: string;
 					} | undefined;
@@ -62775,6 +62784,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							lessons?: string[] | undefined;
 							domain?: string | undefined;
 							subjectStatus?: string | undefined;
+							onApproved?: string | undefined;
 							onFail?: {
 								toStage: string;
 							} | undefined;
