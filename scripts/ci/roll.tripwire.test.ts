@@ -71,6 +71,34 @@ function fakeIo(
   return { io, calls, writes };
 }
 
+describe("plan reports the pin's lag", () => {
+  it("measures commits behind the target, 0 when the pin is the target, null on a failed compare", async () => {
+    const f = fakeIo();
+    const seen: unknown[][] = [];
+    const lagIo = {
+      ...f.io,
+      lag: async (...a: unknown[]) => (seen.push(a), 7),
+    };
+    const [p] = await plan(lagIo, {});
+    expect(p.lag).toBe(7);
+    expect(seen[0]).toEqual(["Synap-core/control-plane-api", OLD, NEW]);
+    expect(render([p])).toContain("7 commits behind the target");
+    const same = await plan({ ...lagIo, resolveRef: async () => OLD }, {});
+    expect(same[0].lag).toBe(0);
+    const bad = await plan(
+      {
+        ...f.io,
+        lag: async () => {
+          throw new Error("404");
+        },
+      },
+      {}
+    );
+    expect(bad[0].lag).toBeNull();
+    expect(render(bad)).toContain("lag     unknown");
+  });
+});
+
 describe("the registry agrees with the repo", () => {
   it("has no problem against the real pins file and real mirror outputs", () => {
     const pins = new Map(
