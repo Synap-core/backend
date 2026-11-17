@@ -262,7 +262,19 @@ export type LinkType =
    * the others it is listed and changes nothing (`services/projects/
    * pillar-health.ts`).
    */
-  | "advances";
+  | "advances"
+  /**
+   * session --orchestrated_by--> session. The FROM session is coordinated by
+   * the TO session, an orchestrator (founder decision D5, plan b38bc224; design
+   * doc 5fccda9b). Deliberately NOT a second `spawned_from`: every lineage
+   * reader assumes ONE parent per child (`getParentSessionId`, the packet's
+   * parent row, `parentOfGraph`), and the picked sessions already belong to
+   * their wave. Not a dependency either: what the child waits on is its HOLD
+   * (`until: answer:<orchestrator>/plan-approval`), which the person's yes
+   * clears. ONE producer: `services/focus-sessions/start-orchestrator.ts`
+   * (same owner at both ends). The Hub REST links door lists and refuses it.
+   */
+  | "orchestrated_by";
 
 export const links = pgTable(
   "links",
