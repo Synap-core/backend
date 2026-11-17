@@ -56,10 +56,7 @@ import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { bodyWithoutTitleHeading } from "@synap-core/markdown-core/sections";
-import {
-  checkPermissionOrPropose,
-  type PermissionCheckOpts,
-} from "../../utils/permission-check.js";
+import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { assertQuestionMayBeFiled } from "./ask-governance.js";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 import {
@@ -888,7 +885,9 @@ export async function applyDocumentPatch(
     : doc.workspaceId;
   const provenanceSessionId =
     input.session?.sessionId ?? input.provenanceSessionId ?? undefined;
-  const gateOpts = (): PermissionCheckOpts => {
+  // The proposal's payload: read at the call, so the ops a materialized
+  // question rewrote are the ones a proposal stores.
+  const proposalData = (): Record<string, unknown> => {
     const data: DocumentPatchProposalData = {
       documentId: doc.id,
       ...(input.session ? { sessionId: input.session.sessionId } : {}),
@@ -907,34 +906,32 @@ export async function applyDocumentPatch(
         : {}),
     };
     // A proposal filed against a legacy checkpoint base keeps comparing on it.
-    const proposalData: Record<string, unknown> =
-      base.version !== undefined
-        ? { ...data, baseRevision: undefined, baseVersion: base.version }
-        : { ...data };
-    return {
-      userId: input.userId,
-      ...(agentUserId ? { agentUserId, source: "intelligence" as const } : {}),
-      workspaceId: workspaceId ?? undefined,
-      subjectType: "document",
-      action,
-      // An agent rewriting the whole body is always reviewed, whatever a rule says.
-      ...(agentUserId && hasReplaceAll ? { forcePropose: true } : {}),
-      // A model's draft the pod files for the person: always reviewed.
-      ...(!agentUserId && systemAuthor && input.forReview
-        ? {
-            source: "intelligence" as const,
-            forcePropose: true,
-            machineAuthor: input.forReview.machineAuthor,
-          }
-        : {}),
-      ...(provenanceSessionId ? { sessionId: provenanceSessionId } : {}),
-      ...(input.reasoning ? { reasoning: input.reasoning } : {}),
-      ...(input.sourceMessageId
-        ? { sourceMessageId: input.sourceMessageId }
-        : {}),
-      data: { ...proposalData, id: doc.id, title: doc.title },
-    };
+    return base.version !== undefined
+      ? { ...data, baseRevision: undefined, baseVersion: base.version }
+      : { ...data };
   };
+  // Everything the gate reads except the subject, the action and the data:
+  // shared by the dry-run check below and the real gate call.
+  const gateBase = () => ({
+    userId: input.userId,
+    ...(agentUserId ? { agentUserId, source: "intelligence" as const } : {}),
+    workspaceId: workspaceId ?? undefined,
+    // An agent rewriting the whole body is always reviewed, whatever a rule says.
+    ...(agentUserId && hasReplaceAll ? { forcePropose: true } : {}),
+    // A model's draft the pod files for the person: always reviewed.
+    ...(!agentUserId && systemAuthor && input.forReview
+      ? {
+          source: "intelligence" as const,
+          forcePropose: true,
+          machineAuthor: input.forReview.machineAuthor,
+        }
+      : {}),
+    ...(provenanceSessionId ? { sessionId: provenanceSessionId } : {}),
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+    ...(input.sourceMessageId
+      ? { sourceMessageId: input.sourceMessageId }
+      : {}),
+  });
 
   // 5b. A question DEFINITION an agent wrote (`:::synap-ask` + an `ask`) becomes
   // a real question on the author's verified session, and the ops the write
@@ -944,7 +941,15 @@ export async function applyDocumentPatch(
   // not refuse the write (`ask-governance.ts`; no proposal is filed by it).
   // Only an agent's write: the pod's own (closing report) and a person's never are.
   if (agentUserId && !systemAuthor && opsHoldAskDefinition(ops)) {
-    await assertQuestionMayBeFiled(gateOpts(), agentUserId);
+    await assertQuestionMayBeFiled(
+      {
+        ...gateBase(),
+        subjectType: "document",
+        action,
+        data: { ...proposalData(), id: doc.id, title: doc.title },
+      },
+      agentUserId
+    );
     const materialized = await materializeAskDefinitionsInOps(ops, {
       userId: input.userId,
       agentUserId,
@@ -963,7 +968,12 @@ export async function applyDocumentPatch(
       );
     }
   }
-  const perm = await checkPermissionOrPropose(gateOpts());
+  const perm = await checkPermissionOrPropose({
+    ...gateBase(),
+    subjectType: "document",
+    action,
+    data: { ...proposalData(), id: doc.id, title: doc.title },
+  });
 
   if ("denied" in perm && perm.denied) {
     throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

@@ -236,6 +236,8 @@ describe("materializeAskDefinitions through the real slot door", () => {
       blockedReason: "decision",
       ask: CHOOSE,
     });
+    // The real door told the person (`session.needs_you`): the hand-off is not silent.
+    expect(h.notified.length).toBeGreaterThan(0);
     // The real door defaulted what the definition did not say.
     expect(typeof slots[0]!.unblocks).toBe("string");
     expect(r.texts[0]).toContain(`sessionId="${id}"`);

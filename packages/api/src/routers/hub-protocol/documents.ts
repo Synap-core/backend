@@ -273,7 +273,7 @@ export const documentsRouter = router({
       });
 
       // Governance check — AI agent creating a document requires proposal by default
-      const gateOpts: PermissionCheckOpts = {
+      const gateOpts = {
         userId: agentUserId,
         agentUserId,
         workspaceId: input.workspaceId ?? undefined,
@@ -305,7 +305,7 @@ export const documentsRouter = router({
           // approval re-reads them through the floor.
           ...scoped,
         },
-      };
+      } satisfies PermissionCheckOpts;
       // A question DEFINITION in an agent's markdown (`:::synap-ask` + `ask`)
       // becomes a real question on the author's verified session and the body
       // (stored, or carried by the proposal) holds the reference form

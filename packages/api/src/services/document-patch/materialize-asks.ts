@@ -71,7 +71,6 @@ const DefinitionPropsSchema = z
       .max(ASK_LIMITS.unblocksMaxChars)
       .optional(),
     blockedReason: z.enum(BLOCKED_REASONS).optional(),
-    ask: z.unknown().optional(),
   })
   .strict();
 
@@ -122,7 +121,9 @@ export function planAskDefinitions(texts: readonly string[]): AskPlan {
       found += 1;
       if (found > MAX_ASK_DEFINITIONS) continue;
       const at = where(textIndex, definition.line);
-      const props = DefinitionPropsSchema.safeParse(definition.props);
+      // `ask` is validated by the pod's own AskSchema below, never restated here.
+      const { ask: rawAsk, ...rest } = definition.props;
+      const props = DefinitionPropsSchema.safeParse(rest);
       if (!props.success) {
         problems.push(
           `${at}: ${props.error.issues
@@ -131,13 +132,13 @@ export function planAskDefinitions(texts: readonly string[]): AskPlan {
         );
         continue;
       }
-      if (props.data.ask == null || typeof props.data.ask !== "object") {
+      if (rawAsk == null || typeof rawAsk !== "object") {
         problems.push(
           `${at}: the props block needs an \`ask\` object (mode confirm | choose | form | act | provide): it is how the person answers.${ASK_SKILL_HINT}`
         );
         continue;
       }
-      const ask = AskSchema.safeParse(props.data.ask);
+      const ask = AskSchema.safeParse(rawAsk);
       if (!ask.success) {
         problems.push(
           `${at}: invalid ask: ${ask.error.issues
