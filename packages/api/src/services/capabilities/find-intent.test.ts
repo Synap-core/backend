@@ -212,6 +212,9 @@ describe("findByIntent — reachability: the RIGHT verb, WITH its schema", () =>
     expect(top.action.governance).toBe("auto");
     expect(top.action.intent).toBe("send_message");
     expect(top.whenToUse).toBe("Gmail, Calendar and Drive for this pod");
+    // ONE copy of that prose per match (ticket dfa6003e): `whenToUse`, never
+    // also `action.description`.
+    expect("description" in top.action).toBe(false);
   });
 
   it("keeps the NOUN: 'clean up duplicate contacts' beats a generic cleanup verb", async () => {
@@ -246,7 +249,11 @@ describe("findByIntent — reachability: the RIGHT verb, WITH its schema", () =>
 
 describe("findByIntent — per-catalog scoring", () => {
   it("normalises each catalog against ITS OWN best, and names the scale", async () => {
-    const r = await findByIntent({ intent: "send a message", ...lens });
+    const r = await findByIntent({
+      intent: "send a message",
+      ...lens,
+      explain: true,
+    });
     // Both arms matched, and each one's top row is 1 — a shared denominator
     // would leave at most one of them at 1.
     expect(r.capabilities!.matches[0]!.confidence).toBe(1);
@@ -266,9 +273,17 @@ describe("findByIntent — per-catalog scoring", () => {
     expect(r.capabilities!.matches[0]!.score).toBeLessThan(
       r.intents!.matches[0]!.score
     );
-    expect(r.scoring.capabilities!.scale).toMatch(/best capability score/);
-    expect(r.scoring.intents!.scale).toMatch(/best intent score/);
-    expect(r.scoring.playbooks!.note).toMatch(/not comparable/);
+    expect(r.scoring!.capabilities!.scale).toMatch(/best capability score/);
+    expect(r.scoring!.intents!.scale).toMatch(/best intent score/);
+    expect(r.scoring!.playbooks!.note).toMatch(/not comparable/);
+  });
+
+  it("sends the scoring prose only when asked (`explain`): it is the same on every call", async () => {
+    const r = await findByIntent({ intent: "send a message", ...lens });
+    // Non-vacuity: the catalogs that would carry a scale were searched.
+    expect(r.capabilities!.matches.length).toBeGreaterThan(0);
+    expect(r.intents!.matches.length).toBeGreaterThan(0);
+    expect("scoring" in r).toBe(false);
   });
 
   it("the intent arm resolves to CONCRETE verb ids under the caller's lens", async () => {

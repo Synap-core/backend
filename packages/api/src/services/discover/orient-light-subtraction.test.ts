@@ -31,6 +31,7 @@ const h = vi.hoisted(() => ({
   entityCountRows: [] as Record<string, unknown>[],
   observationRows: [] as Record<string, unknown>[],
   projectRows: [] as Record<string, unknown>[],
+  openGoals: undefined as unknown,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -48,6 +49,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   const chain = (rows: unknown[], groupRows: unknown[] = []) => {
     const self: Record<string, unknown> = {
       where: () => self,
+      innerJoin: () => self,
       limit: () => self,
       orderBy: () => self,
       groupBy: () => thenable(groupRows),
@@ -122,6 +124,7 @@ vi.mock("./start-here.js", () => ({
     topKinds: [],
     actions: { count: 0, examples: [], lens: "pod" },
     learnMore: { skill: p.learnMoreSkill },
+    ...(h.openGoals ? { openGoals: h.openGoals } : {}),
   }),
 }));
 
@@ -135,7 +138,7 @@ vi.mock("./space-brief.js", async (importOriginal) => ({
   },
 }));
 
-import { discover } from "./discover.js";
+import { discover, LIGHT_ROW_PROSE_MAX } from "./discover.js";
 
 const PROFILE_ROWS = {
   profiles: [
@@ -194,6 +197,7 @@ beforeEach(() => {
   h.entityCountRows = [{ workspaceId: "ws-full", count: 901 }];
   h.observationRows = [];
   h.projectRows = [];
+  h.openGoals = undefined;
   h.briefCalls = [];
 });
 
@@ -500,5 +504,77 @@ describe("orient light — every listed space carries its purpose as ONE line", 
     expect(
       full.workspaces.find((w) => w.id === "ws-0")?.onboarding?.goal
     ).toMatch(/^Goal 0/);
+  });
+});
+
+describe("orient light — row prose is cut, never the row (tickets 434d61d7, dfa6003e)", () => {
+  const LONG =
+    "Done means " +
+    "every pillar has a live goal and a weekly report. ".repeat(20);
+  const goal = (id: string, endState: string | null) => ({
+    id,
+    name: `Goal ${id}`,
+    status: "active",
+    projectId: "p-1",
+    endState,
+    criteria: 0,
+    rollup: { status: "unavailable" },
+  });
+
+  beforeEach(() => {
+    h.openGoals = {
+      count: 2,
+      countIsLowerBound: false,
+      lens: "pod",
+      items: [goal("g-long", LONG), goal("g-short", "Ten clients signed.")],
+      rollupWindowDays: 7,
+      howTo: "h",
+    };
+    h.projectRows = [
+      {
+        id: "p-1",
+        name: "Synap",
+        description: LONG,
+        status: "active",
+        workspaceId: "ws-full",
+      },
+    ];
+  });
+
+  it("light cuts a long end state and description, says so, and names the read that returns it whole", async () => {
+    expect(LONG.length).toBeGreaterThan(LIGHT_ROW_PROSE_MAX * 2);
+    const light = await run("light");
+    const goals = light.startHere.openGoals as {
+      items: Array<Record<string, unknown>>;
+    };
+    const long = goals.items.find((g) => g.id === "g-long")!;
+    expect((long.endState as string).length).toBeLessThanOrEqual(
+      LIGHT_ROW_PROSE_MAX
+    );
+    expect(long.endState).toMatch(/^Done means every pillar/);
+    expect(long.endState).toMatch(/clipped: \d+ chars omitted/);
+    expect(long.truncated).toBe(true);
+    expect(long.more).toBe('list_tracks {trackId:"g-long"}');
+    // A row within the budget is untouched: no mark, no door.
+    const short = goals.items.find((g) => g.id === "g-short")!;
+    expect(short).toEqual(goal("g-short", "Ten clients signed."));
+
+    const project = light.projects.find((p) => p.id === "p-1")!;
+    expect(project.description!.length).toBeLessThanOrEqual(
+      LIGHT_ROW_PROSE_MAX
+    );
+    expect(project.truncated).toBe(true);
+    expect(project.more).toBe('get_project {projectId:"p-1"}');
+  });
+
+  it("full carries the prose whole", async () => {
+    const full = await run("full");
+    const goals = full.startHere.openGoals as {
+      items: Array<Record<string, unknown>>;
+    };
+    const long = goals.items.find((g) => g.id === "g-long")!;
+    expect(long.endState).toBe(LONG);
+    expect(long).not.toHaveProperty("truncated");
+    expect(full.projects.find((p) => p.id === "p-1")!.description).toBe(LONG);
   });
 });

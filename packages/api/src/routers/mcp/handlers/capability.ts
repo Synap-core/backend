@@ -1102,6 +1102,7 @@ export const capabilityHandlers: McpHandlerMap = {
       // empty falls back to all of them — never "searched nothing, no match".
       ...(Array.isArray(args.catalogs) ? { catalogs: args.catalogs } : {}),
       ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+      ...(args.explain === true ? { explain: true } : {}),
     });
     if (!found.ok) {
       return ok({

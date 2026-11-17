@@ -6485,7 +6485,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. Pass `intent` as free text. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+          "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
         inputSchema: {
           type: "object",
           properties: {
@@ -6496,8 +6496,7 @@ export const tools = {
             },
             workspaceId: {
               type: "string",
-              description:
-                "Optional workspace lens. Omit for pod altitude, which is what 'what can this pod do?' usually means.",
+              description: "Optional workspace lens; omit for the whole pod.",
             },
             catalogs: {
               type: "array",
@@ -6508,6 +6507,10 @@ export const tools = {
             limit: {
               type: "number",
               description: "Max matches per catalog (default 5).",
+            },
+            explain: {
+              type: "boolean",
+              description: "Add `scoring` (what the numbers mean).",
             },
           },
           required: ["intent"],
