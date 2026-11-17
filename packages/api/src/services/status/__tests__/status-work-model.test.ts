@@ -143,6 +143,7 @@ const item = (
     kind: "run",
     packet: packet(),
     run: run(),
+    may: { continue: true, review: new Set(["p-1"]) },
     link: "https://pod/open/x",
     ...over,
   });
@@ -201,6 +202,7 @@ describe("workItemOf — a run that stopped at Script", () => {
           decidedByHuman: false,
           fromStage: "script",
           summary: "Approve stage: Draft for Bees",
+          canReview: true,
         },
       ],
     });
@@ -255,6 +257,31 @@ describe("workItemOf — no Continue where the door would refuse", () => {
     expect(
       w.stages.status === "ok" && w.stages.items.map((s) => s.position)
     ).toEqual(["done", "done", "done", "done"]);
+  });
+});
+
+describe("workItemOf — what THIS reader may do is the read's, placed as given", () => {
+  it("a reader the Continue door would refuse sees the offer, never the button", () => {
+    const w = item({ may: { continue: false, review: new Set(["p-1"]) } });
+    expect(w.continue).toMatchObject({
+      label: "Continue at Script",
+      canAct: false,
+    });
+    expect(item().continue?.canAct).toBe(true);
+  });
+
+  it("a gate is the reader's to decide only when it waits on a proposal they may approve", () => {
+    const gates = (w: ReturnType<typeof item>) =>
+      w.gates.status === "ok" ? w.gates.items.map((g) => g.canReview) : null;
+    expect(
+      gates(item({ may: { continue: true, review: new Set<string>() } }))
+    ).toEqual([false]);
+    // A decided gate is nobody's to decide, whatever the verdict says.
+    const decided = packet();
+    (
+      decided.gates as unknown as { items: Array<Record<string, unknown>> }
+    ).items[0]!.state = "approved";
+    expect(gates(item({ packet: decided }))).toEqual([false]);
   });
 });
 

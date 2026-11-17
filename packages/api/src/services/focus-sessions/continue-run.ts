@@ -63,7 +63,10 @@ import {
   type SessionStatus,
 } from "@synap-core/types/focus-sessions";
 import { createLogger } from "@synap-core/core";
-import { grantWriteDenial } from "../../utils/grant-write-check.js";
+import {
+  grantWriteDenial,
+  type GrantWriteInput,
+} from "../../utils/grant-write-check.js";
 import {
   stagesLeft,
   stagesLeftWords,
@@ -176,49 +179,66 @@ async function newestRun(sessionId: string): Promise<PlaybookRun | null> {
   return (run as PlaybookRun | undefined) ?? null;
 }
 
+/** A refusal of the Continue door, in its own words. */
+export type ContinueRefusal = Extract<ContinueRunResult, { ok: false }>;
+
+/** The session columns the Continue check reads. */
+export type ContinueSession = Pick<
+  FocusSession,
+  | "id"
+  | "userId"
+  | "workspaceId"
+  | "projectId"
+  | "status"
+  | "playbookId"
+  | "stages"
+  | "currentStage"
+  | "channelId"
+  | "subjectEntityId"
+>;
+
 /**
- * Continue a stopped run at its stage. The caller is the person who owns the
- * session (owner-floored on `userId`); an agent key is refused by name: the
- * stop is in the person's Needs you, and going on is theirs to decide.
+ * MAY THIS VIEWER CONTINUE IT NOW: every check of the Continue door, in the
+ * door's order, and nothing the door does not check. The door
+ * ({@link continueStoppedRun}) refuses on it; `statusOf` (`include: ["work"]`
+ * → `continue.canAct`) asks it, so a Continue button and its door can never
+ * disagree. Rungs, cheapest first:
+ *   1. a person, never an agent key (`person_only`);
+ *   2. the session's owner (`not_found`: a session that is not theirs is
+ *      never confirmed to exist);
+ *   3. the key's grant allows a session update (`denied`). `grantDenial` is
+ *      the caller's: the door REFUSES (`grantWriteDenial`, recorded for its
+ *      403), a read only ASKS (`grantDeniedKey`, records nothing);
+ *   4. it stopped early with nothing live on it ({@link continueAt}), with a
+ *      run and a room the new turn needs (`nothing_to_continue`);
+ *   5. no other live run of its playbook on the same record, 0427
+ *      (`already_running`).
  */
-export async function continueStoppedRun(params: {
-  sessionId: string;
+export async function continueCheck<R extends { status: string }>(input: {
+  session: ContinueSession;
+  /** Its newest run; `null` = it has none. */
+  run: R | null;
   userId: string;
   agentUserId?: string | null;
-}): Promise<ContinueRunResult> {
-  const { sessionId, userId } = params;
-  if (params.agentUserId) {
-    return {
-      ok: false,
-      reason: "person_only",
-      message:
-        "Only a person continues a run that stopped before its last stage: it waits in their Needs you. Tell them it can go on.",
-    };
-  }
-  const [row] = await db
-    .select()
-    .from(focusSessions)
-    .where(
-      and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
-    )
-    .limit(1);
-  if (!row) {
+  grantDenial: (write: GrantWriteInput) => Promise<string | null>;
+}): Promise<{ ok: true; left: StagesLeft; run: R } | ContinueRefusal> {
+  const { session, run, userId } = input;
+  if (input.agentUserId) return PERSON_ONLY;
+  if (session.userId !== userId) {
     return {
       ok: false,
       reason: "not_found",
-      message: `Focus session ${sessionId} not found`,
+      message: `Focus session ${session.id} not found`,
     };
   }
-  const session = row as FocusSession;
   // The key's grant bounds it like any session write (the gate's rung 0).
-  const denial = await grantWriteDenial({
+  const denial = await input.grantDenial({
     subjectType: "focus_session",
     action: "update",
     workspaceId: session.workspaceId ?? null,
     projectId: session.projectId ?? null,
   });
   if (denial) return { ok: false, reason: "denied", message: denial };
-  const run = await newestRun(sessionId);
   const left = continueAt({
     status: session.status,
     playbookId: session.playbookId ?? null,
@@ -236,7 +256,6 @@ export async function continueStoppedRun(params: {
           : "This session has no run that stopped before its last stage, so there is nothing to continue.",
     };
   }
-
   // ONE LIVE RUN PER OBJECT: another live run of this playbook on the object.
   if (session.subjectEntityId) {
     const { findLiveRunOfSubject } =
@@ -246,10 +265,59 @@ export async function continueStoppedRun(params: {
       subjectId: session.subjectEntityId,
       userId,
     });
-    if (live && live.session.id !== sessionId) {
+    if (live && live.session.id !== session.id) {
       return alreadyRunning(live.session.id);
     }
   }
+  return { ok: true, left, run };
+}
+
+/** Rung 1: the stop waits in the person's Needs you; an agent never goes on. */
+const PERSON_ONLY: ContinueRefusal = {
+  ok: false,
+  reason: "person_only",
+  message:
+    "Only a person continues a run that stopped before its last stage: it waits in their Needs you. Tell them it can go on.",
+};
+
+/**
+ * Continue a stopped run at its stage. The caller is the person who owns the
+ * session; an agent key is refused by name: the stop is in the person's Needs
+ * you, and going on is theirs to decide. Every refusal is
+ * {@link continueCheck}'s, the check the read asks too.
+ */
+export async function continueStoppedRun(params: {
+  sessionId: string;
+  userId: string;
+  agentUserId?: string | null;
+}): Promise<ContinueRunResult> {
+  const { sessionId, userId } = params;
+  // Rung 1 before anything is read: an agent key is refused by name.
+  if (params.agentUserId) return PERSON_ONLY;
+  const [row] = await db
+    .select()
+    .from(focusSessions)
+    .where(
+      and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+    )
+    .limit(1);
+  if (!row) {
+    return {
+      ok: false,
+      reason: "not_found",
+      message: `Focus session ${sessionId} not found`,
+    };
+  }
+  const session = row as FocusSession;
+  const checked = await continueCheck({
+    session,
+    run: await newestRun(sessionId),
+    userId,
+    agentUserId: params.agentUserId,
+    grantDenial: (write) => grantWriteDenial(write),
+  });
+  if (!checked.ok) return checked;
+  const { left, run } = checked;
 
   // Resolved BEFORE anything is written: a playbook that can no longer run
   // (retired, gone) throws here and the session stays as it was.

@@ -56,6 +56,7 @@ import {
 } from "../services/lifecycle/board-lens.js";
 import { readHome, readMoving } from "../services/lifecycle/homes.js";
 import { countNeedsYouByScope } from "./signals.js";
+import { rosterReadFor } from "../access/session-visibility.js";
 import {
   boardInput,
   boardLensInput,
@@ -493,7 +494,15 @@ export const lifecycleRouter = router({
       })
     )
     .query(({ input, ctx }) =>
-      readStatusOf(ctx.userId, input.ids, { include: input.include })
+      readStatusOf(ctx.userId, input.ids, {
+        include: input.include,
+        // What the reader may do on its work (Continue, a gate's Approve):
+        // the doors' own checks, on the facts this door knows.
+        viewer: {
+          agentUserId: ctx.agentUserId ?? null,
+          roster: rosterReadFor(ctx),
+        },
+      })
     ),
 
   get: podProcedure

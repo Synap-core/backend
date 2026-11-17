@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StatusOfWorkItem } from "@synap-core/types/units";
 import {
+  continueButton,
   gatesWaiting,
   holdLine,
   nextMoveLine,
@@ -50,6 +51,7 @@ const stopped = (over: Partial<StatusOfWorkItem> = {}): StatusOfWorkItem => ({
         state: "pending",
         proposalId: "p-1",
         decidedByHuman: false,
+        canReview: true,
       },
       {
         stageKey: "publish",
@@ -57,6 +59,7 @@ const stopped = (over: Partial<StatusOfWorkItem> = {}): StatusOfWorkItem => ({
         kind: "check",
         state: "by_criteria",
         decidedByHuman: false,
+        canReview: false,
       },
     ],
   },
@@ -83,6 +86,7 @@ const stopped = (over: Partial<StatusOfWorkItem> = {}): StatusOfWorkItem => ({
     at: { key: "script", name: "Script" },
     left: [],
     label: "Continue at Script",
+    canAct: true,
   },
   link: "x",
   ...over,
@@ -155,6 +159,22 @@ describe("work-model — what the work section draws", () => {
     ]);
     expect(gatesWaiting(stopped()).map((g) => g.proposalId)).toEqual(["p-1"]);
     expect(stagesLeftLine(stopped())).toBe("2 stages left: Draft, Publish");
+  });
+
+  it("offers Continue only when the read says THIS reader may (the door's own check)", () => {
+    expect(continueButton(stopped())?.label).toBe("Continue at Script");
+    const theirs = stopped();
+    theirs.continue = { ...theirs.continue!, canAct: false };
+    expect(continueButton(theirs)).toBeNull();
+    expect(continueButton(quiet())).toBeNull();
+  });
+
+  it("a gate waiting on someone else is still said, with no decision for this reader", () => {
+    const item = stopped();
+    if (item.gates.status === "ok") item.gates.items[0]!.canReview = false;
+    expect(gatesWaiting(item).map((g) => [g.proposalId, g.canReview])).toEqual([
+      ["p-1", false],
+    ]);
   });
 
   it("an unread stage list is null (the section says so), not empty", () => {

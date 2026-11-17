@@ -1682,6 +1682,18 @@ describe('include: ["work"] — where its work stands (plan 7d71ddcc W4)', () =>
   const S_HIDDEN_ON = randomUUID();
   const RUN_STOPPED = randomUUID();
   const ROOM = randomUUID();
+  // A live run of mine at Draft, with two human gates waiting: Review, filed
+  // for me (`sourceId` = me), and Publish, filed for another person. Pod-wide
+  // (no space), so only the proposal's own person or a pod admin decides it.
+  const S_GATED = randomUUID();
+  const RUN_GATED = randomUUID();
+  const P_REVIEW = randomUUID();
+  const P_PUBLISH = randomUUID();
+  const GATED = [
+    { key: "draft", name: "Draft" },
+    { key: "review", name: "Review", gate: { kind: "human" } },
+    { key: "publish", name: "Publish", gate: { kind: "human" } },
+  ];
   const PRODUCE = [
     { key: "brief", name: "Brief" },
     { key: "script", name: "Script" },
@@ -1729,10 +1741,42 @@ describe('include: ["work"] — where its work stands (plan 7d71ddcc W4)', () =>
         JSON.stringify({ stages: PRODUCE }),
       ]
     );
+    const gatedPlaybook = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, title, status, origin, expected_outputs, metadata, playbook_id, channel_id, stages, current_stage, started_at, created_at, updated_at)
+       values ($1, $2, 'Ship it', 'Ship it', 'active', 'playbook', '[]'::jsonb, '{}'::jsonb, $3, $4, $5::jsonb, 'draft', now(), now(), now())`,
+      [S_GATED, ME, gatedPlaybook, randomUUID(), JSON.stringify(GATED)]
+    );
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, definition_snapshot, started_at)
+       values ($1, $2, $3, 'is-agent', 'running', '{}'::jsonb, $4, $5::jsonb, now())`,
+      [RUN_GATED, gatedPlaybook, S_GATED, ME, JSON.stringify({ stages: GATED })]
+    );
+    for (const [id, stageKey, stageName, sourceId] of [
+      [P_REVIEW, "review", "Review", ME],
+      [P_PUBLISH, "publish", "Publish", OTHER],
+    ] as const) {
+      await q(
+        `insert into proposals (id, target_type, target_id, proposal_type, data, status, session_id, created_by, created_at, updated_at)
+         values ($1, 'focus_session', $2, 'playbook.stage_gate', $3::jsonb, 'pending', $2, $4, now(), now())`,
+        [
+          id,
+          S_GATED,
+          JSON.stringify({ sessionId: S_GATED, stageKey, stageName, sourceId }),
+          sourceId,
+        ]
+      );
+    }
   });
 
-  const workOf = async (id: string) => {
-    const [a] = await readStatusOf(ME, [id], { include: ["work"] });
+  const workOf = async (
+    id: string,
+    viewer?: { agentUserId: string | null; roster: boolean }
+  ) => {
+    const [a] = await readStatusOf(ME, [id], {
+      include: ["work"],
+      ...(viewer ? { viewer } : {}),
+    });
     return (a as StatusOf).work as Exclude<
       StatusOf["work"],
       { status: "unavailable" } | undefined
@@ -1779,5 +1823,51 @@ describe('include: ["work"] — where its work stands (plan 7d71ddcc W4)', () =>
     ]);
     const [plain] = await readStatusOf(ME, [FILM]);
     expect(plain).not.toHaveProperty("work");
+  });
+
+  describe("what THIS reader may do: the doors' own checks, in the read", () => {
+    const PERSON_VIEWER = { agentUserId: null, roster: true };
+    const AGENT_VIEWER = { agentUserId: "agent-of-me", roster: false };
+    const stoppedFor = async (viewer?: typeof PERSON_VIEWER) =>
+      (await workOf(S_STOPPED, viewer)).items[0]!;
+    const gatesFor = async (viewer?: typeof PERSON_VIEWER) => {
+      const g = (await workOf(S_GATED, viewer)).items[0]!.gates;
+      return g.status === "ok"
+        ? g.items.map((x) => [x.stageKey, x.state, x.canReview])
+        : g;
+    };
+
+    it("the owner, as a person, may continue the stopped run", async () => {
+      expect((await stoppedFor(PERSON_VIEWER)).continue).toMatchObject({
+        label: "Continue at Script",
+        canAct: true,
+      });
+    });
+
+    it("an agent key sees the offer, never the button (the door refuses it person_only)", async () => {
+      expect((await stoppedFor(AGENT_VIEWER)).continue?.canAct).toBe(false);
+    });
+
+    it("a reader the door does not know may do nothing", async () => {
+      expect((await stoppedFor()).continue?.canAct).toBe(false);
+      expect(await gatesFor()).toEqual([
+        ["review", "pending", false],
+        ["publish", "pending", false],
+      ]);
+    });
+
+    it("a gate is theirs to decide only when its proposal's verdict says so", async () => {
+      expect(await gatesFor(PERSON_VIEWER)).toEqual([
+        ["review", "pending", true],
+        ["publish", "pending", false],
+      ]);
+    });
+
+    it("an agent key never decides a gate (approval is the person's)", async () => {
+      expect(await gatesFor(AGENT_VIEWER)).toEqual([
+        ["review", "pending", false],
+        ["publish", "pending", false],
+      ]);
+    });
   });
 });

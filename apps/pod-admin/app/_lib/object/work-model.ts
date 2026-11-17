@@ -8,14 +8,18 @@
  *
  *   - an item with nothing to say (no stages, no stop, no gate waiting, no
  *     ask, no hold) is left out, and a section with no item is OMITTED;
- *   - a stopped run leads: "Stopped at Script", with Continue when the read
- *     offers it (`continue`, the door's own predicate);
+ *   - a stopped run leads: "Stopped at Script", with Continue only when the
+ *     read says THIS reader may (`continue.canAct`, the door's own check);
+ *   - a gate waiting on a person is always said; Approve / Send back only
+ *     when the read says this reader may decide it (`canReview`, the
+ *     verdict the review list and the approve door share);
  *   - the next move is the pod's line, EXCEPT that a run that ended early
  *     never reads "Nothing waiting": the stop's words stand instead;
  *   - a part that could not be read is its own state, never "nothing".
  */
 import type {
   StatusOfWork,
+  StatusOfWorkContinue,
   StatusOfWorkGate,
   StatusOfWorkItem,
   StatusOfWorkStagePosition,
@@ -59,6 +63,13 @@ export function gatesWaiting(
     (g): g is StatusOfWorkGate & { proposalId: string } =>
       g.state === "pending" && !!g.proposalId && g.kind !== "check"
   );
+}
+
+/** The Continue button, only when this reader may continue it now. */
+export function continueButton(
+  item: StatusOfWorkItem
+): StatusOfWorkContinue | null {
+  return item.continue?.canAct ? item.continue : null;
 }
 
 /** How many asks it owes the person; `null` when that could not be read. */

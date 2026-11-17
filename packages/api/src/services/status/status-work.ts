@@ -20,6 +20,17 @@
  * the sessions on it. One packet per listed session (the cap bounds it), each
  * read once even when a session is on two asked things.
  *
+ * WHAT THE READER MAY DO on each item is decided here with the doors' OWN
+ * checks, never re-derived, so a button and its door cannot disagree:
+ *   - `continue.canAct`: `continueCheck`, every rung the Continue door
+ *     refuses on (the grant only ASKED here, `grantDeniedKey`: a read records
+ *     no denial);
+ *   - a gate's `canReview`: `resolveViewerReviewVerdicts`, the verdict
+ *     `proposals.list` and `proposals.get` stamp as `viewerCanReview` (the
+ *     approve door's ladder).
+ * With no `viewer` the reader may do nothing (both `false`). A check that
+ * fails to read offers nothing, never a button the door might refuse.
+ *
  * THROWS when the session lists cannot be read; the caller answers the part
  * `unavailable`. A packet or a run read that fails makes only ITS sections
  * `unavailable`, never the whole part.
@@ -32,9 +43,11 @@ import {
   drizzleSql,
   eq,
   focusSessions,
+  getRequestGrant,
   inArray,
   listHolds,
   playbookRuns,
+  proposals,
   type CurrentHold,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
@@ -59,6 +72,8 @@ import {
 } from "../focus-sessions/session-kind.js";
 import type { ContinuationPacket } from "../focus-sessions/continuation-packet.js";
 import { workItemOf, type WorkRunRow } from "./status-work-model.js";
+import { grantDeniedKey } from "../../utils/grant-write-check.js";
+import { continueCheck } from "../focus-sessions/continue-run.js";
 
 const logger = createLogger({ module: "status-work" });
 
@@ -68,6 +83,17 @@ export interface StatusWorkQuestion {
   sessions: ReadonlyArray<{ answerId: string; sessionId: string }>;
   things: readonly string[];
   goals: readonly string[];
+}
+
+/**
+ * WHO READS, as the door knows them: the agent acting (`ctx.agentUserId`;
+ * `null` = the person themselves) and the door's session-roster semantics
+ * (`rosterReadFor(ctx)`), the two facts the Continue and approve doors decide
+ * on beyond the user.
+ */
+export interface StatusViewer {
+  agentUserId: string | null;
+  roster: boolean;
 }
 
 type Listed = { row: FocusSession; on: StatusOfWorkItem["on"] };
@@ -130,7 +156,8 @@ async function newestRuns(
 /** The work on each asked subject, by answer id. THROWS on a failed list. */
 export async function readStatusWork(
   userId: string,
-  q: StatusWorkQuestion
+  q: StatusWorkQuestion,
+  viewer?: StatusViewer
 ): Promise<Map<string, StatusOfWork>> {
   const floor = sessionStatusFloor(userId);
   const listedFor = new Map<string, { items: Listed[]; truncated: boolean }>();
@@ -255,12 +282,26 @@ export async function readStatusWork(
     return null;
   });
 
-  const [runRows, holdRows] = await Promise.all([runs, holds]);
+  const [runRows, holdRows, packetOf] = await Promise.all([
+    runs,
+    holds,
+    Promise.all(
+      ids.map(async (id) => [id, await packets.get(id)!] as const)
+    ).then((pairs) => new Map(pairs)),
+  ]);
+  const [mayContinue, mayReview] = await Promise.all([
+    viewer && runRows
+      ? continuableBy(userId, viewer, [...sessions.values()], runRows)
+      : Promise.resolve(new Set<string>()),
+    viewer
+      ? reviewableBy(userId, viewer, [...packetOf.values()])
+      : Promise.resolve(new Set<string>()),
+  ]);
   const items = new Map<string, StatusOfWorkItem>();
   await Promise.all(
     ids.map(async (id) => {
       const row = sessions.get(id)!;
-      const packet = await packets.get(id)!;
+      const packet = packetOf.get(id)!;
       const hold: RecordedHold | StatusOfWorkUnavailable | undefined =
         holdRows === null
           ? { status: "unavailable", reason: "Its hold could not be read." }
@@ -287,6 +328,7 @@ export async function readStatusWork(
               ? { failed: "Its run could not be read." }
               : (runRows.get(id) ?? null),
           ...(hold ? { hold } : {}),
+          may: { continue: mayContinue.has(id), review: mayReview },
           link: openLink(id),
         })
       );
@@ -301,4 +343,98 @@ export async function readStatusWork(
     });
   }
   return out;
+}
+
+/**
+ * The sessions this reader may continue now: THE Continue door's check
+ * (`continueCheck`), its grant rung only asked. A check that throws offers
+ * nothing.
+ */
+async function continuableBy(
+  userId: string,
+  viewer: StatusViewer,
+  rows: readonly FocusSession[],
+  runs: ReadonlyMap<string, WorkRunRow>
+): Promise<Set<string>> {
+  const grant = getRequestGrant();
+  const ok = await Promise.all(
+    rows.map((session) =>
+      continueCheck({
+        session,
+        run: runs.get(session.id) ?? null,
+        userId,
+        agentUserId: viewer.agentUserId,
+        grantDenial: async (write) =>
+          grant && (await grantDeniedKey(write, grant)) ? "denied" : null,
+      }).then(
+        (c) => c.ok,
+        (err: unknown) => {
+          logger.warn(
+            { err, sessionId: session.id },
+            "statusOf work: whether the reader may continue it could not be read"
+          );
+          return false;
+        }
+      )
+    )
+  );
+  return new Set(rows.filter((_, i) => ok[i]).map((r) => r.id));
+}
+
+/**
+ * The gate proposals this reader may decide now: every PENDING gate's
+ * proposal, through the verdict `proposals.list` and `proposals.get` stamp
+ * (`resolveViewerReviewVerdicts`, the approve door's ladder). A failed read
+ * offers nothing.
+ */
+async function reviewableBy(
+  userId: string,
+  viewer: StatusViewer,
+  packets: ReadonlyArray<ContinuationPacket | { failed: string }>
+): Promise<Set<string>> {
+  const ids = [
+    ...new Set(
+      packets.flatMap((p) =>
+        "failed" in p || p.gates.status !== "ok"
+          ? []
+          : p.gates.items.flatMap((g) =>
+              g.state === "pending" && g.proposalId ? [g.proposalId] : []
+            )
+      )
+    ),
+  ];
+  if (ids.length === 0) return new Set();
+  try {
+    const rows = await db
+      .select({
+        id: proposals.id,
+        workspaceId: proposals.workspaceId,
+        data: proposals.data,
+        agentUserId: proposals.agentUserId,
+        targetType: proposals.targetType,
+        targetId: proposals.targetId,
+        sessionId: proposals.sessionId,
+        proposalType: proposals.proposalType,
+        projectId: proposals.projectId,
+      })
+      .from(proposals)
+      .where(inArray(proposals.id, ids));
+    const { resolveViewerReviewVerdicts } =
+      await import("../../routers/proposals/review-authority.js");
+    const verdicts = await resolveViewerReviewVerdicts({
+      userId,
+      roster: viewer.roster,
+      actingAgentUserId: viewer.agentUserId,
+      rows,
+    });
+    return new Set(
+      [...verdicts].flatMap(([id, v]) => (v.viewerCanReview ? [id] : []))
+    );
+  } catch (err) {
+    logger.warn(
+      { err },
+      "statusOf work: whether the reader may decide its gates could not be read"
+    );
+    return new Set();
+  }
 }

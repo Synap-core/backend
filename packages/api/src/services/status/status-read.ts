@@ -127,6 +127,7 @@ import {
   type NextMoveHoldFact,
 } from "./next-move.js";
 import { readThingRoles, type ThingRoleRow } from "./status-roles.js";
+import type { StatusViewer } from "./status-work.js";
 import {
   sessionStatusFloor,
   statusAccess,
@@ -345,7 +346,15 @@ async function orUnavailable<T>(p: Promise<T>): Promise<T | Unavailable> {
 export async function readStatusOf(
   userId: string,
   rawIds: readonly string[],
-  opts: { include?: readonly StatusOfInclude[] } = {}
+  opts: {
+    include?: readonly StatusOfInclude[];
+    /**
+     * Who reads, as the door knows them (`include: ["work"]` only): what they
+     * may do on each work item is decided by the doors' own checks. Absent =
+     * they may do nothing (no Continue, no gate to decide).
+     */
+    viewer?: StatusViewer;
+  } = {}
 ): Promise<StatusOfAnswer[]> {
   const wants = (part: StatusOfInclude) =>
     opts.include?.includes(part) ?? false;
@@ -800,16 +809,20 @@ export async function readStatusOf(
   // Where its work stands: every subject asked about in ONE read.
   const worked = wants("work")
     ? import("./status-work.js").then((m) =>
-        m.readStatusWork(userId, {
-          sessions: [
-            ...sessions.map((x) => ({ answerId: x.id, sessionId: x.id })),
-            ...runs.flatMap((r) =>
-              r.sessionId ? [{ answerId: r.id, sessionId: r.sessionId }] : []
-            ),
-          ],
-          things: thingIds,
-          goals: goals.map((g) => g.id),
-        })
+        m.readStatusWork(
+          userId,
+          {
+            sessions: [
+              ...sessions.map((x) => ({ answerId: x.id, sessionId: x.id })),
+              ...runs.flatMap((r) =>
+                r.sessionId ? [{ answerId: r.id, sessionId: r.sessionId }] : []
+              ),
+            ],
+            things: thingIds,
+            goals: goals.map((g) => g.id),
+          },
+          opts.viewer
+        )
       )
     : null;
   worked?.catch(() => undefined);

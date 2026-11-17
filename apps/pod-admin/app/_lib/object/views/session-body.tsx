@@ -473,12 +473,7 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
           </p>
         )}
 
-        <WorkSection
-          subjectId={id}
-          self
-          canAct={owner}
-          sessionHref={sessionHref}
-        />
+        <WorkSection subjectId={id} self sessionHref={sessionHref} />
         {owner && <NeedsYouSection sessionId={id} gradedInRail={railGraded} />}
         <ProposedChangesSection sessionId={id} />
 

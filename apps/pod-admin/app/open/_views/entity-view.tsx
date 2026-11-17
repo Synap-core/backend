@@ -221,7 +221,6 @@ export function EntityView({ id }: { id: string }) {
       <WorkSection
         subjectId={id}
         self={false}
-        canAct
         sessionHref={(sid) => objectPage("session", sid)}
       />
       {prose.map((field) => (

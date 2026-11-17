@@ -13,6 +13,15 @@
  * NEGATIVE CONTROLS: an agent key, a run still live, a cancelled session, a
  * run at its last stage and another live run on the record each write
  * NOTHING (no status move, no dispatch, no room line).
+ *
+ * THE LIVE-RUN GUARD (`continueAt`: nothing live, no draft) is pinned on the
+ * one case only it refuses: a session that ENDED (so `stoppedEarly` holds on
+ * the session's status alone) while its newest run is still live or a draft.
+ * Remove the guard and those tests fail: the door would reopen the session
+ * and dispatch a second turn beside the live one.
+ *
+ * `continueCheck` is the door's check the read asks too (`statusOf` work →
+ * `continue.canAct`): its rungs are pinned here once, for both.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -105,7 +114,7 @@ vi.mock("../../playbooks/run-playbook.js", () => ({
   },
 }));
 
-const { continueStoppedRun, continueAt, stoppedEarly } =
+const { continueStoppedRun, continueAt, continueCheck, stoppedEarly } =
   await import("../continue-run.js");
 const { playbookRuns } = await import("@synap/database");
 
@@ -190,6 +199,19 @@ describe("continueAt — the one predicate the read and the door share", () => {
     expect(continueAt(facts({ runStatus: "cancelled" }))).toBeNull();
     expect(continueAt(facts({ currentStage: "publish" }))).toBeNull();
     expect(continueAt(facts({ playbookId: null }))).toBeNull();
+  });
+
+  it("NEGATIVE CONTROL (live-run guard): an ENDED session whose run is still live or a draft is not continued", () => {
+    for (const status of ["closed", "failed"]) {
+      for (const runStatus of ["running", "waiting_on_you", "proposed"]) {
+        // The session's status alone reads it as stopped early …
+        expect(stoppedEarly(facts({ status, runStatus }))?.at?.key).toBe(
+          "script"
+        );
+        // … and only the live-run guard keeps Continue off.
+        expect(continueAt(facts({ status, runStatus }))).toBeNull();
+      }
+    }
   });
 
   it("an open session whose run is live has not stopped early", () => {
@@ -279,6 +301,21 @@ describe("continueStoppedRun — a person continues a stopped run", () => {
     nothingWritten();
   });
 
+  it("NEGATIVE CONTROL (live-run guard): an ended session whose run is still running is not continued, nothing written", async () => {
+    h.session = session({ status: "closed" });
+    h.run = run({ status: "running", stopReason: null });
+    const result = await continueStoppedRun({
+      sessionId: SESSION,
+      userId: "user-1",
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "nothing_to_continue",
+      message: "This run is still going: nothing to continue.",
+    });
+    nothingWritten();
+  });
+
   it("NEGATIVE: a cancelled session, or a run at its last stage, has nothing to continue", async () => {
     h.session = session({ status: "cancelled" });
     expect(
@@ -323,5 +360,73 @@ describe("continueStoppedRun — a person continues a stopped run", () => {
       await continueStoppedRun({ sessionId: SESSION, userId: "user-1" })
     ).toMatchObject({ ok: false, reason: "not_found" });
     nothingWritten();
+  });
+});
+
+describe("continueCheck — the door's check, asked by the read (continue.canAct)", () => {
+  const check = (over: Partial<Parameters<typeof continueCheck>[0]> = {}) =>
+    continueCheck({
+      session: session() as never,
+      run: run(),
+      userId: "user-1",
+      grantDenial: async () => null,
+      ...over,
+    });
+
+  it("the owner, no grant in the way, a stopped run: may continue at Script", async () => {
+    const c = await check();
+    expect(c.ok).toBe(true);
+    if (c.ok) expect(c.left.at?.key).toBe("script");
+  });
+
+  it("an agent may not (person_only), before the grant is even asked", async () => {
+    let asked = false;
+    const c = await check({
+      agentUserId: "agent-1",
+      grantDenial: async () => ((asked = true), null),
+    });
+    expect(c).toMatchObject({ ok: false, reason: "person_only" });
+    expect(asked).toBe(false);
+  });
+
+  it("someone who can read but does not own the session may not (not_found)", async () => {
+    expect(
+      await check({ session: session({ userId: "user-2" }) as never })
+    ).toMatchObject({ ok: false, reason: "not_found" });
+  });
+
+  it("a key whose grant refuses a session update may not (denied), asked as a session update", async () => {
+    const asked: unknown[] = [];
+    const c = await check({
+      grantDenial: async (w: unknown) => (asked.push(w), "denied"),
+    });
+    expect(c).toMatchObject({ ok: false, reason: "denied" });
+    expect(asked).toEqual([
+      {
+        subjectType: "focus_session",
+        action: "update",
+        workspaceId: null,
+        projectId: null,
+      },
+    ]);
+  });
+
+  it("another live run of the playbook on the record: may not (already_running)", async () => {
+    h.live = { session: { id: OTHER_SESSION } };
+    expect(await check()).toMatchObject({
+      ok: false,
+      reason: "already_running",
+      liveSessionId: OTHER_SESSION,
+    });
+  });
+
+  it("no run, or no room for the new turn: nothing to continue", async () => {
+    expect(await check({ run: null })).toMatchObject({
+      ok: false,
+      reason: "nothing_to_continue",
+    });
+    expect(
+      await check({ session: session({ channelId: null }) as never })
+    ).toMatchObject({ ok: false, reason: "nothing_to_continue" });
   });
 });

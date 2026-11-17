@@ -337,6 +337,13 @@ export interface StatusOfWorkGate {
   fromStage?: string | null;
   /** The proposal's own sentence ("Approve stage: Draft for Video 12"). */
   summary?: string | null;
+  /**
+   * May THIS reader decide it now: the gate waits (`pending`) on a proposal
+   * the reader may approve, by the verdict the proposal list and the approve
+   * door share (`viewerCanReview`). `false` otherwise: draw no Approve or
+   * Send back.
+   */
+  canReview: boolean;
 }
 
 /** A slot the run owes the PERSON (the packet's `userMustDecide.owedSlots`). */
@@ -409,6 +416,12 @@ export interface StatusOfWorkContinue {
   left: StatusOfWorkStageRef[];
   /** "Continue at Script". */
   label: string;
+  /**
+   * May THIS reader continue it now: the Continue door's own check (a person,
+   * the session's owner, the key's grant, nothing else live on the record).
+   * `false` = draw no Continue button, the door would refuse.
+   */
+  canAct: boolean;
 }
 
 /** THE next move of a work item (the packet's `nextMove`), as the wire carries it. */

@@ -10,9 +10,11 @@
  * Each item, attention first:
  *   1. a run that stopped before its last stage: "Stopped at Script", the
  *      stages left, why it stopped, and Continue (the door
- *      `focusSessions.continueRun`, offered only when the read says so);
+ *      `focusSessions.continueRun`), only when the read says THIS reader
+ *      may (`continue.canAct`, the door's own check);
  *   2. the gates waiting on a person: Approve / Send back, through the
- *      review's one decision path (`useProposalDecision`);
+ *      review's one decision path (`useProposalDecision`), only when the
+ *      read says this reader may decide it (`canReview`);
  *   3. the stages: done, current, left, each gated one with its gate's state;
  *   4. the hold, the asks it owes (answered on the session page, in Needs
  *      you) and the next move.
@@ -43,6 +45,7 @@ import { useProposalDecision } from "../../../proposal/[id]/use-proposal-decisio
 import { objectPage } from "../content/markdown-model";
 import {
   asksOwed,
+  continueButton,
   gatesWaiting,
   holdLine,
   nextMoveLine,
@@ -72,15 +75,12 @@ const POSITION_WORD: Record<WorkStageMark["position"], string> = {
 export function WorkSection({
   subjectId,
   self,
-  canAct,
   sessionHref,
 }: {
   /** The session or thing whose work this is. */
   subjectId: string;
   /** The page IS the session: its item is not named or linked again. */
   self: boolean;
-  /** The reader may move it (the owner): Continue, Approve, Send back. */
-  canAct: boolean;
   /** A session's page in this frame; null = none to open. */
   sessionHref: (sessionId: string) => string | null;
 }) {
@@ -120,7 +120,6 @@ export function WorkSection({
             <WorkItem
               item={item}
               self={self}
-              canAct={canAct}
               href={sessionHref(item.sessionId)}
               onMoved={() => void query.refetch()}
             />
@@ -134,13 +133,11 @@ export function WorkSection({
 function WorkItem({
   item,
   self,
-  canAct,
   href,
   onMoved,
 }: {
   item: StatusOfWorkItem;
   self: boolean;
-  canAct: boolean;
   href: string | null;
   onMoved: () => void;
 }) {
@@ -151,6 +148,7 @@ function WorkItem({
   const hold = workHold(item);
   const next = nextMoveLine(item);
   const left = stagesLeftLine(item);
+  const again = continueButton(item);
   const cont = trpc.focusSessions.continueRun.useMutation({
     onSuccess: async (result) => {
       if (!result.ok) return;
@@ -203,7 +201,7 @@ function WorkItem({
               {item.run.error}
             </span>
           )}
-          {canAct && item.continue && (
+          {again && (
             <div>
               <Button
                 size="sm"
@@ -213,7 +211,7 @@ function WorkItem({
                 isLoading={cont.isPending}
                 onPress={() => cont.mutate({ sessionId: item.sessionId })}
               >
-                {item.continue.label}
+                {again.label}
               </Button>
             </div>
           )}
@@ -236,7 +234,7 @@ function WorkItem({
           key={g.proposalId}
           stageName={g.stageName}
           proposalId={g.proposalId}
-          canAct={canAct}
+          canReview={g.canReview}
           onDecided={onMoved}
         />
       ))}
@@ -336,16 +334,19 @@ function StageList({ stages }: { stages: WorkStageMark[] }) {
   );
 }
 
-/** A gate waiting on the person: Approve / Send back, the review's own path. */
+/**
+ * A gate waiting on a person. Approve / Send back, the review's own path,
+ * only when the read says THIS reader may decide it (`canReview`).
+ */
 function GateCard({
   stageName,
   proposalId,
-  canAct,
+  canReview,
   onDecided,
 }: {
   stageName: string;
   proposalId: string;
-  canAct: boolean;
+  canReview: boolean;
   onDecided: () => void;
 }) {
   const [decided, setDecided] = useState<"approved" | "sent_back" | null>(null);
@@ -378,10 +379,12 @@ function GateCard({
             ? "approved."
             : decided === "sent_back"
               ? "sent back."
-              : "waits for your approval."}
+              : canReview
+                ? "waits for your approval."
+                : "waits for approval."}
         </span>
       </span>
-      {canAct && !decided && (
+      {canReview && !decided && (
         <span className="flex gap-2">
           <Button
             size="sm"

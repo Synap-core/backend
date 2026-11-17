@@ -18,6 +18,9 @@
  *     move's `stopped_early` rung and the Continue door share;
  *   - the Continue offer: `continueAt`, THE door's own predicate, so the
  *     button is offered exactly when the door would run.
+ * What THIS reader may do (`continue.canAct`, each gate's `canReview`) is
+ * decided by the read (`status-work.ts`) with the doors' own checks and
+ * passed in (`may`): this file only places it.
  */
 import type {
   LifecycleCategory,
@@ -192,6 +195,11 @@ export function workItemOf(input: {
   run: WorkRunRow | null | { failed: string };
   /** Its current hold, read only when it stands paused. */
   hold?: RecordedHold | StatusOfWorkUnavailable;
+  /**
+   * What the reader may do on it, decided by the doors' own checks: continue
+   * it (`continueCheck`), and decide which gate proposals (`viewerCanReview`).
+   */
+  may: { continue: boolean; review: ReadonlySet<string> };
   link: string;
 }): StatusOfWorkItem {
   const { row } = input;
@@ -261,6 +269,10 @@ export function workItemOf(input: {
               ...(g.decidedAt ? { decidedAt: g.decidedAt } : {}),
               ...(g.fromStage ? { fromStage: g.fromStage } : {}),
               ...(g.summary ? { summary: g.summary } : {}),
+              canReview:
+                g.state === "pending" &&
+                !!g.proposalId &&
+                input.may.review.has(g.proposalId),
             })),
           }
     ),
@@ -335,6 +347,7 @@ export function workItemOf(input: {
             at: again.at,
             left: again.left,
             label: continueLabel(again),
+            canAct: input.may.continue,
           },
         }
       : {}),
