@@ -551,6 +551,7 @@ export { registerGoalLoopReactor } from "./services/tracks/goal-loop-reactor.js"
 // a goal's or a session's hold resume owes after the move.
 export { holdResumeFollowUp } from "./services/lifecycle/hold-resume-follow-up.js";
 export { meetOutcomesReactionEffect } from "./services/reactions/meet-outcomes-effect.js";
+export { reachStageStatusReactionEffect } from "./services/reactions/reach-stage-status-effect.js";
 export {
   listReactionRules,
   type ReactionRuleView,

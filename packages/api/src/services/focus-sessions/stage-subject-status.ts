@@ -59,7 +59,8 @@
  * {@link writeStageReachedStatus} through the same {@link writeSubjectStatusValue}
  * door, at exactly two signals:
  *  1. the stage's declared outputs are all delivered
- *     ({@link reachApprovedStageOutputs}, called by every slot-settling door);
+ *     (the reactions reactor's built-in rule on a slot moving to done:
+ *     {@link stagesApprovedBySettledSlots} plans it, one engine — D1);
  *  2. else the NEXT stage's gate passes ({@link writeGatePassStatuses}: the
  *     stage-gate executor, `resumeCheckGateIfMet`, a check gate that passes
  *     on advance) — the reached status of the stage LEFT, THEN the entered
@@ -84,7 +85,12 @@ import {
   resolveStatusMoveTarget,
   type StatusMoveActor,
 } from "@synap/database";
-import { findLifecycleOption, type Hold } from "@synap-core/types/lifecycle";
+import {
+  findLifecycleOption,
+  type Hold,
+  type LifecycleCategory,
+  type TransitionCause,
+} from "@synap-core/types/lifecycle";
 // The ONE reader of a session's process definition — shared with the reverse
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
@@ -97,6 +103,7 @@ import {
 import type { Context } from "../../types/context.js";
 import { moveStatus, type MoveStatusResult } from "../lifecycle/move-status.js";
 import { readSubjectProfile } from "../playbooks/playbook-activators.js";
+import { deriveSlotKeys } from "@synap-core/types/units";
 import {
   stageOutputsApproved,
   stagesDeclaringSlots,
@@ -132,7 +139,12 @@ export type StageSubjectStatusOutcome =
         | "stage_not_found"
         | "subject_ahead";
     }
-  | { status: "failed"; reason: string };
+  | {
+      status: "failed";
+      reason: string;
+      /** The compare-and-set found another status: a person's move won. */
+      code?: "moved_meanwhile";
+    };
 
 /**
  * What an advance's reply says about the subject move (`subjectMove` on the
@@ -347,7 +359,7 @@ export type StageApprover =
   | { kind: "person"; userId: string }
   | { kind: "agent"; userId: string; agentUserId?: string | null };
 
-function approverActor(a: StageApprover): StatusMoveActor {
+export function approverActor(a: StageApprover): StatusMoveActor {
   return a.kind === "person"
     ? { kind: "human", userId: a.userId }
     : { kind: "agent", userId: a.userId, agentUserId: a.agentUserId ?? null };
@@ -374,6 +386,16 @@ export async function writeStageReachedStatus(input: {
   signal: StageApprovalSignal;
   /** Who approved — see {@link StageApprover}. */
   approver: StageApprover;
+  /**
+   * Who MOVES it, when not the approver: the reactions reactor moves as the
+   * `system` (D6) where no person's say is needed (see
+   * `services/reactions/reach-stage-status-effect.ts`).
+   */
+  actor?: StatusMoveActor;
+  /** The move that caused this one (a reaction's, reactions W2). */
+  cause?: TransitionCause | null;
+  /** The status the mover read (the door's compare-and-set). */
+  expectedFrom?: string | null;
 }): Promise<StageSubjectStatusOutcome> {
   const { session } = input;
   if (!session.subjectEntityId)
@@ -405,8 +427,12 @@ export async function writeStageReachedStatus(input: {
       process: { ...proc, statusProperty: proc.statusProperty },
       value,
       reason: reasoning,
-      actor: approverActor(input.approver),
+      actor: input.actor ?? approverActor(input.approver),
       ...(notBackFrom.size > 0 ? { notBackFrom, notBackFromStrict: true } : {}),
+      ...(input.cause ? { cause: input.cause } : {}),
+      ...(input.expectedFrom !== undefined && input.expectedFrom !== null
+        ? { expectedFrom: input.expectedFrom }
+        : {}),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -490,79 +516,139 @@ async function stageLeftForGate(
 }
 
 /**
- * APPROVAL SIGNAL 1: a slot of the session was just settled (approved,
- * attested, answered, evidenced, merged). A stage that declares an
- * `onApproved` and outputs, every one of them now delivered
- * ({@link stageOutputsApproved}), reaches that status. The stages judged:
- * the one the run stands on, and every EARLIER stage that declares one of the
- * `settled` slots — a run may move on before its slot settles (a pull request
- * merged after the run reached the next stage, a sent message a person
- * approves later), and the stage whose work it was still reaches its status.
- * A later stage never: its slots do not exist yet. In stage order, so the
- * history reads as the work did. The approver is who settled the slot.
- * Called AFTER the settling commit by each slot-settling door; idempotent (a
- * status already held is `already_set`; one the subject is past is never
- * moved back); never throws. Returns the last stage's outcome, `undefined`
- * when nothing was due.
+ * APPROVAL SIGNAL 1, the PLAN: a slot of the session was just settled
+ * (approved, attested, answered, evidenced, merged, met by its ref). Which
+ * stages does that approve? A stage that declares an `onApproved` and
+ * outputs, every one of them now delivered ({@link stageOutputsApproved}).
+ * The stages judged: the one the run stands on, and every EARLIER stage that
+ * declares one of the `settled` slots — a run may move on before its slot
+ * settles (a pull request merged after the run reached the next stage), and
+ * the stage whose work it was still reaches its status. A later stage never:
+ * its slots do not exist yet. In stage order, so the history reads as the
+ * work did. Read only: the reactions reactor's built-in rule
+ * `builtin:approved-output-reaches-status` plans with it and writes each one
+ * through {@link writeStageReachedStatus} (decision D1: one engine).
  */
-export async function reachApprovedStageOutputs(input: {
+export async function stagesApprovedBySettledSlots(input: {
   sessionId: string;
-  /** Who settled the slot — see {@link StageApprover}. */
-  approver: StageApprover;
-  /** The slots this door settled (key and/or label), when it knows them. */
-  settled?: readonly SettledSlot[];
-}): Promise<StageSubjectStatusOutcome | undefined> {
-  try {
-    const [row] = await db
-      .select({
-        id: focusSessions.id,
-        playbookId: focusSessions.playbookId,
-        subjectEntityId: focusSessions.subjectEntityId,
-        workspaceId: focusSessions.workspaceId,
-        currentStage: focusSessions.currentStage,
-        expectedOutputs: focusSessions.expectedOutputs,
-      })
-      .from(focusSessions)
-      .where(eq(focusSessions.id, input.sessionId))
-      .limit(1);
-    if (!row?.subjectEntityId || !row.currentStage) return undefined;
-    const proc = await loadSessionProcess({
-      sessionId: row.id,
-      playbookId: row.playbookId,
-    });
-    if (!proc) return undefined;
-    const at = proc.stages.findIndex((s) => s?.key === row.currentStage);
-    if (at < 0) return undefined;
-    const declaring = new Set(
-      stagesDeclaringSlots(proc.stages, input.settled ?? [])
-    );
-    const slots: ExpectedOutput[] = Array.isArray(row.expectedOutputs)
-      ? (row.expectedOutputs as ExpectedOutput[])
-      : [];
-    let last: StageSubjectStatusOutcome | undefined;
-    for (const stage of proc.stages.slice(0, at + 1)) {
-      const key = stage?.key;
-      if (!key || !stageOnApproved(stage)) continue;
-      if (key !== row.currentStage && !declaring.has(key)) continue;
-      if (!stageOutputsApproved(proc.stages, key, slots)) continue;
-      last = await writeStageReachedStatus({
-        session: row,
-        stageKey: key,
-        signal: "output_approved",
-        approver: input.approver,
-      });
-    }
-    return last;
-  } catch (err) {
-    logger.warn(
-      { err, sessionId: input.sessionId },
-      "approved-output reach failed — the slot stands"
-    );
-    return {
-      status: "failed",
-      reason: err instanceof Error ? err.message : String(err),
-    };
+  /** The slots that settled (key and/or label). */
+  settled: readonly SettledSlot[];
+}): Promise<{
+  session: {
+    id: string;
+    playbookId: string | null;
+    subjectEntityId: string;
+    workspaceId: string | null;
+    userId: string;
+  };
+  stages: Array<{ stageKey: string; value: string }>;
+} | null> {
+  const [row] = await db
+    .select({
+      id: focusSessions.id,
+      playbookId: focusSessions.playbookId,
+      subjectEntityId: focusSessions.subjectEntityId,
+      workspaceId: focusSessions.workspaceId,
+      userId: focusSessions.userId,
+      currentStage: focusSessions.currentStage,
+      expectedOutputs: focusSessions.expectedOutputs,
+    })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, input.sessionId))
+    .limit(1);
+  if (!row?.subjectEntityId || !row.currentStage) return null;
+  const proc = await loadSessionProcess({
+    sessionId: row.id,
+    playbookId: row.playbookId,
+  });
+  if (!proc) return null;
+  const at = proc.stages.findIndex((s) => s?.key === row.currentStage);
+  if (at < 0) return null;
+  const slots: ExpectedOutput[] = Array.isArray(row.expectedOutputs)
+    ? (row.expectedOutputs as ExpectedOutput[])
+    : [];
+  // A slot's move names it by its KEY (stamped, or derived from its label);
+  // a stage declares it by label. Name each settled slot both ways, from the
+  // slot as the session stores it.
+  const keys = deriveSlotKeys(slots);
+  const named = input.settled.flatMap((x) => {
+    const at = x.key ? keys.indexOf(x.key) : -1;
+    return at >= 0 ? [x, { key: x.key, label: slots[at]?.label ?? null }] : [x];
+  });
+  const declaring = new Set(stagesDeclaringSlots(proc.stages, named));
+  const stages: Array<{ stageKey: string; value: string }> = [];
+  for (const stage of proc.stages.slice(0, at + 1)) {
+    const key = stage?.key;
+    const value = stageOnApproved(stage);
+    if (!key || !value) continue;
+    if (key !== row.currentStage && !declaring.has(key)) continue;
+    if (!stageOutputsApproved(proc.stages, key, slots)) continue;
+    stages.push({ stageKey: key, value });
   }
+  const { currentStage: _c, expectedOutputs: _e, ...session } = row;
+  return {
+    session: { ...session, subjectEntityId: row.subjectEntityId },
+    stages,
+  };
+}
+
+/**
+ * Where a reached status would land, read where its move would read it (the
+ * role's facet, else the kind's declared lifecycle): the status the subject
+ * holds NOW (the compare-and-set's belief), the value's category (done and
+ * lost are proposed by a reaction, D3) and whether only a person may move a
+ * thing into it (`humanOnly` on the lifecycle, or the process's own list).
+ * Null when the subject is gone or declares no lifecycle. Read only.
+ */
+export async function readReachedMoveTarget(input: {
+  session: {
+    id: string;
+    playbookId: string | null;
+    workspaceId: string | null;
+  };
+  subjectEntityId: string;
+  value: string;
+}): Promise<{
+  current: string | null;
+  category: LifecycleCategory;
+  humanOnly: boolean;
+} | null> {
+  const proc = await loadSessionProcess({
+    sessionId: input.session.id,
+    playbookId: input.session.playbookId,
+  });
+  if (!proc) return null;
+  const [subject] = await db
+    .select({ workspaceId: entities.workspaceId })
+    .from(entities)
+    .where(eq(entities.id, input.subjectEntityId))
+    .limit(1);
+  if (!subject) return null;
+  const subjectProfile = proc.profileSlug
+    ? await readSubjectProfile(proc.profileSlug, input.session.workspaceId)
+    : null;
+  const isRole = subjectProfile?.profileKind === "role";
+  const target = await resolveStatusMoveTarget(db, {
+    entityId: input.subjectEntityId,
+    ...(isRole
+      ? {
+          role: proc.profileSlug,
+          workspaceId: input.session.workspaceId ?? subject.workspaceId ?? null,
+        }
+      : {
+          workspaceId: subject.workspaceId ?? input.session.workspaceId ?? null,
+        }),
+  });
+  if (!target.ok) return null;
+  const option = findLifecycleOption(target.target.lifecycle, input.value);
+  if (!option) return null;
+  const current = target.target.current;
+  return {
+    current: typeof current === "string" ? current : null,
+    category: option.category,
+    humanOnly:
+      option.humanOnly === true || proc.humanOnlyStatuses.includes(input.value),
+  };
 }
 
 /**
@@ -615,6 +701,8 @@ async function writeSubjectStatusValue(input: {
   notBackFromStrict?: boolean;
   /** The status door's compare-and-set belief (`moveStatus.expectedFrom`). */
   expectedFrom?: string;
+  /** The move that caused this one (a reaction's): stamped on the transition. */
+  cause?: TransitionCause;
 }): Promise<StageSubjectStatusOutcome> {
   const { session, entityId, value, reason, actor } = input;
   const proc = input.process;
@@ -687,6 +775,7 @@ async function writeSubjectStatusValue(input: {
       ...(input.expectedFrom !== undefined
         ? { expectedFrom: input.expectedFrom }
         : {}),
+      ...(input.cause ? { cause: input.cause } : {}),
     };
 
     if (isRole) {
@@ -790,6 +879,7 @@ function fromMove(
       return {
         status: "failed",
         reason: `the subject's status moved meanwhile (now "${move.actual ?? "none"}")`,
+        code: "moved_meanwhile",
       };
     case "refused":
       return {

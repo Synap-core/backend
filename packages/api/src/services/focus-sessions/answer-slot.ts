@@ -441,16 +441,6 @@ export async function answerExpectedOutput(
         sessionId: result.session.id,
         userId: params.userId,
       });
-      // An answer that DECIDES its slot (an approval, a choice) may complete
-      // the stage's declared outputs: the stage then reaches its
-      // `onApproved`, as the person who answered (decision D2). Never throws.
-      const { reachApprovedStageOutputs } =
-        await import("./stage-subject-status.js");
-      await reachApprovedStageOutputs({
-        sessionId: result.session.id,
-        approver: { kind: "person", userId: params.userId },
-        settled: [{ key: result.before.key, label: result.before.label }],
-      });
     }
     // A pause may wait on this answer (`until.moves: answer:<session>/<slot>`):
     // it resumes now, not at the hourly sweep (plan 07f8a997 W1).

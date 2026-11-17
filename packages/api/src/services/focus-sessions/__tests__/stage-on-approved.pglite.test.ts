@@ -15,11 +15,16 @@
  *    owed reaches nothing;
  *  - an UNGATED advance out of a stage with no outputs reaches nothing (the
  *    rule's third case: no signal, no write);
- *  - the REAL settle doors reach it: a recorded merge
- *    (`satisfyPullRequestByMerge`) and claim evidence
- *    (`satisfyClaimsByEvidence`) close the stage's required output and the
- *    subject reaches its status — also when the run already moved on to the
- *    next stage; a merge of another pull request reaches nothing.
+ *  - approval signal 1 is ONE built-in reaction (decision D1, review
+ *    6bf3101d M2), not a call from the doors: the REAL settle doors
+ *    (`satisfyPullRequestByMerge`, `satisfyClaimsByEvidence`,
+ *    `attestExpectedOutput`, and default 3's `satisfyOutputsByRef` — M2b)
+ *    owe the slot's move; the REAL reactor (`handleReactions`) runs the rule
+ *    `builtin:approved-output-reaches-status` on it, and the subject reaches
+ *    the stage's status with the reaction's `cause` — also when the run
+ *    already moved on; a merge of another pull request, or a stage still
+ *    owed an output, reaches nothing; a humanOnly status is written as the
+ *    PERSON who attested, and proposed when no person approved.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -146,15 +151,24 @@ vi.mock("../../../utils/split-brain-service.js", async (importOriginal) => ({
 import { pgliteAllTablesDdl } from "../../../__tests__/pglite-ddl.js";
 import { updateFocusSession } from "../update-session.js";
 import {
-  reachApprovedStageOutputs,
   writeGatePassStatuses,
   writeStageReachedStatus,
 } from "../stage-subject-status.js";
 import {
+  attestExpectedOutput,
   satisfyClaimsByEvidence,
+  satisfyOutputsByRef,
   satisfyPullRequestByMerge,
 } from "../satisfy-expected-output.js";
 import { parsePullRequestRef } from "@synap-core/types";
+import { handleReactions } from "@synap/jobs/workers/reactions.js";
+import { registerReactionEffect } from "@synap/jobs/utils/reaction-effects.js";
+import { OUTCOME_MET_REACTION_ID } from "@synap/jobs/utils/reactions.js";
+import { reachStageStatusReactionEffect } from "../../reactions/reach-stage-status-effect.js";
+
+// apps/api fills the effect's slot at boot; here, once.
+registerReactionEffect(reachStageStatusReactionEffect);
+const REACH = "builtin:approved-output-reaches-status";
 
 const migration = (f: string) =>
   readFileSync(
@@ -381,34 +395,6 @@ describe("a humanOnly reached status (founder default c)", () => {
   });
 });
 
-describe("approval signal 1: the stage's declared outputs", () => {
-  it("all delivered: the stage reaches its status, as the approver", async () => {
-    const post = await seedPost("Briefed");
-    const session = await runOn(post, "script", [
-      { kind: "document", label: "Script", status: "done" },
-    ]);
-    const out = await reachApprovedStageOutputs({
-      sessionId: session.id,
-      approver: { kind: "person", userId: USER },
-    });
-    expect(out).toMatchObject({ status: "written", value: "Scripted" });
-    expect(await statusOf(post)).toBe("Scripted");
-  });
-
-  it("NEGATIVE: one still owed reaches nothing", async () => {
-    const post = await seedPost("Briefed");
-    const session = await runOn(post, "script", [
-      { kind: "document", label: "Script", status: "pending" },
-    ]);
-    const out = await reachApprovedStageOutputs({
-      sessionId: session.id,
-      approver: { kind: "person", userId: USER },
-    });
-    expect(out).toBeUndefined();
-    expect(await statusOf(post)).toBe("Briefed");
-  });
-});
-
 describe("no signal, no write (the rule's third case)", () => {
   it("an UNGATED advance out of a stage with no outputs reaches nothing", async () => {
     const post = await seedPost("Idea");
@@ -450,8 +436,42 @@ const prSlot = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-describe("the settle doors reach the stage's status (approval signal 1, through the real doors)", () => {
-  it("a recorded MERGE of the slot's pull request reaches it", async () => {
+/** The reactor, on every slot move the doors owed for `sessionId`. */
+async function react(sessionId: string) {
+  const rows = (
+    await q<{ id: string }>(
+      `select transition->>'transitionId' as id
+         from lifecycle_transition_outbox
+        where transition->>'subjectType' = 'slot'
+          and transition->>'sessionId' = $1
+        order by created_at`,
+      [sessionId]
+    )
+  ).rows;
+  const out = { applied: 0, proposed: 0, skipped: 0 };
+  for (const r of rows) {
+    const one = await handleReactions({ transitionId: r.id });
+    out.applied += one.applied;
+    out.proposed += one.proposed;
+    out.skipped += one.skipped;
+  }
+  return out;
+}
+
+/** The cause on each move of `id`: the reaction that made it. */
+const causesOf = async (id: string) =>
+  (
+    await q<{ rid: string | null }>(
+      `select transition->'cause'->>'reactionId' as rid
+         from lifecycle_transition_outbox
+        where coalesce(transition->>'subjectId', transition->>'entityId') = $1
+        order by created_at`,
+      [id]
+    )
+  ).rows.map((r) => r.rid);
+
+describe("approval signal 1 is ONE built-in reaction: the doors owe the slot's move, the reactor reaches the stage", () => {
+  it("a recorded MERGE of the slot's pull request reaches it, the move naming the rule", async () => {
     const post = await seedPost("Briefed");
     const session = await runOn(post, "merged", [prSlot()], MERGE_STAGES);
     const out = await satisfyPullRequestByMerge({
@@ -460,8 +480,12 @@ describe("the settle doors reach the stage's status (approval signal 1, through 
       pr: parsePullRequestRef(PR_URL)!,
     });
     expect(out.satisfied.map((x) => x.label)).toEqual(["Merged fix"]);
+    // The door itself moves nothing on the subject: the reactor does.
+    expect(await statusOf(post)).toBe("Briefed");
+    expect(await react(session.id)).toMatchObject({ applied: 1 });
     expect(await statusOf(post)).toBe("Scripted");
     expect(await movesOf(post)).toEqual([["Scripted", session.id]]);
+    expect(await causesOf(post)).toEqual([REACH]);
   });
 
   it("the run already moved on to the next stage: the merge still reaches the stage whose work it was", async () => {
@@ -472,6 +496,7 @@ describe("the settle doors reach the stage's status (approval signal 1, through 
       userId: USER,
       pr: parsePullRequestRef(PR_URL)!,
     });
+    await react(session.id);
     expect(await statusOf(post)).toBe("Scripted");
     expect(await movesOf(post)).toEqual([["Scripted", session.id]]);
   });
@@ -489,7 +514,143 @@ describe("the settle doors reach the stage's status (approval signal 1, through 
       userId: USER,
     });
     expect(out.satisfied.map((x) => x.label)).toEqual(["Merged fix"]);
+    await react(session.id);
     expect(await statusOf(post)).toBe("Scripted");
+  });
+
+  it("M2b: an outcome DEFAULT 3 meets by its ref reaches its stage (the move it made chains)", async () => {
+    const post = await seedPost("Briefed");
+    const doc = randomUUID();
+    const session = await runOn(
+      post,
+      "merged",
+      [
+        {
+          kind: "document",
+          label: "Merged fix",
+          status: "pending",
+          ref: { kind: "document", id: doc },
+        },
+      ],
+      [
+        MERGE_STAGES[0]!,
+        {
+          ...MERGE_STAGES[1]!,
+          expectedOutputs: [{ kind: "document", label: "Merged fix" }],
+        },
+        MERGE_STAGES[2]!,
+      ]
+    );
+    const fired = randomUUID();
+    const out = await satisfyOutputsByRef({
+      sessionId: session.id,
+      userId: USER,
+      ref: { kind: "document", id: doc },
+      proposalId: randomUUID(),
+      cause: {
+        reactionId: OUTCOME_MET_REACTION_ID,
+        transitionId: fired,
+        chainId: fired,
+        depth: 1,
+      },
+    });
+    expect(out.satisfied.map((x) => x.label)).toEqual(["Merged fix"]);
+    await react(session.id);
+    expect(await statusOf(post)).toBe("Scripted");
+    expect(await causesOf(post)).toEqual([REACH]);
+  });
+
+  it("a humanOnly status: written as the PERSON whose attestation approved the work", async () => {
+    const post = await seedPost("In Draft");
+    const session = await runOn(
+      post,
+      "review",
+      [
+        {
+          kind: "document",
+          label: "Final cut",
+          status: "pending",
+          owner: "human",
+        },
+      ],
+      [
+        {
+          key: "review",
+          name: "Review",
+          onApproved: "approved",
+          expectedOutputs: [{ kind: "document", label: "Final cut" }],
+        },
+        { key: "publish", name: "Publish" },
+      ]
+    );
+    const att = await attestExpectedOutput({
+      sessionId: session.id,
+      userId: USER,
+      expectedLabel: "Final cut",
+    });
+    expect(att.status).toBe("attested");
+    expect(await react(session.id)).toMatchObject({ applied: 1, proposed: 0 });
+    expect(await statusOf(post)).toBe("approved");
+  });
+
+  it("NEGATIVE: the same humanOnly status reached by EVIDENCE (no person) is proposed, not written", async () => {
+    const post = await seedPost("In Draft");
+    const session = await runOn(
+      post,
+      "review",
+      [
+        {
+          kind: "document",
+          label: "Final cut",
+          status: "pending",
+          claimedDone: true,
+          ref: { url: "https://example.com/cut" },
+        },
+      ],
+      [
+        {
+          key: "review",
+          name: "Review",
+          onApproved: "approved",
+          expectedOutputs: [{ kind: "document", label: "Final cut" }],
+        },
+        { key: "publish", name: "Publish" },
+      ]
+    );
+    await satisfyClaimsByEvidence({ sessionId: session.id, userId: USER });
+    expect(await react(session.id)).toMatchObject({ applied: 0, proposed: 1 });
+    expect(await statusOf(post)).toBe("In Draft");
+  });
+
+  it("NEGATIVE: a stage still owed another output reaches nothing", async () => {
+    const post = await seedPost("Briefed");
+    const stages = [
+      MERGE_STAGES[0]!,
+      {
+        ...MERGE_STAGES[1]!,
+        expectedOutputs: [
+          { kind: "pull_request", label: "Merged fix" },
+          { kind: "document", label: "Release note" },
+        ],
+      },
+      MERGE_STAGES[2]!,
+    ];
+    const session = await runOn(
+      post,
+      "merged",
+      [
+        prSlot(),
+        { kind: "document", label: "Release note", status: "pending" },
+      ],
+      stages
+    );
+    await satisfyPullRequestByMerge({
+      sessionId: session.id,
+      userId: USER,
+      pr: parsePullRequestRef(PR_URL)!,
+    });
+    expect(await react(session.id)).toMatchObject({ applied: 0, proposed: 0 });
+    expect(await statusOf(post)).toBe("Briefed");
   });
 
   it("NEGATIVE: a merge of ANOTHER pull request closes nothing and reaches nothing", async () => {
@@ -503,6 +664,7 @@ describe("the settle doors reach the stage's status (approval signal 1, through 
       )!,
     });
     expect(out.satisfied).toEqual([]);
+    await react(session.id);
     expect(await statusOf(post)).toBe("Briefed");
     expect(await movesOf(post)).toEqual([]);
   });
@@ -519,6 +681,7 @@ describe("the settle doors reach the stage's status (approval signal 1, through 
       userId: USER,
       pr: parsePullRequestRef(PR_URL)!,
     });
+    await react(session.id);
     expect(await statusOf(post)).toBe("In Draft");
     expect(await movesOf(post)).toEqual([]);
   });

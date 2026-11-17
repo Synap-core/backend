@@ -59,6 +59,8 @@ export function reactionViaWords(r: ReactionDeclaration): string {
       return "every outcome, in any of your sessions, that points at what it approved";
     case "run_session":
       return "the session the run drives";
+    case "slot_stage":
+      return "the stage that owes the outcome, once every outcome it owes is in, and that session's thing";
   }
 }
 
@@ -69,6 +71,8 @@ export function reactionDoWords(r: ReactionDeclaration): string {
       return "is met";
     case "pause_session":
       return "pauses and waits on you until you answer";
+    case "reach_stage_status":
+      return "moves to the status that stage reaches when its work is approved";
   }
 }
 

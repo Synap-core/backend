@@ -61,14 +61,18 @@ export type ReactionVia =
   /** An approved proposal → every outcome (slot) whose own `ref` names its target. */
   | { link: "outcome_ref" }
   /** A run → the session it drives. */
-  | { link: "run_session" };
+  | { link: "run_session" }
+  /** A slot → the stage of its session that declares it, and that session's subject. */
+  | { link: "slot_stage" };
 
 /** DO: the one effect, applied through the target's own door. Closed. */
 export type ReactionDo =
   /** Meet the outcome (the done door, `satisfy-expected-output.ts`). */
   | { effect: "meet_outcomes" }
   /** Pause the session with a hold on the person (`setSessionStatus`). */
-  | { effect: "pause_session" };
+  | { effect: "pause_session" }
+  /** Move the subject to the stage's `onApproved` (the status door, `moveStatus`). */
+  | { effect: "reach_stage_status" };
 
 export type ReactionEffectKey = ReactionDo["effect"];
 
@@ -121,6 +125,20 @@ export const BUILT_IN_REACTIONS: readonly ReactionDeclaration[] = [
     via: { link: "run_session" },
     do: { effect: "pause_session" },
     order: 20,
+    source: "built_in",
+    enabled: true,
+  },
+  {
+    // Decision D2, approval signal 1: a stage's `onApproved` is reached when
+    // its declared outputs are all delivered — whichever door delivered the
+    // last one (an approval, an attestation, an answer, evidence, a merge, a
+    // child run, default 3 meeting it by its ref).
+    id: "builtin:approved-output-reaches-status",
+    title: "A stage's approved work moves its thing to the stage's result",
+    when: { subjectType: "slot", category: ["done"] },
+    via: { link: "slot_stage" },
+    do: { effect: "reach_stage_status" },
+    order: 30,
     source: "built_in",
     enabled: true,
   },
