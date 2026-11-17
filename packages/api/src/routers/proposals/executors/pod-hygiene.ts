@@ -175,7 +175,7 @@ async function applyPackItem(
         to: ProposalStatus.EXPIRED,
         from: UNDECIDED_PROPOSAL_STATUSES,
         set: {
-          ...endedByNoPersonSet(new Date()),
+          ...endedByNoPersonSet(),
           updatedAt: new Date(),
           data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('expiredByCleanupPack', ${ctx.packId}::text)`,
         },

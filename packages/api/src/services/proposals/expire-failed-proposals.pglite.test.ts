@@ -235,7 +235,6 @@ describe("a failed proposal ends through the helpers that end a pending one", ()
   });
 
   it("an end with no person names none: the session feed and the display say so", async () => {
-    const started = Date.now();
     const failed = await run({
       status: "approval_failed",
       failedHoursAgo: 30,
@@ -254,11 +253,15 @@ describe("a failed proposal ends through the helpers that end a pending one", ()
     expect(ended).toMatchObject({
       proposal: { decision: "expired", humanDecided: false, decidedBy: null },
     });
-    expect(Date.parse(ended!.at)).toBeGreaterThanOrEqual(started - 1000);
+    // Dated by the sweep that ended it, never by the approve that failed.
+    expect(Date.parse(ended!.at)).toBe(NOW.getTime());
     const [row] = await db
       .select()
       .from(proposals)
       .where(eq(proposals.id, failed));
+    // No reviewer and no review time: nobody reviewed the end.
+    expect(row!.reviewedBy).toBeNull();
+    expect(row!.reviewedAt).toBeNull();
     const [shown] = await enrichProposalsForDisplay([row!], OWNER);
     expect(shown).not.toHaveProperty("approverName");
   });

@@ -78,8 +78,8 @@ async function existing(
   const id = randomUUID();
   await q(
     `insert into proposals (id, status, proposal_type, target_type, target_id, data,
-       created_by, agent_user_id, subject_user_id, reviewed_by, reviewed_at)
-     values ($1, $2, 'messaging.external.send', 'messaging', 'ch-1', $3::jsonb, $4, $4, $5, $5, $6)`,
+       created_by, agent_user_id, subject_user_id, reviewed_by, reviewed_at, updated_at)
+     values ($1, $2, 'messaging.external.send', 'messaging', 'ch-1', $3::jsonb, $4, $4, $5, $5, $6, coalesce($6::timestamptz, now()))`,
     [
       id,
       status,
@@ -117,8 +117,9 @@ const rowOf = async (id: string) =>
       data: Record<string, unknown>;
       reviewed_at: Date | null;
       reviewed_by: string | null;
+      updated_at: Date | null;
     }>(
-      `select status, data, reviewed_at, reviewed_by from proposals where id = $1`,
+      `select status, data, reviewed_at, reviewed_by, updated_at from proposals where id = $1`,
       [id]
     )
   )[0]!;
@@ -165,9 +166,11 @@ describe("supersedes: a filing that replaces a failed proposal", () => {
     expect(old.status).toBe("withdrawn");
     expect(old.data[SUPERSEDED_BY_KEY]).toBe(filed.proposal.id);
     expect(old.data.withdrawReason).toBe(SUPERSEDED_REASON);
-    // An end with no person names none, and is dated now (decision F2).
+    // An end with no person names none and claims no review time (decision
+    // F2): readers date it by its updatedAt, which is now.
     expect(old.reviewed_by).toBeNull();
-    expect(new Date(old.reviewed_at!).getTime()).toBeGreaterThan(
+    expect(old.reviewed_at).toBeNull();
+    expect(new Date(old.updated_at!).getTime()).toBeGreaterThan(
       FAILED_AT.getTime()
     );
     expect((await rowOf(filed.proposal.id)).status).toBe("pending");

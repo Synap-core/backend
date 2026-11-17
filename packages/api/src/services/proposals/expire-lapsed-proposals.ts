@@ -433,11 +433,11 @@ export async function expireLapsedProposals(
       const batch = ids.slice(i, i + CHUNK);
       const rows = await transitionProposal(db, {
         to: ProposalStatus.EXPIRED,
-        from: [from],
         set: {
-          ...endedByNoPersonSet(now),
+          ...endedByNoPersonSet(),
           updatedAt: now,
         },
+        from: [from],
         where: and(inArray(proposals.id, batch), NOT_PARTLY_APPLIED),
       }).returning({ id: proposals.id });
       for (const r of rows) actionedIds.push(r.id);
@@ -508,11 +508,11 @@ export async function expireSessionEphemerals(
 
     const rows = await transitionProposal(db, {
       to: ProposalStatus.EXPIRED,
-      from: UNDECIDED_PROPOSAL_STATUSES,
       set: {
-        ...endedByNoPersonSet(now),
+        ...endedByNoPersonSet(),
         updatedAt: now,
       },
+      from: UNDECIDED_PROPOSAL_STATUSES,
       where: and(inArray(proposals.id, ids), NOT_PARTLY_APPLIED),
     }).returning({ id: proposals.id });
     // Expired = no longer decidable: its bell rows leave with it (one door with approve/reject).

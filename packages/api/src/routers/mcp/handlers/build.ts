@@ -57,6 +57,7 @@ import {
 import { getDb, getRequestGrant, eq } from "@synap/database";
 import { processReadableByGrant } from "../../../access/grant-door-fence.js";
 import { AccessContext, scopedDb } from "../../../access/index.js";
+import { assertKeyMayWrite } from "../../../utils/assert-key-may-write.js";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
 import {
@@ -1276,12 +1277,31 @@ export const buildHandlers: McpHandlerMap = {
     const [filed] = agentUserId
       ? await scopedDb(AccessContext.operator({ userId })).findMany<{
           agentUserId: string | null;
+          workspaceId: string | null;
+          projectId: string | null;
+          targetId: string | null;
         }>(proposals, {
           where: eq(proposals.id, resolvedProposalId),
-          columns: { agentUserId: true },
+          columns: {
+            agentUserId: true,
+            workspaceId: true,
+            projectId: true,
+            targetId: true,
+          },
         })
       : [];
     if (agentUserId && filed?.agentUserId === agentUserId) {
+      // The key's grant still bounds this tool: a key that may not reject a
+      // proposal here may not take one back here either (the same right, on
+      // the proposal's own space, project and object, that the reject door
+      // asks), so routing to the withdraw never widens what the key can do.
+      await assertKeyMayWrite({
+        subjectType: "proposal",
+        action: "reject",
+        workspaceId: filed.workspaceId,
+        projectId: filed.projectId,
+        data: { entityId: filed.targetId },
+      });
       await rejectCaller.withdraw({
         proposalId: resolvedProposalId,
         reason: args.reason as string | undefined,

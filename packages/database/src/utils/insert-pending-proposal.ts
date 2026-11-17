@@ -750,7 +750,7 @@ export async function endReplacedProposal(
     to: ProposalStatus.WITHDRAWN,
     from: args.from,
     set: {
-      ...endedByNoPersonSet(at),
+      ...endedByNoPersonSet(),
       updatedAt: at,
       data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${stamp}::jsonb`,
     },

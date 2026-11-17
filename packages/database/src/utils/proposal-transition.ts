@@ -153,15 +153,18 @@ export const UNDECIDED_PROPOSAL_STATUSES: readonly ProposalStatus[] = [
 /**
  * The columns an end with NO person writes (decision F2, plan 8032a127): a
  * FAILED row that a sweep or helper expires, or that its author or a newer
- * filing withdraws, names no reviewer and is dated now. A pending row keeps
- * what it had (nobody reviewed it). Every end helper spreads this into its
+ * filing withdraws, names no reviewer and claims no review time, exactly like
+ * a pending row that lapses (whose review columns are already empty). The
+ * caller writes `updatedAt`, and readers date the end by
+ * `coalesce(reviewedAt, updatedAt)` (tripwire history-lens-includes-expired:
+ * never stamp a review nobody made). Every end helper spreads this into its
  * `set`, so "who ended it" has one rule.
  */
-export function endedByNoPersonSet(at: Date): ProposalTransitionSet {
+export function endedByNoPersonSet(): ProposalTransitionSet {
   const failed = sql`${proposals.status} = ${APPROVAL_FAILED}`;
   return {
     reviewedBy: sql`CASE WHEN ${failed} THEN NULL ELSE ${proposals.reviewedBy} END`,
-    reviewedAt: sql`CASE WHEN ${failed} THEN ${at.toISOString()}::timestamptz ELSE ${proposals.reviewedAt} END`,
+    reviewedAt: sql`CASE WHEN ${failed} THEN NULL ELSE ${proposals.reviewedAt} END`,
   };
 }
 
