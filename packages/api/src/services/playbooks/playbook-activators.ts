@@ -118,33 +118,69 @@ export function activatorSeedTemplate(playbookId: string): string {
 }
 
 /**
- * The seed namespace of one playbook's PROJECT enablements (`workers.enable`).
- * A namespace of its own, so the space pass's retire-what-is-undeclared sweep
- * of `playbook-activator:<id>` can never touch them.
+ * The seed namespace of one playbook's PROJECT and SESSION enablements
+ * (`workers.enable`). A namespace of its own, so the space pass's
+ * retire-what-is-undeclared sweep of `playbook-activator:<id>` can never
+ * touch them.
  */
 export function workerSeedTemplate(playbookId: string): string {
   return `playbook-worker:${playbookId}`;
 }
 
-/** A project enablement's seed key: `<activatorKey>@project:<id>[@track:<id>]`. */
+/**
+ * An enablement's seed key:
+ *   project — `<activatorKey>@project:<id>[@track:<id>]`
+ *   session — `<activatorKey>[@project:<id>[@track:<id>]]@session:<id>`: the
+ *             session's filing at enable time (where its runs land and whose
+ *             things it works over; none = the space), then the session.
+ * The key is the whole record the activator pass recompiles from, so the
+ * session's filing rides in it rather than being re-read on every pass.
+ */
 export function workerEnablementKey(input: {
   activatorKey: string;
-  projectId: string;
+  projectId?: string | null;
   trackId?: string | null;
+  sessionId?: string | null;
 }): string {
-  return `${input.activatorKey}@project:${input.projectId}${
-    input.trackId ? `@track:${input.trackId}` : ""
+  if (!input.projectId && !input.sessionId) {
+    throw new Error(
+      "workerEnablementKey: an enablement is for a project or a session"
+    );
+  }
+  const filing = input.projectId
+    ? `@project:${input.projectId}${input.trackId ? `@track:${input.trackId}` : ""}`
+    : "";
+  return `${input.activatorKey}${filing}${
+    input.sessionId ? `@session:${input.sessionId}` : ""
   }`;
 }
 
+/**
+ * The inverse of {@link workerEnablementKey}. `projectId` is null only for a
+ * session enablement whose session was unfiled (it works over the space);
+ * `sessionId` is null for a project enablement. null for any other key.
+ */
 export function parseWorkerEnablementKey(key: string): {
   activatorKey: string;
-  projectId: string;
+  projectId: string | null;
   trackId: string | null;
+  sessionId: string | null;
 } | null {
-  const m = /^(.*)@project:([^@]+)(?:@track:([^@]+))?$/.exec(key);
-  if (!m) return null;
-  return { activatorKey: m[1]!, projectId: m[2]!, trackId: m[3] ?? null };
+  const s = /^(.*)@session:([^@]+)$/.exec(key);
+  const head = s ? s[1]! : key;
+  const sessionId = s ? s[2]! : null;
+  const m = /^(.*)@project:([^@]+)(?:@track:([^@]+))?$/.exec(head);
+  if (!m) {
+    return sessionId && head
+      ? { activatorKey: head, projectId: null, trackId: null, sessionId }
+      : null;
+  }
+  return {
+    activatorKey: m[1]!,
+    projectId: m[2]!,
+    trackId: m[3] ?? null,
+    sessionId,
+  };
 }
 
 /** The crons "How often?" builds: every day, or every week on one day. */
@@ -289,8 +325,16 @@ export function activatorRuleDecl(input: {
    * which event an `enters_status` follows — see `playbookActivatorSentence`.
    */
   subject: SubjectLifecycle;
-  /** A PROJECT enablement (`workers.enable`): filing + the project's set. */
-  scope?: { projectId: string; trackId?: string | null };
+  /**
+   * A PROJECT or SESSION enablement (`workers.enable`): filing + the
+   * project's set; a session's (`parentSessionId`) runs are its children. A
+   * session enablement of an unfiled session has no project (the space's set).
+   */
+  scope?: {
+    projectId: string | null;
+    trackId?: string | null;
+    parentSessionId?: string | null;
+  };
 }):
   | TemplateRuleDecl
   | { key: string; error: string }
@@ -307,19 +351,18 @@ export function activatorRuleDecl(input: {
       return {
         key,
         error:
-          "a playbook with no subject runs only on a clock enabled for a project or goal",
+          "a playbook with no subject runs only on a clock enabled for a project, goal or session",
       };
     }
     const verb = a.mode === "propose" ? "propose running" : "run";
     return {
       key,
-      intent: `On schedule (${a.cron}), ${verb} "${input.playbookName}" in this project.`,
+      intent: `On schedule (${a.cron}), ${verb} "${input.playbookName}"${scopeWords(input.scope)}.`,
       sentence: playbookActivatorSentence({
         playbookId,
         profileSlug: "",
         mode: a.mode,
-        projectId: input.scope.projectId,
-        ...(input.scope.trackId ? { trackId: input.scope.trackId } : {}),
+        ...scopeNode(input.scope),
         on: "schedule",
         cron: a.cron ?? "",
       }),
@@ -349,10 +392,9 @@ export function activatorRuleDecl(input: {
     // A batch RUNS; whether its writes propose rides on `worker.writes`.
     mode: perMoment ? ("run" as const) : a.mode,
     worker,
-    ...(input.scope ? { projectId: input.scope.projectId } : {}),
-    ...(input.scope?.trackId ? { trackId: input.scope.trackId } : {}),
+    ...scopeNode(input.scope),
   };
-  const where = input.scope ? " in this project" : "";
+  const where = scopeWords(input.scope);
   const batch = perMoment ? "on them" : "on it";
   const tail =
     perMoment && a.mode === "propose" ? ", proposing every change" : "";
@@ -430,6 +472,35 @@ export function activatorRuleDecl(input: {
       ...(role ? { profileKind: "role" as const } : {}),
     }),
   };
+}
+
+/**
+ * What an enablement's scope puts on the compiled node: its filing, and a
+ * session's parent. Each key OMITTED when absent, so a project enablement
+ * compiles byte-identical to before (its seed hash does not move).
+ */
+function scopeNode(scope?: {
+  projectId: string | null;
+  trackId?: string | null;
+  parentSessionId?: string | null;
+}): { projectId?: string; trackId?: string; parentSessionId?: string } {
+  if (!scope) return {};
+  return {
+    ...(scope.projectId ? { projectId: scope.projectId } : {}),
+    ...(scope.projectId && scope.trackId ? { trackId: scope.trackId } : {}),
+    ...(scope.parentSessionId
+      ? { parentSessionId: scope.parentSessionId }
+      : {}),
+  };
+}
+
+/** The scope in the rule's intent: "" for the space. */
+function scopeWords(scope?: {
+  projectId: string | null;
+  parentSessionId?: string | null;
+}): string {
+  if (!scope) return "";
+  return scope.parentSessionId ? " for this session" : " in this project";
 }
 
 // The ONE reader of a subject profile's kind/role and declared lifecycle
@@ -795,7 +866,7 @@ async function applyOnce(input: {
       });
     }
   }
-  // ── PROJECT enablements (`workers.enable`, their own namespace) ──────────
+  // ── PROJECT and SESSION enablements (`workers.enable`, own namespace) ────
   // Each follows its declared activator: recompiled when the declaration
   // moves, retired (by us, remembered) when it is no longer declared or the
   // playbook is not live, re-activated when declared again. One a PERSON
@@ -827,7 +898,11 @@ async function applyOnce(input: {
               profileSlug: process.profileSlug,
               statusProperty: process.statusProperty,
               subject,
-              scope: { projectId: parsed.projectId, trackId: parsed.trackId },
+              scope: {
+                projectId: parsed.projectId,
+                trackId: parsed.trackId,
+                parentSessionId: parsed.sessionId,
+              },
             })
           : null;
       const remembered = memory.rules[key];
@@ -926,7 +1001,7 @@ async function applyOnce(input: {
   for (const key of Object.keys(memory.rules)) {
     if (declaredKeys.has(key)) continue;
     if (parseWorkerEnablementKey(key)) {
-      // A project enablement's memory lives while its rule does.
+      // A project / session enablement's memory lives while its rule does.
       if (!workerRows.some((r) => r.id === memory.rules[key]!.ruleId))
         delete memory.rules[key];
       continue;
