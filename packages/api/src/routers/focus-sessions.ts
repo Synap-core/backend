@@ -3093,12 +3093,22 @@ export const focusSessionsRouter = router({
         userId: ctx.userId,
         expectedLabel: input.expectedLabel,
         agentType: input.agentType,
+        actingAgentUserId: ctx.agentUserId ?? null,
       });
       switch (result.status) {
         case "not_found":
           throw new TRPCError({
             code: "NOT_FOUND",
             message: `Focus session ${input.sessionId} not found`,
+          });
+        // Only an AGENT caller meets the hand-off gate; this door is the
+        // person's, so both are refusals here, never a silent success.
+        case "refused":
+          throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+        case "proposed":
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `Handing this to another agent was proposed for review (${result.proposalId}).`,
           });
         case "unknown_label":
           throw new TRPCError({
