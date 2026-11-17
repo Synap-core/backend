@@ -2530,6 +2530,47 @@
       }
     },
     {
+      "name": "synap_start_orchestrator",
+      "annotations": {
+        "title": "Start an orchestrator",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Start ONE orchestrator over 2 to 12 of your running sessions: a new session (goal = brief) that reads their rooms, writes a merged plan (slot 'merged-plan') and waits on the person's yes (slot 'plan-approval'). Each picked session is linked to it (`orchestrated_by`), paused if running with a hold that the person's answer to 'plan-approval' clears, and gets a handoff note in its room. Governed: an agent gets { status:'proposed', proposalId } (nothing is paused until the person approves); a person { status:'started', orchestratorSessionId, children }. A session that is not yours is not found; one that is not running or paused is refused. Optional agentId (synap_list_agents) hands the orchestrator to that agent on its computer.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 12,
+            "description": "The running (or paused) sessions to coordinate: yours, 2 to 12."
+          },
+          "brief": {
+            "type": "string",
+            "description": "What the orchestrator is for, one paragraph: its goal, and the note each picked session's room gets."
+          },
+          "title": {
+            "type": "string",
+            "description": "Optional short name; default 'Orchestrate N sessions'."
+          },
+          "agentId": {
+            "type": "string",
+            "description": "Optional agent user id (synap_list_agents) that runs the orchestrator; omit to leave it for the person."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why, in the person's words: shown to whoever reviews the proposal."
+          }
+        },
+        "required": ["sessionIds", "brief"]
+      }
+    },
+    {
       "name": "synap_rerun_session",
       "annotations": {
         "title": "Rerun a session",
