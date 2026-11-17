@@ -1,19 +1,26 @@
 /**
  * Served non-GET Hub routes whose handler names no write gate, calls no
- * `gated` hub tRPC mutation and has no GATED_ELSEWHERE row: unclassified on
- * 2 Nov 2026 (R1, plan "App access done right" §3). The fence still lets a
- * fenced key through them; each one's safety rests on its own floor until
- * someone reads it and classifies it. Most write through a service or a core
- * router whose gate sits one call deeper than the scan reads.
+ * `gated` hub tRPC mutation and has no classification row: unclassified on
+ * 2 Nov 2026 (R1, plan "App access done right" §3). Each one's safety rests
+ * on its own floor until someone reads it and classifies it. Most write
+ * through a service or a core router whose gate sits one call deeper than the
+ * scan reads.
+ *
+ * RUNTIME DATA since 18 Nov 2026 (plan a640c5bb A1 step 1): the Hub fence
+ * refuses every route in this list to a person's app token (`app_person`,
+ * `appPersonWriteAllowed` in grant-door-fence.ts), so a connected app writes
+ * only through doors that check what the person granted it. Every other key
+ * still passes the fence here (step 2 refuses them too, once the routes the
+ * IS and the CLI call are classified).
  *
  * Reads still in this list, to classify next: `POST /workspaces/:workspaceId/
  * to-template` and `POST /projects/:id/to-suite-template` (serialise a whole
  * space or project), `POST /rules/parse` (the pod's kinds, read for the
  * parser), `POST /vault/redeem` (bounded by the vault's own grants).
  *
- * SHRINK-ONLY (`grant-door-classification.tripwire.test.ts`): a route that is
- * classified or no longer served must leave this list, a new route may never
- * join it, and the cap below only goes down.
+ * SHRINK-ONLY (`__tripwires__/grant-door-classification.tripwire.test.ts`): a
+ * route that is classified or no longer served must leave this list, a new
+ * route may never join it, and the cap below only goes down.
  */
 export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "DELETE /agent-skills/:id",
@@ -72,14 +79,11 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /entities/move",
   "POST /events/broadcast",
   "POST /federation/oidc-config",
-  "POST /focus-sessions/:id/answers/relay",
-  "POST /focus-sessions/:id/cancel",
   "POST /focus-sessions/:id/channel",
   "POST /focus-sessions/:id/evaluations",
   "POST /focus-sessions/:id/evidence",
   "POST /focus-sessions/:id/inputs",
   "POST /focus-sessions/:id/rerun",
-  "POST /focus-sessions/:id/revert",
   "POST /focus-sessions/:id/used",
   "POST /focus-sessions/:sessionId/complete-run",
   "POST /forms",
@@ -102,24 +106,16 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /notifications",
   "POST /package-updates/:slug/apply",
   "POST /playbooks",
-  "POST /playbooks/:id/run",
   "POST /proactive/post",
   "POST /profiles",
   "POST /profiles/grant-access",
   "POST /projects/:id/purge",
   "POST /projects/:id/to-suite-template",
   "POST /projects/:projectId/file",
-  "POST /proposals/:id/approve",
-  "POST /proposals/:id/reject",
-  "POST /proposals/:id/revert",
-  "POST /proposals/dev-approval",
   "POST /public/forms/:token",
   "POST /rules/parse",
   "POST /setup/accept-invite",
   "POST /setup/agent",
-  "POST /setup/agent/pending/:keyId/approve",
-  "POST /setup/agent/pending/:keyId/reject",
-  "POST /setup/agent/pending/approve-batch",
   "POST /setup/agent/pending/lookup",
   "POST /setup/device",
   "POST /setup/device/token",
@@ -138,7 +134,6 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /tracks/:id/operation",
   "POST /tracks/:id/participants",
   "POST /tracks/:id/participants/:pid/acknowledge",
-  "POST /tracks/:id/participants/:pid/answer",
   "POST /tracks/:id/reopen",
   "POST /tracks/:id/stages",
   "POST /tracks/:id/stages/:stageKey/sessions",
@@ -163,4 +158,4 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
 ];
 
 /** Lower it when the list shrinks; never raise it. */
-export const UNCLASSIFIED_WRITE_ROUTES_CAP = 144;
+export const UNCLASSIFIED_WRITE_ROUTES_CAP = 132;

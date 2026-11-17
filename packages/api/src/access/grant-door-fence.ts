@@ -15,7 +15,9 @@
  * every served non-GET Hub route is a declared read, names its gate, or sits
  * in a shrink-only baseline (the classification tripwire). The free-form
  * `POST /proposals` passes no gate, so it runs rung 0 itself on an allowlist
- * (`fenced-proposal.ts`, 2026-10-28). On the Bearer tRPC door (S7,
+ * (`fenced-proposal.ts`, 2026-10-28). A person's app token (`app_person`)
+ * is refused every route still in that baseline (`appPersonWriteAllowed`,
+ * plan a640c5bb A1 step 1, 18 Nov 2026). On the Bearer tRPC door (S7,
  * 2026-10-20) a mutation passes only when `TRPC_KEY_MUTATION_DOORS` says the
  * gate really bounds it; every other one needs an unbounded `*` key.
  *
@@ -43,6 +45,7 @@ import {
   WORK_RELEASE_SOURCE_STATES,
   type WorkReleasePart,
 } from "@synap-core/types/work-release";
+import { UNCLASSIFIED_WRITE_ROUTES } from "./grant-door-write-baseline.js";
 
 /** How a fenced read door is bounded by a grant. */
 export type FencedReadDoor =
@@ -1657,6 +1660,44 @@ export function restDoorAllowed(
   }
   return true; // PUT / PATCH / DELETE — writes, bounded by the gate
 }
+
+/**
+ * The unclassified write baseline (`grant-door-write-baseline.ts`) as
+ * matchers: `METHOD /path/:param` → the method and a regex of the path
+ * relative to /api/hub, each `:param` standing for one segment. The
+ * classification tripwire checks that no other served write matches one.
+ */
+const UNCLASSIFIED_WRITES: ReadonlyArray<readonly [string, RegExp]> =
+  UNCLASSIFIED_WRITE_ROUTES.map((row) => {
+    const [method, path] = row.split(" ") as [string, string];
+    const pattern = path
+      .split("/")
+      .map((seg) =>
+        seg.startsWith(":")
+          ? "[^/]+"
+          : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      )
+      .join("/");
+    return [method, new RegExp(`^${pattern}/?$`)] as const;
+  });
+
+/**
+ * Hub REST: may a person's app token (`app_person`) make this request? Not a
+ * write nobody has classified yet (the baseline): its handler is not known
+ * to check what the person granted the app, and the token acts AS the person,
+ * so every owner check behind it passes (a connected app hard-purging a
+ * space, R1 A risk 1). Any other request goes on to the fence and the gate.
+ * The Hub middleware asks it for an `app_person` key only, whatever its
+ * grant (step 2 extends the refusal to every fenced key).
+ */
+export function appPersonWriteAllowed(method: string, path: string): boolean {
+  const m = method.toUpperCase();
+  return !UNCLASSIFIED_WRITES.some(([um, r]) => um === m && r.test(path));
+}
+
+/** The 403 message for a request `appPersonWriteAllowed` refused. */
+export const APP_PERSON_WRITE_UNSUPPORTED =
+  "This door does not take an app's sign-in yet: it does not check what you allowed this app to do. Nothing was changed. Do this in your pod, or through a door the app's access covers.";
 
 /**
  * MCP: may a scoped key call this listed tool? A read tool through its door

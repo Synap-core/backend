@@ -30,12 +30,17 @@
  * scope no grant carries, and a refusal of every principal that is not the
  * computer), a write that only FILES an ask its person decides
  * (`ASK_ONLY_WRITES`: its helper files a pending proposal and applies none of
- * what approving does), or in the shrink-only baseline of routes nobody has classified yet
- * (`grant-door-write-baseline.ts`). A NEW route in none of them fails, a
- * baseline row that is now classified or gone fails, and the baseline's cap
- * only goes down. The fence still lets a baselined POST through at run time:
- * this check stops the class from growing, it does not prove each baselined
- * handler reaches a gate.
+ * what approving does), a write whose GRANT check sits deeper than one call
+ * (`GRANT_CHECKED_DEEPER`: a call chain read from the code, ending in a check
+ * of the key's grant), a decision only a signed-in person makes
+ * (`PERSON_SESSION_WRITES`: the auth door skips it and the handler reads only
+ * the person's Kratos session), or in the shrink-only baseline of routes
+ * nobody has classified yet (`access/grant-door-write-baseline.ts`). A NEW
+ * route in none of them fails, a baseline row that is now classified or gone
+ * fails, and the baseline's cap only goes down. At run time the fence refuses
+ * every baselined route to a person's app token (`appPersonWriteAllowed`, A1
+ * step 1) and still lets every other key through: this check stops the class
+ * from growing, it does not prove each baselined handler reaches a gate.
  *
  * GET ROUTES ARE CLASSIFIED (4 Nov 2026): every served GET route is a safe
  * read, a declared read door (`GRANT_REST_GET_READS`, REFUSED included) or
@@ -55,7 +60,10 @@
  */
 import { describe, expect, it } from "vitest";
 import { tools } from "../routers/mcp/tools/index.js";
+import { readFileSync } from "fs";
+import { join } from "path";
 import {
+  appPersonWriteAllowed,
   GRANT_OWNER_WIDE_REST_DOORS,
   GRANT_OWNER_WIDE_REST_WRITES,
   GRANT_REST_GET_READS,
@@ -69,7 +77,8 @@ import {
 import {
   UNCLASSIFIED_WRITE_ROUTES,
   UNCLASSIFIED_WRITE_ROUTES_CAP,
-} from "./grant-door-write-baseline.js";
+} from "../access/grant-door-write-baseline.js";
+import { hubAuthSkipped } from "../routers/hub-protocol/_middleware/auth-skip.js";
 import {
   UNCLASSIFIED_READ_ROUTES,
   UNCLASSIFIED_READ_ROUTES_CAP,
@@ -524,6 +533,16 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../access/fenced-proposal.js"),
     why: "the free-form proposal runs rung 0 itself (fenced-proposal.ts)",
   },
+  "POST /proposals/dev-approval": {
+    via: "createDevApprovalProposal",
+    load: () => import("../services/proposals/dev-approval.js"),
+    why: "a fenced key files a plan or deploy approval only for a session its grant may update (grantWriteDenial focus_session.update in the session's space), and files it there",
+  },
+  "POST /focus-sessions/:id/answers/relay": {
+    via: "relaySessionAnswer",
+    load: () => import("../services/focus-sessions/session-answer.js"),
+    why: "only an agent relays (the handler refuses a person's key), and the key must hold the session's answer write (grantWriteDenial on answerGrantWrite)",
+  },
 };
 
 /**
@@ -608,6 +627,152 @@ const APPROVAL_EFFECTS = [
   "clipHostedAgentGrants",
 ] as const;
 
+/**
+ * The checks that read the calling KEY's grant: rung 0 itself
+ * (`grantWriteDenial`), the gate that runs it first
+ * (`checkPermissionOrPropose`), the decision right (`assertMayDecideProposal`)
+ * and the revise core's key check (`assertMayReviseProposal`). NOT
+ * `canWrite` / `assertCanWrite` / `assertWorkspaceWrite`: they check the
+ * person's role in a space and read no key grant (knowledge 5ae551b2), so a
+ * person's app token passes them wherever the person may write.
+ */
+const GRANT_CHECKS = [
+  "checkPermissionOrPropose",
+  "grantWriteDenial",
+  "assertMayDecideProposal",
+  "assertMayReviseProposal",
+] as const;
+const GRANT_CHECK = new RegExp(
+  GRANT_CHECKS.map((g) => callOf(g).source).join("|")
+);
+
+const SRC = join(__dirname, "..");
+
+/**
+ * The definition of `name` in `file` (relative to src), read from the source:
+ * a function, a `const`, or a tRPC procedure (`name: …Procedure`), from its
+ * first line to the next line at its own indentation that does not close it.
+ * `null` when the file defines no such name.
+ */
+export function definitionOf(file: string, name: string): string | null {
+  const src = readFileSync(join(SRC, file), "utf8");
+  const start = new RegExp(
+    `^([ \\t]*)(?:export\\s+)?(?:async\\s+)?(?:function\\s+${name}\\b|const\\s+${name}\\s*=|${name}:\\s*\\w*[pP]rocedure\\b)`,
+    "m"
+  ).exec(src);
+  if (!start) return null;
+  const bodyFrom = src.indexOf("\n", start.index) + 1;
+  const end = new RegExp(`^${start[1]}(?![\\s})\\]>])`, "gm");
+  end.lastIndex = bodyFrom;
+  const next = end.exec(src);
+  return src.slice(start.index, next ? next.index : src.length);
+}
+
+/**
+ * Writes whose check of the key's GRANT sits more than one call below the
+ * handler, read from the code (plan a640c5bb A1, 18 Nov 2026: the approve
+ * tier, and the doors the app SDK calls). Each row names the call chain: the
+ * handler calls `chain[0]`, each link's definition calls the next one, and
+ * the last one names a GRANT_CHECKS call. A role check alone (`canWrite`)
+ * never qualifies. Checked below; a renamed link fails.
+ */
+const GRANT_CHECKED_DEEPER: Readonly<
+  Record<
+    string,
+    {
+      chain: ReadonlyArray<{ name: string; file: string }>;
+      why: string;
+    }
+  >
+> = {
+  "POST /proposals/:id/approve": {
+    chain: [{ name: "approve", file: "routers/proposals.ts" }],
+    why: "proposals.approve asks the key's proposal.approve right on the proposal's own space, project and object first (assertMayDecideProposal); applyProposalApproval names the space to the grant again",
+  },
+  "POST /proposals/:id/reject": {
+    chain: [{ name: "reject", file: "routers/proposals.ts" }],
+    why: "proposals.reject asks the key's proposal.reject right first (assertMayDecideProposal), then the proposal's own space through assertCanReviewProposal",
+  },
+  "POST /proposals/:id/revert": {
+    chain: [{ name: "revert", file: "routers/proposals.ts" }],
+    why: "proposals.revert executes with the reviewer's authority, so it asks the key's approve right first (assertMayDecideProposal)",
+  },
+  "POST /focus-sessions/:id/revert": {
+    chain: [
+      {
+        name: "revertSession",
+        file: "services/focus-sessions/revert-session.ts",
+      },
+      {
+        name: "defaultRevertOne",
+        file: "services/focus-sessions/revert-session.ts",
+      },
+      { name: "revert", file: "routers/proposals.ts" },
+    ],
+    why: "each applied proposal of the session is reverted through proposals.revert, which asks the key's approve right on that proposal (assertMayDecideProposal)",
+  },
+  "POST /tracks/:id/participants/:pid/answer": {
+    chain: [
+      {
+        name: "change",
+        file: "routers/hub-protocol/rest/track-participants.ts",
+      },
+      {
+        name: "changeTrackParticipants",
+        file: "services/tracks/track-participants.ts",
+      },
+    ],
+    why: "a participant's answer is track.update through checkPermissionOrPropose in the goal's project space (rung 0 checks the grant)",
+  },
+  "POST /focus-sessions/:id/cancel": {
+    chain: [
+      {
+        name: "cancelSession",
+        file: "services/focus-sessions/cancel-session.ts",
+      },
+      {
+        name: "completeFocusSession",
+        file: "services/focus-sessions/complete-session.ts",
+      },
+    ],
+    why: "the one close door: focus_session.update through checkPermissionOrPropose in the session's space, before anything is stopped (the app SDK's cancelRun)",
+  },
+  "POST /playbooks/:id/run": {
+    chain: [
+      {
+        name: "runPlaybookDoor",
+        file: "routers/hub-protocol/playbook-doors.ts",
+      },
+      { name: "run", file: "routers/playbooks.ts" },
+    ],
+    why: "playbooks.run: playbook.run through checkPermissionOrPropose in the run's space (the app SDK's runPlaybook). Not covered: with a live run on the subject it returns before the gate and keeps a remembered run choice (rememberRunChoice)",
+  },
+};
+
+/**
+ * Decisions only a signed-in PERSON makes: the pending-agent approval doors.
+ * The auth door skips them (`hubAuthSkipped`), so no key is ever their
+ * principal and the fence never sees them; the handler resolves the decider
+ * through `via`, which reads only the Kratos session (cookie or
+ * `x-session-token`) and never an API key. Checked below.
+ */
+const PERSON_SESSION_WRITES: Readonly<
+  Record<string, { via: string; file: string; why: string }>
+> = Object.fromEntries(
+  [
+    "POST /setup/agent/pending/:keyId/approve",
+    "POST /setup/agent/pending/:keyId/reject",
+    "POST /setup/agent/pending/approve-batch",
+  ].map((key) => [
+    key,
+    {
+      via: "resolveKratosPodUserId",
+      file: "routers/hub-protocol/rest/setup.ts",
+      why: "only the connection's linked person or a pod admin, signed in to the pod (Kratos session), decides a pending agent key; no key reaches it",
+    },
+  ])
+);
+
 /** `router.procedure` names a handler calls (`caller.entities.createEntity(`). */
 function trpcCallsOf(source: string): string[] {
   return [...source.matchAll(/\.([a-zA-Z]+)\.([a-zA-Z]+)\s*\(/g)].map(
@@ -623,6 +788,8 @@ type NonGetClass =
   | "gated-elsewhere"
   | "computer-runner"
   | "ask-only"
+  | "grant-checked-deeper"
+  | "person-session"
   | "unclassified";
 
 /** How a served non-GET route is bounded, from the fence and its own code. */
@@ -643,6 +810,11 @@ export function nonGetRouteClass(r: ServedRoute): NonGetClass {
   if (runner && callOf(runner.via).test(r.source)) return "computer-runner";
   const ask = ASK_ONLY_WRITES[`${r.method} ${r.path}`];
   if (ask && callOf(ask.via).test(r.source)) return "ask-only";
+  const deeper = GRANT_CHECKED_DEEPER[`${r.method} ${r.path}`];
+  if (deeper && callOf(deeper.chain[0]!.name).test(r.source))
+    return "grant-checked-deeper";
+  const person = PERSON_SESSION_WRITES[`${r.method} ${r.path}`];
+  if (person && callOf(person.via).test(r.source)) return "person-session";
   return "unclassified";
 }
 
@@ -669,6 +841,12 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
       Object.keys(COMPUTER_RUNNER_WRITES).length
     );
     expect(count("ask-only")).toBe(Object.keys(ASK_ONLY_WRITES).length);
+    expect(count("grant-checked-deeper")).toBe(
+      Object.keys(GRANT_CHECKED_DEEPER).length
+    );
+    expect(count("person-session")).toBe(
+      Object.keys(PERSON_SESSION_WRITES).length
+    );
   });
 
   it("a new non-GET route is classified: a declared read or a named gate", () => {
@@ -767,6 +945,107 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     expect(broken).toEqual([]);
   });
 
+  it("every GRANT_CHECKED_DEEPER row is served, its chain holds, and it ends in a grant check", () => {
+    const byKey = new Map(nonGet.map((r) => [keyOf(r), r]));
+    const broken: string[] = [];
+    for (const [key, row] of Object.entries(GRANT_CHECKED_DEEPER)) {
+      const r = byKey.get(key);
+      if (!r || !callOf(row.chain[0]!.name).test(r.source)) {
+        broken.push(`${key}: handler does not call ${row.chain[0]!.name}`);
+        continue;
+      }
+      if (!row.why.trim()) broken.push(`${key}: no reason`);
+      row.chain.forEach((link, i) => {
+        const def = definitionOf(link.file, link.name);
+        const next = row.chain[i + 1];
+        if (!def) broken.push(`${key}: ${link.file} defines no ${link.name}`);
+        else if (next && !callOf(next.name).test(def))
+          broken.push(`${key}: ${link.name} does not call ${next.name}`);
+        else if (!next && !GRANT_CHECK.test(def))
+          broken.push(`${key}: ${link.name} names no grant check`);
+      });
+    }
+    expect(broken).toEqual([]);
+  });
+
+  it("every PERSON_SESSION_WRITES row is skipped by the auth door and reads only the person's session", () => {
+    const byKey = new Map(nonGet.map((r) => [keyOf(r), r]));
+    const broken: string[] = [];
+    for (const [key, row] of Object.entries(PERSON_SESSION_WRITES)) {
+      const r = byKey.get(key);
+      if (!r || !callOf(row.via).test(r.source)) {
+        broken.push(`${key}: handler does not call ${row.via}`);
+        continue;
+      }
+      if (!hubAuthSkipped(`/api/hub${concrete(r.path)}`))
+        broken.push(`${key}: the auth door does not skip it`);
+      const def = definitionOf(row.file, row.via) ?? "";
+      if (!/\bgetSession\)?\s*\(/.test(def))
+        broken.push(`${key}: ${row.via} reads no Kratos session`);
+      if (/authorization|validateApiKey|getApiKeyStatus/i.test(def))
+        broken.push(`${key}: ${row.via} reads an API key`);
+    }
+    expect(broken).toEqual([]);
+  });
+
+  /**
+   * The approve tier (R1 "T0 decide/approve", 13 routes): each one is
+   * classified and checks the key's GRANT (a role check alone does not
+   * count), or no key can reach it; one that is not bounded stays in the
+   * baseline, named here with why (a person's app token is refused it).
+   */
+  const T0_APPROVE_TIER = [
+    "POST /proposals/:id/approve",
+    "POST /proposals/:id/reject",
+    "POST /proposals/:id/revert",
+    "POST /proposals/dev-approval",
+    "POST /setup/agent/pending/:keyId/approve",
+    "POST /setup/agent/pending/:keyId/reject",
+    "POST /setup/agent/pending/approve-batch",
+    "POST /skills/:id/approve",
+    "POST /tools/:id/approve",
+    "POST /focus-sessions/:id/revert",
+    "POST /focus-sessions/:id/answers/relay",
+    "POST /tracks/:id/criteria/:key/acceptance",
+    "POST /tracks/:id/participants/:pid/answer",
+  ];
+  const T0_NOT_BOUNDED: Readonly<Record<string, string>> = {
+    "POST /tracks/:id/criteria/:key/acceptance":
+      "acceptGoalCriterion refuses an agent and anyone but the goal's judge, and reads no key grant: a person's app token is refused here until it does",
+  };
+
+  it("the approve tier: each route checks the key's grant, takes no key, or is named unbounded", async () => {
+    const byKey = new Map(nonGet.map((r) => [keyOf(r), r]));
+    const broken: string[] = [];
+    for (const key of T0_APPROVE_TIER) {
+      const r = byKey.get(key);
+      if (!r) {
+        broken.push(`${key}: not served`);
+        continue;
+      }
+      const cls = nonGetRouteClass(r);
+      if (key in T0_NOT_BOUNDED) {
+        if (cls !== "unclassified")
+          broken.push(
+            `${key}: classified now (${cls}), drop it from T0_NOT_BOUNDED`
+          );
+        continue;
+      }
+      if (cls === "gated") {
+        if (!GRANT_CHECK.test(r.source))
+          broken.push(`${key}: its handler names no grant check`);
+      } else if (cls === "gated-elsewhere") {
+        const row = GATED_ELSEWHERE[key]!;
+        const helper = (await row.load())[row.via];
+        if (!GRANT_CHECK.test(String(helper)))
+          broken.push(`${key}: ${row.via} names no grant check`);
+      } else if (cls !== "grant-checked-deeper" && cls !== "person-session") {
+        broken.push(`${key}: ${cls}`);
+      }
+    }
+    expect(broken).toEqual([]);
+  });
+
   it("self-check: the classifier sees gates, gated tRPC mutations and helpers", () => {
     const write = (source: string, path = "/zz-not-a-route"): ServedRoute => ({
       method: "POST",
@@ -816,6 +1095,104 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     ).toBe("unclassified");
     // A declared read is a read, whatever its source.
     expect(nonGetRouteClass(write("", "/packages/preflight"))).toBe("read");
+    // A GRANT_CHECKED_DEEPER row counts only while its handler calls the chain's head.
+    expect(
+      nonGetRouteClass(
+        write("await caller.approve({ proposalId })", "/proposals/:id/approve")
+      )
+    ).toBe("grant-checked-deeper");
+    expect(
+      nonGetRouteClass(write("return c.json({})", "/proposals/:id/approve"))
+    ).toBe("unclassified");
+    // A PERSON_SESSION_WRITES row counts only while its handler resolves the person.
+    expect(
+      nonGetRouteClass(
+        write(
+          "const id = await resolveKratosPodUserId(c)",
+          "/setup/agent/pending/approve-batch"
+        )
+      )
+    ).toBe("person-session");
+    expect(
+      nonGetRouteClass(
+        write("return c.json({})", "/setup/agent/pending/approve-batch")
+      )
+    ).toBe("unclassified");
+  });
+
+  it("self-check: a chain link is read from its file, and a role check is not a grant check", () => {
+    expect(definitionOf("routers/proposals.ts", "approve")).toMatch(
+      /^ {2}approve: \w*[pP]rocedure/
+    );
+    expect(definitionOf("routers/proposals.ts", "noSuchProcedure")).toBeNull();
+    // The definition stops at its end: approve's segment does not run into reject's.
+    expect(definitionOf("routers/proposals.ts", "approve")).not.toMatch(
+      /^ {2}reject: /m
+    );
+    expect(GRANT_CHECK.test("await grantWriteDenial({ subjectType })")).toBe(
+      true
+    );
+    expect(
+      GRANT_CHECK.test("await (0, __vi_import_1__.checkPermissionOrPropose)(p)")
+    ).toBe(true);
+    expect(GRANT_CHECK.test("await canWrite(p, { workspace })")).toBe(false);
+    expect(GRANT_CHECK.test("await assertWorkspaceWrite(db, u, w)")).toBe(
+      false
+    );
+  });
+});
+
+/**
+ * A1 step 1 (plan a640c5bb, 18 Nov 2026): the Hub fence refuses a person's
+ * app token (`app_person`) exactly the routes still in the write baseline,
+ * derived from the served routes: every baselined route is refused (at its
+ * concrete path), and no other served write is caught by a baseline pattern
+ * (a param segment of a baselined route swallowing a classified static one).
+ */
+describe("the fence refuses a person's app token exactly the unclassified writes", () => {
+  const nonGet = servedRoutes().filter(
+    (r) => r.method !== "GET" && r.method !== "HEAD"
+  );
+  const baseline = new Set(UNCLASSIFIED_WRITE_ROUTES);
+  const keyOf = (r: ServedRoute) => `${r.method} ${r.path}`;
+
+  it("sees the baseline and the classified writes (non-vacuity)", () => {
+    expect(nonGet.filter((r) => baseline.has(keyOf(r))).length).toBe(
+      UNCLASSIFIED_WRITE_ROUTES.length
+    );
+    expect(
+      nonGet.filter((r) => !baseline.has(keyOf(r))).length
+    ).toBeGreaterThan(100);
+  });
+
+  it("refuses every baselined route", () => {
+    expect(
+      nonGet
+        .filter((r) => baseline.has(keyOf(r)))
+        .filter((r) => appPersonWriteAllowed(r.method, concrete(r.path)))
+        .map(keyOf)
+    ).toEqual([]);
+  });
+
+  it("lets every other served write through (no baseline pattern catches it)", () => {
+    expect(
+      nonGet
+        .filter((r) => !baseline.has(keyOf(r)))
+        .filter((r) => !appPersonWriteAllowed(r.method, concrete(r.path)))
+        .map(keyOf)
+    ).toEqual([]);
+  });
+
+  it("rules on the method and the whole path", () => {
+    expect(appPersonWriteAllowed("POST", "/workspaces/ws-1/purge")).toBe(false);
+    expect(appPersonWriteAllowed("post", "/workspaces/ws-1/purge/")).toBe(
+      false
+    );
+    expect(appPersonWriteAllowed("GET", "/workspaces/ws-1/purge")).toBe(true);
+    expect(appPersonWriteAllowed("POST", "/workspaces/ws-1/purge/x")).toBe(
+      true
+    );
+    expect(appPersonWriteAllowed("POST", "/proposals/p-1/approve")).toBe(true);
   });
 });
 
