@@ -112,6 +112,11 @@ export const BUILT_IN_REACTIONS: readonly ReactionDeclaration[] = [
     via: { link: "outcome_ref" },
     do: { effect: "meet_outcomes" },
     order: 10,
+    // An outcome it meets may complete a stage's work: that slot's move must
+    // reach the stage's status (`builtin:approved-output-reaches-status`,
+    // decision D2; review 6bf3101d M2b). Its moves are slots only, so the
+    // only rule they fire is that one.
+    chains: true,
     terminal: "apply",
     terminalWhy:
       "The approval is already the person's decision: meeting the outcome it delivers asks nothing new.",
