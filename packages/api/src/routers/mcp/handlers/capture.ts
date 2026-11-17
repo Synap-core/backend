@@ -16,6 +16,7 @@ import {
 } from "@synap-core/types";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { createHash } from "crypto";
+import { shortenTitle } from "@synap-core/types/titles";
 import {
   TITLE_HARD_MAX,
   lintTitle,
@@ -144,7 +145,7 @@ function entityNamed(
     return `entity '${callerRef}'`;
   const title =
     typeof e.title === "string" && e.title
-      ? ` ("${e.title.slice(0, 60)}")`
+      ? ` ("${shortenTitle(e.title, 60)}")`
       : "";
   return `entities[${index}]${title}`;
 }
