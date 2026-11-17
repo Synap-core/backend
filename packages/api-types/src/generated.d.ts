@@ -26230,6 +26230,8 @@ export type StageSubjectStatusOutcome = {
 	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_ahead" | "subject_not_found";
 	status: "skipped";
 } | {
+	/** The compare-and-set found another status: a person's move won. */
+	code?: "moved_meanwhile";
 	reason: string;
 	status: "failed";
 };
