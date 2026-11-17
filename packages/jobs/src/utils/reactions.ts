@@ -34,9 +34,11 @@
 import type {
   AnyTransitionPayload,
   LifecycleCategory,
+  ProposalTransitionPayload,
   TransitionCause,
   TransitionSubjectType,
 } from "@synap-core/types/lifecycle";
+import { PROPOSAL_STATUS_DECLARATION } from "@synap-core/types/units";
 
 /** How many moves deep a chain of reactions may go (Jira caps at 10; D7 keeps it short). */
 export const MAX_REACTION_DEPTH = 3;
@@ -164,7 +166,12 @@ export function resetReactionRegistryForTests(): void {
   stateSource = null;
 }
 
-/** The subject types any rule listens to: the reactor's cheap pre-filter. */
+/** The subject types the DECLARED rules (registered sources) listen to. */
+export function declaredSubjectTypes(): ReadonlySet<TransitionSubjectType> {
+  return new Set(sources.flatMap((s) => s.subjectTypes));
+}
+
+/** The subject types any rule listens to. */
 export function reactionSubjectTypes(): ReadonlySet<TransitionSubjectType> {
   return new Set([
     ...BUILT_IN_REACTIONS.map((r) => r.when.subjectType),
@@ -232,6 +239,11 @@ export interface PlannedWrite {
   ownerUserId: string;
   /** The effect's own facts (the session, the slot, the hold). */
   detail: Record<string, unknown>;
+  /**
+   * The person's words for it: the target's own name (an outcome's label, a
+   * session's title) and the sentence its log row says once it is applied.
+   */
+  say: { name: string; applied: string };
 }
 
 export type ReactionSkipCode =
@@ -268,8 +280,55 @@ export interface SkippedWrite {
   reaction: ReactionDeclaration;
   write: PlannedWrite;
   code: ReactionSkipCode;
+  /** In the person's words (`reactionReason`): the Rules list shows it. */
   reason: string;
+  /** The machine's detail (statuses, values, an error), never shown as is. */
+  detail?: string | null;
   cause: TransitionCause;
+}
+
+/** Every code a reaction's log row carries. */
+export type ReactionLogCode = ReactionSkipCode | "applied" | "proposed";
+
+/**
+ * THE WORDS of a reaction's log row, in the person's language: the Rules list
+ * (D8) shows them. The target is named by its own name (an outcome's label, a
+ * session's title), never by a type and an id; no internal word ("door",
+ * "transition", "reaction", a status key). The machine's facts ride beside
+ * them (`code`, `target`, `detail`). Pure.
+ */
+export function reactionReason(
+  code: ReactionSkipCode | "proposed",
+  name: string | null,
+  extra: { others?: readonly string[] } = {}
+): string {
+  const it = name ? `\u201c${name}\u201d` : "it";
+  const kept = `Left ${it} as it was`;
+  const others = (extra.others ?? []).map((t) => `\u201c${t}\u201d`);
+  switch (code) {
+    case "proposed":
+      return `Asked you before closing ${it}: closing it is your call.`;
+    case "paused":
+      return `${kept}: this rule is paused.`;
+    case "not_chained":
+      return `${kept}: another rule made the change, and rules do not set each other off.`;
+    case "chain_depth":
+      return `${kept}: rules had already changed ${MAX_REACTION_DEPTH} things in a row.`;
+    case "conflict":
+      return `${kept}: ${others.join(" and ") || "two rules"} would change it in different ways.`;
+    case "same_write":
+      return `Nothing more to do on ${it}: ${others[0] ?? "another rule"} already changes it the same way.`;
+    case "moved_meanwhile":
+      return `${kept}: it changed since, and that change wins.`;
+    case "needs_proposal":
+      return `${kept}: closing it needs your approval, and this rule cannot ask for it yet.`;
+    case "effect_unavailable":
+      return "Did not run this time: this rule is not available right now.";
+    case "refused":
+      return `${kept}: it could not be changed.`;
+    case "failed":
+      return `Could not change ${it} this time: it will be tried again.`;
+  }
 }
 
 /** The cause a reaction's move carries, one link deeper than the move that fired it. */
@@ -315,28 +374,33 @@ export function decideReactionWrites(input: {
   );
   for (const { reaction, writes } of ordered) {
     const cause = nextCause(reaction.id, input.source);
-    const skipAll = (code: ReactionSkipCode, reason: string) => {
+    const skipAll = (code: ReactionSkipCode, detail: string) => {
       for (const write of writes) {
-        skipped.push({ reaction, write, code, reason, cause });
+        skipped.push({
+          reaction,
+          write,
+          code,
+          reason: reactionReason(code, write.say.name),
+          detail,
+          cause,
+        });
       }
     };
     if (!reaction.enabled) {
-      skipAll("paused", "The rule is paused.");
+      skipAll("paused", "rule disabled");
       continue;
     }
     if (sourceCause && !(input.causedBy?.chains === true)) {
       skipAll(
         "not_chained",
-        input.causedBy
-          ? `"${input.causedBy.title}" made this move, and its moves fire no other rule.`
-          : "A rule made this move, and that rule no longer chains."
+        `caused by ${input.causedBy?.id ?? sourceCause.reactionId ?? "unknown"}, which does not chain`
       );
       continue;
     }
     if (cause.depth > MAX_REACTION_DEPTH) {
       skipAll(
         "chain_depth",
-        `The chain is already ${cause.depth - 1} moves deep (at most ${MAX_REACTION_DEPTH}).`
+        `depth ${cause.depth} > ${MAX_REACTION_DEPTH}, chain ${cause.chainId}`
       );
       continue;
     }
@@ -352,12 +416,15 @@ export function decideReactionWrites(input: {
   for (const group of byTarget.values()) {
     const values = new Set(group.map((g) => g.write.to));
     if (values.size > 1) {
-      const names = [...new Set(group.map((g) => `"${g.reaction.title}"`))];
+      const titles = [...new Set(group.map((g) => g.reaction.title))];
       for (const g of group) {
         skipped.push({
           ...g,
           code: "conflict",
-          reason: `${names.join(" and ")} would move it to different statuses (${[...values].join(", ")}): nothing was applied.`,
+          reason: reactionReason("conflict", g.write.say.name, {
+            others: titles,
+          }),
+          detail: `${group.map((x) => `${x.reaction.id}=${x.write.to}`).join(", ")}`,
         });
       }
       continue;
@@ -367,7 +434,10 @@ export function decideReactionWrites(input: {
       skipped.push({
         ...g,
         code: "same_write",
-        reason: `"${first!.reaction.title}" already moves it to ${g.write.to}.`,
+        reason: reactionReason("same_write", g.write.say.name, {
+          others: [first!.reaction.title],
+        }),
+        detail: `${first!.reaction.id} writes ${g.write.to}`,
       });
     }
     const terminal =
@@ -379,4 +449,66 @@ export function decideReactionWrites(input: {
     });
   }
   return { decided, skipped };
+}
+
+// ── A receipt born decided ────────────────────────────────────────────────
+
+/** The proposal row a receipt is read from (`proposals`). */
+export interface BornReceiptRow {
+  id: string;
+  status: string;
+  proposalType: string;
+  targetType: string;
+  targetId: string;
+  sessionId: string | null;
+  workspaceId: string | null;
+  subjectUserId: string | null;
+  createdBy: string | null;
+  agentUserId: string | null;
+  createdAt: Date | string | null;
+}
+
+/**
+ * A receipt born `auto_approved`, as the move it stands for: `null` →
+ * `auto_approved`, by the system (the policy decided). Its insert owes no
+ * transition (a birth is not a move, `proposal-transition.ts`), so there is
+ * no transition id: the receipt's own id stands for it (the cause's
+ * `transitionId` and the log's source name the receipt). `null` once it no
+ * longer stands `auto_approved` (its write failed, it was reverted). Pure.
+ */
+export function bornReceiptTransition(
+  row: BornReceiptRow
+): ProposalTransitionPayload | null {
+  if (row.status !== "auto_approved") return null;
+  const at = (
+    row.createdAt ? new Date(row.createdAt) : new Date()
+  ).toISOString();
+  return {
+    transitionId: row.id,
+    subjectType: "proposal",
+    subjectId: row.id,
+    property: "status",
+    from: null,
+    to: "auto_approved",
+    fromCategory: null,
+    category: PROPOSAL_STATUS_DECLARATION.auto_approved.category,
+    actorKind: "system",
+    actorClass: "system",
+    appId: null,
+    userId: row.subjectUserId ?? row.createdBy ?? "system",
+    agentUserId: row.agentUserId ?? null,
+    sessionId: row.sessionId ?? null,
+    reason: null,
+    staleExpected: false,
+    proposalId: row.id,
+    workspaceId: row.workspaceId ?? null,
+    occurredAt: at,
+    recordedAt: at,
+    backdated: false,
+    hold: null,
+    proposalType: row.proposalType,
+    targetType: row.targetType,
+    targetId: row.targetId,
+    section: null,
+  };
 }

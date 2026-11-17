@@ -168,6 +168,7 @@ async function logMetAnywhere(
   userId: string,
   sessionId: string,
   slotKey: string,
+  label: string,
   event: PullRequestEvent
 ): Promise<void> {
   try {
@@ -176,7 +177,8 @@ async function logMetAnywhere(
         reactionId: OUTCOME_MET_REACTION_ID,
         outcome: "applied",
         code: "applied",
-        reason: `Met because ${event.repo}#${event.number} merged.`,
+        reason: `Met \u201c${label}\u201d: its pull request ${event.repo}#${event.number} merged.`,
+        detail: `dev.pr_merged ${event.repo}#${event.number} into the default branch`,
         userId,
         sourceTransitionId: null,
         source: `pr:${event.repo}#${event.number}`,
@@ -240,8 +242,11 @@ export async function sweepMergedPullRequest(
           slotKey,
         });
         if (pod.satisfied.some((s) => s.key === slotKey)) {
-          if (!named)
-            await logMetAnywhere(userId, base.sessionId, slotKey, event);
+          if (!named) {
+            const label =
+              pod.satisfied.find((s) => s.key === slotKey)?.label ?? slotKey;
+            await logMetAnywhere(userId, base.sessionId, slotKey, label, event);
+          }
           await recheckAfterMerge({
             sessionId: base.sessionId,
             userId,

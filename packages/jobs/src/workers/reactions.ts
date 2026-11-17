@@ -27,24 +27,28 @@ import {
   db,
   eq,
   lifecycleTransitionOutbox,
+  proposals,
   recordReactionOutcomes,
   type ReactionLogEntry,
 } from "@synap/database";
-import { registerReactor, type Reactor } from "@synap/events";
+import { getBoss, registerReactor, type Reactor } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import type {
   AnyTransitionPayload,
   TransitionSubjectType,
 } from "@synap-core/types/lifecycle";
 import {
+  BUILT_IN_REACTIONS,
+  bornReceiptTransition,
   decideReactionWrites,
+  declaredSubjectTypes,
   listReactions,
   reactionMatches,
-  reactionSubjectTypes,
+  reactionReason,
   type DecidedWrite,
   type PlannedWrite,
   type ReactionDeclaration,
-  type SkippedWrite,
+  type ReactionLogCode,
 } from "../utils/reactions.js";
 import {
   reactionEffectOf,
@@ -55,9 +59,16 @@ const logger = createLogger({ module: "reactions" });
 
 export const REACTIONS_QUEUE = "reactions";
 
-export interface ReactionsJobData {
-  transitionId: string;
-}
+/**
+ * One move (`transitionId`, off the outbox), or one RECEIPT born
+ * `auto_approved` (`bornProposalId`). A receipt is inserted already decided
+ * (permission-check, the event-backed recorder, the automation door): its
+ * insert owes no transition, by design (a birth is not a move,
+ * `proposal-transition.ts`), so its door queues this job itself.
+ */
+export type ReactionsJobData =
+  | { transitionId: string; bornProposalId?: undefined }
+  | { bornProposalId: string; transitionId?: undefined };
 
 export interface ReactionsJobResult {
   applied: number;
@@ -83,6 +94,30 @@ async function readTransition(
   return t && typeof t.to === "string" ? t : null;
 }
 
+/** A receipt born `auto_approved`, read as the move it stands for. */
+async function readBornReceipt(
+  proposalId: string
+): Promise<AnyTransitionPayload | null> {
+  const [row] = await db
+    .select({
+      id: proposals.id,
+      status: proposals.status,
+      proposalType: proposals.proposalType,
+      targetType: proposals.targetType,
+      targetId: proposals.targetId,
+      sessionId: proposals.sessionId,
+      workspaceId: proposals.workspaceId,
+      subjectUserId: proposals.subjectUserId,
+      createdBy: proposals.createdBy,
+      agentUserId: proposals.agentUserId,
+      createdAt: proposals.createdAt,
+    })
+    .from(proposals)
+    .where(eq(proposals.id, proposalId))
+    .limit(1);
+  return row ? bornReceiptTransition(row) : null;
+}
+
 const subjectOf = (t: AnyTransitionPayload) =>
   `${t.subjectType}:${t.subjectId}`;
 const targetOf = (w: PlannedWrite) =>
@@ -96,8 +131,9 @@ function logEntry(
     cause: DecidedWrite["cause"];
   },
   outcome: ReactionLogEntry["outcome"],
-  code: string,
+  code: ReactionLogCode,
   reason: string,
+  detail?: string | null,
   proposalId?: string
 ): ReactionLogEntry {
   return {
@@ -105,6 +141,7 @@ function logEntry(
     outcome,
     code,
     reason,
+    detail: detail ?? null,
     userId: d.write.ownerUserId || t.userId,
     sourceTransitionId: t.transitionId,
     source: subjectOf(t),
@@ -148,7 +185,11 @@ export async function handleReactions(
   data: ReactionsJobData
 ): Promise<ReactionsJobResult> {
   const result: ReactionsJobResult = { applied: 0, proposed: 0, skipped: 0 };
-  const t = await readTransition(data.transitionId);
+  const t = data.bornProposalId
+    ? await readBornReceipt(data.bornProposalId)
+    : data.transitionId
+      ? await readTransition(data.transitionId)
+      : null;
   if (!t) return result;
   const all = await listReactions();
   const matching = all.filter((r) => reactionMatches(r, t));
@@ -167,7 +208,8 @@ export async function handleReactions(
         reactionId: reaction.id,
         outcome: "skipped",
         code: "effect_unavailable",
-        reason: `The door behind "${reaction.title}" is not available in this process.`,
+        reason: reactionReason("effect_unavailable", null),
+        detail: `effect ${reaction.do.effect} not registered`,
         userId: t.userId,
         sourceTransitionId: t.transitionId,
         source: subjectOf(t),
@@ -190,8 +232,8 @@ export async function handleReactions(
     planned,
     causedBy,
   });
-  for (const s of skipped as SkippedWrite[]) {
-    log.push(logEntry(t, s, "skipped", s.code, s.reason));
+  for (const s of skipped) {
+    log.push(logEntry(t, s, "skipped", s.code, s.reason, s.detail));
   }
 
   let failure: unknown = null;
@@ -207,7 +249,8 @@ export async function handleReactions(
               d,
               "applied",
               "applied",
-              `"${d.reaction.title}": moved to ${d.write.to} because ${subjectOf(t)} moved to ${t.to}.`
+              d.write.say.applied,
+              `${subjectOf(t)} -> ${t.to}`
             )
           );
           break;
@@ -219,7 +262,8 @@ export async function handleReactions(
               d,
               "proposed",
               "proposed",
-              `"${d.reaction.title}": a move into ${d.write.toCategory} is proposed, not applied.`,
+              reactionReason("proposed", d.write.say.name),
+              `-> ${d.write.to} (${d.write.toCategory})`,
               out.proposalId
             )
           );
@@ -227,30 +271,30 @@ export async function handleReactions(
         case "unchanged":
           break;
         case "moved_meanwhile":
-          log.push(logEntry(t, d, "skipped", "moved_meanwhile", out.reason));
-          break;
         case "refused":
-          log.push(logEntry(t, d, "skipped", "refused", out.reason));
-          break;
-        case "needs_proposal":
           log.push(
             logEntry(
               t,
               d,
               "skipped",
-              "needs_proposal",
-              `A move into ${d.write.toCategory} must be proposed, and "${d.reaction.title}" cannot file one.`
+              out.status,
+              reactionReason(out.status, d.write.say.name),
+              out.detail
             )
           );
           break;
+        case "needs_proposal":
         case "effect_unavailable":
           log.push(
             logEntry(
               t,
               d,
               "skipped",
-              "effect_unavailable",
-              `The door behind "${d.reaction.title}" is not available in this process.`
+              out.status,
+              reactionReason(out.status, d.write.say.name),
+              out.status === "needs_proposal"
+                ? `-> ${d.write.to} (${d.write.toCategory}); effect ${d.reaction.do.effect} has no propose`
+                : `effect ${d.reaction.do.effect} not registered`
             )
           );
           break;
@@ -263,6 +307,7 @@ export async function handleReactions(
           d,
           "skipped",
           "failed",
+          reactionReason("failed", d.write.say.name),
           err instanceof Error ? err.message : String(err)
         )
       );
@@ -287,14 +332,35 @@ export async function handleReactions(
 }
 
 /**
+ * Does some rule listen to this move? The built-ins are matched exactly (their
+ * WHEN is static); a declared rule by its subject type. Most moves (a run
+ * flipping running ↔ stale, a proposal expiring) queue no job at all.
+ */
+function someRuleListens(payload: {
+  subjectType: string;
+  data?: Record<string, unknown>;
+}): boolean {
+  const d = payload.data ?? {};
+  if (typeof d.to !== "string" || typeof d.category !== "string") return false;
+  const move = {
+    subjectType: payload.subjectType as TransitionSubjectType,
+    to: d.to,
+    category: d.category as AnyTransitionPayload["category"],
+  };
+  return (
+    BUILT_IN_REACTIONS.some((r) => reactionMatches(r, move)) ||
+    declaredSubjectTypes().has(move.subjectType)
+  );
+}
+
+/**
  * Every move some rule listens to: sent to the queue (off the emit path),
  * where the job decides. A redelivered move is one job, not two.
  */
 export const reactionsReactor: Reactor = {
   id: "reactions",
   match: (payload) =>
-    payload.action === "transition" &&
-    reactionSubjectTypes().has(payload.subjectType as TransitionSubjectType),
+    payload.action === "transition" && someRuleListens(payload),
   async handler(payload, { boss }) {
     // The move's own id (the outbox key; the event row's id is the same).
     const transitionId =
@@ -309,6 +375,47 @@ export const reactionsReactor: Reactor = {
     );
   },
 };
+
+/**
+ * A receipt born `auto_approved` (an agent's write a rule let through, a
+ * person's recorded write): its insert owes no transition, so its door calls
+ * this after the insert, and the rules that listen to an `auto_approved`
+ * proposal (pod default 3) run on it like on any approval. Delayed a little
+ * (`startAfter`): a receipt is filed as the write is granted, and the job
+ * reads it again, acting only while it still stands `auto_approved` (a write
+ * that failed has moved it to `approval_failed`). Best-effort: never throws.
+ */
+export const RECEIPT_REACTIONS_DELAY_S = 15;
+
+export async function queueReceiptReactions(proposalId: string): Promise<void> {
+  if (
+    !BUILT_IN_REACTIONS.some((r) =>
+      reactionMatches(r, {
+        subjectType: "proposal",
+        to: "auto_approved",
+        category: "done",
+      })
+    ) &&
+    !declaredSubjectTypes().has("proposal")
+  ) {
+    return;
+  }
+  try {
+    await getBoss().send(
+      REACTIONS_QUEUE,
+      { bornProposalId: proposalId } satisfies ReactionsJobData,
+      {
+        singletonKey: `reaction:born:${proposalId}`,
+        startAfter: RECEIPT_REACTIONS_DELAY_S,
+      }
+    );
+  } catch (err) {
+    logger.warn(
+      { err, proposalId },
+      "receipt reactions not queued — its outcomes stay as they are"
+    );
+  }
+}
 
 let registered = false;
 

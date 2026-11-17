@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
     exec: (sql: string) => Promise<unknown>;
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
+  sent: [] as unknown[][],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -32,6 +33,12 @@ vi.mock("@synap/events", () => ({
   dispatchLifecycleTransition: vi.fn(async () => true),
   emitSideEffects: vi.fn(async () => undefined),
   registerReactor: vi.fn(),
+  getBoss: () => ({
+    send: async (...args: unknown[]) => {
+      h.sent.push(args);
+      return "job";
+    },
+  }),
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
@@ -40,11 +47,14 @@ import {
   focusSessions,
   lifecycleTransitionOutbox,
   playbookRuns,
+  proposals,
 } from "@synap/database/schema";
 import { db, setRunStatus } from "@synap/database";
 import {
   REACTIONS_QUEUE,
+  RECEIPT_REACTIONS_DELAY_S,
   handleReactions,
+  queueReceiptReactions,
   reactionsReactor,
 } from "./reactions.js";
 import {
@@ -159,6 +169,7 @@ beforeAll(async () => {
     focusSessions,
     lifecycleTransitionOutbox,
     playbookRuns,
+    proposals,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -187,7 +198,14 @@ describe("the reactor", () => {
       { transitionId: "t-9" },
       { singletonKey: "reaction:t-9" }
     );
-    // Not a move, or a move no rule listens to: no job at all.
+    // A move no rule listens to (a run back to running), or not a move at
+    // all: no job.
+    expect(
+      reactionsReactor.match!({
+        ...payload,
+        data: { transitionId: "t-9", to: "running", category: "active" },
+      } as never)
+    ).toBe(false);
     expect(
       reactionsReactor.match!({ ...payload, action: "update" } as never)
     ).toBe(false);
@@ -232,6 +250,9 @@ describe("default 4: a run that stops early goes to Needs you", () => {
           target: `focus_session:${s}`,
           to: "paused",
           depth: 1,
+          // The person's words: the session by its name, the ask by its label.
+          reason:
+            "Paused \u201cg\u201d: its run stopped and waits on your answer to \u201cKeep the run going\u201d.",
         }),
       }),
     ]);
@@ -312,7 +333,7 @@ describe("default 4: a run that stops early goes to Needs you", () => {
     });
     expect(out).toEqual({
       status: "moved_meanwhile",
-      reason: "The session is no longer active.",
+      detail: "focus_session no longer active",
     });
     expect(await statusOf(s)).toBe("closed");
   });
@@ -375,6 +396,7 @@ describe("the guards, end to end (a stubbed effect plans on purpose)", () => {
     expectedFrom: "open",
     ownerUserId: "u1",
     detail: {},
+    say: { name: `Thing ${id}`, applied: `Changed Thing ${id}.` },
   });
 
   it("two rules writing one thing with different values: both logged as a conflict, nothing applied", async () => {
@@ -485,5 +507,97 @@ describe("the guards, end to end (a stubbed effect plans on purpose)", () => {
     expect(
       (await logOf(t.transitionId)).map((l) => l.data.code).sort()
     ).toEqual(["applied", "failed"]);
+  });
+});
+
+describe("a receipt born auto_approved (its insert owes no move)", () => {
+  async function receipt(status = "auto_approved"): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into proposals (id, target_type, target_id, proposal_type, data, status, subject_user_id, created_by, created_at)
+       values ($1, 'playbook', 'pb-1', 'update', '{}'::jsonb, $2, 'u1', 'agent-1', now())`,
+      [id, status]
+    );
+    return id;
+  }
+
+  it("its door queues ONE delayed job; the job runs the approval rules on it as on any approval", async () => {
+    h.sent.length = 0;
+    const id = await receipt();
+    await queueReceiptReactions(id);
+    expect(h.sent).toEqual([
+      [
+        REACTIONS_QUEUE,
+        { bornProposalId: id },
+        {
+          singletonKey: `reaction:born:${id}`,
+          startAfter: RECEIPT_REACTIONS_DELAY_S,
+        },
+      ],
+    ]);
+
+    const seen: unknown[] = [];
+    registerReactionEffect({
+      key: "meet_outcomes",
+      async plan(t) {
+        seen.push(t);
+        return [
+          {
+            target: { subjectType: "slot", subjectId: "s/k" },
+            to: "done",
+            toCategory: "done",
+            expectedFrom: "pending",
+            ownerUserId: "u1",
+            detail: {},
+            say: { name: "Recipe", applied: "Met “Recipe”." },
+          },
+        ];
+      },
+      async apply() {
+        return { status: "applied", transitionIds: [] };
+      },
+    });
+    expect(await handleReactions({ bornProposalId: id })).toEqual({
+      applied: 1,
+      proposed: 0,
+      skipped: 0,
+    });
+    expect(seen).toEqual([
+      expect.objectContaining({
+        transitionId: id,
+        subjectType: "proposal",
+        from: null,
+        to: "auto_approved",
+        targetType: "playbook",
+        targetId: "pb-1",
+      }),
+    ]);
+    expect(await logOf(id)).toEqual([
+      expect.objectContaining({
+        type: "reaction.applied",
+        subject_id: "builtin:outcome-met-where-filed",
+      }),
+    ]);
+  });
+
+  it("a receipt that no longer stands auto_approved (its write failed) runs nothing", async () => {
+    let planned = 0;
+    registerReactionEffect({
+      key: "meet_outcomes",
+      async plan() {
+        planned++;
+        return [];
+      },
+      async apply() {
+        return { status: "unchanged" };
+      },
+    });
+    const id = await receipt("approval_failed");
+    expect(await handleReactions({ bornProposalId: id })).toEqual({
+      applied: 0,
+      proposed: 0,
+      skipped: 0,
+    });
+    expect(planned).toBe(0);
   });
 });

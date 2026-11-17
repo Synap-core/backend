@@ -42,11 +42,16 @@ export interface ReactionLogEntry {
   outcome: ReactionOutcome;
   /** Why it was skipped (a stable code), or what it did. */
   code: string;
-  /** The same, in plain words. */
+  /** In the person's words: the Rules list shows it (no ids, no internal words). */
   reason: string;
+  /** The machine's detail (statuses, values, an error message), never shown as is. */
+  detail?: string | null;
   /** The person whose thing moved (the log's owner). */
   userId: string;
-  /** The move that fired it; null when a fact fired it (a merged PR). */
+  /**
+   * The move that fired it (a receipt born decided: the receipt's id); null
+   * when a fact fired it (a merged PR).
+   */
   sourceTransitionId: string | null;
   /** What moved, for a reader: `<subjectType>:<subjectId>`, or the fact. */
   source: string;
@@ -80,6 +85,7 @@ export async function recordReactionOutcomes(
         outcome: e.outcome,
         code: e.code,
         reason: e.reason,
+        detail: e.detail ?? null,
         sourceTransitionId: e.sourceTransitionId,
         source: e.source,
         target: e.target,
@@ -130,6 +136,7 @@ export async function listReactionOutcomes(
       outcome: (str(d.outcome) ?? "skipped") as ReactionOutcome,
       code: str(d.code) ?? "",
       reason: str(d.reason) ?? "",
+      detail: str(d.detail),
       sourceTransitionId: str(d.sourceTransitionId),
       source: str(d.source) ?? "",
       target: str(d.target),

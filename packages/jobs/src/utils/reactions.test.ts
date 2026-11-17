@@ -9,11 +9,13 @@ import {
   BUILT_IN_REACTIONS,
   MAX_REACTION_DEPTH,
   OUTCOME_MET_REACTION_ID,
+  bornReceiptTransition,
   decideReactionWrites,
   isReactionEnabled,
   listReactions,
   nextCause,
   reactionMatches,
+  reactionReason,
   reactionSubjectTypes,
   registerReactionSource,
   registerReactionStateSource,
@@ -48,6 +50,7 @@ const write = (
   expectedFrom: "open",
   ownerUserId: "u1",
   detail: {},
+  say: { name: `Thing ${subjectId}`, applied: `Changed Thing ${subjectId}.` },
 });
 
 const SOURCE = { transitionId: "t-1" };
@@ -204,7 +207,7 @@ describe("the guards", () => {
     expect(out.skipped).toEqual([
       expect.objectContaining({
         code: "paused",
-        reason: "The rule is paused.",
+        reason: "Left \u201cThing e1\u201d as it was: this rule is paused.",
       }),
     ]);
   });
@@ -228,7 +231,11 @@ describe("the guards", () => {
     });
     expect(off.decided).toEqual([]);
     expect(off.skipped[0]).toMatchObject({ code: "not_chained" });
-    expect(off.skipped[0]!.reason).toContain("Rule maker");
+    expect(off.skipped[0]).toMatchObject({
+      reason:
+        "Left \u201cThing e9\u201d as it was: another rule made the change, and rules do not set each other off.",
+      detail: "caused by maker, which does not chain",
+    });
 
     const on = decideReactionWrites({
       source: caused,
@@ -292,7 +299,11 @@ describe("the guards", () => {
       ["a", "conflict"],
       ["b", "conflict"],
     ]);
-    expect(out.skipped[0]!.reason).toMatch(/Rule a.*Rule b.*shipped, archived/);
+    expect(out.skipped[0]).toMatchObject({
+      reason:
+        "Left \u201cThing e1\u201d as it was: \u201cRule a\u201d and \u201cRule b\u201d would change it in different ways.",
+      detail: "a=shipped, b=archived",
+    });
   });
 
   it("two rules writing the same value: applied once, the second logged", () => {
@@ -321,5 +332,79 @@ describe("the guards", () => {
     expect(decide(rule("a"), "lost")).toBe("propose");
     expect(decide(rule("a"), "paused")).toBe("apply");
     expect(decide(rule("a", { terminal: "apply" }), "done")).toBe("apply");
+  });
+});
+
+describe("the words the person reads (the Rules list)", () => {
+  it("name the thing by its own name, and never an id, a type or an internal word", () => {
+    const codes = [
+      "proposed",
+      "paused",
+      "not_chained",
+      "chain_depth",
+      "conflict",
+      "same_write",
+      "moved_meanwhile",
+      "needs_proposal",
+      "effect_unavailable",
+      "refused",
+      "failed",
+    ] as const;
+    for (const code of codes) {
+      const words = reactionReason(code, "Brief for the launch", {
+        others: ["Rule A"],
+      });
+      expect(words, code).not.toMatch(
+        /door|transition|reaction|process|_|[0-9a-f]{8}-[0-9a-f]{4}/i
+      );
+      if (code !== "effect_unavailable") {
+        expect(words, code).toContain("\u201cBrief for the launch\u201d");
+      }
+    }
+  });
+});
+
+describe("a receipt born decided (pod default 3's other trigger)", () => {
+  const row = {
+    id: "11111111-1111-4111-8111-111111111111",
+    status: "auto_approved",
+    proposalType: "update",
+    targetType: "playbook",
+    targetId: "p-1",
+    sessionId: null,
+    workspaceId: "w-1",
+    subjectUserId: "u1",
+    createdBy: "agent-1",
+    agentUserId: "agent-1",
+    createdAt: "2026-11-17T10:00:00.000Z",
+  };
+
+  it("reads as the approval it stands for, its own id standing for the move", () => {
+    const t = bornReceiptTransition(row)!;
+    expect(t).toMatchObject({
+      transitionId: row.id,
+      subjectType: "proposal",
+      subjectId: row.id,
+      from: null,
+      to: "auto_approved",
+      category: "done",
+      actorKind: "system",
+      userId: "u1",
+      targetType: "playbook",
+      targetId: "p-1",
+    });
+    expect(reactionMatches(BUILT_IN_REACTIONS[0]!, t)).toBe(true);
+    expect(nextCause(OUTCOME_MET_REACTION_ID, t)).toEqual({
+      reactionId: OUTCOME_MET_REACTION_ID,
+      transitionId: row.id,
+      chainId: row.id,
+      depth: 1,
+    });
+  });
+
+  it("is nothing once it no longer stands auto_approved (its write failed, it was reverted)", () => {
+    for (const status of ["approval_failed", "reverted", "pending"]) {
+      expect(bornReceiptTransition({ ...row, status })).toBeNull();
+    }
   });
 });

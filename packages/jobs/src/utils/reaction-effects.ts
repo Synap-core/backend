@@ -21,6 +21,7 @@ import { dispatchLifecycleTransition } from "@synap/events";
 import {
   deliverableOwedBy,
   deriveSlotKeys,
+  newestOwedFirst,
   type SlotFacts,
 } from "@synap-core/types/units";
 import {
@@ -42,8 +43,9 @@ export type ReactionEffectOutcome =
   /** Already where the write would put it: nothing to do, nothing logged. */
   | { status: "unchanged" }
   /** The compare-and-set found another status: a person's move wins. */
-  | { status: "moved_meanwhile"; reason: string }
-  | { status: "refused"; reason: string };
+  | { status: "moved_meanwhile"; detail: string }
+  /** The target's door refused it; `detail` is the door's own message. */
+  | { status: "refused"; detail: string };
 
 export interface ReactionEffectContext {
   transition: AnyTransitionPayload;
@@ -106,23 +108,16 @@ type StoredSlot = SlotFacts & {
  * Pure. Null when it owes them nothing: then nobody waits on the person.
  */
 export function slotTheRunWaitsOn(
-  raw: unknown
+  slots: readonly StoredSlot[]
 ): { key: string; label: string } | null {
-  const slots: StoredSlot[] = Array.isArray(raw) ? (raw as StoredSlot[]) : [];
   const keys = deriveSlotKeys(slots);
-  let best: { key: string; label: string; since: string; at: number } | null =
-    null;
-  slots.forEach((slot, at) => {
-    if (!slot || deliverableOwedBy(slot) !== "you") return;
-    const key = slot.key || keys[at];
-    if (!key) return;
-    const since = typeof slot.owedSince === "string" ? slot.owedSince : "";
-    if (!best || since > best.since || (since === best.since && at > best.at)) {
-      best = { key, label: slot.label || key, since, at };
-    }
-  });
-  const b = best as { key: string; label: string } | null;
-  return b ? { key: b.key, label: b.label } : null;
+  const [newest] = slots
+    .map((slot, at) => ({ slot, key: keys[at] }))
+    .filter(({ slot, key }) => key && slot && deliverableOwedBy(slot) === "you")
+    .sort((a, b) => newestOwedFirst(a.slot, b.slot));
+  return newest
+    ? { key: newest.key!, label: newest.slot.label || newest.key! }
+    : null;
 }
 
 /**
@@ -141,6 +136,8 @@ export const pauseSessionEffect: ReactionEffect = {
         id: focusSessions.id,
         status: focusSessions.status,
         userId: focusSessions.userId,
+        title: focusSessions.title,
+        goal: focusSessions.goal,
         expectedOutputs: focusSessions.expectedOutputs,
       })
       .from(focusSessions)
@@ -149,8 +146,11 @@ export const pauseSessionEffect: ReactionEffect = {
     // Only a session at work is paused: one already paused (a gate, another
     // hold), ended or not started is left where it stands.
     if (!s || s.status !== "active") return [];
-    const slot = slotTheRunWaitsOn(s.expectedOutputs);
+    const slot = slotTheRunWaitsOn(
+      Array.isArray(s.expectedOutputs) ? s.expectedOutputs : []
+    );
     if (!slot) return [];
+    const name = s.title || s.goal;
     const hold: Hold = {
       on: "person",
       reason: `The run stopped and waits on you: ${slot.label}.`,
@@ -170,6 +170,10 @@ export const pauseSessionEffect: ReactionEffect = {
         expectedFrom: s.status,
         ownerUserId: s.userId,
         detail: { slotKey: slot.key, hold },
+        say: {
+          name,
+          applied: `Paused \u201c${name}\u201d: its run stopped and waits on your answer to \u201c${slot.label}\u201d.`,
+        },
       },
     ];
   },
@@ -187,7 +191,7 @@ export const pauseSessionEffect: ReactionEffect = {
       if (rows.length === 0) {
         return {
           status: "moved_meanwhile",
-          reason: `The session is no longer ${write.expectedFrom}.`,
+          detail: `focus_session no longer ${write.expectedFrom}`,
         };
       }
       for (const t of transitions) {
@@ -201,7 +205,7 @@ export const pauseSessionEffect: ReactionEffect = {
         : { status: "unchanged" };
     } catch (err) {
       if (err instanceof HoldRefusedError) {
-        return { status: "refused", reason: err.message };
+        return { status: "refused", detail: err.message };
       }
       throw err;
     }

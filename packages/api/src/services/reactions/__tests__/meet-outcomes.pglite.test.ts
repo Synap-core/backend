@@ -58,6 +58,7 @@ import type { AnyTransitionPayload } from "@synap-core/types/lifecycle";
 import {
   BUILT_IN_REACTIONS,
   OUTCOME_MET_REACTION_ID,
+  bornReceiptTransition,
   decideReactionWrites,
   reactionMatches,
 } from "@synap/jobs/utils/reactions.js";
@@ -226,6 +227,51 @@ describe("default 3: an approval meets the outcome wherever it was filed", () =>
     // Idempotent: a redelivered approval meets nothing twice.
     expect(await react(t)).toEqual({ applied: 0 });
     expect(await slotMoves(`${work}/proposal-animated`)).toHaveLength(1);
+  });
+
+  it("a receipt BORN auto_approved (an agent's write a rule let through) meets it too: its door queues the job, which reads it as the approval", async () => {
+    const playbook = randomUUID();
+    const ambient = await session([]);
+    const work = await session([recipe(playbook)]);
+    const id = randomUUID();
+    // Inserted already decided, as permission-check files a receipt: no
+    // transition is owed for it.
+    await q(
+      `insert into proposals (id, target_type, target_id, proposal_type, data, status, session_id, subject_user_id, created_by, agent_user_id, created_at)
+       values ($1, 'playbook', $2, 'update', '{}'::jsonb, 'auto_approved', $3, $4, 'agent-1', 'agent-1', now())`,
+      [id, playbook, ambient, OWNER]
+    );
+    expect(
+      (
+        await q(
+          `select 1 from lifecycle_transition_outbox where transition->>'subjectId' = $1`,
+          [id]
+        )
+      ).rows
+    ).toEqual([]);
+    const [row] = (
+      await q<Record<string, unknown>>(
+        `select id, status, proposal_type as "proposalType", target_type as "targetType", target_id as "targetId",
+                session_id as "sessionId", workspace_id as "workspaceId", subject_user_id as "subjectUserId",
+                created_by as "createdBy", agent_user_id as "agentUserId", created_at as "createdAt"
+           from proposals where id = $1`,
+        [id]
+      )
+    ).rows;
+    const t = bornReceiptTransition(row as never);
+    expect(t).not.toBeNull();
+    expect(await react(t!)).toEqual({ applied: 1 });
+    expect((await slotsOf(work))[0]).toMatchObject({
+      status: "done",
+      satisfiedByProposalId: id,
+    });
+    expect((await slotMoves(`${work}/proposal-animated`))[0]).toMatchObject({
+      cause: {
+        reactionId: OUTCOME_MET_REACTION_ID,
+        transitionId: id,
+        depth: 1,
+      },
+    });
   });
 
   it("meets it in EVERY session of the owner that declares it, and never another person's", async () => {
