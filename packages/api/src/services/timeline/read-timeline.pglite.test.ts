@@ -17,6 +17,11 @@
  *   - a CI run on the PR's head sha that names no PR — the PR timeline's
  *     head rule finds it; a run on another sha stays out;
  *   - another person's session — read as missing, never as empty.
+ *
+ * The session CHAIN (decision D3) sits where a looser read would leak: a
+ * child of another person, a pod notice, a comment, a deleted and an
+ * ephemeral row in the room, a post whose stamp names an agent that did not
+ * write it, and a "sent" post in a room the reader cannot see.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -318,6 +323,219 @@ beforeAll(async () => {
 const kinds = (events: readonly DevTimelineEvent[]) =>
   events.map((e) => e.kind);
 
+// ─── The session chain: stage moves, spawns, runners, room posts ─────────
+const C = {
+  parent: randomUUID(),
+  child: randomUUID(),
+  hiddenChild: randomUUID(),
+  peer: randomUUID(),
+  stranger: randomUUID(),
+};
+const ROOM = {
+  parent: randomUUID(),
+  peer: randomUUID(),
+  stranger: randomUUID(),
+};
+const MACHINE = "machine-devbox";
+const LONG = `${"word ".repeat(60)}end of the first line\nsecond line`;
+const MSG = {
+  person: randomUUID(),
+  question: randomUUID(),
+  received: randomUUID(),
+  sent: randomUUID(),
+};
+
+async function room(id: string, owner: string) {
+  await q(
+    `insert into channels (id, user_id, channel_type, title, created_at, updated_at)
+     values ($1, $2, 'session', 'room', $3, $3)`,
+    [id, owner, at(-60)]
+  );
+}
+
+async function message(
+  id: string,
+  channelId: string,
+  min: number,
+  m: {
+    role: string;
+    authorType: string;
+    content: string;
+    user?: string;
+    agent?: string | null;
+    metadata?: unknown;
+    category?: string;
+    deleted?: boolean;
+    ephemeral?: boolean;
+  }
+) {
+  await q(
+    `insert into messages (id, channel_id, role, author_type, message_category, content, metadata, user_id, routed_teammate_id, timestamp, hash, ephemeral, deleted_at)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, 'h', $11, $12)`,
+    [
+      id,
+      channelId,
+      m.role,
+      m.authorType,
+      m.category ?? "chat",
+      m.content,
+      JSON.stringify(m.metadata ?? null),
+      m.user ?? USER,
+      m.agent ?? null,
+      at(min),
+      m.ephemeral ?? false,
+      m.deleted ? at(min) : null,
+    ]
+  );
+}
+
+const sessionPost = (from: string, to: string, agent = AGENT) => ({
+  sessionPost: {
+    intent: "handoff",
+    from: {
+      sessionId: from,
+      agentUserId: agent,
+      harness: "claude-code",
+      conversationId: "conv-1",
+    },
+    to: { sessionId: to },
+    hop: 0,
+    wake: true,
+  },
+  roomPost: { kind: "update" },
+});
+
+async function seedChain() {
+  await q(
+    `insert into users (id, email, name, user_type) values ($1, $2, 'devbox', 'agent')`,
+    [MACHINE, `${MACHINE}@test`]
+  );
+  for (const id of [C.parent, C.child, C.peer]) await session(id, USER);
+  await session(C.hiddenChild, OTHER);
+  await session(C.stranger, OTHER);
+  await room(ROOM.parent, USER);
+  await room(ROOM.peer, USER);
+  await room(ROOM.stranger, OTHER);
+  await q(`update focus_sessions set channel_id = $2 where id = $1`, [
+    C.parent,
+    ROOM.parent,
+  ]);
+  await q(`update focus_sessions set channel_id = $2 where id = $1`, [
+    C.peer,
+    ROOM.peer,
+  ]);
+  await q(`update focus_sessions set channel_id = $2 where id = $1`, [
+    C.stranger,
+    ROOM.stranger,
+  ]);
+  // The stage ledger, as `appendSessionStageHistory` writes it.
+  await q(`update focus_sessions set stage_history = $2::jsonb where id = $1`, [
+    C.parent,
+    JSON.stringify([
+      {
+        stageKey: "plan",
+        fromStage: null,
+        enteredAt: at(-50).toISOString(),
+        actor: AGENT,
+        userId: USER,
+        via: "advance",
+      },
+      {
+        stageKey: "build",
+        fromStage: "plan",
+        enteredAt: at(-45).toISOString(),
+        actor: USER,
+        userId: USER,
+        via: "approval",
+      },
+    ]),
+  ]);
+  // Spawned: mine, and another person's child (past the session floor).
+  for (const [child, min] of [
+    [C.child, -44],
+    [C.hiddenChild, -44.5],
+  ] as const) {
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_by, created_at)
+       values ($1, 'session', $2, 'session', $3, 'spawned_from', '{}'::jsonb, $4, $5)`,
+      [randomUUID(), child, C.parent, AGENT, at(min)]
+    );
+  }
+  await q(
+    `insert into session_runners (session_id, client_key, user_id, agent_user_id, harness, conversation_id, machine_user_id, process_key, process_host, state, model, provider, first_seen_at, last_seen_at)
+     values ($1, 'key:k1|conv:conv-1', $2, $3, 'claude-code', 'conv-1', $4, 'mac:1:1', 'mac.local', 'busy', 'opus', 'anthropic', $5, $6)`,
+    [C.parent, USER, AGENT, MACHINE, at(-43), at(-1)]
+  );
+  // The room: a person's long message, an agent's question, a coordination
+  // post received from the peer; then what must stay out.
+  await message(MSG.person, ROOM.parent, -42, {
+    role: "user",
+    authorType: "human",
+    content: `\n  ${LONG}`,
+  });
+  await message(MSG.question, ROOM.parent, -41, {
+    role: "assistant",
+    authorType: "ai_agent",
+    agent: AGENT,
+    content: "Which budget?\nThe details follow.",
+    metadata: { roomPost: { kind: "question", slotLabel: "Budget" } },
+  });
+  await message(MSG.received, ROOM.parent, -40, {
+    role: "assistant",
+    authorType: "ai_agent",
+    agent: AGENT,
+    content: "Types landed, go on",
+    metadata: sessionPost(C.peer, C.parent),
+  });
+  // Out: a pod notice, a comment, a deleted row, an ephemeral row.
+  await message(randomUUID(), ROOM.parent, -38, {
+    role: "assistant",
+    authorType: "human",
+    content: "Recall: related notes",
+  });
+  await message(randomUUID(), ROOM.parent, -37, {
+    role: "user",
+    authorType: "human",
+    content: "a comment",
+    category: "comment",
+  });
+  await message(randomUUID(), ROOM.parent, -36, {
+    role: "user",
+    authorType: "human",
+    content: "deleted",
+    deleted: true,
+  });
+  await message(randomUUID(), ROOM.parent, -35, {
+    role: "user",
+    authorType: "human",
+    content: "typing…",
+    ephemeral: true,
+  });
+  // Sent by the parent into the peer's room; a stamp another agent wrote;
+  // a "sent" post in a room the reader cannot see.
+  await message(MSG.sent, ROOM.peer, -39, {
+    role: "assistant",
+    authorType: "ai_agent",
+    agent: AGENT,
+    content: "Over to you",
+    metadata: sessionPost(C.parent, C.peer),
+  });
+  await message(randomUUID(), ROOM.peer, -34, {
+    role: "assistant",
+    authorType: "ai_agent",
+    agent: "agent-forger",
+    content: "Forged",
+    metadata: sessionPost(C.parent, C.peer),
+  });
+  await message(randomUUID(), ROOM.stranger, -33, {
+    role: "assistant",
+    authorType: "ai_agent",
+    agent: AGENT,
+    content: "Elsewhere",
+    metadata: sessionPost(C.parent, C.stranger),
+  });
+}
+
 describe("timelineSubjectOf — one subject per call", () => {
   it("refuses none, two, or a malformed one", () => {
     expect(timelineSubjectOf({}).ok).toBe(false);
@@ -503,6 +721,152 @@ describe("readSessionTimelines — a page of sessions in a fixed number of queri
     spy.mockRestore();
     expect(one).toBeGreaterThan(0);
     expect(three).toBe(one);
+  });
+});
+
+describe("the session chain (decision D3): stage moves, spawns, runners, room posts", () => {
+  const reader = { userId: USER, isHubProtocol: true } as const;
+  beforeAll(seedChain);
+
+  it("each joins the session's chain at its time, newest first, with its door", async () => {
+    const t = await readTimeline({ kind: "session", id: C.parent }, reader);
+    const events = t!.events as DevTimelineEvent[];
+    expect(kinds(events)).toEqual([
+      "room_post", // sent to the peer (-39)
+      "room_post", // received from the peer (-40)
+      "room_post", // the agent's question (-41)
+      "room_post", // the person's message (-42)
+      "runner_seen", // -43
+      "child_started", // -44; another person's child stays out
+      "stage_moved", // build (-45)
+      "stage_moved", // plan (-50)
+      "session_started",
+    ]);
+    const stages = events.filter((e) => e.kind === "stage_moved");
+    expect(stages[0]).toMatchObject({
+      from: "plan",
+      to: "build",
+      via: "approval",
+      at: at(-45).toISOString(),
+      actor: { kind: "human", id: USER },
+      refs: { sessionId: C.parent },
+    });
+    expect(stages[1]).toMatchObject({
+      from: null,
+      to: "plan",
+      actor: { kind: "agent", id: AGENT },
+    });
+    expect(events.find((e) => e.kind === "child_started")).toMatchObject({
+      at: at(-44).toISOString(),
+      child: { id: C.child, title: "Ship the feed", status: "active" },
+      actor: { kind: "agent", id: AGENT },
+      refs: { sessionId: C.child },
+    });
+    expect(events.find((e) => e.kind === "runner_seen")).toMatchObject({
+      at: at(-43).toISOString(),
+      actor: { kind: "agent", id: AGENT },
+      refs: { sessionId: C.parent, runnerId: "claude-code:conv-1" },
+      runner: {
+        harness: "claude-code",
+        conversationId: "conv-1",
+        computer: "devbox",
+        model: "opus",
+        provider: "anthropic",
+        state: "busy",
+        lastSeenAt: at(-1).toISOString(),
+      },
+    });
+  });
+
+  it("room posts are one-line references: form, first line, message and room, never the body", async () => {
+    const t = await readTimeline({ kind: "session", id: C.parent }, reader);
+    const posts = t!.events.filter((e) => e.kind === "room_post") as Array<
+      Extract<DevTimelineEvent, { kind: "room_post" }>
+    >;
+    expect(
+      posts.map((e) => [e.refs.messageId, e.post.form, e.post.direction])
+    ).toEqual([
+      [MSG.sent, "session_message", "out"],
+      [MSG.received, "session_message", "in"],
+      [MSG.question, "question", null],
+      [MSG.person, "person", null],
+    ]);
+    // A sent post opens the session it went to, a received one its sender.
+    expect(posts[0]).toMatchObject({
+      refs: { sessionId: C.peer, channelId: ROOM.peer },
+      post: { intent: "handoff", line: "Over to you", truncated: false },
+      actor: { kind: "agent", id: AGENT },
+    });
+    expect(posts[1]).toMatchObject({
+      refs: { sessionId: C.peer, channelId: ROOM.parent },
+      post: { intent: "handoff", line: "Types landed, go on" },
+    });
+    expect(posts[2]!.post).toEqual({
+      form: "question",
+      direction: null,
+      intent: null,
+      line: "Which budget?",
+      truncated: true,
+    });
+    const person = posts[3]!;
+    expect(person.actor).toMatchObject({ kind: "human", id: USER });
+    expect([...person.post.line]).toHaveLength(120);
+    expect(person.post.line.startsWith("word word")).toBe(true);
+    expect(person.post.line.endsWith("…")).toBe(true);
+    expect(person.post.truncated).toBe(true);
+    // The body never rides on the wire.
+    const wire = JSON.stringify(t);
+    expect(wire).not.toContain("end of the first line");
+    expect(wire).not.toContain("second line");
+    expect(wire).not.toContain("The details follow");
+    for (const out of [
+      "Recall",
+      "a comment",
+      "deleted",
+      "typing",
+      "Forged",
+      "Elsewhere",
+    ])
+      expect(wire).not.toContain(out);
+  });
+
+  it("the other session sees the same posts from its side; a stamp its writer did not sign is no mail", async () => {
+    const t = await readTimeline({ kind: "session", id: C.peer }, reader);
+    const posts = t!.events.filter((e) => e.kind === "room_post") as Array<
+      Extract<DevTimelineEvent, { kind: "room_post" }>
+    >;
+    expect(
+      posts.map((e) => [
+        e.post.line,
+        e.post.form,
+        e.post.direction,
+        e.refs.sessionId,
+      ])
+    ).toEqual([
+      // In its room, written by agent-forger: an agent's post, not mail.
+      ["Forged", "update", null, C.peer],
+      ["Over to you", "session_message", "in", C.parent],
+      ["Types landed, go on", "session_message", "out", C.parent],
+    ]);
+  });
+
+  it("stays bounded: each chain source keeps its newest rows and says older ones exist", async () => {
+    const page = await readSessionTimelines([C.parent], reader, 1);
+    const chain = page.get(C.parent)!;
+    expect(kinds(chain.events)).toEqual([
+      "room_post", // the newest sent
+      "room_post", // the newest in the room
+      "runner_seen",
+      "child_started",
+      "stage_moved", // build: plan is past the cap
+      "session_started",
+    ]);
+    expect(
+      chain.events
+        .filter((e) => e.kind === "room_post")
+        .map((e) => e.refs.messageId)
+    ).toEqual([MSG.sent, MSG.received]);
+    expect(chain.truncated).toBe(true);
   });
 });
 

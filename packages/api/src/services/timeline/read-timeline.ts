@@ -23,7 +23,19 @@
  *                     `slot_handed_back` — its slots'
  *                     history rows (`focus_session.slot_*`, under the events
  *                     floor), written by the ask doors in the same transaction
- *                     as the change. Room posts are not in it.
+ *                     as the change;
+ *                 THE CHAIN (decision D3, the Operations session lens):
+ *                 `stage_moved` — the stage ledger on the row
+ *                     (`stage_history`, 0382), never the transition log;
+ *                 `child_started` — a `spawned_from` link to it, the child
+ *                     under the reader's session floor;
+ *                 `runner_seen` — each runner row (0342) at its first sight,
+ *                     with its state NOW (no state history is kept);
+ *                 `room_post` — its room's posts (a person's message, an
+ *                     agent's question or update, a session_message in) and
+ *                     the session_messages it sent, under the channel floor,
+ *                     as ONE line (`timelinePostLine`, 120 characters) with
+ *                     the message and room ids: never the body.
  *                 One session or a page of them: {@link readSessionTimelines}.
  *   pull_request  its `dev.pr_*` facts, and the CI runs that name it or ran on
  *                 a head sha one of them named (the PR fold's own rule).
@@ -43,6 +55,7 @@
 
 import {
   and,
+  channels,
   db,
   desc,
   drizzleSql,
@@ -50,12 +63,21 @@ import {
   eq,
   events,
   focusSessions,
+  gte,
   inArray,
+  isNotNull,
   isNull,
   lifecycleTransitionOutbox,
+  links,
   lte,
+  MessageAuthorType,
+  MessageCategory,
+  MessageRole,
+  messages,
   or,
   proposals,
+  readSessionStageHistory,
+  sessionRunners,
   type SQL,
 } from "@synap/database";
 import {
@@ -70,9 +92,15 @@ import {
   type PullRequestRef,
 } from "@synap-core/types";
 import type { ActivityActor } from "@synap-core/types/activity";
+import {
+  readSessionPost,
+  SESSION_POST_META_KEY,
+} from "@synap-core/types/agents";
+import { readRoomPostMeta } from "@synap-core/types/ask";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type { TransitionBase } from "@synap-core/types/lifecycle";
 import {
+  timelinePostLine,
   timelineRecordedAt,
   type DevTimelineEvent,
   type DevTimelineRefs,
@@ -86,6 +114,7 @@ import {
 import { eventVisibleWhere } from "../../access/event-visibility.js";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import {
   sessionDevFactWhere,
@@ -174,6 +203,8 @@ interface Pending {
   event: Unnamed<DevTimelineEvent>;
   actorId: string | null;
   isAgent: boolean;
+  /** A runner's computer (`machine` user), named in the same users read. */
+  computerId?: string | null;
 }
 
 interface DevFactRow {
@@ -256,21 +287,26 @@ async function finish(
   out: readonly Pending[],
   viewer: string
 ): Promise<DevTimelineEvent[]> {
-  const rows = await loadActorRows(out.map((p) => p.actorId));
-  const named = out.map(
-    (p) =>
-      ({
-        ...p.event,
-        actor:
-          p.event.actor ??
-          activityActorOf(
-            p.actorId,
-            p.actorId ? rows.get(p.actorId) : undefined,
-            viewer,
-            p.isAgent
-          ),
-      }) as DevTimelineEvent
+  const rows = await loadActorRows(
+    out.flatMap((p) => [p.actorId, p.computerId])
   );
+  const named = out.map((p) => {
+    const e = {
+      ...p.event,
+      actor:
+        p.event.actor ??
+        activityActorOf(
+          p.actorId,
+          p.actorId ? rows.get(p.actorId) : undefined,
+          viewer,
+          p.isAgent
+        ),
+    } as DevTimelineEvent;
+    const computer = p.computerId ? rows.get(p.computerId)?.name : null;
+    return e.kind === "runner_seen" && computer
+      ? { ...e, runner: { ...e.runner, computer } }
+      : e;
+  });
   named.sort((a, b) => {
     const t = Date.parse(b.at) - Date.parse(a.at);
     if (t !== 0) return t;
@@ -506,6 +542,78 @@ function slotEvent(
   }
 }
 
+/** Characters of a post read to cut its line: the body never leaves SQL. */
+const POST_HEAD_CHARS = 600;
+
+interface PostRow {
+  id: string;
+  channelId: string;
+  head: string;
+  long: boolean;
+  role: string;
+  authorType: string;
+  userId: string;
+  routedTeammateId: string | null;
+  metadata: unknown;
+  timestamp: Date | string;
+}
+
+/**
+ * A room post as a one-line reference (decision D3): the post's form, the
+ * first line of its text ({@link timelinePostLine}), its message and room.
+ * `sessionId` is the session whose chain it joins: a session_message it
+ * RECEIVED (`in`, addressed to it, sent by another session's agent under that
+ * agent's own attribution, the inbox rule) or SENT (`out`).
+ */
+function roomPostEvent(row: PostRow, sessionId: string): Pending {
+  const meta = readSessionPost(row.metadata);
+  const agent =
+    row.authorType === MessageAuthorType.AI_AGENT ? row.routedTeammateId : null;
+  const attributed = Boolean(meta && agent && agent === meta.from.agentUserId);
+  const direction: "in" | "out" | null =
+    meta && attributed && meta.from.sessionId !== meta.to.sessionId
+      ? meta.to.sessionId === sessionId
+        ? "in"
+        : meta.from.sessionId === sessionId
+          ? "out"
+          : null
+      : null;
+  const form = direction
+    ? "session_message"
+    : row.authorType === MessageAuthorType.AI_AGENT
+      ? (readRoomPostMeta(row.metadata)?.kind ?? "update")
+      : "person";
+  const { line, truncated } = timelinePostLine(row.head);
+  // The OTHER session of a session_message is the door; else this one.
+  const other =
+    direction === "in"
+      ? meta!.from.sessionId
+      : direction === "out"
+        ? meta!.to.sessionId
+        : null;
+  return {
+    event: {
+      id: `message:${row.id}`,
+      kind: "room_post",
+      at: iso(row.timestamp),
+      refs: {
+        sessionId: other ?? sessionId,
+        messageId: row.id,
+        channelId: row.channelId,
+      },
+      post: {
+        form,
+        direction,
+        intent: direction ? meta!.intent : null,
+        line,
+        truncated: truncated || row.long,
+      },
+    },
+    actorId: agent ?? row.userId,
+    isAgent: Boolean(agent),
+  };
+}
+
 /** The `row_number()` of a row within its session, newest first. */
 function rankIn(partition: SQL, order: SQL) {
   return drizzleSql<number>`row_number() over (partition by ${partition} order by ${order} desc)`;
@@ -523,8 +631,9 @@ export interface SessionTimelineRead {
 /**
  * THE session timeline, for one session or a PAGE of them, in a fixed number
  * of queries whatever the page size: the session rows, then ONE read per
- * source (moves, dev facts, decisions, slot history) ranked per session by a
- * window, then ONE actor read. Each source keeps at most `perSource` rows per
+ * source (moves, dev facts, decisions, slot history, children, runners, room
+ * posts, sent posts) ranked per session by a window, then ONE actor read.
+ * The stage ledger rides on the session row; room posts are ranked per room. Each source keeps at most `perSource` rows per
  * session, newest first; one more than that sets `truncated`. The one-session
  * door ({@link readTimeline}) is this with `perSource` = the source cap, so
  * the door and a page's tails cannot project a session differently.
@@ -557,6 +666,8 @@ export async function readSessionTimelines(
       startedAt: focusSessions.startedAt,
       createdAt: focusSessions.createdAt,
       expectedOutputs: focusSessions.expectedOutputs,
+      channelId: focusSessions.channelId,
+      stageHistory: focusSessions.stageHistory,
     })
     .from(focusSessions)
     .where(
@@ -687,11 +798,192 @@ export async function readSessionTimelines(
     )
     .as("slots_ranked");
 
-  const [moves, facts, decisions, slotRows] = await Promise.all([
+  // ── The session CHAIN (decision D3): spawns, runners, room posts ──────
+  const floor = { userId: actor.userId, lens: actor.lens };
+
+  // Spawned children: `child --spawned_from--> parent` (`session-spawn.ts`),
+  // each child under the reader's own session floor.
+  const childrenRanked = db
+    .select({
+      id: links.id,
+      createdAt: links.createdAt,
+      createdBy: links.createdBy,
+      childId: drizzleSql<string>`${focusSessions.id}`.as("child_id"),
+      childTitle: drizzleSql<string | null>`${focusSessions.title}`.as(
+        "child_title"
+      ),
+      childGoal: drizzleSql<string>`${focusSessions.goal}`.as("child_goal"),
+      childStatus: drizzleSql<string>`${focusSessions.status}`.as(
+        "child_status"
+      ),
+      owner: drizzleSql<string>`${links.toId}`.as("owner"),
+      rank: rankIn(
+        drizzleSql`${links.toId}`,
+        drizzleSql`${links.createdAt}`
+      ).as("rank"),
+    })
+    .from(links)
+    .innerJoin(
+      focusSessions,
+      eq(drizzleSql`${focusSessions.id}::text`, links.fromId)
+    )
+    .where(
+      and(
+        eq(links.fromType, "session"),
+        eq(links.toType, "session"),
+        eq(links.linkType, "spawned_from"),
+        inArray(links.toId, readable),
+        sessionReadableWhere(floor)
+      )
+    )
+    .as("children_ranked");
+
+  // Runners: one row per process of a client conversation (0342), each an
+  // event at its first sight. Their state is now, never a history (none kept).
+  const runnersRanked = db
+    .select({
+      owner: drizzleSql<string>`${sessionRunners.sessionId}::text`.as("owner"),
+      clientKey: sessionRunners.clientKey,
+      processKey: sessionRunners.processKey,
+      harness: sessionRunners.harness,
+      conversationId: sessionRunners.conversationId,
+      agentUserId: sessionRunners.agentUserId,
+      machineUserId: sessionRunners.machineUserId,
+      processHost: sessionRunners.processHost,
+      state: sessionRunners.state,
+      model: sessionRunners.model,
+      provider: sessionRunners.provider,
+      firstSeenAt: sessionRunners.firstSeenAt,
+      lastSeenAt: sessionRunners.lastSeenAt,
+      rank: rankIn(
+        drizzleSql`${sessionRunners.sessionId}`,
+        drizzleSql`${sessionRunners.firstSeenAt}`
+      ).as("rank"),
+    })
+    .from(sessionRunners)
+    .where(inArray(sessionRunners.sessionId, readable))
+    .as("runners_ranked");
+
+  // Room posts: the sessions' rooms, under the channel floor. A person's
+  // message or an agent's post; never a comment, a pod notice or an
+  // ephemeral row. Only the head of the text is read (one line is shown).
+  const sessionsOfRoom = new Map<string, string[]>();
+  for (const s of sessions) {
+    if (!s.channelId) continue;
+    sessionsOfRoom.set(s.channelId, [
+      ...(sessionsOfRoom.get(s.channelId) ?? []),
+      s.id,
+    ]);
+  }
+  const visibleRooms = db
+    .select({ id: channels.id })
+    .from(channels)
+    .where(channelVisibilityWhere(actor.userId));
+  const postSelect = {
+    id: messages.id,
+    channelId: messages.channelId,
+    head: drizzleSql<string>`left(${messages.content}, ${POST_HEAD_CHARS})`.as(
+      "head"
+    ),
+    long: drizzleSql<boolean>`char_length(${messages.content}) > ${POST_HEAD_CHARS}`.as(
+      "long"
+    ),
+    role: messages.role,
+    authorType: messages.authorType,
+    userId: messages.userId,
+    routedTeammateId: messages.routedTeammateId,
+    metadata: messages.metadata,
+    timestamp: messages.timestamp,
+  };
+  const postLive = and(
+    isNull(messages.deletedAt),
+    eq(messages.ephemeral, false),
+    eq(messages.messageCategory, MessageCategory.CHAT),
+    inArray(messages.channelId, visibleRooms)
+  );
+  const rooms = [...sessionsOfRoom.keys()];
+  const postsRanked = db
+    .select({
+      ...postSelect,
+      owner: drizzleSql<string>`${messages.channelId}::text`.as("owner"),
+      rank: rankIn(
+        drizzleSql`${messages.channelId}`,
+        drizzleSql`${messages.timestamp}`
+      ).as("rank"),
+    })
+    .from(messages)
+    .where(
+      and(
+        inArray(messages.channelId, rooms),
+        postLive,
+        or(
+          and(
+            eq(messages.role, MessageRole.USER),
+            eq(messages.authorType, MessageAuthorType.HUMAN)
+          ),
+          eq(messages.authorType, MessageAuthorType.AI_AGENT)
+        )
+      )
+    )
+    .as("posts_ranked");
+
+  // Posts a session SENT to another session's room (`sessionPost.from`),
+  // under the sender agent's own attribution (the inbox rule), into a room of
+  // a session the reader may read. Bounded below by the page's oldest start.
+  const sent = drizzleSql`${messages.metadata}->${SESSION_POST_META_KEY}`;
+  const sentFrom = drizzleSql`${sent}->'from'->>'sessionId'`;
+  const oldest = new Date(
+    Math.min(...sessions.map((s) => new Date(s.createdAt).getTime()))
+  );
+  const sentRanked = db
+    .select({
+      ...postSelect,
+      owner: drizzleSql<string>`${sentFrom}`.as("owner"),
+      rank: rankIn(sentFrom, drizzleSql`${messages.timestamp}`).as("rank"),
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.authorType, MessageAuthorType.AI_AGENT),
+        inArray(sentFrom, readable),
+        drizzleSql`coalesce(${sent}->'to'->>'sessionId', '') <> ${sentFrom}`,
+        drizzleSql`${messages.routedTeammateId} = ${sent}->'from'->>'agentUserId'`,
+        gte(messages.timestamp, oldest),
+        postLive,
+        inArray(
+          messages.channelId,
+          db
+            .select({ id: drizzleSql`${focusSessions.channelId}` })
+            .from(focusSessions)
+            .where(
+              and(
+                isNotNull(focusSessions.channelId),
+                sessionReadableWhere(floor)
+              )
+            )
+        )
+      )
+    )
+    .as("sent_ranked");
+
+  const [
+    moves,
+    facts,
+    decisions,
+    slotRows,
+    children,
+    runners,
+    posts,
+    sentPosts,
+  ] = await Promise.all([
     db.select().from(movesRanked).where(lte(movesRanked.rank, limit)),
     db.select().from(factsRanked).where(lte(factsRanked.rank, limit)),
     db.select().from(decisionsRanked).where(lte(decisionsRanked.rank, limit)),
     db.select().from(slotsRanked).where(lte(slotsRanked.rank, limit)),
+    db.select().from(childrenRanked).where(lte(childrenRanked.rank, limit)),
+    db.select().from(runnersRanked).where(lte(runnersRanked.rank, limit)),
+    db.select().from(postsRanked).where(lte(postsRanked.rank, limit)),
+    db.select().from(sentRanked).where(lte(sentRanked.rank, limit)),
   ]);
 
   const pending = new Map<string, Pending[]>();
@@ -747,6 +1039,92 @@ export async function readSessionTimelines(
   for (const r of slotRows) {
     if (keep(r)) push(r.owner, slotEvent(r, r.owner));
   }
+  for (const s of sessions) {
+    // The stage ledger rides on the row: its newest `perSource` entries.
+    const stages = readSessionStageHistory(s.stageHistory);
+    if (stages.length > perSource) truncated.add(s.id);
+    for (
+      let index = Math.max(0, stages.length - perSource);
+      index < stages.length;
+      index++
+    ) {
+      const entry = stages[index]!;
+      push(s.id, {
+        event: {
+          id: `stage:${s.id}:${index}`,
+          kind: "stage_moved",
+          at: iso(entry.enteredAt),
+          refs: { sessionId: s.id },
+          from: entry.fromStage ?? null,
+          to: entry.stageKey,
+          via: entry.via,
+        },
+        actorId: entry.actor || entry.userId,
+        isAgent: Boolean(entry.actor) && entry.actor !== entry.userId,
+      });
+    }
+  }
+  for (const r of children) {
+    if (!keep(r)) continue;
+    push(r.owner, {
+      event: {
+        id: `link:${r.id}`,
+        kind: "child_started",
+        at: iso(r.createdAt),
+        refs: { sessionId: r.childId },
+        child: {
+          id: r.childId,
+          title:
+            resolveSessionTitle({ title: r.childTitle, goal: r.childGoal }) ||
+            "Session",
+          status: r.childStatus,
+        },
+      },
+      actorId: r.createdBy,
+      isAgent: false,
+    });
+  }
+  const ownerOfSession = new Map(sessions.map((s) => [s.id, s.userId]));
+  for (const r of runners) {
+    if (!keep(r)) continue;
+    const runnerId = `${r.harness}:${r.conversationId}`;
+    push(r.owner, {
+      event: {
+        id: `runner:${r.owner}:${r.clientKey}:${r.processKey}`,
+        kind: "runner_seen",
+        at: iso(r.firstSeenAt),
+        refs: { sessionId: r.owner, runnerId },
+        runner: {
+          harness: r.harness,
+          conversationId: r.conversationId,
+          computer: r.processHost ?? null,
+          model: r.model ?? null,
+          provider: r.provider ?? null,
+          state: r.state ?? null,
+          lastSeenAt: iso(r.lastSeenAt),
+        },
+      },
+      actorId: r.agentUserId ?? ownerOfSession.get(r.owner) ?? null,
+      isAgent: Boolean(r.agentUserId),
+      computerId: r.machineUserId,
+    });
+  }
+  // A post joins each session of its room once, a sent one its sender.
+  const posted = new Set<string>();
+  const pushPost = (sessionId: string, r: PostRow) => {
+    if (posted.has(`${sessionId}:${r.id}`)) return;
+    posted.add(`${sessionId}:${r.id}`);
+    push(sessionId, roomPostEvent(r, sessionId));
+  };
+  for (const r of posts) {
+    const owners = sessionsOfRoom.get(r.owner) ?? [];
+    if (Number(r.rank) > perSource) {
+      for (const id of owners) truncated.add(id);
+      continue;
+    }
+    for (const id of owners) pushPost(id, r);
+  }
+  for (const r of sentPosts) if (keep(r)) pushPost(r.owner, r);
 
   // Every actor of every session, named in ONE read.
   const ownerOf = new Map<string, string>();
