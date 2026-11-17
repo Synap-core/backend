@@ -1827,11 +1827,12 @@ describe('include: ["work"] — where its work stands (plan 7d71ddcc W4)', () =>
   });
 
   describe("what THIS reader may do: the doors' own checks, in the read", () => {
-    const PERSON_VIEWER = { agentUserId: null, roster: true };
-    const AGENT_VIEWER = { agentUserId: "agent-of-me", roster: false };
-    const stoppedFor = async (viewer?: typeof PERSON_VIEWER) =>
+    type Viewer = { agentUserId: string | null; roster: boolean };
+    const PERSON_VIEWER: Viewer = { agentUserId: null, roster: true };
+    const AGENT_VIEWER: Viewer = { agentUserId: "agent-of-me", roster: false };
+    const stoppedFor = async (viewer?: Viewer) =>
       (await workOf(S_STOPPED, viewer)).items[0]!;
-    const gatesFor = async (viewer?: typeof PERSON_VIEWER) => {
+    const gatesFor = async (viewer?: Viewer) => {
       const g = (await workOf(S_GATED, viewer)).items[0]!.gates;
       return g.status === "ok"
         ? g.items.map((x) => [x.stageKey, x.state, x.canReview])

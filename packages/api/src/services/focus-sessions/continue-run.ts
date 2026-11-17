@@ -424,7 +424,7 @@ export async function continueStoppedRun(params: {
   };
 }
 
-function alreadyRunning(liveSessionId: string | null): ContinueRunResult {
+function alreadyRunning(liveSessionId: string | null): ContinueRefusal {
   return {
     ok: false,
     reason: "already_running",
