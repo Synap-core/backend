@@ -587,25 +587,25 @@ describe("a BIRTH never moves its subject backwards", () => {
 
 describe("REACHED ON APPROVAL (decision D2): a stage's onApproved", () => {
   // Produce Content, its D2 shape.
-  const PRODUCE = [
+  const PRODUCE: Parameters<typeof statusesAheadOfStage>[0] = [
     { key: "brief", name: "Brief" },
     {
       key: "script",
       name: "Script",
       onApproved: "Scripted",
-      expectedOutputs: [{ kind: "document", label: "Script" }],
+      expectedOutputs: [{ kind: "document" as const, label: "Script" }],
     },
     {
       key: "draft",
       name: "Draft",
       subjectStatus: "In Draft",
-      gate: { kind: "human" },
+      gate: { kind: "human" as const },
     },
     { key: "schedule", name: "Schedule", onApproved: "Scheduled" },
     {
       key: "publish",
       name: "Publish",
-      gate: { kind: "human" },
+      gate: { kind: "human" as const },
       onApproved: "Published",
     },
   ];
