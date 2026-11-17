@@ -219,36 +219,32 @@ describe("rankRouteCandidates — the live CRM Hygiene case", () => {
     );
   });
 
-  it("never offers CRM Hygiene, nor a candidate whose name says none of the words", () => {
+  it("offers nothing rather than a wrong first candidate", () => {
     const ranked = rankRouteCandidates({
       entity: {},
       intentText: INTENT,
       candidates: pool,
     });
-    const names = ranked.map((r) => r.candidate.name);
     // CRM Hygiene matched only on generic words ("agent", "each"), which are
-    // stopwords now, so it is dropped.
-    expect(names.indexOf("CRM Hygiene")).toBe(-1);
-    // This pool predates descriptions: only goal templates. "AI Dev Session"
-    // (once first here, on "build") shares no word with the intent in its
-    // NAME, so the relevance floor drops it like every other body-only match.
-    expect(names.indexOf("AI Dev Session")).toBe(-1);
-    const intentWords = new Set(tokenize(INTENT).keys());
-    for (const r of ranked) {
-      expect(
-        [...tokenize(r.candidate.name).keys()].some((w) => intentWords.has(w))
-      ).toBe(true);
-    }
+    // stopwords. "AI Dev Session" (once first here, on "build") and the rest
+    // matched only in their goal templates: this pool predates descriptions.
+    // "Lead → qualified (discovery)" has ONE name word ("discovery", in
+    // another sense) for a 10-word request, under the floor's one per five.
+    // No playbook of this pool is named for this work, so none is offered.
+    expect(ranked).toEqual([]);
   });
 
   it("returns only candidates that matched a word (no bare 'Runs for anything new')", () => {
+    // Same pool, a request a playbook IS named for: what comes back matched
+    // a word, and the candidates that matched none are not padded in.
     const ranked = rankRouteCandidates({
       entity: {},
-      intentText: INTENT,
+      intentText: "qualify a new lead after discovery",
       candidates: pool,
     });
     expect(ranked.length).toBeGreaterThan(0);
     expect(ranked.length).toBeLessThan(pool.length);
+    expect(ranked[0]!.candidate.name).toBe("Lead → qualified (discovery)");
     for (const r of ranked) {
       expect(r.signals.some((s) => s.type === "intent")).toBe(true);
     }

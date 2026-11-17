@@ -58,14 +58,19 @@
  * website (Website Factory)" on "prove, backend, pod, new, apply". So:
  *   - a word that is also in the candidate's NAME counts twice
  *     (`WEIGHT.nameTerm` on top of `WEIGHT.intentTerm`);
- *   - RELEVANCE FLOOR: a candidate whose only evidence is words (no subject,
- *     kind or facet signal) is returned only when one of those words is in
- *     its NAME, or its DESCRIPTION (its own "when to use me") holds at least
- *     half of the request's words. Matches in the rest of the body (goal
- *     template, stage names) still score, but never admit a candidate alone:
- *     they made one long playbook the magnet of every request (plan
- *     2026-11-05, document 7fbd45a7, step 5; measured on the live pool of 84
- *     active playbooks, 2026-11-17).
+ *   - RELEVANCE FLOOR (`FLOOR`): a candidate whose only evidence is words (no
+ *     subject, kind or facet signal) is returned only when its NAME holds one
+ *     of the request's words per five words asked, or its DESCRIPTION (its
+ *     own "when to use me") holds half of them. Matches in the rest of the
+ *     body (goal template, stage names) still score, but never admit a
+ *     candidate alone: they made one long playbook the magnet of every
+ *     request (plan 2026-11-05, document 7fbd45a7, step 5). The name share is
+ *     PROPORTIONAL because one name word is a coincidence in a long request:
+ *     "Design and build a feature: space brief … then fix MCP discovery gaps"
+ *     (10 words) otherwise offered "Lead → qualified (discovery)" on
+ *     "discovery" alone. With nothing better, nothing is offered: an empty
+ *     list is a fact, a wrong first candidate teaches agents to skip the
+ *     list. Measured on the live pool of 84 active playbooks, 2026-11-17.
  * A structural signal (subject, kind, facet) is evidence about the ENTITY, so
  * a candidate carrying one is never cut by the floor.
  *
@@ -147,6 +152,14 @@ export interface RankedRoute<C extends RouteCandidate = RouteCandidate> {
   reason: string;
   signals: RouteSignal[];
 }
+
+/** The relevance floor (header): what admits a candidate on words alone. */
+const FLOOR = {
+  /** One name word per this many words of the request. */
+  requestWordsPerNameWord: 5,
+  /** Or this share of the request's words in the description. */
+  descriptionShare: 0.5,
+} as const;
 
 const WEIGHT = {
   intentTerm: 3,
@@ -346,11 +359,12 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
 
     return {
       termCount,
-      // The relevance floor (header): words alone must reach the name, or
-      // the description must hold half of what was asked.
+      // The relevance floor (header, `FLOOR`).
       admitted:
-        nameHits > 0 ||
-        (descriptionHits > 0 && 2 * descriptionHits >= intent.size),
+        (nameHits > 0 &&
+          nameHits * FLOOR.requestWordsPerNameWord >= intent.size) ||
+        (descriptionHits > 0 &&
+          descriptionHits >= FLOOR.descriptionShare * intent.size),
       rarest,
       structural: structuralRank(signals),
       route: {
