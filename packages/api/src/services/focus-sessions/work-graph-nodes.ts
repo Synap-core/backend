@@ -28,6 +28,7 @@ import {
 import type { FocusSession } from "@synap/database/schema";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { parsePullRequestRef } from "@synap-core/types";
+import { deriveTrackStages, type TrackStage } from "@synap-core/types/units";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { pullRequestKey } from "../dev-loop/pr-state.js";
 import {
@@ -70,12 +71,29 @@ export interface WorkGraphHold {
   reviewDue: boolean;
 }
 
+/**
+ * One stage of a goal's method, as `deriveTrackStages` places it against the
+ * goal's `currentStage` — the rule every track surface uses. Only what a map
+ * draws: the stage's brief, tasks, outputs and criteria stay on the goal's
+ * own read (`getTrack`).
+ */
+export type WorkGraphGoalStage = Pick<
+  TrackStage,
+  "key" | "name" | "category" | "position"
+>;
+
 /** A goal (track) a node is filed into, as the track floor lets the caller see it. */
 export interface WorkGraphGoal {
   id: string;
   name: string;
   status: string;
   projectId: string;
+  /** The goal's METHOD (`project_tracks.playbook_id`); `null` = it follows none. */
+  playbookId: string | null;
+  /** The stage key the goal is at; `null` = stageless, or not started. */
+  currentStage: string | null;
+  /** The method's stages in order, each placed against `currentStage`; `[]` = stageless. */
+  stages: WorkGraphGoalStage[];
 }
 
 /**
@@ -170,6 +188,9 @@ export async function readGraphGoals(
       name: projectTracks.name,
       status: projectTracks.status,
       projectId: projectTracks.projectId,
+      playbookId: projectTracks.playbookId,
+      currentStage: projectTracks.currentStage,
+      definitionSnapshot: projectTracks.definitionSnapshot,
     })
     .from(projectTracks)
     .where(
@@ -183,5 +204,16 @@ export async function readGraphGoals(
     name: t.name,
     status: t.status,
     projectId: t.projectId,
+    playbookId: t.playbookId,
+    currentStage: t.currentStage,
+    stages: deriveTrackStages(
+      (t.definitionSnapshot as { stages?: unknown } | null)?.stages,
+      t.currentStage
+    ).map((st) => ({
+      key: st.key,
+      name: st.name,
+      category: st.category,
+      position: st.position,
+    })),
   }));
 }

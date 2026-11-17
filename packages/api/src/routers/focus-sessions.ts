@@ -731,6 +731,11 @@ export const focusSessionsRouter = router({
    * `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave
    * (the root and every session spawned under it); one or the other. It also
    * carries the PRs, holds and goals its sessions point at.
+   * `playbookId` narrows it to the sessions that follow a playbook (run from
+   * it, or filed in a goal whose method it is; each node's `playbookMatch`
+   * says which), `subjectEntityId` to the sessions on one thing. Both are
+   * clauses of the list's WHERE; goal-filed and worker sessions are often
+   * `run`-kind, so pair them with `kind: "all"`.
    */
   graph: protectedProcedure
     .input(
@@ -748,6 +753,10 @@ export const focusSessionsRouter = router({
           lens: sessionLensSchema,
           trackId: z.string().uuid().optional(),
           rootSessionId: z.string().uuid().optional(),
+          /** Only the sessions that follow this playbook (see above). */
+          playbookId: z.string().uuid().optional(),
+          /** Only the sessions on this thing: its subject, or a worker targeting it. */
+          subjectEntityId: z.string().uuid().optional(),
         })
         .refine((i) => !(i.trackId && i.rootSessionId), {
           message: "Pass trackId or rootSessionId, not both.",
@@ -767,6 +776,8 @@ export const focusSessionsRouter = router({
           : input.rootSessionId
             ? { rootSessionId: input.rootSessionId }
             : undefined,
+        playbookId: input.playbookId,
+        subjectEntityId: input.subjectEntityId,
       });
     }),
   /**

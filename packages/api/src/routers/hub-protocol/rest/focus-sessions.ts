@@ -67,6 +67,7 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
+import { TRACK_STAGE_POSITIONS } from "@synap-core/types/units";
 import {
   ASK_LIMITS,
   AskAnswerValueSchema,
@@ -277,6 +278,12 @@ const WorkGraphWireSchema = z.object({
       viewerRole: z.enum(["owner", "member"]),
       /** false = only the far end of an edge of a window session. */
       inWindow: z.boolean(),
+      /**
+       * With `playbookId`: how this window node follows it — `session` (its
+       * own playbook) or `goal` (only through its goal's method); `null` on
+       * far ends. Absent without the narrow.
+       */
+      playbookMatch: z.enum(["session", "goal"]).nullable().optional(),
     })
   ),
   edges: z.array(
@@ -322,6 +329,19 @@ const WorkGraphWireSchema = z.object({
       name: z.string(),
       status: z.string(),
       projectId: z.string(),
+      /** The goal's method; null = it follows none. */
+      playbookId: z.string().nullable(),
+      /** The stage key the goal is at; null = stageless or not started. */
+      currentStage: z.string().nullable(),
+      /** The method's stages in order, placed against `currentStage`. */
+      stages: z.array(
+        z.object({
+          key: z.string(),
+          name: z.string(),
+          category: z.string().nullable(),
+          position: z.enum(TRACK_STAGE_POSITIONS),
+        })
+      ),
     })
   ),
   sections: z.object({
@@ -912,7 +932,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "`triggered`, `updated`), and the PRs, holds and goals its sessions " +
       "point at. `trackId` narrows it to one goal's sessions, " +
       "`rootSessionId` to one wave (the root and every session spawned " +
-      "under it); one or the other. For an unbound key, pod-wide when neither " +
+      "under it); one or the other. `playbookId` narrows it to the sessions " +
+      "that follow a playbook: run from it, or filed in a goal whose method " +
+      "it is (each window node's `playbookMatch` says which: `session` or " +
+      "`goal`). `subjectEntityId` narrows it to the sessions on one thing " +
+      "(its subject, or a worker targeting it). Each goal carries its method " +
+      "(`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither " +
       "`workspaceId` nor `projectId` is given. A workspace-bound key reads " +
       "its own workspace, far ends included, and another `workspaceId` is a " +
       "403. Floored at the sessions the caller can read, " +
@@ -934,6 +959,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         lens: z.enum(["default", "triage", "all"]).optional(),
         trackId: uuidQueryParam.optional(),
         rootSessionId: uuidQueryParam.optional(),
+        playbookId: uuidQueryParam.optional(),
+        subjectEntityId: uuidQueryParam.optional(),
       }),
     },
     responses: {
@@ -1594,7 +1621,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   });
 
   /**
-   * GET /focus-sessions/graph?workspaceId=&projectId=&windowHours=&kind=&lens=&trackId=&rootSessionId=
+   * GET /focus-sessions/graph?workspaceId=&projectId=&windowHours=&kind=&lens=&trackId=&rootSessionId=&playbookId=&subjectEntityId=
    *
    * The work graph (`buildWorkGraph`); `trackId` narrows it to one goal,
    * `rootSessionId` to one wave (one or the other). STATIC, so it is registered before
@@ -1678,9 +1705,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (trackId && rootSessionId) {
       return c.json({ error: "Pass trackId or rootSessionId, not both." }, 400);
     }
+    const playbookId = c.req.query("playbookId") || undefined;
+    const subjectEntityId = c.req.query("subjectEntityId") || undefined;
     for (const [name, value] of [
       ["trackId", trackId],
       ["rootSessionId", rootSessionId],
+      ["playbookId", playbookId],
+      ["subjectEntityId", subjectEntityId],
     ] as const) {
       if (value && !isUuid(value)) {
         return c.json({ error: `${name} is not a valid id: ${value}` }, 400);
@@ -1703,6 +1734,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           : rootSessionId
             ? { rootSessionId }
             : undefined,
+        playbookId,
+        subjectEntityId,
       });
       return c.json(graph);
     } catch (err) {
