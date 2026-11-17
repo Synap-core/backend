@@ -418,10 +418,11 @@ describe("the guards, end to end (a stubbed effect plans on purpose)", () => {
     });
 
     const proposed: unknown[] = [];
+    const proposalId = randomUUID();
     const can = stub(async () => [target("e3", "shipped", "done")], {
       async propose(w, ctx) {
         proposed.push({ w, cause: ctx.cause });
-        return { status: "proposed", proposalId: "p-1" };
+        return { status: "proposed", proposalId };
       },
     });
     const t2 = await park(await run(await session([])));
@@ -439,7 +440,7 @@ describe("the guards, end to end (a stubbed effect plans on purpose)", () => {
     expect(await logOf(t2.transitionId)).toEqual([
       expect.objectContaining({
         type: "reaction.proposed",
-        data: expect.objectContaining({ proposalId: "p-1" }),
+        data: expect.objectContaining({ proposalId }),
       }),
     ]);
   });
