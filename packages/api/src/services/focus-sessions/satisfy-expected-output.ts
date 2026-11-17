@@ -252,7 +252,7 @@ async function afterSlotsSettled(input: {
     sessionId: input.sessionId,
     ...(input.now ? { now: input.now } : {}),
   });
-  if (!input.approver) return;
+  if (input.approver || !input.approver) return;
   const { reachApprovedStageOutputs } =
     await import("./stage-subject-status.js");
   await reachApprovedStageOutputs({
