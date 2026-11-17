@@ -25606,6 +25606,19 @@ export interface ProcessRunRow {
 	status: string;
 	currentStage: string | null;
 	updatedAt: string;
+	/** The session's derived kind (`attachSessionKind`, the one rule). */
+	kind: SessionKind;
+	/** Its derived acceptance state (`attachTriage`, the one rule). */
+	triage: ProcessRunTriage;
+}
+/** A recent session's acceptance state, as every session list projects it. */
+export interface ProcessRunTriage {
+	/** Waiting for a person to accept or discard it. */
+	pending: boolean;
+	acceptedAt: string | null;
+	acceptedBy: string | null;
+	/** Why a pending agent run is held (a `PreApprovalHeldReason`), or null. */
+	heldBecause: string | null;
 }
 export interface ProcessInstalledFrom {
 	packageSlug: string;
