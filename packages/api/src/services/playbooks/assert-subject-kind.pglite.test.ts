@@ -5,6 +5,7 @@
  * cases pass through.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { randomUUID } from "node:crypto";
 
 const holder = vi.hoisted(() => ({ db: undefined as unknown }));
@@ -134,8 +135,9 @@ describe("assertRunSubjectMatchesPlaybook", () => {
     expect(e.expected).toBe("post");
     expect(e.actual).toEqual(["person"]);
     // In the person's words: the vocabulary nouns, no quoted slugs.
+    const process = resolveObjectNoun("playbook").toLowerCase();
     expect(e.message).toBe(
-      "This template runs on a post, but the subject you chose is a person. Pick a post, or run a template made for this kind."
+      `This ${process} runs on a post, but the subject you chose is a person. Pick a post, or run a ${process} made for this kind.`
     );
     // A plain person is NOT a lead (the facet is per entity).
     await expect(check(PERSON, "lead")).rejects.toBeInstanceOf(

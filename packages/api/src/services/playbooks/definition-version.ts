@@ -26,6 +26,10 @@ export const DEFINITION_VERSION_FIELDS = [
   // run is handed to, a changed requires what is checked before it is.
   "runner",
   "requires",
+  // How a run is carried out (an agent session vs a one-shot `generate`): an
+  // executor-only change changes what a run IS, so runs before and after must
+  // carry different versions (founder, doc a7811b28 §3).
+  "executor",
 ] as const;
 
 export function definitionVersionChanged(

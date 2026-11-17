@@ -417,6 +417,10 @@
       "types": "./dist/presence/index.d.ts",
       "import": "./dist/presence/index.js"
     },
+    "./processes": {
+      "types": "./dist/processes/index.d.ts",
+      "import": "./dist/processes/index.js"
+    },
     "./marketplace-source": {
       "types": "./dist/marketplace-source/index.d.ts",
       "import": "./dist/marketplace-source/index.js"

@@ -138,6 +138,39 @@ export async function preApprovalEligibility(p: {
  * rule is read again here: the playbook may have changed between the run
  * door's check and this start, and a rule never covers another version.
  */
+/**
+ * The person's pre-approval rule for a playbook, by the ONE predicate the run
+ * door matches (`personsRule` below): an active `auto` rule on
+ * `playbook.run` naming this playbook, owned by the person.
+ */
+function personsRuleWhere(playbookId: string, userId: string) {
+  return and(
+    activeRulePredicate(),
+    eq(governanceRules.targetPattern, PLAYBOOK_RUN_ACTION),
+    eq(governanceRules.verdict, "auto"),
+    eq(governanceRules.targetSubjectId, playbookId),
+    eq(governanceRules.principalOwnerId, userId)
+  );
+}
+
+/**
+ * The playbook version the person pre-approved their agents to run without
+ * asking, or null when there is no such rule (the process read's
+ * `preApprovedVersion`). A run of another version is held (`version_changed`).
+ */
+export async function readPreApprovedVersion(
+  db: Db,
+  playbookId: string,
+  userId: string
+): Promise<number | null> {
+  const [rule] = await db
+    .select({ version: governanceRules.targetSubjectVersion })
+    .from(governanceRules)
+    .where(personsRuleWhere(playbookId, userId))
+    .limit(1);
+  return rule?.version ?? null;
+}
+
 export async function decidePreApprovedRun(p: {
   db: Db;
   playbook: PreApprovablePlaybook;
@@ -148,13 +181,7 @@ export async function decidePreApprovedRun(p: {
 }): Promise<PreApprovalDecision> {
   const { db, playbook } = p;
   const ruleId = p.preApprovedByRuleId;
-  const personsRule = and(
-    activeRulePredicate(),
-    eq(governanceRules.targetPattern, PLAYBOOK_RUN_ACTION),
-    eq(governanceRules.verdict, "auto"),
-    eq(governanceRules.targetSubjectId, playbook.id),
-    eq(governanceRules.principalOwnerId, p.userId)
-  );
+  const personsRule = personsRuleWhere(playbook.id, p.userId);
   let rule: { version: number | null } | undefined;
   try {
     [rule] = await db

@@ -180,6 +180,17 @@ import {
   findNonArchivedAutomationByName,
 } from "../services/playbooks/cron-automation.js";
 import {
+  FLOW_ROLE,
+  addPlaybookAutomation,
+  readDriverAutomationId,
+  setDriverAutomation,
+} from "../services/playbooks/playbook-automation-links.js";
+import {
+  listProcesses,
+  processReaderOf,
+  readProcess,
+} from "../services/playbooks/process-read.js";
+import {
   describeGoalPlaceholderProblems,
   findGoalPlaceholderProblems,
   findUnresolvedGoalReferences,
@@ -818,36 +829,14 @@ const playbookAutomationsRouter = router({
         };
       }
 
-      // 5. First-class join row (role/sortOrder live here — the links edge
-      // below can't carry them).
-      await database
-        .insert(playbookAutomations)
-        .values({
-          playbookId: input.playbookId,
-          automationId: input.automationId,
-          role: input.role ?? null,
-          sortOrder: input.sortOrder ?? null,
-        })
-        .onConflictDoNothing({
-          target: [
-            playbookAutomations.playbookId,
-            playbookAutomations.automationId,
-          ],
-        });
-
-      // 6. Symmetric `links` edge (transition — createLinks also dual-writes
-      // the join row above, so this is a no-op there and just keeps the
-      // read-only graph view in sync).
-      await createLinks([
-        {
-          workspaceId: playbook.workspaceId,
-          fromType: "automation",
-          fromId: input.automationId,
-          toType: "playbook",
-          toId: input.playbookId,
-          linkType: "member_of",
-        },
-      ]);
+      // 5. The ONE link (0425): the join row. The legacy
+      // `automation --member_of--> playbook` edge is no longer written.
+      await addPlaybookAutomation(database, {
+        playbookId: input.playbookId,
+        automationId: input.automationId,
+        role: input.role ?? null,
+        sortOrder: input.sortOrder ?? null,
+      });
 
       return {
         status: "added" as const,
@@ -1955,6 +1944,48 @@ export const playbooksRouter = router({
     }),
 
   /**
+   * ONE process, whole (Process wave plan 0adf8352, W2): the playbook seen as
+   * a Process — definition, what starts it, steps, checks, what it moves, its
+   * needs with coverage, its skills, its runs and health — composed by the ONE
+   * process read (`services/playbooks/process-read.ts`), the same read the Hub
+   * REST door and MCP `synap_list_playbooks({ playbookId })` return. A part
+   * that could not be read is named in `unavailable`, never answered empty.
+   * Contract: `@synap-core/types/processes` `ProcessRead`.
+   */
+  process: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const read = await readProcess(processReaderOf(ctx), input.playbookId);
+      if (!read) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+      return read;
+    }),
+
+  /**
+   * A space's process index (`ProcessIndex`): the cards (`ProcessSummary`)
+   * and the automations outside any process, or every visible one when no
+   * space is named (`null` = pod-wide only). User-floored. Archived
+   * playbooks and automations are left out.
+   */
+  processes: protectedProcedure
+    .input(
+      z
+        .object({ workspaceId: z.string().uuid().nullable().optional() })
+        .optional()
+    )
+    .query(async ({ ctx, input }) =>
+      listProcesses(processReaderOf(ctx), {
+        ...(input?.workspaceId !== undefined
+          ? { workspaceId: input.workspaceId }
+          : {}),
+      })
+    ),
+
+  /**
    * Create a new playbook. Governance-gated: AI callers (agentUserId set) route
    * through checkPermissionOrPropose; on "proposed" the row is NOT written.
    */
@@ -2250,8 +2281,8 @@ export const playbooksRouter = router({
           agentUserId: input.agentUserId,
         });
 
-        // S1: a scheduled playbook maintains ONE backing cron automation (stamped
-        // on flow_automation_id) that the existing automation-cron-scheduler fires.
+        // S1: a scheduled playbook maintains ONE backing cron automation (its
+        // `schedule` row in playbook_automations) that the cron scheduler fires.
         await materializePlaybookCronAutomation(created, {
           userId: input.agentUserId ?? ctx.userId,
         });
@@ -2637,7 +2668,7 @@ export const playbooksRouter = router({
       warnUnresolvedGoalReferences(updated);
 
       // S1: re-reconcile the backing cron automation against the new schedule.
-      // Idempotent — re-points/updates the SAME row via flow_automation_id, or
+      // Idempotent — re-points/updates the SAME row (the playbook's driver), or
       // tears it down when the schedule was cleared/disabled.
       //
       // Only a schedule or status CHANGE may arm it. An adoption / metadata
@@ -3561,9 +3592,10 @@ export const playbooksRouter = router({
 
   /**
    * Get the flow graph for a playbook (Option-C model: playbook references an
-   * automation that owns the flow definition via `flow_automation_id`).
+   * automation that owns the flow definition: its driving automation, the
+   * `schedule`/`flow` row in `playbook_automations`, 0425).
    *
-   * If `flow_automation_id` is set → load that automation's flowDefinition.
+   * If it has one → load that automation's flowDefinition.
    * If NOT set → return a lazy starter graph (NOT persisted) seeded from the
    * playbook's name and goalTemplate. `automationId: null` signals the caller
    * that no automation exists yet (saveFlow will create one on first save).
@@ -3633,11 +3665,13 @@ export const playbooksRouter = router({
         });
       }
 
-      // Existing automation → return its persisted flow.
-      if (playbook.flowAutomationId) {
-        const database = await getDb();
+      // Existing automation → return its persisted flow. The driving
+      // automation is the playbook's `schedule`/`flow` join row (0425).
+      const database = await getDb();
+      const driverId = await readDriverAutomationId(database, playbook.id);
+      if (driverId) {
         const automation = await database.query.automations.findFirst({
-          where: eq(automations.id, playbook.flowAutomationId),
+          where: eq(automations.id, driverId),
         });
         if (automation) {
           return {
@@ -3691,11 +3725,13 @@ export const playbooksRouter = router({
   /**
    * Save the flow graph for a playbook (Option-C model).
    *
-   * If `flow_automation_id` is already set → update that automation's
-   * flowDefinition in-place.
-   * If NOT set → create a new "manual" draft automation, stamp
-   * `playbooks.flow_automation_id`, and write an `automation --activates-->
-   * playbook` link edge.
+   * If the playbook has a driving automation (its `schedule`/`flow` row in
+   * `playbook_automations`, 0425) → update that automation's flowDefinition
+   * in-place.
+   * If NOT → create a new "manual" draft automation and link it with role
+   * `flow` (the ONE link; `flow_automation_id` is still written beside it for
+   * one release). The `automation --activates--> playbook` edge it used to
+   * write had no reader and is no longer written.
    *
    * Governance-gated (mirrors `update`): write-gate on the LOADED playbook's
    * workspaceId + checkPermissionOrPropose. On "proposed" returns without
@@ -3775,14 +3811,15 @@ export const playbooksRouter = router({
       const flowDef = input.flowDefinition as FlowDefinition;
 
       // 4a. Existing automation → update its flowDefinition in-place.
-      if (existing.flowAutomationId) {
+      const driverId = await readDriverAutomationId(database, existing.id);
+      if (driverId) {
         await database
           .update(automations)
           .set({ flowDefinition: flowDef, updatedAt: new Date() })
-          .where(eq(automations.id, existing.flowAutomationId));
+          .where(eq(automations.id, driverId));
 
         return {
-          automationId: existing.flowAutomationId as string,
+          automationId: driverId,
           status: "updated" as const,
           message: "Flow definition updated",
           proposalId: null as string | null,
@@ -3792,7 +3829,7 @@ export const playbooksRouter = router({
       // 4b. No automation yet → create one, stamp playbook, write link edge.
       // 23505 recovery against automations_workspace_name_active_uq (0230): a
       // non-archived automation of this name may already exist (the playbook's
-      // backing row survived a flow_automation_id reset). Adopt it and persist
+      // backing row survived a schedule teardown). Adopt it and persist
       // THIS flow onto it — saveFlow's whole contract — rather than 500-ing or
       // cloning. Case-insensitive identity handled by findNonArchivedAutomationByName.
       let automationId: string;
@@ -3827,23 +3864,12 @@ export const playbooksRouter = router({
         automationId = winner.id;
       }
 
-      // Stamp the playbook with the new automation id.
-      await database
-        .update(playbooks)
-        .set({ flowAutomationId: automationId, updatedAt: new Date() })
-        .where(eq(playbooks.id, existing.id));
-
-      // Write the `automation --activates--> playbook` link edge (idempotent).
-      await createLinks([
-        {
-          workspaceId: existing.workspaceId,
-          fromType: "automation",
-          fromId: automationId,
-          toType: "playbook",
-          toId: existing.id,
-          linkType: "activates",
-        },
-      ]);
+      // The ONE link (0425): the canvas flow is the playbook's `flow` row.
+      await setDriverAutomation(database, {
+        playbookId: existing.id,
+        automationId,
+        role: FLOW_ROLE,
+      });
 
       return {
         automationId: automationId as string,

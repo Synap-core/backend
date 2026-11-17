@@ -1747,6 +1747,29 @@ export async function listRunTracks(
 }
 
 /**
+ * The EXACT run group of each given playbook (the whole visible ledger, not a
+ * recent window), in ONE grouped query: the process read's batch over a
+ * space's processes (no per-flow page). Keyed by playbook id; a playbook with
+ * no visible run is ABSENT (zero runs, exactly). Ids must already be floored
+ * by the caller's playbook visibility read. THROWS on a failed read.
+ */
+export async function listPlaybookRunGroups(input: {
+  userId: string;
+  playbookIds: readonly string[];
+}): Promise<Map<string, RunGroup>> {
+  const ids = [...new Set(input.playbookIds)];
+  if (ids.length === 0) return new Map();
+  const groups = await groupPlaybookRuns(
+    input.userId,
+    undefined,
+    ids.length,
+    undefined,
+    ids
+  );
+  return new Map(groups.map((g) => [g.flowId, g]));
+}
+
+/**
  * Runs collapsed to ONE row per flow (automation / playbook), newest-active
  * first. USER-floored via the SAME `userVisibleWhere` predicate `listRuns` uses,
  * so a group never counts a run the user can't see. Each ledger is grouped in the

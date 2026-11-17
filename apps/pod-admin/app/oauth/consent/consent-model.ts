@@ -658,7 +658,7 @@ const midSentence = (noun: string) =>
  * vocabulary door: `entity.post.create` → "Create posts", `document.update` →
  * "Edit documents", `entity.read` → "Read everything in it",
  * `proposal.approve` → "Approve changes waiting for your review",
- * `entity.post.archive` → "Archive posts", `playbook.run` → "Run templates",
+ * `entity.post.archive` → "Archive posts", `playbook.run` → "Run processes",
  * `entity.deal.transition` → "Move deals", `entity.*` → "Read, create, edit
  * and delete everything in it", `capability.publish_post.run` → "Publish
  * posts with your tools", `*` → "Full access". The raw permission is

@@ -4566,7 +4566,9 @@ CREATE INDEX IF NOT EXISTS "idx_playbook_runs_external_agent_active"
 -- ── Playbook Automations (0179_playbook_automations.sql catch-up) ─────────────
 -- First-class, editable composition of a playbook's automations (promotes the
 -- read-only `automation --member_of--> playbook` link edges). Soft links: no FK
--- to playbooks or automations (enforced at the application layer).
+-- to playbooks or automations (enforced at the application layer). Since 0425
+-- the ONE store of a playbook's automations: its schedule (role `schedule`),
+-- its canvas flow (`flow`), its activators (`activator`), its members.
 CREATE TABLE IF NOT EXISTS "playbook_automations" (
   "id"            uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "playbook_id"   uuid        NOT NULL,
@@ -5016,9 +5018,8 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "title" varchar(200);  -- 
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- 0291: the ABSTRACT intents a playbook needs the pod to be able to do
--- (capability_intents vocabulary). WHAT IT NEEDS, not what the pod has: a
--- playbook may declare an intent nothing installed serves, and that gap is
--- what a later install is checked against — so it is reported, never rejected.
+-- (capability_intents vocabulary). Unread and unwritten since 0419 folded it
+-- into `tools`; kept until a release carrying 0419 has shipped (forward-only).
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "required_intents" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "guidance" jsonb NOT NULL DEFAULT '[]'::jsonb;  -- 0411 (the rules a playbook follows, by kind or skill ref)
 -- 0416: who runs a playbook by default (a PlaybookRunner; NULL = nobody

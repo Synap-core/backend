@@ -3751,7 +3751,7 @@ export const tools = {
       {
         name: "synap_propose_app_from_playbook",
         annotations: {
-          title: "Propose a template's UI",
+          title: "Propose a process's UI",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -3788,7 +3788,7 @@ export const tools = {
       {
         name: "synap_promote_session_to_playbook",
         annotations: {
-          title: "Save session as template",
+          title: "Save session as process",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -3820,12 +3820,12 @@ export const tools = {
       {
         name: "synap_list_playbooks",
         annotations: {
-          title: "List templates",
+          title: "List processes",
           readOnlyHint: true,
           openWorldHint: false,
         },
         description:
-          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full (goal template, stages, criteria, expected outputs…), or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
+          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3850,7 +3850,7 @@ export const tools = {
             playbookId: {
               type: "string",
               description:
-                "Read ONE playbook in full (its whole definition), instead of listing.",
+                "Read ONE playbook in full (its whole definition and its `process`), instead of listing.",
             },
             detail: {
               type: "string",
@@ -3865,12 +3865,12 @@ export const tools = {
       {
         name: "synap_match_playbooks",
         annotations: {
-          title: "Match templates",
+          title: "Match processes",
           readOnlyHint: true,
           openWorldHint: false,
         },
         description:
-          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, description, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal template') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
+          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, description, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal process') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Process') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3912,7 +3912,7 @@ export const tools = {
       {
         name: "synap_create_playbook",
         annotations: {
-          title: "Create template",
+          title: "Create process",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -3976,7 +3976,7 @@ export const tools = {
       {
         name: "synap_update_playbook",
         annotations: {
-          title: "Update template",
+          title: "Update process",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
@@ -6887,7 +6887,7 @@ export const tools = {
       {
         name: "synap_run_playbook",
         annotations: {
-          title: "Run template",
+          title: "Run process",
           readOnlyHint: false,
           destructiveHint: true,
           openWorldHint: true,

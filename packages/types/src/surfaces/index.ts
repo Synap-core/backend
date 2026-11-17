@@ -62,15 +62,10 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     replacedBy: "Inbox; Settings › AI & agents",
     decisionDoc: V1_PLAN_DOC,
   },
-  {
-    id: "processors",
-    surface: "browser",
-    since: SINCE,
-    reason:
-      "Operations app deprecated: folds into Work › Activity plus the new health mark. Builder mode keeps a door to it.",
-    replacedBy: "Work › Activity",
-    decisionDoc: V1_PLAN_DOC,
-  },
+  // `processors` (Operations) left this registry: it was DELETED from the
+  // browser (Process wave plan 0adf8352 W4), its id aliased to Processes. A
+  // retired app is not a deprecated one (the browser tripwire requires every
+  // id here to keep a manifest entry).
   {
     id: "activity",
     surface: "browser",

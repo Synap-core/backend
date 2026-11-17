@@ -55,12 +55,12 @@ The pod's MCP server lists 121 tools. A new agent key lists the `entry` tools; t
 | [`synap_list_agents`](#synap_list_agents)                                 | List agents and computers         | sessions     | yes       |
 | [`synap_create_cell`](#synap_create_cell)                                 | Define cell                       | build        | no        |
 | [`synap_promote_cell_to_renderer`](#synap_promote_cell_to_renderer)       | Promote cell to renderer          | build        | no        |
-| [`synap_propose_app_from_playbook`](#synap_propose_app_from_playbook)     | Propose a template's UI           | build        | no        |
-| [`synap_promote_session_to_playbook`](#synap_promote_session_to_playbook) | Save session as template          | sessions     | no        |
-| [`synap_list_playbooks`](#synap_list_playbooks)                           | List templates                    | build        | yes       |
-| [`synap_match_playbooks`](#synap_match_playbooks)                         | Match templates                   | build        | yes       |
-| [`synap_create_playbook`](#synap_create_playbook)                         | Create template                   | build        | no        |
-| [`synap_update_playbook`](#synap_update_playbook)                         | Update template                   | build        | no        |
+| [`synap_propose_app_from_playbook`](#synap_propose_app_from_playbook)     | Propose a process's UI            | build        | no        |
+| [`synap_promote_session_to_playbook`](#synap_promote_session_to_playbook) | Save session as process           | sessions     | no        |
+| [`synap_list_playbooks`](#synap_list_playbooks)                           | List processes                    | build        | yes       |
+| [`synap_match_playbooks`](#synap_match_playbooks)                         | Match processes                   | build        | yes       |
+| [`synap_create_playbook`](#synap_create_playbook)                         | Create process                    | build        | no        |
+| [`synap_update_playbook`](#synap_update_playbook)                         | Update process                    | build        | no        |
 | [`synap_governance`](#synap_governance)                                   | Get governance policy             | governance   | yes       |
 | [`synap_set_workspace_focus`](#synap_set_workspace_focus)                 | Set space focus                   | spaces       | no        |
 | [`synap_set_project_focus`](#synap_set_project_focus)                     | Set project focus                 | spaces       | no        |
@@ -122,7 +122,7 @@ The pod's MCP server lists 121 tools. A new agent key lists the `entry` tools; t
 | [`synap_create_automation`](#synap_create_automation)                     | Create rule flow (advanced)       | capabilities | no        |
 | [`synap_create_rule`](#synap_create_rule)                                 | Create rule                       | governance   | no        |
 | [`synap_update_rule`](#synap_update_rule)                                 | Update rule                       | governance   | no        |
-| [`synap_run_playbook`](#synap_run_playbook)                               | Run template                      | build        | no        |
+| [`synap_run_playbook`](#synap_run_playbook)                               | Run process                       | build        | no        |
 | [`synap_create_skill`](#synap_create_skill)                               | Create tool (skill)               | build        | no        |
 | [`synap_update_skill`](#synap_update_skill)                               | Update skill                      | build        | no        |
 | [`synap_load_skill`](#synap_load_skill)                                   | Load skill                        | entry        | yes       |
@@ -930,7 +930,7 @@ Escalation L4: bind a cell that already proved itself as a renderer. For a kind'
 
 ## synap_propose_app_from_playbook
 
-**Propose a template's UI** · Group: `build` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+**Propose a process's UI** · Group: `build` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
 
 The one verb for 'build me an app / a UI for this playbook'. From the playbook and the kind it works (its declared lifecycle), files ONE proposal holding: the kind's pipeline view, a dashboard (bento) over the same kind, a generated board cell drawn live from flow.of (columns = states in order, headed by the owning stage; governed moves), and that board on the playbook's page. Nothing is created until a person approves it; `proposed` is success, pass on reviewUrl. Parts that already exist are skipped (`alreadyExists`), a page that already shows something is never replaced (`leftOut`), and a second call returns the same pending proposal (`status: duplicate`). Refused with the next step when the playbook works no kind or the kind has no lifecycle (synap_declare_lifecycle).
 
@@ -943,7 +943,7 @@ The one verb for 'build me an app / a UI for this playbook'. From the playbook a
 
 ## synap_promote_session_to_playbook
 
-**Save session as template** · Group: `sessions` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+**Save session as process** · Group: `sessions` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
 
 Escalation L4 — crystallize AFTER a session succeeded and the process is clearly repeatable (not a one-off). Promotes a validated focus session into a reusable Playbook (runtime → config): its `tools` list keeps what the session's work had (the core write tools, the origin playbook's tools, the capabilities used), and it records lineage. May propose; never promote failed or speculative sessions.
 
@@ -954,9 +954,9 @@ Escalation L4 — crystallize AFTER a session succeeded and the process is clear
 
 ## synap_list_playbooks
 
-**List templates** · Group: `build` · readOnlyHint: true · openWorldHint: false
+**List processes** · Group: `build` · readOnlyHint: true · openWorldHint: false
 
-List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full (goal template, stages, criteria, expected outputs…), or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.
+List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.
 
 | Parameter     | Type   | Required | Description                                                                                                                 |
 | ------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -964,14 +964,14 @@ List playbooks (reusable process/session templates) visible to you across the po
 | `status`      | enum   | no       | Optional status filter. One of: `draft`, `active`, `paused`, `archived`.                                                    |
 | `limit`       | number | no       | Page size (1–100, default 25).                                                                                              |
 | `cursor`      | string | no       | nextCursor of the prior reply                                                                                               |
-| `playbookId`  | string | no       | Read ONE playbook in full (its whole definition), instead of listing.                                                       |
+| `playbookId`  | string | no       | Read ONE playbook in full (its whole definition and its `process`), instead of listing.                                     |
 | `detail`      | enum   | no       | lean (default) = the digest per playbook; full = complete rows (large: pair it with a small limit). One of: `lean`, `full`. |
 
 ## synap_match_playbooks
 
-**Match templates** · Group: `build` · readOnlyHint: true · openWorldHint: false
+**Match processes** · Group: `build` · readOnlyHint: true · openWorldHint: false
 
-Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, description, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal template') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.
+Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, description, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal process') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Process') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.
 
 | Parameter     | Type   | Required | Description                                                                                                                                                                                                                                                                                                                        |
 | ------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -984,7 +984,7 @@ Suggest playbooks for what the user wants — text-first, suggest-and-confirm, N
 
 ## synap_create_playbook
 
-**Create template** · Group: `build` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+**Create process** · Group: `build` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
 
 Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator, or a cron synap_create_automation with a playbook_run node. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.
 
@@ -1012,7 +1012,7 @@ Create a reusable playbook (staged process/session template) for a repeatable wo
 
 ## synap_update_playbook
 
-**Update template** · Group: `build` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+**Update process** · Group: `build` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
 
 Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change — an absent field stays as it is; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.
 
@@ -1974,7 +1974,7 @@ Governed like every write: status='proposed' is SUCCESS, not an error — nothin
 
 ## synap_run_playbook
 
-**Run template** · Group: `build` · readOnlyHint: false · destructiveHint: true · openWorldHint: true
+**Run process** · Group: `build` · readOnlyHint: false · destructiveHint: true · openWorldHint: true
 
 LAUNCH a playbook via its executor (discover via synap_list_playbooks): a session + run channel + playbook_run, dispatched to its executor (is-agent | external-agent | hybrid). Pass playbookId OR an unambiguous playbookName/name (several matches return candidates, never a silent pick). Write home: workspaceId, else the playbook's workspace, else subject/session; a pod-wide playbook with no home is refused (pass workspaceId). It LAUNCHES the executor, unlike opening a working session from the template. Outcomes, none to retry: status="draft" (an agent's launch, the usual one: the person's DRAFT, not started until they accept it; `session` returned, `run` null; tell them), "proposed" (a rule or limit asks first: SUCCESS, pass on reviewUrl), "blocked" (nothing ran: skills not enabled; `unenabledSkills` names them, `enableProposals` holds one enable request per pack; run again once approved), "running" (`run` + `session`), "already_running" (nothing started: the person has a live run or draft of it on this subject; `session` is it, `reason` says which; startAnother only if they asked for a second run), "generated" (one-shot, no session: its draft is a proposal on the subject; pass on generated.reviewUrl), "skipped" (nothing ran: the record's last run failed recently, or no pinned record was ready; read `message`, never report it as started).
 

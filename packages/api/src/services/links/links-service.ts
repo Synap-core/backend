@@ -27,32 +27,34 @@ import type { LinkInput, LinkEndpointType } from "@synap/playbooks";
 import { workspaceLensWhere } from "../../utils/user-visible-where.js";
 
 /**
- * Dual-write hook: `automation --member_of--> playbook` is the legacy edge
- * shape for playbook composition. `playbook_automations` (0179) is now the
- * first-class, editable store for that composition (see
- * packages/api/src/routers/playbooks.ts `automations` sub-router). Every path
- * that writes the legacy edge — this service is the ONLY place `links` rows
- * are inserted from — ALSO upserts the join row, so new compositions land in
- * both stores immediately. The `links` write is kept for the transition; this
- * is additive, not a cutover.
- */
-/**
  * What a link write runs on: the pod db, or a caller's open TRANSACTION (so an
  * edge replace — delete then create — commits or rolls back as one).
  */
 export type LinkWriter = Pick<Awaited<ReturnType<typeof getDb>>, "insert">;
 
-async function dualWritePlaybookAutomation(
+/**
+ * ONE LINK PER RELATION (0425): `automation --member_of--> playbook` is no
+ * longer a `links` row. A playbook's automations live in `playbook_automations`
+ * only (`services/playbooks/playbook-automation-links.ts`), which every backend
+ * reader reads. A link write of that shape (the generic link doors still accept
+ * `member_of`) lands as the join row and writes NO `links` row: until 0425 it
+ * was dual-written, and the two stores could disagree. Rows written before
+ * 0425 stay (backfilled into the join table, no reader; dropped in W5).
+ */
+export function isPlaybookAutomationEdge(
+  input: Pick<LinkInput, "fromType" | "toType" | "linkType">
+): boolean {
+  return (
+    input.fromType === "automation" &&
+    input.toType === "playbook" &&
+    input.linkType === "member_of"
+  );
+}
+
+async function writePlaybookAutomation(
   db: LinkWriter,
-  input: Pick<LinkInput, "fromType" | "fromId" | "toType" | "toId" | "linkType">
+  input: Pick<LinkInput, "fromId" | "toId">
 ): Promise<void> {
-  if (
-    input.fromType !== "automation" ||
-    input.toType !== "playbook" ||
-    input.linkType !== "member_of"
-  ) {
-    return;
-  }
   await db
     .insert(playbookAutomations)
     .values({ playbookId: input.toId, automationId: input.fromId })
@@ -78,6 +80,10 @@ export async function createLink(
   writer?: LinkWriter
 ): Promise<Link | undefined> {
   const db = writer ?? (await getDb());
+  if (isPlaybookAutomationEdge(input)) {
+    await writePlaybookAutomation(db, input);
+    return undefined;
+  }
   const [created] = await db
     .insert(links)
     .values({
@@ -100,8 +106,6 @@ export async function createLink(
     })
     .returning();
 
-  await dualWritePlaybookAutomation(db, input);
-
   return created as Link | undefined;
 }
 
@@ -112,10 +116,15 @@ export async function createLink(
 export async function createLinks(inputs: LinkInput[]): Promise<Link[]> {
   if (inputs.length === 0) return [];
   const db = await getDb();
+  for (const input of inputs.filter(isPlaybookAutomationEdge)) {
+    await writePlaybookAutomation(db, input);
+  }
+  const edges = inputs.filter((input) => !isPlaybookAutomationEdge(input));
+  if (edges.length === 0) return [];
   const created = await db
     .insert(links)
     .values(
-      inputs.map((input) => ({
+      edges.map((input) => ({
         workspaceId: input.workspaceId,
         fromType: input.fromType,
         fromId: input.fromId,
@@ -135,10 +144,6 @@ export async function createLinks(inputs: LinkInput[]): Promise<Link[]> {
       ],
     })
     .returning();
-
-  for (const input of inputs) {
-    await dualWritePlaybookAutomation(db, input);
-  }
 
   return created as Link[];
 }

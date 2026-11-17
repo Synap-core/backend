@@ -57,7 +57,9 @@ const NO_VERSION: Record<string, string> = {
     "archives a playbook (status only)",
   "api:services/focus-sessions/complete-session.ts":
     "drops a closed session's subject from the pin list (metadata)",
-  "api:services/playbooks/cron-automation.ts":
+  // 0425: the ONE link's writer; it still stamps or clears the legacy
+  // `flow_automation_id` beside the join row (cron-automation no longer does).
+  "api:services/playbooks/playbook-automation-links.ts":
     "stamps or clears flow_automation_id",
   "api:services/playbooks/run-playbook.ts":
     "advances a rotating input cursor (inputStrategy.cursor), a run-time position, never a new definition",

@@ -94,7 +94,7 @@ vi.mock("../match-session-template.js", async (importOriginal) => ({
         score: 1,
         reason: "You mentioned “bug”",
         scope: "session",
-        templateKind: "Work template",
+        templateKind: "Process",
       },
     ],
     optOut: "pass templateId: null",

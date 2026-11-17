@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import {
   loadRouteSuggestions,
   type RouteMatchers,
@@ -122,10 +123,11 @@ describe("draft-process offer", () => {
       statusProperty: "track-status",
     });
     expect(draft.signals).toEqual([]);
-    expect(draft.reason).toMatch(/No template is set up for/);
+    const process = resolveObjectNoun("playbook").toLowerCase();
+    expect(draft.reason).toBe(`No ${process} is set up for goals yet`);
     // The same words as the web/relay offer: the plural kind noun (`track`
     // reads "Goals" since the goal words, W5).
-    expect(draft.candidate.name).toBe("Draft a template for goals");
+    expect(draft.candidate.name).toBe(`Draft a ${process} for goals`);
   });
 
   it("is NOT offered when a playbook is built for the kind", async () => {

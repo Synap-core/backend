@@ -30,7 +30,7 @@ import { DEFINITION_VERSION_FIELDS } from "./definition-version.js";
 /**
  * What a kept version holds: every field that bumps `version`, plus what a run
  * of that version needs to read it as a playbook (its name, the kind it works
- * on, its executor and scope). The 0416 backfill builds the same object in SQL;
+ * on and its scope; its executor bumps, so it is in the first list). The 0416 backfill builds the same object in SQL;
  * `playbook-versions.test.ts` pins the two together.
  */
 export const PLAYBOOK_VERSION_FIELDS = [
@@ -38,7 +38,6 @@ export const PLAYBOOK_VERSION_FIELDS = [
   "name",
   "description",
   "subjectProfile",
-  "executor",
   "scope",
 ] as const;
 

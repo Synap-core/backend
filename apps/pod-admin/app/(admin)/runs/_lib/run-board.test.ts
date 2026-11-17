@@ -27,7 +27,7 @@ function group(over: Partial<FlowGroupFacts> = {}): FlowGroupFacts {
 describe("flow words", () => {
   it("names registry kinds through the vocabulary, the rest plainly", () => {
     expect(flowNoun("automation")).toBe("Automation");
-    expect(flowNoun("playbook")).toBe("Template");
+    expect(flowNoun("playbook")).toBe("Process");
     expect(flowNoun("chat")).toBe("AI turn");
     expect(flowNoun("agent_write")).toBe("Agent write");
   });

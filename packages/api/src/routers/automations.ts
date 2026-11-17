@@ -22,6 +22,7 @@ import {
   proposedMessageFor,
 } from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
+import { stampPlaybookRunIds } from "../services/automations/playbook-run-ids.js";
 import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
@@ -352,6 +353,31 @@ async function injectSkillIdsFromNames(
       node.data = data;
     }
   }
+}
+
+/**
+ * Resolve a by-name `playbook_run` node to its id at save
+ * (`stampPlaybookRunIds`, the one rule; Process wave W2: one link per
+ * relation), looked up through the validator's own access
+ * (`playbookValidationAccess`: what the author may reference, archived out).
+ */
+async function injectPlaybookIdsFromNames(
+  flow: { nodes: Array<Record<string, unknown>>; edges: unknown[] },
+  workspaceId: string | null | undefined,
+  userId: string
+): Promise<void> {
+  await stampPlaybookRunIds(flow, (names) =>
+    scopedDb(playbookValidationAccess(userId, workspaceId)).findMany<{
+      id: string;
+      name: string;
+    }>(playbooks, {
+      columns: { id: true, name: true },
+      where: and(
+        ne(playbooks.status, "archived"),
+        inArray(playbooks.name, [...names])
+      ),
+    })
+  );
 }
 
 /**
@@ -727,6 +753,11 @@ async function prepareAutomationForMaterialization(
   // final materialization, so every persisted flow dispatches by stable id.
   await injectSkillIdsFromNames(
     database,
+    input.flowDefinition,
+    input.workspaceId,
+    createdBy
+  );
+  await injectPlaybookIdsFromNames(
     input.flowDefinition,
     input.workspaceId,
     createdBy
@@ -2777,6 +2808,11 @@ export const automationsRouter = router({
         // matching create's pre-persist normalization.
         await injectSkillIdsFromNames(
           database,
+          input.flowDefinition,
+          existing.workspaceId,
+          existing.createdBy
+        );
+        await injectPlaybookIdsFromNames(
           input.flowDefinition,
           existing.workspaceId,
           existing.createdBy

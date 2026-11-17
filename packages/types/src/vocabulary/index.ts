@@ -57,6 +57,11 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
+import type { ProcessStepRunnerKind } from "../processes/steps.js";
+import type {
+  ProcessHealth,
+  ProcessHealthReason,
+} from "../processes/health.js";
 import type { SessionVerdict } from "../focus-sessions/verdict.js";
 import type { RunnerState } from "../units/runner-state.js";
 import type {
@@ -1086,6 +1091,18 @@ export function resolveObjectNoun(
   );
 }
 
+/**
+ * The English words a kind was called before a rename (`formerLabels` on its
+ * registry row), to RECOGNISE durable stored text that still spells them
+ * (never to show them). Empty for a kind never renamed or unknown.
+ */
+export function resolveFormerObjectNouns(
+  kind: string | null | undefined
+): readonly string[] {
+  if (!kind) return [];
+  return OBJECT_KINDS[canonicalKind(kind)]?.formerLabels ?? [];
+}
+
 function canonicalKind(kind: string): string {
   const key = kind.toLowerCase();
   return Object.hasOwn(OBJECT_KIND_ALIASES, key)
@@ -1618,6 +1635,26 @@ export function resolveToolKindLabel(kind: string | null | undefined): string {
   const key = kind.toLowerCase();
   const canonical = OBJECT_KIND_ALIASES[key] ?? key;
   return TOOL_KIND_LABELS[canonical] ?? humanizeToken(canonical);
+}
+
+/**
+ * The plural of {@link TOOL_KIND_LABELS}, for a block that lists several of
+ * one kind. A process's instruction skills ("What agents load",
+ * `ProcessRead.skills`) are "Skills": the noun for instructions an agent
+ * follows, distinct from the umbrella "Tool" (founder D2), which stays the
+ * noun of lists, counts and mentions.
+ */
+export const TOOL_KIND_PLURALS: Readonly<Record<string, string>> = {
+  skill: "Skills",
+  capability: "Capabilities",
+  tool: "Integrations",
+};
+
+export function resolveToolKindPlural(kind: string | null | undefined): string {
+  if (!kind) return "";
+  const key = kind.toLowerCase();
+  const canonical = OBJECT_KIND_ALIASES[key] ?? key;
+  return TOOL_KIND_PLURALS[canonical] ?? humanizeToken(canonical);
 }
 
 /**
@@ -2484,6 +2521,23 @@ export const WAIT_KIND_LABELS = {
 export type WaitKindLabelRows = typeof WAIT_KIND_LABELS;
 
 /**
+ * Who moves a process step on, in a person's words (`PROCESS_STEP_RUNNER_KINDS`,
+ * `classifyStepRunner`, `@synap-core/types/processes`): the step strip's and
+ * pod admin's runner mark, beside the gate's words (`trackStepGateLabel`,
+ * `@synap-core/types/units`), which it never repeats. `automatic` is declared and
+ * unreachable until W2b declares "an automation moves this step". Keyed by
+ * EVERY kind.
+ */
+export const STEP_RUNNER_KIND_LABELS = {
+  person: "You",
+  ai: "An agent",
+  automatic: "Runs by itself",
+} as const satisfies Readonly<Record<ProcessStepRunnerKind, string>>;
+
+/** The step runner rows, exactly typed: the keys of the `stepRunner.*` catalog. */
+export type StepRunnerKindLabelRows = typeof STEP_RUNNER_KIND_LABELS;
+
+/**
  * What a session's runner says it is doing (0384, `RUNNER_STATES`), in a
  * person's words: the mark a session page and a needs-you row wear (decision
  * D-R1). Keyed by EVERY state: a word with no label stops the build.
@@ -2584,6 +2638,94 @@ export function resolveWaitKindLabel(
   return (
     translatedWord(`waitKind.${key}`, catalogLocaleOf(opts?.locale)) ??
     WAIT_KIND_LABELS[key as keyof WaitKindLabelRows]
+  );
+}
+
+/**
+ * The words for who moves a step on (`person` | `ai` | `automatic`, the
+ * answer of `classifyStepRunner`), in `opts.locale` (else the ambient catalog
+ * locale), through `stepRunner.<kind>`. Unknown kinds humanize; none is "".
+ */
+export function resolveStepRunnerLabel(
+  kind: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!kind) return "";
+  const key = kind.trim().toLowerCase();
+  if (!Object.hasOwn(STEP_RUNNER_KIND_LABELS, key)) return humanizeToken(kind);
+  return (
+    translatedWord(`stepRunner.${key}`, catalogLocaleOf(opts?.locale)) ??
+    STEP_RUNNER_KIND_LABELS[key as keyof StepRunnerKindLabelRows]
+  );
+}
+
+/**
+ * A process health's LABEL (its pill / mark text), from its reason code, in
+ * `opts.locale` (else the ambient catalog locale). `waiting_on_you` reads the
+ * status label door (`resolveStatusLabel("waiting_on_you")`). An unknown code
+ * (a newer pod) humanizes, never leaks.
+ */
+export function resolveProcessHealthLabel(
+  health: Pick<ProcessHealth, "reason">,
+  opts?: { locale?: Locale }
+): string {
+  const locale = catalogLocaleOf(opts?.locale);
+  if (health.reason === "waiting_on_you") {
+    return resolveStatusLabel("waiting_on_you", locale);
+  }
+  if (!isProcessHealthReason(health.reason)) {
+    return humanizeToken(health.reason);
+  }
+  return sentences(locale)(
+    `vocabulary.processHealth.${health.reason}.label` as ProcessHealthLabelKey
+  );
+}
+
+/**
+ * A process health's REASON sentence (the why under the label), from its code
+ * and, for `latest_unresolved`, the status it names (through
+ * `resolveStatusLabel`). An unknown code humanizes.
+ */
+export function resolveProcessHealthReason(
+  health: Pick<ProcessHealth, "reason" | "latestStatus">,
+  opts?: { locale?: Locale }
+): string {
+  const locale = catalogLocaleOf(opts?.locale);
+  if (!isProcessHealthReason(health.reason)) {
+    return humanizeToken(health.reason);
+  }
+  const t = sentences(locale);
+  if (health.reason === "latest_unresolved") {
+    return t("vocabulary.processHealth.latest_unresolved.reason", {
+      status: resolveStatusLabel(health.latestStatus ?? "", locale),
+    });
+  }
+  return t(
+    `vocabulary.processHealth.${health.reason}.reason` as ProcessHealthPlainReasonKey
+  );
+}
+
+type ProcessHealthLabelKey = `vocabulary.processHealth.${Exclude<
+  ProcessHealthReason,
+  "waiting_on_you"
+>}.label`;
+type ProcessHealthPlainReasonKey = `vocabulary.processHealth.${Exclude<
+  ProcessHealthReason,
+  "latest_unresolved"
+>}.reason`;
+// COVERAGE FLOOR: a reason code without its words does not build.
+type _ProcessHealthWordsCovered = [
+  ProcessHealthLabelKey | ProcessHealthPlainReasonKey,
+] extends [keyof VocabularySentencesEn]
+  ? true
+  : never;
+const _processHealthWordsCovered: _ProcessHealthWordsCovered = true;
+void _processHealthWordsCovered;
+
+function isProcessHealthReason(code: string): code is ProcessHealthReason {
+  return Object.hasOwn(
+    vocabularySentencesEn,
+    `vocabulary.processHealth.${code}.reason`
   );
 }
 
@@ -4151,6 +4293,7 @@ export const vocabularyEn = buildVocabularyEn({
   needsYouNouns: NEEDS_YOU_ITEM_NOUNS,
   runnerStates: RUNNER_STATE_LABELS,
   waitKinds: WAIT_KIND_LABELS,
+  stepRunners: STEP_RUNNER_KIND_LABELS,
 });
 
 /** Every locale's vocabulary catalog, for `createT` and the parity test. */

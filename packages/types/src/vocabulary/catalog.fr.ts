@@ -81,8 +81,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "kind.skill.other": "Outils",
   "kind.automation.one": "Automatisation",
   "kind.automation.other": "Automatisations",
-  "kind.playbook.one": "Modèle",
-  "kind.playbook.other": "Modèles",
+  "kind.playbook.one": "Processus",
+  "kind.playbook.other": "Processus",
   "kind.capability.one": "Outil",
   "kind.capability.other": "Outils",
   "kind.command.one": "Commande",
@@ -587,6 +587,10 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "waitKind.another_work": "Autre travail",
   "waitKind.date": "Une date",
   "waitKind.nobody": "Personne",
+  // ── Step runners: `stepRunner.<kind>` (who moves a step on) ──
+  "stepRunner.person": "Vous",
+  "stepRunner.ai": "Un agent",
+  "stepRunner.automatic": "S’exécute tout seul",
   // ── Needs-you counts: `needsYou.count.<kind>` (French counts 0 and 1 as
   // singular; `many` is a whole number of millions: "1000000 de décisions") ──
   "needsYou.count.decision":
@@ -682,10 +686,10 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "vocabulary.runner.needs_answer.named": "Attend la réponse de {name}",
   "vocabulary.runner.needs_answer.unnamed": "Attend une réponse",
   "vocabulary.offer.everySpace": "{offer} dans tous les espaces",
-  "vocabulary.templateNoun.goal.one": "Modèle d’objectif",
-  "vocabulary.templateNoun.goal.other": "Modèles d’objectif",
-  "vocabulary.templateNoun.work.one": "Modèle de travail",
-  "vocabulary.templateNoun.work.other": "Modèles de travail",
+  "vocabulary.templateNoun.goal.one": "Processus d’objectif",
+  "vocabulary.templateNoun.goal.other": "Processus d’objectif",
+  "vocabulary.templateNoun.work.one": "Processus",
+  "vocabulary.templateNoun.work.other": "Processus",
   "vocabulary.templateNoun.space.one": "Modèle d’espace",
   "vocabulary.templateNoun.space.other": "Modèles d’espace",
   "vocabulary.packageNoun.template.one": "Modèle",
@@ -696,6 +700,47 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
     "Ajouter des packs et des modèles à votre pod",
   "vocabulary.needsYou.count.uncurated":
     "{n, plural, one {# {noun}} many {# de {nouns}} other {# {nouns}}}",
+  // ── Process health: `vocabulary.processHealth.<code>.label|reason` ──
+  "vocabulary.processHealth.config_invalid.label": "Erreur de configuration",
+  "vocabulary.processHealth.config_invalid.reason":
+    "La définition enregistrée est invalide ou ne peut pas être activée.",
+  "vocabulary.processHealth.running.label": "En cours",
+  "vocabulary.processHealth.running.reason":
+    "Au moins une exécution est en cours.",
+  "vocabulary.processHealth.running_after_failure.label":
+    "En cours · l’exécution précédente a échoué",
+  "vocabulary.processHealth.running_after_failure.reason":
+    "Une exécution est en cours après l’échec du dernier résultat connu.",
+  "vocabulary.processHealth.waiting_on_you.reason":
+    "La dernière exécution est en pause jusqu’à ce que vous répondiez à ce que sa session vous a demandé.",
+  "vocabulary.processHealth.blocked_by_policy.label": "Bloqué par une règle",
+  "vocabulary.processHealth.blocked_by_policy.reason":
+    "La gouvernance a refusé l’effet de la dernière exécution — elle attend votre revue.",
+  "vocabulary.processHealth.latest_failed.label": "Dernière exécution en échec",
+  "vocabulary.processHealth.latest_failed.reason":
+    "Aucun résultat réussi plus récent ne résout le dernier échec.",
+  "vocabulary.processHealth.draft.label": "Brouillon",
+  "vocabulary.processHealth.draft.reason":
+    "La définition doit encore être complétée ou activée.",
+  "vocabulary.processHealth.paused.label": "En pause",
+  "vocabulary.processHealth.paused.reason":
+    "La définition est en pause et ne lancera pas de nouvelle exécution.",
+  "vocabulary.processHealth.archived.label": "Archivé",
+  "vocabulary.processHealth.archived.reason":
+    "La définition est archivée et ne lancera pas de nouvelle exécution.",
+  "vocabulary.processHealth.healthy.label": "En bonne santé",
+  "vocabulary.processHealth.healthy.reason":
+    "Le dernier résultat connu s’est terminé sans échec.",
+  "vocabulary.processHealth.latest_unresolved.label":
+    "Dernier statut non résolu",
+  "vocabulary.processHealth.latest_unresolved.reason":
+    "La dernière exécution est «\u00a0{status}\u00a0»\u00a0; Synap ne peut pas encore la classer comme réussie ou en échec.",
+  "vocabulary.processHealth.never_run.label": "Jamais exécuté",
+  "vocabulary.processHealth.never_run.reason":
+    "Cette définition enregistrée n’a encore aucune exécution.",
+  "vocabulary.processHealth.not_enough_activity.label": "Statut inconnu",
+  "vocabulary.processHealth.not_enough_activity.reason":
+    "Il n’y a pas assez d’activité chargée pour déterminer l’état actuel.",
   "vocabulary.job.startedHere":
     "{n, plural, one {# travail lancé d’ici} many {# de travaux lancés d’ici} other {# travaux lancés d’ici}}",
 };

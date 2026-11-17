@@ -13,6 +13,18 @@ template.
 
 <!-- brief:end -->
 
+## Reading a process whole
+
+`synap_list_playbooks({ playbookId })` returns the playbook in full (goal
+template, stages, criteria, expected outputs) plus `process`, the playbook seen
+whole: what starts it (its automations and workers), its steps, its checks, what
+it moves (the subject kind's states and the step that owns each), its needs (each
+`filled`, `empty` or `unknown` against the space's tools), its skills, its runs
+(counts, recent sessions) and its health (a state and a reason code). A part the
+pod could not read is named in `unavailable` and reads null or `unknown`, never
+empty. `processWithheld` replaces it when your key's grant does not read every
+part (automations, sessions, skills, tools).
+
 ## Writing a process (a playbook that follows a kind's lifecycle)
 
 The status belongs to the **kind or role**, never to a playbook. Its profile declares the lifecycle ONCE, in its
