@@ -474,13 +474,28 @@ export interface TrackKpi {
 	/** The user (or agent) id that stated `current`. */
 	updatedBy?: string;
 }
+declare const TRANSITION_SUBJECT_TYPES: readonly [
+	"entity",
+	"track",
+	"focus_session",
+	"playbook_run",
+	"proposal",
+	"slot"
+];
+export type TransitionSubjectType = (typeof TRANSITION_SUBJECT_TYPES)[number];
 /**
- * What a transition is ABOUT. An entity (a kind's lifecycle, or a role's on
- * its facet) moves through the `moveStatus` door; a goal (`project_tracks`)
- * through its own compare-and-set; a focus session through `setSessionStatus`.
- * All three write the SAME shape below, through the same outbox.
+ * WHY a move happened when another move caused it (reactions W2): the
+ * reaction that fired, the transition that fired it, the chain it belongs to
+ * and how deep in that chain it is. Absent on a move nobody's move caused.
+ * Carried only: nothing in W1 writes or reads it, and it is never part of
+ * what makes a move a move.
  */
-export type TransitionSubjectType = "entity" | "focus_session" | "track";
+export interface TransitionCause {
+	reactionId?: string;
+	transitionId: string;
+	chainId: string;
+	depth: number;
+}
 /**
  * ONE TRANSITION SHAPE (status-flow plan W1): what every status move carries,
  * whatever moved. Emitted as `<subjectType>.transition.completed`
@@ -537,6 +552,8 @@ export interface TransitionBase {
 	 * moves, whose statuses declare no waits).
 	 */
 	wait?: TransitionWait;
+	/** The move that caused this one (reactions W2); absent otherwise. */
+	cause?: TransitionCause;
 }
 /** Who made a move, for attribution (`TransitionBase.actorClass`). */
 export type TransitionActorClass = "agent" | "app" | "human" | "system";
@@ -8844,16 +8861,6 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  | "advances";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
-/**
- * Lifecycle of a run.
- *
- * `cancelled` is the RELEASE state: a live session that followed this playbook
- * stopped following it (`follow-playbook.ts`). It is neither `completed` (the
- * run did not finish) nor `failed` (nothing failed) — and the distinction is
- * load-bearing, because the scorecard feeds governance widening and a `failed`
- * row would grade a playbook for a person's change of mind.
- */
-export type PlaybookRunStatus = "cancelled" | "completed" | "failed" | "proposed" | "running" | "stale" | "waiting_on_you";
 /** The normalized state of an external agent's task (the `status` verb). */
 export type ExternalAgentState = "done" | "failed" | "needs_input" | "running";
 /**
@@ -17746,6 +17753,23 @@ declare const OperationalEventTypes: {
 		readonly label: "Notification created";
 		readonly type: "notification.created.completed";
 	};
+	readonly PLAYBOOK_RUN_TRANSITIONED: {
+		readonly description: "Fires when a playbook run's status moves (running, waiting on you, completed, failed\u2026).";
+		readonly domain: "Playbook runs";
+		readonly filterKeys: [
+			"from",
+			"to",
+			"fromCategory",
+			"category",
+			"actorKind",
+			"playbookId",
+			"stopReason",
+			"projectId",
+			"trackId"
+		];
+		readonly label: "Run status changed";
+		readonly type: "playbook_run.transition.completed";
+	};
 	readonly PROACTIVE_POST: {
 		readonly description: "The proactive AI posted a message into your channel.";
 		readonly domain: "Intelligence";
@@ -17786,6 +17810,21 @@ declare const OperationalEventTypes: {
 		readonly label: "Proposal rejected";
 		readonly type: "proposal.rejected.completed";
 	};
+	readonly PROPOSAL_TRANSITIONED: {
+		readonly description: "Fires when a proposal's status moves (approved, rejected, expired, withdrawn, failed\u2026).";
+		readonly domain: "Proposals";
+		readonly filterKeys: [
+			"from",
+			"to",
+			"fromCategory",
+			"category",
+			"actorKind",
+			"proposalType",
+			"targetType"
+		];
+		readonly label: "Proposal status changed";
+		readonly type: "proposal.transition.completed";
+	};
 	readonly RELATION_CREATED: {
 		readonly description: "Two entities were linked.";
 		readonly domain: "Relations";
@@ -17803,6 +17842,22 @@ declare const OperationalEventTypes: {
 		];
 		readonly label: "Relation deleted";
 		readonly type: "relation.delete.completed";
+	};
+	readonly SLOT_TRANSITIONED: {
+		readonly description: "Fires when a session's ask or declared output changes state (owed by you, answered, done, retired).";
+		readonly domain: "Focus sessions";
+		readonly filterKeys: [
+			"from",
+			"to",
+			"fromCategory",
+			"category",
+			"actorKind",
+			"slotKey",
+			"projectId",
+			"trackId"
+		];
+		readonly label: "Ask or output changed";
+		readonly type: "slot.transition.completed";
 	};
 	readonly TRACK_SIGNALED: {
 		readonly description: "Runs once when a paused goal is ready to be reviewed.";
@@ -48831,7 +48886,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				runOn: RunOn | null;
 				sessionId: string | null;
 				startedAt: Date;
-				status: PlaybookRunStatus;
+				status: "cancelled" | "completed" | "failed" | "proposed" | "running" | "stale" | "waiting_on_you";
 				stopReason: "budget" | "stages_left" | null;
 				summary: string | null;
 				workspaceId: string | null;
@@ -50253,7 +50308,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					runOn: RunOn | null;
 					sessionId: string | null;
 					startedAt: Date;
-					status: PlaybookRunStatus;
+					status: "cancelled" | "completed" | "failed" | "proposed" | "running" | "stale" | "waiting_on_you";
 					stopReason: "budget" | "stages_left" | null;
 					summary: string | null;
 					workspaceId: string | null;
@@ -50282,7 +50337,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					runOn: RunOn | null;
 					sessionId: string | null;
 					startedAt: Date;
-					status: PlaybookRunStatus;
+					status: "cancelled" | "completed" | "failed" | "proposed" | "running" | "stale" | "waiting_on_you";
 					stopReason: "budget" | "stages_left" | null;
 					summary: string | null;
 					workspaceId: string | null;
@@ -50381,7 +50436,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					runOn: RunOn | null;
 					sessionId: string | null;
 					startedAt: Date;
-					status: PlaybookRunStatus;
+					status: "cancelled" | "completed" | "failed" | "proposed" | "running" | "stale" | "waiting_on_you";
 					stopReason: "budget" | "stages_left" | null;
 					summary: string | null;
 					workspaceId: string | null;
