@@ -8,7 +8,9 @@
  *              Auto-approved `focus_session` receipts are left out: the
  *              session source already carries that lifecycle, once.
  *   decision — a person's approve / reject / revert / failed approval, by the
- *              REVIEWER, at `reviewed_at`.
+ *              REVIEWER, at `reviewed_at`; and an automatic receipt's failure
+ *              (no reviewer), by its agent, or the pod (`system`) when none
+ *              is recorded (`answeredRowWhere`, finding d4d20c02).
  *   run      — automation + playbook runs, at `coalesce(completed_at,
  *              started_at)`. An automation run is a RULE acting (`system`).
  *   session  — one row per session of the project-path population (work +
@@ -121,6 +123,7 @@ import {
   ownAgentUserFilter,
 } from "../agent-identity-service.js";
 import { activityActorOf } from "./activity-actors.js";
+import { answeredRowWhere, DECISION_STATUSES } from "./decision-events.js";
 import { proposalPayloadTargetName } from "../../routers/proposals/display.js";
 import { nameRedactedProposals } from "../object-graph/graph-service.js";
 import { redactUnreadableSessionTargets } from "../proposals/session-content-redaction.js";
@@ -325,14 +328,6 @@ interface Candidate extends ActivityCursor {
   origin?: string | null;
 }
 
-/** The decisions a PERSON makes on a proposal (the `reviewed_by` stamp). */
-const DECISION_STATUSES = [
-  "approved",
-  "rejected",
-  "reverted",
-  "approval_failed",
-] as const;
-
 const LIVE_SESSION_STATUSES = ["active", "paused", "forming"] as const;
 
 /**
@@ -450,15 +445,19 @@ async function readDecisions<P extends Projection>(
     q.outcome
   ) ?? [...DECISION_STATUSES];
   if (statuses.length === 0) return none;
-  const actorId = drizzleSql<string>`${proposals.reviewedBy}`;
-  const isAgent = drizzleSql<boolean>`(${users.userType} = 'agent')`;
+  // The reviewer; a receipt's failure has none and is its agent's (or, with
+  // no agent recorded, the pod's: a null actor). Never the person the row is
+  // about (finding d4d20c02, e.g. 7ad8bdde).
+  const actorId = drizzleSql<
+    string | null
+  >`coalesce(${proposals.reviewedBy}, ${proposals.agentUserId})`;
+  const isAgent = drizzleSql<boolean>`(${users.userType} = 'agent' or (${proposals.reviewedBy} is null and ${proposals.agentUserId} is not null))`;
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
   if (actor === null) return none;
   const at = drizzleSql`${proposals.reviewedAt}`;
   const where = and(
     proposalFloor(viewer, q.workspaceLens),
-    isNotNull(proposals.reviewedBy),
-    isNotNull(proposals.reviewedAt),
+    answeredRowWhere(),
     inArray(proposals.status, statuses as never[]),
     q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
     q.trackId ? proposalInTrack(q.trackId) : undefined,
@@ -471,7 +470,7 @@ async function readDecisions<P extends Projection>(
     const days = await database
       .select(dayFields(at, p.tz))
       .from(proposals)
-      .leftJoin(users, eq(users.id, proposals.reviewedBy))
+      .leftJoin(users, drizzleSql`${users.id} = ${actorId}`)
       .where(where)
       .groupBy(byDay);
     return asDays(days) as Projected<P>;
@@ -482,14 +481,14 @@ async function readDecisions<P extends Projection>(
       at: exactAt(at),
       status: proposals.status,
       proposalType: proposals.proposalType,
-      actorId: proposals.reviewedBy,
+      actorId,
       isAgent,
       projectId: proposals.projectId,
       sessionId: proposals.sessionId,
       changeCount: proposalChangeCountSql(),
     })
     .from(proposals)
-    .leftJoin(users, eq(users.id, proposals.reviewedBy))
+    .leftJoin(users, drizzleSql`${users.id} = ${actorId}`)
     .where(where)
     .orderBy(...order(at, proposals.id))
     .limit(p.take);

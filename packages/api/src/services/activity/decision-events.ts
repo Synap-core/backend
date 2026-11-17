@@ -3,7 +3,8 @@
  * by its author) and answered (decided by a PERSON, with the reviewer's note).
  * ONE projection for the track history and the session timeline; each caller
  * says what refs (and extra fields, e.g. a stage) its events carry, and both
- * read their rows through `decisionRowsWhere`.
+ * read their rows through `decisionRowsWhere`. The activity ledger's
+ * `decision` source reads its answered rows through `answeredRowWhere`.
  *
  * One answer is not a person's: an agent's auto-applied receipt that failed
  * to apply (`approval_failed`, no `reviewedBy`). It is answered by its agent,
@@ -24,7 +25,7 @@ import {
 import { readProposalReviewComments } from "@synap-core/types/proposals";
 
 /** The statuses a proposal is ANSWERED in (pending is the asked side). */
-const DECISION_STATUSES = [
+export const DECISION_STATUSES = [
   "approved",
   "rejected",
   "reverted",
@@ -32,22 +33,26 @@ const DECISION_STATUSES = [
 ] as const;
 
 /**
+ * An answered proposal a history shows: decided by a person (`reviewedBy`),
+ * or an automatic receipt's failure, which has no reviewer. Without that last
+ * arm the failure of an agent's receipt went silent once it stopped naming the
+ * person. The caller narrows the status (`DECISION_STATUSES` or fewer).
+ */
+export function answeredRowWhere(): SQL {
+  return and(
+    isNotNull(proposals.reviewedAt),
+    or(isNotNull(proposals.reviewedBy), eq(proposals.status, "approval_failed"))
+  )!;
+}
+
+/**
  * The proposals a history reads as decision events: the pending ones (asked)
- * and the answered ones: decided by a person (`reviewedBy`), or an automatic
- * receipt's failure, which has no reviewer. Without that last arm the failure
- * of an agent's receipt went silent once it stopped naming the person.
+ * and the answered ones (`answeredRowWhere`).
  */
 export function decisionRowsWhere(): SQL {
   return or(
     eq(proposals.status, "pending"),
-    and(
-      inArray(proposals.status, [...DECISION_STATUSES]),
-      isNotNull(proposals.reviewedAt),
-      or(
-        isNotNull(proposals.reviewedBy),
-        eq(proposals.status, "approval_failed")
-      )
-    )
+    and(inArray(proposals.status, [...DECISION_STATUSES]), answeredRowWhere())
   )!;
 }
 
