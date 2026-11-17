@@ -2726,6 +2726,65 @@ declare const STATUS_OF_ANSWER_TYPES: readonly [
 ];
 export type StatusOfAnswerType = (typeof STATUS_OF_ANSWER_TYPES)[number];
 /**
+ * A RULE around the subject (plan 7d71ddcc §2: WHEN a subject reaches a
+ * status or category → VIA one link → DO one effect through the target's own
+ * door). The person sees the word "Rules" (decision D8). `role` says how it
+ * touches this subject: it `fires` when this subject moves, or it `moves`
+ * this subject when what it is linked to moves (a roll-up's parent).
+ */
+export interface StatusOfReaction {
+	/** The rule's stable id (`builtin:…`, `declared:rollup:…`). */
+	ruleId: string;
+	/** Its row in the pod's rule list (where its pause lives), once seeded. */
+	ruleRowId: string | null;
+	/** The rule's name, as the Rules list shows it. */
+	name: string;
+	/** Who declared it: a pod default, a relation, a playbook stage, a person. */
+	source: "default" | "relation" | "stage" | "user";
+	role: "fires" | "moves";
+	/** The status or category that fires it. */
+	when: {
+		category?: LifecycleCategory;
+		to?: string;
+	};
+	/** WHEN, VIA and DO in the person's words. */
+	whenWords: string;
+	/** The link it follows to its target. */
+	via: string | null;
+	/** What it does there, in words. */
+	does: string;
+	paused: boolean;
+	/** A move into done or lost: proposed (the default, D3) or applied. */
+	terminal: "apply" | "propose";
+	/**
+	 * What it last did that touched this subject, newest: applied, proposed,
+	 * or skipped with why. Null when it has not acted on it yet.
+	 */
+	last: StatusOfReactionOutcome | null;
+	/**
+	 * A roll-up that moves this subject: where its parts stand (the parts the
+	 * reader may see). `label` reads "3 of 5 done".
+	 */
+	progress?: {
+		done: number;
+		label: string;
+		lost: number;
+		of: number;
+		open: number;
+		ready: boolean;
+	};
+}
+/** One logged outcome of a rule, as `include: ["reactions"]` shows it. */
+export interface StatusOfReactionOutcome {
+	outcome: "applied" | "proposed" | "skipped";
+	/** A stable code (`applied`, `moved_meanwhile`, `paused`, …). */
+	code: string;
+	/** In plain words. */
+	reason: string;
+	at: string;
+	proposalId: string | null;
+}
+/**
  * A stage a SESSION entered, read from its stage ledger
  * (`focus_sessions.stage_history`, 0382; the shape of a goal's `step_moved`).
  * Only `include: ["history"]` carries it; the timeline does not.
@@ -5465,6 +5524,18 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		mode?: "appointment" | "propose" | "run";
 		/** Maps automation step outputs to playbook params */
 		paramsMapping?: Record<string, string>;
+		/**
+		 * PARENT SESSION — the focus session (`focus_sessions.id`) this node's
+		 * runs are CHILDREN of. Forwarded to `runPlaybook({ parentSessionId })`,
+		 * which writes `run session --spawned_from--> parent` through its one
+		 * producer (`recordSessionSpawn`, owner floor on the parent). A node
+		 * naming a parent that is no longer open (closed, cancelled, failed, or
+		 * gone) starts and files NOTHING (`session_closed`): a session's worker
+		 * stops with its session, and nothing on the session moves. Producer: a
+		 * SESSION-scoped worker enablement (`workers.enable({ sessionId })`, via
+		 * the rule grammar's `__parentSessionId` key). Absent ⇒ unchanged.
+		 */
+		parentSessionId?: string;
 		/** Resolve the playbook by id, OR by `playbookName` (template-friendly:
 		 *  a capability references its seeded playbook by stable name). One required. */
 		playbookId?: string;
@@ -12089,6 +12160,44 @@ export interface WorkReleaseRead {
 	blockers: WorkReleaseBlocker[];
 	/** Present only when the caller's grant narrowed the read. */
 	narrowed?: WorkReleaseNarrowing;
+}
+declare const REACTION_OUTCOMES: readonly [
+	"applied",
+	"proposed",
+	"skipped"
+];
+export type ReactionOutcome = (typeof REACTION_OUTCOMES)[number];
+export interface ReactionLogEntry {
+	reactionId: string;
+	outcome: ReactionOutcome;
+	/** Why it was skipped (a stable code), or what it did. */
+	code: string;
+	/** In the person's words: the Rules list shows it (no ids, no internal words). */
+	reason: string;
+	/** The machine's detail (statuses, values, an error message), never shown as is. */
+	detail?: string | null;
+	/** The person whose thing moved (the log's owner). */
+	userId: string;
+	/**
+	 * The move that fired it (a receipt born decided: the receipt's id); null
+	 * when a fact fired it (a merged PR).
+	 */
+	sourceTransitionId: string | null;
+	/** What moved, for a reader: `<subjectType>:<subjectId>`, or the fact. */
+	source: string;
+	/** What it would move or moved: `<subjectType>:<subjectId>`. */
+	target: string | null;
+	/** The status it would move it to. */
+	to: string | null;
+	chainId: string | null;
+	depth: number | null;
+	proposalId?: string | null;
+	sessionId?: string | null;
+	workspaceId?: string | null;
+}
+/** One logged outcome, as a reader sees it (newest first). */
+export interface ReactionLogRow extends Omit<ReactionLogEntry, "userId"> {
+	at: string;
 }
 /** A thing that can be held: an entity (kind lifecycle, or a role's facet), a goal, a session. */
 export interface HoldSubjectRef {
@@ -20454,6 +20563,11 @@ export interface StatusOf {
 	 * moves its step offers ({@link StatusOfMove}).
 	 */
 	moves?: StatusOfMove[];
+	/**
+	 * On `include: ["reactions"]` (every type): the rules around it — those
+	 * that fire when it moves, those that move it (`status-reactions.ts`).
+	 */
+	reactions?: StatusOfReaction[] | Unavailable$1;
 	/** Things only: the roles it wears that the reader may see. */
 	roles?: StatusOfRole[] | Unavailable$1;
 	/** Things only: the account it works at, when the reader may read it. */
@@ -21623,6 +21737,11 @@ export interface RuleScope {
 	/** Cross-cutting project lens. Absent = the rule is not project-scoped. */
 	projectId?: string;
 }
+/** See {@link RuleMetadata.reaction}. */
+export interface RuleReaction {
+	/** The reaction's stable id (`builtin:…`, `declared:rollup:…`). */
+	id: string;
+}
 /** See {@link RuleMetadata.seed}. */
 export interface RuleSeed {
 	/** The template (package slug) that installed the rule. */
@@ -21859,6 +21978,111 @@ export interface RuleDryRunMatch {
 	 * this one counts runs that happened. Absent when no existing rule was named.
 	 */
 	actualRunCount?: number;
+}
+/** WHEN: the move a reaction listens to. Empty `to` and `category` = any move. */
+export interface ReactionWhen {
+	subjectType: TransitionSubjectType;
+	/** The move lands on one of these statuses. */
+	to?: readonly string[];
+	/** …or in one of these categories. */
+	category?: readonly LifecycleCategory[];
+	/**
+	 * Things only: the move is of one of these kinds' OWN lifecycle (a kind's
+	 * slug; a role's move, on its facet, is not the kind's). Absent: any.
+	 */
+	profileSlug?: readonly string[];
+}
+/**
+ * VIA: the ONE existing link a reaction walks from what moved to what it
+ * moves. A closed union: a declaration names a link, never an expression.
+ * The relation arm carries the roll-ups a link declares (wave 3).
+ */
+export type ReactionVia = 
+/** An approved proposal → every outcome (slot) whose own `ref` names its target. */
+{
+	link: "outcome_ref";
+}
+/** A run → the session it drives. */
+ | {
+	link: "run_session";
+}
+/**
+ * A thing → the thing(s) a declared relation links it to (wave 3, a
+ * relation's `reactions`, `@synap-core/types/relations`). `parent` names
+ * the end that moves: `target` for `part_of` (child → parent), `source`
+ * for `parent_of`. The profile ids pin the declaring pair.
+ */
+ | {
+	link: "relation";
+	parent: "source" | "target";
+	relation: string;
+	relationDefId: string;
+	sourceProfileId: string;
+	targetProfileId: string;
+};
+/** DO: the one effect, applied through the target's own door. Closed. */
+export type ReactionDo = 
+/** Meet the outcome (the done door, `satisfy-expected-output.ts`). */
+{
+	effect: "meet_outcomes";
+}
+/** Pause the session with a hold on the person (`setSessionStatus`). */
+ | {
+	effect: "pause_session";
+}
+/**
+ * Roll the parent up (decision D5): when every non-lost part is done and
+ * at least one is, the parent moves to `to`, else to its next status
+ * (`moveStatus`, the thing's own door).
+ */
+ | {
+	effect: "roll_up";
+	to?: string;
+};
+export interface ReactionDeclaration {
+	/** Stable: the dedupe key, the log's subject and the cause's `reactionId`. */
+	id: string;
+	/** Plain words, as the person's Rules list shows it. */
+	title: string;
+	when: ReactionWhen;
+	via: ReactionVia;
+	do: ReactionDo;
+	/** Lower runs first; ties by `id`. */
+	order: number;
+	/** A move this reaction makes may fire further reactions (off by default). */
+	chains?: boolean;
+	/**
+	 * D3: a move into done or lost is PROPOSED unless this says `apply`. The
+	 * reason it is safe to apply goes in `terminalWhy`.
+	 */
+	terminal?: "apply" | "propose";
+	terminalWhy?: string;
+	/** Where it was declared. */
+	source: "built_in" | "declared";
+	/** Built-in rules are on unless their owner paused them. */
+	enabled: boolean;
+	/**
+	 * A declared rule: who declared it, in the person's words (the relation and
+	 * the kinds at its two ends), for the Rules list. Absent on a built-in.
+	 */
+	declaredOn?: {
+		kind: "relation";
+		relation: string;
+		relationName: string;
+		source: {
+			name: string;
+			profileId: string;
+			slug: string;
+		};
+		target: {
+			name: string;
+			profileId: string;
+			slug: string;
+		};
+		/** The person who declared it (the relation's author). */
+		userId: string | null;
+		workspaceId: string | null;
+	};
 }
 /** Which read paths the newly-created verb was wired into. */
 export interface WireCreatedVerbResult {
@@ -39251,7 +39475,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						mode: "propose" | "run";
 						projectId: string | null;
 						ruleId: string;
-						scope: "project" | "space";
+						scope: "project" | "session" | "space";
 						state: "paused" | "running";
 					}[];
 					workspaceId: string | null;
@@ -46454,7 +46678,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		statusOf: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				ids: string[];
-				include?: ("history" | "links" | "moves" | "rollup" | "signals")[] | undefined;
+				include?: ("history" | "links" | "moves" | "reactions" | "rollup" | "signals")[] | undefined;
 			};
 			meta: object;
 			output: StatusOfAnswer[];
@@ -57193,6 +57417,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						expiresAt?: string;
 						factSkillId?: string;
 						intent: string;
+						reaction?: RuleReaction;
 						routing?: RuleRouting;
 						scope: RuleScope;
 						seed?: RuleSeed;
@@ -57242,6 +57467,47 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				skills: any;
 			};
+		}>;
+		listReactionRules: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				recent?: number | undefined;
+			} | undefined;
+			meta: object;
+			output: {
+				chains: boolean;
+				declaredOn: {
+					kind: "relation";
+					relation: string;
+					relationName: string;
+					source: {
+						name: string;
+						profileId: string;
+						slug: string;
+					};
+					target: {
+						name: string;
+						profileId: string;
+						slug: string;
+					};
+					userId: string | null;
+					workspaceId: string | null;
+				} | null;
+				do: string;
+				enabled: boolean;
+				id: string;
+				owner: {
+					name: string | null;
+					userId: string;
+				} | null;
+				recent: ReactionLogRow[];
+				ruleId: string | null;
+				source: ReactionDeclaration["source"];
+				terminal: "apply" | "propose";
+				terminalWhy: string | null;
+				title: string;
+				via: string;
+				when: string;
+			}[];
 		}>;
 		listRules: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
@@ -57350,6 +57616,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					version: string | null;
 					workspaceId: string | null;
 				};
+			};
+		}>;
+		setReactionRule: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				on: boolean;
+			};
+			meta: object;
+			output: {
+				on: boolean;
+				ruleId: string;
+				status: "updated";
+			} | {
+				proposalId: string;
+				status: "proposed";
 			};
 		}>;
 		setRequiredTools: import("@trpc/server").TRPCMutationProcedure<{
@@ -61127,6 +61408,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: "weekly";
 					time: string;
 				} | undefined;
+				sessionId?: string | undefined;
 				trackId?: string | undefined;
 			};
 			meta: object;
@@ -61148,6 +61430,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId?: string | undefined;
 				profileSlug?: string | undefined;
 				projectId?: string | undefined;
+				sessionId?: string | undefined;
 				trackId?: string | undefined;
 			};
 			meta: object;
@@ -61183,7 +61466,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileSlug: string | null;
 				projectId: string | null;
 				ruleId: string;
-				scope: "project" | "space";
+				scope: "project" | "session" | "space";
+				sessionId?: string | null | undefined;
 				size: "per_moment" | "per_thing";
 				state: "paused" | "running";
 				trackId: string | null;
