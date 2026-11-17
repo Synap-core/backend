@@ -113,11 +113,11 @@ function toEffectOutcome(
       // already_set, or the subject is already past the stage: nothing to do.
       return out.reason === "already_set" || out.reason === "subject_ahead"
         ? { status: "unchanged" }
-        : { status: "refused", reason: out.reason };
+        : { status: "refused", detail: out.reason };
     case "failed":
       return out.code === "moved_meanwhile"
-        ? { status: "moved_meanwhile", reason: out.reason }
-        : { status: "refused", reason: out.reason };
+        ? { status: "moved_meanwhile", detail: out.reason }
+        : { status: "refused", detail: out.reason };
   }
 }
 
