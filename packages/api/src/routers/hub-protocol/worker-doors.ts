@@ -74,18 +74,27 @@ async function guarded<T>(fn: () => Promise<T>): Promise<WorkerDoorOutcome<T>> {
   }
 }
 
-/** The workers enabled on a goal (strict), or a project's, as views. */
+/**
+ * The workers enabled on a goal (strict), a project's, or the ones a session
+ * started (`scopeSessionId`, strict), as views.
+ */
 export function listWorkersDoor(
   identity: PlaybookDoorIdentity,
-  input: { trackId?: string; projectId?: string; playbookId?: string }
+  input: {
+    trackId?: string;
+    projectId?: string;
+    /** The session whose workers to list (not the caller's attribution). */
+    scopeSessionId?: string;
+    playbookId?: string;
+  }
 ): Promise<
   WorkerDoorOutcome<{ items: Awaited<ReturnType<typeof listWorkerViews>> }>
 > {
-  if (!input.trackId && !input.projectId) {
+  if (!input.trackId && !input.projectId && !input.scopeSessionId) {
     return Promise.resolve({
       kind: "invalid",
       error:
-        "trackId (the goal) or projectId is required — find a goal with synap_list_tracks.",
+        "trackId (the goal), projectId or scopeSessionId is required — find a goal with synap_list_tracks.",
     });
   }
   return guarded(async () => ({
@@ -93,12 +102,18 @@ export function listWorkersDoor(
       userId: identity.userId,
       ...(input.trackId ? { trackId: input.trackId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.scopeSessionId ? { sessionId: input.scopeSessionId } : {}),
       ...(input.playbookId ? { playbookId: input.playbookId } : {}),
     }),
   }));
 }
 
-/** Enable a declared worker on a goal (or a project). An agent's is a proposal. */
+/**
+ * Enable a declared worker on a goal, a project, or a session the caller owns
+ * (`scopeSessionId`: its runs are that session's children). An agent's is a
+ * proposal. Named `scopeSessionId`, never `sessionId`: on the doors that name
+ * is the caller's focus-session attribution.
+ */
 export function enableWorkerDoor(
   identity: PlaybookDoorIdentity,
   input: {
@@ -109,12 +124,21 @@ export function enableWorkerDoor(
     mode?: "run" | "propose";
     trackId?: string;
     projectId?: string;
+    scopeSessionId?: string;
   }
 ): Promise<WorkerDoorOutcome<Awaited<ReturnType<typeof enableWorker>>>> {
-  if (!input.trackId && !input.projectId) {
+  if (!input.trackId && !input.projectId && !input.scopeSessionId) {
     return Promise.resolve({
       kind: "invalid",
-      error: "Enable a worker for a goal (trackId) or a project (projectId).",
+      error:
+        "Enable a worker for a goal (trackId), a project (projectId) or a session (scopeSessionId).",
+    });
+  }
+  if (input.scopeSessionId && (input.trackId || input.projectId)) {
+    return Promise.resolve({
+      kind: "invalid",
+      error:
+        "A session's worker is filed where the session is: give scopeSessionId alone.",
     });
   }
   return guarded(() =>
@@ -127,6 +151,7 @@ export function enableWorkerDoor(
       ...(input.mode ? { mode: input.mode } : {}),
       ...(input.trackId ? { trackId: input.trackId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.scopeSessionId ? { sessionId: input.scopeSessionId } : {}),
     })
   );
 }
