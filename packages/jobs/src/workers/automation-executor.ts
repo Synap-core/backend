@@ -1334,6 +1334,7 @@ async function executeAutomationFlow(params: {
                             projectId?: string;
                             trackId?: string;
                             handToAgentId?: string;
+                            parentSessionId?: string;
                             mode?: PlaybookRunMode;
                             worker?: PlaybookRunWorkerSpec;
                           },
@@ -1879,6 +1880,8 @@ async function executeAutomationFlow(params: {
                 trackId?: string;
                 /** Hand-off: the agent user id the session is handed to. */
                 handToAgentId?: string;
+                /** A session's worker: the session its runs are children of. */
+                parentSessionId?: string;
                 /** `"appointment"` ⇒ a `scheduled` session; `"propose"` ⇒ a
                  *  governed proposal only (see `executePlaybookRun`). */
                 mode?: PlaybookRunMode;
@@ -1921,6 +1924,14 @@ async function executeAutomationFlow(params: {
                   // start the run with the playbook's own executor and nobody
                   // on the roster. Pinned by `playbook-run-mode-honoured.tripwire`.
                   handToAgentId: data.handToAgentId,
+                  // Same hazard, same fix: a SESSION's worker reaching the
+                  // TOP-LEVEL path without this line would start runs that are
+                  // nobody's children (no `spawned_from`) and keep running
+                  // after its session closed, while the identical node inside
+                  // a loop kept its parent. Pinned by
+                  // `playbook-run-mode-honoured.tripwire` and
+                  // `steps/__tests__/playbook-run-parent-session.test.ts`.
+                  parentSessionId: data.parentSessionId,
                   // Same hazard, same fix: without this line an `appointment`
                   // node reaching the TOP-LEVEL path would silently execute as a
                   // RUN — dispatching an agent at a session the human was meant

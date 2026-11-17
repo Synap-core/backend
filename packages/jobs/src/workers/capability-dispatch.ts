@@ -175,6 +175,12 @@ export interface PlaybookRunnerInput {
    */
   handToAgentId?: string | null;
   /**
+   * Lineage: the session this run is a child of (a session's worker). The
+   * spine writes `spawned_from` (owner floor on the parent) — see
+   * `RunPlaybookInput.parentSessionId`.
+   */
+  parentSessionId?: string;
+  /**
    * Unattended run: refuse (throw) when the playbook depends on not-enabled
    * skills, filing the enable request on behalf of the owner. See run-playbook.
    */

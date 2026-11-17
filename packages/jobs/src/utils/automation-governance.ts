@@ -961,6 +961,8 @@ export async function proposeRulePlaybookRun(opts: {
   /** Filing the approved run is born into (replayed by the approval executor). */
   projectId?: string;
   trackId?: string;
+  /** The session the approved run is a child of (a session's worker). */
+  parentSessionId?: string;
   sessionId?: string;
   stepRunId?: string;
   nodeId?: string;
@@ -1198,6 +1200,7 @@ async function fileRulePlaybookRunProposal(
     ...(opts.agentType ? { agentType: opts.agentType } : {}),
     ...(opts.projectId ? { projectId: opts.projectId } : {}),
     ...(opts.trackId ? { trackId: opts.trackId } : {}),
+    ...(opts.parentSessionId ? { parentSessionId: opts.parentSessionId } : {}),
     // A batch proposal lists its subjects; `subjectId` stays the first, so a
     // batch of one reads (and runs) exactly like a single proposal.
     ...(opts.batchId && subjectId ? { subjectIds: [subjectId] } : {}),

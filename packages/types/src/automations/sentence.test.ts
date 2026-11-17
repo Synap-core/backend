@@ -838,6 +838,44 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     expect(back.__trackId).toBe("trk-1");
   });
 
+  it("a session worker's parent lands on data.parentSessionId, never in params, and round-trips", () => {
+    const flow = toFlowDefinition([
+      {
+        type: null,
+        config: {
+          __nodeType: "playbook_run",
+          __playbookId: "11111111-1111-4111-8111-111111111111",
+          __parentSessionId: "sess-parent",
+          topic: "x",
+        },
+      },
+    ]);
+    const node = flow.nodes.find((n) => n.type === "playbook_run")!;
+    // Negative control: without the bookkeeping key the value lands in
+    // paramsMapping and data.parentSessionId is undefined.
+    expect(node.data.parentSessionId).toBe("sess-parent");
+    expect(node.data.paramsMapping).toEqual({ topic: "x" });
+    expect(flowToSentenceActions(flow)[0]!.config.__parentSessionId).toBe(
+      "sess-parent"
+    );
+  });
+
+  it("playbookActivatorSentence carries a session enablement's parent only when given", () => {
+    const base = {
+      playbookId: "11111111-1111-4111-8111-111111111111",
+      profileSlug: "deal",
+      mode: "run" as const,
+      on: "created" as const,
+    };
+    expect(
+      playbookActivatorSentence({ ...base, parentSessionId: "sess-1" })
+        .actions[0]!.config
+    ).toMatchObject({ __parentSessionId: "sess-1" });
+    expect(
+      playbookActivatorSentence(base).actions[0]!.config
+    ).not.toHaveProperty("__parentSessionId");
+  });
+
   it("omits goalOverride entirely when the rule states no goal", () => {
     // Absent, not `undefined`: a node without a goal must round-trip to a node
     // without one, which is what keeps every pre-existing node byte-identical.
