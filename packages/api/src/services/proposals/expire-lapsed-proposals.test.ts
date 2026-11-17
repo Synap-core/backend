@@ -199,3 +199,93 @@ describe("selectLapsedIds — capability runs on a durable object", () => {
     ).toEqual(["send", "tool"]);
   });
 });
+
+/**
+ * A FAILED outbound call lapses too (plan 8032a127 D2): a failed row could
+ * leave only through a person's reject, which scores against its agent. Its
+ * clock starts at the failure, not the filing, and a failure a retry could
+ * clear without changing the request (retryable class) never lapses: a sweep
+ * must not expire what someone is about to retry. Founder's pod, 17 Nov:
+ * e01d5786, 17ddc7fb, 1bc63175, a9855964 are failed runs of this kind.
+ */
+describe("selectLapsedIds — failed outbound calls", () => {
+  const NOW = new Date("2026-11-17T12:00:00Z");
+  const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3600_000);
+  const failed = (
+    id: string,
+    over: {
+      failedHoursAgo: number;
+      errorClass?: string;
+      filedHoursAgo?: number;
+    }
+  ): LapseCandidate => ({
+    id,
+    proposalType: "capability.run",
+    targetType: "capability",
+    status: "approval_failed",
+    createdAt: hoursAgo(over.filedHoursAgo ?? 24 * 10),
+    reviewedAt: hoursAgo(over.failedHoursAgo),
+    data: {
+      skillId: "s1",
+      verbId: null,
+      ...(over.errorClass ? { failure: { errorClass: over.errorClass } } : {}),
+    },
+  });
+
+  it("lapses a day after it FAILED, not a day after it was filed", () => {
+    expect(
+      selectLapsedIds(
+        [
+          failed("old-failure", { failedHoursAgo: 25 }),
+          failed("fresh-failure", { failedHoursAgo: 2 }),
+        ],
+        NOW
+      )
+    ).toEqual(["old-failure"]);
+  });
+
+  it("a failure that needs the request changed lapses; a retryable one never does", () => {
+    const out = selectLapsedIds(
+      [
+        failed("validation", { failedHoursAgo: 100, errorClass: "validation" }),
+        failed("unclassified", { failedHoursAgo: 100 }),
+        failed("unknown", { failedHoursAgo: 100, errorClass: "unknown" }),
+        failed("transient", { failedHoursAgo: 100, errorClass: "transient" }),
+        failed("auth", { failedHoursAgo: 100, errorClass: "auth" }),
+        failed("no-conn", { failedHoursAgo: 100, errorClass: "no_connection" }),
+        failed("not-conn", {
+          failedHoursAgo: 100,
+          errorClass: "not_connected",
+        }),
+      ],
+      NOW
+    );
+    expect(out).toEqual(["validation", "unclassified", "unknown"]);
+  });
+
+  it("a failed row with no failure time falls back to its filing", () => {
+    const row = {
+      ...failed("no-time", { failedHoursAgo: 0 }),
+      reviewedAt: null,
+    };
+    expect(selectLapsedIds([row], NOW)).toEqual(["no-time"]);
+  });
+
+  it("a failed proposal of a class with no lifetime never lapses", () => {
+    expect(
+      selectLapsedIds(
+        [
+          {
+            id: "create",
+            proposalType: "create",
+            targetType: "entity",
+            status: "approval_failed",
+            createdAt: hoursAgo(24 * 99),
+            reviewedAt: hoursAgo(24 * 99),
+          },
+        ],
+        NOW
+      )
+    ).toEqual([]);
+  });
+});

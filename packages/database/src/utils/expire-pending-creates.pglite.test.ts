@@ -128,6 +128,39 @@ describe("expirePendingCreatesOfLandedRecord", () => {
     expect((await row(otherKind)).status).toBe("pending");
   });
 
+  // Plan 8032a127 D2: 63d6e707 and c5dede63 (creates of a decision that
+  // already existed) failed on 18 Oct and could leave only through a
+  // person's reject, which scores against the agent.
+  it("also expires a copy whose approval FAILED, never a decided one", async () => {
+    const failed = await file(record("minted-failed", { title: "Third" }), {
+      status: "approval_failed",
+    });
+    const withdrawn = await file(record("minted-wd", { title: "Third" }), {
+      status: "withdrawn",
+    });
+    const approved = await file(record("minted-ap", { title: "Third" }), {
+      status: "approved",
+    });
+    const expired = await expirePendingCreatesOfLandedRecord(
+      {
+        record: record("minted-landing-3", { title: "Third" }),
+        entityId: "entity-3",
+        ownerUserId: OWNER,
+        landedByProposalId: null,
+      },
+      db
+    );
+    expect(expired).toEqual([failed]);
+    const f = await row(failed);
+    expect(f.status).toBe("expired");
+    expect(f.data).toMatchObject({
+      expiredBy: "record_landed",
+      supersededByEntityId: "entity-3",
+    });
+    expect((await row(withdrawn)).status).toBe("withdrawn");
+    expect((await row(approved)).status).toBe("approved");
+  });
+
   it("never expires the proposal that landed it, named by id", async () => {
     const approved = await file(record("minted-a2", { title: "Second" }));
     const sibling = await file(record("minted-b2", { title: "Second" }));

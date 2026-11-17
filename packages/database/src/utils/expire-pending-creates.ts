@@ -7,8 +7,8 @@
  * entity door's same-name gate, and until then each one counted toward the
  * agent's pending cap (`AGENT_PENDING_PROPOSAL_CAP`).
  *
- * So when an entity create lands, the pending AGENT `entity/create` proposals
- * that propose the SAME record (`createdRecordIdentity` — the rule the dedup
+ * So when an entity create lands, the undecided AGENT `entity/create` proposals
+ * (pending, or whose approval failed: plan 8032a127 D2) that propose the SAME record (`createdRecordIdentity` — the rule the dedup
  * hash applies) are EXPIRED, never rejected: `ProposalStatus.EXPIRED` is "never
  * decided, its moment passed" and is not scored, so the agent's track record is
  * not penalised for a copy a person never judged. Each row is stamped with what
@@ -34,7 +34,10 @@ import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 import { createdRecordIdentity } from "./insert-pending-proposal.js";
-import { transitionProposal } from "./proposal-transition.js";
+import {
+  transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
+} from "./proposal-transition.js";
 import { stableStringify } from "./stable-stringify.js";
 
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -63,7 +66,7 @@ export async function expirePendingCreatesOfLandedRecord(
     .from(proposals)
     .where(
       and(
-        eq(proposals.status, ProposalStatus.PENDING),
+        inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES]),
         eq(proposals.targetType, "entity"),
         eq(proposals.proposalType, "create"),
         isNotNull(proposals.agentUserId),
@@ -96,6 +99,7 @@ export async function expirePendingCreatesOfLandedRecord(
 
   const expired = await transitionProposal(executor, {
     to: ProposalStatus.EXPIRED,
+    from: UNDECIDED_PROPOSAL_STATUSES,
     set: {
       updatedAt: new Date(),
       data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(
@@ -103,12 +107,9 @@ export async function expirePendingCreatesOfLandedRecord(
         'supersededByEntityId', ${input.entityId}::text,
         'supersededByProposalId', ${input.landedByProposalId ?? null}::text)`,
     },
-    where: and(
-      inArray(proposals.id, sameRecord),
-      // Re-checked at write: a copy decided between the read and here keeps
-      // its decision.
-      eq(proposals.status, ProposalStatus.PENDING)
-    ),
+    // Re-checked at write (`from`): a copy decided between the read and here
+    // keeps its decision.
+    where: inArray(proposals.id, sameRecord),
   }).returning({ id: proposals.id });
   return expired.map((row) => row.id);
 }

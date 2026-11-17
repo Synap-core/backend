@@ -35,7 +35,9 @@ import {
   lt,
   transitionProposal,
   expireOrphanedStageGates,
+  UNDECIDED_PROPOSAL_STATUSES,
 } from "@synap/database";
+import type { FailureErrorClass } from "@synap-core/types/failures";
 import { createLogger } from "@synap-core/core";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
 import { scrubGuestPayloads } from "../forms/guest-retention.js";
@@ -100,12 +102,49 @@ export function diesWithSession(
   return isSessionBoundDraft({ targetType, proposalType });
 }
 
+/**
+ * Failure classes that clear WITHOUT changing the request: retried as it is
+ * once a moment passes (`transient`) or once the person fixes a connection
+ * (`auth`, `no_connection`, `not_connected`, which the held-send reopen also
+ * waits on). A failed row of one of these stays off the lapse clock: a sweep
+ * must never expire a failure someone is about to retry (plan 8032a127 D2). Every other class needs the request itself changed (revise, or a
+ * newer filing that supersedes it), so its moment passes like a pending one's.
+ * An unclassified failure (no `errorClass`) is NOT retryable here: `unknown`
+ * says nobody knows a retry would pass.
+ */
+export const RETRYABLE_FAILURE_CLASSES: ReadonlySet<FailureErrorClass> =
+  new Set<FailureErrorClass>([
+    "transient",
+    "auth",
+    "no_connection",
+    "not_connected",
+  ]);
+
+/** The `data.failure.errorClass` of a failed row, when it carries one. */
+function failureClassOf(data: unknown): string | undefined {
+  const failure =
+    data && typeof data === "object"
+      ? (data as { failure?: { errorClass?: unknown } }).failure
+      : undefined;
+  return typeof failure?.errorClass === "string"
+    ? failure.errorClass
+    : undefined;
+}
+
 /** The minimum a row must carry for the lapse decision. */
 export interface LapseCandidate {
   id: string;
   proposalType: string;
   targetType: string;
   createdAt: Date;
+  /**
+   * `pending` (absent: read as pending) or `approval_failed`. A failed row's
+   * clock starts at its failure (`reviewedAt`, written by the failure write),
+   * not at its filing, and a retryable failure never lapses
+   * ({@link RETRYABLE_FAILURE_CLASSES}).
+   */
+  status?: string;
+  reviewedAt?: Date | null;
   /**
    * The raw `proposals.data` — read ONLY for a capability run's `verbId`, which
    * decides whether the run acts on a durable object (never expires) or is an
@@ -138,7 +177,14 @@ export function selectLapsedIds(
       capabilityRunVerbId(p.data)
     );
     if (hours === null) continue;
-    if (now.getTime() - p.createdAt.getTime() > hours * 60 * 60 * 1000) {
+    const failed = p.status === ProposalStatus.APPROVAL_FAILED;
+    if (failed) {
+      const cls = failureClassOf(p.data);
+      if (cls && RETRYABLE_FAILURE_CLASSES.has(cls as FailureErrorClass))
+        continue;
+    }
+    const since = failed ? (p.reviewedAt ?? p.createdAt) : p.createdAt;
+    if (now.getTime() - since.getTime() > hours * 60 * 60 * 1000) {
       out.push(p.id);
     }
   }
@@ -249,7 +295,8 @@ export interface ExpireLapsedResult {
 }
 
 /**
- * Expire every pending proposal past its class lifetime.
+ * Expire every undecided proposal past its class lifetime: a pending one from
+ * its filing, a failed one from its failure (retryable classes never).
  *
  * Classes with a `null` lifetime are never touched, and an unrecognised
  * proposalType falls to `objectWork` (no lifetime) — so this pass fails toward
@@ -267,21 +314,26 @@ export async function expireLapsedProposals(
   // can have lapsed, so the index does the work and memory stays flat as the
   // pod grows. The pure decision below still applies each class's own limit.
   const oldestPossiblyLive = new Date(now.getTime() - MIN_LIFETIME_MS);
+  // A failed row lapses from its failure, which is never before its filing,
+  // so the same `createdAt` bound still holds for it.
   const pending = await db
     .select({
       id: proposals.id,
       proposalType: proposals.proposalType,
       targetType: proposals.targetType,
       createdAt: proposals.createdAt,
+      status: proposals.status,
+      reviewedAt: proposals.reviewedAt,
       // Carried so an expiry can discard a staged source blob (see
-      // `discardExpiredSourceBlobs`), and for a capability run's `verbId`,
-      // which the class rule reads (`DURABLE_OBJECT_VERBS`).
+      // `discardExpiredSourceBlobs`), for a capability run's `verbId`, which
+      // the class rule reads (`DURABLE_OBJECT_VERBS`), and for a failed row's
+      // failure class.
       data: proposals.data,
     })
     .from(proposals)
     .where(
       and(
-        eq(proposals.status, ProposalStatus.PENDING),
+        inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES]),
         lt(proposals.createdAt, oldestPossiblyLive)
       )
     );
@@ -356,27 +408,36 @@ export async function expireLapsedProposals(
     return { scanned: pending.length, expired: orphanedGates.length };
   }
 
-  // Chunked, and re-asserting PENDING in the WHERE: a human may have approved
-  // one of these between the read and the write, and an expiry must never
-  // overwrite a real decision.
+  // Chunked, and re-asserting in the WHERE the status each row was READ in: a
+  // human may have approved (or retried) one of these between the read and
+  // the write, and an expiry must never overwrite a real decision, nor expire
+  // a failed row a revise just reopened on the failure's clock.
   const CHUNK = 500;
   let expired = 0;
   /** Ids this scan actually moved to EXPIRED — collected, not fired per chunk. */
   const actionedIds: string[] = [];
-  for (let i = 0; i < lapsed.length; i += CHUNK) {
-    const batch = lapsed.slice(i, i + CHUNK);
-    const rows = await transitionProposal(db, {
-      to: ProposalStatus.EXPIRED,
-      set: {
-        updatedAt: now,
-      },
-      where: and(
-        inArray(proposals.id, batch),
-        eq(proposals.status, ProposalStatus.PENDING)
-      ),
-    }).returning({ id: proposals.id });
-    for (const r of rows) actionedIds.push(r.id);
-    expired += rows.length;
+  const readFailed = new Set(
+    pending
+      .filter((p) => p.status === ProposalStatus.APPROVAL_FAILED)
+      .map((p) => p.id)
+  );
+  for (const [from, ids] of [
+    [ProposalStatus.PENDING, lapsed.filter((id) => !readFailed.has(id))],
+    [ProposalStatus.APPROVAL_FAILED, lapsed.filter((id) => readFailed.has(id))],
+  ] as const) {
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const batch = ids.slice(i, i + CHUNK);
+      const rows = await transitionProposal(db, {
+        to: ProposalStatus.EXPIRED,
+        from: [from],
+        set: {
+          updatedAt: now,
+        },
+        where: inArray(proposals.id, batch),
+      }).returning({ id: proposals.id });
+      for (const r of rows) actionedIds.push(r.id);
+      expired += rows.length;
+    }
   }
 
   await discardExpiredSourceBlobs(actionedIds, candidates);
@@ -397,7 +458,9 @@ export async function expireLapsedProposals(
 }
 
 /**
- * Expire a closing session's still-pending proposals whose CONTEXT died with it.
+ * Expire a closing session's still-undecided proposals (pending, or whose
+ * approval failed) whose CONTEXT died with it; a failed one of any failure
+ * class, as nobody is left to retry it (plan 8032a127 D2).
  *
  * The real trigger. Called from `completeSession`, best-effort: a session must
  * close even if this fails, so it never throws.
@@ -423,7 +486,7 @@ export async function expireSessionEphemerals(
       .where(
         and(
           eq(proposals.sessionId, sessionId),
-          eq(proposals.status, ProposalStatus.PENDING)
+          inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES])
         )
       );
 
@@ -440,13 +503,11 @@ export async function expireSessionEphemerals(
 
     const rows = await transitionProposal(db, {
       to: ProposalStatus.EXPIRED,
+      from: UNDECIDED_PROPOSAL_STATUSES,
       set: {
         updatedAt: now,
       },
-      where: and(
-        inArray(proposals.id, ids),
-        eq(proposals.status, ProposalStatus.PENDING)
-      ),
+      where: inArray(proposals.id, ids),
     }).returning({ id: proposals.id });
     // Expired = no longer decidable: its bell rows leave with it (one door with approve/reject).
     markProposalNotificationsActioned(rows.map((r) => r.id));

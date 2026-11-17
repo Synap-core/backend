@@ -92,8 +92,20 @@ export const PROPOSAL_TRANSITIONS: Readonly<
   ],
   // A failed approval stays in the actionable queue: retried (approved, or
   // failed again) or rejected; or its author revises it, which reopens it
-  // for review (`proposals-service.ts` revise, #512).
-  [APPROVAL_FAILED]: [APPROVED, APPROVAL_FAILED, REJECTED, PENDING],
+  // for review (`proposals-service.ts` revise, #512). It also ends with nobody
+  // deciding, like a pending one (decision D2, plan 8032a127, founder 17 Nov
+  // 2026: 44 failed rows could leave only through a person's reject, which
+  // scores against the agent): withdrawn by its author or replaced by a newer
+  // filing (`supersededBy`), expired when its moment passed or its record
+  // landed. Neither is scored.
+  [APPROVAL_FAILED]: [
+    APPROVED,
+    APPROVAL_FAILED,
+    REJECTED,
+    PENDING,
+    WITHDRAWN,
+    EXPIRED,
+  ],
   // Re-stamp; revert; revert-and-reopen (`proposals.revert {reopen}`); a
   // library organise claim given back after a later step threw.
   [APPROVED]: [APPROVED, REVERTED, PENDING, APPROVAL_FAILED],
@@ -126,6 +138,17 @@ export function proposalStatusesThatMayBecome(
     (from) => canTransitionProposal(from, to)
   );
 }
+
+/**
+ * The statuses nobody has decided yet: waiting for a review, or a review whose
+ * approval failed (it is retried, repaired or ended). The end helpers that
+ * retire a request whose moment passed (a record landed, a hand-off became
+ * moot, a lifetime ran out) take both, and re-assert them in their WHERE.
+ */
+export const UNDECIDED_PROPOSAL_STATUSES: readonly ProposalStatus[] = [
+  PENDING,
+  APPROVAL_FAILED,
+];
 
 /** The statuses that mean "the approval applied". */
 export const APPLIED_PROPOSAL_STATUSES: readonly ProposalStatus[] = [

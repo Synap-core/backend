@@ -17,7 +17,6 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
-  and,
   eq,
   drizzleSql,
   proposals,
@@ -25,6 +24,7 @@ import {
   focusSessions,
   ProposalStatus,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
 } from "@synap/database";
 import {
   readPackItems,
@@ -166,18 +166,19 @@ async function applyPackItem(
         .select({ data: proposals.data })
         .from(proposals)
         .where(eq(proposals.id, targetId));
+      // Pending, or failed on approval: a failed one is as undecided, and a
+      // person's one approval of the pack ends it the same way (plan 8032a127
+      // D2), never as a reject that would score against its agent.
       const rows = await transitionProposal(db, {
         to: ProposalStatus.EXPIRED,
+        from: UNDECIDED_PROPOSAL_STATUSES,
         set: {
           updatedAt: new Date(),
           data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('expiredByCleanupPack', ${ctx.packId}::text)`,
         },
-        where: and(
-          eq(proposals.id, targetId),
-          eq(proposals.status, ProposalStatus.PENDING)
-        ),
+        where: eq(proposals.id, targetId),
       }).returning({ id: proposals.id });
-      if (rows.length === 0) throw new Error("Proposal is no longer pending");
+      if (rows.length === 0) throw new Error("Proposal was already decided");
       markProposalNotificationsActioned([targetId]);
       await discardProposalSourceBlob({
         database: db,
