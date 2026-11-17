@@ -10,6 +10,7 @@
  *   entity          a card that opens the record's console page; its title
  *                   only when the reader's own read returns it
  *   view            a chip that opens the view's console page
+ *   ask             a session's live question, as the shared answer card
  *   cell-frame      an HTML page cell RUNS, in the isolated frame of
  *                   `html-frame`, its source read on the viewer's own floor
  *                   (`widgetDefinitions.get`); any other cell is a chip that
@@ -46,6 +47,7 @@ import {
   type EmbedWords,
 } from "@synap-core/types/vocabulary";
 import { kindIcon } from "../kind-icon";
+import { AskChip, AskEmbed } from "./embed-ask";
 import { ChartSnapshot } from "./embed-chart";
 import { EmbedHostContext, type EmbedHost } from "./embed-context";
 import { HtmlFrame } from "./html-frame";
@@ -601,6 +603,13 @@ export function EmbedBlock({
   inline: boolean;
   fallback: ReactNode;
 }) {
+  if (embed.directive === "synap-ask") {
+    return inline ? (
+      <AskChip embed={embed} />
+    ) : (
+      <AskEmbed embed={embed} fallback={fallback} />
+    );
+  }
   const model = embedModelOf(embed);
   const words = resolveEmbedWords(model);
   if (inline) return <Head model={model} words={words} inline />;

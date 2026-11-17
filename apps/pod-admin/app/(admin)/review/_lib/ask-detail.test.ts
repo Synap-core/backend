@@ -8,6 +8,7 @@ import {
 import {
   OTHER_KEY,
   answerCall,
+  withSlotLabel,
   askSlotOf,
   askStaleness,
   askView,
@@ -730,5 +731,23 @@ describe("answerCall — Refuse, on every mode (founder D2, 16 Nov 2026)", () =>
       expect(view.refuse.label).toBe(ASK_COPY.refuse);
       expect(view.refuse.consequence).toBe(ASK_COPY.refuseConsequence);
     }
+  });
+});
+
+describe("withSlotLabel — a refusal names the slot by its label, not the key it was sent by", () => {
+  const msg = (k: string) => `"${k}" was already answered`;
+  it("replaces the quoted key with the label when the slot was addressed by key", () => {
+    expect(
+      withSlotLabel(msg("write-the-plan"), {
+        label: "Write the plan",
+        slotKey: "write-the-plan",
+      })
+    ).toBe(msg("Write the plan"));
+  });
+  it("leaves the message alone with no key (the session page), or a key equal to the label", () => {
+    expect(withSlotLabel(msg("X"), { label: "X" })).toBe(msg("X"));
+    expect(withSlotLabel(msg("X"), { label: "X", slotKey: "X" })).toBe(
+      msg("X")
+    );
   });
 });

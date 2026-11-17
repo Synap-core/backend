@@ -99,6 +99,8 @@ import {
   askView,
   relayCall,
   relayWaitingView,
+  slotRefOf,
+  withSlotLabel,
   formFieldErrors,
   initialFormDraft,
   slotCall,
@@ -156,13 +158,16 @@ import {
 } from "../../../_lib/request/request-story-view";
 import { fileProblem, uploadProvidedFile } from "./provide-file";
 
+/** How a card settled: the receipt a host may draw ("Answer sent", "Marked as done"…). */
+export type AskSettleKind = "answered" | "attested" | "handed-back" | "refused";
+
 export interface AskAnswerProps {
   /** The question as it read when the reader opened it. */
   slot: AskSlot;
   /** The question as the pod holds it now (null = no longer owed). */
   live: AskSlot | null;
   /** Answered, done or handed back: the page closes this and moves on. */
-  onSettled: () => void;
+  onSettled: (kind: AskSettleKind) => void;
   onClose: () => void;
   /**
    * The asker's door to its session. Off on the session's own page, where it
@@ -179,6 +184,13 @@ export interface AskAnswerProps {
    * is asked (a criterion's grade under its own statement, in a session's rail).
    */
   showContext?: boolean;
+  /**
+   * The page already shows the answer as it lands (an embedded card keeps its
+   * own receipt): skip the success toast. Refusals still toast. Default off.
+   */
+  quietReceipt?: boolean;
+  /** Draw "Message the agent". Off where the card sits inside a document. Default on. */
+  showTalk?: boolean;
   /**
    * The request's story (Review's detail): the ask is drawn inside it, its
    * asker in the story's head. Absent (a session's own page): the ask alone.
@@ -210,6 +222,8 @@ export function AskAnswer({
   sessionDoor = true,
   showHeading = true,
   showContext = true,
+  quietReceipt = false,
+  showTalk = true,
   story,
   identity,
   barClassName = "",
@@ -233,16 +247,16 @@ export function AskAnswer({
     refreshAfterAnswer(utils, seen.sessionId);
   }
 
-  function settled(receipt: ProvideReceipt) {
-    addToast({ color: "success", ...receipt });
+  function settled(receipt: ProvideReceipt, kind: AskSettleKind = "answered") {
+    if (!quietReceipt) addToast({ color: "success", ...receipt });
     refresh();
-    onSettled();
+    onSettled(kind);
   }
 
   /** `kept`: said with the refusal when something already went through. */
   function refused(err: DoorError, kept: string | null = null) {
     if (redirectToLoginIfUnauthorized(err)) return;
-    const refusal = classifyAskRefusal(err.message);
+    const refusal = classifyAskRefusal(withSlotLabel(err.message, seen));
     if (refusal.kind === "failed") {
       setFailure(kept ? `${refusal.message} ${kept}` : refusal.message);
       return;
@@ -266,7 +280,7 @@ export function AskAnswer({
       const value = call.value;
       if (value?.type === "declined") {
         // The agent reads the same words: the answer's own summary.
-        settled({ title: ASK_COPY.refusedReceipt(value.reason) });
+        settled({ title: ASK_COPY.refusedReceipt(value.reason) }, "refused");
         return;
       }
       const grant = "secretGrant" in data ? data.secretGrant : undefined;
@@ -306,11 +320,11 @@ export function AskAnswer({
       ),
   });
   const attest = trpc.focusSessions.attestOutput.useMutation({
-    onSuccess: () => settled({ title: rt("ask.markedDone") }),
+    onSuccess: () => settled({ title: rt("ask.markedDone") }, "attested"),
     onError: (err) => refused(err),
   });
   const handBack = trpc.focusSessions.unblockOutput.useMutation({
-    onSuccess: () => settled({ title: rt("ask.handedBack") }),
+    onSuccess: () => settled({ title: rt("ask.handedBack") }, "handed-back"),
     onError: (err) => refused(err),
   });
   // A relay waiting on the tap: Confirm makes it the person's answer; "Not
@@ -356,7 +370,7 @@ export function AskAnswer({
   const secretOptions = trpc.focusSessions.provideOptions.useQuery(
     {
       sessionId: seen.sessionId,
-      expectedLabel: seen.label,
+      expectedLabel: slotRefOf(seen),
       askFingerprint: askFingerprint(seen.ask),
     },
     { enabled: !!story && isSecret, retry: false, staleTime: 30_000 }
@@ -392,7 +406,10 @@ export function AskAnswer({
   const consequence =
     staleness !== "gone" && !handedOver ? view.refuse.consequence : null;
   const handedOverBlock = handedOver ? (
-    <SecretHandedOver slot={slotCall(seen)} onDone={onSettled} />
+    <SecretHandedOver
+      slot={slotCall(seen)}
+      onDone={() => onSettled("answered")}
+    />
   ) : null;
   const headBlock = (
     <div className="flex flex-col gap-2">
@@ -562,7 +579,7 @@ export function AskAnswer({
                 setFailure(null);
                 handBack.mutate({
                   sessionId: seen.sessionId,
-                  expectedLabel: seen.label,
+                  expectedLabel: slotRefOf(seen),
                 });
               }}
               handingBack={handBack.isPending}
@@ -600,7 +617,7 @@ export function AskAnswer({
       )}
     </>
   );
-  const talkBlock = (
+  const talkBlock = !showTalk ? null : (
     <div className="flex flex-col gap-2">
       {asked && (
         <>
@@ -714,7 +731,11 @@ export function AskAnswer({
           {consequence}
         </p>
       )}
-      <div className="border-t border-foreground/[0.06] pt-4">{talkBlock}</div>
+      {talkBlock && (
+        <div className="border-t border-foreground/[0.06] pt-4">
+          {talkBlock}
+        </div>
+      )}
     </div>
   );
 }
@@ -1486,7 +1507,7 @@ function ProvideControl(props: ProvideControlProps) {
   const options = trpc.focusSessions.provideOptions.useQuery(
     {
       sessionId: slot.sessionId,
-      expectedLabel: slot.label,
+      expectedLabel: slotRefOf(slot),
       askFingerprint: askFingerprint(slot.ask),
     },
     { retry: false, staleTime: 30_000 }
@@ -1639,7 +1660,7 @@ function ConnectionProvide({
       connectSessionCall({
         providerId: sheet.connectProviderId,
         sessionId: slot.sessionId,
-        expectedLabel: slot.label,
+        expectedLabel: slotRefOf(slot),
         askFingerprint: askFingerprint(slot.ask),
       }),
       {

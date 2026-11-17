@@ -31,6 +31,8 @@ import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { CommandLine } from "../../../_lib/command-line";
 import { navHref } from "../../../../lib/console-nav";
+import { ExitLink } from "../../../../lib/exit-link";
+import { WORK_EXIT } from "../../../../lib/open-in";
 import { useConsoleLocale, useT } from "../../../../lib/i18n/locale-provider";
 import { ConfirmModal } from "../../components/confirm-modal";
 import {
@@ -262,15 +264,6 @@ function ActionCardView({
         <div className="flex flex-wrap gap-2">
           <Button
             as={Link}
-            href={navHref("runs")}
-            size="sm"
-            radius="md"
-            variant="flat"
-          >
-            {t("action.pause.runs")}
-          </Button>
-          <Button
-            as={Link}
             href={navHref("rules")}
             size="sm"
             radius="md"
@@ -287,6 +280,9 @@ function ActionCardView({
           >
             {t("action.pause.agents")}
           </Button>
+          {/* Runs left the console (`WORK_MOVED_TO_APP`): what is running
+              now is Work › Moving now, in the desktop app. */}
+          <ExitLink exit={WORK_EXIT.moving} label={t("action.pause.runs")} />
         </div>
       </ActionBlock>
     );

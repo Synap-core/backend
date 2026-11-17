@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, type ReactNode } from "react";
+import type { EmbedAskRead } from "./ask-embed-model";
 import type {
   EmbedCellInstanceRead,
   EmbedCellRead,
@@ -32,6 +33,11 @@ export interface EmbedHost {
    * Without it a marker shows its label or its kind's noun, a bare id its text.
    */
   useObjectRef?: (id: string) => ObjectRefRead;
+  /**
+   * A hook: called once per `synap-ask` embed — the session's question, on
+   * the viewer's own floor. Without it the embed is a door to its session.
+   */
+  useAsk?: (sessionId: string, slot: string) => EmbedAskRead;
   openInApp?: ReactNode;
 }
 

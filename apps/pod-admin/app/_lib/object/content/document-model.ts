@@ -44,7 +44,13 @@ export interface DocumentReadAnswer {
   contentOmitted?: "binary";
 }
 
-const REFERENCE_EMBEDS: ReadonlySet<string> = new Set(EMBED_DIRECTIVES);
+/**
+ * The embeds that make a page live. A `synap-ask` is not one: its card is live
+ * and answerable right here, so it never sends the page to the app.
+ */
+const REFERENCE_EMBEDS: ReadonlySet<string> = new Set(
+  (EMBED_DIRECTIVES as readonly string[]).filter((name) => name !== "synap-ask")
+);
 
 /**
  * A LIVING document: a page whose parts move without anyone editing it — it
