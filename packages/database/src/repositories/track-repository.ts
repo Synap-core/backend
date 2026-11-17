@@ -302,7 +302,7 @@ export class TrackRepository extends BaseRepository<
       occurredAt?: Date | null;
       /** A replay: the app its proposal was filed by (`proposals.app_id`). */
       appId?: string | null;
-      /** The move that caused this one (a reaction, reactions W2). */
+      /** The move that caused this one (a reaction). */
       cause?: TransitionCause | null;
     },
     userId: string

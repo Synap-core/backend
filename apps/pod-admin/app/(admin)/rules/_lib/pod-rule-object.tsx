@@ -2,7 +2,7 @@
 
 /**
  * `/rules/<rule id>` for a rule the POD applies (a built-in rule, or a
- * roll-up a relation declares; plan 7d71ddcc D8): the second rung after the
+ * roll-up a relation declares; decision D8): the second rung after the
  * Rules list. In order:
  *   1. what it is: its name, on or paused, and its one act (Pause / Turn on,
  *      through the governed rule door, `skills.setReactionRule`);

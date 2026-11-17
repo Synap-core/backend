@@ -1112,12 +1112,12 @@ export const skillsRouter = router({
     }),
 
   /**
-   * The RULES the pod's reactions reactor applies (plan 7d71ddcc W3, decision
-   * D8: the person sees one "Rules" list): the built-in ones and the ones a
-   * relation declares, each with WHEN → VIA → DO in words, on or paused, its
-   * owner and what it did lately (applied, proposed, skipped with why). Read
-   * beside `automations.listPage` by the Rules page. Floored: a declared
-   * rule in a space the reader is not in is not listed; the log is theirs.
+   * The RULES the pod's reactions reactor applies (decision D8: the person sees
+   * one "Rules" list): the built-in ones and the ones a relation declares, each
+   * with WHEN → VIA → DO in words, on or paused, its owner and what it did
+   * lately (applied, proposed, skipped with why). Read beside
+   * `automations.listPage` by the Rules page. Floored: a declared rule in a
+   * space the reader is not in is not listed; the log is theirs.
    */
   listReactionRules: protectedProcedure
     .input(

@@ -1,8 +1,8 @@
 /**
- * THE REACTIONS REACTOR (plan 7d71ddcc, wave 2, decision D1) — one reactor
- * after the outbox applies every rule "when X moves, move Y", generalised from
- * `holdResumeReactor` (`hold-resume.ts`): subject-generic, no workspace gate,
- * one deduped job per move.
+ * THE REACTIONS REACTOR (decision D1) — one reactor after the outbox applies
+ * every rule "when X moves, move Y", in the shape of `holdResumeReactor`
+ * (`hold-resume.ts`): subject-generic, no workspace gate, one deduped job per
+ * move.
  *
  *   1. the reactor sees every transition (`action === 'transition'`) whose
  *      subject type some rule listens to, and queues ONE job for it
@@ -20,8 +20,19 @@
  *      (`recordReactionOutcomes`).
  *
  * A reaction is not "the AI" (D6): it acts on the person's own declaration,
- * not re-governed, like a hold's resume. Holds stay in `hold-resume.ts`
- * (folding them in is wave 5). User-authored automations stay on the matcher.
+ * not re-governed, like a hold's resume. User-authored automations stay on
+ * the matcher.
+ *
+ * WHY HOLDS ARE NOT A SOURCE HERE. A hold is one paused thing waiting on one
+ * fact, not a rule: it is resumed by `hold-resume.ts`, and three of its four
+ * triggers are not moves at all (a date, a dev fact, an answer or decision
+ * read off state with the hold owner's floor). Listed here, every hold would
+ * be read on every move (this reactor's `list()` has no index; `listHolds`
+ * reads by `hold.until.moves`), would take the D3 "propose done or lost"
+ * guard meant for a person's declarations (a resume executes a decision
+ * already made), and would log each resume as a Rule the person never wrote.
+ * The two share the shape (after the outbox, a singleton job per move, the
+ * target's own compare-and-set door as the `system`), not the registry.
  */
 import {
   db,

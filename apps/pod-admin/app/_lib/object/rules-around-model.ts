@@ -1,9 +1,8 @@
 /**
- * The pure half of a thing page's "When this moves" block: the rules around
- * one thing, from ONE read (`lifecycle.statusOf` include "reactions", plan
- * 7d71ddcc W3). Two groups, the one that moves it first (what the reader
- * comes for: will it move on its own, and how close is it?), then the ones
- * its own moves set off.
+ * The pure half of a thing page's "When this moves" block: the rules around one
+ * thing, from ONE read (`lifecycle.statusOf` include "reactions"). Two groups,
+ * the one that moves it first (what the reader comes for: will it move on its
+ * own, and how close is it?), then the ones its own moves set off.
  */
 
 import type { StatusOfReaction } from "@synap-core/types/units";

@@ -19,7 +19,7 @@
  *            serves it, each end the reader may see;
  *   rollup   a goal's tree, down its `serves` edges: its work per category, its
  *            stuck sessions and its waits per `waitKind`, each node once;
- *   reactions the RULES around it ({@link StatusOfReaction}, plan 7d71ddcc):
+ *   reactions the RULES around it ({@link StatusOfReaction}):
  *            those that fire when it moves, those that move it, each with
  *            what it last did and, for a roll-up, its parts' "3 of 5 done";
  *   signals  the status signals (`status_signal_raised`) whose episode is still
@@ -69,11 +69,11 @@ export const STATUS_OF_HISTORY_MAX = 50;
 // ── include: ["reactions"] — the rules around it ──────────────────────────
 
 /**
- * A RULE around the subject (plan 7d71ddcc §2: WHEN a subject reaches a
- * status or category → VIA one link → DO one effect through the target's own
- * door). The person sees the word "Rules" (decision D8). `role` says how it
- * touches this subject: it `fires` when this subject moves, or it `moves`
- * this subject when what it is linked to moves (a roll-up's parent).
+ * A RULE around the subject (WHEN a subject reaches a status or category → VIA
+ * one link → DO one effect through the target's own door). The person sees the
+ * word "Rules" (decision D8). `role` says how it touches this subject: it
+ * `fires` when this subject moves, or it `moves` this subject when what it is
+ * linked to moves (a roll-up's parent).
  */
 export interface StatusOfReaction {
   /** The rule's stable id (`builtin:…`, `declared:rollup:…`). */

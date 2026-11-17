@@ -283,7 +283,7 @@ describe("the audience of a status event is statusOf's floor", () => {
     ]);
   });
 
-  it("a run reaches its session's readers; a session-less run the space's (reactions W1)", async () => {
+  it("a run reaches its session's readers; a session-less run the space's", async () => {
     expect(await statusAudience({ type: "run", id: R_MINE })).toEqual([ME]);
     expect(
       (await statusAudience({ type: "run", id: R_SHARED })).sort()
@@ -453,7 +453,7 @@ describe("on the wire", () => {
     ]);
   });
 
-  it("a run's, a proposal's and a slot's move speak their own words (reactions W1)", async () => {
+  it("a run's, a proposal's and a slot's move speak their own words", async () => {
     await pushStatusTransition(
       transitionRow("playbook_run", R_MINE, {
         from: "running",

@@ -54,13 +54,13 @@ vi.mock("@synap/database", async (importOriginal) => {
         from: () => b,
         where: () => b,
         for: async () => [{ expectedOutputs: lockedOutputs }],
-        // A slot transition's session read (reactions W1): none here.
+        // A slot transition's session read: none here.
         limit: async () => [],
       };
       return b;
     },
     update,
-    // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+    // The proposal door's one statement (`WITH … UPDATE`).
     $with: () => ({ as: () => ({}) }),
     with() {
       return this;
@@ -69,7 +69,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
-      // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+      // The proposal door's one statement (`WITH … UPDATE`).
       $with: () => ({ as: () => ({}) }),
       with() {
         return this;

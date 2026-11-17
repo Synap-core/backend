@@ -17,7 +17,7 @@ const h = vi.hoisted(() => ({
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
-    // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+    // The proposal door's one statement (`WITH … UPDATE`).
     $with: () => ({ as: () => ({}) }),
     with() {
       return this;

@@ -1,8 +1,7 @@
 /**
- * The reactions registry and its guards (plan 7d71ddcc W2), pure: which rules
- * match a move, in which order, and what the guards make of their planned
- * writes — chaining and its depth cap, conflicts, D3's proposal into done or
- * lost, a paused rule.
+ * The reactions registry and its guards, pure: which rules match a move, in
+ * which order, and what the guards make of their planned writes — chaining and
+ * its depth cap, conflicts, D3's proposal into done or lost, a paused rule.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -11,12 +10,12 @@ import {
   OUTCOME_MET_REACTION_ID,
   bornReceiptTransition,
   decideReactionWrites,
+  declaredSubjectTypes,
   isReactionEnabled,
   listReactions,
   nextCause,
   reactionMatches,
   reactionReason,
-  reactionSubjectTypes,
   registerReactionSource,
   registerReactionStateSource,
   resetReactionRegistryForTests,
@@ -76,11 +75,10 @@ describe("the built-in rules", () => {
     expect(stopped!.terminal).toBeUndefined();
   });
 
-  it("listens to proposals and runs only (the reactor's pre-filter)", () => {
-    expect([...reactionSubjectTypes()].sort()).toEqual([
-      "playbook_run",
-      "proposal",
-    ]);
+  it("the built-ins listen to proposals and runs only", () => {
+    expect(
+      [...new Set(BUILT_IN_REACTIONS.map((r) => r.when.subjectType))].sort()
+    ).toEqual(["playbook_run", "proposal"]);
   });
 });
 
@@ -114,7 +112,7 @@ describe("matching", () => {
     ).toBe(true);
   });
 
-  it("a rule naming kinds matches only those kinds' own moves, never a role's (W3)", () => {
+  it("a rule naming kinds matches only those kinds' own moves, never a role's", () => {
     const posts = rule("posts", {
       when: {
         subjectType: "entity",
@@ -168,7 +166,7 @@ describe("the one list", () => {
     expect(await isReactionEnabled(OUTCOME_MET_REACTION_ID)).toBe(false);
     expect(await isReactionEnabled("builtin:stopped-run-needs-you")).toBe(true);
     expect(await isReactionEnabled("nope")).toBe(false);
-    expect(reactionSubjectTypes().has("entity")).toBe(true);
+    expect(declaredSubjectTypes().has("entity")).toBe(true);
   });
 });
 

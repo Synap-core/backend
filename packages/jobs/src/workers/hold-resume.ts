@@ -403,7 +403,7 @@ export async function handleHoldResume(
     held = (await listHolds(db, { awaiting: moved }, now))
       // A WAIT (`proposal:<id>`, `answer:…`) is resumed only by the wait
       // check, which re-reads the owner floor: a proposal's own transition
-      // (reactions W1) names the same ref, and sends that check instead.
+      // names the same ref, and sends that check instead.
       .filter(
         (h) => !isWaitHold(h.hold.until) && holdWokenBy(h.hold.until, moved)
       )
@@ -690,9 +690,9 @@ export const holdResumeReactor: Reactor = {
       until && typeof until === "object" && "moves" in until
         ? parseHoldWaitRef(String((until as { moves: unknown }).moves))
         : null;
-    // A proposal moved (reactions W1): the holds that wait on it as a WAIT
-    // (`proposal:<id>`) are checked now, through the owner-floored wait
-    // read, whatever moved it (an expiry, a withdrawal, an approval).
+    // A proposal moved: the holds that wait on it as a WAIT (`proposal:<id>`)
+    // are checked now, through the owner-floored wait read, whatever moved it
+    // (an expiry, a withdrawal, an approval).
     if (payload.subjectType === "proposal") {
       await boss.send(
         HOLD_RESUME_QUEUE,

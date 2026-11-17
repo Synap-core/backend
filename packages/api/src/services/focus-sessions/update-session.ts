@@ -2816,7 +2816,7 @@ export async function updateFocusSession(
         outputsAfter = applied.outputs;
         // A slot whose derived status moved (an agent withdrew it, a
         // hand-over through the list) owes its transition in this same
-        // transaction (reactions W1).
+        // transaction.
         await oweSlotTransitions(tx, {
           sessionId,
           before: current,

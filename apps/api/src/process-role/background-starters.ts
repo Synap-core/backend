@@ -771,12 +771,11 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         registerHoldResumeFollowUp((resumed) =>
           api.holdResumeFollowUp(resumed)
         );
-        // The reactions reactor (plan 7d71ddcc W2): the effect whose door is
-        // api-side — an outcome met wherever it was filed (pod default 3)
-        // goes through THE done door. Unfilled, its writes are skipped and
-        // logged `effect_unavailable`.
+        // The reactions reactor: the effect whose door is api-side — an outcome
+        // met wherever it was filed (pod default 3) goes through THE done door.
+        // Unfilled, its writes are skipped and logged `effect_unavailable`.
         registerReactionEffect(api.meetOutcomesReactionEffect);
-        // W3: a parent rolls up along a relation that declares it (pod
+        // A parent rolls up along a relation that declares it (pod
         // default 1) through THE thing's door; the relations' declarations
         // join the one list; and each rule's pause is its row in the rule
         // list (draft = paused), read back here.

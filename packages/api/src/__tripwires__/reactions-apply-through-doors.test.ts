@@ -1,20 +1,19 @@
 /**
  * TRIPWIRE — every built-in reaction applies through a DOOR, never a raw write
- * (reactions W2, plan 7d71ddcc §2: "DO = one effect through the target's own
- * door").
+ * ("DO = one effect through the target's own door").
  *
  * A reaction moves another thing's status. The doors are what make that move
  * safe: the compare-and-set (a person's move wins, D6), the owed transition in
  * the same transaction (so history says "moved because X moved"), the hold a
  * pause records. A raw `UPDATE … SET status` inside an effect would skip all
  * three and move the thing silently — the exact defect class the door exists
- * to end (155 proposal writers, 18 run writers before W1).
+ * to end (155 proposal writers and 18 run writers before the door).
  *
  * DERIVED, not listed:
  *   - the effects ← every `: ReactionEffect = {` declaration in
  *     packages/jobs/src and packages/api/src (non-test), with its `key`;
  *   - the built-ins ← `BUILT_IN_REACTIONS` itself;
- *   - every effect a DECLARED rule can name (wave 3: a relation's roll-up)
+ *   - every effect a DECLARED rule can name (a relation's roll-up)
  *     ← the `ReactionDo` union's `effect` keys, parsed from its source.
  * Every built-in's `do.effect`, and every `ReactionDo` key, must have
  * exactly one declared effect; every

@@ -11,8 +11,9 @@
  *      posting key's grant, because the fact is checked against the slot's
  *      OWN `ref` (same repo, same number) under the row lock. The posting key
  *      keeps only `event.create`. While pod default 3 is on ("an outcome is
- *      met wherever it was filed", the rule `builtin:outcome-met-where-filed`,
- *      reactions W2), the same act also closes the slot of every OTHER
+ *      met wherever it was filed", the rule
+ *      `builtin:outcome-met-where-filed`), the same act also closes the slot of
+ * every OTHER
  *      session whose own `ref` is this PR (`via: outcome_ref`), logged under
  *      the rule. A slot whose ref does not match, a person's slot, a slot a
  *      criterion checks, or (the rule paused) a session the body does not
@@ -209,7 +210,7 @@ export async function sweepMergedPullRequest(
   // `event.sessionId`, which the observation door may have DERIVED from an
   // outcome ref (`sessionForDevLoopFact`) rather than read from the PR.
   const namedSessionId = podSessionIdFromBody(event.body);
-  // Pod default 3, "an outcome is met wherever it was filed" (reactions W2):
+  // Pod default 3, "an outcome is met wherever it was filed":
   // while the rule is on, the pod's own act also closes the slot of every
   // OTHER session whose own `ref` is this PR (`via: outcome_ref`), not only
   // the session the body names. The safety is the same: the merge is checked

@@ -555,7 +555,7 @@ export {
   listReactionRules,
   type ReactionRuleView,
 } from "./services/reactions/list-reaction-rules.js";
-// Reactions W3: the roll-up a relation declares (its effect, its source of
+// Reactions: the roll-up a relation declares (its effect, its source of
 // declarations), each rule's pause, and the pass that seeds their rows.
 export { rollUpReactionEffect } from "./services/reactions/roll-up-effect.js";
 export { relationReactionSource } from "./services/reactions/relation-reactions.js";
