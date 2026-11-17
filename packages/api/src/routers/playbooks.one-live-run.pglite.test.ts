@@ -63,6 +63,12 @@ const h = vi.hoisted(() => {
      * pairs, so two clicks both read "nothing live" before either inserts.
      */
     barrierReads: 0,
+    /**
+     * The race LOST: the next `blindReads` live-run reads answer "nothing
+     * live" although a run is live, as when a concurrent click inserted just
+     * after both of this click's reads. The click then reaches the 0427 index.
+     */
+    blindReads: 0,
     waiting: [] as Array<() => void>,
     async arrive(): Promise<void> {
       if (state.barrierReads <= 0) return;
@@ -102,6 +108,10 @@ vi.mock(
       findLiveRunOfSubject: async (
         input: Parameters<typeof actual.findLiveRunOfSubject>[0]
       ) => {
+        if (h.blindReads > 0) {
+          h.blindReads--;
+          return null;
+        }
         const live = await actual.findLiveRunOfSubject(input);
         await h.arrive();
         return live;
@@ -161,6 +171,7 @@ import { playbooksRouter } from "./playbooks.js";
 import type { Context } from "../types/context.js";
 import { advanceSessionStage } from "../services/focus-sessions/advance-stage.js";
 import { reopenCancelledSession } from "../services/focus-sessions/reopen-session.js";
+import { runPlaybook } from "../services/playbooks/run-playbook.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const M0427 = readFileSync(
@@ -180,6 +191,7 @@ const PB = randomUUID();
 const FOR_EACH = randomUUID();
 const ONE_AREA = randomUUID();
 const USES = randomUUID();
+const ROTATING = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -346,10 +358,14 @@ beforeAll(async () => {
     },
     { key: "publish", name: "Publish", category: "completed" },
   ]);
+  await insertPlaybook(ROTATING, "Post the next topic", [
+    { key: "post", name: "Post", category: "started" },
+  ]);
 });
 
 beforeEach(async () => {
   h.barrierReads = 0;
+  h.blindReads = 0;
   h.waiting.length = 0;
   await h.client!.exec(
     "delete from focus_sessions; delete from playbook_runs; delete from channels; delete from messages; delete from links; delete from proposals; delete from session_stage_runs; delete from lifecycle_transition_outbox;"
@@ -542,5 +558,86 @@ describe("when the run ends", () => {
       (s) => s.id === first.session!.id
     );
     expect(row!.status).toBe("cancelled");
+  });
+});
+
+describe("edges of the one live run (backend#1079 follow-up)", () => {
+  it("'run it this way and remember' is kept when the run is already live", async () => {
+    const first = await as(USER).run({ playbookId: PB, subjectId: SUBJECT });
+    expect(first.status).toBe("running");
+    const again = await as(USER).run({
+      playbookId: PB,
+      subjectId: SUBJECT,
+      runOn: "synap_ai",
+      remember: true,
+    });
+    expect(again.status).toBe("already_running");
+    expect(again.session?.id).toBe(first.session!.id);
+    // The person's choice for this playbook is stored (the assignment edge
+    // `readStoredRunChoice` reads), although this click started nothing.
+    const edges = await q<{ from_type: string }>(
+      `select from_type from links where link_type = 'assigned_to' and to_type = 'playbook' and to_id = $1 and metadata ->> 'ownerId' = $2`,
+      [PB, USER]
+    );
+    expect(edges.rows.map((r) => r.from_type)).toEqual(["agent"]);
+    expect(await sessionsOf(PB)).toHaveLength(1);
+  });
+
+  it("a click that loses the index race does not advance a rotating cursor", async () => {
+    await q(`update playbooks set input_strategy = $2::jsonb where id = $1`, [
+      ROTATING,
+      JSON.stringify({ kind: "rotating", items: ["a", "b", "c"], cursor: 0 }),
+    ]);
+    const cursor = async () =>
+      (
+        await q<{ c: number }>(
+          `select (input_strategy ->> 'cursor')::int as c from playbooks where id = $1`,
+          [ROTATING]
+        )
+      ).rows[0]!.c;
+    const first = await as(USER).run({
+      playbookId: ROTATING,
+      subjectId: SUBJECT,
+    });
+    expect(first.status).toBe("running");
+    // A run that started moves the cursor on.
+    expect(await cursor()).toBe(1);
+    // Both reads of the next click miss the live run: it reaches the insert,
+    // the index refuses it, and the door answers with the live run.
+    h.blindReads = 2;
+    const lost = await as(USER).run({
+      playbookId: ROTATING,
+      subjectId: SUBJECT,
+    });
+    expect(h.blindReads).toBe(0);
+    expect(lost.status).toBe("already_running");
+    expect(lost.session?.id).toBe(first.session!.id);
+    expect(await sessionsOf(ROTATING)).toHaveLength(1);
+    // Nothing started, so no item was used up.
+    expect(await cursor()).toBe(1);
+  });
+
+  it("an automation's reuse never returns another person's session", async () => {
+    // Bea's own run of the pod's playbook on the shared record.
+    const theirs = await as(OTHER).run({ playbookId: PB, subjectId: SUBJECT });
+    expect(theirs.status).toBe("running");
+    const automation = () =>
+      runPlaybook({
+        playbookId: PB,
+        workspaceId: WS,
+        userId: USER,
+        subjectId: SUBJECT,
+        idempotentBySubject: true,
+      } as never);
+    // Antoine's automation on the same record starts HIS run.
+    const mine = await automation();
+    expect(mine.reused).toBeUndefined();
+    expect(mine.session?.id).not.toBe(theirs.session!.id);
+    expect(mine.session?.userId).toBe(USER);
+    // Reuse still works for the owner: the next fire answers with his run.
+    const again = await automation();
+    expect(again.reused).toBe(true);
+    expect(again.session?.id).toBe(mine.session!.id);
+    expect(await sessionsOf(PB)).toHaveLength(2);
   });
 });

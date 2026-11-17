@@ -356,6 +356,82 @@ function alreadyRunningFields(
   };
 }
 
+/** The run choice a `playbooks.run` call carries, as its checks read it. */
+interface RunChoiceAsked {
+  handToAgentId?: string;
+  runOn?: "synap_ai";
+  remember?: boolean;
+  agentUserId?: string;
+}
+
+/**
+ * RUN CHOICE — refuse a choice this run cannot take (an agent nobody could
+ * hand it to, Synap AI on a playbook that runs only on agents, or both at
+ * once), and a `remember` that an agent asked for or that names nothing,
+ * with exactly the arguments `runPlaybook` resolves the choice with again
+ * when the run starts.
+ */
+async function assertRunChoice(args: {
+  input: RunChoiceAsked;
+  ctxAgentUserId: string | null | undefined;
+  userId: string;
+  workspaceId: string;
+  playbook: Playbook;
+}): Promise<void> {
+  const { input } = args;
+  if (input.handToAgentId || input.runOn) {
+    await resolveRunChoice({
+      userId: args.userId,
+      workspaceId: args.workspaceId,
+      agentUserId: input.agentUserId,
+      handToAgentId: input.handToAgentId,
+      runOn: input.runOn,
+      playbook: args.playbook,
+    });
+  }
+  if (input.remember) {
+    if (input.agentUserId || args.ctxAgentUserId) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "Only a person can choose who runs this from now on — an agent cannot.",
+        cause: { reasonCode: "PERSON_ONLY" },
+      });
+    }
+    if (!input.runOn && !input.handToAgentId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          'Nothing to remember: pass runOn "synap_ai" or handToAgentId with remember.',
+      });
+    }
+  }
+}
+
+/**
+ * Remember the person's run choice for this playbook (`remember`, checked by
+ * {@link assertRunChoice}) so the next launch does not ask
+ * (`readPlaybookRunChoice`). The playbook's own runner comes before a
+ * remembered choice: when it names another, the answer is the offer to make
+ * this one its runner. Null when nothing is to be remembered.
+ */
+async function rememberRunChoice(args: {
+  input: RunChoiceAsked;
+  userId: string;
+  playbook: Playbook;
+}): Promise<RunnerOffer | null> {
+  if (!args.input.remember) return null;
+  const remembered: RunChoice = args.input.handToAgentId
+    ? { executor: "external-agent", agentUserId: args.input.handToAgentId }
+    : { executor: "is-agent" };
+  await setRunChoice({
+    callerId: args.userId,
+    playbookId: args.playbook.id,
+    choice: remembered,
+  });
+  return runnerOfferFor(args.playbook, remembered);
+}
+
 // ── Shared input schemas ─────────────────────────────────────────────────────
 
 const executorRefSchema = playbookExecutorSchema;
@@ -3212,9 +3288,27 @@ export const playbooksRouter = router({
           userId: ctx.userId,
         });
         if (live) {
+          // "Run it this way and remember" is the person's choice for the
+          // playbook, not for this click: it is kept although nothing starts
+          // (checked exactly as below; person-only, the write floor above
+          // already ran). Nothing else is checked or proposed.
+          const runChoiceArgs = {
+            input,
+            userId: ctx.userId,
+            playbook,
+          };
+          if (input.remember) {
+            await assertRunChoice({
+              ...runChoiceArgs,
+              ctxAgentUserId: ctx.agentUserId,
+              workspaceId: runWorkspaceId,
+            });
+          }
+          const runnerOffer = await rememberRunChoice(runChoiceArgs);
           return {
             ...alreadyRunningFields(playbook.name, live),
             status: "already_running" as const,
+            ...(runnerOffer ? { runnerOffer } : {}),
           };
         }
       }
@@ -3307,38 +3401,15 @@ export const playbooksRouter = router({
         }
       }
 
-      // RUN CHOICE — refuse a choice this run cannot take (an agent nobody
-      // could hand it to, Synap AI on a playbook that runs only on agents, or
-      // both at once) BEFORE a proposal is filed (same placement as FILING
-      // above), with exactly the arguments `runPlaybook` resolves it with
-      // again when the run starts.
-      if (input.handToAgentId || input.runOn) {
-        await resolveRunChoice({
-          userId: ctx.userId,
-          workspaceId: runWorkspaceId,
-          agentUserId: input.agentUserId,
-          handToAgentId: input.handToAgentId,
-          runOn: input.runOn,
-          playbook,
-        });
-      }
-      if (input.remember) {
-        if (input.agentUserId || ctx.agentUserId) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message:
-              "Only a person can choose who runs this from now on — an agent cannot.",
-            cause: { reasonCode: "PERSON_ONLY" },
-          });
-        }
-        if (!input.runOn && !input.handToAgentId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              'Nothing to remember: pass runOn "synap_ai" or handToAgentId with remember.',
-          });
-        }
-      }
+      // RUN CHOICE — refused BEFORE a proposal is filed (same placement as
+      // FILING above).
+      await assertRunChoice({
+        input,
+        ctxAgentUserId: ctx.agentUserId,
+        userId: ctx.userId,
+        workspaceId: runWorkspaceId,
+        playbook,
+      });
 
       // TOOLS — refuse a run whose tools lack what a step declares BEFORE a
       // proposal is filed for a run that could never start (`runPlaybook`
@@ -3444,20 +3515,11 @@ export const playbooksRouter = router({
       // The person's choice is remembered once the run is allowed, before it
       // starts, so this run already follows it and the next launch does not
       // ask (`readPlaybookRunChoice`).
-      // The playbook's own runner comes before a remembered choice: when it
-      // names another, the reply offers to make this one its runner.
-      let runnerOffer: RunnerOffer | null = null;
-      if (input.remember) {
-        const remembered: RunChoice = input.handToAgentId
-          ? { executor: "external-agent", agentUserId: input.handToAgentId }
-          : { executor: "is-agent" };
-        await setRunChoice({
-          callerId: ctx.userId,
-          playbookId: playbook.id,
-          choice: remembered,
-        });
-        runnerOffer = runnerOfferFor(playbook, remembered);
-      }
+      const runnerOffer = await rememberRunChoice({
+        input,
+        userId: ctx.userId,
+        playbook,
+      });
       if ("proposalId" in perm) {
         return {
           run: null,

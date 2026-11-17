@@ -50993,25 +50993,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
-				enableProposals: Awaited<ReturnType<typeof proposeCapabilityEnable>>;
-				generated?: undefined;
-				message: string;
-				proposalId: string | null;
-				run: null;
-				session: FocusSession | null;
-				status: "blocked";
-				unenabledSkills: CapabilityRef[];
-			} | {
-				enableProposals?: undefined;
-				generated?: undefined;
-				message: string;
-				proposalId: string;
-				run: null;
-				runnerOffer?: RunnerOffer | undefined;
-				session: FocusSession | null;
-				status: "proposed";
-				unenabledSkills?: undefined;
-			} | {
 				enableProposals?: undefined;
 				generated?: undefined;
 				message: string;
@@ -51040,6 +51021,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				runnerOffer?: RunnerOffer | undefined;
 				session: FocusSession | null;
 				status: "already_running";
+				unenabledSkills?: undefined;
+			} | {
+				enableProposals: Awaited<ReturnType<typeof proposeCapabilityEnable>>;
+				generated?: undefined;
+				message: string;
+				proposalId: string | null;
+				run: null;
+				session: FocusSession | null;
+				status: "blocked";
+				unenabledSkills: CapabilityRef[];
+			} | {
+				enableProposals?: undefined;
+				generated?: undefined;
+				message: string;
+				proposalId: string;
+				run: null;
+				runnerOffer?: RunnerOffer | undefined;
+				session: FocusSession | null;
+				status: "proposed";
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;

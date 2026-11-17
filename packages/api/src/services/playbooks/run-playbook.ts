@@ -748,53 +748,69 @@ function readInputStrategy(value: unknown): InputStrategy {
  *   - none / static-empty → exactly ONE run with the caller's params (the
  *     baseline behavior; `static` with items fans one run per item).
  *   - static  → one run per declared item.
- *   - rotating → advance a cursor stored in `playbook.metadata.inputCursor`
- *     (NO new column) and run for the CURRENT item only.
+ *   - rotating → run for the CURRENT item only; `advanceCursor` moves the
+ *     cursor stored in the strategy (NO new column) to the next item. The
+ *     caller advances it once the run is not a duplicate that lost the race
+ *     to a live run (one live run per object): a click that started nothing
+ *     must not skip an item.
  *   - query   → TODO(P-query): resolve `sourceSubscriptionId` into a live item
  *     set. Not yet implemented — runs ONCE with the caller's params so the
  *     playbook still fires (we do NOT fabricate items).
  *   - pinned  → exactly ONE run. The subject is chosen before this function
  *     (caller, else the pin list, else one fallback row). No fan-out.
  *
- * Returns the per-run `input` payloads, capped at MAX_INPUT_FANOUT.
+ * Returns the per-run `input` payloads, capped at MAX_INPUT_FANOUT, and the
+ * cursor advance (a no-op for every strategy but `rotating`).
  */
 async function resolveInputItems(
   playbook: Playbook,
   baseParams: Record<string, unknown>
-): Promise<Array<Record<string, unknown>>> {
+): Promise<{
+  items: Array<Record<string, unknown>>;
+  advanceCursor: () => Promise<void>;
+}> {
   const strategy = readInputStrategy(playbook.inputStrategy);
+  const noCursor = async () => undefined;
 
   switch (strategy.kind) {
     case "none":
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
 
     case "static": {
       const items = strategy.items ?? [];
-      if (items.length === 0) return [baseParams];
-      return items
-        .slice(0, MAX_INPUT_FANOUT)
-        .map((item) => ({ ...baseParams, item }));
+      if (items.length === 0)
+        return { items: [baseParams], advanceCursor: noCursor };
+      return {
+        items: items
+          .slice(0, MAX_INPUT_FANOUT)
+          .map((item) => ({ ...baseParams, item })),
+        advanceCursor: noCursor,
+      };
     }
 
     case "rotating": {
       const items = strategy.items ?? [];
-      if (items.length === 0) return [baseParams];
+      if (items.length === 0)
+        return { items: [baseParams], advanceCursor: noCursor };
       const cursor = typeof strategy.cursor === "number" ? strategy.cursor : 0;
       const idx = ((cursor % items.length) + items.length) % items.length;
       const item = items[idx];
 
-      // Persist the advanced cursor back into the strategy (JSONB, no new column).
-      const db = await getDb();
-      const nextStrategy: InputStrategy = {
-        ...strategy,
-        cursor: (idx + 1) % items.length,
+      // Persist the advanced cursor back into the strategy (JSONB, no new
+      // column), when the caller says the run counts.
+      const advanceCursor = async () => {
+        const db = await getDb();
+        const nextStrategy: InputStrategy = {
+          ...strategy,
+          cursor: (idx + 1) % items.length,
+        };
+        await db
+          .update(playbooks)
+          .set({ inputStrategy: nextStrategy, updatedAt: new Date() })
+          .where(eq(playbooks.id, playbook.id));
       };
-      await db
-        .update(playbooks)
-        .set({ inputStrategy: nextStrategy, updatedAt: new Date() })
-        .where(eq(playbooks.id, playbook.id));
 
-      return [{ ...baseParams, item }];
+      return { items: [{ ...baseParams, item }], advanceCursor };
     }
 
     case "query": {
@@ -809,15 +825,27 @@ async function resolveInputItems(
         },
         "inputStrategy 'query' not yet implemented — running once with caller params"
       );
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
     }
 
     case "pinned":
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
 
     default:
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
   }
+}
+
+/**
+ * The run lost the race on the one-live-run index (0427) to a run that has
+ * since ended: `executeSingleRun` answers it with a CONFLICT whose cause is
+ * the unique violation. Like an `alreadyRunning` answer, it started nothing.
+ */
+function lostOneLiveRunRace(err: unknown): boolean {
+  return (
+    err instanceof TRPCError &&
+    uniqueViolationConstraint(err.cause) === ONE_LIVE_RUN_INDEX
+  );
 }
 
 /**
@@ -1602,23 +1630,33 @@ export async function runPlaybook(
 
   // S9: resolve the input strategy into per-run param payloads. The first item
   // is the primary (returned) run; the rest fan out as side effects.
-  const runItems = await resolveInputItems(
+  const { items: runItems, advanceCursor } = await resolveInputItems(
     playbook,
     (runInput.params ?? {}) as Record<string, unknown>
   );
 
-  const primary = await executeSingleRun(
-    playbook,
-    runInput,
-    runItems[0] ?? {},
-    filing,
-    undefined,
-    handOff,
-    runOn
-  );
+  // A rotating cursor advances for every run that counts, a failed one
+  // included (as before), but never for a click that lost the race to a live
+  // run: that click started nothing, so moving the cursor would skip an item.
+  let primary: RunPlaybookResult;
+  try {
+    primary = await executeSingleRun(
+      playbook,
+      runInput,
+      runItems[0] ?? {},
+      filing,
+      undefined,
+      handOff,
+      runOn
+    );
+  } catch (err) {
+    if (!lostOneLiveRunRace(err)) await advanceCursor();
+    throw err;
+  }
   // Lost the race to a concurrent start: that run is the answer, and its own
   // call fans out the other items.
   if (primary.alreadyRunning) return primary;
+  await advanceCursor();
 
   // Fan-out: additional items each get their own session/channel/run. Failures
   // are logged but never abort the primary result. A trial is ONE run. Only
@@ -1820,6 +1858,13 @@ async function executeSingleRun(
       where: and(
         eq(focusSessions.playbookId, playbook.id),
         eq(focusSessions.subjectEntityId, input.subjectId),
+        // The OWNER's run only (the session's owner is always the person the
+        // run is for, `actorId` below). Without it, an automation of one
+        // member of a shared space was answered with ANOTHER member's private
+        // session of a pod-wide playbook on the same record: its id and room
+        // landed in the automation's step output, and the owner's run never
+        // started. The same key as a person's one live run per object.
+        eq(focusSessions.userId, input.userId),
         // Reuse any IN-FLIGHT session (active/paused/stale/forming), not just
         // 'active': a stuck subject whose session the focus-session reaper aged
         // active→'stale' must NOT re-spawn a fresh run on the next daily cron.
