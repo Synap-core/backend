@@ -2,7 +2,7 @@
 
 # Events
 
-The pod's event catalog: the 34 event types an automation trigger can name.
+The pod's event catalog: the 37 event types an automation trigger can name.
 
 ## Catalog
 
@@ -18,11 +18,12 @@ The pod's event catalog: the 34 event types an automation trigger can name.
 
 ### Focus sessions
 
-| Event type                              | Name                   | Description                                                                 | Filter keys                                                                   |
-| --------------------------------------- | ---------------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `focus_session.stage_changed.completed` | Playbook stage changed | Fires when a focus session advances to a different playbook stage.          | `toStage`, `fromStage`, `playbookId`                                          |
-| `focus_session.transition.completed`    | Session status changed | Fires when a focus session's status moves (active, paused, stale, closed…). | `from`, `to`, `fromCategory`, `category`, `actorKind`, `projectId`, `trackId` |
-| `focus_session.signal.completed`        | Needs a look           | Runs once when a paused session is ready to be reviewed.                    | `signal`, `status`, `category`, `ownerId`, `projectId`, `trackId`             |
+| Event type                              | Name                   | Description                                                                                         | Filter keys                                                                              |
+| --------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `focus_session.stage_changed.completed` | Playbook stage changed | Fires when a focus session advances to a different playbook stage.                                  | `toStage`, `fromStage`, `playbookId`                                                     |
+| `focus_session.transition.completed`    | Session status changed | Fires when a focus session's status moves (active, paused, stale, closed…).                         | `from`, `to`, `fromCategory`, `category`, `actorKind`, `projectId`, `trackId`            |
+| `focus_session.signal.completed`        | Needs a look           | Runs once when a paused session is ready to be reviewed.                                            | `signal`, `status`, `category`, `ownerId`, `projectId`, `trackId`                        |
+| `slot.transition.completed`             | Ask or output changed  | Fires when a session's ask or declared output changes state (owed by you, answered, done, retired). | `from`, `to`, `fromCategory`, `category`, `actorKind`, `slotKey`, `projectId`, `trackId` |
 
 ### Tracks
 
@@ -32,13 +33,20 @@ The pod's event catalog: the 34 event types an automation trigger can name.
 | `track.transition.completed`    | Goal status changed | Fires when a project's goal (a track) moves status (active, paused, completed…). | `from`, `to`, `fromCategory`, `category`, `actorKind`, `projectId`, `trackId` |
 | `track.signal.completed`        | Needs a look        | Runs once when a paused goal is ready to be reviewed.                            | `signal`, `status`, `category`, `ownerId`, `projectId`, `trackId`             |
 
+### Playbook runs
+
+| Event type                          | Name               | Description                                                                             | Filter keys                                                                                               |
+| ----------------------------------- | ------------------ | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `playbook_run.transition.completed` | Run status changed | Fires when a playbook run's status moves (running, waiting on you, completed, failed…). | `from`, `to`, `fromCategory`, `category`, `actorKind`, `playbookId`, `stopReason`, `projectId`, `trackId` |
+
 ### Proposals
 
-| Event type                    | Name              | Description                              | Filter keys                                  |
-| ----------------------------- | ----------------- | ---------------------------------------- | -------------------------------------------- |
-| `proposal.created.completed`  | Proposal created  | A new AI proposal is pending review.     | `proposalStatus`, `targetType`, `changeType` |
-| `proposal.approved.completed` | Proposal approved | An AI proposal was approved and applied. | `proposalStatus`, `targetType`               |
-| `proposal.rejected.completed` | Proposal rejected | An AI proposal was rejected.             | `proposalStatus`, `targetType`               |
+| Event type                      | Name                    | Description                                                                             | Filter keys                                                                         |
+| ------------------------------- | ----------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `proposal.created.completed`    | Proposal created        | A new AI proposal is pending review.                                                    | `proposalStatus`, `targetType`, `changeType`                                        |
+| `proposal.approved.completed`   | Proposal approved       | An AI proposal was approved and applied.                                                | `proposalStatus`, `targetType`                                                      |
+| `proposal.rejected.completed`   | Proposal rejected       | An AI proposal was rejected.                                                            | `proposalStatus`, `targetType`                                                      |
+| `proposal.transition.completed` | Proposal status changed | Fires when a proposal's status moves (approved, rejected, expired, withdrawn, failed…). | `from`, `to`, `fromCategory`, `category`, `actorKind`, `proposalType`, `targetType` |
 
 ### Relations
 
@@ -131,7 +139,7 @@ Event types follow `{subject}.{action}.{phase}`.
 - Subjects (record changes): `entity`, `document`, `workspace`, `view`, `relation`, `link`, `tag`, `project`, `proposal`, `message`, `user`, `role`, `apiKey`, `skill`, `agent`, `agentRun`, `chatThread`, `template`, `inboxItem`, `sharing`, `workspaceMember`, `projectMember`
 - Actions: `create`, `update`, `delete`, `archive`, `restore`
 - Phases: `requested`, `validated`, `completed`, `denied`
-- Subjects whose action is a domain verb: `command`, `external_channel`, `external_webhook`, `focus_session`, `hydration`, `inbox_item`, `messaging_account`, `notification`, `tool`, `connection_sync`, `track`, `entity_facet`
+- Subjects whose action is a domain verb: `command`, `external_channel`, `external_webhook`, `focus_session`, `hydration`, `inbox_item`, `messaging_account`, `notification`, `tool`, `connection_sync`, `track`, `entity_facet`, `playbook_run`, `slot`
 - Connector and system families: `external_message`, `channel_message`, `connector_sync`, `capture`, `proactive`, `feed`
 - Message alias patterns: `message.received`, `message.received.*`, `message.sent`, `message.sent.*`, `message.*`
 - Observation namespaces: `dev`, `ci`

@@ -6,6 +6,7 @@
  */
 
 import { Hono } from "hono";
+import { OperationalEventTypes, TRANSITION_EVENT_TYPES } from "@synap/events";
 
 const podUrl = process.env.POD_URL ?? "";
 
@@ -63,15 +64,23 @@ const CAPABILITIES_PAYLOAD = {
       docs: "POST JSON payload to the inbound URL. Include Authorization: Bearer {apiKey} header.",
     },
   ],
+  // The wire names webhooks deliver (`${type}.${action}.completed`, the
+  // event catalog's `type`): read from the catalog, so the advertised name is
+  // the delivered one. `proposal.approved` was advertised without its
+  // `.completed` and never matched what arrived.
   eventTypes: [
-    "entity.create.completed",
-    "entity.update.completed",
-    "entity.delete.completed",
-    "proposal.created",
-    "proposal.approved",
-    "proposal.rejected",
-    "channel.message.created",
-    "notification.created",
+    OperationalEventTypes.ENTITY_CREATED.type,
+    OperationalEventTypes.ENTITY_UPDATED.type,
+    OperationalEventTypes.ENTITY_DELETED.type,
+    OperationalEventTypes.PROPOSAL_CREATED.type,
+    OperationalEventTypes.PROPOSAL_APPROVED.type,
+    OperationalEventTypes.PROPOSAL_REJECTED.type,
+    OperationalEventTypes.CHANNEL_MESSAGE_CREATED.type,
+    OperationalEventTypes.NOTIFICATION_CREATED.type,
+    // Every status move, one shape per subject (the transition door):
+    // things, goals, sessions, and since reactions W1 runs, proposals and
+    // owed slots.
+    ...Object.values(TRANSITION_EVENT_TYPES),
     "workspace.member.added",
     "workspace.member.removed",
   ],

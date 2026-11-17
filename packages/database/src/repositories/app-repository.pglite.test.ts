@@ -88,7 +88,26 @@ beforeAll(async () => {
     -- withdrawPendingRequests writes these
     reviewed_by  text,
     reviewed_at  timestamptz,
-    updated_at   timestamptz
+    updated_at   timestamptz,
+    -- the proposal door reads these to owe the move's transition (reactions W1)
+    workspace_id text,
+    session_id uuid,
+    created_by text,
+    proposed_by_user_id text,
+    subject_user_id text,
+    agent_user_id text
+  );
+  CREATE TABLE lifecycle_transition_outbox (
+    transition_id uuid PRIMARY KEY,
+    transition jsonb NOT NULL,
+    emit_context jsonb NOT NULL DEFAULT '{}'::jsonb,
+    event_id uuid,
+    delivered text[] NOT NULL DEFAULT '{}',
+    attempts integer NOT NULL DEFAULT 0,
+    last_error text,
+    claimed_until timestamptz,
+    emitted_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now()
   );`);
   const db = drizzle(pg, { schema });
   repo = new AppRepository(db as never);

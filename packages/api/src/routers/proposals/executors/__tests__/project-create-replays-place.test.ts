@@ -28,7 +28,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   // select → from → where resolves no row (not yet approved); update chains.
   const chain: Record<string, unknown> = {};
-  for (const k of ["select", "from", "update", "set"]) chain[k] = () => chain;
+  // `with` / `$with`: the proposal door's one statement (reactions W1).
+  for (const k of ["select", "from", "update", "set", "with"])
+    chain[k] = () => chain;
+  chain.$with = () => ({ as: () => ({}) });
   chain.where = async () => h.rows.shift() ?? [];
   return {
     ...actual,

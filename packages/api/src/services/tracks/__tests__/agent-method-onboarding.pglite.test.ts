@@ -136,6 +136,7 @@ import {
   podMembers,
   projectMembers,
   trackParticipants,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { buildHandlers } from "../../../routers/mcp/handlers/build.js";
@@ -175,6 +176,7 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     focusSessions,
     proposals,
     users,

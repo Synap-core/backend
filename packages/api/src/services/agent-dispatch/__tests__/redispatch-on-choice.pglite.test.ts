@@ -89,6 +89,7 @@ import {
   focusSessions,
   playbooks,
   playbookRuns,
+  lifecycleTransitionOutbox,
   entities,
   workspaceMembers,
   workspaces,
@@ -171,6 +172,7 @@ describe("re-dispatch after 'Choose an agent'", () => {
       projectMembers,
       // Attaching an agent settles its pending hand-offs (5de7efaa).
       proposals,
+      lifecycleTransitionOutbox,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

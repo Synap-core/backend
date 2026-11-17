@@ -23,6 +23,11 @@ vi.mock("@synap/database", async (importOriginal) => ({
   transitionProposal: (await importOriginal<typeof import("@synap/database")>())
     .transitionProposal,
   db: {
+    // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
     select: () => ({
       from: () => ({ where: () => whereResult(proposalRows) }),
     }),

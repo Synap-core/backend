@@ -73,7 +73,7 @@ export interface RecordedHold extends Hold {
  * shape, so the agent can fix the call in one try.
  */
 export const HOLD_REQUIRED_MESSAGE =
-  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session>:<id>", "to": "<status>" } or { "moves": "pr:<owner/name>#<n>" | "main:<owner/name>" | "job:<devbox job name>" } or { "moves": "answer:<session id>/<slot key or label>" | "proposal:<proposal id>" } }. An agent cannot pause without one. Retry the same move with `hold` added.';
+  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session|playbook_run>:<id>" | "slot:<session id>/<slot key>", "to": "<status>" } or { "moves": "pr:<owner/name>#<n>" | "main:<owner/name>" | "job:<devbox job name>" } or { "moves": "answer:<session id>/<slot key or label>" | "proposal:<proposal id>" } }. An agent cannot pause without one. Retry the same move with `hold` added.';
 
 /**
  * The dev-fact forms of `until.moves`, in one line: what an agent reads in a
@@ -131,10 +131,18 @@ export const OCCURRED_AT_MAX_PAST_DAYS = 30;
 
 const DAY_MS = 86_400_000;
 
+/**
+ * The subjects `until.moves` may name. A proposal is NOT one: `proposal:<id>`
+ * is the WAIT form (`parseHoldWaitRef`: "no longer pending", owner-floored,
+ * checked by the hold-resume worker whenever the proposal moves), so a second,
+ * unfloored spelling of the same wait is not offered.
+ */
 const MOVES_SUBJECTS: readonly TransitionSubjectType[] = [
   "entity",
   "track",
   "focus_session",
+  "playbook_run",
+  "slot",
 ];
 
 /**

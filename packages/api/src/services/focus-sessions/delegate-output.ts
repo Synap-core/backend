@@ -48,7 +48,15 @@
  * session that is missing and a session that is not yours are indistinguishable.
  */
 
-import { db, focusSessions, and, eq, users } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  and,
+  eq,
+  users,
+  oweSlotTransitions,
+  type WorkUnitActor,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -177,8 +185,13 @@ export async function delegateExpectedOutput(
   // by `find((o) => o.delegatedTo)`, which on a session with a sibling slot
   // already delegated re-stamped THAT slot (wiping its return note) and left
   // the requested one untouched: the door reported a delegation it never made.
-  const stamped = await updateExpectedOutputsLocked(session.id, (current) =>
-    stampDelegated(current, slot.label, agentType)
+  const stamped = await updateExpectedOutputsLocked(
+    session.id,
+    (current) => stampDelegated(current, slot.label, agentType),
+    {
+      actor: { kind: "human", userId: session.userId },
+      reason: `Handed to ${agentType}.`,
+    }
   );
   // `false` ⇒ the row vanished between the load and the lock. Nothing was
   // recorded, so the ask that IS in the room must not be reported as a
@@ -239,7 +252,13 @@ export function stampDelegated(
  */
 export async function updateExpectedOutputsLocked(
   sessionId: string,
-  mutate: (current: ExpectedOutput[]) => ExpectedOutput[] | null
+  mutate: (current: ExpectedOutput[]) => ExpectedOutput[] | null,
+  /**
+   * Who changes the slots, for the slot transitions this write owes (a slot
+   * whose derived status moved: asked, handed back, answered, done, retired).
+   * Absent: the system's.
+   */
+  mover: { actor?: WorkUnitActor; reason?: string | null } = {}
 ): Promise<boolean> {
   return await db.transaction(async (tx) => {
     const [locked] = await tx
@@ -261,6 +280,15 @@ export async function updateExpectedOutputsLocked(
       .update(focusSessions)
       .set({ expectedOutputs: next, updatedAt: new Date() })
       .where(eq(focusSessions.id, sessionId));
+    // Each slot whose derived status moved owes its transition, in this
+    // same transaction (reactions W1, `oweSlotTransitions`).
+    await oweSlotTransitions(tx, {
+      sessionId,
+      before: current,
+      after: next,
+      actor: mover.actor ?? { kind: "system" },
+      reason: mover.reason,
+    });
     return true;
   });
 }

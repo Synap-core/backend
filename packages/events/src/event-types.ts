@@ -236,6 +236,53 @@ export const OperationalEventTypes = {
     ],
   },
 
+  // ── Playbook runs ────────────────────────────────────────────────────────
+  // A run's status moved — every writer goes through `setRunStatus`
+  // (@synap/database), which owes this in the same transaction (reactions
+  // W1). The one transition shape, subject = the run; `stopReason` says why
+  // a run that stopped early stopped.
+  PLAYBOOK_RUN_TRANSITIONED: {
+    type: "playbook_run.transition.completed",
+    label: "Run status changed",
+    domain: "Playbook runs",
+    description:
+      "Fires when a playbook run's status moves (running, waiting on you, completed, failed…).",
+    filterKeys: [
+      "from",
+      "to",
+      "fromCategory",
+      "category",
+      "actorKind",
+      "playbookId",
+      "stopReason",
+      "projectId",
+      "trackId",
+    ],
+  },
+
+  // ── Owed slots (a session's declared outputs and asks) ──────────────────
+  // A slot's DERIVED status moved (owed, pending, answered, done, retired):
+  // the slot doors owe this when it changes (reactions W1). Subject id
+  // `<session id>/<slot key>`. The wake of an answered slot stays
+  // `focus_session.slot_answered`.
+  SLOT_TRANSITIONED: {
+    type: "slot.transition.completed",
+    label: "Ask or output changed",
+    domain: "Focus sessions",
+    description:
+      "Fires when a session's ask or declared output changes state (owed by you, answered, done, retired).",
+    filterKeys: [
+      "from",
+      "to",
+      "fromCategory",
+      "category",
+      "actorKind",
+      "slotKey",
+      "projectId",
+      "trackId",
+    ],
+  },
+
   // ── Proposal governance ──────────────────────────────────────────────────
   PROPOSAL_CREATED: {
     type: "proposal.created.completed",
@@ -257,6 +304,26 @@ export const OperationalEventTypes = {
     domain: "Proposals",
     description: "An AI proposal was rejected.",
     filterKeys: ["proposalStatus", "targetType"],
+  },
+  // A proposal's status moved — `transitionProposal`, its one door, owes
+  // this in the same transaction (reactions W1): every move, expiries,
+  // withdrawals, failed approvals and revisions included, pod-wide ones too.
+  // `proposal.approved` / `.rejected` stay beside it (dual emits).
+  PROPOSAL_TRANSITIONED: {
+    type: "proposal.transition.completed",
+    label: "Proposal status changed",
+    domain: "Proposals",
+    description:
+      "Fires when a proposal's status moves (approved, rejected, expired, withdrawn, failed…).",
+    filterKeys: [
+      "from",
+      "to",
+      "fromCategory",
+      "category",
+      "actorKind",
+      "proposalType",
+      "targetType",
+    ],
   },
 
   // ── Relations ────────────────────────────────────────────────────────────

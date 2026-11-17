@@ -54,7 +54,7 @@ vi.mock("../../../lib/event-helpers.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions } from "@synap/database";
+import { focusSessions, lifecycleTransitionOutbox } from "@synap/database";
 import { projectSessionOutcomes } from "@synap-core/types/units";
 import { updateFocusSession } from "../update-session.js";
 import { updateExpectedOutputsLocked } from "../delegate-output.js";
@@ -101,6 +101,10 @@ const LEGACY = [
 describe("slot keys reach storage through the write doors", () => {
   beforeAll(async () => {
     await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
+    // The slot and proposal doors owe their transition (reactions W1).
+    await h.client!.exec(
+      ddlFor(lifecycleTransitionOutbox as unknown as PgTable)
+    );
   }, 120_000);
   afterAll(async () => {
     await h.client?.close();

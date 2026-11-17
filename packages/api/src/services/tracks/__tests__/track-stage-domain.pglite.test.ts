@@ -141,6 +141,7 @@ import {
   links,
   sessionEvaluations,
   trackParticipants,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { startStageSession, startTrack } from "../tracks-service.js";
 import { listWorkspacesUsedByProjects } from "../../../utils/project-workspace.js";
@@ -234,6 +235,7 @@ async function usedBy(projectId: string): Promise<string[]> {
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     focusSessions,
     proposals,
     users,

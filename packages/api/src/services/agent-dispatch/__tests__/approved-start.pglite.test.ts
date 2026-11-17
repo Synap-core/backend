@@ -57,6 +57,7 @@ import {
   tools,
   focusSessions,
   playbookRuns,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { recordApprovedAgentStart } from "../approved-start.js";
 
@@ -106,7 +107,14 @@ const row = async (id: string) =>
 
 describe("recordApprovedAgentStart", () => {
   beforeAll(async () => {
-    for (const t of [users, links, tools, focusSessions, playbookRuns]) {
+    for (const t of [
+      users,
+      links,
+      tools,
+      focusSessions,
+      playbookRuns,
+      lifecycleTransitionOutbox,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
     await q(

@@ -20,6 +20,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       query: {
         proposals: { findFirst: vi.fn() },
         entities: { findFirst: vi.fn() },
@@ -45,6 +50,11 @@ vi.mock("@synap/database", async (importOriginal) => {
       delete: vi.fn(),
       transaction: vi.fn(async (fn: (tx: unknown) => unknown) =>
         fn({
+          // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+          $with: () => ({ as: () => ({}) }),
+          with() {
+            return this;
+          },
           query: { entities: { findFirst: vi.fn() } },
           select: vi.fn(),
           update: vi.fn(),

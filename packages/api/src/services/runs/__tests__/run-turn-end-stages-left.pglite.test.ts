@@ -163,6 +163,7 @@ import {
   links,
   tools,
   playbookRuns,
+  lifecycleTransitionOutbox,
   sessionStageRuns,
 } from "@synap/database";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
@@ -341,6 +342,7 @@ describe("a completed turn never completes a staged run with stages left", () =>
       entities,
       relations,
       sessionStageRuns,
+      lifecycleTransitionOutbox,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

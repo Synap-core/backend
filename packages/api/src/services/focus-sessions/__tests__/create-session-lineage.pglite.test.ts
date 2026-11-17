@@ -95,6 +95,7 @@ import {
   links,
   playbooks,
   users,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { createFocusSession } from "../create-session.js";
 import { registerFocusSessionExecutors } from "../../../routers/proposals/executors/focus-session.js";
@@ -138,7 +139,14 @@ describe("createFocusSession — title, parent and blockers at birth", () => {
   beforeAll(async () => {
     // `users` backs the agent-focus read an unpinned agent start makes
     // (`getAgentFocusProjectId`); no row means no focus, as for a fresh agent.
-    for (const t of [focusSessions, proposals, links, playbooks, users]) {
+    for (const t of [
+      lifecycleTransitionOutbox,
+      focusSessions,
+      proposals,
+      links,
+      playbooks,
+      users,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
     // `addSessionBlocker`'s ON CONFLICT target needs its unique index.

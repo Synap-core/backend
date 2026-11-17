@@ -66,6 +66,8 @@ import {
   desc,
   drizzleSql,
   liveRunStatusWhere,
+  LIVE_RUN_STATUSES,
+  setRunStatus,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import {
@@ -656,16 +658,15 @@ async function releasePlaybook(
     // COMPARE-AND-SET: only a run still LIVE is released; one that ended
     // between the read above and here (a turn completed it, the reaper failed
     // it) keeps its verdict.
-    const released = await db
-      .update(playbookRuns)
-      .set({ status: "cancelled", completedAt: new Date() })
-      .where(
-        and(
-          eq(playbookRuns.id, run.id),
-          liveRunStatusWhere(playbookRuns.status)
-        )
-      )
-      .returning({ id: playbookRuns.id });
+    const { rows: released } = await setRunStatus(db, {
+      runId: run.id,
+      from: LIVE_RUN_STATUSES,
+      to: "cancelled",
+      // The session's owner let the playbook go.
+      actor: { kind: "human" },
+      reason: "The session stopped following its playbook.",
+      set: { completedAt: new Date() },
+    });
     // `cancelled` is not a failure, so the parent keeps its verdict — routed
     // through the one helper anyway, so every terminal writer is uniform.
     if (released.length > 0) {

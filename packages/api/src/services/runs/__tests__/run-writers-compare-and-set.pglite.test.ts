@@ -78,7 +78,13 @@ vi.mock("@synap/events", async (importOriginal) => ({
 }));
 
 import type { PgTable } from "drizzle-orm/pg-core";
-import { playbookRuns, proposals, entities } from "@synap/database";
+import {
+  playbookRuns,
+  proposals,
+  entities,
+  focusSessions,
+  lifecycleTransitionOutbox,
+} from "@synap/database";
 import { pgliteTableDdl } from "../../../__tests__/pglite-ddl.js";
 import { recordExecutorResult } from "../../playbooks/run-playbook.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
@@ -161,7 +167,13 @@ async function approveUpdate(runId: string, data: Record<string, unknown>) {
 
 describe("run status writers write only onto a LIVE run", () => {
   beforeAll(async () => {
-    for (const t of [playbookRuns, proposals, entities]) {
+    for (const t of [
+      playbookRuns,
+      proposals,
+      entities,
+      lifecycleTransitionOutbox,
+      focusSessions,
+    ]) {
       await h.client!.exec(pgliteTableDdl(t as unknown as PgTable));
     }
   }, 120_000);

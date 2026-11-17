@@ -70,6 +70,11 @@ interface CallerCtx {
 
 // ── module mocks ───────────────────────────────────────────────────────────
 const dbStub = {
+  // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+  $with: () => ({ as: () => ({}) }),
+  with() {
+    return this;
+  },
   query: {
     entities: { findFirst: async () => undefined },
     projects: { findFirst: async () => projectRow },

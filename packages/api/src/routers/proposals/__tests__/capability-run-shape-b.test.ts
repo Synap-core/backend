@@ -18,7 +18,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const { mockDb, mockRunResolvedSkill } = vi.hoisted(() => ({
-  mockDb: { select: vi.fn(), update: vi.fn() },
+  mockDb: {
+    select: vi.fn(),
+    update: vi.fn(),
+    // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
+  },
   mockRunResolvedSkill: vi.fn(),
 }));
 

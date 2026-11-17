@@ -103,6 +103,7 @@ import {
   podMembers,
   users,
   type db as DatabaseHandle,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { isSwipeSafe } from "@synap-core/types/proposals/intent";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
@@ -140,6 +141,7 @@ function ddlFor(table: PgTable): string {
 async function freshDb() {
   const client = new PGlite();
   for (const table of [
+    lifecycleTransitionOutbox,
     entities,
     relations,
     entityFacets,

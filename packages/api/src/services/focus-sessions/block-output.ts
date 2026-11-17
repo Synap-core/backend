@@ -36,7 +36,7 @@
  * the load. Missing and not-yours are indistinguishable.
  */
 
-import { db, focusSessions, and, eq } from "@synap/database";
+import { db, focusSessions, and, eq, workUnitActorOf } from "@synap/database";
 import {
   ASK_ANSWER_BY_PAST_MESSAGE,
   ASK_UNBLOCKS_DEFAULT,
@@ -313,6 +313,10 @@ export async function blockExpectedOutput(
         { askedBy: params.agentUserId, askCause: params.askCause }
       );
       return lockedAfter;
+    },
+    {
+      actor: workUnitActorOf(params.userId, params.agentUserId),
+      reason: params.why ?? null,
     }
   );
   if (!stamped) return { status: "not_found" };
@@ -402,7 +406,8 @@ export async function unblockExpectedOutput(
         (o) => normalizeExpectedLabel(o?.label) === wanted
       );
       return stampUnblocked(current, slot.label);
-    }
+    },
+    { actor: workUnitActorOf(params.userId, null), reason: "Handed back." }
   );
   if (!stamped) return { status: "not_found" };
 

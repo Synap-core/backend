@@ -105,7 +105,12 @@ vi.mock("../decision-entity-door.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions, entities, podSettings } from "@synap/database";
+import {
+  focusSessions,
+  entities,
+  podSettings,
+  lifecycleTransitionOutbox,
+} from "@synap/database";
 import { decisionAskReactor } from "../decision-ask-reactor.js";
 import { retireUnaskedDecisionAsks } from "../retire-unasked-decision-asks.js";
 import { answerExpectedOutput } from "../../focus-sessions/answer-slot.js";
@@ -194,7 +199,12 @@ const OPTIONS = [
 
 describe("a proposed decision asks the person (W3)", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, entities, podSettings]) {
+    for (const t of [
+      lifecycleTransitionOutbox,
+      focusSessions,
+      entities,
+      podSettings,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
   }, 120_000);
