@@ -130,7 +130,7 @@ describe("app/connect proposal words", () => {
     expect(ask.holderKind).toBe("agent");
     expect(ask.mode).toBe("add");
     expect(ask.title).toBe(
-      "Claude Code on devbox asks to change notes in Finance"
+      "Claude Code on devbox asks to update notes in Finance"
     );
   });
 
