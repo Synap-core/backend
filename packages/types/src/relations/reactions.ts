@@ -178,8 +178,7 @@ export function rollupProgress(
     if (c.status === null && c.category === null) continue;
     const outcome = classifyDependencyBlocker("entity", c.status, c.category);
     if (outcome === "delivered") done += 1;
-    else if (outcome === "dropped") lost += 1;
-    else open += 1;
+    else open += 1; // NEGATIVE CONTROL: a lost part holds the parent
   }
   return { of: done + open, done, lost, open, ready: open === 0 && done > 0 };
 }
