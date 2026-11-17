@@ -102,14 +102,14 @@ function outcomeOf(
     case "conflict":
       return {
         status: "moved_meanwhile",
-        reason: `It is no longer ${write.expectedFrom ?? "unset"}: it was moved to ${r.actual ?? "none"} meanwhile.`,
+        detail: `It is no longer ${write.expectedFrom ?? "unset"}: it was moved to ${r.actual ?? "none"} meanwhile.`,
       };
     case "proposed":
       return { status: "proposed", proposalId: r.proposalId };
     case "denied":
-      return { status: "refused", reason: r.reason };
+      return { status: "refused", detail: r.reason };
     case "refused":
-      return { status: "refused", reason: r.reason };
+      return { status: "refused", detail: r.reason };
   }
 }
 
