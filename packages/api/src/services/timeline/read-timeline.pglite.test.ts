@@ -217,11 +217,12 @@ beforeAll(async () => {
     sha: HEAD,
     title: "feat: the feed",
   });
-  // The session's PR, its run naming no session; heard 5 min late.
+  // The session's PR, its run naming no session AND no PR (the producer did
+  // not know it): the timeline reads its PR from the head `dev.pr_opened`
+  // named. Heard 5 min late.
   await devFact(USER, "ci.finished", -30, {
     repo: BE,
     sha: HEAD,
-    pr: 47,
     status: "failure",
     workflow: "CI",
     ingestedAt: at(-25).toISOString(),
@@ -625,6 +626,10 @@ describe("readTimeline on PGlite", () => {
       "pr_opened",
     ]);
     expect(events.some((e) => e.kind === "pr_merged")).toBe(false);
+    // Every run on the head carries the PR's number, named or read off the head.
+    expect(
+      events.flatMap((e) => (e.kind === "checks_finished" ? [e.checks.pr] : []))
+    ).toEqual([47, 47]);
   });
 });
 

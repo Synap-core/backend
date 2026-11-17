@@ -10,7 +10,13 @@
  *                  (`./activity-line.ts`);
  *   jobBranches    child jobs as forks; PRs and blockers as marks
  *                  (`./branches.ts`);
- *   markOf         the one tone + glyph, from the existing doors (`./mark.ts`).
+ *   markOf         the one tone + glyph, from the existing doors (`./mark.ts`);
+ *   entryOf        one line entry as the ONE display entry: who, when, words,
+ *                  mark, door (`./entry.ts`);
+ *   groupEntries   fold checks into their pull request row (red stands alone),
+ *                  group by day or by Job (`./entry.ts`);
+ *   nextStepsOf    what a blocker offers, at most 3, each a person's tap
+ *                  (`./next-steps.ts`).
  *
  * User words come from `@synap-core/types/vocabulary`, never from here: a
  * request is the `proposal` noun ("Request"), a child job is a Job, folded as
@@ -21,3 +27,5 @@ export * from "./requests.js";
 export * from "./activity-line.js";
 export * from "./branches.js";
 export * from "./mark.js";
+export * from "./entry.js";
+export * from "./next-steps.js";

@@ -216,8 +216,37 @@ interface DevFactRow {
 
 const iso = (d: Date | string) => new Date(d).toISOString();
 
+const headKey = (repo: string, sha: string) =>
+  `${repo.toLowerCase()}@${sha.slice(0, 7).toLowerCase()}`;
+
+/**
+ * The pull request each head commit belongs to, from the PR facts in a read
+ * (`dev.pr_*` name their `sha` / `headSha`). A CI run names its PR only when
+ * its producer knew it; a run on a head a PR fact named is that PR's, so a
+ * surface can fold the run into the PR row by number, never by time order.
+ */
+export function pullRequestByHead(
+  rows: readonly DevFactRow[]
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const row of rows) {
+    if (!PR_FACT_KIND[row.type]) continue;
+    const d = (row.data ?? {}) as Record<string, unknown>;
+    if (typeof d.repo !== "string" || typeof d.number !== "number") continue;
+    for (const sha of [d.sha, d.headSha]) {
+      if (typeof sha === "string" && sha.length >= 7) {
+        out.set(headKey(d.repo, sha), d.number);
+      }
+    }
+  }
+  return out;
+}
+
 /** One dev fact as a timeline event; null when the row is not one. */
-function devFactEvent(row: DevFactRow): Pending | null {
+function devFactEvent(
+  row: DevFactRow,
+  prByHead?: ReadonlyMap<string, number>
+): Pending | null {
   const d = (row.data ?? {}) as Record<string, unknown>;
   const repo = typeof d.repo === "string" ? d.repo : null;
   if (!repo) return null;
@@ -253,7 +282,8 @@ function devFactEvent(row: DevFactRow): Pending | null {
   if (!sha || typeof d.status !== "string") return null;
   const status = d.status as CiFinishedStatus;
   const workflow = typeof d.workflow === "string" ? d.workflow : null;
-  const pr = typeof d.pr === "number" ? d.pr : null;
+  const pr =
+    typeof d.pr === "number" ? d.pr : (prByHead?.get(headKey(repo, sha)) ?? null);
   return {
     event: {
       id: `event:${row.id}`,
@@ -1032,7 +1062,8 @@ export async function readSessionTimelines(
   for (const r of moves) {
     if (keep(r)) push(r.owner, statusMovedEvent(r, { sessionId: r.owner }));
   }
-  for (const r of facts) if (keep(r)) push(r.owner, devFactEvent(r));
+  const factHeads = pullRequestByHead(facts);
+  for (const r of facts) if (keep(r)) push(r.owner, devFactEvent(r, factHeads));
   const decisionsBySession = new Map<string, typeof decisions>();
   for (const r of decisions) {
     if (!keep({ owner: r.sessionId, rank: r.rank })) continue;
@@ -1235,6 +1266,7 @@ async function readPullRequestTimeline(
     )
     .orderBy(desc(events.timestamp))
     .limit(cap + 1);
+  const prHeads = pullRequestByHead(prRows);
   const out: Pending[] = [];
   for (const r of prRows.slice(0, cap)) {
     const d = (r.data ?? {}) as Record<string, unknown>;
@@ -1251,7 +1283,7 @@ async function readPullRequestTimeline(
     const sha = typeof d.sha === "string" ? d.sha : "";
     // The SQL matched 7 characters; the fold's rule is the whole prefix.
     if (d.pr !== ref.number && !heads.some((h) => sameCommit(h, sha))) continue;
-    const e = devFactEvent(r);
+    const e = devFactEvent(r, prHeads);
     if (e) out.push(e);
   }
   return {
