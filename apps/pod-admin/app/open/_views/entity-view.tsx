@@ -211,17 +211,18 @@ export function EntityView({ id }: { id: string }) {
           ))}
         </div>
       )}
+      {/* Work waiting on the reader leads the fields; omitted when none. */}
+      <WorkSection
+        subjectId={id}
+        self={false}
+        sessionHref={(sid) => objectPage("session", sid)}
+      />
       <FieldList
         plan={plan}
         omit={[
           ...proseKeys,
           ...(summary.propertySlug ? [summary.propertySlug] : []),
         ]}
-      />
-      <WorkSection
-        subjectId={id}
-        self={false}
-        sessionHref={(sid) => objectPage("session", sid)}
       />
       {prose.map((field) => (
         <ContentBlock

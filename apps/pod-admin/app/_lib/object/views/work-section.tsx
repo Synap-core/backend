@@ -8,13 +8,13 @@
  * gate or a next move.
  *
  * Each item, attention first:
- *   1. a run that stopped before its last stage: "Stopped at Script", the
- *      stages left, why it stopped, and Continue (the door
- *      `focusSessions.continueRun`), only when the read says THIS reader
- *      may (`continue.canAct`, the door's own check);
- *   2. the gates waiting on a person: Approve / Send back, through the
+ *   1. the gates waiting on a person: Approve / Send back, through the
  *      review's one decision path (`useProposalDecision`), only when the
  *      read says this reader may decide it (`canReview`);
+ *   2. a run that stopped before its last stage: "Stopped at Script", why it
+ *      stopped, and Continue (the door `focusSessions.continueRun`), only
+ *      when the read says THIS reader may (`continue.canAct`, the door's own
+ *      check); flat while a gate or an ask still waits on them;
  *   3. the stages: done, current, left, each gated one with its gate's state;
  *   4. the hold, the asks it owes (answered on the session page, in Needs
  *      you) and the next move.
@@ -32,6 +32,7 @@ import {
   CirclePause,
   Lock,
   OctagonPause,
+  Undo2,
   type LucideIcon,
 } from "lucide-react";
 import type { StatusOfWorkItem } from "@synap-core/types/units";
@@ -44,8 +45,10 @@ import { useReauthOnUnauthorized } from "../use-reauth";
 import { useProposalDecision } from "../../../proposal/[id]/use-proposal-decision";
 import { objectPage } from "../content/markdown-model";
 import {
+  afterGateDecision,
   asksOwed,
   continueButton,
+  continueEmphasis,
   gatesWaiting,
   holdLine,
   nextMoveLine,
@@ -53,6 +56,7 @@ import {
   workHold,
   workStages,
   workToShow,
+  type GateDecided,
   type WorkRead,
   type WorkStageMark,
 } from "../work-model";
@@ -72,6 +76,20 @@ const POSITION_WORD: Record<WorkStageMark["position"], string> = {
   left: "not reached",
 };
 
+/**
+ * THE work read of one subject (`statusOf` include work). The session page
+ * reads it too (the header's restart, the proposed-changes list): the same
+ * query key, so one request serves both.
+ */
+export function useWorkRead(subjectId: string) {
+  const query = trpc.lifecycle.statusOf.useQuery(
+    { ids: [subjectId], include: ["work"] },
+    { retry: false, staleTime: 15_000 }
+  );
+  const answer = query.data?.[0] as unknown as { work?: WorkRead } | undefined;
+  return { query, read: answer?.work };
+}
+
 export function WorkSection({
   subjectId,
   self,
@@ -84,17 +102,19 @@ export function WorkSection({
   /** A session's page in this frame; null = none to open. */
   sessionHref: (sessionId: string) => string | null;
 }) {
-  const query = trpc.lifecycle.statusOf.useQuery(
-    { ids: [subjectId], include: ["work"] },
-    { retry: false, staleTime: 15_000 }
-  );
+  const { query, read } = useWorkRead(subjectId);
+  const utils = trpc.useUtils();
   useReauthOnUnauthorized(query.error);
+  // A decision or a Continue moves this read, the proposals list beside it
+  // (a decided gate leaves it) and the Needs you counts.
+  const onMoved = () => {
+    void query.refetch();
+    void utils.proposals.list.invalidate();
+    void utils.signals.invalidate();
+  };
 
   if (query.isLoading) return null;
-  const answer = query.data?.[0] as unknown as { work?: WorkRead } | undefined;
-  const shown = query.error
-    ? { kind: "failed" as const }
-    : workToShow(answer?.work);
+  const shown = query.error ? { kind: "failed" as const } : workToShow(read);
   if (shown.kind === "none") return null;
   const title = self ? "Where it stands" : "Work on it";
   if (shown.kind === "failed") {
@@ -121,7 +141,7 @@ export function WorkSection({
               item={item}
               self={self}
               href={sessionHref(item.sessionId)}
-              onMoved={() => void query.refetch()}
+              onMoved={onMoved}
             />
           </li>
         ))}
@@ -147,7 +167,8 @@ function WorkItem({
   const asks = asksOwed(item);
   const hold = workHold(item);
   const next = nextMoveLine(item);
-  const left = stagesLeftLine(item);
+  // The stepper draws the stages left; the sentence only stands without it.
+  const left = stages && stages.length > 0 ? null : stagesLeftLine(item);
   const again = continueButton(item);
   const cont = trpc.focusSessions.continueRun.useMutation({
     onSuccess: async (result) => {
@@ -156,7 +177,6 @@ function WorkItem({
       await Promise.all([
         utils.focusSessions.get.invalidate({ id: item.sessionId }),
         utils.focusSessions.browse.invalidate(),
-        utils.signals.invalidate(),
       ]);
     },
   });
@@ -180,6 +200,16 @@ function WorkItem({
           <span className="text-[12px] text-foreground/65">{item.label}</span>
         </div>
       )}
+
+      {gates.map((g) => (
+        <GateCard
+          key={g.proposalId}
+          stageName={g.stageName}
+          proposalId={g.proposalId}
+          canReview={g.canReview}
+          onDecided={onMoved}
+        />
+      ))}
 
       {item.stopped && !continued && (
         <div
@@ -207,9 +237,13 @@ function WorkItem({
                 size="sm"
                 radius="md"
                 color="primary"
-                variant="solid"
+                variant={continueEmphasis(item)}
                 isLoading={cont.isPending}
-                onPress={() => cont.mutate({ sessionId: item.sessionId })}
+                isDisabled={cont.isPending}
+                onPress={() => {
+                  if (cont.isPending) return;
+                  cont.mutate({ sessionId: item.sessionId });
+                }}
               >
                 {again.label}
               </Button>
@@ -219,25 +253,18 @@ function WorkItem({
         </div>
       )}
       {continued && (
-        <p role="status" className="text-[12.5px] text-foreground/75">
-          Continued
-          {continued.at ? ` at ${continued.at.name}` : ""}: a new turn of the
-          run started here.
-          {continued.warnings.length > 0
-            ? ` ${continued.warnings.join(" ")}`
-            : ""}
-        </p>
+        <div role="status" className="flex flex-col gap-1">
+          <p className="text-[12.5px] text-foreground/75">
+            Continued{continued.at ? ` from ${continued.at.name}` : ""}. It is
+            working on it now.
+          </p>
+          {continued.warnings.map((w) => (
+            <p key={w} className="text-[12.5px] text-warning-700">
+              {w}
+            </p>
+          ))}
+        </div>
       )}
-
-      {gates.map((g) => (
-        <GateCard
-          key={g.proposalId}
-          stageName={g.stageName}
-          proposalId={g.proposalId}
-          canReview={g.canReview}
-          onDecided={onMoved}
-        />
-      ))}
 
       {stages === null ? (
         <ResourceRowError
@@ -252,25 +279,28 @@ function WorkItem({
         <p className="text-[12.5px] text-foreground/75">{holdLine(hold)}</p>
       )}
 
-      {asks !== null && asks > 0 && (
+      {/* On the session page Needs you sits right below and answers them. */}
+      {!self && asks !== null && asks > 0 && (
         <p className="text-[12.5px] text-foreground/75">
-          {asks === 1 ? "1 question waits" : `${asks} questions wait`} for you
-          {self || !href ? (
-            " in Needs you."
-          ) : (
+          {asks === 1 ? "1 question waits" : `${asks} questions wait`} on the
+          session
+          {href ? (
             <>
               {": "}
               <Link href={href} className={DOOR}>
-                answer on the session
+                answer it there
               </Link>
             </>
+          ) : (
+            "."
           )}
         </p>
       )}
       {asks === null && (
-        <p className="text-[12.5px] text-status-down">
-          What it asks of you couldn’t be read.
-        </p>
+        <ResourceRowError
+          message="What it asks of you couldn’t be read."
+          onRetry={onMoved}
+        />
       )}
 
       {next && !(item.stopped && next.label === item.stopped.label) && (
@@ -292,7 +322,7 @@ function StageList({ stages }: { stages: WorkStageMark[] }) {
       aria-label="Stages"
     >
       {stages.map((s, i) => {
-        const Icon = POSITION_ICON[s.position];
+        const Icon = s.stoppedHere ? OctagonPause : POSITION_ICON[s.position];
         return (
           <li key={s.key} className="flex items-center gap-1.5">
             {i > 0 && (
@@ -301,27 +331,30 @@ function StageList({ stages }: { stages: WorkStageMark[] }) {
             <span
               className={[
                 "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[12px]",
-                s.position === "current"
-                  ? "bg-primary/10 font-medium text-foreground ring-1 ring-inset ring-primary/30"
-                  : s.position === "done"
-                    ? "text-foreground/75"
-                    : "text-foreground/55",
+                s.stoppedHere
+                  ? "bg-warning/10 font-medium text-foreground ring-1 ring-inset ring-warning/30"
+                  : s.position === "current"
+                    ? "bg-primary/10 font-medium text-foreground ring-1 ring-inset ring-primary/30"
+                    : s.position === "done"
+                      ? "text-foreground/75"
+                      : "text-foreground/55",
               ].join(" ")}
             >
               <Icon
                 aria-hidden
-                className="h-3 w-3 shrink-0"
+                className={[
+                  "h-3 w-3 shrink-0",
+                  s.stoppedHere ? "text-warning" : "",
+                ].join(" ")}
                 strokeWidth={2.25}
               />
               {s.name}
-              <span className="sr-only">, {POSITION_WORD[s.position]}</span>
+              <span className="sr-only">
+                , {s.stoppedHere ? "stopped here" : POSITION_WORD[s.position]}
+              </span>
               {s.gate && s.gate.state !== "not_reached" && (
                 <span className="inline-flex items-center gap-0.5 text-foreground/60">
-                  {s.gate.state === "pending" ? (
-                    <CirclePause aria-hidden className="h-3 w-3" />
-                  ) : (
-                    <Lock aria-hidden className="h-3 w-3" />
-                  )}
+                  <GateIcon state={s.gate.state} />
                   <span className="sr-only">gate: </span>
                   {resolveStatusLabel(s.gate.state)}
                 </span>
@@ -332,6 +365,19 @@ function StageList({ stages }: { stages: WorkStageMark[] }) {
       })}
     </ol>
   );
+}
+
+/** A gate's state as a mark: approved a check, sent back an undo, pending a pause. */
+function GateIcon({ state }: { state: string }) {
+  const Icon =
+    state === "approved"
+      ? Check
+      : state === "rejected"
+        ? Undo2
+        : state === "pending"
+          ? CirclePause
+          : Lock;
+  return <Icon aria-hidden className="h-3 w-3" />;
 }
 
 /**
@@ -349,19 +395,16 @@ function GateCard({
   canReview: boolean;
   onDecided: () => void;
 }) {
-  const [decided, setDecided] = useState<"approved" | "sent_back" | null>(null);
+  const [decided, setDecided] = useState<GateDecided | null>(null);
+  // The review's path calls `onRejected` and THEN the common callback: the
+  // state follows `afterGateDecision`, and the page moves once.
   const decision = useProposalDecision(
     proposalId,
     () => {
-      setDecided("approved");
+      setDecided((d) => afterGateDecision(d, "decided"));
       onDecided();
     },
-    {
-      onRejected: () => {
-        setDecided("sent_back");
-        onDecided();
-      },
-    }
+    { onRejected: () => setDecided((d) => afterGateDecision(d, "rejected")) }
   );
   const href = objectPage("proposal", proposalId);
   return (

@@ -411,7 +411,17 @@ function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
   );
 }
 
-export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
+export function ProposedChangesSection({
+  sessionId,
+  drawnAbove,
+}: {
+  sessionId: string;
+  /**
+   * Proposals the page already draws as their own card (a stage gate in
+   * "Where it stands", decided there): listed once, never twice.
+   */
+  drawnAbove?: ReadonlySet<string>;
+}) {
   const list = trpc.proposals.list.useQuery(
     { sessionId, status: "pending", limit: PROPOSALS_LIMIT },
     { staleTime: 15_000, retry: false }
@@ -426,7 +436,7 @@ export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
       onRetry={() => void list.refetch()}
     />
   ) : null;
-  const items = list.data?.items ?? [];
+  const items = (list.data?.items ?? []).filter((p) => !drawnAbove?.has(p.id));
   if (items.length === 0) {
     return failure ? (
       <SectionCard variant="flat" title="Proposed changes">

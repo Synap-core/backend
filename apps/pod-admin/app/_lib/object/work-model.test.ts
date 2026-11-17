@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { StatusOfWorkItem } from "@synap-core/types/units";
 import {
+  afterGateDecision,
   continueButton,
+  continueEmphasis,
+  gateProposalIds,
   gatesWaiting,
   holdLine,
   nextMoveLine,
+  offersContinue,
   stagesLeftLine,
   workStages,
   workToShow,
@@ -110,19 +114,69 @@ const quiet = (over: Partial<StatusOfWorkItem> = {}): StatusOfWorkItem =>
   });
 
 describe("work-model — what the work section draws", () => {
-  it("a run that stopped early never reads 'Nothing waiting'", () => {
-    const line = nextMoveLine(
-      stopped({
-        nextMove: {
-          kind: "none",
-          actor: "none",
-          label: "Nothing waiting",
-          reason: "",
-        },
-      })
-    );
-    expect(line?.label).toBe("Stopped at Script");
-    expect(line?.yours).toBe(true);
+  it("a run that stopped early reads the pod's own stopped_early move, never 'Nothing waiting'", () => {
+    const line = nextMoveLine(stopped());
+    expect(line).toEqual({
+      label: "Stopped at Script",
+      reason: "The run ended.",
+      yours: true,
+    });
+    // The pod's word is drawn as the pod says it: no client override.
+    expect(nextMoveLine(quiet())).toBeNull();
+  });
+
+  it("M1: Send back stays 'sent back' (the review path calls rejected, then decided)", () => {
+    expect(
+      afterGateDecision(afterGateDecision(null, "rejected"), "decided")
+    ).toBe("sent_back");
+    expect(afterGateDecision(null, "decided")).toBe("approved");
+  });
+
+  it("M3: Continue is the loud button only when nothing else waits on the reader", () => {
+    // A gate this reader may decide waits: decide it first.
+    expect(continueEmphasis(stopped())).toBe("flat");
+    const noGate = stopped({ gates: { status: "ok", items: [] } });
+    expect(continueEmphasis(noGate)).toBe("solid");
+    // A gate someone else decides does not hold the reader back.
+    const theirs = stopped();
+    if (theirs.gates.status === "ok") theirs.gates.items[0]!.canReview = false;
+    expect(continueEmphasis(theirs)).toBe("solid");
+    // An owed ask waits on them.
+    expect(
+      continueEmphasis(
+        stopped({
+          gates: { status: "ok", items: [] },
+          asks: {
+            status: "ok",
+            total: 1,
+            items: [
+              { label: "Which cut?", kind: "decision", noun: "Decision" },
+            ],
+          },
+        })
+      )
+    ).toBe("flat");
+  });
+
+  it("M2 / M4: the session page reads the offer and the gate cards from the same read", () => {
+    const read = { items: [stopped(), quiet()], truncated: false };
+    expect(offersContinue(read)).toBe(true);
+    expect([...gateProposalIds(read)]).toEqual(["p-1"]);
+    const theirs = stopped();
+    theirs.continue = { ...theirs.continue!, canAct: false };
+    expect(offersContinue({ items: [theirs], truncated: false })).toBe(false);
+    expect(offersContinue({ status: "unavailable" })).toBe(false);
+    expect(gateProposalIds(undefined).size).toBe(0);
+  });
+
+  it("S4: the stage the run stopped on is marked stopped, not current", () => {
+    expect(workStages(stopped())?.map((s) => [s.key, s.stoppedHere])).toEqual([
+      ["brief", false],
+      ["script", true],
+      ["draft", false],
+      ["publish", false],
+    ]);
+    expect(workStages(quiet())).toEqual([]);
   });
 
   it("an item with nothing to say is left out, and no item omits the section", () => {

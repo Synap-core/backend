@@ -13,8 +13,10 @@
  *   - a gate waiting on a person is always said; Approve / Send back only
  *     when the read says this reader may decide it (`canReview`, the
  *     verdict the review list and the approve door share);
- *   - the next move is the pod's line, EXCEPT that a run that ended early
- *     never reads "Nothing waiting": the stop's words stand instead;
+ *   - the gates come first; Continue is the loud button only when nothing
+ *     else waits on the reader (`continueEmphasis`);
+ *   - the next move is the pod's line, as the pod words it (a run that
+ *     ended early reads its `stopped_early` move, never "Nothing waiting");
  *   - a part that could not be read is its own state, never "nothing".
  */
 import type {
@@ -37,6 +39,8 @@ export interface WorkStageMark {
   position: StatusOfWorkStagePosition;
   /** The stage's gate, when it declares one. */
   gate: StatusOfWorkGate | null;
+  /** The run stopped on this stage: drawn stopped, never "current". */
+  stoppedHere: boolean;
 }
 
 /** The stages, each with its gate; `null` when they could not be read. */
@@ -46,11 +50,13 @@ export function workStages(item: StatusOfWorkItem): WorkStageMark[] | null {
     item.gates.status === "ok"
       ? new Map(item.gates.items.map((g) => [g.stageKey, g]))
       : new Map<string, StatusOfWorkGate>();
+  const stoppedAt = item.stopped?.at?.key ?? null;
   return item.stages.items.map((s) => ({
     key: s.key,
     name: s.name,
     position: s.position,
     gate: gates.get(s.key) ?? null,
+    stoppedHere: s.key === stoppedAt,
   }));
 }
 
@@ -70,6 +76,47 @@ export function continueButton(
   item: StatusOfWorkItem
 ): StatusOfWorkContinue | null {
   return item.continue?.canAct ? item.continue : null;
+}
+
+/**
+ * How loud Continue is: `solid` only when it is the reader's one move left;
+ * `flat` while a gate they may decide or an ask still waits on them (those
+ * come first, then the run goes on).
+ */
+export function continueEmphasis(item: StatusOfWorkItem): "solid" | "flat" {
+  const gateWaits = gatesWaiting(item).some((g) => g.canReview);
+  return gateWaits || (asksOwed(item) ?? 0) > 0 ? "flat" : "solid";
+}
+
+/** What a gate card says after the reader decided it. */
+export type GateDecided = "approved" | "sent_back";
+
+/**
+ * The card's state after a decision event. The review's decision path calls
+ * `rejected` and THEN its common `decided`: a Send back stays "sent back".
+ */
+export function afterGateDecision(
+  prev: GateDecided | null,
+  event: "decided" | "rejected"
+): GateDecided {
+  return event === "rejected" ? "sent_back" : (prev ?? "approved");
+}
+
+/** The items of a work read; none when it is absent or failed. */
+export function workItems(read: WorkRead): StatusOfWorkItem[] {
+  return read && !("status" in read) ? read.items : [];
+}
+
+/** Does the read offer THIS reader a Continue on any of its items? */
+export function offersContinue(read: WorkRead): boolean {
+  return workItems(read).some((i) => continueButton(i) !== null);
+}
+
+/** The gate proposals the work section draws as cards (pending, waiting on a person). */
+export function gateProposalIds(read: WorkRead): Set<string> {
+  return new Set(
+    workItems(read).flatMap((i) => gatesWaiting(i).map((g) => g.proposalId))
+  );
 }
 
 /** How many asks it owes the person; `null` when that could not be read. */
@@ -110,9 +157,8 @@ export function hasWorkToShow(item: StatusOfWorkItem): boolean {
 }
 
 /**
- * The next move's line. A run that ended before its last stage never reads
- * "Nothing waiting" (the W0 defect): when the pod's move has nothing to say,
- * the stop's own words stand.
+ * The next move's line, the pod's own (a run that ended early is the pod's
+ * `stopped_early` move); `null` when the pod says nothing waits.
  */
 export function nextMoveLine(item: StatusOfWorkItem): {
   label: string;
@@ -120,9 +166,6 @@ export function nextMoveLine(item: StatusOfWorkItem): {
   yours: boolean;
 } | null {
   const m = item.nextMove;
-  if (item.stopped && (m.kind === "none" || m.kind === "unknown")) {
-    return { label: item.stopped.label, reason: null, yours: true };
-  }
   if (m.kind === "none") return null;
   return {
     label: m.label,
