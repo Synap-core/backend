@@ -107,20 +107,26 @@ function readSubjectSlug(subjectProfile: unknown): string | null {
   return typeof slug === "string" && slug.trim() ? slug.trim() : null;
 }
 
-/** The states the playbook's stages own (`subjectStatus`), in stage order. */
+/**
+ * The states the playbook's stages own, in stage order: each stage's
+ * `subjectStatus` (entered), then its `onApproved` (reached when its work is
+ * approved, decision D2).
+ */
 export function ownedStatesOf(stages: unknown): PlaybookAppFacts["owned"] {
   if (!Array.isArray(stages)) return [];
   return stages.flatMap((raw) => {
-    const s = raw as { key?: unknown; name?: unknown; subjectStatus?: unknown };
-    if (typeof s?.key !== "string" || typeof s.subjectStatus !== "string")
-      return [];
-    return [
-      {
-        state: s.subjectStatus,
-        stageKey: s.key,
-        stageName: typeof s.name === "string" ? s.name : s.key,
-      },
-    ];
+    const s = raw as {
+      key?: unknown;
+      name?: unknown;
+      subjectStatus?: unknown;
+      onApproved?: unknown;
+    };
+    if (typeof s?.key !== "string") return [];
+    const stageKey = s.key;
+    const stageName = typeof s.name === "string" ? s.name : s.key;
+    return [s.subjectStatus, s.onApproved]
+      .filter((v): v is string => typeof v === "string" && v.trim() !== "")
+      .map((state) => ({ state, stageKey, stageName }));
   });
 }
 

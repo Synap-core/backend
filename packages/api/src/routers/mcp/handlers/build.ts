@@ -701,7 +701,7 @@ export const buildHandlers: McpHandlerMap = {
       // params/criteria: `playbooks.create` parses them with the ONE schema
       // set (`schemas/playbook-process.ts`) and folds them into
       // `subjectProfile`, so a malformed declaration is refused, never dropped.
-      // Stage-level `subjectStatus` / `gate` / `onFail` / `expectedOutputs`
+      // Stage-level `subjectStatus` / `onApproved` / `gate` / `onFail` / `expectedOutputs`
       // ride inside `stages`, validated by `playbookStageSchema`.
       ...(args.activators !== undefined
         ? {

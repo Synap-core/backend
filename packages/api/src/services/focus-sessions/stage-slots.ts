@@ -25,25 +25,11 @@ import type { ExpectedOutput } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { deriveSlotKeys } from "./slot-keys.js";
+import { declaredStageOutputs } from "./stage-outputs-approved.js";
 import {
   mergeExpectedOutputs,
   sanitizeDeclaredOutputs,
 } from "./update-session.js";
-
-/** The declared outputs of stage `stageKey`, or [] (unknown stage, none declared). */
-function declaredStageOutputs(
-  stages: unknown,
-  stageKey: string | null
-): ExpectedOutput[] {
-  if (!stageKey || !Array.isArray(stages)) return [];
-  const stage = stages.find(
-    (s) =>
-      !!s && typeof s === "object" && (s as { key?: unknown }).key === stageKey
-  ) as { expectedOutputs?: unknown } | undefined;
-  return Array.isArray(stage?.expectedOutputs)
-    ? (stage.expectedOutputs as ExpectedOutput[])
-    : [];
-}
 
 /**
  * The entered stage's slots the session does not carry yet — sanitized, ready

@@ -74,6 +74,14 @@ vi.mock("../stage-subject-status.js", () => ({
     h.writes.push(input);
     return h.subjectOutcome;
   },
+  // A gate's pass (D2): the stage left's `onApproved`, then the entered one.
+  writeGatePassStatuses: async (input: Record<string, unknown>) => {
+    h.writes.push({ ...input, pass: true });
+    return {
+      reached: { status: "written", property: "post-status", value: "done-x" },
+      entered: h.subjectOutcome,
+    };
+  },
 }));
 vi.mock("@synap/jobs/utils/session-process.js", () => ({
   loadSessionProcess: async () => h.proc,
@@ -227,6 +235,37 @@ describe("advanceSessionStage — process hooks", () => {
     expect(h.updates).toContainEqual(
       expect.objectContaining({ currentStage: "review" })
     );
+  });
+
+  it("a PASSING check gate reaches the stage LEFT first, then writes the entered status (D2)", async () => {
+    const proc = h.proc as { stages: Array<Record<string, unknown>> };
+    proc.stages[1]!.gate = { kind: "check" };
+    h.gates.push({
+      kind: "check",
+      stageKey: "review",
+      passed: true,
+      failing: [],
+      paused: false,
+    });
+    const r = await advanceSessionStage({
+      session: SESSION,
+      toStage: "review",
+      userId: "owner-1",
+      agentUserId: "agent-1",
+      stageWrite: "door",
+    });
+    // ONE gate-pass write, naming the stage left and the stage entered.
+    expect(h.writes).toEqual([
+      expect.objectContaining({
+        pass: true,
+        gatedStage: "review",
+        fromStage: "draft",
+        userId: "owner-1",
+        agentUserId: "agent-1",
+      }),
+    ]);
+    expect(r.subjectReached).toMatchObject({ value: "done-x" });
+    expect(r.subjectStatus).toMatchObject({ status: "written" });
   });
 
   it("a FOLLOW into a PASSING check gate writes nothing either", async () => {

@@ -79,6 +79,7 @@ export function scopePlaybookToStage<
     gate: _gate,
     onFail: _onFail,
     subjectStatus: _subjectStatus,
+    onApproved: _onApproved,
     ...step
   } = stage;
   const goal = typeof step.goal === "string" ? step.goal.trim() : "";

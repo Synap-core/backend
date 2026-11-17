@@ -118,6 +118,15 @@ vi.mock("../stage-subject-status.js", () => ({
     subjectWrites.push(input);
     return { status: "written", property: "post-status", value: "x" };
   },
+  // A gate's pass (D2): the judged stage's `onApproved`, then the gated
+  // stage's `subjectStatus` — recorded as the entered stage it writes.
+  writeGatePassStatuses: async (input: Record<string, unknown>) => {
+    subjectWrites.push({ ...input, toStage: input.gatedStage });
+    return {
+      entered: { status: "written", property: "post-status", value: "x" },
+    };
+  },
+  reachApprovedStageOutputs: async () => undefined,
 }));
 
 // The session room's posts (the spent-criterion news): captured, so the news

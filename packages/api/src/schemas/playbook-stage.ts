@@ -249,6 +249,12 @@ export const playbookStageSchema = z.looseObject({
    */
   subjectStatus: z.string().trim().min(1).max(200).optional(),
   /**
+   * The subject status value this stage's APPROVED work reaches — see
+   * `PlaybookStage.onApproved` (decision D2). Same shape and same inertness
+   * as `subjectStatus`.
+   */
+  onApproved: z.string().trim().min(1).max(200).optional(),
+  /**
    * Where a failed gate returns the run — see `PlaybookStage.onFail`. STRICT
    * like `gate`: it is a control, and a misspelled key must not survive.
    */
@@ -389,6 +395,8 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // so a stage's tie to a subject's lifecycle value has nothing to write and
   // nothing to follow on a track; it governs session RUNS of the playbook.
   "subjectStatus",
+  // Same reason: the value an approved stage reaches is a subject's.
+  "onApproved",
   // The failed-gate return path is applied by the SESSION run's gate
   // (`stage-on-fail.ts`); a track's gate holds and resumes explicitly.
   "onFail",

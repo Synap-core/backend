@@ -67,6 +67,10 @@ vi.mock("../stage-subject-status.js", () => ({
     h.writes.push(input);
     return { status: "skipped", reason: "no_status_property" };
   },
+  writeGatePassStatuses: async (input: Record<string, unknown>) => {
+    h.writes.push(input);
+    return { entered: { status: "skipped", reason: "no_status_property" } };
+  },
 }));
 vi.mock("@synap/jobs/utils/session-process.js", () => ({
   loadSessionProcess: async () => h.proc,
