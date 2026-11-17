@@ -34,8 +34,10 @@ import {
   type StatusOfWorkStage,
   type StatusOfWorkUnavailable,
 } from "@synap-core/types/units";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
-import { sessionStatusCategory } from "@synap-core/types/focus-sessions";
+import {
+  resolveSessionTitle,
+  sessionStatusCategory,
+} from "@synap-core/types/focus-sessions";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import type { ContinuationPacket } from "../focus-sessions/continuation-packet.js";
 import {

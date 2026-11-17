@@ -1,5 +1,5 @@
 /**
- * CONTINUE AT <STAGE> (plan 7d71ddcc W4, `continue-run.ts`): a PERSON resumes
+ * CONTINUE AT <STAGE> (`continue-run.ts`): a PERSON resumes
  * a run that ended or stopped before its last stage, in the SAME session, at
  * the stage it stopped on, with a new run turn. The stopped run keeps its
  * verdict; an ended session is reopened through the one status write.

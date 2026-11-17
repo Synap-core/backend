@@ -1,6 +1,5 @@
 /**
- * WHERE ITS WORK STANDS — `statusOf`'s `include: ["work"]` (plan 7d71ddcc §2
- * "One read", W4). For each subject asked about, the sessions and runs on it,
+ * WHERE ITS WORK STANDS — `statusOf`'s `include: ["work"]`. For each subject asked about, the sessions and runs on it,
  * each projected by `workItemOf` (`status-work-model.ts`) from THE
  * continuation packet (`projectContinuationPacket`, the one session read every
  * session door returns) and its newest playbook run.

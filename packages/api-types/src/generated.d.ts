@@ -3085,10 +3085,10 @@ export interface StatusOfWork {
 	truncated: boolean;
 }
 /**
- * A RULE that fires when the subject moves (plan 7d71ddcc §2: WHEN a subject
- * reaches a status or category → VIA one link → DO one effect through the
- * target's own door). The person sees the word "Rules" (decision D8).
- * RESERVED: no read fills it yet; waves 2 and 3 do.
+ * A RULE that fires when the subject moves (WHEN a subject reaches a status
+ * or category → VIA one link → DO one effect through the target's own door).
+ * The person sees the word "Rules" (decision D8).
+ * RESERVED: no read fills it yet.
  */
 export interface StatusOfReaction {
 	ruleId: string;
@@ -20972,8 +20972,7 @@ export interface StatusOf {
 	 */
 	work?: StatusOfWork | Unavailable$1;
 	/**
-	 * RESERVED (plan 7d71ddcc waves 2 and 3): the rules that fire when it
-	 * moves. No read fills it yet.
+	 * RESERVED: the rules that fire when it moves. No read fills it yet.
 	 */
 	reactions?: StatusOfReaction[] | Unavailable$1;
 	link: string;

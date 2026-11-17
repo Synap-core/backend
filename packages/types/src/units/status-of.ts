@@ -27,7 +27,7 @@
  *            stages left, the person's Continue.
  *
  * `reactions` ({@link StatusOfReaction}) is a typed slot the answer does not
- * fill yet: the rules that fire when it moves (plan 7d71ddcc, waves 2 and 3).
+ * fill yet: the rules that fire when it moves.
  *
  * Pure: types and constants only.
  */
@@ -512,10 +512,10 @@ export interface StatusOfWork {
 // ── reactions (typed slot; not filled yet) ────────────────────────────────
 
 /**
- * A RULE that fires when the subject moves (plan 7d71ddcc §2: WHEN a subject
- * reaches a status or category → VIA one link → DO one effect through the
- * target's own door). The person sees the word "Rules" (decision D8).
- * RESERVED: no read fills it yet; waves 2 and 3 do.
+ * A RULE that fires when the subject moves (WHEN a subject reaches a status
+ * or category → VIA one link → DO one effect through the target's own door).
+ * The person sees the word "Rules" (decision D8).
+ * RESERVED: no read fills it yet.
  */
 export interface StatusOfReaction {
   ruleId: string;
