@@ -3458,6 +3458,48 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   });
 
   /**
+   * POST /focus-sessions/:id/continue — CONTINUE AT <STAGE>: a run that ended
+   * or stopped before its last stage resumes in the SAME session at the stage
+   * it stopped on, with a new run turn (an ended session is reopened for it).
+   * Same service and body as tRPC `focusSessions.continueRun` and MCP
+   * `synap_continue_session`. Refusals: 404 unknown
+   * session · 403 an agent credential (a person's move) · 409 nothing to
+   * continue / another run live on the record / the session moved.
+   */
+  app.post("/focus-sessions/:id/continue", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    try {
+      const { continueStoppedRun } =
+        await import("../../../services/focus-sessions/continue-run.js");
+      const result = await continueStoppedRun({
+        sessionId: id,
+        userId: c.get("userId") as string,
+        agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+      });
+      if (result.ok) return c.json(result, 200);
+      const status =
+        result.reason === "not_found"
+          ? 404
+          : result.reason === "person_only"
+            ? 403
+            : 409;
+      return c.json(result, status);
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.continue failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
    * POST /focus-sessions/:id/recall — "recall again": re-run session recall
    * now (same runner as the start doors and the sweep). Mirrors tRPC
    * `focusSessions.recallAgain`. Owner-floored; 404 for a foreign/unknown

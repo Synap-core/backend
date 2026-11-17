@@ -1484,6 +1484,33 @@ export const focusSessionsRouter = router({
     }),
 
   /**
+   * CONTINUE AT <STAGE> — a run that ended or stopped before its last stage
+   * resumes in the SAME session at the stage it stopped on, with a new run
+   * turn (`continue-run.ts`; an ended session is reopened for it). A
+   * person's move: an agent key is refused. Offered when `statusOf`
+   * `include: ["work"]` says `continue`. A refusal (nothing to continue,
+   * another run live on the record, the session moved) comes back as
+   * `{ ok: false, reason, message }`; only an unknown session throws.
+   * Same service and body as Hub `POST /focus-sessions/:id/continue` and MCP
+   * `synap_continue_session`.
+   */
+  continueRun: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { continueStoppedRun } =
+        await import("../services/focus-sessions/continue-run.js");
+      const result = await continueStoppedRun({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        agentUserId: ctx.agentUserId ?? null,
+      });
+      if (!result.ok && result.reason === "not_found") {
+        throw new TRPCError({ code: "NOT_FOUND", message: result.message });
+      }
+      return result;
+    }),
+
+  /**
    * "Recall again" — re-run session recall now (the same runner the start
    * doors and the sweep use): retrieves raw captures / notes that could help
    * this session, REPLACES `metadata.recalled`, and posts one room message

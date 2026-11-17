@@ -301,6 +301,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.terminal.open.past": "Terminal ouvert",
   "action.session.stop.imperative": "Arrêter",
   "action.session.stop.past": "Arrêté",
+  "action.session.continue.imperative": "Continuer",
+  "action.session.continue.past": "Continué",
   "action.session.wait_on.imperative": "Attendre",
   "action.session.wait_on.past": "Mis en attente de",
   "action.session.release.imperative": "Ne plus attendre",

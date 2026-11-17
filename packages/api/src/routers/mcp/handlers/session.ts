@@ -1048,6 +1048,30 @@ export const sessionHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
+  /**
+   * CONTINUE AT <STAGE> — the same service and body as tRPC
+   * `focusSessions.continueRun` and Hub `POST /focus-sessions/:id/continue`.
+   * A person's move: an agent key is refused by the service with the reason.
+   */
+  synap_continue_session: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
+    if (!isUuid(sessionId)) {
+      return ok({ error: "sessionId must be a focus session UUID." });
+    }
+    const { continueStoppedRun } =
+      await import("../../../services/focus-sessions/continue-run.js");
+    return ok(
+      await continueStoppedRun({
+        sessionId,
+        userId,
+        agentUserId: agentUserId ?? null,
+      })
+    );
+  },
   synap_get_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);

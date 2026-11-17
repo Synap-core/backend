@@ -2998,6 +2998,28 @@ export const tools = {
         },
       },
       {
+        name: "synap_continue_session",
+        annotations: {
+          title: "Continue a stopped run",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Continue a run that stopped before its last stage (\"Stopped at Script\"): the SAME session resumes at the stage it stopped on, with a new run turn; an ended session is reopened for it, and the stopped run keeps its verdict. A PERSON's move: an agent key gets { ok:false, reason:'person_only' } \u2014 tell the person it can go on (synap_orient statusOf + include:['work'] shows `continue`). Refusals come back as { ok:false, reason, message }: nothing_to_continue, already_running (another run of the playbook is live on the record), conflict.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description:
+                "The session (run) UUID that stopped with stages left.",
+            },
+          },
+          required: ["sessionId"],
+        },
+      },
+      {
         name: "synap_rerun_session",
         annotations: {
           title: "Rerun a session",
