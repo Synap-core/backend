@@ -377,12 +377,16 @@ sync_git_before_build() {
 # exits 1 with no message. Say what to do instead. `install` never gets here
 # without a TTY (it switches itself to --non-interactive); this covers the rest.
 _synap_prompt_read() {
-    if [ ! -t 0 ]; then
-        echo -e "${RED:-}No answer on stdin: this step asks a question and no terminal is attached.${NC:-}" >&2
-        echo "Re-run from a terminal, or for install pass --non-interactive (every prompt then takes its default or a flag: --domain, --email, --admin-email, --admin-password, --intelligence-key ...)." >&2
-        exit 1
-    fi
-    read "$@"
+    # Read first: an answer piped on stdin is a real answer (scripts and tests
+    # pipe "yes" or the pod domain). Only EOF with nothing read is "no answer".
+    # The last argument is the variable `read` fills; a final line without a
+    # newline sets it and still returns non-zero, so check it.
+    if read "$@"; then return 0; fi
+    local __var="${!#}"
+    if [ -n "${!__var:-}" ]; then return 0; fi
+    echo -e "${RED:-}No answer on stdin: this step asks a question and nothing answered it.${NC:-}" >&2
+    echo "Re-run from a terminal, or for install pass --non-interactive (every prompt then takes its default or a flag: --domain, --email, --admin-email, --admin-password, --intelligence-key ...)." >&2
+    exit 1
 }
 
 # Used by destructive / confirm flows when automation must not block (e.g. Eve -y)
