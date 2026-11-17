@@ -1108,7 +1108,7 @@ services:
   # ============================================================================
   stirling-pdf:
     logging: *default-logging
-    image: ghcr.io/synap-core/stirling-pdf:3.3.0-core@sha256:__STIRLING_DIGEST__
+    image: ghcr.io/synap-core/stirling-pdf:3.3.0-core@sha256:42ee358c3a3bdeac0e02791c657637cfd00167da008c969a8df4634d353221ba
     container_name: ${COMPOSE_PROJECT_NAME:-synap}-stirling-pdf
     restart: unless-stopped
     environment:
