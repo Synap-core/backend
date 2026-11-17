@@ -8,6 +8,7 @@ import {
 import { ProposalStatus } from "@synap/database/schema";
 import { auditLog, type AuditLogOpts } from "./audit-log.js";
 import { createPendingProposal } from "./permission-check.js";
+import { queueReceiptReactions } from "@synap/jobs/workers/reactions.js";
 
 export interface CreateEventBackedProposalInput {
   userId: string;
@@ -223,6 +224,10 @@ export async function createAutoApprovedProposal(
       ...callingKeyAttribution(),
     })
     .returning();
+  // Born decided, so its insert owes no transition: the rules that listen to
+  // an approval (pod default 3, "an outcome is met wherever it was filed")
+  // are queued here instead (reactions W2). Best-effort, never throws.
+  if (proposal?.id) await queueReceiptReactions(proposal.id);
 
   // Second stamp: the write already happened, so the lifecycle is
   // requested → completed (no pending review gap). Coherent timeline.

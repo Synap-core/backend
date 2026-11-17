@@ -89,6 +89,7 @@ export const meetOutcomesReactionEffect: ReactionEffect = {
         : [];
       const criterionKeys = new Set(readCriteria(s.criteria).map((c) => c.key));
       for (const pick of selectSlotsMetByRef(slots, ref, criterionKeys)) {
+        const label = slots[pick.index]!.label || pick.key;
         writes.push({
           target: { subjectType: "slot", subjectId: `${s.id}/${pick.key}` },
           to: "done",
@@ -100,6 +101,10 @@ export const meetOutcomesReactionEffect: ReactionEffect = {
             slotKey: pick.key,
             ref,
             proposalId: t.subjectId,
+          },
+          say: {
+            name: label,
+            applied: `Met \u201c${label}\u201d: what it points at was approved.`,
           },
         });
       }
@@ -139,8 +144,8 @@ export const meetOutcomesReactionEffect: ReactionEffect = {
     if (slot && slotStatusOf(slot) === "done") return { status: "unchanged" };
     return {
       status: "moved_meanwhile",
-      reason:
-        "The outcome changed since: it is withdrawn, the person's, or gone.",
+      detail:
+        "slot no longer pending for an agent (withdrawn, the person's, or gone)",
     };
   },
 };
