@@ -7,6 +7,7 @@ import {
   describeVerbRunProposal,
   hasVerbRunHeading,
   toolRunActionLabel,
+  toolRunEdits,
 } from "./capability-run.js";
 
 const isSecretName = (key: string) => /key|token|secret|password/i.test(key);
@@ -226,5 +227,79 @@ describe("describeVerbRun: a ship verb's heading", () => {
         data: { verbId: "github_merge_pr" },
       })
     ).toBeNull();
+  });
+});
+
+describe("toolRunEdits: what a person changed before approving", () => {
+  const entry = (
+    before: Record<string, unknown>,
+    after: Record<string, unknown>,
+    at = "2026-11-17T10:00:00.000Z"
+  ) => ({
+    at,
+    by: "user-1",
+    before: { parameters: before },
+    patch: { parameters: after },
+  });
+  const proposed = { text: "Hello world", accountId: "acc-1", apiKey: "k-1" };
+
+  it("reads the proposed and the approved text, per argument", () => {
+    const edits = toolRunEdits(
+      [entry(proposed, { ...proposed, text: "Hello, LinkedIn" })],
+      { isSecretName }
+    );
+    expect(edits).toEqual([
+      {
+        key: "text",
+        before: "Hello world",
+        after: "Hello, LinkedIn",
+        at: "2026-11-17T10:00:00.000Z",
+        by: "user-1",
+      },
+    ]);
+  });
+
+  it("keeps the first proposal as `before` across several changes", () => {
+    const second = { ...proposed, text: "Second" };
+    const edits = toolRunEdits(
+      [
+        entry(proposed, second),
+        entry(second, { ...proposed, text: "Third" }, "2026-11-17T11:00:00.000Z"),
+      ],
+      { isSecretName }
+    );
+    expect(edits).toHaveLength(1);
+    expect(edits[0]).toMatchObject({ before: "Hello world", after: "Third" });
+  });
+
+  it("is not an edit when the text went back to what was proposed", () => {
+    const second = { ...proposed, text: "Second" };
+    expect(
+      toolRunEdits([entry(proposed, second), entry(second, proposed)], {
+        isSecretName,
+      })
+    ).toEqual([]);
+  });
+
+  it("never reads a credential argument, by name or by the run's flag", () => {
+    const edits = toolRunEdits(
+      [entry(proposed, { text: "x", accountId: "acc-2", apiKey: "k-2" })],
+      { isSecretName, secretKeys: new Set(["accountId"]) }
+    );
+    expect(edits.map((e) => e.key)).toEqual(["text"]);
+    expect(JSON.stringify(edits)).not.toMatch(/k-1|k-2|acc-2/);
+  });
+
+  it("ignores revisions that are not about parameters, and non-text values", () => {
+    expect(
+      toolRunEdits(
+        [
+          { at: "t", by: "u", before: { _summary: "a" }, patch: { _summary: "b" } },
+          entry({ n: 1 }, { n: 2 }),
+        ],
+        { isSecretName }
+      )
+    ).toEqual([]);
+    expect(toolRunEdits(null, { isSecretName })).toEqual([]);
   });
 });

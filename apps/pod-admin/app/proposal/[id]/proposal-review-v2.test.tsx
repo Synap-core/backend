@@ -814,12 +814,22 @@ describe("a tool run (founder dogfood 2026-10-30, proposal 4b5e040e)", () => {
     for (const v of ["cx23", "sillage", "ubuntu-24.04", "nbg1"]) {
       expect(page).toContain(v);
     }
-    expect(page).toContain("Hetzner server type");
     for (const line of USER_DATA.split("\n"))
       expect(page).toContain(line.trim());
     expect(html).toContain('data-tool-run-arg="userData"');
     expect(page).toContain("Hidden — a credential");
     expect(page).not.toContain("tok_live_123");
+  });
+
+  it("says what it does in one line and keeps the rest behind Details", () => {
+    state.proposal = toolRun({ toolRun: call });
+    const html = render();
+    expect(html).toContain('data-tool-run-consequence=""');
+    expect(text(html)).toContain("Create server through Hetzner cloud");
+    expect(html).toContain('data-tool-run-details=""');
+    const at = html.indexOf("data-tool-run-details");
+    expect(html.slice(at)).toContain("Create a server on Hetzner Cloud");
+    expect(html.slice(0, at)).not.toContain("Create a server on Hetzner Cloud");
   });
 
   it("draws no generic record card: no 'Untitled', no 'Skill ID', no key-name list", () => {

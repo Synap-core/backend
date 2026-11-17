@@ -6,18 +6,27 @@
  * call ("Create server · Hetzner cloud", `proposalHeading`); this replaces the
  * generic record card, which read a run as "Untitled · Tool" with its
  * arguments' NAMES only. The reading rules live in `tool-run-model.ts`.
+ *
+ * Declutter (founder, 17 Nov 2026): the card shows what the tool DOES: the
+ * text as it will be sent, the account, and one line of consequence. The
+ * tool's description, ids, the policy mark and the rest sit behind "Details"
+ * (`children`). A text argument can be changed in place; the change is sent
+ * with "Approve with your changes" (`DecisionButtons`) and recorded on the
+ * proposal's revision chain, shown here as "Proposed as" to every reader.
  */
 
-import { Chip } from "@heroui/react";
-import { Lock } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Button, Chip } from "@heroui/react";
+import { Lock, Pencil } from "lucide-react";
 import type { ProposalToolRun } from "@synap-core/types/proposals/capability-run";
 import { CodeValue, RECORD_GRID_CLASS } from "./ProposedRecordCard";
 import { proposalPageT } from "./copy";
 import {
-  toolRunArguments,
+  toolRunSplit,
   type ToolRunArgument,
   type ToolRunValue,
 } from "./tool-run-model";
+import type { ToolRunEdit } from "@synap-core/types/proposals/capability-run";
 
 type T = ReturnType<typeof proposalPageT>;
 
@@ -66,18 +75,92 @@ function Value({ value, t }: { value: ToolRunValue; t: T }) {
   }
 }
 
-function Argument({ arg, t }: { arg: ToolRunArgument; t: T }) {
+function Argument({
+  arg,
+  t,
+  edit,
+}: {
+  arg: ToolRunArgument;
+  t: T;
+  edit?: {
+    draft: string | undefined;
+    recorded: ToolRunEdit | undefined;
+    onDraft: ((text: string | undefined) => void) | null;
+  };
+}) {
+  const [editing, setEditing] = useState(false);
+  const canEdit = !!edit?.onDraft && arg.editable;
+  const edited = edit?.draft !== undefined && edit.draft !== arg.raw;
   return (
     <div
       data-tool-run-arg={arg.key}
-      className={`flex min-w-0 flex-col gap-1 ${arg.wide ? "col-span-full" : ""}`}
+      className={`flex min-w-0 flex-col gap-1 ${arg.wide || editing ? "col-span-full" : ""}`}
     >
-      <dt className="text-[12.5px] font-medium text-foreground/70">
+      <dt className="flex items-center gap-2 text-[12.5px] font-medium text-foreground/70">
         {arg.label}
+        {canEdit && !editing && (
+          <Button
+            size="sm"
+            variant="light"
+            className="min-h-8"
+            startContent={<Pencil aria-hidden className="h-3.5 w-3.5" />}
+            onPress={() => setEditing(true)}
+          >
+            {t("toolRun.edit")}
+          </Button>
+        )}
       </dt>
       <dd className="flex min-w-0 flex-col gap-1 text-[13px] leading-relaxed text-foreground/90">
-        <Value value={arg.value} t={t} />
-        {arg.description && (
+        {editing && canEdit ? (
+          <>
+            <textarea
+              aria-label={arg.label}
+              data-tool-run-edit={arg.key}
+              className="min-h-28 w-full rounded-md bg-background px-3 py-2 text-[13px] leading-relaxed text-foreground ring-1 ring-inset ring-foreground/20 focus:outline-none focus:ring-2 focus:ring-foreground/50"
+              value={edit?.draft ?? arg.raw ?? ""}
+              onChange={(e) => edit?.onDraft?.(e.target.value)}
+            />
+            <span className="flex gap-2">
+              <Button
+                size="sm"
+                variant="flat"
+                className="min-h-9"
+                onPress={() => {
+                  edit?.onDraft?.(undefined);
+                  setEditing(false);
+                }}
+              >
+                {t("toolRun.undoEdit")}
+              </Button>
+            </span>
+          </>
+        ) : (
+          <Value
+            value={
+              edited
+                ? { kind: "text", text: edit?.draft ?? "" }
+                : arg.value
+            }
+            t={t}
+          />
+        )}
+        {edited && !editing && (
+          <span className="text-[12px] text-foreground/70">
+            {t("toolRun.yourChange")}
+          </span>
+        )}
+        {edit?.recorded && (
+          <span
+            data-tool-run-was={arg.key}
+            className="flex flex-col gap-0.5 text-[12px] text-foreground/70"
+          >
+            <span className="font-medium">{t("toolRun.proposedAs")}</span>
+            <span className="whitespace-pre-wrap break-words line-through decoration-foreground/30">
+              {edit.recorded.before}
+            </span>
+          </span>
+        )}
+        {arg.description && arg.detail && (
           <span className="text-[12px] text-foreground/70">
             {arg.description}
           </span>
@@ -87,9 +170,45 @@ function Argument({ arg, t }: { arg: ToolRunArgument; t: T }) {
   );
 }
 
-export function ToolRunArguments({ run }: { run: ProposalToolRun }) {
+export function ToolRunArguments({
+  run,
+  drafts,
+  onDraft,
+  recorded = [],
+  children,
+}: {
+  run: ProposalToolRun;
+  /** The changes made on this page, not yet sent (argument key -> text). */
+  drafts: Readonly<Record<string, string>>;
+  /** Absent when the request can no longer be decided: the text is read-only. */
+  onDraft: ((key: string, text: string | undefined) => void) | null;
+  /** What people already changed, from the revision chain. */
+  recorded?: readonly ToolRunEdit[];
+  /** The rest, behind "Details" (the policy mark, the reason). */
+  children?: ReactNode;
+}) {
   const t = proposalPageT();
-  const args = toolRunArguments(run);
+  const { shown, detail } = toolRunSplit(run);
+  const wasByKey = new Map(recorded.map((e) => [e.key, e]));
+  const editFor = (arg: ToolRunArgument) => ({
+    draft: drafts[arg.key],
+    recorded: wasByKey.get(arg.key),
+    onDraft: onDraft ? (text: string | undefined) => onDraft(arg.key, text) : null,
+  });
+  const account = run.parameters.find(
+    (p) =>
+      /account/i.test(p.key) &&
+      typeof p.value === "string" &&
+      !p.secret &&
+      /\s|@/.test(p.value)
+  );
+  const consequence = [
+    run.action,
+    run.tool ? t("toolRun.through", { tool: run.tool }) : null,
+    account ? t("toolRun.as", { account: String(account.value) }) : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <section
       aria-label={t("toolRun.sends")}
@@ -100,14 +219,14 @@ export function ToolRunArguments({ run }: { run: ProposalToolRun }) {
         <h2 className="font-heading text-[15px] font-medium text-foreground">
           {t("toolRun.sends")}
         </h2>
-        {run.description && (
-          <p className="text-[12.5px] text-foreground/65">{run.description}</p>
-        )}
+        <p data-tool-run-consequence="" className="text-[12.5px] text-foreground/65">
+          {consequence}
+        </p>
       </header>
-      {args.length > 0 ? (
+      {shown.length > 0 ? (
         <dl className={RECORD_GRID_CLASS}>
-          {args.map((arg) => (
-            <Argument key={arg.key} arg={arg} t={t} />
+          {shown.map((arg) => (
+            <Argument key={arg.key} arg={arg} t={t} edit={editFor(arg)} />
           ))}
         </dl>
       ) : (
@@ -115,6 +234,24 @@ export function ToolRunArguments({ run }: { run: ProposalToolRun }) {
           {t("toolRun.noArguments")}
         </p>
       )}
+      <details data-tool-run-details="" className="group text-[12.5px]">
+        <summary className="min-h-9 cursor-pointer select-none py-1.5 font-medium text-foreground/70">
+          {t("toolRun.details")}
+        </summary>
+        <div className="flex flex-col gap-3 pt-2">
+          {run.description && (
+            <p className="text-foreground/65">{run.description}</p>
+          )}
+          {detail.length > 0 && (
+            <dl className={RECORD_GRID_CLASS}>
+              {detail.map((arg) => (
+                <Argument key={arg.key} arg={arg} t={t} edit={editFor(arg)} />
+              ))}
+            </dl>
+          )}
+          {children}
+        </div>
+      </details>
     </section>
   );
 }
