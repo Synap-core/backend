@@ -1,7 +1,7 @@
 /**
  * CONTINUE AT <STAGE> — the person's door for a run that ended or stopped
- * before its last declared stage (plan 7d71ddcc W4, founder decision D4: the
- * run says "Stopped at Script", and whether it goes on is the person's).
+ * before its last declared stage (founder decision D4: the run says
+ * "Stopped at Script", and whether it goes on is the person's).
  *
  * WHAT IT DOES. The SAME session resumes at the stage it stands on
  * (`focus_sessions.current_stage`, where the run stopped), with a NEW run

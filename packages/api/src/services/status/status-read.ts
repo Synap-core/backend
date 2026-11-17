@@ -242,8 +242,7 @@ export interface StatusOf {
    */
   work?: StatusOfWork | Unavailable;
   /**
-   * RESERVED (plan 7d71ddcc waves 2 and 3): the rules that fire when it
-   * moves. No read fills it yet.
+   * RESERVED: the rules that fire when it moves. No read fills it yet.
    */
   reactions?: StatusOfReaction[] | Unavailable;
   link: string;

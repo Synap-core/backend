@@ -1672,7 +1672,7 @@ describe('include: ["history"] — the wait episodes (0386)', () => {
   });
 });
 
-describe('include: ["work"] — where its work stands (plan 7d71ddcc W4)', () => {
+describe('include: ["work"] — where its work stands', () => {
   // A film whose run stopped at Script (its session ended `failed`, the run
   // `failed` with `stages_left`), an open session on it, and another
   // person's session on it that the reader may not see.
