@@ -407,19 +407,25 @@ export function computeProposalDedupHash(p: {
   // other keys (a `summary` property, a `reasoning` field) are the change.
   // Without this every agent entity create hashed uniquely (live 2026-10-18:
   // three byte-identical decision creates filed as three pending rows).
+  //
+  // Any OTHER action (an update's patch) keeps its `id` — it names the
+  // target, which the hash carries anyway — but drops the install clock the
+  // same way: a package reconcile replays the whole source-link on every
+  // run (`reconcile-installed-playbooks.ts` → `playbooks.update` with
+  // `metadata.marketSource`), so with the clock in the hash each
+  // `synap templates update` filed a fresh pending update beside the last.
   const record = payload.data;
   if (
-    isCreate &&
     // The REQUEST ENVELOPE `checkPermissionOrPropose` writes —
     // `{ requestId, targetType, changeType, data: <the record>, … }` — rather
     // than a flat record. The guard reads any object (it widens its argument
     // back to a record itself); the cast only meets its parameter type.
     isRequestShapedProposalData(p.data as unknown as StoredProposalData) &&
-    record !== null &&
-    typeof record === "object" &&
-    !Array.isArray(record)
+    isPlainObject(record)
   ) {
-    payload.data = createdRecordIdentity(record as Record<string, unknown>);
+    payload.data = isCreate
+      ? createdRecordIdentity(record)
+      : withoutInstallClock(record);
   }
   const canonical = {
     workspaceId: p.workspaceId ?? null,
