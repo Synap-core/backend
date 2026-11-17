@@ -63,6 +63,7 @@ import {
   type SessionStatus,
 } from "@synap-core/types/focus-sessions";
 import { createLogger } from "@synap-core/core";
+import { grantWriteDenial } from "../../utils/grant-write-check.js";
 import {
   stagesLeft,
   stagesLeftWords,
@@ -158,7 +159,8 @@ export type ContinueRunResult =
         | "person_only"
         | "nothing_to_continue"
         | "already_running"
-        | "conflict";
+        | "conflict"
+        | "denied";
       message: string;
       liveSessionId?: string;
     };
@@ -208,6 +210,14 @@ export async function continueStoppedRun(params: {
     };
   }
   const session = row as FocusSession;
+  // The key's grant bounds it like any session write (the gate's rung 0).
+  const denial = await grantWriteDenial({
+    subjectType: "focus_session",
+    action: "update",
+    workspaceId: session.workspaceId ?? null,
+    projectId: session.projectId ?? null,
+  });
+  if (denial) return { ok: false, reason: "denied", message: denial };
   const run = await newestRun(sessionId);
   const left = continueAt({
     status: session.status,

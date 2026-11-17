@@ -3463,7 +3463,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * it stopped on, with a new run turn (an ended session is reopened for it).
    * Same service and body as tRPC `focusSessions.continueRun` and MCP
    * `synap_continue_session`. Refusals: 404 unknown
-   * session · 403 an agent credential (a person's move) · 409 nothing to
+   * session · 403 an agent credential (a person's move) or a key whose grant
+   * does not allow it · 409 nothing to
    * continue / another run live on the record / the session moved.
    */
   app.post("/focus-sessions/:id/continue", async (c) => {
@@ -3486,7 +3487,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       const status =
         result.reason === "not_found"
           ? 404
-          : result.reason === "person_only"
+          : result.reason === "person_only" || result.reason === "denied"
             ? 403
             : 409;
       return c.json(result, status);
