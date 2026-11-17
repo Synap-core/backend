@@ -35,6 +35,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { loadVisibleProject } from "../projects/load-visible-project.js";
 import {
   getLinksFor,
   resolveGrantedCapabilities,
@@ -79,6 +80,8 @@ export interface BindOnFactsInput {
   phase: "start" | "update";
   title: string | null;
   workspaceId: string | null;
+  /** The session's project: its home space is the session's when it has none. */
+  projectId?: string | null;
   subjectEntityId: string | null;
   parentSessionId: string | null;
 }
@@ -87,6 +90,7 @@ export interface BindOnFactsInput {
 export async function loadBindingFacts(input: {
   userId: string;
   workspaceId: string | null;
+  projectId?: string | null;
   title: string | null;
   subjectEntityId: string | null;
   parentSessionId: string | null;
@@ -156,12 +160,26 @@ export async function loadBindingFacts(input: {
     parent = row ?? null;
   }
 
+  // A project session has no space of its own (most agent starts are
+  // project-scoped): its subject's space, else its project's home space, is
+  // where its playbooks live. Without the project's, every space-scoped
+  // playbook read as "another space" and the parent and main-red rungs never
+  // bound a project session with no subject (lane ops-p-binding, 2026-11-17).
+  let projectWorkspaceId: string | null = null;
+  if (
+    !input.workspaceId &&
+    !subjectWorkspaceId &&
+    input.projectId &&
+    isUuid(input.projectId)
+  ) {
+    const project = await loadVisibleProject(db, input.projectId, input.userId);
+    projectWorkspaceId = project?.workspaceId ?? null;
+  }
+
   return {
     situation: {
       title: input.title,
-      // A project session has no space of its own: its subject's space is
-      // where its playbooks live.
-      workspaceId: input.workspaceId ?? subjectWorkspaceId,
+      workspaceId: input.workspaceId ?? subjectWorkspaceId ?? projectWorkspaceId,
       subject,
       parent,
     },
@@ -285,6 +303,7 @@ export async function rebindOnFirstFact(input: {
     origin?: string | null;
     title: string | null;
     workspaceId: string | null;
+    projectId?: string | null;
     subjectEntityId: string | null;
     metadata: unknown;
   };
@@ -324,6 +343,7 @@ export async function rebindOnFirstFact(input: {
       phase: "update",
       title: session.title,
       workspaceId: session.workspaceId,
+      projectId: session.projectId ?? null,
       subjectEntityId: session.subjectEntityId,
       // The `spawned_from` edge, read-only: a lane's parent may follow a
       // playbook (rung 3). Never a close path (`session-detour-pop.test.ts`).
