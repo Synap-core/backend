@@ -147,13 +147,19 @@ export interface LibraryItemUpdatedEvent {
 
 /**
  * What a status event is about, in `statusOf`'s words (its answer's `type`):
- * a thing (`entity`), a goal (`track`) or a work session (`focus_session`).
- * Read the subject again with `lifecycle.statusOf({ ids: [subjectId] })`.
+ * a thing (`entity`), a goal (`track`) or a work session (`focus_session`);
+ * since reactions W1 also a playbook run (`run`), a proposal (`proposal`) and
+ * an owed slot (`slot`, id `<session id>/<slot key>`). Read a thing, goal or
+ * session again with `lifecycle.statusOf({ ids: [subjectId] })`; a run, a
+ * proposal or a slot through its own read (its session's, for a slot).
  */
 export const STATUS_EVENT_SUBJECT_TYPES = [
   "entity",
   "goal",
   "session",
+  "run",
+  "proposal",
+  "slot",
 ] as const;
 export type StatusEventSubjectType =
   (typeof STATUS_EVENT_SUBJECT_TYPES)[number];

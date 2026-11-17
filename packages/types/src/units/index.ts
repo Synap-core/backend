@@ -21,6 +21,8 @@ export * from "./templates.js";
 export * from "./work-from-template.js";
 export * from "./stage-space.js";
 export * from "./deliverable.js";
+export * from "./run-status.js";
+export * from "./proposal-status.js";
 export * from "./outcome.js";
 export * from "./status-of.js";
 export * from "./pillar-health.js";

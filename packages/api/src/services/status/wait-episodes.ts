@@ -257,12 +257,15 @@ export async function syncWaitEpisodesTick(
         facetId: null,
       });
   }
-  for (const h of holds)
+  for (const h of holds) {
+    // A run's hold (reactions W1) is its session's wait, asked there.
+    if (h.subjectType === "playbook_run") continue;
     add({
       subjectType: h.subjectType,
       subjectId: h.subjectId,
       facetId: h.subjectType === "entity" ? h.facetId : null,
     });
+  }
   for (const s of open) add(s);
 
   const all = [...subjects.values()];

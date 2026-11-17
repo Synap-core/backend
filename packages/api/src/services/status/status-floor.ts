@@ -12,7 +12,19 @@
  *            floor), so a role's move reaches only who may see that role;
  *   goal     the access layer's rule for `project_tracks` (`scopedDb`);
  *   session  THE session read predicate (`sessionReadableWhere`), as the
- *            statusOf door asks it (no roster branch).
+ *            statusOf door asks it (no roster branch);
+ *   run      its SESSION's floor when it drives one; a session-less run
+ *            (`generate`) the access layer's rule for `playbook_runs`;
+ *   proposal the access layer's rule for `proposals` (`scopedDb`);
+ *   slot     its SESSION's floor: a slot (`<session id>/<slot key>`) is read
+ *            only through the session that declares it.
+ *
+ * COST: the audience asks every user of the pod (O(users) reads per move).
+ * Runs and slots move often (the run reaper's bulk sweeps), so a run's or a
+ * slot's audience is MEMOISED per subject for a few seconds
+ * ({@link AUDIENCE_TTL_MS}): a burst of moves of one subject reads its
+ * floor once. Never longer: a reader who lost access stops receiving within
+ * that window.
  */
 import {
   and,
@@ -21,7 +33,9 @@ import {
   eq,
   focusSessions,
   isNull,
+  playbookRuns,
   projectTracks,
+  proposals,
   runOutsideRequestContext,
   users,
 } from "@synap/database";
@@ -82,17 +96,52 @@ export async function canReadStatus(
       });
       return rows.length > 0;
     }
-    case "session": {
-      const rows = await db
-        .select({ id: focusSessions.id })
-        .from(focusSessions)
-        .where(
-          and(eq(focusSessions.id, subject.id), sessionStatusFloor(userId))
-        )
+    case "session":
+      return canReadSession(userId, subject.id);
+    case "slot": {
+      // `<session id>/<slot key>`: the slot is read through its session.
+      const slash = subject.id.indexOf("/");
+      return slash > 0
+        ? canReadSession(userId, subject.id.slice(0, slash))
+        : false;
+    }
+    case "run": {
+      // A run that drives a session is read through that session (its
+      // owner's floor); a session-less run (`generate`) through the access
+      // layer's rule for runs.
+      const [run] = await db
+        .select({ sessionId: playbookRuns.sessionId })
+        .from(playbookRuns)
+        .where(eq(playbookRuns.id, subject.id))
         .limit(1);
+      if (!run) return false;
+      if (run.sessionId) return canReadSession(userId, run.sessionId);
+      const rows = await statusAccess(userId).findMany(playbookRuns, {
+        where: eq(playbookRuns.id, subject.id),
+        columns: { id: true },
+      });
+      return rows.length > 0;
+    }
+    case "proposal": {
+      const rows = await statusAccess(userId).findMany(proposals, {
+        where: eq(proposals.id, subject.id),
+        columns: { id: true },
+      });
       return rows.length > 0;
     }
   }
+}
+
+async function canReadSession(
+  userId: string,
+  sessionId: string
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: focusSessions.id })
+    .from(focusSessions)
+    .where(and(eq(focusSessions.id, sessionId), sessionStatusFloor(userId)))
+    .limit(1);
+  return rows.length > 0;
 }
 
 /** Readers checked at once (each check is one or two small reads). */
@@ -111,6 +160,33 @@ const AUDIENCE_CONCURRENCY = 8;
 export async function statusAudience(
   subject: StatusSubjectRef
 ): Promise<string[]> {
+  if (!MEMOISED.has(subject.type)) return readAudience(subject);
+  const key = `${subject.type}:${subject.id}`;
+  const now = Date.now();
+  const hit = audienceMemo.get(key);
+  if (hit && hit.until > now) return hit.readers;
+  const readers = readAudience(subject);
+  audienceMemo.set(key, { until: now + AUDIENCE_TTL_MS, readers });
+  // A failed read is not remembered: the next move asks again.
+  readers.catch(() => audienceMemo.delete(key));
+  if (audienceMemo.size > AUDIENCE_MEMO_MAX) {
+    for (const [k, v] of audienceMemo)
+      if (v.until <= now) audienceMemo.delete(k);
+  }
+  return readers;
+}
+
+/** How long a run's or a slot's audience is reused (see the header). */
+export const AUDIENCE_TTL_MS = 5_000;
+const AUDIENCE_MEMO_MAX = 500;
+/** The subjects whose audience is memoised: the ones that move in bursts. */
+const MEMOISED = new Set<StatusEventSubjectType>(["run", "slot"]);
+const audienceMemo = new Map<
+  string,
+  { until: number; readers: Promise<string[]> }
+>();
+
+function readAudience(subject: StatusSubjectRef): Promise<string[]> {
   return runOutsideRequestContext(async () => {
     const everyone = await db.select({ id: users.id }).from(users);
     const readers: string[] = [];

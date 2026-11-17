@@ -29,7 +29,6 @@ import {
   type HoldSubjectRef,
 } from "@synap/database";
 import { profiles } from "@synap/database/schema";
-import type { PlaybookRunStatus } from "@synap/database/schema";
 import type { AnyColumn, SQL } from "drizzle-orm";
 import {
   findLifecycleOption,
@@ -40,6 +39,8 @@ import {
   type TransitionSubjectType,
 } from "@synap-core/types/lifecycle";
 import {
+  RUN_STATUS_DECLARATION,
+  runStatusCategory,
   deriveWaitingOn,
   HOLD_ON_WAITING_ON,
   waitingOnReasonOf,
@@ -85,25 +86,11 @@ import {
 export type CategoryCounts = Partial<Record<LifecycleCategory, number>>;
 
 /**
- * A playbook run's status, read as the RUN base lifecycle (status-flow plan
- * §3: runs are mapped when read, never moved through a door). Keyed by every
- * stored status, so a new one stops the build until it is classified.
+ * A playbook run's status, read as the RUN lifecycle: THE declaration
+ * (`@synap-core/types/units` `RUN_STATUS_DECLARATION`, founder decision D9),
+ * the same one `setRunStatus` moves a run by. Re-exported for the readers.
  */
-export const RUN_STATUS_DECLARATION = {
-  proposed: { category: "open" },
-  running: { category: "active" },
-  waiting_on_you: { category: "paused" },
-  stale: { category: "paused" },
-  completed: { category: "done" },
-  failed: { category: "lost" },
-  cancelled: { category: "lost" },
-} as const satisfies Record<PlaybookRunStatus, { category: LifecycleCategory }>;
-
-export function runStatusCategory(status: string): LifecycleCategory | null {
-  return Object.hasOwn(RUN_STATUS_DECLARATION, status)
-    ? RUN_STATUS_DECLARATION[status as PlaybookRunStatus].category
-    : null;
-}
+export { RUN_STATUS_DECLARATION, runStatusCategory };
 
 export function addCount(
   counts: CategoryCounts,

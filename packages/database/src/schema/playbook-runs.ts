@@ -22,6 +22,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import type { RunOn } from "@synap-core/types/agents";
+import type { PlaybookRunStatusValue } from "@synap-core/types/units";
 
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef =
@@ -35,20 +36,16 @@ export type PlaybookRunExecutorRef =
  * load-bearing, because the scorecard feeds governance widening and a `failed`
  * row would grade a playbook for a person's change of mind.
  */
-export type PlaybookRunStatus =
-  | "running"
-  | "completed"
-  | "failed"
-  | "proposed"
-  | "cancelled"
-  // W2 calm: the reaper found the run quiet with its session still owing the
-  // person an open slot — waiting on the human, never force-failed.
-  | "waiting_on_you"
-  // The reaper found a run an EXTERNAL agent holds quiet past its window (D6,
-  // 2026-10-11). Not failed — nothing the pod launched died — and not
-  // terminal: the next write attributed to its session revives it to
-  // `running` (`reviveStaleSession`). Same word as the session status.
-  | "stale";
+// `waiting_on_you` (W2 calm): the reaper found the run quiet with its session
+// still owing the person an open slot — waiting on the human, never
+// force-failed. `stale`: the reaper found a run an EXTERNAL agent holds quiet
+// past its window (D6, 2026-10-11). Not failed — nothing the pod launched
+// died — and not terminal: the next write attributed to its session revives
+// it to `running` (`reviveStaleSession`). Same word as the session status.
+// The list and each status's category are declared ONCE, in
+// `@synap-core/types/units` (`PLAYBOOK_RUN_STATUSES`,
+// `RUN_STATUS_DECLARATION`); the column's enum below must name the same.
+export type PlaybookRunStatus = PlaybookRunStatusValue;
 
 /**
  * Why a `failed` run stopped before it finished (`playbook_runs.stop_reason`),
