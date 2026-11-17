@@ -3,6 +3,7 @@ import {
   SERVICE_MARKS,
   GENERIC_SERVICE_PATH,
   normalizeServiceId,
+  resolveAgentName,
   resolveServiceMark,
   resolveServiceName,
   resolveServiceWebUrl,
@@ -140,5 +141,43 @@ describe("resolveServiceWebUrl", () => {
     expect(
       ENTRIES.filter(([, def]) => def.webUrl).length
     ).toBeGreaterThanOrEqual(15);
+  });
+});
+
+describe("resolveAgentName: an agent named at its source, never by slug", () => {
+  it("an agent registered with its type token as its name reads as its type", () => {
+    expect(
+      resolveAgentName({ name: "claude-code", agentType: "claude-code" })
+    ).toBe("Claude Code");
+    // A known service token, whatever type the row carries.
+    expect(resolveAgentName({ name: "claude-code", agentType: null })).toBe(
+      "Claude Code"
+    );
+  });
+
+  it("an unnamed agent is named from its type, never the raw token", () => {
+    expect(resolveAgentName({ name: null, agentType: "orchestrator" })).toBe(
+      "Orchestrator"
+    );
+    expect(resolveAgentName({ name: "  ", agentType: "claude-code" })).toBe(
+      "Claude Code"
+    );
+  });
+
+  it("a name a person gave is kept as written", () => {
+    expect(
+      resolveAgentName({ name: "Claude Code", agentType: "claude-code" })
+    ).toBe("Claude Code");
+    expect(resolveAgentName({ name: "Scout", agentType: "researcher" })).toBe(
+      "Scout"
+    );
+    // Token-shaped but no known service and not its type: a name.
+    expect(resolveAgentName({ name: "devbox", agentType: "machine" })).toBe(
+      "devbox"
+    );
+  });
+
+  it("nothing to name it by is undefined, never an id", () => {
+    expect(resolveAgentName({ name: null, agentType: null })).toBeUndefined();
   });
 });

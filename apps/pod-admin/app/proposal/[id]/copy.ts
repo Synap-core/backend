@@ -98,6 +98,9 @@ export const en = {
   "undo.cannot": "Approving applies it now, and it cannot be undone from here.",
   "undo.unknown":
     "Nobody checked whether this can be undone, so treat it as permanent.",
+  // The door to the object a proposal updates (`UpdatedDoor`): the verb and
+  // the noun bundle, so French says "Ouvrir le constat" / "Ouvrir la tâche".
+  "updated.open": "{verb} {obj}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -199,6 +202,8 @@ export const fr: Catalog<typeof en> = {
     "Approuver l’applique maintenant, et cela ne peut pas être annulé d’ici.",
   "undo.unknown":
     "Personne n’a vérifié si cela peut être annulé : considérez-le comme définitif.",
+  "updated.open":
+    "{verb} {objG, select, f {{objV, select, yes {l’{obj}} other {la {obj}}}} m {{objV, select, yes {l’{obj}} other {le {obj}}}} other {l’élément {Obj}}}",
 };
 
 /** The catalog keys of a decided request's one-line outcome. */

@@ -249,18 +249,47 @@ describe("requestStory — the past says each act as it was", () => {
 
   it("a decision says the vocabulary's word for its status, in each locale", () => {
     expect(requestStoryLine(decided("d1", "rejected", "Ship it"))).toBe(
-      "Rejected: Ship it"
+      "Rejected “Ship it”"
     );
     expect(requestStoryLine(decided("d2", "reverted", "Ship it"))).toBe(
-      "Reverted: Ship it"
+      "Reverted “Ship it”"
     );
     expect(requestStoryLine(decided("d3", "approval_failed", null))).toBe(
       "Approval failed"
     );
     expect(requestStoryLine(decided("d4", "rejected", "Ship it"), "fr")).toBe(
-      "Rejeté : Ship it"
+      "Rejeté «\u00a0Ship it\u00a0»"
     );
   });
+
+  // Review N3: "Proposed: Gap: search tools" said two colons. The title is
+  // set apart by quotes, so the line holds only the title's own colons.
+  it.each(["en", "fr"] as const)(
+    "a titled decision quotes its title and adds no colon of its own (%s)",
+    (locale) => {
+      const title = "Gap: search tools miss archived notes";
+      const asked: DevTimelineEvent = {
+        id: "q1",
+        kind: "decision_asked",
+        at: at(),
+        actor: ME,
+        refs: { sessionId: S, proposalId: "p-q1" },
+        title,
+      } as DevTimelineEvent;
+      const colons = (s: string) => s.split(":").length - 1;
+      for (const line of [
+        requestStoryLine(asked, locale),
+        requestStoryLine(decided("d5", "rejected", title), locale),
+      ]) {
+        expect(line).toContain(title);
+        expect(colons(line)).toBe(colons(title));
+        // The title sits between an opening and a closing quote mark.
+        const i = line.indexOf(title);
+        expect(line.slice(0, i).trim()).toMatch(/[“«]$/);
+        expect(line.slice(i + title.length).trim()).toMatch(/^[”»]/);
+      }
+    }
+  );
 
   it("a slot handed back with Not mine is its own line", () => {
     const handedBack: DevTimelineEvent = {

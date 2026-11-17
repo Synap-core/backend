@@ -17,12 +17,14 @@ export const en = {
   "needsYou.story.prClosed": "Closed {repo}#{number} without merging",
   "needsYou.story.checks":
     "{result, select, passed {Checks passed} failed {Checks failed} other {Checks finished}}",
+  // The title is QUOTED, never after a colon: a title often carries its own
+  // ("Proposed “Gap: search tools”", review N3).
   "needsYou.story.decisionAsked":
-    "{titled, select, yes {Proposed: {title}} other {Proposed a change}}",
+    "{titled, select, yes {Proposed “{title}”} other {Proposed a change}}",
   // `status` is the decision's word from the vocabulary door
   // (`resolveStatusLabel`), the one every surface says for it.
   "needsYou.story.decisionAnswered":
-    "{titled, select, yes {{status}: {title}} other {{status}}}",
+    "{titled, select, yes {{status} “{title}”} other {{status}}}",
   "needsYou.story.slotAsked": "Asked you: {slot}",
   "needsYou.story.slotAnswered": "Answered: {slot}",
   // A refusal (`{ type: "declined" }`) is an answer on the wire, and a no.
@@ -68,9 +70,9 @@ export const fr: Catalog<typeof en> = {
   "needsYou.story.checks":
     "{result, select, passed {Vérifications réussies} failed {Vérifications en échec} other {Vérifications terminées}}",
   "needsYou.story.decisionAsked":
-    "{titled, select, yes {Proposé : {title}} other {A proposé un changement}}",
+    "{titled, select, yes {Proposé «\u00a0{title}\u00a0»} other {A proposé un changement}}",
   "needsYou.story.decisionAnswered":
-    "{titled, select, yes {{status} : {title}} other {{status}}}",
+    "{titled, select, yes {{status} «\u00a0{title}\u00a0»} other {{status}}}",
   "needsYou.story.slotAsked": "Vous a demandé : {slot}",
   "needsYou.story.slotAnswered": "Répondu : {slot}",
   "needsYou.story.slotRefused": "Refusé : {slot}",

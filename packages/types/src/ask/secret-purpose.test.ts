@@ -140,19 +140,17 @@ describe("the words say the grant that applies", () => {
 
   it("one read, asked by the ask or picked by the person, says once and its window", () => {
     expect(provideGrantNote({ ...offer, uses: "once", minutes: 15 })).toBe(
-      "Researcher will be able to read it once, within 15 minutes, in this job only."
+      "Researcher can read it once, within 15 minutes, in this job only."
     );
     expect(provideGrantNote(offer, { uses: "once" })).toBe(
-      "Researcher will be able to read it once, within 15 minutes, in this job only."
+      "Researcher can read it once, within 15 minutes, in this job only."
     );
     expect(
       provideGrantNote(
         { ...offer, uses: "once", minutes: 15 },
         { uses: "session" }
       )
-    ).toBe(
-      "Researcher will be able to read it for 60 minutes, in this job only."
-    );
+    ).toBe("Researcher can read it for up to 60 minutes, in this job only.");
   });
 
   it("the receipt says a standing grant lasts until taken back, and once is once", () => {

@@ -19,7 +19,13 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
+import {
+  GOVERNANCE_POLICY_SENTENCES,
+  GOVERNANCE_REASON_SHORT_LABELS,
+} from "@synap-core/types/proposals";
+
+/** The reason mark, read from its one home (`GOVERNANCE_REASON_SHORT_LABELS`). */
+const IDENTITY_MARK = GOVERNANCE_REASON_SHORT_LABELS.SCOPE_IDENTITY_CHANGE!;
 import { resolveActionLabel } from "@synap-core/types/vocabulary";
 
 vi.mock("next/navigation", () => ({
@@ -506,15 +512,13 @@ describe.each([
     const seen = text(render());
     expect(seen).toMatch(/Kind Finding Issue/);
     expect(seen).not.toMatch(/ProfileSlug/);
-    expect(seen.indexOf("Finding")).toBeLessThan(
-      seen.indexOf("Changes what it is")
-    );
+    expect(seen.indexOf("Finding")).toBeLessThan(seen.indexOf(IDENTITY_MARK));
   });
 
   it("why: the reason as ONE mark (its sentence behind it), the proposer's words as theirs", () => {
     const html = render();
     const seen = text(html);
-    expect(html).toContain('data-review-mark="Changes what it is"');
+    expect(html).toContain(`data-review-mark="${IDENTITY_MARK}"`);
     // The sentence is read from its one home, so a rewording never reds this.
     expect(seen).not.toContain(
       GOVERNANCE_POLICY_SENTENCES.SCOPE_IDENTITY_CHANGE
@@ -588,7 +592,7 @@ describe.each([
     const before = at(html, 'data-story-node="before"');
     const head = at(html, "data-story-head");
     const now = at(html, 'data-story-node="now"');
-    const change = at(html, "Changes what it is");
+    const change = at(html, IDENTITY_MARK);
     const after = at(html, 'data-story-node="after"');
     const decision = at(html, "data-review-decision");
     const depth = at(html, "data-story-depth");

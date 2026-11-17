@@ -26,6 +26,9 @@ import {
   resolveObjectNoun,
 } from "../vocabulary/index.js";
 import { declinedAnswerText } from "./declined.js";
+import { askT } from "./copy.js";
+import { isLocale, type Locale } from "../i18n/locale.js";
+import { ambientCatalogLocale } from "../i18n/ambient.js";
 import {
   ASK_CHANGED_PREFIX,
   askAnswersInline,
@@ -74,233 +77,303 @@ export { ASK_MODES_ENDING_WITH_SESSION, askEndsWithSession };
 /**
  * The person's words for the engine's units, through the vocabulary door
  * (founder G1, 2026-10-30): a session is a "job" (`JOB_NOUN`, defined once in
- * `../proposals/fate.ts`), a stage a "step". The card face never says
- * "session" (plan c727854c W1b): the engine word belongs on rung 3 only.
+ * `../proposals/fate.ts`), a stage a "step", each in the copy's locale. The
+ * card face never says "session" (plan c727854c W1b).
  */
-const STEP = nounInSentence(resolveObjectNoun("stage"));
+function unitNouns(locale: Locale): { job: string; step: string } {
+  return {
+    job: nounInSentence(resolveObjectNoun("session", locale)),
+    step: nounInSentence(resolveObjectNoun("stage", locale)),
+  };
+}
 
 /**
- * The card's words, ONCE for both surfaces. Product copy, not vocabulary: none
- * of these names a value the pod stores. "Yes" / "No" are `summarizeAnswer`'s
- * own receipt words, so the button pressed and the receipt read back agree.
- * No em dashes in visible copy.
+ * The card's words in `locale`, ONCE for every surface. Product copy, not
+ * vocabulary: none of these names a value the pod stores. "Yes" / "No" are
+ * `summarizeAnswer`'s own receipt words, so the button pressed and the
+ * receipt read back agree. No em dashes in visible copy. The sentences are
+ * the catalog's (`./copy.ts`); what an agent or a person wrote is a param.
  */
-export const ASK_COPY = {
-  yes: "Yes",
-  no: "No",
-  didThis: "I did this",
-  notMine: "Not mine",
-  /**
-   * "Not mine" said in the room as the person (`unblockOutput`), so the agent
-   * that asked reads that the slot came back to it, and why.
-   */
-  notMineReceipt: (label: string): string => `Not mine: ${label.trim()}`,
-  /**
-   * REFUSE, on every ask (`{ type: "declined" }`, `./declined.ts`): the verb
-   * through the vocabulary door, the reason prompt, what refusing does, and
-   * the receipt. The receipt is the answer's own summary
-   * (`declinedAnswerText`), so the button and the receipt agree.
-   */
-  refuse: resolveActionLabel("refuse", "imperative"),
-  /** The optional reason field: the agent reads it. */
-  refuseReason: "Tell the agent why (optional)",
-  /** What refusing does, shown before the person confirms it. */
-  refuseConsequence:
-    "The agent gets this back with your reason and picks its next step. Nothing is handed over.",
-  refusedReceipt: (reason?: string | null): string =>
-    declinedAnswerText(reason),
-  talk: "Talk it through",
-  answerDoor: "Answer…",
-  movedOn: "This one moved on",
-  askChanged: "The question changed. Check your answer.",
-  failedTitle: "Didn't go through",
-  doneByYou: "Done by you",
-  /** The surface appends " · {age}" itself. */
-  youAnswered: (answer: string): string => `You answered: ${answer}`,
-  agentHasIt: "The agent has it back.",
-  /**
-   * The heading over an ask's `lookedAt` — the objects the agent read before
-   * asking (trust-ladder rung 1). The agent speaks, so it is first person.
-   */
-  lookedAt: "What I looked at",
-  /**
-   * The label over an ask's `why`: act steps say "in this card's why", so the
-   * card names it. The agent speaks, so no first person is needed.
-   */
-  whyHeading: "Why",
-  /**
-   * The mark on an answered choose whose ask carried an AI recommendation
-   * ({@link askRecommendationOutcome}). Nothing is drawn for `none`.
-   */
-  followedAiPick: "Followed AI pick",
-  /** The ask's risk marks ({@link needsYouRisk}, `../needs-you/risk.ts`). */
-  riskHigh: NEEDS_YOU_RISK_LABELS.high,
-  riskMedium: NEEDS_YOU_RISK_LABELS.medium,
-  choseDifferently: "Chose differently from AI",
-  /** The overrode mark's detail line, when the recommended option is known. */
-  aiPicked: (label: string): string => `AI picked: ${label}`,
-  /**
-   * The ask's deadline mark (`answerBy`, {@link askCardView} `due`): a time
-   * past the hour, the span within it, or how late it is.
-   */
-  neededBy: (when: string): string => `Needed by ${when}`,
-  neededIn: (span: string): string => `Needed in ${span}`,
-  overdueBy: (span: string): string => `Overdue by ${span}`,
-  /** A provide this host has not wired (`askRowRegion` → `none`). */
-  provideTitle: "Not answerable here yet",
-  provideBody: "Talk it through with the agent.",
-  /** Provide, connection: start a new connection to the asked service. */
-  provideConnect: (service: string): string => `Connect ${service}`,
-  /** Provide, connection: hand over one the person already has. */
-  provideUseExisting: "Use an account you already connected",
-  /** Provide, connection: several accounts, so the person picks one. */
-  provideWhichAccount: "Which account?",
-  /** Provide, connection: why a new connection can't start from this pod. */
-  provideConnectUnavailable: (
-    reason: ProvideConnectUnavailableReason,
-    service: string
-  ): string => {
-    switch (reason) {
-      case "no_broker":
-        return "This pod can't connect accounts yet. A pod admin sets that up.";
-      case "not_offered":
-        return `This pod does not offer a ${service} connection yet. A pod admin can add it.`;
+function buildAskCopy(locale: Locale) {
+  const t = askT(locale);
+  const { job, step } = unitNouns(locale);
+  const named = (name: string | null | undefined) => {
+    const trimmed = name?.trim() ?? "";
+    return { named: trimmed ? "yes" : "no", agent: trimmed };
+  };
+  return {
+    yes: t("ask.yes"),
+    no: t("ask.no"),
+    didThis: t("ask.didThis"),
+    notMine: t("ask.notMine"),
+    /**
+     * "Not mine" said in the room as the person (`unblockOutput`), so the agent
+     * that asked reads that the slot came back to it, and why.
+     */
+    notMineReceipt: (label: string): string =>
+      t("ask.notMineReceipt", { label: label.trim() }),
+    /**
+     * REFUSE, on every ask (`{ type: "declined" }`, `./declined.ts`): the verb
+     * through the vocabulary door, the reason prompt, what refusing does, and
+     * the receipt. The receipt is the answer's own summary
+     * (`declinedAnswerText`), so the button and the receipt agree.
+     */
+    refuse: resolveActionLabel("refuse", "imperative", locale),
+    /** The optional reason field: the agent reads it. */
+    refuseReason: t("ask.refuseReason"),
+    /** What refusing does, shown before the person confirms it. */
+    refuseConsequence: t("ask.refuseConsequence"),
+    refusedReceipt: (reason?: string | null): string =>
+      declinedAnswerText(reason),
+    talk: t("ask.talk"),
+    answerDoor: t("ask.answerDoor"),
+    movedOn: t("ask.movedOn"),
+    askChanged: t("ask.askChanged"),
+    failedTitle: t("ask.failedTitle"),
+    doneByYou: t("ask.doneByYou"),
+    /** The surface appends " · {age}" itself. */
+    youAnswered: (answer: string): string => t("ask.youAnswered", { answer }),
+    agentHasIt: t("ask.agentHasIt"),
+    /**
+     * The heading over an ask's `lookedAt` — the objects the agent read before
+     * asking (trust-ladder rung 1). The agent speaks, so it is first person.
+     */
+    lookedAt: t("ask.lookedAt"),
+    /**
+     * The label over an ask's `why`: act steps say "in this card's why", so the
+     * card names it. The agent speaks, so no first person is needed.
+     */
+    whyHeading: t("ask.whyHeading"),
+    /**
+     * The mark on an answered choose whose ask carried an AI recommendation
+     * ({@link askRecommendationOutcome}). Nothing is drawn for `none`.
+     */
+    followedAiPick: t("ask.followedAiPick"),
+    /** The ask's risk marks ({@link needsYouRisk}, `../needs-you/risk.ts`). */
+    riskHigh: NEEDS_YOU_RISK_LABELS.high,
+    riskMedium: NEEDS_YOU_RISK_LABELS.medium,
+    choseDifferently: t("ask.choseDifferently"),
+    /** The overrode mark's detail line, when the recommended option is known. */
+    aiPicked: (label: string): string => t("ask.aiPicked", { label }),
+    /**
+     * The ask's deadline mark (`answerBy`, {@link askCardView} `due`): a time
+     * past the hour, the span within it, or how late it is.
+     */
+    neededBy: (when: string): string => t("ask.neededBy", { when }),
+    neededIn: (span: string): string => t("ask.neededIn", { span }),
+    overdueBy: (span: string): string => t("ask.overdueBy", { span }),
+    /** A provide this host has not wired (`askRowRegion` → `none`). */
+    provideTitle: t("ask.provideTitle"),
+    provideBody: t("ask.provideBody"),
+    /** Provide, connection: start a new connection to the asked service. */
+    provideConnect: (service: string): string =>
+      t("ask.provideConnect", { service }),
+    /** Provide, connection: hand over one the person already has. */
+    provideUseExisting: t("ask.provideUseExisting"),
+    /** Provide, connection: several accounts, so the person picks one. */
+    provideWhichAccount: t("ask.provideWhichAccount"),
+    /** Provide, connection: why a new connection can't start from this pod. */
+    provideConnectUnavailable: (
+      reason: ProvideConnectUnavailableReason,
+      service: string
+    ): string => t("ask.provideConnectUnavailable", { reason, service }),
+    /** Provide, connection: an account every member of the pod can use. */
+    provideAccountShared: t("ask.provideAccountShared"),
+    /** Provide, connection: an account that is signed out (never handed over). */
+    provideAccountNeedsSignIn: t("ask.provideAccountNeedsSignIn"),
+    /** Provide, connection: the connect flow is open somewhere else. */
+    provideWaitingForConnection: (service: string): string =>
+      t("ask.provideWaitingForConnection", { service }),
+    /** Provide, file. */
+    provideUpload: t("ask.provideUpload"),
+    provideLandsIn: (space: string): string =>
+      t("ask.provideLandsIn", { space }),
+    /** Provide, secret: pick one already in the person's vault. */
+    providePickSecret: t("ask.providePickSecret"),
+    /** Provide, secret: type a new one (only where the host may author it). */
+    provideAddSecret: t("ask.provideAddSecret"),
+    /** Provide, secret, on a host that never takes a new secret (the console). */
+    provideAddSecretInApp: t("ask.provideAddSecretInApp"),
+    /**
+     * Provide, secret: what handing it over lets the asking agent do, the
+     * cap said as a cap ("up to", review S11).
+     */
+    provideGrantNote: (agent: string, minutes: number): string =>
+      t("ask.provideGrantNote", { agent, minutes, job }),
+    /** Provide, secret, asked for one read only. */
+    provideGrantOnceNote: (agent: string, minutes: number): string =>
+      t("ask.provideGrantOnceNote", { agent, minutes, job }),
+    /**
+     * Provide, secret: the agent already holds a permanent grant on the picked
+     * secret, so nothing new is granted and nothing ends with the job.
+     */
+    provideStandingGrantNote: (agent: string): string =>
+      t("ask.provideStandingGrantNote", { agent }),
+    /** Provide, secret: the ask declared no purpose (never inferred). */
+    provideNoPurpose: t("ask.provideNoPurpose"),
+    /** Provide, secret: the pod could not tell which agent asked. */
+    provideNoGrantNote: t("ask.provideNoGrantNote"),
+    /**
+     * Provide, secret, after the answer: the agent asking is no longer the one
+     * the person was shown (`secretGrant` refused `agent_changed`), so the pod
+     * gave nobody a read of it.
+     */
+    provideAgentChangedTitle: t("ask.provideAgentChangedTitle"),
+    provideAgentChangedBody: t("ask.provideAgentChangedBody"),
+    /** Provide, file: the answer was refused after the upload, which stays. */
+    provideUploadKept: (space: string): string =>
+      t("ask.provideUploadKept", { space }),
+    /**
+     * The PROPOSED row for an undecided agent draft (`draft-asks` signal): the
+     * draft itself, to accept or reject. Composed ONCE, server-side, into the
+     * signal's `title`; `agent` is null when the pod cannot name who started it.
+     * It names no ask count: since the founder decision of 2026-10-22 a draft's
+     * asks are Needs-you rows of their own, and counting them here too would
+     * show one number in two places.
+     */
+    draftStarted: (agent: string | null, work: string): string =>
+      t("ask.draftStarted", { ...named(agent), work }),
+    /**
+     * The answer marks ({@link answerProvenanceMark}). `agent` is the relaying
+     * agent's display name; null when the pod cannot name it.
+     */
+    answeredByYou: t("ask.answeredByYou"),
+    // Unnamed, the relay is said without inventing "an agent" (founder,
+    // 2026-10-26): the mark still says it was relayed, never who.
+    relayedBy: (agent: string | null): string =>
+      t("ask.relayedBy", named(agent)),
+    /** A relay the person then confirmed with their own tap. */
+    relayConfirmed: (agent: string | null): string =>
+      t("ask.relayConfirmed", named(agent)),
+    /**
+     * A commitment's relay, waiting for the person's tap: a MARK, not an
+     * instruction. The Confirm / "Not what I said" pair beside it carries the
+     * instruction, and a lock screen with no pair never says "Confirm it".
+     */
+    awaitingYourTap: (agent: string | null): string =>
+      t("ask.awaitingYourTap", named(agent)),
+    confirmRelayed: t("ask.confirmRelayed"),
+    notWhatISaid: t("ask.notWhatISaid"),
+    /**
+     * The person's own words under the answer a relay will record
+     * ({@link relayRecordedAnswer}): the answer is the headline, this the quote.
+     */
+    youSaid: (quote: string): string =>
+      t("ask.youSaid", { quote: quote.trim() }),
+    /** The receipt after Confirm: what was settled, by the card's heading. */
+    relayConfirmedReceipt: (heading: string): string =>
+      t("ask.relayConfirmedReceipt", { heading: heading.trim() }),
+    /** The receipt after "Not what I said": nothing recorded, the ask reopens. */
+    relayRejectedReceipt: t("ask.relayRejectedReceipt"),
+    /** `note` is the agent's one-line reason, when it gave one. */
+    withdrawn: (note: string | null | undefined): string => {
+      const trimmed = note?.trim() ?? "";
+      return t("ask.withdrawn", {
+        noted: trimmed ? "yes" : "no",
+        note: trimmed,
+      });
+    },
+    closedSessionEnded: t("ask.closedSessionEnded", { job }),
+    /**
+     * A relayed answer's words on its receipt (a relay waiting for the tap, or
+     * one recorded): the person's own QUOTE when the agent carried it, else the
+     * recorded answer. Null when there are no words to show.
+     */
+    relayedWords: (answer: {
+      quote?: string | null;
+      text?: string | null;
+    }): string | null => {
+      const words = answer.quote?.trim() || answer.text?.trim();
+      return words ? t("ask.quoted", { words }) : null;
+    },
+    // ── The card's anatomy ({@link askCardView}) ──
+    /** The card's age: "Asked 8d ago", or spoken, "Asked 8 days ago". */
+    askedAgo: (span: string): string => t("ask.askedAgo", { span }),
+    /** The collapsed note affordance: one label, no placeholder repeating it. */
+    addNote: t("ask.addNote"),
+    /** The note field once opened: a noun, not the verb that opened it. */
+    note: t("ask.note"),
+    /** The mark on the answer the agent recommends. */
+    recommended: t("ask.recommended"),
+    /**
+     * What raised an ask no agent asked ({@link AskCause}), as the door's words.
+     * `at` is already formatted ("29 Sep"); absent, the date is left out.
+     */
+    askCause: (kind: AskCauseKind, at: string | null): string => {
+      const head = causeWords(kind);
+      return at ? t("ask.cause.withDate", { cause: head, at }) : head;
+    },
+  };
+
+  /** The words of each {@link AskCauseKind}. Product copy, not vocabulary. */
+  function causeWords(kind: AskCauseKind): string {
+    switch (kind) {
+      // Only a decision an AGENT wrote asks (founder, 2026-10-26), so never
+      // "your note". Its title is already the card's heading: the door names
+      // the kind.
+      case "decision":
+        return t("ask.cause.decision");
+      case "gate":
+        return t("ask.cause.gate", { job, step });
+      case "run":
+        return t("ask.cause.run");
+      case "external_approval":
+        return t("ask.cause.external_approval");
+      case "param":
+        return t("ask.cause.param");
+      case "criterion":
+        return t("ask.cause.criterion", { job });
       default:
-        return "Couldn't check which connections this pod offers. Try again in a moment.";
+        // A kind a newer pod sends: the ask still lives in a session.
+        return t("ask.cause.unknown", { job });
     }
-  },
-  /** Provide, connection: an account every member of the pod can use. */
-  provideAccountShared: "Shared with the pod",
-  /** Provide, connection: an account that is signed out (never handed over). */
-  provideAccountNeedsSignIn: "Needs signing in again",
-  /** Provide, connection: the connect flow is open somewhere else. */
-  provideWaitingForConnection: (service: string): string =>
-    `Finish connecting ${service}. This answers itself when it is done.`,
-  /** Provide, file. */
-  provideUpload: "Upload a file",
-  provideLandsIn: (space: string): string => `It will be saved in ${space}.`,
-  /** Provide, secret: pick one already in the person's vault. */
-  providePickSecret: "Pick a secret from your vault",
-  /** Provide, secret: type a new one (only where the host may author it). */
-  provideAddSecret: "Add the secret",
-  /** Provide, secret, on a host that never takes a new secret (the console). */
-  provideAddSecretInApp:
-    "New secrets are added in the Synap app, never typed here.",
-  /** Provide, secret: what handing it over lets the asking agent do. */
-  provideGrantNote: (agent: string, minutes: number): string =>
-    `${agent} will be able to read it for ${minutes} minutes, in this ${JOB_NOUN} only.`,
-  /** Provide, secret, asked for one read only. */
-  provideGrantOnceNote: (agent: string, minutes: number): string =>
-    `${agent} will be able to read it once, within ${minutes} minutes, in this ${JOB_NOUN} only.`,
-  /**
-   * Provide, secret: the agent already holds a permanent grant on the picked
-   * secret, so nothing new is granted and nothing ends with the job.
-   */
-  provideStandingGrantNote: (agent: string): string =>
-    `${agent} can already read this secret, until you take it back. Nothing new is granted.`,
-  /** Provide, secret: the ask declared no purpose (never inferred). */
-  provideNoPurpose: "The agent did not say what it is for.",
-  /** Provide, secret: the pod could not tell which agent asked. */
-  provideNoGrantNote:
-    "No agent will be able to read it yet. The agent has to ask for access.",
-  /**
-   * Provide, secret, after the answer: the agent asking is no longer the one
-   * the person was shown (`secretGrant` refused `agent_changed`), so the pod
-   * gave nobody a read of it.
-   */
-  provideAgentChangedTitle: "No agent can read your secret yet",
-  provideAgentChangedBody:
-    "The agent working on this changed. Reopen it to see who gets access.",
-  /** Provide, file: the answer was refused after the upload, which stays. */
-  provideUploadKept: (space: string): string =>
-    `The file was saved in ${space}, but it wasn't handed over.`,
-  /**
-   * The PROPOSED row for an undecided agent draft (`draft-asks` signal): the
-   * draft itself, to accept or reject. Composed ONCE, server-side, into the
-   * signal's `title`; `agent` is null when the pod cannot name who started it.
-   * It names no ask count: since the founder decision of 2026-10-22 a draft's
-   * asks are Needs-you rows of their own, and counting them here too would
-   * show one number in two places.
-   */
-  draftStarted: (agent: string | null, work: string): string =>
-    `${agent?.trim() || "An agent"} started ${work}`,
-  /**
-   * The answer marks ({@link answerProvenanceMark}). `agent` is the relaying
-   * agent's display name; null when the pod cannot name it.
-   */
-  answeredByYou: "You answered",
-  // Unnamed, the relay is said without inventing "an agent" (founder,
-  // 2026-10-26): the mark still says it was relayed, never who.
-  relayedBy: (agent: string | null): string =>
-    agent?.trim()
-      ? `Answered in chat · relayed by ${agent.trim()}`
-      : "Answered in chat · relayed",
-  /** A relay the person then confirmed with their own tap. */
-  relayConfirmed: (agent: string | null): string =>
-    agent?.trim()
-      ? `You confirmed what ${agent.trim()} relayed`
-      : "You confirmed the relayed answer",
-  /**
-   * A commitment's relay, waiting for the person's tap: a MARK, not an
-   * instruction. The Confirm / "Not what I said" pair beside it carries the
-   * instruction, and a lock screen with no pair never says "Confirm it".
-   */
-  awaitingYourTap: (agent: string | null): string =>
-    agent?.trim()
-      ? `Relayed by ${agent.trim()} · needs your tap`
-      : "Relayed · needs your tap",
-  confirmRelayed: "Confirm",
-  notWhatISaid: "Not what I said",
-  /**
-   * The person's own words under the answer a relay will record
-   * ({@link relayRecordedAnswer}): the answer is the headline, this the quote.
-   */
-  youSaid: (quote: string): string => `You said “${quote.trim()}”`,
-  /** The receipt after Confirm: what was settled, by the card's heading. */
-  relayConfirmedReceipt: (heading: string): string =>
-    `Confirmed · ${heading.trim()}`,
-  /** The receipt after "Not what I said": nothing recorded, the ask reopens. */
-  relayRejectedReceipt: "Not recorded · the question is yours again",
-  /** `note` is the agent's one-line reason, when it gave one. */
-  withdrawn: (note: string | null | undefined): string =>
-    note?.trim() ? `Withdrawn · ${note.trim()}` : "Withdrawn",
-  closedSessionEnded: `Closed · the ${JOB_NOUN} ended`,
-  /**
-   * A relayed answer's words on its receipt (a relay waiting for the tap, or
-   * one recorded): the person's own QUOTE when the agent carried it, else the
-   * recorded answer. Null when there are no words to show.
-   */
-  relayedWords: (answer: {
-    quote?: string | null;
-    text?: string | null;
-  }): string | null => {
-    const words = answer.quote?.trim() || answer.text?.trim();
-    return words ? `“${words}”` : null;
-  },
-  // ── The card's anatomy ({@link askCardView}) ──
-  /** The card's age: "Asked 8d ago", or spoken, "Asked 8 days ago". */
-  askedAgo: (span: string): string => `Asked ${span} ago`,
-  /** The collapsed note affordance: one label, no placeholder repeating it. */
-  addNote: "Add a note",
-  /** The note field once opened: a noun, not the verb that opened it. */
-  note: "Note",
-  /** The mark on the answer the agent recommends. */
-  recommended: "Recommended",
-  /**
-   * What raised an ask no agent asked ({@link AskCause}), as the door's words.
-   * `at` is already formatted ("29 Sep"); absent, the date is left out.
-   */
-  askCause: (kind: AskCauseKind, at: string | null): string => {
-    // A kind a newer pod sends: the ask still lives in a session.
-    const head = ASK_CAUSE_WORDS[kind] ?? `From the ${JOB_NOUN}`;
-    return at ? `${head} · ${at}` : head;
-  },
-} as const;
+  }
+}
+
+/** The ask card's words, as {@link askCopy} gives them. */
+export type AskCopy = ReturnType<typeof buildAskCopy>;
+
+const askCopies = new Map<Locale, AskCopy>();
+
+/**
+ * The ask card's words in `locale` (else the ambient catalog locale), built
+ * once per locale. A server writing for a person passes their locale; a
+ * client reads {@link ASK_COPY} at render.
+ */
+export function askCopy(locale?: Locale): AskCopy {
+  const loc = isLocale(locale) ? locale : ambientCatalogLocale();
+  let copy = askCopies.get(loc);
+  if (!copy) {
+    copy = buildAskCopy(loc);
+    askCopies.set(loc, copy);
+  }
+  return copy;
+}
+
+/**
+ * The ask card's words in the AMBIENT catalog locale, read when a property is
+ * read (each one a getter over {@link askCopy}), never frozen at module load:
+ * a client host that sets the locale (`setAmbientCatalogLocale`) gets French
+ * on its next render. Read it at render, never into a module-level constant.
+ * The server never sets the ambient locale, so it reads English.
+ */
+export const ASK_COPY: AskCopy = Object.defineProperties(
+  {} as AskCopy,
+  Object.fromEntries(
+    (Object.keys(askCopy("en")) as Array<keyof AskCopy>).map((key) => [
+      key,
+      { enumerable: true, get: () => askCopy()[key] },
+    ])
+  )
+);
+
+const STEP = nounInSentence(resolveObjectNoun("stage", "en"));
 
 /**
  * What moves on the answer to an ask no agent asked — the line a system
  * producer's slot reads when it declared none ({@link effectiveSlotUnblocks}).
- * Product copy, like {@link ASK_CAUSE_WORDS}.
+ * Product copy, like the cause words (`ask.cause.*`, `./copy.ts`). English
+ * only: the pod stamps it on the slot it serves (`owed-outputs.ts`).
  */
 const ASK_CAUSE_UNBLOCKS: Record<AskCauseKind, string> = {
   decision: "The decision is recorded",
@@ -330,18 +403,6 @@ export function effectiveSlotUnblocks(slot: AskCardSlot): string | null {
   const cause = effectiveAskCause(slot);
   return cause ? (ASK_CAUSE_UNBLOCKS[cause.kind] ?? null) : null;
 }
-
-/** The words of each {@link AskCauseKind}. Product copy, not vocabulary. */
-const ASK_CAUSE_WORDS: Record<AskCauseKind, string> = {
-  // Only a decision an AGENT wrote asks (founder, 2026-10-26), so never "your
-  // note". Its title is already the card's heading: the door names the kind.
-  decision: "From a proposed decision",
-  gate: `Before the ${JOB_NOUN}'s next ${STEP}`,
-  run: "From the run",
-  external_approval: "From the external agent's run",
-  param: "From the playbook's inputs",
-  criterion: `From the ${JOB_NOUN}'s checks`,
-};
 
 // ─── Where the slot stands ──────────────────────────────────────────────────
 
@@ -399,11 +460,15 @@ export interface AskRefusal {
 
 const ASK_CODE_PREFIX = /^ask_[a-z_]+:\s*/;
 
-const REFUSAL_FALLBACK: Record<AskRefusalKind, string> = {
-  failed: ASK_COPY.failedTitle,
-  ask_changed: ASK_COPY.askChanged,
-  moved_on: ASK_COPY.movedOn,
-};
+/** A refusal's words, read at call time (the ambient locale's). */
+function refusalFallback(kind: AskRefusalKind): string {
+  const copy = askCopy();
+  return kind === "ask_changed"
+    ? copy.askChanged
+    : kind === "moved_on"
+      ? copy.movedOn
+      : copy.failedTitle;
+}
 
 /**
  * How many "What I looked at" refs a card shows inline before "+N" — and "+N"
@@ -427,7 +492,7 @@ export function classifyAskRefusal(
       ? "ask_changed"
       : "moved_on";
   const words = raw.replace(ASK_CODE_PREFIX, "").trim();
-  return { kind, message: words || REFUSAL_FALLBACK[kind] };
+  return { kind, message: words || refusalFallback(kind) };
 }
 
 // ─── Which region a row draws ───────────────────────────────────────────────

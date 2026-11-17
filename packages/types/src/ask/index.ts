@@ -1742,9 +1742,14 @@ export {
   type ProvideAccountChoice,
 } from "./provide.js";
 
+/** The ask card's words as catalogs (en + fr) — see `./copy.ts`. */
+export { askCopyCatalogs, askT } from "./copy.js";
+
 /** The Ask card's shared surface rules and copy — see `./card.ts`. */
 export {
   ASK_COPY,
+  askCopy,
+  type AskCopy,
   LOOKED_AT_ROW_CAP,
   askSlotStanding,
   classifyAskRefusal,
