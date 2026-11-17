@@ -51617,7 +51617,7 @@
                                 "projectId": { "type": ["string", "null"] },
                                 "state": {
                                   "type": "string",
-                                  "enum": ["running", "paused"]
+                                  "enum": ["running", "paused", "stopped"]
                                 }
                               },
                               "required": [
