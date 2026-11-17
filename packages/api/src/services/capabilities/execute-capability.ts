@@ -161,6 +161,7 @@ import {
 } from "./capability-enable-link.js";
 import { answeringSkillOrder, answeringSkillsWhere } from "./verb-skill.js";
 import type { IntentRequestRecord } from "./intent-actions.js";
+import type { HeldSend } from "../channels/held-sends.js";
 import { describeIntentRun } from "./intent-input.js";
 import { resolveEntityVerbRunSubject } from "./capability-run-subject.js";
 import {
@@ -1890,6 +1891,8 @@ async function runResolvedSkillInner(
       message: string;
       errorClass?: FailureErrorClass;
       providerRef?: string;
+      /** Not sent and waiting: a LinkedIn action its account may not make today. */
+      held?: HeldSend;
     }
   | { kind: "not_found"; message: string }
   | {
@@ -2049,12 +2052,14 @@ async function runResolvedSkillInner(
         const env = (result ?? {}) as {
           errorClass?: FailureErrorClass;
           providerRef?: string;
+          held?: HeldSend;
         };
         return {
           kind: "error",
           message: errMessage,
           errorClass: env.errorClass,
           providerRef: env.providerRef,
+          ...(env.held ? { held: env.held } : {}),
         };
       }
     }
@@ -2102,6 +2107,7 @@ async function runResolvedSkillInner(
       // in-process sandbox (dispatch result); undefined for a non-provider failure.
       errorClass: envelope.errorClass,
       providerRef: envelope.providerRef,
+      ...(envelope.held ? { held: envelope.held } : {}),
     };
   }
   return { kind: "run", skillId: skill.id, result: envelope.result };

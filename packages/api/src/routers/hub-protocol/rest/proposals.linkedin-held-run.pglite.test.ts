@@ -8,9 +8,11 @@
  *
  * Rows rule out:
  *   - a limited run marked failed (its row not held, the failure written over);
- *   - a run that failed for another reason on an account that may act being
- *     held instead of failed;
- *   - a verb with no send intent being held.
+ *   - a run LinkedIn itself refused being held because the account's day
+ *     reads full (its 20th request refused with 422 cannot_resend_yet): the
+ *     hold comes ONLY from the run's own answer (`held`), never from a
+ *     re-read of the account, so LinkedIn's sentence is what the person sees;
+ *   - a run that failed for another reason being held instead of failed.
  *
  * The REAL `capability.run` executor on PGlite, with the harness of
  * `proposals.fenced-key.pglite.test.ts`; the skill runner is stubbed to
@@ -398,40 +400,69 @@ async function approveRun(skillId: string) {
   return { thrown, row: row! };
 }
 
+const UNTIL = () => {
+  const n = new Date();
+  return new Date(
+    Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() + 1)
+  ).toISOString();
+};
+
 describe("approving a LinkedIn connection request its account may not send today", () => {
-  beforeEach(() => {
-    // What the sandbox answers when the provider call was not sent (the
-    // limit refused it at `triggerProviderAction`).
+  it("the run answered held (today's 20 connection requests used): kept pending and HELD until the next day", async () => {
+    await limitReached(true);
+    // What the sandbox answers when the limit refused the provider call at
+    // `triggerProviderAction`: not sent, with the hold it waits under.
     h.runResolvedSkill.mockResolvedValue({
       kind: "error",
-      message:
-        "linkedin_send_invite: provider rejected the invitation (status 429)",
+      message: "This LinkedIn account sent today's 20 connection requests.",
       errorClass: "transient",
+      held: {
+        errorClass: "linkedin_limit",
+        reason: "This LinkedIn account sent today's 20 connection requests.",
+        at: new Date().toISOString(),
+        until: UNTIL(),
+      },
     });
-  });
-
-  it("the account used today's 20 connection requests: kept pending and HELD until the next day", async () => {
-    await limitReached(true);
     const { thrown, row } = await approveRun(INVITE);
     expect(thrown).toBeTruthy();
     expect(keepsRowAsRecorded(thrown)).toBe(true);
     expect(row.status).toBe("pending");
-    expect(row.data.held).toMatchObject({ errorClass: "linkedin_limit" });
+    expect(row.data.held).toMatchObject({
+      errorClass: "linkedin_limit",
+      until: UNTIL(),
+    });
   });
 
-  it("the account may still send: the failure stands (not held)", async () => {
-    await limitReached(false);
+  it("LinkedIn refused the day's 20th request (422 cannot_resend_yet) and the day now reads full: the failure stands with LinkedIn's sentence, not held", async () => {
+    await limitReached(true);
+    h.runResolvedSkill.mockResolvedValue({
+      kind: "error",
+      message:
+        "callProvider failed: Unipile: You cannot resend this invitation yet.",
+      errorClass: "validation",
+    });
     const { thrown, row } = await approveRun(INVITE);
     expect(thrown).toBeTruthy();
     expect(keepsRowAsRecorded(thrown)).toBe(false);
+    expect(String((thrown as Error).message)).toMatch(
+      /cannot resend this invitation yet/
+    );
     expect(row.data.held).toBeUndefined();
   });
 
-  it("a verb with no send intent is never held, even on a limited account", async () => {
-    await limitReached(true);
-    const { thrown, row } = await approveRun(SEARCH);
-    expect(keepsRowAsRecorded(thrown)).toBe(false);
-    expect(row.data.held).toBeUndefined();
+  it("a run that failed with no hold is not held, whatever its verb", async () => {
+    await limitReached(false);
+    h.runResolvedSkill.mockResolvedValue({
+      kind: "error",
+      message: "linkedin_search_people: provider error (status 500)",
+      errorClass: "provider",
+    });
+    for (const skill of [INVITE, SEARCH]) {
+      const { thrown, row } = await approveRun(skill);
+      expect(thrown).toBeTruthy();
+      expect(keepsRowAsRecorded(thrown)).toBe(false);
+      expect(row.data.held).toBeUndefined();
+    }
   });
 
   it("a run that went out is approved as before", async () => {

@@ -305,6 +305,7 @@ export function registerMessagingExecutors(): void {
           return { delivered: true };
         });
       } catch (err) {
+        // Assigned in the closure above; TS cannot see it.
         const hold = threadHeld as HeldSend | null;
         if (hold === null) throw err;
         await holdPendingSend(input.proposalId, hold);
