@@ -20,7 +20,14 @@
 
 import type { RootContent } from "mdast";
 import type { Diagnostic } from "./diagnostics.js";
-import { fenceColonsFor, scanContainers } from "./scan.js";
+import {
+  closesFence,
+  fenceColonsFor,
+  opensFence,
+  scanContainers,
+  splitLines,
+  type ScannedContainer,
+} from "./scan.js";
 
 /** The reference embeds (frames — `FRAME_DIRECTIVES` — carry content, not a reference). `synap-ask` is a session's live question. */
 export const EMBED_DIRECTIVES = [
@@ -235,7 +242,10 @@ export function readEmbed(node: DirectiveLike): Embed | null {
     diagnostics.push({
       code: "missing-ref",
       severity: "error",
-      message: `\`:::${directive}\` names nothing to show: it needs ${requiredWords(directive)}.`,
+      message:
+        directive === "synap-ask" && props && "ask" in props
+          ? ASK_DEFINITION_UNMATERIALIZED
+          : `\`:::${directive}\` names nothing to show: it needs ${requiredWords(directive)}.`,
       line,
       directive,
     });
@@ -290,6 +300,183 @@ function requiredWords(directive: string): string {
   return "allOf" in required
     ? required.allOf.join(" and ")
     : required.anyOf.join(" or ");
+}
+
+// ─── The ask DEFINITION (one write, no invented ids) ────────────────────────
+
+/**
+ * What a reader says about a stored `:::synap-ask` that carries an `ask` in
+ * its props block but no `sessionId` / `slot`: a question DEFINITION that was
+ * never turned into a real question. Stays an error (it draws nothing), and
+ * names the way out.
+ */
+export const ASK_DEFINITION_UNMATERIALIZED =
+  "`:::synap-ask` has an `ask` but no `sessionId` and `slot`, so no question was filed and nothing shows. Write it in your own session, or reference an existing question with `sessionId` and `slot`.";
+
+/**
+ * A `:::synap-ask` DEFINITION as authored (`ask-materialize`): no `sessionId`
+ * and no `slot` attribute, a ```json props block as the FIRST child, then the
+ * prose fallback. The pod turns it into a real question on the author's
+ * session and writes the reference form back (`rewriteAskDefinitions`).
+ */
+export interface AskDefinition {
+  /** 1-based line of the opener. */
+  line: number;
+  /** 0-based, inclusive line extent of the whole block (opener to closer). */
+  startLine: number;
+  endLine: number;
+  /** The decoded props block (an object). `ask` is NOT validated here: the pod's validator owns that. */
+  props: Record<string, unknown>;
+  /** The markdown after the props block, as authored. */
+  fallback: string;
+}
+
+export interface AskDefinitionProblem {
+  /** 1-based line of the opener. */
+  line: number;
+  message: string;
+}
+
+export interface AskDefinitionScan {
+  definitions: AskDefinition[];
+  /** Definitions that cannot be read: nothing may be materialized from them. */
+  problems: AskDefinitionProblem[];
+}
+
+function isInsideAsk(
+  containers: readonly ScannedContainer[],
+  c: ScannedContainer
+): boolean {
+  for (let p = c.parent; p !== null; p = containers[p]!.parent) {
+    if (containers[p]!.name === "synap-ask") return true;
+  }
+  return false;
+}
+
+/**
+ * Find the question definitions in a markdown string. Reads through the same
+ * line scanner every splice uses, so a `:::synap-ask` inside a code fence is
+ * invisible (it is an example, not a directive) and one nested in another
+ * ask's fallback is that ask's prose. Never throws.
+ *
+ * A block is a DEFINITION when it has neither `sessionId` nor `slot` and its
+ * first child is a ```json block. One with only one of the two attributes is
+ * a broken reference (the reader says so) and is left alone. One with no props
+ * block at all is left alone too: it names nothing, and the reader says that.
+ */
+export function scanAskDefinitions(markdown: string): AskDefinitionScan {
+  const definitions: AskDefinition[] = [];
+  const problems: AskDefinitionProblem[] = [];
+  if (!markdown.includes("synap-ask")) return { definitions, problems };
+  const scan = scanContainers(markdown);
+  const lines = splitLines(markdown);
+  for (const c of scan.containers) {
+    if (c.name !== "synap-ask" || isInsideAsk(scan.containers, c)) continue;
+    if (c.attributes.sessionId !== undefined || c.attributes.slot !== undefined)
+      continue;
+    const line = c.startLine + 1;
+    const body = lines.slice(
+      c.startLine + 1,
+      c.terminated ? c.endLine : c.endLine + 1
+    );
+    let at = 0;
+    while (at < body.length && body[at]!.trim() === "") at++;
+    const open = opensFence(body[at] ?? "");
+    // The reader's props block is a code block whose FIRST info word is `json`.
+    if (!open || open.char === "$" || !/^json(?:\s|$)/i.test(open.info))
+      continue;
+    if (/^\s/.test(lines[c.startLine] ?? "")) {
+      problems.push({
+        line,
+        message: "start `:::synap-ask` at the beginning of a line.",
+      });
+      continue;
+    }
+    // An HTML comment hides the block from the renderer but not from this scanner.
+    const above = lines.slice(0, c.startLine).join("\n");
+    if (above.lastIndexOf("<!--") > above.lastIndexOf("-->")) {
+      problems.push({
+        line,
+        message:
+          "this `:::synap-ask` sits inside an HTML comment: move it out.",
+      });
+      continue;
+    }
+    if (!c.terminated) {
+      problems.push({
+        line,
+        message:
+          "this `:::synap-ask` is never closed: end it with a line of `:::`.",
+      });
+      continue;
+    }
+    let close = -1;
+    for (let i = at + 1; i < body.length; i++) {
+      if (closesFence(body[i]!, open)) {
+        close = i;
+        break;
+      }
+    }
+    if (close === -1) {
+      problems.push({
+        line,
+        message: "the ```json block of this `:::synap-ask` is never closed.",
+      });
+      continue;
+    }
+    const decoded = decodeProps(
+      body.slice(at + 1, close).join("\n"),
+      "props block"
+    );
+    if ("error" in decoded) {
+      problems.push({ line, message: decoded.error });
+      continue;
+    }
+    definitions.push({
+      line,
+      startLine: c.startLine,
+      endLine: c.endLine,
+      props: decoded.props,
+      fallback: body.slice(close + 1).join("\n"),
+    });
+  }
+  return { definitions, problems };
+}
+
+/**
+ * Rewrite each definition to the REFERENCE form: its `sessionId` and `slot`,
+ * the props block gone, the prose fallback kept. Written by `serializeEmbed`
+ * (the one writer), so the result is exactly what a hand-built reference
+ * serializes to. `refs` pairs a definition (as returned by
+ * `scanAskDefinitions` on THIS markdown) with the real ids. Throws
+ * `EmbedSerializeError` when the fallback cannot be written back losslessly.
+ */
+export function rewriteAskDefinitions(
+  markdown: string,
+  refs: ReadonlyArray<{
+    definition: Pick<AskDefinition, "startLine" | "endLine" | "fallback">;
+    sessionId: string;
+    slot: string;
+  }>
+): string {
+  if (refs.length === 0) return markdown;
+  const lines = splitLines(markdown);
+  const ordered = [...refs].sort(
+    (a, b) => b.definition.startLine - a.definition.startLine
+  );
+  for (const { definition, sessionId, slot } of ordered) {
+    const block = serializeEmbed({
+      directive: "synap-ask",
+      ref: { sessionId, slot },
+      fallback: definition.fallback,
+    });
+    lines.splice(
+      definition.startLine,
+      definition.endLine - definition.startLine + 1,
+      ...block.split("\n")
+    );
+  }
+  return lines.join("\n");
 }
 
 // ─── The writer ─────────────────────────────────────────────────────────────
