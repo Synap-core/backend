@@ -352,7 +352,7 @@ describe("default 4: a run that stops early goes to Needs you", () => {
         },
       ])
     ).toEqual({ key: "new", label: "New" });
-    expect(slotTheRunWaitsOn(null)).toBeNull();
+    expect(slotTheRunWaitsOn([])).toBeNull();
   });
 });
 
