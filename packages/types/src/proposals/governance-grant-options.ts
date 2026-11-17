@@ -207,10 +207,7 @@ export function deriveGovernanceGrantOptions(
   // that rule would never fire.
   if (
     ctx.capabilityTarget &&
-    capabilityVerbAllowsRuleWiden(
-      ctx.capabilityTarget,
-      ctx.capabilityIntent
-    ) &&
+    capabilityVerbAllowsRuleWiden(ctx.capabilityTarget, ctx.capabilityIntent) &&
     !isNonWidenableGovernanceReason(ctx.governanceReason)
   ) {
     opts.push({

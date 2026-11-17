@@ -51,9 +51,8 @@ vi.mock("@synap/database/agent-governance", () => ({
 vi.mock("@synap/database/schema", () => T);
 
 const { gateCapabilityExecution } = await import("./index.js");
-const { capabilityVerbAllowsRuleWiden } = await import(
-  "@synap/governance-policy"
-);
+const { capabilityVerbAllowsRuleWiden } =
+  await import("@synap/governance-policy");
 
 const agentRun = (name: string, intent?: string | null) => ({
   capabilityKind: "skill" as const,

@@ -73,9 +73,9 @@ describe("redactSecretKeys — every string under a credential key", () => {
 
 describe("carriesRedactedSecret — the replay refusal sees the marker at any depth", () => {
   it("in an array or an object under a credential key", () => {
-    expect(carriesRedactedSecret(redactSecretKeys({ api_keys: [SECRET] }))).toBe(
-      true
-    );
+    expect(
+      carriesRedactedSecret(redactSecretKeys({ api_keys: [SECRET] }))
+    ).toBe(true);
     expect(
       carriesRedactedSecret(
         redactSecretKeys({ credentials: { username: "u", pass: SECRET } })

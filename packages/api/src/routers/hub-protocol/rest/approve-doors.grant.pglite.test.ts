@@ -127,8 +127,7 @@ const approve = (
   });
 
 beforeAll(async () => {
-  for (const t of [skills, tools] as PgTable[])
-    await h.client!.exec(ddlFor(t));
+  for (const t of [skills, tools] as PgTable[]) await h.client!.exec(ddlFor(t));
   for (const [id, ws] of [
     [SKILL_POD, null],
     [SKILL_W, W],
@@ -195,7 +194,7 @@ describe("what stays allowed", () => {
     expect(
       (await approve(keyApp(null), "skills", SKILL_POD, false)).status
     ).toBe(200);
-    const full: KeyGrant = { scopes: [{ permissions: ["*"] }] };
+    const full: KeyGrant = { clientId: null, scopes: [{ permissions: ["*"] }] };
     expect((await approve(keyApp(full), "tools", TOOL_POD, false)).status).toBe(
       200
     );

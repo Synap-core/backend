@@ -1144,8 +1144,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         }),
       },
       202: {
-        description:
-          "An agent handing it to another agent: proposed for review — `{ status: 'proposed', proposalId, reviewUrl }`",
+        description: "Proposed for review: a hand-off to another agent",
         schema: z.object({}).passthrough(),
       },
       400: { description: "Bad request", schema: ErrorSchema },

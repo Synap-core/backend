@@ -134,11 +134,11 @@ export function redactSecretKeys<T>(
   underSecretKey = false
 ): T {
   if (typeof value === "string") {
-    return (underSecretKey &&
-    value.trim() &&
-    !/^vault:\/\//.test(value.trim())
-      ? REDACTED_SECRET_VALUE
-      : value) as T;
+    return (
+      underSecretKey && value.trim() && !/^vault:\/\//.test(value.trim())
+        ? REDACTED_SECRET_VALUE
+        : value
+    ) as T;
   }
   if (!value || typeof value !== "object") return value;
   // Past the depth bound, what sits under a credential key is replaced,
