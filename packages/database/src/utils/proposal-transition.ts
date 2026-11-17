@@ -31,6 +31,7 @@ import { and, inArray, sql, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import { PROPOSAL_STATUS_DECLARATION } from "@synap-core/types/units";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
+import type { TransitionCause } from "@synap-core/types/lifecycle";
 // Type-only: the door runs on the executor it is handed, never on a pool it
 // opens itself (a PGlite test or a transaction passes its own).
 import type { db } from "../client-pg.js";
@@ -211,6 +212,8 @@ export function transitionProposal(
     set?: ProposalTransitionSet;
     actor?: WorkUnitActor;
     reason?: string | null;
+    /** The move that caused this one (a reaction, reactions W2). */
+    cause?: TransitionCause | null;
   }
 ) {
   const from = args.from ?? proposalStatusesThatMayBecome(args.to);
@@ -278,7 +281,11 @@ export function transitionProposal(
           'targetType', p.target_type,
           'targetId', p.target_id,
           'section', ${sectionSql()}
-        ), '{}'::jsonb
+        )${
+          args.cause
+            ? sql` || jsonb_build_object('cause', ${JSON.stringify(args.cause)}::jsonb)`
+            : sql``
+        }, '{}'::jsonb
           FROM (SELECT l.id, l.prior_status, gen_random_uuid() AS tid
                   FROM ${sql.raw(LOCKED_CTE)} l
                  WHERE l.prior_status <> ${args.to}::text) m

@@ -133,6 +133,41 @@ describe("a goal's status flip owes its transition", () => {
     });
   });
 
+  it("a move a rule caused carries its cause; one nobody caused carries none (reactions W2)", async () => {
+    const { trackId } = await goal("active");
+    await repo.transitionStatus(
+      trackId,
+      {
+        from: "active",
+        to: "paused",
+        actor: { kind: "system", userId: OWNER },
+        cause: {
+          reactionId: "rule-1",
+          transitionId: "t-src",
+          chainId: "t-src",
+          depth: 1,
+        },
+      },
+      OWNER
+    );
+    const [t] = await owedFor(trackId);
+    expect(t).toMatchObject({
+      cause: {
+        reactionId: "rule-1",
+        transitionId: "t-src",
+        chainId: "t-src",
+        depth: 1,
+      },
+    });
+    const other = await goal("active");
+    await repo.transitionStatus(
+      other.trackId,
+      { from: "active", to: "paused" },
+      OWNER
+    );
+    expect((await owedFor(other.trackId))[0]).not.toHaveProperty("cause");
+  });
+
   it("a lost compare-and-set owes nothing and emits no receipt", async () => {
     const { trackId } = await goal("completed");
     const before = receipts.length;

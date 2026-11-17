@@ -114,6 +114,36 @@ describe("transitionProposal owes the move's transition", () => {
     });
   });
 
+  it("a move a rule caused carries its cause; one nobody caused carries none (reactions W2)", async () => {
+    const id = await proposal("pending");
+    await transitionProposal(db, {
+      to: "expired",
+      where: eq(schema.proposals.id, id),
+      cause: {
+        reactionId: "rule-1",
+        transitionId: "t-src",
+        chainId: "t-src",
+        depth: 1,
+      },
+    });
+    const [t] = await owedFor(id);
+    expect(t).toMatchObject({
+      to: "expired",
+      cause: {
+        reactionId: "rule-1",
+        transitionId: "t-src",
+        chainId: "t-src",
+        depth: 1,
+      },
+    });
+    const plain = await proposal("pending");
+    await transitionProposal(db, {
+      to: "expired",
+      where: eq(schema.proposals.id, plain),
+    });
+    expect((await owedFor(plain))[0]).not.toHaveProperty("cause");
+  });
+
   it("a move nobody attributes is the system's, owned by who filed it", async () => {
     const id = await proposal("pending");
     await transitionProposal(db, {
