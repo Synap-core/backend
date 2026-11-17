@@ -11,14 +11,20 @@
  *
  * Each case rules a wrong rule out:
  *  - another agent's failed proposal, same person → ended, pointing at the
- *    new row, its bell entry actioned, its failure time kept (rules out
- *    "author only", and "a supersede is a decision now");
+ *    new row, its bell entry actioned, naming no person and dated now
+ *    (rules out "author only", and keeping the failure's reviewer);
+ *  - the same kind of request to ANOTHER target → left failed (rules out
+ *    "same type is enough");
+ *  - a plan that partly applied → refused, kept failed (Q6);
  *  - a PENDING one → refused, nothing filed (a person may be about to
  *    approve it: rules out "any undecided");
  *  - another person's failed one → refused, nothing filed (rules out
  *    "any failed row");
  *  - an id that names nothing → refused with the same words (no oracle);
  *  - a request that files TWO rows → only the first replaces it;
+ *  - a row of another KIND of request (other proposal type) → leaves it
+ *    open, and the matching row the same call files next replaces it
+ *    (rules out "whatever the call files first");
  *  - no `supersedes` → nothing ends.
  */
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
@@ -64,7 +70,11 @@ const ASKED = "agent-orchestrator";
 const FAILED_AT = new Date("2026-11-03T10:00:00Z");
 
 /** A proposal for `owner`, filed by AUTHOR, in `status`. */
-async function existing(status: string, owner = OWNER): Promise<string> {
+async function existing(
+  status: string,
+  owner = OWNER,
+  extra: Record<string, unknown> = {}
+): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into proposals (id, status, proposal_type, target_type, target_id, data,
@@ -73,7 +83,11 @@ async function existing(status: string, owner = OWNER): Promise<string> {
     [
       id,
       status,
-      JSON.stringify({ body: "Hi", failure: { errorClass: "missing_field" } }),
+      JSON.stringify({
+        body: "Hi",
+        failure: { errorClass: "missing_field" },
+        ...extra,
+      }),
       AUTHOR,
       owner,
       status === "approval_failed" ? FAILED_AT : null,
@@ -102,7 +116,11 @@ const rowOf = async (id: string) =>
       status: string;
       data: Record<string, unknown>;
       reviewed_at: Date | null;
-    }>(`select status, data, reviewed_at from proposals where id = $1`, [id])
+      reviewed_by: string | null;
+    }>(
+      `select status, data, reviewed_at, reviewed_by from proposals where id = $1`,
+      [id]
+    )
   )[0]!;
 
 const count = async () =>
@@ -147,9 +165,10 @@ describe("supersedes: a filing that replaces a failed proposal", () => {
     expect(old.status).toBe("withdrawn");
     expect(old.data[SUPERSEDED_BY_KEY]).toBe(filed.proposal.id);
     expect(old.data.withdrawReason).toBe(SUPERSEDED_REASON);
-    // Nobody decided now: the failure's own time stays.
-    expect(new Date(old.reviewed_at!).toISOString()).toBe(
-      FAILED_AT.toISOString()
+    // An end with no person names none, and is dated now (decision F2).
+    expect(old.reviewed_by).toBeNull();
+    expect(new Date(old.reviewed_at!).getTime()).toBeGreaterThan(
+      FAILED_AT.getTime()
     );
     expect((await rowOf(filed.proposal.id)).status).toBe("pending");
     const [bell] = await q<{ status: string }>(
@@ -198,6 +217,53 @@ describe("supersedes: a filing that replaces a failed proposal", () => {
     expect((await rowOf(failed)).data[SUPERSEDED_BY_KEY]).toBe(
       first.proposal.id
     );
+  });
+
+  it("a row of another kind of request leaves it open for the matching one", async () => {
+    const failed = await existing("approval_failed");
+    const { slot, result } = runWithSupersedes(failed, async () => {
+      const other = await insertPendingProposal(
+        filing({
+          proposalType: "update",
+          targetType: "entity",
+          targetId: "e-1",
+          data: { title: "x" },
+        }),
+        db as never
+      );
+      const send = await insertPendingProposal(filing(), db as never);
+      return { other, send };
+    });
+    const { other, send } = await result;
+    expect(other.superseded).toEqual([]);
+    expect(slot.replacedBy).toBe(send.proposal.id);
+    expect((await rowOf(failed)).data[SUPERSEDED_BY_KEY]).toBe(
+      send.proposal.id
+    );
+  });
+
+  it("the same kind of request to another target leaves it failed", async () => {
+    const failed = await existing("approval_failed");
+    const { slot, result } = runWithSupersedes(failed, () =>
+      insertPendingProposal(filing({ targetId: "ch-2" }), db as never)
+    );
+    await result;
+    expect(slot.replacedBy).toBeNull();
+    expect((await rowOf(failed)).status).toBe("approval_failed");
+  });
+
+  it("a plan that partly applied is refused and stays failed", async () => {
+    const partly = await existing("approval_failed", OWNER, {
+      planFailure: {
+        compensation: { notCompensated: [{ ref: "$op1", reason: "x" }] },
+      },
+    });
+    const { result } = runWithSupersedes(partly, () =>
+      insertPendingProposal(filing(), db as never)
+    );
+    await expect(result).rejects.toThrow(/partly applied/);
+    expect((await rowOf(partly)).status).toBe("approval_failed");
+    expect(await count()).toBe(1);
   });
 
   it("without supersedes, a failed proposal stays as it is", async () => {

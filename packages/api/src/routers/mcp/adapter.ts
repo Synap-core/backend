@@ -31,6 +31,7 @@ import {
   type SupersedesSlot,
 } from "@synap/database";
 import { toolError } from "./tool-errors.js";
+import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
 import {
   describeWriteSessions,
   firstTopicHint,
@@ -251,14 +252,19 @@ export async function executeMCPToolViaHubProtocol(
       ? runWithDerivedSession(session.sessionId, invokeHandler, session.receipt)
       : invokeHandler();
   // D3 (plan 8032a127): a write that REPLACES a failed proposal names it
-  // (`supersedes`, declared on every attributed tool). Refused here, before
-  // the handler, when the name cannot be replaced (the insert door checks it
-  // again against the row it files); otherwise the first proposal this call
-  // files for review ends it (`insertPendingProposal`).
+  // (`supersedes`, on SUPERSEDES_TOOLS only: any other tool refuses it).
+  // Refused here, before the handler, when the name cannot be replaced (the
+  // insert door checks it again, and the request kind, against the row it
+  // files); otherwise the proposal this call files for it ends it.
   const supersedes =
     typeof args.supersedes === "string" && args.supersedes.trim() !== ""
       ? args.supersedes.trim()
       : undefined;
+  if (args.supersedes !== undefined && !SUPERSEDES_TOOLS.includes(toolName)) {
+    return toolError(
+      `${toolName} does not take \`supersedes\` — NOTHING WAS CHANGED. Only ${SUPERSEDES_TOOLS.join(", ")} file a request that replaces a failed one.`
+    );
+  }
   if (supersedes) {
     const problem = await supersedesProblem(supersedes, userId);
     if (problem) {

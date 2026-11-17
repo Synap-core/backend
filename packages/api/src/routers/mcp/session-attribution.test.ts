@@ -1,3 +1,4 @@
+import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -221,31 +222,28 @@ describe("MCP session attribution — explicit override is declared", () => {
     ).toEqual([]);
   });
 
-  // D3 (plan 8032a127): the corrected request is filed through whatever door
-  // the failed one used, so EVERY attributed tool declares `supersedes`, the
-  // same derived way, and no read does (it files nothing to replace with).
-  it("every attributed tool declares supersedes, no read does — live list and manifest", async () => {
+  // D3 (plan 8032a127): `supersedes` is declared on EXACTLY the filing doors
+  // of SUPERSEDES_TOOLS (each a write), on the live list and the manifest,
+  // and on no other tool (the token-budget decision, 17 Nov 2026).
+  it("exactly SUPERSEDES_TOOLS declare supersedes — live list and manifest", async () => {
     const live = await tools.list();
-    const writes = live.filter((t) => t.annotations?.readOnlyHint !== true);
-    const reads = live.filter((t) => t.annotations?.readOnlyHint === true);
-    expect(writes.length).toBeGreaterThan(50);
-    expect(reads.length).toBeGreaterThan(20);
-    expect(
-      writes
-        .filter((t) => !t.inputSchema?.properties?.supersedes)
+    const declaring = (list: Array<{ name: string; inputSchema?: unknown }>) =>
+      list
+        .filter(
+          (t) =>
+            (t.inputSchema as { properties?: Record<string, unknown> })
+              ?.properties?.supersedes
+        )
         .map((t) => t.name)
-    ).toEqual([]);
-    expect(
-      reads
-        .filter((t) => t.inputSchema?.properties?.supersedes)
-        .map((t) => t.name)
-    ).toEqual([]);
-    const byName = manifestTools();
-    expect(
-      writes
-        .filter((t) => !byName.get(t.name)?.inputSchema?.properties?.supersedes)
-        .map((t) => t.name)
-    ).toEqual([]);
+        .sort();
+    expect(SUPERSEDES_TOOLS.length).toBeGreaterThan(2);
+    expect(declaring(live)).toEqual([...SUPERSEDES_TOOLS].sort());
+    expect(declaring([...manifestTools().values()])).toEqual(
+      [...SUPERSEDES_TOOLS].sort()
+    );
+    for (const name of SUPERSEDES_TOOLS) {
+      expect(await isReadOnlyTool(name)).toBe(false);
+    }
   });
 
   it("the derived declaration states the receipt's real idle window", async () => {

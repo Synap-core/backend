@@ -36,6 +36,8 @@ import {
   transitionProposal,
   expireOrphanedStageGates,
   UNDECIDED_PROPOSAL_STATUSES,
+  endedByNoPersonSet,
+  NOT_PARTLY_APPLIED,
 } from "@synap/database";
 import type { FailureErrorClass } from "@synap-core/types/failures";
 import { createLogger } from "@synap-core/core";
@@ -103,21 +105,23 @@ export function diesWithSession(
 }
 
 /**
- * Failure classes that clear WITHOUT changing the request: retried as it is
- * once a moment passes (`transient`) or once the person fixes a connection
- * (`auth`, `no_connection`, `not_connected`, which the held-send reopen also
- * waits on). A failed row of one of these stays off the lapse clock: a sweep
- * must never expire a failure someone is about to retry (plan 8032a127 D2). Every other class needs the request itself changed (revise, or a
- * newer filing that supersedes it), so its moment passes like a pending one's.
- * An unclassified failure (no `errorClass`) is NOT retryable here: `unknown`
- * says nobody knows a retry would pass.
+ * Failure classes kept OFF the lapse clock (plan 8032a127 D2, decision F3): a
+ * sweep must never expire a failure a person is about to fix or retry. A
+ * retry clears it as it is (`transient`); a person fixes a connection or a
+ * setup (`auth`, `no_connection`, `not_connected`, `missing_field`), a right
+ * (`permission`), or must check what happened (`conflict`: the outcome is
+ * unclear). Every other class needs the request itself changed, so its moment
+ * passes like a pending one's; an unclassified one (`unknown`, or none) too.
  */
-export const RETRYABLE_FAILURE_CLASSES: ReadonlySet<FailureErrorClass> =
+export const LAPSE_EXEMPT_FAILURE_CLASSES: ReadonlySet<FailureErrorClass> =
   new Set<FailureErrorClass>([
     "transient",
     "auth",
     "no_connection",
     "not_connected",
+    "missing_field",
+    "permission",
+    "conflict",
   ]);
 
 /** The `data.failure.errorClass` of a failed row, when it carries one. */
@@ -140,8 +144,8 @@ export interface LapseCandidate {
   /**
    * `pending` (absent: read as pending) or `approval_failed`. A failed row's
    * clock starts at its failure (`reviewedAt`, written by the failure write),
-   * not at its filing, and a retryable failure never lapses
-   * ({@link RETRYABLE_FAILURE_CLASSES}).
+   * not at its filing, and an exempt failure class never lapses
+   * ({@link LAPSE_EXEMPT_FAILURE_CLASSES}).
    */
   status?: string;
   reviewedAt?: Date | null;
@@ -180,7 +184,7 @@ export function selectLapsedIds(
     const failed = p.status === ProposalStatus.APPROVAL_FAILED;
     if (failed) {
       const cls = failureClassOf(p.data);
-      if (cls && RETRYABLE_FAILURE_CLASSES.has(cls as FailureErrorClass))
+      if (cls && LAPSE_EXEMPT_FAILURE_CLASSES.has(cls as FailureErrorClass))
         continue;
     }
     const since = failed ? (p.reviewedAt ?? p.createdAt) : p.createdAt;
@@ -296,7 +300,7 @@ export interface ExpireLapsedResult {
 
 /**
  * Expire every undecided proposal past its class lifetime: a pending one from
- * its filing, a failed one from its failure (retryable classes never).
+ * its filing, a failed one from its failure (exempt classes never).
  *
  * Classes with a `null` lifetime are never touched, and an unrecognised
  * proposalType falls to `objectWork` (no lifetime) — so this pass fails toward
@@ -431,9 +435,10 @@ export async function expireLapsedProposals(
         to: ProposalStatus.EXPIRED,
         from: [from],
         set: {
+          ...endedByNoPersonSet(now),
           updatedAt: now,
         },
-        where: inArray(proposals.id, batch),
+        where: and(inArray(proposals.id, batch), NOT_PARTLY_APPLIED),
       }).returning({ id: proposals.id });
       for (const r of rows) actionedIds.push(r.id);
       expired += rows.length;
@@ -505,9 +510,10 @@ export async function expireSessionEphemerals(
       to: ProposalStatus.EXPIRED,
       from: UNDECIDED_PROPOSAL_STATUSES,
       set: {
+        ...endedByNoPersonSet(now),
         updatedAt: now,
       },
-      where: inArray(proposals.id, ids),
+      where: and(inArray(proposals.id, ids), NOT_PARTLY_APPLIED),
     }).returning({ id: proposals.id });
     // Expired = no longer decidable: its bell rows leave with it (one door with approve/reject).
     markProposalNotificationsActioned(rows.map((r) => r.id));

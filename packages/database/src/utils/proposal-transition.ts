@@ -150,6 +150,29 @@ export const UNDECIDED_PROPOSAL_STATUSES: readonly ProposalStatus[] = [
   APPROVAL_FAILED,
 ];
 
+/**
+ * The columns an end with NO person writes (decision F2, plan 8032a127): a
+ * FAILED row that a sweep or helper expires, or that its author or a newer
+ * filing withdraws, names no reviewer and is dated now. A pending row keeps
+ * what it had (nobody reviewed it). Every end helper spreads this into its
+ * `set`, so "who ended it" has one rule.
+ */
+export function endedByNoPersonSet(at: Date): ProposalTransitionSet {
+  const failed = sql`${proposals.status} = ${APPROVAL_FAILED}`;
+  return {
+    reviewedBy: sql`CASE WHEN ${failed} THEN NULL ELSE ${proposals.reviewedBy} END`,
+    reviewedAt: sql`CASE WHEN ${failed} THEN ${at.toISOString()}::timestamptz ELSE ${proposals.reviewedAt} END`,
+  };
+}
+
+/**
+ * Not a connected plan that PARTLY applied: a failed plan whose undo left
+ * steps in place (`planFailure.compensation.notCompensated`) stays failed, so
+ * a person sees what landed; no sweep, helper or newer filing ends it (plan
+ * 8032a127 Q6; the revise door refuses to reopen it the same way).
+ */
+export const NOT_PARTLY_APPLIED: SQL = sql`CASE WHEN jsonb_typeof(${proposals.data} #> '{planFailure,compensation,notCompensated}') = 'array' THEN jsonb_array_length(${proposals.data} #> '{planFailure,compensation,notCompensated}') = 0 ELSE true END`;
+
 /** The statuses that mean "the approval applied". */
 export const APPLIED_PROPOSAL_STATUSES: readonly ProposalStatus[] = [
   APPROVED,

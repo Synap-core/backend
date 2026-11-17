@@ -5,20 +5,16 @@
  * 3 Nov were filed again on 9 Nov beside the failed ones: two cards for one
  * person, both of which could go out.
  *
- * SEAM: the REAL `refileUndecidedSend` (the send door's step before it files)
- * → the REAL revise core `mergeProposalRevision`, on PGlite. Each case rules a
- * wrong rule out:
- *  - another agent's PENDING send → revised in place: same row, new words,
- *    the AUTHOR kept, the filing agent named on the revision (rules out
- *    "author only", and "the filer takes the row over");
- *  - a FAILED send never dispatched → revised and reopened for review;
+ * SEAM: the REAL `undecidedSendOn` (which send a new one meets) on PGlite;
+ * the revise and the replace are driven through the send door in
+ * `channel-send.pglite.test.ts`. Each case rules a wrong rule out:
+ *  - a pending send, or a failed one never dispatched → found;
  *  - a failed send that REACHED the network (`external_dispatched_at`) →
- *    never reopened: a new send is filed (rules out "any failed row");
- *  - another person's send on the channel → untouched (rules out "per
- *    channel" without the owner);
- *  - an app's draft (no agent: no author rung to revise it under) → left
- *    alone, the new send is filed beside it;
- *  - a pending and a failed one → the pending one is revised.
+ *    never (rules out "any failed row");
+ *  - another person's send on the channel → never (rules out "per channel"
+ *    without the owner);
+ *  - an app's draft (no agent) → found: it is replaced like any other;
+ *  - a pending and a failed one → the pending one.
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -43,8 +39,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { runWithActingAgent } from "@synap/database";
-import { refileUndecidedSend } from "./external-dispatch.js";
+import { undecidedSendOn } from "./external-dispatch.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -71,7 +66,6 @@ const q = <T>(sql: string, params?: unknown[]) =>
 const OWNER = randomUUID();
 const OTHER_OWNER = randomUUID();
 const AUTHOR = randomUUID();
-const FILER = randomUUID();
 const CHANNEL = randomUUID();
 
 async function send(opts: {
@@ -110,29 +104,9 @@ async function send(opts: {
   return id;
 }
 
-const refile = (body: string) =>
-  runWithActingAgent(FILER, () =>
-    refileUndecidedSend({
-      ownerUserId: OWNER,
-      channelId: CHANNEL,
-      body,
-      subject: null,
-      filingAgentUserId: FILER,
-    })
-  );
-
-async function rowOf(id: string) {
-  const { rows } = await q<{
-    status: string;
-    agent_user_id: string;
-    data: Record<string, unknown>;
-    revision_history: Array<Record<string, unknown>> | null;
-  }>(
-    `select status, agent_user_id, data, revision_history from proposals where id = $1`,
-    [id]
-  );
-  return rows[0]!;
-}
+const found = async () =>
+  (await undecidedSendOn({ ownerUserId: OWNER, channelId: CHANNEL }))?.id ??
+  null;
 
 beforeAll(async () => {
   const tables = (Object.values(schema) as unknown[]).filter(
@@ -147,52 +121,32 @@ beforeEach(async () => {
   await h.client!.exec(`delete from proposals;`);
 });
 
-describe("one undecided send per person's channel", () => {
-  it("another agent's pending send is revised in place: same row, new words, its author kept", async () => {
+describe("the undecided send a new one meets on a person's channel", () => {
+  it("a pending send, or a failed one never dispatched, is found", async () => {
     const pending = await send({ status: "pending" });
-    expect(await refile("Second draft")).toBe(pending);
-    const row = await rowOf(pending);
-    expect(row.status).toBe("pending");
-    expect(row.data.body).toBe("Second draft");
-    expect(row.agent_user_id).toBe(AUTHOR);
-    expect(row.revision_history?.at(-1)).toMatchObject({
-      actingAgentUserId: FILER,
-      patch: { body: "Second draft" },
-    });
-  });
-
-  it("a failed send never dispatched is revised and reopened for review", async () => {
+    expect(await found()).toBe(pending);
+    await h.client!.exec(`delete from proposals;`);
     const failed = await send({ status: "approval_failed" });
-    expect(await refile("Fixed draft")).toBe(failed);
-    const row = await rowOf(failed);
-    expect(row.status).toBe("pending");
-    expect(row.data.body).toBe("Fixed draft");
-    expect(row.data.failure).toBeUndefined();
+    expect(await found()).toBe(failed);
   });
 
-  it("a failed send that reached the network is never reopened: a new one is filed", async () => {
-    const dispatched = await send({
-      status: "approval_failed",
-      dispatched: true,
-    });
-    expect(await refile("Again")).toBeNull();
-    expect((await rowOf(dispatched)).status).toBe("approval_failed");
+  it("a failed send that reached the network is never met again", async () => {
+    await send({ status: "approval_failed", dispatched: true });
+    expect(await found()).toBeNull();
   });
 
-  it("another person's send on the same channel is left alone", async () => {
-    const theirs = await send({ status: "pending", owner: OTHER_OWNER });
-    expect(await refile("Mine")).toBeNull();
-    expect((await rowOf(theirs)).data.body).toBe("First draft");
+  it("another person's send on the same channel is never met", async () => {
+    await send({ status: "pending", owner: OTHER_OWNER });
+    expect(await found()).toBeNull();
   });
 
-  it("an app's draft (no agent) is left alone", async () => {
+  it("an app's draft (no agent) is met like any other", async () => {
     const appDraft = await send({ status: "pending", agent: null });
-    expect(await refile("Mine")).toBeNull();
-    expect((await rowOf(appDraft)).data.body).toBe("First draft");
+    expect(await found()).toBe(appDraft);
   });
 
-  it("with a pending and a failed one, the pending one is revised", async () => {
-    const failed = await send({
+  it("with a pending and a failed one, the pending one", async () => {
+    await send({
       status: "approval_failed",
       createdAt: "2026-11-09T10:00:00Z",
     });
@@ -200,7 +154,6 @@ describe("one undecided send per person's channel", () => {
       status: "pending",
       createdAt: "2026-11-03T10:00:00Z",
     });
-    expect(await refile("Newest")).toBe(pending);
-    expect((await rowOf(failed)).status).toBe("approval_failed");
+    expect(await found()).toBe(pending);
   });
 });

@@ -35,6 +35,8 @@ import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 import { createdRecordIdentity } from "./insert-pending-proposal.js";
 import {
+  endedByNoPersonSet,
+  NOT_PARTLY_APPLIED,
   transitionProposal,
   UNDECIDED_PROPOSAL_STATUSES,
 } from "./proposal-transition.js";
@@ -101,6 +103,7 @@ export async function expirePendingCreatesOfLandedRecord(
     to: ProposalStatus.EXPIRED,
     from: UNDECIDED_PROPOSAL_STATUSES,
     set: {
+      ...endedByNoPersonSet(new Date()),
       updatedAt: new Date(),
       data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(
         'expiredBy', 'record_landed',
@@ -109,7 +112,7 @@ export async function expirePendingCreatesOfLandedRecord(
     },
     // Re-checked at write (`from`): a copy decided between the read and here
     // keeps its decision.
-    where: inArray(proposals.id, sameRecord),
+    where: and(inArray(proposals.id, sameRecord), NOT_PARTLY_APPLIED),
   }).returning({ id: proposals.id });
   return expired.map((row) => row.id);
 }

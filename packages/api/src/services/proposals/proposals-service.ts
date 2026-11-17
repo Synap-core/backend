@@ -24,6 +24,7 @@ import {
   getActingAgentUserId,
   transitionProposal,
   computeProposalDedupHash,
+  isUniqueViolation,
   ne,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
@@ -1060,16 +1061,13 @@ export async function mergeProposalRevision(
             )
           )
           .limit(1);
-        if (twin) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `The same request is already waiting for review as proposal ${twin.id}, so this one was left as it is. Revise that one instead, and withdraw this one (synap_reject_proposal, if it is yours).`,
-          });
-        }
+        if (twin) throw sameRequestWaiting(twin.id);
       }
       // Reopened: the failure is history (kept on the revision entry above),
       // and the row waits for a review again: approval_failed → pending,
       // through the status door.
+      // The peek above and this write race a concurrent identical filing: the
+      // index answers it with the same refusal, never a raw unique violation.
       await transitionProposal(tx, {
         to: ProposalStatus.PENDING,
         from: [ProposalStatus.APPROVAL_FAILED],
@@ -1089,6 +1087,8 @@ export async function mergeProposalRevision(
             : {}),
         },
         where: unchanged,
+      }).catch((err: unknown) => {
+        throw isUniqueViolation(err) ? sameRequestWaiting(null) : err;
       });
     } else {
       await tx
@@ -1126,6 +1126,14 @@ export async function mergeProposalRevision(
   return redecideOwnGraphRevision({
     proposalId: params.proposalId,
     ...redecide,
+  });
+}
+
+/** The reopen's refusal when the same request already waits as another row. */
+function sameRequestWaiting(twinId: string | null): TRPCError {
+  return new TRPCError({
+    code: "CONFLICT",
+    message: `The same request is already waiting for review${twinId ? ` as proposal ${twinId}` : ""}, so this one was left as it is. Revise that one instead, and withdraw this one (synap_reject_proposal, if it is yours).`,
   });
 }
 

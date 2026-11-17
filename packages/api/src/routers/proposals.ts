@@ -2753,17 +2753,8 @@ export const proposalsRouter = router({
       //     principal acting as itself.
       //   · revise    — matches `ctx.agentUserId === proposals.agentUserId`,
       //     which DOES fire for the ordinary agent key.
-      // So today an ordinary agent key can amend its own proposal but cannot
-      // withdraw it. That divergence is KNOWN and deliberately left in place:
-      // withdraw is TERMINAL and revise is not. A revise leaves the proposal
-      // pending with `revisionHistory` appended, so the human still decides on
-      // a request they can see changed; a withdraw removes it from the queue
-      // outright, and a human about to approve simply loses it with no
-      // equivalent trace. "Still asking, not deciding" justifies the revise
-      // rung and does not transfer to a terminal state change.
-      // Aligning them would WIDEN withdraw — a separate decision needing its
-      // own evidence (how many pending proposals are agent-authored, and
-      // whether any surface treats `withdrawn` differently from `rejected`).
+      // The ordinary agent key withdraws its own proposal through the
+      // author-agent rung below (plan 8032a127 D2), not through this one.
       const isActingAgent =
         !!proposal.agentUserId && proposal.createdBy === userId;
       // The human CREATOR of an agent-less proposal: most capture/import doors
@@ -2773,8 +2764,8 @@ export const proposalsRouter = router({
       // proposer — not a widening to other users or to session owners.
       const isHumanCreator =
         !proposal.agentUserId && proposal.createdBy === userId;
-      // THE AUTHOR AGENT (plan 8032a127 D2, the decision the note above waited
-      // for): matched as the revise author rung matches (`proposals-service.ts`).
+      // THE AUTHOR AGENT (plan 8032a127 D2): the agent IDENTITY (the key's
+      // agent), never the session, matched as the revise author rung matches.
       const actingAgentUserId =
         getActingAgentUserId() ?? ctx.agentUserId ?? null;
       const isAuthorAgent =
@@ -2799,9 +2790,15 @@ export const proposalsRouter = router({
         // retried into another status, meanwhile keeps that.
         from: [from],
         set: {
-          // An agent is not a reviewer: its withdrawal names no person (the
-          // row's `agentUserId` already says who filed it).
-          reviewedBy: actingAgentUserId ? null : userId,
+          // Its author agent taking it back names no person (decision F2); a
+          // person withdrawing, through any key, is named.
+          reviewedBy:
+            isAuthorAgent &&
+            !isHumanProposer &&
+            !isActingAgent &&
+            !isHumanCreator
+              ? null
+              : userId,
           reviewedAt: now,
           updatedAt: now,
           // On `data.withdrawReason` (the `data.revertReason` precedent), NEVER

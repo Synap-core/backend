@@ -673,7 +673,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR it: yours, with synap_revise_proposal (it reopens for review, never a second filing); another agent's, file the corrected request with `supersedes` = this id (it ends withdrawn, pointing to the new one). Take back your own with synap_reject_proposal (withdrawn, not scored). A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned.",
+      "description": "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR it: yours with synap_revise_proposal; another's, file the fix with `supersedes` = this id (capture, create/update_entity, run_capability). Take back yours with synap_reject_proposal (unscored). A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned.",
       "parameters": [
         {
           "name": "proposalId",
@@ -1311,7 +1311,7 @@
           "name": "supersedes",
           "type": "string",
           "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
+          "description": "Failed proposal id"
         }
       ],
       "inputSchema": {
@@ -1375,7 +1375,7 @@
           },
           "supersedes": {
             "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
+            "description": "Failed proposal id"
           }
         },
         "required": ["profileSlug", "title"]
@@ -1467,7 +1467,7 @@
           "name": "supersedes",
           "type": "string",
           "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
+          "description": "Failed proposal id"
         }
       ],
       "inputSchema": {
@@ -1543,7 +1543,7 @@
           },
           "supersedes": {
             "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
+            "description": "Failed proposal id"
           }
         },
         "required": ["entityId"]
@@ -1585,12 +1585,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -1680,10 +1674,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["items"]
@@ -1718,12 +1708,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -1740,10 +1724,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["entityId"]
@@ -1829,12 +1809,6 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -1886,10 +1860,6 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["title"]
@@ -1942,12 +1912,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -2055,10 +2019,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["documentId", "ops"]
@@ -2100,12 +2060,6 @@
           "type": "string",
           "required": false,
           "description": "OPTIONAL focus-session override, same rules as on `synap_store_file`. The upload's `synap_store_file` call defaults to this session."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -2127,10 +2081,6 @@
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL focus-session override, same rules as on `synap_store_file`. The upload's `synap_store_file` call defaults to this session."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["filename", "mimeType", "size"]
@@ -2202,12 +2152,6 @@
           "type": "string",
           "required": false,
           "description": "The declared output slot this fulfils, exactly as declared on the session."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -2249,10 +2193,6 @@
           "expectedLabel": {
             "type": "string",
             "description": "The declared output slot this fulfils, exactly as declared on the session."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         }
       }
@@ -2318,12 +2258,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -2361,10 +2295,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["fact"]
@@ -2417,12 +2347,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -2452,10 +2376,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["sourceEntityId", "targetEntityId"]
@@ -2514,12 +2434,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -2552,10 +2466,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["entityId", "facetSlug"]
@@ -2608,12 +2518,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -2642,10 +2546,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": []
@@ -2710,12 +2610,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -2752,10 +2646,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["properties"]
@@ -2832,12 +2722,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -2883,10 +2767,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["slug", "displayName", "workspaceId"]
@@ -2970,12 +2850,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -3076,10 +2950,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["slug", "displayName", "workspaceId"]
@@ -3350,12 +3220,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -3629,10 +3493,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["goal"]
@@ -3828,12 +3688,6 @@
           "type": "array<string>",
           "required": false,
           "description": "Stop waiting on these sessions — how you RE-PLAN when a blocker was dropped (cancelled / failed), or when it is no longer needed. Reported per id on `blockerRemovals` (removed | absent — there was no such edge | proposed | failed with a reason). To wait on a retry instead, remove the old one and add the retry (`addBlockedBySessionIds`) in the same call."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -4155,10 +4009,6 @@
             "items": { "type": "string", "format": "uuid" },
             "maxItems": 20,
             "description": "Stop waiting on these sessions — how you RE-PLAN when a blocker was dropped (cancelled / failed), or when it is no longer needed. Reported per id on `blockerRemovals` (removed | absent — there was no such edge | proposed | failed with a reason). To wait on a retry instead, remove the old one and add the retry (`addBlockedBySessionIds`) in the same call."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         }
       }
@@ -4187,12 +4037,6 @@
           "type": "object",
           "required": false,
           "description": "Evidence keyed by each criterion's evidenceKey (e.g. { typecheck: { passed: true, detail: \"0 errors\" } })."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -4213,10 +4057,6 @@
               },
               "required": ["passed"]
             }
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["sessionId"]
@@ -4270,12 +4110,6 @@
           "type": "array<object>",
           "required": false,
           "description": "Your word on each question you asked in the room that is still open (the refusal lists them). 'withdrawn' = your work overtook it (say why in `note`). 'keep_as_owed' = the person still owes you the answer after this session: it becomes an owed slot of theirs."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -4326,10 +4160,6 @@
               },
               "required": ["messageId", "disposition"]
             }
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["sessionId"]
@@ -4467,12 +4297,6 @@
           "type": "string",
           "required": false,
           "description": "Why you are rerunning (e.g. which guideline changed) — recorded on the new session's run manifest for the reviewer."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -4499,10 +4323,6 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are rerunning (e.g. which guideline changed) — recorded on the new session's run manifest for the reviewer."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["sessionId", "mode"]
@@ -4612,12 +4432,6 @@
           "type": "boolean",
           "required": false,
           "description": "false = peek: never mark answers picked up or messages read (a watcher that is not the agent doing the work). Default: an agent's read marks them."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -4669,10 +4483,6 @@
           "stamp": {
             "type": "boolean",
             "description": "false = peek: never mark answers picked up or messages read (a watcher that is not the agent doing the work). Default: an agent's read marks them."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": []
@@ -4744,12 +4554,6 @@
           "type": "string",
           "required": false,
           "description": "With 'withdrawn': one line on why you no longer need it."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -4796,10 +4600,6 @@
             "type": "string",
             "maxLength": 500,
             "description": "With 'withdrawn': one line on why you no longer need it."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["sessionId", "disposition"]
@@ -4897,12 +4697,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: a session of yours, still open, to file it on. Omit it: the ask lands where this conversation's writes are grouped, else on your standing asks session."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -5053,10 +4847,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: a session of yours, still open, to file it on. Omit it: the ask lands where this conversation's writes are grouped, else on your standing asks session."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["question", "ask"]
@@ -5685,12 +5475,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -5741,10 +5525,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["name", "rendererSource"]
@@ -5823,12 +5603,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -5881,10 +5655,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["slot"]
@@ -5925,12 +5695,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -5951,10 +5715,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["playbookId"]
@@ -5983,12 +5743,6 @@
           "type": "string",
           "required": false,
           "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -6001,10 +5755,6 @@
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["sessionId"]
@@ -6290,12 +6040,6 @@
           "type": "string",
           "required": false,
           "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -6802,10 +6546,6 @@
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["name", "goalTemplate"]
@@ -6934,12 +6674,6 @@
           "type": "string",
           "required": false,
           "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -7450,10 +7184,6 @@
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["playbookId"]
@@ -7508,12 +7238,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -7526,10 +7250,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": []
@@ -7558,12 +7278,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -7576,10 +7290,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": []
@@ -7614,12 +7324,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -7658,10 +7362,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": []
@@ -7811,7 +7511,7 @@
           "name": "supersedes",
           "type": "string",
           "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
+          "description": "Failed proposal id"
         }
       ],
       "inputSchema": {
@@ -8178,7 +7878,7 @@
           },
           "supersedes": {
             "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
+            "description": "Failed proposal id"
           }
         }
       }
@@ -8224,12 +7924,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -8251,10 +7945,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["name"]
@@ -8301,12 +7991,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -8345,10 +8029,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["workspaceId"]
@@ -8468,12 +8148,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -8508,10 +8182,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["name"]
@@ -8793,12 +8463,6 @@
           "type": "string",
           "required": false,
           "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -8952,10 +8616,6 @@
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["projectId"]
@@ -9002,12 +8662,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -9029,10 +8683,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["trackId"]
@@ -9073,12 +8723,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -9096,10 +8740,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["trackId", "toStage"]
@@ -9198,12 +8838,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -9289,10 +8923,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["trackId", "status"]
@@ -9333,12 +8963,6 @@
           "type": "string",
           "required": false,
           "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -9359,10 +8983,6 @@
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["trackId"]
@@ -9409,12 +9029,6 @@
           "type": "string",
           "required": false,
           "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -9439,10 +9053,6 @@
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["entityId"]
@@ -9525,12 +9135,6 @@
           "type": "string",
           "required": false,
           "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -9560,10 +9164,6 @@
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["playbookId", "activatorKey"]
@@ -9598,12 +9198,6 @@
           "type": "string",
           "required": false,
           "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -9620,10 +9214,6 @@
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["ruleId", "paused"]
@@ -9658,12 +9248,6 @@
           "type": "string",
           "required": false,
           "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -9680,10 +9264,6 @@
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["ruleId"]
@@ -9764,12 +9344,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -9817,10 +9391,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["trackId", "action"]
@@ -9861,12 +9431,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -9885,10 +9449,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["trackId", "params"]
@@ -10001,12 +9561,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10147,10 +9701,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["trackId"]
@@ -10203,12 +9753,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10231,10 +9775,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["trackId", "name"]
@@ -10307,12 +9847,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10352,10 +9886,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["projectId"]
@@ -10398,12 +9928,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10426,10 +9950,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["projectId", "workspaceId"]
@@ -10476,12 +9996,6 @@
           "type": "string",
           "required": false,
           "description": "OPTIONAL: the focus session this filing belongs to. Leave it out and the write is attributed automatically. Name it when you file your own fresh records into THAT session's project: a session you name says which project the person asked for, so the filing applies directly instead of waiting for approval. A session that isn't yours is ignored, not an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10507,10 +10021,6 @@
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL: the focus session this filing belongs to. Leave it out and the write is attributed automatically. Name it when you file your own fresh records into THAT session's project: a session you name says which project the person asked for, so the filing applies directly instead of waiting for approval. A session that isn't yours is ignored, not an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["projectId", "entityIds"]
@@ -10551,12 +10061,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10577,10 +10081,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["workspaceId"]
@@ -10621,12 +10121,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10647,10 +10141,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["workspaceId"]
@@ -10686,12 +10176,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10706,10 +10190,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["workspaceId"]
@@ -10774,12 +10254,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10813,10 +10287,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["workspaceId"]
@@ -10857,12 +10327,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10880,10 +10344,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["workspaceId", "brief"]
@@ -10924,12 +10384,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -10951,10 +10405,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["entityIds", "workspaceId"]
@@ -10989,12 +10439,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -11011,10 +10455,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["propertyDefId"]
@@ -11067,12 +10507,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -11132,10 +10566,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["profileId", "options"]
@@ -11182,12 +10612,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -11209,10 +10633,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["profileId", "targetWorkspaceId"]
@@ -11273,12 +10693,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -11311,10 +10725,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["profileId"]
@@ -11422,12 +10832,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -11486,10 +10890,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["name", "type"]
@@ -11548,12 +10948,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -11584,10 +10978,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["viewId", "store", "version"]
@@ -11634,12 +11024,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -11661,10 +11045,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["viewId"]
@@ -11846,12 +11226,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -11881,10 +11255,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["mode"]
@@ -11988,12 +11358,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -12147,10 +11511,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["content"]
@@ -12197,12 +11557,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -12239,10 +11593,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["proposalId"]
@@ -12258,7 +11608,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Take a proposal out of the review queue so it never lands. YOUR OWN (pending or failed) is WITHDRAWN, not scored: a write you now know is wrong (a duplicate, a superseded plan, a mistaken read). Another's is REJECTED: the `reason` is recorded and feeds that agent's scorecard. To replace a failed one with a corrected request, file that request with `supersedes` instead. The reply's `status` says which. There is deliberately NO approve tool: approval is the HUMAN step (an agent key that approved its own write would be self-approving) — point the user at the proposal's review link instead. Rejecting is safe by the same logic in reverse: it only PREVENTS a change from landing, so it carries no self-approval or undo risk.",
+      "description": "Take a proposal out of the review queue so it never lands. YOUR OWN (pending or failed; matched on your agent identity, not the session) is WITHDRAWN, not scored: a write you now know is wrong (a duplicate, a superseded plan, a mistaken read). Another's is REJECTED: the `reason` is recorded and feeds that agent's scorecard. To replace a failed one with a corrected request, file that request with `supersedes` instead. The reply's `status` says which. There is deliberately NO approve tool: approval is the HUMAN step (an agent key that approved its own write would be self-approving) — point the user at the proposal's review link instead. Rejecting is safe by the same logic in reverse: it only PREVENTS a change from landing, so it carries no self-approval or undo risk.",
       "parameters": [
         {
           "name": "proposalId",
@@ -12293,12 +11643,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -12329,10 +11673,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["proposalId"]
@@ -12398,12 +11738,6 @@
           "required": false,
           "description": "What the approval lets ship: `push` (to a protected branch), `publish` (a package) or `deploy`. It covers this step only.",
           "enum": ["push", "publish", "deploy"]
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -12454,10 +11788,6 @@
             "type": "string",
             "enum": ["push", "publish", "deploy"],
             "description": "What the approval lets ship: `push` (to a protected branch), `publish` (a package) or `deploy`. It covers this step only."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": [
@@ -12710,12 +12040,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -12741,10 +12065,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["capabilityKey", "computer"]
@@ -12808,7 +12128,7 @@
           "name": "supersedes",
           "type": "string",
           "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
+          "description": "Failed proposal id"
         }
       ],
       "inputSchema": {
@@ -12855,7 +12175,7 @@
           },
           "supersedes": {
             "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
+            "description": "Failed proposal id"
           }
         },
         "required": ["workspaceId"]
@@ -12939,12 +12259,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -12994,10 +12308,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["toolName", "verbName", "method", "pathTemplate"]
@@ -13113,12 +12423,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -13143,10 +12447,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["id"]
@@ -13226,12 +12526,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -13405,10 +12699,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["name", "triggerType", "flowDefinition", "metadata"]
@@ -13468,12 +12758,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -13679,10 +12963,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["intent"]
@@ -13754,12 +13034,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -13973,10 +13247,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["ruleId", "intent", "scope"]
@@ -14095,12 +13365,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -14168,10 +13432,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": []
@@ -14261,12 +13521,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -14354,10 +13608,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["name"]
@@ -14434,12 +13684,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -14484,10 +13728,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": []
@@ -14581,12 +13821,6 @@
           "type": "string",
           "required": false,
           "description": "Optional: passed to the tool as its `sessionId` when `arguments` has none."
-        },
-        {
-          "name": "supersedes",
-          "type": "string",
-          "required": false,
-          "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
         }
       ],
       "inputSchema": {
@@ -14603,10 +13837,6 @@
           "sessionId": {
             "type": "string",
             "description": "Optional: passed to the tool as its `sessionId` when `arguments` has none."
-          },
-          "supersedes": {
-            "type": "string",
-            "description": "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal)."
           }
         },
         "required": ["tool"]

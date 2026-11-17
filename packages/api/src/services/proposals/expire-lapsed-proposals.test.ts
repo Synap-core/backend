@@ -203,10 +203,8 @@ describe("selectLapsedIds — capability runs on a durable object", () => {
 /**
  * A FAILED outbound call lapses too (plan 8032a127 D2): a failed row could
  * leave only through a person's reject, which scores against its agent. Its
- * clock starts at the failure, not the filing, and a failure a retry could
- * clear without changing the request (retryable class) never lapses: a sweep
- * must not expire what someone is about to retry. Founder's pod, 17 Nov:
- * e01d5786, 17ddc7fb, 1bc63175, a9855964 are failed runs of this kind.
+ * clock starts at the failure, not the filing, and a failure a person may
+ * still fix or retry (decision F3) never lapses.
  */
 describe("selectLapsedIds — failed outbound calls", () => {
   const NOW = new Date("2026-11-17T12:00:00Z");
@@ -244,7 +242,7 @@ describe("selectLapsedIds — failed outbound calls", () => {
     ).toEqual(["old-failure"]);
   });
 
-  it("a failure that needs the request changed lapses; a retryable one never does", () => {
+  it("a failure that needs the request changed lapses; one a person may still fix never does", () => {
     const out = selectLapsedIds(
       [
         failed("validation", { failedHoursAgo: 100, errorClass: "validation" }),
@@ -257,10 +255,14 @@ describe("selectLapsedIds — failed outbound calls", () => {
           failedHoursAgo: 100,
           errorClass: "not_connected",
         }),
+        failed("missing", { failedHoursAgo: 100, errorClass: "missing_field" }),
+        failed("perm", { failedHoursAgo: 100, errorClass: "permission" }),
+        failed("conflict", { failedHoursAgo: 100, errorClass: "conflict" }),
+        failed("provider", { failedHoursAgo: 100, errorClass: "provider" }),
       ],
       NOW
     );
-    expect(out).toEqual(["validation", "unclassified", "unknown"]);
+    expect(out).toEqual(["validation", "unclassified", "unknown", "provider"]);
   });
 
   it("a failed row with no failure time falls back to its filing", () => {

@@ -50,9 +50,11 @@ import {
   inArray,
   proposals,
   ProposalStatus,
-  runWithActingAgent,
   UNDECIDED_PROPOSAL_STATUSES,
+  endReplacedProposal,
+  getOpenSupersedes,
 } from "@synap/database";
+import { settleSupersededProposals } from "../services/proposals/settle-superseded.js";
 import {
   validateExternalUrl,
   safePublicFetch,
@@ -1569,28 +1571,20 @@ async function sendOnChannel(args: {
 }
 
 /**
- * A send to a person's channel that already holds an UNDECIDED one (pending,
- * or failed and never dispatched) revises that row and returns its id; null
- * when there is none (plan 8032a127 D2).
+ * ONE UNDECIDED SEND PER PERSON'S CHANNEL (plan 8032a127 D2; decision Q3, 17
+ * Nov 2026). The undecided send already on `channelId` for its owner
+ * (pending, or failed and never dispatched: `externalDispatchedAt` is the
+ * at-most-once claim), newest pending first; null when there is none.
  *
- * WHO REVISES: the ONE revise door, under the row's AUTHOR rung, entered by
- * this door for the row's author (`runWithActingAgent`). The authority is the
- * send door's, not the filing agent's: it has just passed this send's own gate
- * for this person's channel, and it changes only the words (`body`, `subject`:
- * the recipient, account and channel are protected fields). So the row keeps
- * its author, the revision entry names the agent that filed the new words
- * (`attributionAgentUserId`), and a failed row reopens for review as any
- * revised failure does. A row with no agent (an app's draft) has no author
- * rung: it is left alone and the send is filed beside it.
+ * Its AUTHOR filing again revises it in place, through the normal author rung
+ * ({@link reviseOwnUndecidedSend}). Anyone else's send, or a revise that fails,
+ * is filed as a new row that ends this one (`endReplacedProposal`).
  */
-export async function refileUndecidedSend(input: {
+export async function undecidedSendOn(input: {
   ownerUserId: string;
   channelId: string;
-  body: string;
-  subject: string | null;
-  filingAgentUserId: string | null;
-}): Promise<string | null> {
-  const [existing] = await db
+}): Promise<{ id: string; agentUserId: string | null } | null> {
+  const [row] = await db
     .select({ id: proposals.id, agentUserId: proposals.agentUserId })
     .from(proposals)
     .where(
@@ -1600,8 +1594,7 @@ export async function refileUndecidedSend(input: {
         eq(proposals.targetId, input.channelId),
         eq(proposals.subjectUserId, input.ownerUserId),
         inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES]),
-        isNull(proposals.externalDispatchedAt),
-        isNotNull(proposals.agentUserId)
+        isNull(proposals.externalDispatchedAt)
       )
     )
     .orderBy(
@@ -1609,12 +1602,27 @@ export async function refileUndecidedSend(input: {
       desc(proposals.createdAt)
     )
     .limit(1);
-  if (!existing) return null;
+  return row ?? null;
+}
+
+/**
+ * The author's new words on its own undecided send: the one revise door, its
+ * author rung (the acting agent is the row's author), only the words. A
+ * failed row reopens for review. True when it landed; false when the revise
+ * refused (decided meanwhile, a payload refusal): the caller files instead.
+ */
+async function reviseOwnUndecidedSend(input: {
+  proposalId: string;
+  ownerUserId: string;
+  authorAgentUserId: string;
+  body: string;
+  subject: string | null;
+}): Promise<boolean> {
   const { mergeProposalRevision } =
     await import("../services/proposals/proposals-service.js");
-  await runWithActingAgent(existing.agentUserId ?? undefined, () =>
-    mergeProposalRevision({
-      proposalId: existing.id,
+  try {
+    await mergeProposalRevision({
+      proposalId: input.proposalId,
       patch: {
         kind: "envelope",
         fields: {
@@ -1623,10 +1631,20 @@ export async function refileUndecidedSend(input: {
         },
       },
       actorId: input.ownerUserId,
-      attributionAgentUserId: input.filingAgentUserId,
-    })
-  );
-  return existing.id;
+      actingAgentUserId: input.authorAgentUserId,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, proposalId: input.proposalId },
+      "send refile: the author's revise refused, filing a new send instead"
+    );
+    return false;
+  }
+  // A `supersedes` naming this very row is answered: the row now carries the
+  // corrected request (the MCP door must not say it was left failed).
+  const slot = getOpenSupersedes();
+  if (slot?.proposalId === input.proposalId) slot.replacedBy = input.proposalId;
+  return true;
 }
 
 /**
@@ -1775,18 +1793,27 @@ async function gateMessagingSend(
     const accountId = channel
       ? input.accountId || (channelMeta(channel).accountId as string) || null
       : null;
-    // ONE UNDECIDED SEND PER PERSON'S CHANNEL (plan 8032a127 D2): a send to a
-    // channel that already holds one revises it, so the person reviews one
-    // card for one person, never two drafts of which both could go out.
-    if (channel) {
-      const refiled = await refileUndecidedSend({
+    // ONE UNDECIDED SEND PER PERSON'S CHANNEL (`undecidedSendOn`): never a
+    // second card for the same person, of which both could go out.
+    const undecided = channel
+      ? await undecidedSendOn({
+          ownerUserId: input.userId,
+          channelId: channel.id,
+        })
+      : null;
+    if (
+      undecided &&
+      input.agentUserId &&
+      undecided.agentUserId === input.agentUserId &&
+      (await reviseOwnUndecidedSend({
+        proposalId: undecided.id,
         ownerUserId: input.userId,
-        channelId: channel.id,
+        authorAgentUserId: input.agentUserId,
         body: input.body,
         subject: input.subject ?? null,
-        filingAgentUserId: input.agentUserId ?? null,
-      });
-      if (refiled) return { kind: "propose", proposalId: refiled };
+      }))
+    ) {
+      return { kind: "propose", proposalId: undecided.id };
     }
     const proposal = await createPendingProposal({
       userId: input.userId,
@@ -1836,6 +1863,21 @@ async function gateMessagingSend(
         ? `Send a ${humanizeToken(provider)} message to ${channel.title ?? "them"}`
         : `Send message via ${provider}`,
     });
+    if (undecided && channel) {
+      // The new send replaces the one already there (another author's, or one
+      // its revise refused): it ends withdrawn, pointing here.
+      const ended = await endReplacedProposal(db, {
+        replacedId: undecided.id,
+        replacement: {
+          id: proposal.id,
+          proposalType: "messaging.external.send",
+          targetType: "messaging",
+          targetId: channel.id,
+        },
+        from: UNDECIDED_PROPOSAL_STATUSES,
+      });
+      await settleSupersededProposals(ended, input.userId);
+    }
     return { kind: "propose", proposalId: proposal.id };
   }
 

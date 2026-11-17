@@ -1290,6 +1290,12 @@ export const buildHandlers: McpHandlerMap = {
         success: true,
         proposalId: resolvedProposalId,
         status: "withdrawn",
+        message: "withdrawn: yours, not scored",
+        ...(args.reasonCode !== undefined
+          ? {
+              note: "reasonCode is not kept on a withdrawal (only `reason` is).",
+            }
+          : {}),
       });
     }
     await rejectCaller.reject({

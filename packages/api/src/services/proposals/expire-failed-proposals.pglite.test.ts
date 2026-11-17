@@ -13,7 +13,12 @@
  *    retryable failure (`transient`) never lapses (rules out "every failed
  *    row"), an approved row is untouched (rules out "any status");
  *  - session close: its failed run ends with it, a decided one stays;
- *  - cleanup pack: one approval ends a failed row the pack lists.
+ *  - cleanup pack: one approval ends a failed row the pack lists;
+ *  - an end with no person names none (decision F2): the session feed says
+ *    nobody decided it, now, and the display names no approver (rules out
+ *    keeping the person who clicked the approve that failed);
+ *  - a plan that partly applied stays failed for every helper (Q6);
+ *  - `conflict` stays off the lapse clock (decision F3).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -56,6 +61,9 @@ import {
   expireSessionEphemerals,
 } from "./expire-lapsed-proposals.js";
 import { applyCleanupPack } from "../../routers/proposals/executors/pod-hygiene.js";
+import { listSessionChanges } from "../focus-sessions/session-changes.js";
+import { enrichProposalsForDisplay } from "../../routers/proposals/display.js";
+import { db, eq, proposals } from "@synap/database";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -81,6 +89,7 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 const NOW = new Date();
 const hoursAgo = (n: number) => new Date(NOW.getTime() - n * 3_600_000);
+const SKILL = randomUUID();
 const OWNER = randomUUID();
 const AGENT = randomUUID();
 const SESSION = randomUUID();
@@ -91,27 +100,31 @@ async function run(opts: {
   failedHoursAgo?: number;
   errorClass?: string;
   sessionId?: string;
+  extra?: Record<string, unknown>;
 }): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into proposals (id, status, proposal_type, target_type, target_id, data,
-       created_by, agent_user_id, subject_user_id, session_id, reviewed_at, created_at)
-     values ($1, $2, 'capability.run', 'capability', 'cap-1', $3::jsonb, $4, $4, $5, $6, $7, $8)`,
+       created_by, agent_user_id, subject_user_id, session_id, reviewed_at, created_at, reviewed_by)
+     values ($1, $2, 'capability.run', 'capability', 'cap-1', $3::jsonb, $4, $4, $5, $6, $7, $8, $9)`,
     [
       id,
       opts.status,
       JSON.stringify({
-        skillId: "s1",
+        skillId: SKILL,
         verbId: null,
         ...(opts.errorClass
           ? { failure: { errorClass: opts.errorClass } }
           : {}),
+        ...opts.extra,
       }),
       AGENT,
       OWNER,
       opts.sessionId ?? null,
       opts.failedHoursAgo !== undefined ? hoursAgo(opts.failedHoursAgo) : null,
       hoursAgo(24 * 10),
+      // The person who clicked the approve that failed.
+      opts.status === "approval_failed" ? OWNER : null,
     ]
   );
   return id;
@@ -131,6 +144,14 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  await q(
+    `insert into users (id, email, user_type) values ($1, 'o@x.test', 'human')`,
+    [OWNER]
+  );
+  await q(
+    `insert into focus_sessions (id, user_id, goal, status) values ($1, $2, 'Send the follow-ups', 'active')`,
+    [SESSION, OWNER]
+  );
 }, 120_000);
 
 beforeEach(async () => {
@@ -211,5 +232,65 @@ describe("a failed proposal ends through the helpers that end a pending one", ()
     } as never);
     expect(outcomes.map((o) => o.outcome)).toEqual(["applied"]);
     expect(await statusOf(failed)).toBe("expired");
+  });
+
+  it("an end with no person names none: the session feed and the display say so", async () => {
+    const started = Date.now();
+    const failed = await run({
+      status: "approval_failed",
+      failedHoursAgo: 30,
+      errorClass: "validation",
+      sessionId: SESSION,
+    });
+    await expireLapsedProposals(NOW);
+    const page = await listSessionChanges({
+      sessionId: SESSION,
+      userId: OWNER,
+      kinds: new Set(["proposal_decided"]),
+    });
+    const ended = page?.events.find(
+      (e) => e.kind === "proposal_decided" && e.proposal.id === failed
+    );
+    expect(ended).toMatchObject({
+      proposal: { decision: "expired", humanDecided: false, decidedBy: null },
+    });
+    expect(Date.parse(ended!.at)).toBeGreaterThanOrEqual(started - 1000);
+    const [row] = await db
+      .select()
+      .from(proposals)
+      .where(eq(proposals.id, failed));
+    const [shown] = await enrichProposalsForDisplay([row!], OWNER);
+    expect(shown).not.toHaveProperty("approverName");
+  });
+
+  it("a plan that partly applied stays failed for every helper, and conflict stays off the clock", async () => {
+    const partly = {
+      planFailure: {
+        compensation: { notCompensated: [{ ref: "$op1", reason: "x" }] },
+      },
+    };
+    const lapsing = await run({
+      status: "approval_failed",
+      failedHoursAgo: 100,
+      errorClass: "validation",
+      extra: partly,
+    });
+    const closing = await run({
+      status: "approval_failed",
+      failedHoursAgo: 1,
+      errorClass: "validation",
+      sessionId: SESSION,
+      extra: partly,
+    });
+    const unclear = await run({
+      status: "approval_failed",
+      failedHoursAgo: 100,
+      errorClass: "conflict",
+    });
+    await expireLapsedProposals(NOW);
+    await expireSessionEphemerals(SESSION, NOW);
+    expect(await statusOf(lapsing)).toBe("approval_failed");
+    expect(await statusOf(closing)).toBe("approval_failed");
+    expect(await statusOf(unclear)).toBe("approval_failed");
   });
 });

@@ -24,7 +24,11 @@ import {
   type StoredProposalData,
 } from "@synap-core/types/proposals";
 import { isUniqueViolation } from "./pg-errors.js";
-import { transitionProposal } from "./proposal-transition.js";
+import {
+  endedByNoPersonSet,
+  NOT_PARTLY_APPLIED,
+  transitionProposal,
+} from "./proposal-transition.js";
 import {
   callingKeyAttribution,
   getOpenSupersedes,
@@ -316,6 +320,12 @@ const VOLATILE_DEDUP_KEYS = new Set([
   "summary",
   "previousData",
   "targetName",
+  // Written onto the stored row AFTER filing, never part of the change: a
+  // revise's `_summary`, and the derived-session marker (`sessionSource`).
+  // Without them a reopened failed row hashed apart from the same request
+  // filed again (plan 8032a127 Q7).
+  "_summary",
+  SESSION_SOURCE_MARKER_KEY,
   // The duplicate door's answer (B2): computed against the queue AS IT IS NOW,
   // so a second copy of the same create sees the first one as a candidate and
   // would otherwise hash differently from it — the exact layer would then never
@@ -628,15 +638,16 @@ export async function insertPendingProposal(
   if (problem) throw new SupersedesRefusedError(replaces.proposalId, problem);
   const result = await (executor as typeof db).transaction(async (tx) => {
     const filed = await insertPendingProposalRow(input, tx);
-    const ended = await endReplacedFailure(
-      tx,
-      replaces.proposalId,
-      filed.proposal.id
-    );
+    const ended = await endReplacedProposal(tx, {
+      replacedId: replaces.proposalId,
+      replacement: filed.proposal,
+      from: [ProposalStatus.APPROVAL_FAILED],
+    });
     return { filed, ended };
   });
   // Claimed only when the failed row really ended: one decided or retried
-  // meanwhile keeps its new state, and the door says it was left as it was.
+  // meanwhile keeps its new state, and a row of another request (a call that
+  // files several) leaves it open for the one that asks it again.
   if (result.ended.length > 0) replaces.replacedBy = result.filed.proposal.id;
   return {
     ...result.filed,
@@ -664,6 +675,7 @@ export class SupersedesRefusedError extends Error {
  * the SAME person, which is the whole authority: the agent may be another one
  * than its author (Ask AI wakes the orchestrator), but the person's queue
  * keeps one request, the newer one, and never loses one of another person's.
+ * Never a plan that partly applied ({@link NOT_PARTLY_APPLIED}).
  */
 export async function supersedesProblem(
   failedId: string,
@@ -675,6 +687,7 @@ export async function supersedesProblem(
     .select({
       status: proposals.status,
       subjectUserId: proposals.subjectUserId,
+      settled: drizzleSql<boolean>`${NOT_PARTLY_APPLIED}`,
     })
     .from(proposals)
     .where(eq(proposals.id, failedId))
@@ -688,39 +701,77 @@ export async function supersedesProblem(
       ? "is still pending: revise it (synap_revise_proposal) instead of filing a new one."
       : `is ${failed.status}, not failed: only a proposal whose approval failed is replaced this way.`;
   }
+  if (!failed.settled) {
+    return "partly applied and could not be undone: it stays for the person to see what landed.";
+  }
   return null;
 }
 
 /**
- * End the failed proposal a new filing replaced: `withdrawn`, pointing at its
- * replacement on the key the pending supersede writes (`supersededBy`, which
- * Relay links). Not scored: `withdrawn` is outside every scorecard. Its
- * `reviewedAt` is left as the failure wrote it (nobody decided now), and its
- * notifications leave the bell with it.
+ * Does `proposalType` mint its own target id per attempt? A create's target is
+ * the record it will make, a capture or import graph's a fresh id: two filings
+ * of the same request never share it, so it says nothing about sameness.
  */
-async function endReplacedFailure(
-  tx: DbTx,
-  failedId: string,
-  replacementId: string
+function mintsItsTarget(proposalType: string): boolean {
+  const action = proposalType.slice(proposalType.lastIndexOf(".") + 1);
+  return action === "create" || action === "graph";
+}
+
+/**
+ * End a proposal a newer filing REPLACED (plan 8032a127 D3 and the one
+ * undecided send per channel): `withdrawn`, pointing at its replacement on the
+ * key the pending supersede writes (`supersededBy`, which Relay links), and
+ * its notifications leave the bell. Only by the same request (proposal type
+ * and target type, and the same target when neither mints one), never a plan
+ * that partly applied, and naming no person (`endedByNoPersonSet`). Not
+ * scored. Returns what ended, for the caller's after-commit side effects
+ * (`settleSupersededProposals`).
+ */
+export async function endReplacedProposal(
+  executor: typeof db | DbTx,
+  args: {
+    replacedId: string;
+    replacement: {
+      id: string;
+      proposalType: string;
+      targetType: string;
+      targetId: string;
+    };
+    from: readonly ProposalStatus[];
+  }
 ): Promise<SupersededVersion[]> {
+  const { replacement } = args;
   const stamp = JSON.stringify({
-    [SUPERSEDED_BY_KEY]: replacementId,
+    [SUPERSEDED_BY_KEY]: replacement.id,
     withdrawReason: SUPERSEDED_REASON,
   });
-  const ended = await transitionProposal(tx, {
+  const at = new Date();
+  const ended = await transitionProposal(executor, {
     to: ProposalStatus.WITHDRAWN,
-    from: [ProposalStatus.APPROVAL_FAILED],
+    from: args.from,
     set: {
-      updatedAt: new Date(),
+      ...endedByNoPersonSet(at),
+      updatedAt: at,
       data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${stamp}::jsonb`,
     },
-    where: eq(proposals.id, failedId),
+    where: and(
+      eq(proposals.id, args.replacedId),
+      ne(proposals.id, replacement.id),
+      eq(proposals.proposalType, replacement.proposalType),
+      eq(proposals.targetType, replacement.targetType),
+      ...(mintsItsTarget(replacement.proposalType)
+        ? []
+        : [eq(proposals.targetId, replacement.targetId)]),
+      NOT_PARTLY_APPLIED
+    ),
   }).returning({
     id: proposals.id,
     workspaceId: proposals.workspaceId,
     data: proposals.data,
   });
-  if (ended.length > 0) await actionProposalNotifications([failedId], tx);
+  if (ended.length > 0) {
+    await actionProposalNotifications([args.replacedId], executor);
+  }
   return ended;
 }
 

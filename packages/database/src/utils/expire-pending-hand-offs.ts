@@ -22,6 +22,8 @@
 import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import {
+  endedByNoPersonSet,
+  NOT_PARTLY_APPLIED,
   transitionProposal,
   UNDECIDED_PROPOSAL_STATUSES,
 } from "./proposal-transition.js";
@@ -43,6 +45,7 @@ export async function expirePendingHandOffsOfAttachedAgent(
     to: ProposalStatus.EXPIRED,
     from: UNDECIDED_PROPOSAL_STATUSES,
     set: {
+      ...endedByNoPersonSet(new Date()),
       updatedAt: new Date(),
       data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(
         'expiredBy', 'agent_attached',
@@ -53,6 +56,7 @@ export async function expirePendingHandOffsOfAttachedAgent(
       eq(proposals.proposalType, "assign_agent"),
       eq(proposals.targetId, input.sessionId),
       sql`${proposals.data}->'data'->>'addAgentId' = ${input.agentId}`,
+      NOT_PARTLY_APPLIED,
       ...(input.landedByProposalId
         ? [ne(proposals.id, input.landedByProposalId)]
         : [])
