@@ -70,6 +70,8 @@ export interface RequestWriteContext {
   readonly heldWritesApprovedBy?: string;
   /** 0364 — the usage middleware's slot, filled by the key-auth doors below. */
   readonly usage?: UsageSlot;
+  /** D3 — the failed proposal this request's filing replaces (see below). */
+  readonly supersedes?: SupersedesSlot;
 }
 
 /**
@@ -820,6 +822,40 @@ export function recordWriteSessionFiling(
     return;
   }
   ledger.filings.push({ sessionId, projectId: project });
+}
+
+// ═══ Concern: A FILING THAT REPLACES A FAILED PROPOSAL (plan 8032a127 D3) ════
+//
+// An agent that cannot repair a failed proposal (it did not author it: Ask AI
+// wakes another agent) files the corrected request instead, and names the
+// failed one (`supersedes`) so the person's queue keeps ONE request: the
+// failed one ends `withdrawn` + `supersededBy` in the insert's transaction
+// (`insertPendingProposal`). The door that knows the name (the MCP adapter)
+// is far above the insert, and the request reaches it through any of ~10
+// filing doors, so it travels here. Mutable on purpose: the FIRST pending row
+// the request files claims it, and the door reads afterwards whether one did.
+
+/** The failed proposal a request's filing replaces, and the row that did. */
+export interface SupersedesSlot {
+  readonly proposalId: string;
+  /** The proposal that replaced it; null while the request filed none. */
+  replacedBy: string | null;
+}
+
+/** Run `fn` with a filing that replaces `proposalId`; read the slot after. */
+export function runWithSupersedes<T>(
+  proposalId: string,
+  fn: () => T
+): { slot: SupersedesSlot; result: T } {
+  const slot: SupersedesSlot = { proposalId, replacedBy: null };
+  const result = runWithPatch({ supersedes: slot }, fn);
+  return { slot, result };
+}
+
+/** The open slot of this request, unless a filing already claimed it. */
+export function getOpenSupersedes(): SupersedesSlot | undefined {
+  const slot = storage.getStore()?.supersedes;
+  return slot && slot.replacedBy === null ? slot : undefined;
 }
 
 // ═══ Concern: HELD WRITES APPROVED (W-B1) ═════════════════════════════════════

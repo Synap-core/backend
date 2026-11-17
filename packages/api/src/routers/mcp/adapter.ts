@@ -25,8 +25,12 @@ import {
 import { getAgentFocusWorkspaceId } from "../../services/agent-identity-service.js";
 import {
   runWithDerivedSession,
+  runWithSupersedes,
   runWithWriteSessionLedger,
+  supersedesProblem,
+  type SupersedesSlot,
 } from "@synap/database";
+import { toolError } from "./tool-errors.js";
 import {
   describeWriteSessions,
   firstTopicHint,
@@ -242,12 +246,45 @@ export async function executeMCPToolViaHubProtocol(
   // write, by client + project), so the reply below names what landed. A
   // derived RECEIPT carries its project so the gate can re-key a write of
   // another project to that project's receipt.
-  const { ledger, result: pending } = runWithWriteSessionLedger(() =>
+  const routed = () =>
     session?.attribution === "derived"
       ? runWithDerivedSession(session.sessionId, invokeHandler, session.receipt)
-      : invokeHandler()
-  );
-  const result = await pending;
+      : invokeHandler();
+  // D3 (plan 8032a127): a write that REPLACES a failed proposal names it
+  // (`supersedes`, declared on every attributed tool). Refused here, before
+  // the handler, when the name cannot be replaced (the insert door checks it
+  // again against the row it files); otherwise the first proposal this call
+  // files for review ends it (`insertPendingProposal`).
+  const supersedes =
+    typeof args.supersedes === "string" && args.supersedes.trim() !== ""
+      ? args.supersedes.trim()
+      : undefined;
+  if (supersedes) {
+    const problem = await supersedesProblem(supersedes, userId);
+    if (problem) {
+      return toolError(
+        `supersedes ${supersedes}: ${problem} Nothing was filed.`
+      );
+    }
+  }
+  let replacing: SupersedesSlot | undefined;
+  const { ledger, result: pending } = runWithWriteSessionLedger(() => {
+    if (!supersedes) return routed();
+    const run = runWithSupersedes(supersedes, routed);
+    replacing = run.slot;
+    return run.result;
+  });
+  const handled = await pending;
+  // Said when nothing this call filed went to review (a refusal, a write that
+  // applied at once): the failed proposal is still there, and the agent must
+  // not believe it ended.
+  const result =
+    replacing && !replacing.replacedBy && !handled.isError
+      ? withNote(
+          handled,
+          `supersedes: this call filed nothing for review, so proposal ${replacing.proposalId} was left as it is (still failed).`
+        )
+      : handled;
   const filed = resolution
     ? await describeWriteSessions(ledger.filings, { userId, agentUserId })
     : undefined;

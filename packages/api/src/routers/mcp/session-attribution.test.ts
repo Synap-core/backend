@@ -221,6 +221,33 @@ describe("MCP session attribution — explicit override is declared", () => {
     ).toEqual([]);
   });
 
+  // D3 (plan 8032a127): the corrected request is filed through whatever door
+  // the failed one used, so EVERY attributed tool declares `supersedes`, the
+  // same derived way, and no read does (it files nothing to replace with).
+  it("every attributed tool declares supersedes, no read does — live list and manifest", async () => {
+    const live = await tools.list();
+    const writes = live.filter((t) => t.annotations?.readOnlyHint !== true);
+    const reads = live.filter((t) => t.annotations?.readOnlyHint === true);
+    expect(writes.length).toBeGreaterThan(50);
+    expect(reads.length).toBeGreaterThan(20);
+    expect(
+      writes
+        .filter((t) => !t.inputSchema?.properties?.supersedes)
+        .map((t) => t.name)
+    ).toEqual([]);
+    expect(
+      reads
+        .filter((t) => t.inputSchema?.properties?.supersedes)
+        .map((t) => t.name)
+    ).toEqual([]);
+    const byName = manifestTools();
+    expect(
+      writes
+        .filter((t) => !byName.get(t.name)?.inputSchema?.properties?.supersedes)
+        .map((t) => t.name)
+    ).toEqual([]);
+  });
+
   it("the derived declaration states the receipt's real idle window", async () => {
     const link = (await tools.list()).find(
       (t) => t.name === "synap_link_entities"

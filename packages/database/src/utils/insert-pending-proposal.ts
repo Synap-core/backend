@@ -27,6 +27,7 @@ import { isUniqueViolation } from "./pg-errors.js";
 import { transitionProposal } from "./proposal-transition.js";
 import {
   callingKeyAttribution,
+  getOpenSupersedes,
   isDerivedSession,
   type SessionSource,
 } from "./request-write-context.js";
@@ -613,6 +614,120 @@ export async function deriveProposalProjectId(
 export async function insertPendingProposal(
   input: InsertPendingProposalInput,
   executor: typeof db | DbTx = db
+): Promise<InsertPendingProposalResult> {
+  const replaces = getOpenSupersedes();
+  if (!replaces) return insertPendingProposalRow(input, executor);
+  // THIS FILING REPLACES A FAILED PROPOSAL (plan 8032a127 D3, see
+  // `runWithSupersedes`). Checked BEFORE anything is filed, so a wrong name
+  // files nothing; then the row and the end of the failed one land together.
+  const problem = await supersedesProblem(
+    replaces.proposalId,
+    input.subjectUserId ?? null,
+    executor
+  );
+  if (problem) throw new SupersedesRefusedError(replaces.proposalId, problem);
+  const result = await (executor as typeof db).transaction(async (tx) => {
+    const filed = await insertPendingProposalRow(input, tx);
+    const ended = await endReplacedFailure(
+      tx,
+      replaces.proposalId,
+      filed.proposal.id
+    );
+    return { filed, ended };
+  });
+  // Claimed only when the failed row really ended: one decided or retried
+  // meanwhile keeps its new state, and the door says it was left as it was.
+  if (result.ended.length > 0) replaces.replacedBy = result.filed.proposal.id;
+  return {
+    ...result.filed,
+    superseded: [...(result.filed.superseded ?? []), ...result.ended],
+  };
+}
+
+/** A `supersedes` the filing door refused: nothing was filed. */
+export class SupersedesRefusedError extends Error {
+  readonly code = "SUPERSEDES_REFUSED";
+  constructor(
+    readonly proposalId: string,
+    readonly problem: string
+  ) {
+    super(`supersedes ${proposalId}: ${problem} Nothing was filed.`);
+    this.name = "SupersedesRefusedError";
+  }
+}
+
+/**
+ * Why `failedId` cannot be replaced by a filing for `ownerUserId`, or null.
+ *
+ * Only a FAILED proposal: a pending one is revised (its author) or decided (a
+ * person about to approve it must not lose it under them). Only one filed for
+ * the SAME person, which is the whole authority: the agent may be another one
+ * than its author (Ask AI wakes the orchestrator), but the person's queue
+ * keeps one request, the newer one, and never loses one of another person's.
+ */
+export async function supersedesProblem(
+  failedId: string,
+  ownerUserId: string | null,
+  executor: typeof db | DbTx = db
+): Promise<string | null> {
+  if (!isUuid(failedId)) return "is not a proposal id.";
+  const [failed] = await executor
+    .select({
+      status: proposals.status,
+      subjectUserId: proposals.subjectUserId,
+    })
+    .from(proposals)
+    .where(eq(proposals.id, failedId))
+    .limit(1);
+  // One sentence for "absent" and "another person's": no existence oracle.
+  if (!failed || !ownerUserId || failed.subjectUserId !== ownerUserId) {
+    return "is not a proposal filed for the same person as this one.";
+  }
+  if (failed.status !== ProposalStatus.APPROVAL_FAILED) {
+    return failed.status === ProposalStatus.PENDING
+      ? "is still pending: revise it (synap_revise_proposal) instead of filing a new one."
+      : `is ${failed.status}, not failed: only a proposal whose approval failed is replaced this way.`;
+  }
+  return null;
+}
+
+/**
+ * End the failed proposal a new filing replaced: `withdrawn`, pointing at its
+ * replacement on the key the pending supersede writes (`supersededBy`, which
+ * Relay links). Not scored: `withdrawn` is outside every scorecard. Its
+ * `reviewedAt` is left as the failure wrote it (nobody decided now), and its
+ * notifications leave the bell with it.
+ */
+async function endReplacedFailure(
+  tx: DbTx,
+  failedId: string,
+  replacementId: string
+): Promise<SupersededVersion[]> {
+  const stamp = JSON.stringify({
+    [SUPERSEDED_BY_KEY]: replacementId,
+    withdrawReason: SUPERSEDED_REASON,
+  });
+  const ended = await transitionProposal(tx, {
+    to: ProposalStatus.WITHDRAWN,
+    from: [ProposalStatus.APPROVAL_FAILED],
+    set: {
+      updatedAt: new Date(),
+      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${stamp}::jsonb`,
+    },
+    where: eq(proposals.id, failedId),
+  }).returning({
+    id: proposals.id,
+    workspaceId: proposals.workspaceId,
+    data: proposals.data,
+  });
+  if (ended.length > 0) await actionProposalNotifications([failedId], tx);
+  return ended;
+}
+
+/** {@link insertPendingProposal} without a replaced failure. */
+async function insertPendingProposalRow(
+  input: InsertPendingProposalInput,
+  executor: typeof db | DbTx
 ): Promise<InsertPendingProposalResult> {
   // DEDUP GUARD (agent/automation-authored only): prevent a duplicate pending
   // proposal at the door instead of creating-then-rejecting. When an identical

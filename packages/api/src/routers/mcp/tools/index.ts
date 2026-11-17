@@ -709,6 +709,19 @@ const ATTRIBUTED_SESSION_ID_PARAM = {
     "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error.",
 } as const;
 
+/**
+ * The `supersedes` every ATTRIBUTED tool declares, derived in `tools.list()`
+ * beside `sessionId` (plan 8032a127 D3): a filing that replaces a FAILED
+ * proposal names it, and the adapter ends that one when this call files its
+ * replacement for review (`runWithSupersedes`). Any write tool, because the
+ * corrected request is filed through whatever door the failed one used.
+ */
+const ATTRIBUTED_SUPERSEDES_PARAM = {
+  type: "string",
+  description:
+    "Optional: the id of a FAILED proposal (approval_failed) for the same person that this call files again, corrected. It ends withdrawn, pointing to the new one. Your own failed proposal: revise it instead (synap_revise_proposal).",
+} as const;
+
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
 export interface ToolsListContext {
   workspaceId?: string;
@@ -1139,7 +1152,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR the same proposal with synap_revise_proposal (never file a second one pointing at the first), or withdraw it with synap_reject_proposal. A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned.",
+          "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR it: yours, with synap_revise_proposal (it reopens for review, never a second filing); another agent's, file the corrected request with `supersedes` = this id (it ends withdrawn, pointing to the new one). Take back your own with synap_reject_proposal (withdrawn, not scored). A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6301,8 +6314,8 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Reject a pending proposal so the queued change never lands — withdraw a write you now know is wrong (a duplicate, a superseded plan, a mistaken read) instead of leaving it in the user's review queue. Give a `reason`: it is recorded on the proposal and feeds your agent scorecard. " +
-          "There is deliberately NO approve tool: approval is the HUMAN step (an agent key that approved its own write would be self-approving) — point the user at the proposal's review link instead. Rejecting is safe by the same logic in reverse: it only PREVENTS a pending change from landing, so it carries no self-approval or undo risk. Only a still-pending proposal can be rejected.",
+          "Take a proposal out of the review queue so it never lands. YOUR OWN (pending or failed) is WITHDRAWN, not scored: a write you now know is wrong (a duplicate, a superseded plan, a mistaken read). Another's is REJECTED: the `reason` is recorded and feeds that agent's scorecard. To replace a failed one with a corrected request, file that request with `supersedes` instead. The reply's `status` says which. " +
+          "There is deliberately NO approve tool: approval is the HUMAN step (an agent key that approved its own write would be self-approving) — point the user at the proposal's review link instead. Rejecting is safe by the same logic in reverse: it only PREVENTS a change from landing, so it carries no self-approval or undo risk.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6321,8 +6334,7 @@ export const tools = {
             },
             reason: {
               type: "string",
-              description:
-                "Why you are rejecting it (recorded on the proposal). Always give one.",
+              description: "Why (recorded on the proposal). Always give one.",
             },
             reasonCode: {
               type: "string",
@@ -7246,13 +7258,21 @@ export const tools = {
     // W-C1: every attributed tool declares `sessionId`, derived here so a new
     // write tool declares it the moment it is listed. A tool that declares its
     // own (`synap_update_session`'s target, …) keeps it.
+    // D3: every attributed tool also declares `supersedes`, the same way.
     for (const tool of toolDefs) {
       if (tool.annotations?.readOnlyHint === true) continue;
       const properties = tool.inputSchema.properties ?? {};
-      if ("sessionId" in properties) continue;
       tool.inputSchema = {
         ...tool.inputSchema,
-        properties: { ...properties, sessionId: ATTRIBUTED_SESSION_ID_PARAM },
+        properties: {
+          ...properties,
+          ...("sessionId" in properties
+            ? {}
+            : { sessionId: ATTRIBUTED_SESSION_ID_PARAM }),
+          ...("supersedes" in properties
+            ? {}
+            : { supersedes: ATTRIBUTED_SUPERSEDES_PARAM }),
+        },
       };
     }
 
