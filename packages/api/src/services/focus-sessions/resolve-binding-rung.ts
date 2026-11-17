@@ -45,6 +45,7 @@
 import {
   readSubjectLifecycle,
   stageForSubjectStatus,
+  stagesMapSubjectStatus,
   readPlaybookParams,
 } from "@synap/playbooks";
 import { evaluateSubjectFilter } from "../playbooks/subject-filter.js";
@@ -165,11 +166,10 @@ function coversSubject(
     p.subjectProfile
   );
   const stages = Array.isArray(p.stages) ? (p.stages as unknown[]) : [];
-  const mapsStatus = stages.some(
-    (s) =>
-      typeof (s as { subjectStatus?: unknown } | null)?.subjectStatus ===
-      "string"
-  );
+  // A stage ties the run to the lifecycle by the status it enters OR the one
+  // its approved work reaches (D2): a Briefed post binds a process whose
+  // `brief` stage reaches Briefed.
+  const mapsStatus = stagesMapSubjectStatus(stages);
   if (statusProperty && mapsStatus) {
     const value = subject.properties[statusProperty];
     if (typeof value === "string" && humanOnlyStatuses.includes(value)) {

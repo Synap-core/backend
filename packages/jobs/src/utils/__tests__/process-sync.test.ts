@@ -305,6 +305,70 @@ describe("subject status → run stage", () => {
   });
 });
 
+describe("a REACHED status (onApproved, decision D2) → the NEXT stage", () => {
+  // Win a deal, its D2 shape: `send` reaches "proposed" (Proposal sent) once
+  // its work is done; `await-answer` is where the run then stands.
+  const DEAL = [
+    { key: "qualify", name: "Qualify", subjectStatus: "draft" },
+    { key: "write", name: "Write", gate: { kind: "check" } },
+    {
+      key: "send",
+      name: "Send",
+      gate: { kind: "human" },
+      onApproved: "proposed",
+    },
+    { key: "await-answer", name: "Await answer" },
+    {
+      key: "negotiate",
+      name: "Negotiate",
+      subjectStatus: "negotiating",
+      gate: { kind: "check" },
+      onApproved: "won",
+    },
+    { key: "won", name: "Won", gate: { kind: "human" } },
+  ];
+  beforeEach(() => {
+    h.proc = {
+      stages: DEAL,
+      statusProperty: "post-status",
+      humanOnlyStatuses: [],
+    };
+  });
+
+  it("a person's board move to the reached status lands the run on the stage AFTER its owner", async () => {
+    h.sessions = [session("send")];
+    const out = await entered("proposed", "draft");
+    expect(h.advances).toEqual([
+      expect.objectContaining({ toStage: "await-answer", stageWrite: "door" }),
+    ]);
+    expect(out[0]).toMatchObject({ kind: "followed", backward: false });
+  });
+
+  it("from further back, the same move lands on the same stage (never back on its owner)", async () => {
+    h.sessions = [session("qualify")];
+    await entered("proposed", "draft");
+    expect(h.advances.map((a) => a.toStage)).toEqual(["await-answer"]);
+  });
+
+  it("an ENTERED status still lands on its own stage", async () => {
+    h.sessions = [session("await-answer")];
+    await entered("negotiating", "proposed");
+    expect(h.advances.map((a) => a.toStage)).toEqual(["negotiate"]);
+  });
+
+  it("the reached status of a stage whose next is human-gated lands on that gate (entering files it)", async () => {
+    h.sessions = [session("negotiate")];
+    await entered("won", "negotiating");
+    expect(h.advances.map((a) => a.toStage)).toEqual(["won"]);
+  });
+
+  it("a run already at the stage the reached status names does not move (the gate pass's own write)", async () => {
+    h.sessions = [session("await-answer")];
+    await entered("proposed", "draft");
+    expect(h.advances).toEqual([]);
+  });
+});
+
 describe("an AGENT's status write never walks a human gate", () => {
   it("a forward jump over a human-gated stage stops AT that stage (the door files its gate), as the agent", async () => {
     h.sessions = [session("draft")];

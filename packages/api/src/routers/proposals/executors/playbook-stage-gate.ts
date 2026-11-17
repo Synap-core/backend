@@ -20,9 +20,12 @@
  * is returned there by the process engine off the `proposal.rejected` event
  * (`@synap/jobs` `utils/process-sync.ts`) — declared, not invented.
  *
- * APPROVAL also writes the stage's `subjectStatus` onto the run's subject
- * (`writeStageSubjectStatus`) — the advance door holds that write while the
- * gate is open, because entering the stage was not agreed yet.
+ * APPROVAL also writes the subject's statuses (`writeGatePassStatuses`,
+ * decision D2): the stage LEFT reached its `onApproved` (the gate approves
+ * the work before it), THEN the gated stage's `subjectStatus` — the advance
+ * door holds both while the gate is open, because entering the stage was not
+ * agreed yet. Both are written AS THE APPROVER (a person: a humanOnly status
+ * is theirs to write, never a second proposal).
  */
 
 import { TRPCError } from "@trpc/server";
@@ -117,23 +120,29 @@ export function registerPlaybookStageGateExecutors(): void {
                 "keeps the state its owner left it in.",
             };
 
-      // The person agreed to the stage: its `subjectStatus` (if any) is written
-      // NOW — the advance door skipped it while the gate held. As the approver,
-      // through the governed entity door; a skip/failure never un-approves.
+      // The person agreed to the stage: the stage left reached its
+      // `onApproved`, then the gated stage's `subjectStatus` is written (if
+      // any) NOW — the advance door skipped both while the gate held. As the
+      // approver, through the status door; a skip/failure never un-approves.
       // Only while the run still stands on the GATED stage: a run that moved on
       // since (a follow, a manual advance) must not get the old stage's value.
-      const gatedStage = (proposal.data as { stageKey?: unknown } | null)
-        ?.stageKey;
+      const gateData = proposal.data as {
+        stageKey?: unknown;
+        fromStage?: unknown;
+      } | null;
+      const gatedStage = gateData?.stageKey;
       if (
         resumed.length > 0 &&
         session.currentStage &&
         (typeof gatedStage !== "string" || gatedStage === session.currentStage)
       ) {
-        const { writeStageSubjectStatus } =
+        const { writeGatePassStatuses } =
           await import("../../../services/focus-sessions/stage-subject-status.js");
-        await writeStageSubjectStatus({
+        await writeGatePassStatuses({
           session,
-          toStage: session.currentStage,
+          gatedStage: session.currentStage,
+          fromStage:
+            typeof gateData?.fromStage === "string" ? gateData.fromStage : null,
           userId,
         });
         // The gate passed: the stage now RUNS — the stage runner hands it to

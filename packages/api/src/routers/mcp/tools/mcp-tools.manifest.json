@@ -3492,7 +3492,7 @@
           },
           "stages": {
             "type": "array",
-            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, onApproved?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
             "items": {
               "type": "object",
               "properties": {
@@ -3538,7 +3538,13 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 200,
-                  "description": "Entering this stage writes this status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
+                  "description": "Entering this stage writes this in-progress status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
+                },
+                "onApproved": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The result status the subject reaches when this stage's work is approved (its outputs delivered, else the next gate passing). An existing option. More: load_skill system/synap/processes."
                 },
                 "gate": {
                   "anyOf": [
@@ -4125,7 +4131,7 @@
           },
           "stages": {
             "type": "array",
-            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, onApproved?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
             "items": {
               "type": "object",
               "properties": {
@@ -4171,7 +4177,13 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 200,
-                  "description": "Entering this stage writes this status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
+                  "description": "Entering this stage writes this in-progress status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
+                },
+                "onApproved": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The result status the subject reaches when this stage's work is approved (its outputs delivered, else the next gate passing). An existing option. More: load_skill system/synap/processes."
                 },
                 "gate": {
                   "anyOf": [

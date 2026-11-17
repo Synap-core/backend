@@ -44,6 +44,9 @@ const DOORS = [
   "satisfyOutputsByRef",
   "satisfyExpectedOutputs",
   "satisfyPullRequestByMerge",
+  // A stage's reached status (D2): the stage writer, which moves the subject
+  // through `moveStatus` (`stage-subject-status.ts`, `writeSubjectStatusValue`).
+  "writeStageReachedStatus",
 ];
 
 const RAW_WRITE = [

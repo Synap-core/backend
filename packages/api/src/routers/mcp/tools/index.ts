@@ -371,7 +371,7 @@ const ASK_JSON_SCHEMA = buildAskWireSchema();
 /**
  * The PROCESS contract on `synap_create_playbook`, DERIVED from the schemas
  * `playbooks.create` parses it with — `playbookStageSchema` (stage
- * `subjectStatus` / `gate` / `onFail` / `expectedOutputs`) and
+ * `subjectStatus` / `onApproved` / `gate` / `onFail` / `expectedOutputs`) and
  * `schemas/playbook-process.ts` (`statusProperty`, `activators`,
  * `humanOnlyStatuses`). Same reasoning as the builders above: the advertised
  * shape and the parse that refuses a bad declaration cannot drift apart.
@@ -419,7 +419,11 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
   stage: {
     subjectStatus: deriveJsonSchema(
       playbookStageSchema.shape.subjectStatus.unwrap(),
-      "Entering this stage writes this status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
+      "Entering this stage writes this in-progress status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
+    ),
+    onApproved: deriveJsonSchema(
+      playbookStageSchema.shape.onApproved.unwrap(),
+      "The result status the subject reaches when this stage's work is approved (its outputs delivered, else the next gate passing). An existing option. More: load_skill system/synap/processes."
     ),
     gate: deriveJsonSchema(
       playbookStageSchema.shape.gate.unwrap(),
@@ -488,7 +492,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, onApproved?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
   items: {
     type: "object",
     properties: {

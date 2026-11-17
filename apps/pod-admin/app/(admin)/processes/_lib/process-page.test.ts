@@ -90,6 +90,7 @@ const step = {
   requires: [],
   gate: null,
   subjectStatus: null,
+  onApproved: null,
 };
 
 describe("blocksToDraw", () => {

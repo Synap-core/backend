@@ -152,8 +152,10 @@ export interface ProcessStep {
   requires: string[];
   /** human | check | awaits | null. */
   gate: string | null;
-  /** The subject status this step moves the subject to, if any. */
+  /** The status entering this step moves the subject to, if any. */
   subjectStatus: string | null;
+  /** The status this step's approved work reaches (decision D2), if any. */
+  onApproved: string | null;
 }
 
 export interface ProcessCriterion {

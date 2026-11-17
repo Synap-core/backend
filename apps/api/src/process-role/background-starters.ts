@@ -778,6 +778,9 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         // goes through THE done door. Unfilled, its writes are skipped and
         // logged `effect_unavailable`.
         registerReactionEffect(api.meetOutcomesReactionEffect);
+        // Pod default D2 (approval signal 1): a stage's approved work moves its
+        // subject to the stage's `onApproved`, through the status door.
+        registerReactionEffect(api.reachStageStatusReactionEffect);
         // The status watcher (W6): late, approaching, stuck and
         // hold-review signals, raised once per episode, owner told.
         registerStatusWatcherRunner(() => api.runStatusWatcher());
