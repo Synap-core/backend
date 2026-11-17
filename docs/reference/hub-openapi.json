@@ -8781,6 +8781,270 @@
         }
       }
     },
+    "/workspaces/{workspaceId}/needs": {
+      "get": {
+        "tags": ["Workspaces"],
+        "summary": "A space's needs: the vocabulary, and each declared need filled or empty",
+        "description": "The needs a space's processes name (`need:` refs of its playbooks and automations), each `filled` (with the provider the space bound) or `empty` (with the installed capabilities that declare they fill it), plus the need vocabulary. Space members only. Requires hub-protocol.read scope.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The space's needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "vocabulary": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "slug": { "type": "string" },
+                          "label": { "type": "string" },
+                          "description": { "type": "string" },
+                          "intents": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                          },
+                          "aliases": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                          }
+                        },
+                        "required": [
+                          "slug",
+                          "label",
+                          "description",
+                          "intents",
+                          "aliases"
+                        ]
+                      }
+                    },
+                    "coverage": {
+                      "type": "object",
+                      "properties": {
+                        "workspaceId": { "type": "string" },
+                        "needs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "need": { "type": "string" },
+                              "label": { "type": ["string", "null"] },
+                              "known": { "type": "boolean" },
+                              "state": {
+                                "type": "string",
+                                "enum": ["filled", "empty"]
+                              },
+                              "implicit": { "type": "boolean" },
+                              "provider": {
+                                "type": ["object", "null"],
+                                "properties": {
+                                  "capabilityId": { "type": "string" },
+                                  "name": { "type": ["string", "null"] }
+                                },
+                                "required": ["capabilityId", "name"]
+                              },
+                              "binding": {
+                                "type": ["object", "null"],
+                                "properties": {
+                                  "bindingId": { "type": "string" },
+                                  "setBy": { "type": "string" },
+                                  "updatedAt": { "type": "string" },
+                                  "origin": {
+                                    "type": "string",
+                                    "enum": ["person", "automatic"]
+                                  }
+                                },
+                                "required": [
+                                  "bindingId",
+                                  "setBy",
+                                  "updatedAt",
+                                  "origin"
+                                ]
+                              },
+                              "candidates": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "capabilityId": { "type": "string" },
+                                    "name": { "type": "string" }
+                                  },
+                                  "required": ["capabilityId", "name"]
+                                }
+                              }
+                            },
+                            "required": [
+                              "need",
+                              "label",
+                              "known",
+                              "state",
+                              "implicit",
+                              "provider",
+                              "binding",
+                              "candidates"
+                            ]
+                          }
+                        },
+                        "empty": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        }
+                      },
+                      "required": ["workspaceId", "needs", "empty"]
+                    }
+                  },
+                  "required": ["vocabulary", "coverage"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid workspace id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspaceId}/needs/{need}": {
+      "put": {
+        "tags": ["Workspaces"],
+        "summary": "Fill (or clear) one need of a space",
+        "description": "Binds the need to a provider capability (its container id), once for the space and shared by its members; `providerCapabilityId: null` clears it. The provider must be this space's or pod-wide, and declare it fills the need or offer a tool for one of its intents. GOVERNED (`workspace/bind_need`): an agent caller gets `{ status: 'proposed', proposalId }` (202), applied on approval; a member who may write applies at once (`{ status: 'applied' }`). Requires hub-protocol.write.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": true,
+            "name": "workspaceId",
+            "in": "path"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": true,
+            "name": "need",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "providerCapabilityId": { "type": ["string", "null"] }
+                },
+                "required": ["providerCapabilityId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["applied", "proposed"]
+                    },
+                    "result": { "type": "object", "additionalProperties": {} },
+                    "proposalId": { "type": "string" },
+                    "reviewUrl": { "type": "string" }
+                  },
+                  "required": ["status"]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Proposed for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["applied", "proposed"]
+                    },
+                    "result": { "type": "object", "additionalProperties": {} },
+                    "proposalId": { "type": "string" },
+                    "reviewUrl": { "type": "string" }
+                  },
+                  "required": ["status"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, or the provider cannot fill it",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such provider",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/package-updates": {
       "get": {
         "tags": ["Packages"],
@@ -18535,8 +18799,7 @@
                                     "items": {
                                       "type": "string",
                                       "minLength": 1,
-                                      "maxLength": 200,
-                                      "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                                      "maxLength": 200
                                     },
                                     "maxItems": 16
                                   },
@@ -19933,8 +20196,7 @@
                               "items": {
                                 "type": "string",
                                 "minLength": 1,
-                                "maxLength": 200,
-                                "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                                "maxLength": 200
                               },
                               "maxItems": 16
                             },
@@ -23820,8 +24082,7 @@
                                     "items": {
                                       "type": "string",
                                       "minLength": 1,
-                                      "maxLength": 200,
-                                      "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                                      "maxLength": 200
                                     },
                                     "maxItems": 16
                                   },
@@ -25225,8 +25486,7 @@
                               "items": {
                                 "type": "string",
                                 "minLength": 1,
-                                "maxLength": 200,
-                                "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                                "maxLength": 200
                               },
                               "maxItems": 16
                             },
@@ -31304,8 +31564,7 @@
                           "items": {
                             "type": "string",
                             "minLength": 1,
-                            "maxLength": 200,
-                            "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                            "maxLength": 200
                           },
                           "maxItems": 16
                         },
@@ -32450,8 +32709,7 @@
                     "items": {
                       "type": "string",
                       "minLength": 1,
-                      "maxLength": 200,
-                      "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                      "maxLength": 200
                     },
                     "maxItems": 16
                   },
@@ -36518,6 +36776,271 @@
           },
           "500": {
             "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agents/access-requests": {
+      "post": {
+        "tags": ["Agents"],
+        "summary": "An agent asks its person for one more thing",
+        "description": "With the agent's own key. Each pair is a permission inside the agent's limits, in one space the person can give it. Files ONE ask the person answers from a card; allowing it ADDS the pairs to the key that asked (no other key of the agent), within what its computer holds. A pair the key already holds, already asked for, or that the person declined less than 30 days ago is not asked again. An ask waits 7 days.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "requests": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "permission": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120,
+                          "description": "A permission inside the agent's limits, usually the `ask.permission` of the refusal (GRANT_DENIED with `askable: true`)."
+                        },
+                        "workspaceId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "The space, by id: every pair names one, reads included."
+                        }
+                      },
+                      "required": ["permission", "workspaceId"]
+                    },
+                    "minItems": 1,
+                    "maxItems": 16
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 300,
+                    "description": "Why the agent needs it, shown to the person as the agent's words."
+                  }
+                },
+                "required": ["requests"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Nothing new to ask: each pair's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": ["string", "null"],
+                      "description": "The ask filed now; null when every pair was already given, already asked, or declined less than 30 days ago."
+                    },
+                    "status": {
+                      "type": ["string", "null"],
+                      "enum": [
+                        "pending",
+                        "allowed",
+                        "declined",
+                        "expired",
+                        null
+                      ]
+                    },
+                    "reviewUrl": { "type": ["string", "null"] },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" },
+                          "state": {
+                            "type": "string",
+                            "enum": ["asked", "given", "open", "quiet"],
+                            "description": "asked: in the ask filed now; given: the app holds it; open: an earlier ask still waits for it; quiet: the person said Not now less than 30 days ago."
+                          },
+                          "askId": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName",
+                          "state"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "reviewUrl",
+                    "expiresAt",
+                    "pairs"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The ask, filed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": ["string", "null"],
+                      "description": "The ask filed now; null when every pair was already given, already asked, or declined less than 30 days ago."
+                    },
+                    "status": {
+                      "type": ["string", "null"],
+                      "enum": [
+                        "pending",
+                        "allowed",
+                        "declined",
+                        "expired",
+                        null
+                      ]
+                    },
+                    "reviewUrl": { "type": ["string", "null"] },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" },
+                          "state": {
+                            "type": "string",
+                            "enum": ["asked", "given", "open", "quiet"],
+                            "description": "asked: in the ask filed now; given: the app holds it; open: an earlier ask still waits for it; quiet: the person said Not now less than 30 days ago."
+                          },
+                          "askId": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName",
+                          "state"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "reviewUrl",
+                    "expiresAt",
+                    "pairs"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or a pair that names no space (ASK_NEEDS_SPACE)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an agent's own key acting for its person (NOT_AN_AGENT_KEY), a permission outside the agent's limits (ASK_BEYOND_AGENT_LIMIT), or a pair the person cannot give (ASK_NOT_ON_OFFER)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agents/access-requests/{id}": {
+      "get": {
+        "tags": ["Agents"],
+        "summary": "What became of an agent's ask",
+        "description": "With the agent's own key: pending, allowed, declined (Not now) or expired. An agent reads only its own asks.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ask",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "status": {
+                      "type": "string",
+                      "enum": ["pending", "allowed", "declined", "expired"]
+                    },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName"
+                        ]
+                      }
+                    },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "decidedAt": { "type": ["string", "null"] }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "pairs",
+                    "expiresAt",
+                    "decidedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an agent's own key",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ask of this agent",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -49962,6 +50485,80 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/focus-sessions/{id}/continue": {
+      "post": {
+        "tags": ["FocusSessions"],
+        "summary": "Continue a run that stopped before its last stage",
+        "description": "CONTINUE AT <STAGE>: the SAME session resumes at the stage its run stopped on, with a new run turn (an ended session is reopened for it; the stopped run keeps its verdict). A person's move: an agent credential is refused (403 person_only). Offered by statusOf include work as `continue`, with `canAct` from the same check. Same service as tRPC focusSessions.continueRun and MCP synap_continue_session.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Continued: { ok, sessionId, runId, runStatus, at, reopenedFrom, warnings }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Refused: an agent credential (person_only) or the key's grant (denied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: nothing to continue, another run live on the record (already_running), or the session moved (conflict)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
               }
             }
           },
