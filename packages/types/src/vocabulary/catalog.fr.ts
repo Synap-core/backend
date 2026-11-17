@@ -696,6 +696,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
     "Ajouter des packs et des modèles à votre pod",
   "vocabulary.needsYou.count.uncurated":
     "{n, plural, one {# {noun}} many {# de {nouns}} other {# {nouns}}}",
+  "vocabulary.job.startedHere":
+    "{n, plural, one {# travail lancé d’ici} many {# de travaux lancés d’ici} other {# travaux lancés d’ici}}",
 };
 
 /** A noun's grammar in French: what a sentence agrees with. */

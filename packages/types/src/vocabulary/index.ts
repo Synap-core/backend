@@ -3555,6 +3555,20 @@ export function resolveHandedToLabel(
   return sentences(catalogLocaleOf(locale))("vocabulary.handedTo", { name });
 }
 
+/**
+ * A job's child jobs folded on its Activity line: "3 jobs started from here"
+ * (plan 5207fbb6, `@synap-core/types/work-view` `jobBranches`
+ * `descendants`). A child job is a Job, never a "branch" on screen.
+ */
+export function resolveJobsStartedHereLabel(
+  n: number,
+  locale?: Locale
+): string {
+  return sentences(catalogLocaleOf(locale))("vocabulary.job.startedHere", {
+    n,
+  });
+}
+
 // ─── The one-line aim of a sitting (decision D3, 2026-10-23) ────────────────
 
 /**

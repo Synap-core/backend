@@ -770,6 +770,44 @@ export const focusSessionsRouter = router({
       });
     }),
   /**
+   * TIMELINE — what happened to a goal, a session or a pull request, newest
+   * first (`TimelineWire`, `@synap-core/types/units`): the tRPC door of the
+   * ONE read behind Hub `GET /timeline` and MCP `synap_get_timeline`
+   * (`services/timeline/read-timeline.ts`), so the Work view's Activity line
+   * (`@synap-core/types/work-view` `activityLine`) reads it on a person's
+   * sign-in too. Same subject parser (`timelineSubjectOf`: exactly one of
+   * `goalId`, `sessionId`, `pr`), same reader and floors as those doors:
+   * sessions owner-only, a goal through the goal history's own floor. A
+   * subject that is not the caller's is NOT_FOUND, never an empty timeline.
+   */
+  timeline: protectedProcedure
+    .input(
+      z.object({
+        goalId: z.string().optional(),
+        sessionId: z.string().optional(),
+        pr: z.string().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      // Loaded on call, as the MCP door does: the read pulls the goal history
+      // and status reads, which this router must not load at import.
+      const { readTimeline, timelineSubjectOf } =
+        await import("../services/timeline/read-timeline.js");
+      const subject = timelineSubjectOf(input);
+      if (!subject.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: subject.error });
+      }
+      const timeline = await readTimeline(subject.subject, {
+        userId: requireUserId(ctx.userId),
+        agentUserId: ctx.agentUserId ?? null,
+        isHubProtocol: ctx.isHubProtocol,
+      });
+      if (!timeline) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
+      }
+      return timeline;
+    }),
+  /**
    * BROWSE — the full, searchable, paged session list behind "See all".
    *
    * `list` feeds home surfaces: newest-started first, capped at 50, returning a
