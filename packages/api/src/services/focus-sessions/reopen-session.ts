@@ -42,6 +42,7 @@ import {
   desc,
   drizzleSql,
   liveRunStatusWhere,
+  setRunStatus,
   setSessionStatus,
   workUnitActorOf,
   LifecycleConflictError,
@@ -251,16 +252,14 @@ export async function reopenCancelledSession(params: {
       if (cancelledRun?.status === "cancelled") {
         // COMPARE-AND-SET: only the run still `cancelled` is revived (a
         // concurrent reopen, or any writer between the read and here, wins).
-        const revived = await tx
-          .update(playbookRuns)
-          .set({ status: "running", completedAt: null, error: null })
-          .where(
-            and(
-              eq(playbookRuns.id, cancelledRun.id),
-              eq(playbookRuns.status, "cancelled")
-            )
-          )
-          .returning({ id: playbookRuns.id });
+        const { rows: revived } = await setRunStatus(tx, {
+          runId: cancelledRun.id,
+          from: "cancelled",
+          to: "running",
+          actor: workUnitActorOf(userId, null),
+          reason: "reopened by the person",
+          set: { completedAt: null, error: null },
+        });
         if (revived.length > 0) reopenedRunId = cancelledRun.id;
       }
     }

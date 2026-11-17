@@ -66,6 +66,8 @@ import {
   closeOpenRoomQuestions,
   openRoomQuestionConditions,
   setSessionStatus,
+  setRunStatus,
+  LIVE_RUN_STATUSES,
   workUnitActorOf,
   type WorkUnitActor,
 } from "@synap/database";
@@ -728,20 +730,18 @@ export async function completeFocusSession(
     // reaper or a cancel can settle it between that read and this write. Its
     // verdict then stands (a run that completed is not re-stamped `cancelled`
     // by a late close), and nothing is settled again.
-    const ended = await db
-      .update(playbookRuns)
-      .set({
-        status: runStatus,
+    const { rows: ended } = await setRunStatus(db, {
+      runId: run.id,
+      from: LIVE_RUN_STATUSES,
+      to: runStatus,
+      // The same mover as the session's own close.
+      actor: params.actor ?? workUnitActorOf(params.userId, params.agentUserId),
+      reason: `Its session was ${terminalStatus}.`,
+      set: {
         completedAt: new Date(),
         error: runStatus === "failed" ? SESSION_FAILED_RUN_ERROR : null,
-      })
-      .where(
-        and(
-          eq(playbookRuns.id, run.id),
-          liveRunStatusWhere(playbookRuns.status)
-        )
-      )
-      .returning({ id: playbookRuns.id });
+      },
+    });
     if (ended.length > 0) {
       // The parent automation run settles from its children (never throws).
       await settleParentAutomationRunFromChild({ playbookRunId: run.id });

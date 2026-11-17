@@ -1,7 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
-  and,
   proposals,
   playbooks,
   playbookRuns,
@@ -9,7 +8,8 @@ import {
   eq,
   inArray,
   getWorkspaceMembership,
-  liveRunStatusWhere,
+  LIVE_RUN_STATUSES,
+  setRunStatus,
   transitionProposal,
 } from "@synap/database";
 // `createLinks` is the ONE link door and it lives in @synap/api, not
@@ -1048,21 +1048,19 @@ export function registerPlaybookExecutors(): void {
       // run was read above without a status floor, and the person may approve
       // long after it was filed: a run cancelled or finished since keeps its
       // verdict, and the receipt says nothing was written.
-      const written = await db
-        .update(playbookRuns)
-        .set({
-          status: nextStatus,
+      const { rows: written } = await setRunStatus(db, {
+        runId,
+        from: LIVE_RUN_STATUSES,
+        to: nextStatus,
+        // The person approved the agent's capture: theirs, with its proposal.
+        actor: { kind: "human", userId },
+        proposalId: input.proposalId,
+        set: {
           summary: (inner.summary as string | undefined) ?? run.summary,
           error: (inner.error as string | undefined) ?? run.error,
           completedAt: terminal ? new Date() : run.completedAt,
-        })
-        .where(
-          and(
-            eq(playbookRuns.id, runId),
-            liveRunStatusWhere(playbookRuns.status)
-          )
-        )
-        .returning({ id: playbookRuns.id });
+        },
+      });
       // A failed child of an automation run settles its parent (never throws).
       if (terminal && written.length > 0)
         await settleParentAutomationRunFromChild({ playbookRunId: runId });

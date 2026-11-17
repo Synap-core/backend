@@ -50,6 +50,7 @@ import {
   listHolds,
   proposals,
   resolveStatusMoveTarget,
+  setRunStatus,
   setSessionStatus,
   sql,
   type CurrentHold,
@@ -60,6 +61,7 @@ import {
   registerReactor,
   type Reactor,
 } from "@synap/events";
+import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
 import { createLogger } from "@synap-core/core";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
 import type { SessionStatus } from "@synap-core/types/focus-sessions";
@@ -77,7 +79,10 @@ import {
   holdDevRefMet,
   type DevLoopEventRowLike,
 } from "@synap-core/types";
-import type { ProjectTrackStatus } from "@synap/database/schema";
+import type {
+  PlaybookRunStatus,
+  ProjectTrackStatus,
+} from "@synap/database/schema";
 
 const logger = createLogger({ module: "hold-resume" });
 
@@ -601,8 +606,29 @@ async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
       if (rows.length > 0) await followUp(h, to);
       return rows.length > 0;
     }
-    case "playbook_run":
-      return false;
+    case "playbook_run": {
+      // A run's own door. A run's pause resumes to where it was (live, as a
+      // rule); a run that a pause leaves into a verdict settles its parent
+      // like every terminal writer (tripwire playbook-run-terminal-settles-parent).
+      const { rows, transitions } = await setRunStatus(db, {
+        runId: h.subjectId,
+        from: h.status as PlaybookRunStatus,
+        to: to as PlaybookRunStatus,
+        actor: { kind: "system" },
+        reason,
+      });
+      for (const t of transitions) {
+        await dispatchLifecycleTransition(t.transitionId);
+      }
+      if (
+        transitions.some((t) => t.category === "done" || t.category === "lost")
+      ) {
+        await settleParentAutomationRunFromChild({
+          playbookRunId: h.subjectId,
+        });
+      }
+      return rows.length > 0;
+    }
     // A proposal or a slot never pauses: nothing of theirs is held.
     case "proposal":
     case "slot":
