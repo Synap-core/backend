@@ -1758,12 +1758,13 @@ describe('include: ["work"] — where its work stands (plan 7d71ddcc W4)', () =>
     ] as const) {
       await q(
         `insert into proposals (id, target_type, target_id, proposal_type, data, status, session_id, created_by, created_at, updated_at)
-         values ($1, 'focus_session', $2, 'playbook.stage_gate', $3::jsonb, 'pending', $2, $4, now(), now())`,
+         values ($1, 'focus_session', $2, 'playbook.stage_gate', $3::jsonb, 'pending', $5, $4, now(), now())`,
         [
           id,
           S_GATED,
           JSON.stringify({ sessionId: S_GATED, stageKey, stageName, sourceId }),
           sourceId,
+          S_GATED,
         ]
       );
     }
