@@ -121,7 +121,7 @@ import {
 const attestLogger = createLogger({ module: "attest-slot" });
 
 /** How long after close an approval still counts as satisfying this session. */
-const RECENTLY_CLOSED_MS = 24 * 60 * 60 * 1000;
+export const RECENTLY_CLOSED_MS = 24 * 60 * 60 * 1000;
 
 export interface SatisfyExpectedOutputsParams {
   sessionId: string;
