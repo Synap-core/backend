@@ -2147,6 +2147,10 @@ export type DevTimelineEvent = DevTimelineEventBase & ({
 	/** The agent's reason, as written; null = none given. */
 	note: string | null;
 	slot: string | null;
+} | {
+	/** The person said "Not mine" about a slot an agent handed them: it is the agent's again, unanswered. */
+	kind: "slot_handed_back";
+	slot: string;
 });
 /** A part as read: the value, or that its read failed. */
 export type RequestContextPart<T> = {

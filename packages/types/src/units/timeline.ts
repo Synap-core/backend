@@ -54,6 +54,7 @@ export const DEV_TIMELINE_EVENT_KINDS = [
   "slot_attested",
   "relay_corrected",
   "question_withdrawn",
+  "slot_handed_back",
 ] as const;
 export type DevTimelineEventKind = (typeof DEV_TIMELINE_EVENT_KINDS)[number];
 
@@ -162,6 +163,11 @@ export type DevTimelineEvent = DevTimelineEventBase &
         slot: string | null;
         /** The agent's reason, as written; null = none given. */
         note: string | null;
+      }
+    | {
+        /** The person said "Not mine" about a slot an agent handed them: it is the agent's again, unanswered. */
+        kind: "slot_handed_back";
+        slot: string;
       }
   );
 

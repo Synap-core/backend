@@ -78,6 +78,7 @@ import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import {
   askFingerprint,
   effectiveSlotAsk,
+  isDeclinedValue,
   resolveAskResolution,
 } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
@@ -650,7 +651,7 @@ export function criterionMetBy(
   /** The answer that would meet it; absent for an attest ("I did this"). */
   value?: SlotAnswerValue
 ): string | null {
-  if (value?.type === "declined") return null;
+  if (isDeclinedValue(value)) return null;
   const slot = outputs[index];
   if (!slot || slot.owner !== "human" || slot.kind === CRITERION_SLOT_KIND) {
     return null;

@@ -2401,6 +2401,11 @@ function readLastCompletion(
  * A blocker as a next move names it: its title in quotes, or — unnamed or not
  * visible — "the <noun>" through the vocabulary door (no a/an guessing).
  */
+/** The person's words in a next-move reason: at most 140 characters. */
+function clip140(text: string): string {
+  return text.length > 140 ? `${text.slice(0, 140)}…` : text;
+}
+
 function blockerName(b: OpenBlocker): string {
   return b.title
     ? `"${b.title}"`
@@ -2707,20 +2712,16 @@ export function deriveNextMove(input: {
         actor: "ai",
         label: `Re-plan "${s.label}"`,
         reason:
-          `The person refused your ask${reason ? `: "${reason.length > 140 ? `${reason.slice(0, 140)}…` : reason}"` : ""}. ` +
+          `The person refused your ask${reason ? `: "${clip140(reason)}"` : ""}. ` +
           "Do it another way, ask something new, withdraw the slot (retireOutput), or close the session failed.",
       };
     }
     if (s.answer) {
-      const said =
-        s.answer.text.length > 140
-          ? `${s.answer.text.slice(0, 140)}…`
-          : s.answer.text;
       return {
         kind: "agent_slot",
         actor: "ai",
         label: `Continue "${s.label}"`,
-        reason: `The person answered: "${said}"`,
+        reason: `The person answered: "${clip140(s.answer.text)}"`,
       };
     }
     return {

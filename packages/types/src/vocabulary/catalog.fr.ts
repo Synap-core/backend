@@ -441,6 +441,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.ask.progressive": "Demande en cours",
   "action.attest.imperative": "Marquer comme fait",
   "action.attest.past": "Marqué comme fait",
+  "action.hand_back.imperative": "Rendre",
+  "action.hand_back.past": "Rendu",
   "action.post.imperative": "Poster",
   "action.post.past": "Posté",
   "action.post.progressive": "Publication en cours",

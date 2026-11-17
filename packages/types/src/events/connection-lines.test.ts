@@ -169,6 +169,13 @@ const ROWS: Row[] = [
     { label: "Deck" },
     'Marked done "Deck"',
   ],
+  // "Not mine" (review a089b624 S3), named as the history row names it.
+  [
+    "focus_session.slot_handed_back.completed",
+    { expectedLabel: "Budget" },
+    'Handed back "Budget"',
+  ],
+  ["focus_session.slot_handed_back.completed", undefined, "Handed back"],
   ["focus_session.closed.completed", undefined, "Closed job"],
   [
     "track.stage_changed.completed",

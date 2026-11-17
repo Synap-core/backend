@@ -103,8 +103,20 @@ describe("the provide-secret ask: purpose and uses", () => {
     "https://github.com/Synap-core/backend/pull/1066",
     "synap-backend/packages/api/src/services",
     "Merging the delivery PR for release 2026-11-16",
+    // What an agent names the work by in this pod: a session or entity id,
+    // a hyphenated or underscored slug (review a089b624 S4).
+    "session 23a8e85b-1a9a-4560-8418-d16faa7dd8c3",
+    "427c440c-1928-438a-85ca-a7ae262b1d74",
+    "synap-intelligence-service-v2",
+    "merge_pull_request_2026_11_16",
   ])("lets ordinary words, paths and links through: %s", (value) => {
     expect(looksLikeCredential(value)).toBe(false);
+    expect(
+      AskSchema.safeParse({
+        ...OLD_ASK,
+        provide: { ...OLD_ASK.provide, purpose: { ...PURPOSE, on: value } },
+      }).success
+    ).toBe(true);
   });
 });
 

@@ -512,13 +512,27 @@ const httpUrl = z
 /**
  * A purpose part must name a thing, never carry a credential: one unbroken
  * run of 24+ token characters (no `/` or `.`, so a path or a URL passes)
- * mixing letters and digits (`ghp_…`, `sk_live_…`, a JWT segment) is refused. A heuristic floor, not a scanner: the field is
- * bounded and shown to the person, so a pasted value would be seen there.
+ * holding a piece of 16+ characters, between its separators (`_ - + =`),
+ * that mixes letters and digits (`ghp_…`, `sk_live_…`, a JWT segment) is
+ * refused. The piece, not the whole run: an id an agent names the work by
+ * (a UUID, `synap-intelligence-service-v2`, `merge_pull_request_2026_11_16`)
+ * is short pieces joined, and passes. A heuristic floor, not a scanner: the
+ * field is bounded and shown to the person, so a pasted value would be seen
+ * there.
  */
 const CREDENTIAL_LIKE_RUN = /[A-Za-z0-9_\-+=]{24,}/g;
+const CREDENTIAL_PIECE_MIN = 16;
 export function looksLikeCredential(text: string): boolean {
   for (const run of text.match(CREDENTIAL_LIKE_RUN) ?? []) {
-    if (/[A-Za-z]/.test(run) && /[0-9]/.test(run)) return true;
+    for (const piece of run.split(/[_\-+=]+/)) {
+      if (
+        piece.length >= CREDENTIAL_PIECE_MIN &&
+        /[A-Za-z]/.test(piece) &&
+        /[0-9]/.test(piece)
+      ) {
+        return true;
+      }
+    }
   }
   return false;
 }

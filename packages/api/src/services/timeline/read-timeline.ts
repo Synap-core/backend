@@ -19,7 +19,8 @@
  *                 `decision_asked` / `decision_answered` — the proposals filed
  *                     in it (pending; decided by a PERSON), as the goal history;
  *                 `slot_asked` / `slot_answered` / `slot_attested` /
- *                     `relay_corrected` / `question_withdrawn` — its slots'
+ *                     `relay_corrected` / `question_withdrawn` /
+ *                     `slot_handed_back` — its slots'
  *                     history rows (`focus_session.slot_*`, under the events
  *                     floor), written by the ask doors in the same transaction
  *                     as the change. Room posts are not in it.
@@ -95,6 +96,7 @@ import {
   FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE,
   FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE,
   FOCUS_SESSION_SLOT_ATTESTED_EVENT_TYPE,
+  FOCUS_SESSION_SLOT_HANDED_BACK_EVENT_TYPE,
   FOCUS_SESSION_SUBJECT_TYPE,
 } from "../focus-sessions/lifecycle-events.js";
 import { readTrackHistory } from "../tracks/track-history.js";
@@ -401,6 +403,7 @@ const SLOT_EVENT_KIND: Readonly<
     | "slot_attested"
     | "relay_corrected"
     | "question_withdrawn"
+    | "slot_handed_back"
   >
 > = {
   [FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE]: "slot_asked",
@@ -408,6 +411,7 @@ const SLOT_EVENT_KIND: Readonly<
   [FOCUS_SESSION_SLOT_ATTESTED_EVENT_TYPE]: "slot_attested",
   [FOCUS_SESSION_RELAY_CORRECTED_EVENT_TYPE]: "relay_corrected",
   [FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE]: "question_withdrawn",
+  [FOCUS_SESSION_SLOT_HANDED_BACK_EVENT_TYPE]: "slot_handed_back",
 };
 const SLOT_EVENT_TYPES = Object.keys(SLOT_EVENT_KIND);
 
@@ -418,7 +422,8 @@ const str = (v: unknown): string | null =>
  * One slot history row (`focus_session.slot_*`, written by the door that made
  * the change) as a timeline event; null when the row is not one. The actor
  * is who ACTED: the asking agent (else the pod), the person who answered or
- * attested or corrected, the agent that withdrew.
+ * attested or corrected or handed it back ("Not mine"), the agent that
+ * withdrew.
  */
 function slotEvent(
   row: DevFactRow & { userId: string },
@@ -478,6 +483,13 @@ function slotEvent(
       return {
         event: { ...base, kind, slot },
         actorId: row.userId,
+        isAgent: false,
+      };
+    case "slot_handed_back":
+      if (!slot) return null;
+      return {
+        event: { ...base, kind, slot },
+        actorId: str(d.handedBackBy) ?? row.userId,
         isAgent: false,
       };
     case "question_withdrawn": {

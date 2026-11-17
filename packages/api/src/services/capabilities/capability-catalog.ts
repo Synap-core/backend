@@ -352,6 +352,8 @@ export function extractInstallParams(
   if (!Array.isArray(params)) return [];
   return params.map((p) => {
     const type = typeof p.type === "string" ? p.type : undefined;
+    // Dropped when invalid: a cached manifest was not validated here.
+    const obtain = readParamObtain(p.obtain);
     return {
       name: String(p.name),
       ...(typeof p.label === "string" ? { label: p.label } : {}),
@@ -360,11 +362,7 @@ export function extractInstallParams(
       ...(typeof p.description === "string"
         ? { description: p.description }
         : {}),
-      // Dropped when invalid: a cached manifest was not validated here.
-      ...(() => {
-        const obtain = readParamObtain(p.obtain);
-        return obtain ? { obtain } : {};
-      })(),
+      ...(obtain ? { obtain } : {}),
       // Prompt these masked: an explicit secret/password type, or the
       // conventional credential param names used by vault-generic templates.
       ...(type === "password" ||

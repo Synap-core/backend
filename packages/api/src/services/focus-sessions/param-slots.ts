@@ -32,7 +32,11 @@ import {
   describeParamTypeError,
 } from "@synap/playbooks";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
-import { isCredentialFieldName, playbookParamAsk } from "@synap-core/types/ask";
+import {
+  isCredentialFieldName,
+  isDeclinedValue,
+  playbookParamAsk,
+} from "@synap-core/types/ask";
 
 /** How the run came to be without the value — the `why`'s last sentence. */
 export const PARAM_SLOT_CIRCUMSTANCE = {
@@ -145,7 +149,7 @@ export function paramValueFromAnswer(
   if (slot.kind !== PARAM_SLOT_KIND || !slot.paramName)
     return { status: "none" };
   // A REFUSAL gives no value: the param stays unset (never `false`, never "").
-  if (value?.type === "declined") return { status: "none" };
+  if (isDeclinedValue(value)) return { status: "none" };
   const name = slot.paramName;
   // A credential param has no ask (`playbookParamAsk` → null): typing the
   // secret here would store it as words in the slot, the room and the params.

@@ -284,6 +284,12 @@ beforeAll(async () => {
     blockedReason: "decision",
     askedByAgentUserId: AGENT,
   });
+  // "Not mine" (review a089b624 S3), as `notMineSessionSlot` writes it.
+  await slotRow(S.sibling, USER, "slot_handed_back", -8, {
+    expectedLabel: "Budget",
+    handedBackBy: USER,
+    blockedReason: "decision",
+  });
   await slotRow(S.sibling, USER, "slot_answered", -7, {
     expectedLabel: "Pick the target",
     answeredBy: USER,
@@ -405,7 +411,7 @@ describe("readTimeline on PGlite", () => {
 });
 
 describe("the slots' history in the session timeline", () => {
-  it("asked, answered, withdrawn, attested and corrected, each by who acted, under the events floor", async () => {
+  it("asked, handed back, answered, withdrawn, attested and corrected, each by who acted, under the events floor", async () => {
     const t = await readTimeline(
       { kind: "session", id: S.sibling },
       { userId: USER, isHubProtocol: true }
@@ -416,6 +422,7 @@ describe("the slots' history in the session timeline", () => {
       "slot_attested",
       "question_withdrawn",
       "slot_answered",
+      "slot_handed_back",
       "slot_asked",
       "checks_finished", // its devbox job (-19)
       "session_started",
@@ -442,6 +449,11 @@ describe("the slots' history in the session timeline", () => {
     expect(events.find((e) => e.kind === "slot_attested")).toMatchObject({
       slot: "Rotate the key",
       actor: { kind: "human", id: USER },
+    });
+    expect(events.find((e) => e.kind === "slot_handed_back")).toMatchObject({
+      slot: "Budget",
+      actor: { kind: "human", id: USER, isViewer: true },
+      refs: { sessionId: S.sibling, slotLabel: "Budget" },
     });
   });
 });
