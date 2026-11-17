@@ -160,7 +160,9 @@ export const reachStageStatusReactionEffect: ReactionEffect = {
     // target as a conflict. The LATEST approved stage the subject does not
     // hold yet is where the work stands (an earlier one is behind it, and the
     // writer never moves a subject back).
-    for (const { stageKey, value } of [...approved.stages].reverse()) {
+    for (const { stageKey, stageName, value } of [
+      ...approved.stages,
+    ].reverse()) {
       const target = await readReachedMoveTarget({
         session,
         subjectEntityId: session.subjectEntityId,
@@ -190,6 +192,10 @@ export const reachStageStatusReactionEffect: ReactionEffect = {
           expectedFrom: target.current,
           ownerUserId: session.userId,
           detail: detail as unknown as Record<string, unknown>,
+          say: {
+            name: target.title,
+            applied: `Moved \u201c${target.title}\u201d to ${target.label}: the work of \u201c${stageName}\u201d was approved.`,
+          },
         },
       ];
     }
