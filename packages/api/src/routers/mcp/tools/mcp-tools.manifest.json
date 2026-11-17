@@ -3472,7 +3472,7 @@
           },
           "stages": {
             "type": "array",
-            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, onApproved?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
             "items": {
               "type": "object",
               "properties": {
@@ -3518,7 +3518,13 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 200,
-                  "description": "Entering this stage writes this status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
+                  "description": "The in-progress status the subject holds WHILE this stage is worked (In Draft, Review, in_progress): entering the stage writes it. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one. A result status (Scripted, Published, sent, won) goes in onApproved instead."
+                },
+                "onApproved": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The result status the subject REACHES when this stage's work is approved: its expectedOutputs all delivered, else the next stage's gate passing. An existing option. The subject holding it means the run stands at the NEXT stage. A stage with neither outputs nor a gated next stage is never written by the engine: the person or worker who finishes it moves the subject."
                 },
                 "gate": {
                   "anyOf": [
@@ -4105,7 +4111,7 @@
           },
           "stages": {
             "type": "array",
-            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, onApproved?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
             "items": {
               "type": "object",
               "properties": {
@@ -4151,7 +4157,13 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 200,
-                  "description": "Entering this stage writes this status on the subject. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one."
+                  "description": "The in-progress status the subject holds WHILE this stage is worked (In Draft, Review, in_progress): entering the stage writes it. Must be an EXISTING option of the subject kind's `statusProperty` — never invent one. A result status (Scripted, Published, sent, won) goes in onApproved instead."
+                },
+                "onApproved": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200,
+                  "description": "The result status the subject REACHES when this stage's work is approved: its expectedOutputs all delivered, else the next stage's gate passing. An existing option. The subject holding it means the run stands at the NEXT stage. A stage with neither outputs nor a gated next stage is never written by the engine: the person or worker who finishes it moves the subject."
                 },
                 "gate": {
                   "anyOf": [

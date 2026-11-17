@@ -18522,6 +18522,11 @@
                                     "minLength": 1,
                                     "maxLength": 200
                                   },
+                                  "onApproved": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
                                   "onFail": {
                                     "type": "object",
                                     "properties": {
@@ -23801,6 +23806,11 @@
                                     "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
                                   },
                                   "subjectStatus": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "onApproved": {
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 200
@@ -31298,6 +31308,11 @@
                           "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
                         },
                         "subjectStatus": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "onApproved": {
                           "type": "string",
                           "minLength": 1,
                           "maxLength": 200
@@ -50807,7 +50822,11 @@
                                   "type": ["string", "null"],
                                   "enum": ["human", "check", "awaits", null]
                                 },
-                                "executor": { "type": "string" }
+                                "executor": { "type": "string" },
+                                "via": {
+                                  "type": "string",
+                                  "enum": ["enter", "reach"]
+                                }
                               },
                               "required": [
                                 "playbookId",
@@ -50890,7 +50909,11 @@
                                               null
                                             ]
                                           },
-                                          "executor": { "type": "string" }
+                                          "executor": { "type": "string" },
+                                          "via": {
+                                            "type": "string",
+                                            "enum": ["enter", "reach"]
+                                          }
                                         },
                                         "required": [
                                           "playbookId",
@@ -51208,7 +51231,11 @@
                                             null
                                           ]
                                         },
-                                        "executor": { "type": "string" }
+                                        "executor": { "type": "string" },
+                                        "via": {
+                                          "type": "string",
+                                          "enum": ["enter", "reach"]
+                                        }
                                       },
                                       "required": [
                                         "playbookId",
@@ -51466,6 +51493,7 @@
                                   ]
                                 },
                                 "subjectStatus": { "type": ["string", "null"] },
+                                "onApproved": { "type": ["string", "null"] },
                                 "gate": {
                                   "type": ["string", "null"],
                                   "enum": ["human", "check", "awaits", null]
@@ -51476,6 +51504,7 @@
                                 "name",
                                 "category",
                                 "subjectStatus",
+                                "onApproved",
                                 "gate"
                               ]
                             }
