@@ -578,6 +578,9 @@ function agentConnectOf(
 ): { keyId: string; agentType: string; name: string | null } | null {
   if (p.targetType !== "agent" || p.proposalType !== "connect") return null;
   const d = (p.data ?? {}) as Record<string, unknown>;
+  // An agent asking for one more thing (`mode: "add"`) names a key that is
+  // already connected: it is decided as a proposal, not a new connection.
+  if (d.mode === "add") return null;
   if (typeof d.keyId !== "string") return null;
   return {
     keyId: d.keyId,

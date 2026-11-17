@@ -317,6 +317,16 @@ export async function expireLapsedProposals(
   } catch (err) {
     logger.warn({ err }, "expiry: app-ask scan failed (retried next run)");
   }
+  // The same for an AI's ask for one more thing (`agent/connect` of mode
+  // "add", services/agent-access-ask.ts), lazy for the same cycle.
+  try {
+    const { lapsedAgentAskIds } = await import("../agent-access-ask.js");
+    for (const id of await lapsedAgentAskIds(now)) {
+      if (!lapsed.includes(id)) lapsed.push(id);
+    }
+  } catch (err) {
+    logger.warn({ err }, "expiry: agent-ask scan failed (retried next run)");
+  }
   const seen = new Set(pending.map((p) => p.id));
   const candidates = [...pending, ...guestRows.filter((g) => !seen.has(g.id))];
 

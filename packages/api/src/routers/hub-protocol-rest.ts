@@ -380,7 +380,7 @@ registerEntityShareRoutes(app); // /entity-share/deliver (CP JWT auth)
 registerDeviceRoutes(app); // /setup/device, /setup/device/token — RFC 8628 device door (unauthenticated, MACHINE-IDENTITY-PLAN W2)
 registerSetupRoutes(app); // /setup/agent (provisioning auth)
 registerMcpRedeemRoutes(app); // /mcp/redeem (CP-MCP consent-code → claude-web key), /mcp/revoke (disconnect)
-registerAgentsRoutes(app); // /agents/sync
+registerAgentsRoutes(app); // /agents/sync, /agents/access-requests
 registerMessagingRoutes(app); // /messaging/*
 registerDiscordRoutes(app); // /discord/agent-turn
 registerDiscordIdentityRoutes(app); // /discord/identity, /discord/identity/members, /discord/identity/link

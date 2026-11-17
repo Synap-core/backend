@@ -36527,6 +36527,271 @@
         }
       }
     },
+    "/agents/access-requests": {
+      "post": {
+        "tags": ["Agents"],
+        "summary": "An agent asks its person for one more thing",
+        "description": "With the agent's own key. Each pair is a permission inside the agent's limits, in one space the person can give it. Files ONE ask the person answers from a card; allowing it ADDS the pairs to the key that asked (no other key of the agent), within what its computer holds. A pair the key already holds, already asked for, or that the person declined less than 30 days ago is not asked again. An ask waits 7 days.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "requests": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "permission": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120,
+                          "description": "A permission inside the agent's limits, usually the `ask.permission` of the refusal (GRANT_DENIED with `askable: true`)."
+                        },
+                        "workspaceId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "description": "The space, by id: every pair names one, reads included."
+                        }
+                      },
+                      "required": ["permission", "workspaceId"]
+                    },
+                    "minItems": 1,
+                    "maxItems": 16
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 300,
+                    "description": "Why the agent needs it, shown to the person as the agent's words."
+                  }
+                },
+                "required": ["requests"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Nothing new to ask: each pair's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": ["string", "null"],
+                      "description": "The ask filed now; null when every pair was already given, already asked, or declined less than 30 days ago."
+                    },
+                    "status": {
+                      "type": ["string", "null"],
+                      "enum": [
+                        "pending",
+                        "allowed",
+                        "declined",
+                        "expired",
+                        null
+                      ]
+                    },
+                    "reviewUrl": { "type": ["string", "null"] },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" },
+                          "state": {
+                            "type": "string",
+                            "enum": ["asked", "given", "open", "quiet"],
+                            "description": "asked: in the ask filed now; given: the app holds it; open: an earlier ask still waits for it; quiet: the person said Not now less than 30 days ago."
+                          },
+                          "askId": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName",
+                          "state"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "reviewUrl",
+                    "expiresAt",
+                    "pairs"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The ask, filed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": ["string", "null"],
+                      "description": "The ask filed now; null when every pair was already given, already asked, or declined less than 30 days ago."
+                    },
+                    "status": {
+                      "type": ["string", "null"],
+                      "enum": [
+                        "pending",
+                        "allowed",
+                        "declined",
+                        "expired",
+                        null
+                      ]
+                    },
+                    "reviewUrl": { "type": ["string", "null"] },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" },
+                          "state": {
+                            "type": "string",
+                            "enum": ["asked", "given", "open", "quiet"],
+                            "description": "asked: in the ask filed now; given: the app holds it; open: an earlier ask still waits for it; quiet: the person said Not now less than 30 days ago."
+                          },
+                          "askId": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName",
+                          "state"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "reviewUrl",
+                    "expiresAt",
+                    "pairs"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, or a pair that names no space (ASK_NEEDS_SPACE)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an agent's own key acting for its person (NOT_AN_AGENT_KEY), a permission outside the agent's limits (ASK_BEYOND_AGENT_LIMIT), or a pair the person cannot give (ASK_NOT_ON_OFFER)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agents/access-requests/{id}": {
+      "get": {
+        "tags": ["Agents"],
+        "summary": "What became of an agent's ask",
+        "description": "With the agent's own key: pending, allowed, declined (Not now) or expired. An agent reads only its own asks.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ask",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "status": {
+                      "type": "string",
+                      "enum": ["pending", "allowed", "declined", "expired"]
+                    },
+                    "pairs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "permission": { "type": "string" },
+                          "workspaceId": { "type": "string" },
+                          "workspaceName": { "type": "string" }
+                        },
+                        "required": [
+                          "permission",
+                          "workspaceId",
+                          "workspaceName"
+                        ]
+                      }
+                    },
+                    "expiresAt": { "type": ["string", "null"] },
+                    "decidedAt": { "type": ["string", "null"] }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "pairs",
+                    "expiresAt",
+                    "decidedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an agent's own key",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such ask of this agent",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/messaging/inbound": {
       "post": {
         "tags": ["Messaging"],

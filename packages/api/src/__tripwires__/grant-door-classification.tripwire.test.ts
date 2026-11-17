@@ -528,15 +528,24 @@ const ASK_ONLY_WRITES: Readonly<
     load: () => import("../services/app-access-ask.js"),
     why: "a pod app asks its person for one more thing: one pending app/connect of mode add, applied only by the person's approval (the executor re-checks the document, the offer and the person's reach)",
   },
+  "POST /agents/access-requests": {
+    via: "fileAgentAccessAsk",
+    load: () => import("../services/agent-access-ask.js"),
+    why: "an agent's key asks its person for one more thing: one pending agent/connect of mode add, applied only by the person's approval (the executor re-checks the key, the agent's limits and the person's reach, then clips to the computer)",
+  },
 };
 
-/** What approving an app's ask does: an ask-only helper names none of them. */
+/** What approving an ask does: an ask-only helper names none of them. */
 const APPROVAL_EFFECTS = [
   "setApprovedRequests",
   "addApprovedRequests",
   "applyApprovedReach",
   "attachGrantsOrRevoke",
   "applyProposalApproval",
+  // An agent's ask (`approveAgentAccessAsk`): the grant write and the clip.
+  "approveAgentAccessAsk",
+  "attachMany",
+  "clipHostedAgentGrants",
 ] as const;
 
 /** `router.procedure` names a handler calls (`caller.entities.createEntity(`). */
