@@ -348,7 +348,7 @@ export interface StatusOfWorkAsk {
   owedSince?: string;
   criterionKey?: string;
   /** How it asks (`confirm`, `choose`, `form`, `act`, `provide`), when it declares an ask. */
-  askKind?: string;
+  askMode?: string;
 }
 
 /** A proposal filed in the session that waits on a decision. */
@@ -392,7 +392,7 @@ export interface StatusOfWorkStopped {
  * THE CONTINUE DOOR, offered: a run that ended or stopped with stages left
  * and nothing live on it. The SAME session resumes at `at` with a new run
  * turn (tRPC `focusSessions.continueRun`, Hub `POST
- * /focus-sessions/:id/continue`, MCP `synap_update_session` `continueRun`).
+ * /focus-sessions/:id/continue`, MCP `synap_continue_session`).
  * A person's move; an agent is refused. Absent = nothing to continue.
  */
 export interface StatusOfWorkContinue {

@@ -25,7 +25,11 @@
  *            opened, every subject asked about in ONE read;
  *   links    a goal's or a session's `serves` edges, each end the reader sees;
  *   rollup   a goal's tree down `serves` (`readGoalTreeRollups`);
- *   signals  the status signals (`status_signal_raised`) still open.
+ *   signals  the status signals (`status_signal_raised`) still open;
+ *   work     where its work stands (`status-work.ts`): the sessions and runs
+ *            on a thing or a goal, or the session itself, each from THE
+ *            continuation packet, with its stages, gates, owed asks, stop
+ *            and the person's Continue.
  * A part that could not be read is `unavailable`, never empty.
  *
  * Served by orient's `statusOf` (MCP, Hub REST) and tRPC `lifecycle.statusOf`
@@ -86,6 +90,8 @@ import {
   type StatusOfRole,
   type StatusOfRollup,
   type StatusOfSignal,
+  type StatusOfReaction,
+  type StatusOfWork,
   type UnitTone,
   type WaitingOnMark,
   type WaitingOnSource,
@@ -229,6 +235,16 @@ export interface StatusOf {
   rollup?: StatusOfRollup | Unavailable;
   /** On `include: ["signals"]` (things, goals, sessions): those still open. */
   signals?: StatusOfSignal[] | Unavailable;
+  /**
+   * On `include: ["work"]` (every type): the sessions and runs on it, or the
+   * session itself, and where each stands (`StatusOfWork`).
+   */
+  work?: StatusOfWork | Unavailable;
+  /**
+   * RESERVED (plan 7d71ddcc waves 2 and 3): the rules that fire when it
+   * moves. No read fills it yet.
+   */
+  reactions?: StatusOfReaction[] | Unavailable;
   link: string;
 }
 
@@ -781,6 +797,33 @@ export async function readStatusOf(
         }
       : {};
 
+  // Where its work stands: every subject asked about in ONE read.
+  const worked = wants("work")
+    ? import("./status-work.js").then((m) =>
+        m.readStatusWork(userId, {
+          sessions: [
+            ...sessions.map((x) => ({ answerId: x.id, sessionId: x.id })),
+            ...runs.flatMap((r) =>
+              r.sessionId ? [{ answerId: r.id, sessionId: r.sessionId }] : []
+            ),
+          ],
+          things: thingIds,
+          goals: goals.map((g) => g.id),
+        })
+      )
+    : null;
+  worked?.catch(() => undefined);
+  const workOf = async (
+    id: string
+  ): Promise<{ work?: StatusOfWork | Unavailable }> =>
+    worked
+      ? {
+          work: await orUnavailable(
+            worked.then((m) => m.get(id) ?? { items: [], truncated: false })
+          ),
+        }
+      : {};
+
   const raised = wants("signals")
     ? roles.then((r) =>
         readRaisedSignals([
@@ -923,6 +966,7 @@ export async function readStatusOf(
                   since: null,
                 }))),
           ])),
+          ...(await workOf(t.id)),
           link: openLink(t.id),
         };
       })()
@@ -987,6 +1031,7 @@ export async function readStatusOf(
               since: since.since,
             },
           ])),
+          ...(await workOf(g.id)),
           link: openLink(g.id),
         };
       })()
@@ -1034,6 +1079,7 @@ export async function readStatusOf(
               since: since.since,
             },
           ])),
+          ...(await workOf(s.id)),
           link: openLink(s.id),
         };
       })()
@@ -1056,6 +1102,7 @@ export async function readStatusOf(
         since: iso(r.completedAt ?? r.startedAt),
         sinceMeasured: settled,
         waitingOn: r.sessionId ? await waitingOf(`session:${r.sessionId}`) : [],
+        ...(await workOf(r.id)),
         link: openLink(r.sessionId ?? r.id),
       }))()
     );

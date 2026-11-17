@@ -1671,3 +1671,113 @@ describe('include: ["history"] — the wait episodes (0386)', () => {
     ).toHaveLength(3);
   });
 });
+
+describe('include: ["work"] — where its work stands (plan 7d71ddcc W4)', () => {
+  // A film whose run stopped at Script (its session ended `failed`, the run
+  // `failed` with `stages_left`), an open session on it, and another
+  // person's session on it that the reader may not see.
+  const FILM = randomUUID();
+  const S_STOPPED = randomUUID();
+  const S_OPEN_ON = randomUUID();
+  const S_HIDDEN_ON = randomUUID();
+  const RUN_STOPPED = randomUUID();
+  const ROOM = randomUUID();
+  const PRODUCE = [
+    { key: "brief", name: "Brief" },
+    { key: "script", name: "Script" },
+    { key: "draft", name: "Draft" },
+    { key: "publish", name: "Publish" },
+  ];
+
+  beforeAll(async () => {
+    await q(
+      `insert into entities (id, user_id, workspace_id, profile_id, title, properties, created_at, updated_at)
+       values ($1, $2, null, $3, 'Bees, the film', '{}'::jsonb, now(), now())`,
+      [FILM, ME, NOTE]
+    );
+    for (const [id, owner, status, stage, minutes] of [
+      [S_STOPPED, ME, "failed", "script", 60],
+      [S_OPEN_ON, ME, "active", null, 30],
+      [S_HIDDEN_ON, OTHER, "active", null, 10],
+    ] as const) {
+      await q(
+        `insert into focus_sessions (id, user_id, goal, title, status, origin, expected_outputs, metadata, subject_entity_id, playbook_id, channel_id, stages, current_stage, started_at, closed_at, created_at, updated_at)
+         values ($1, $2, 'Make a film', $3, $4, 'playbook', '[]'::jsonb, '{}'::jsonb, $5, $6, $7, $8::jsonb, $9, now() - interval '2 hours', $10, now(), now() - ($11 || ' minutes')::interval)`,
+        [
+          id,
+          owner,
+          id === S_HIDDEN_ON ? "Their secret run" : "Make a film",
+          status,
+          FILM,
+          id === S_STOPPED ? randomUUID() : null,
+          id === S_STOPPED ? ROOM : null,
+          JSON.stringify(id === S_STOPPED ? PRODUCE : []),
+          stage,
+          status === "failed" ? new Date() : null,
+          String(minutes),
+        ]
+      );
+    }
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, executor, status, stop_reason, error, input, created_by, definition_snapshot, started_at, completed_at)
+       values ($1, $2, $3, 'is-agent', 'failed', 'stages_left', 'Stopped at Script with 2 stages left', '{}'::jsonb, $4, $5::jsonb, now() - interval '2 hours', now())`,
+      [
+        RUN_STOPPED,
+        randomUUID(),
+        S_STOPPED,
+        ME,
+        JSON.stringify({ stages: PRODUCE }),
+      ]
+    );
+  });
+
+  const workOf = async (id: string) => {
+    const [a] = await readStatusOf(ME, [id], { include: ["work"] });
+    return (a as StatusOf).work as Exclude<
+      StatusOf["work"],
+      { status: "unavailable" } | undefined
+    >;
+  };
+
+  it("a thing lists the sessions on it, open first; one the reader may not see is never named", async () => {
+    const work = await workOf(FILM);
+    expect(work.truncated).toBe(false);
+    expect(work.items.map((i) => [i.sessionId, i.on])).toEqual([
+      [S_OPEN_ON, "subject"],
+      [S_STOPPED, "subject"],
+    ]);
+    expect(JSON.stringify(work)).not.toContain("Their secret run");
+  });
+
+  it("a run that stopped at Script says so, offers Continue, and never reads 'Nothing waiting'", async () => {
+    const stopped = (await workOf(FILM)).items.find(
+      (i) => i.sessionId === S_STOPPED
+    )!;
+    expect(stopped.stopped?.label).toBe("Stopped at Script");
+    expect(stopped.continue?.label).toBe("Continue at Script");
+    expect(stopped.run).toMatchObject({
+      id: RUN_STOPPED,
+      status: "failed",
+      stopReason: "stages_left",
+    });
+    expect(stopped.nextMove.label).not.toBe("Nothing waiting");
+    expect(stopped.nextMove).toMatchObject({
+      kind: "stopped_early",
+      actor: "user",
+      label: "Stopped at Script",
+    });
+    expect(
+      stopped.stages.status === "ok" &&
+        stopped.stages.items.map((s) => s.position)
+    ).toEqual(["done", "current", "left", "left"]);
+  });
+
+  it("a session asked about lists itself; a run without include carries no work", async () => {
+    const own = await workOf(S_STOPPED);
+    expect(own.items.map((i) => [i.sessionId, i.on])).toEqual([
+      [S_STOPPED, "self"],
+    ]);
+    const [plain] = await readStatusOf(ME, [FILM]);
+    expect(plain).not.toHaveProperty("work");
+  });
+});

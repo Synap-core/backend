@@ -38,7 +38,8 @@ export interface StagesLeft {
   left: StageRef[];
 }
 
-function stageRefs(stages: unknown): StageRef[] {
+/** PURE. The declared stages, in order, as the room names them. */
+export function stageRefs(stages: unknown): StageRef[] {
   if (!Array.isArray(stages)) return [];
   const out: StageRef[] = [];
   for (const s of stages) {

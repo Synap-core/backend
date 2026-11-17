@@ -486,7 +486,8 @@ export const lifecycleRouter = router({
         ids: statusOfInput.unwrap().min(1),
         /**
          * Parts beyond the status, on request (`STATUS_OF_INCLUDES`): `moves`,
-         * `history`, `links`, `rollup`, `signals`. An unknown part is refused.
+         * `history`, `links`, `rollup`, `signals`, `work`. An unknown part is
+         * refused.
          */
         include: statusOfIncludeInput,
       })
