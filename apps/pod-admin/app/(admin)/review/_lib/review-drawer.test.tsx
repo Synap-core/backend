@@ -523,25 +523,25 @@ describe.each([
     );
   });
 
-  it("the decision bar: the verbs, what refusing does, who decides", () => {
+  // Founder, 17 Nov 2026, on a phone: the bar holds the verbs and nothing
+  // else; "Can't be undone" is said on the first press of Approve.
+  it("the decision bar: the verbs, and no sentence", () => {
     const html = render();
     expect(count(html, /data-review-decision/)).toBe(1);
     const at = html.indexOf("data-review-decision");
     const bar = html.slice(at, html.indexOf("Advanced", at));
     const seen = text(bar);
-    expect(seen).toMatch(/Can't be undone/);
+    expect(seen).not.toMatch(/Can't be undone/);
     // Approve, then the ONE Refuse trigger; the verb is Refuse, never Reject.
     expect(bar).toContain(">Approve<");
     expect(count(bar, /data-refuse-trigger/)).toBe(1);
     expect(bar.indexOf(">Approve<")).toBeLessThan(bar.indexOf(REFUSE));
     // A proposal is rejected (the verb follows the object): never Refuse.
     expect(text(html)).not.toMatch(/\bRefuse\b/);
-    // What rejecting does, without naming the requester again (the head does).
-    const refusing = text(bar.slice(bar.indexOf("data-review-refusing")));
-    expect(refusing).toContain(REQUEST_EN["refuse.proposalConsequenceAgent"]);
-    expect(seen).toMatch(
-      /You decide as Ada Lovelace · recorded in the Audit log/
-    );
+    // What rejecting does is said in the Reject step; who decides is the
+    // head's; where it is kept, the outcome's.
+    expect(bar).not.toContain("data-review-refusing");
+    expect(seen).not.toMatch(/If you reject|You decide as|Recorded in the/);
     // The bar is the story's footer: after the timeline; Advanced is last.
     expect(at).toBeGreaterThan(html.indexOf("</ol>"));
     expect(html.indexOf("Advanced")).toBeGreaterThan(at);
@@ -772,12 +772,14 @@ describe.each([
 
 // Founder, 17 Nov 2026: when the story says nothing the head and the bar do
 // not (no own past, nothing waiting beyond the consequence), Now is drawn
-// flat and what approving does is said once, in the bar.
+// flat.
 describe.each([
   ["the Review dock", dock],
   ["the /proposal page", page],
 ])("%s — nothing more to tell: no rail", (_host, render) => {
-  it("no rail and no Now/Next labels; 'If you approve' joins the bar's line, once", () => {
+  // Founder, 17 Nov 2026: what approving does is the title and the head;
+  // the bar no longer repeats it.
+  it("no rail and no Now/Next labels; 'If you approve' is said nowhere", () => {
     Object.assign(state, {
       context: reads.contextOf({
         ...reads.SESSION_PARTS,
@@ -789,9 +791,7 @@ describe.each([
     expect(html).not.toContain("data-request-story");
     expect(html).not.toMatch(/rq-rail-|rq-mark-now/);
     const approve = REQUEST_EN["story.approveDoes"].split("{change}")[0]!;
-    expect(count(text(html), new RegExp(approve))).toBe(1);
-    const bar = html.slice(html.indexOf("data-review-decision"));
-    expect(text(bar)).toContain(approve);
+    expect(count(text(html), new RegExp(approve))).toBe(0);
   });
 });
 

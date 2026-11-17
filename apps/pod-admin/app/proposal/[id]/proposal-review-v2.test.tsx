@@ -144,7 +144,10 @@ vi.mock("../../../lib/trpc", async () => ({
 }));
 
 import { ProposalReview } from "./ProposalReview";
-import { alwaysEn } from "./copy";
+import { ApproveConfirm, approvePressAct } from "./ApproveConfirm";
+import { alwaysEn, en as PAGE_EN } from "./copy";
+import { undoMark } from "./proposal-review-model";
+import { en as REQUEST_EN } from "../../_lib/request/copy";
 
 /** A proposal's one trigger, reject (the vocabulary door's verb), and the rule menu's. */
 const REFUSE = `${resolveActionLabel("reject", "imperative")}…`;
@@ -278,6 +281,15 @@ const text = (html: string) =>
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ");
 
+/**
+ * The page's words with each control's accessible name: a rule menu is the
+ * chevron segment of its verb's split button, named only by its aria-label.
+ */
+const named = (html: string) =>
+  `${text(html)} ${[...html.matchAll(/aria-label="([^"]*)"/g)]
+    .map((m) => text(m[1]!))
+    .join(" ")}`;
+
 const render = () =>
   renderToStaticMarkup(
     <ProposalReview proposalId={ids.PROPOSAL} identity="Grace Hopper" />
@@ -376,7 +388,7 @@ describe("a create with no twin", () => {
 describe("Refuse and never allow", () => {
   it("an agent's change offers it beside Reject", () => {
     state.proposal = personCreate(null);
-    const seen = text(render());
+    const seen = named(render());
     expect(seen).toContain(REFUSE);
     expect(seen).toContain(NEVER);
     // A proposal's verb is Reject everywhere (the verb follows the object):
@@ -386,12 +398,12 @@ describe("Refuse and never allow", () => {
 
   it("a person's own change does not: a person is never refused", () => {
     state.proposal = { ...personCreate(null), agentUserId: null };
-    expect(text(render())).not.toContain(NEVER);
+    expect(named(render())).not.toContain(NEVER);
   });
 
   it("stays beside a change that acts on its own: never narrows", () => {
     state.proposal = skillUpdate();
-    const seen = text(render());
+    const seen = named(render());
     expect(seen).not.toContain("Approve and always allow");
     expect(seen).toContain(NEVER);
   });
@@ -399,7 +411,7 @@ describe("Refuse and never allow", () => {
   it("a member is offered neither rule: the rule door is a pod admin's", () => {
     state.role = "member";
     state.proposal = personCreate(null);
-    const seen = text(render());
+    const seen = named(render());
     expect(seen).toContain(REFUSE);
     expect(seen).not.toContain(NEVER);
     expect(seen).not.toContain("Approve and always allow");
@@ -590,19 +602,19 @@ describe("a skill rewrite (acts on its own)", () => {
 
   it("offers Approve, never 'Approve and always allow…' beside it", () => {
     state.proposal = skillUpdate();
-    const seen = text(render());
+    const seen = named(render());
     expect(presses.has("Approve")).toBe(true);
     expect(seen).not.toContain("Approve and always allow");
     // A plain change keeps the split.
     state.proposal = personCreate(null);
-    expect(text(render())).toContain("Approve and always allow");
+    expect(named(render())).toContain("Approve and always allow");
   });
 });
 
 describe("a proposal whose moment passed", () => {
   it("is history: Expired, and no Approve", () => {
     state.proposal = { ...personCreate(null), lifetimeHours: 1 };
-    const seen = text(render());
+    const seen = named(render());
     expect(seen).toContain("Expired");
     expect(presses.has("Approve")).toBe(false);
     expect(seen).not.toContain("Approve and always allow");
@@ -837,5 +849,129 @@ describe("a tool run (founder dogfood 2026-10-30, proposal 4b5e040e)", () => {
     const html = render();
     expect(html).toContain("data-proposed-record");
     expect(html).not.toContain("data-tool-run");
+  });
+});
+
+// Founder, 17 Nov 2026, on a phone: "the user actions should be in one row
+// … we remove text or things that should be not needed, or as progressive
+// disclosure, appearing only when needed, or when a user does an action".
+describe("the decision bar on a phone: one row of verbs, nothing else", () => {
+  const barOf = (html: string) => {
+    const at = html.indexOf("data-review-decision");
+    return html.slice(at, html.indexOf("Advanced", at));
+  };
+  /** The one verb row's own markup (it holds no nested div). */
+  const rowOf = (html: string) => {
+    const at = html.indexOf("data-decision-verbs");
+    expect(at, "the verb row is drawn").toBeGreaterThanOrEqual(0);
+    return html.slice(at, html.indexOf("</div>", at));
+  };
+
+  it("Approve and Reject are split buttons in ONE row; each chevron is named and 44 px", () => {
+    state.proposal = personCreate(null);
+    const row = rowOf(render());
+    expect(row).toContain(">Approve<");
+    expect(row).toContain(REFUSE);
+    for (const name of [alwaysEn["always.trigger"], NEVER]) {
+      const chevron = row
+        .split("<button")
+        .find((b) => b.includes(`aria-label="${name}"`));
+      expect(chevron, name).toBeTruthy();
+      expect(chevron).toMatch(/min-h-11/);
+      expect(chevron).toMatch(/min-w-11/);
+    }
+    // Approve, its chevron, Reject, its chevron: in reading order.
+    expect(row.indexOf(">Approve<")).toBeLessThan(
+      row.indexOf(alwaysEn["always.trigger"])
+    );
+    expect(row.indexOf(alwaysEn["always.trigger"])).toBeLessThan(
+      row.indexOf(REFUSE)
+    );
+    expect(row.indexOf(REFUSE)).toBeLessThan(row.indexOf(NEVER));
+  });
+
+  it("without a rule menu the verbs are plain buttons, no chevron", () => {
+    state.role = "member";
+    state.proposal = personCreate(null);
+    const row = rowOf(render());
+    expect(row).toContain(">Approve<");
+    expect(row).toContain(REFUSE);
+    expect(row).not.toContain("data-rule-menu");
+  });
+
+  it("the bar says no sentence: no consequence line, no 'You decide as', no audit line", () => {
+    state.proposal = { ...personCreate(null), revertable: false };
+    const bar = barOf(render());
+    const seen = text(bar);
+    expect(bar).not.toContain("data-review-refusing");
+    expect(seen).not.toMatch(/If you approve|If you reject|You decide as/);
+    expect(seen).not.toMatch(/Recorded in the/);
+    // "Can't be undone" waits for the press: no chip in the bar.
+    expect(seen).not.toMatch(/Can't be undone|can’t be undone/);
+    expect(bar).not.toContain("data-review-mark");
+  });
+
+  it("an irreversible change: the first press on Approve asks, it does not approve", () => {
+    state.proposal = { ...personCreate(null), revertable: false };
+    render();
+    press("Approve");
+    expect(approveCalls).toEqual([]);
+  });
+
+  it("a reversible change approves in one press, as before", () => {
+    state.proposal = personCreate(null);
+    render();
+    press("Approve");
+    expect(approveCalls).toEqual([{ proposalId: ids.PROPOSAL }]);
+  });
+
+  it("the press reads the undo mark: unmarked approves, marked confirms", () => {
+    expect(approvePressAct(undoMark(true))).toBe("approve");
+    expect(approvePressAct(undoMark(false))).toBe("confirm");
+    // Unmeasured is treated as permanent (S12).
+    expect(approvePressAct(undoMark(null))).toBe("confirm");
+  });
+
+  it("the named confirm: '<verb> · can't be undone', Cancel beside it, the one sentence", () => {
+    const confirmed: string[] = [];
+    const html = renderToStaticMarkup(
+      <ApproveConfirm
+        verb="Approve"
+        undo={undoMark(false)!}
+        loading={false}
+        disabled={false}
+        onConfirm={() => confirmed.push("confirm")}
+        onCancel={() => confirmed.push("cancel")}
+      />
+    );
+    const seen = text(html);
+    expect(seen).toContain(PAGE_EN["undo.cannot"]);
+    expect(html).toContain("data-approve-cancel");
+    expect(seen).not.toMatch(/Are you sure|\bYes\b|\bNo\b/);
+    press("Approve · can’t be undone");
+    press(PAGE_EN["decide.confirmCancel"]);
+    expect(confirmed).toEqual(["confirm", "cancel"]);
+  });
+
+  it("Reject's effect is said in its step: nothing is applied", () => {
+    expect(REQUEST_EN["refuse.reassure"]).toMatch(
+      /reject \{Nothing is applied\./
+    );
+  });
+
+  it("once decided, the outcome says where it is kept: the Audit log, a door for an admin", () => {
+    state.proposal = { ...personCreate(null), status: "approved" };
+    const recordedIn = (html: string) => {
+      const at = html.indexOf("data-recorded-in");
+      expect(at, "the outcome says where it is kept").toBeGreaterThanOrEqual(0);
+      return html.slice(at, html.indexOf("</span>", at) + 7);
+    };
+    const admin = recordedIn(render());
+    expect(text(admin)).toContain("Recorded in the Audit log");
+    expect(admin).toContain('href="/audit"');
+    state.role = "member";
+    const member = recordedIn(render());
+    expect(text(member)).toContain("Recorded in the Audit log");
+    expect(member).not.toContain('href="/audit"');
   });
 });

@@ -197,8 +197,6 @@ export interface AskAnswerProps {
    * asker in the story's head. Absent (a session's own page): the ask alone.
    */
   story?: { story: RequestStory | null; read: StoryRead };
-  /** Who the reader is signed in as: the decision bar's "You decide as". */
-  identity?: string;
   /** The host's pin for the decision bar (the story's footer). */
   barClassName?: string;
 }
@@ -226,7 +224,6 @@ export function AskAnswer({
   quietReceipt = false,
   showTalk = true,
   story,
-  identity,
   barClassName = "",
 }: AskAnswerProps) {
   // What the reader sees stays put until they choose to see the new question:
@@ -686,7 +683,6 @@ export function AskAnswer({
             }
             footer={
               <DecisionFooter
-                identity={identity}
                 verbs={barVerbs}
                 verbsSlot={setBarSlot}
                 consequence={refusing ? null : consequence}

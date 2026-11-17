@@ -44,7 +44,6 @@ function wordsOf(kind: RefuseKind, locale: Locale): string[] {
     return [
       ...sheet,
       t("refuse.proposalConsequence", { who: "Claude Code" }),
-      t("refuse.proposalConsequenceAnyone"),
       receipts["reject.applied"],
       receipts["reject.failed"],
       pageWords["outcome.rejected"],

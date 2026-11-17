@@ -240,9 +240,12 @@ describe("in French", () => {
   it("the decision bar names no English verb", () => {
     setAmbientCatalogLocale("fr");
     state.proposal = request("pending");
-    const seen = text(render());
-    expect(seen).toContain("Approuver et toujours autoriser…");
-    expect(seen).not.toMatch(/\bApprove\b|\bReject\b|\bRefuse\b/);
+    const html = render();
+    // The rule menu is Approve's chevron, named in French.
+    expect(html).toContain('aria-label="Approuver et toujours autoriser…"');
+    expect(text(html)).not.toMatch(/\bApprove\b|\bReject\b|\bRefuse\b/);
+    for (const [, name] of html.matchAll(/aria-label="([^"]*)"/g))
+      expect(name).not.toMatch(/\bApprove\b|\bReject\b|\bRefuse\b/);
   });
 });
 

@@ -3,9 +3,11 @@
 /**
  * THE DECISION BAR of every request (an agent's ask, a proposal): the
  * story's own footer (`RequestStoryView` `footer`), pinned by its host to
- * the bottom of the scroll box, on the card's own surface. It holds, in this
- * order: the verbs (or what was decided), what refusing does, and who
- * decides ("You decide as … · recorded in the Audit log").
+ * the bottom of the scroll box, on the card's own surface. It holds the verbs
+ * (or what was decided) and, for an ask, what refusing does. Nothing else
+ * (founder, 17 Nov 2026, on a phone: "everything except the buttons" goes):
+ * who decides is the head's "for you", and "recorded in the Audit log" is
+ * said once the decision is made, in its outcome (`RecordedInAuditLog`).
  *
  * One component for both kinds of request (UX review M1 / M2): before it, a
  * proposal's bar sat inside Now and cut the rail, and an ask had none.
@@ -37,8 +39,11 @@ export function InDecisionBar({ children }: { children: ReactNode }) {
   return slot ? createPortal(row, slot) : row;
 }
 
-/** "You decide as <name> · recorded in the Audit log" — the log a door for an admin. */
-function WhoDecides({ identity }: { identity?: string }) {
+/**
+ * "Recorded in the Audit log", the log a door for an admin: said in a
+ * decided request's outcome, never in the bar before the decision.
+ */
+export function RecordedInAuditLog() {
   const role = useConsoleRole();
   const audit = navItem("audit");
   const log =
@@ -54,25 +59,22 @@ function WhoDecides({ identity }: { identity?: string }) {
     );
   const t = proposalPageT();
   return (
-    <p className="text-[12px] text-foreground/70">
-      {identity ? t("decide.as", { identity }) : t("decide.recorded")} {log}
-    </p>
+    <span data-recorded-in="audit" className="text-[12px] text-foreground/70">
+      {t("decide.recorded")} {log}
+    </span>
   );
 }
 
 export function DecisionFooter({
   verbs,
   consequence,
-  identity,
   verbsSlot,
   className = "",
 }: {
   /** The verbs, or what was decided. */
   verbs?: ReactNode;
-  /** What refusing does, one sentence. */
+  /** What refusing does, one sentence (an ask's; a proposal's says it in its Reject step). */
   consequence?: ReactNode;
-  /** Who the reader is signed in as, when the host knows it. */
-  identity?: string;
   /** Where a control draws its own verb row (`InDecisionBar`), before `verbs`. */
   verbsSlot?: (el: HTMLDivElement | null) => void;
   /** The host's pin (its `bottom`, bleed and padding). */
@@ -87,7 +89,6 @@ export function DecisionFooter({
           {consequence}
         </p>
       )}
-      <WhoDecides identity={identity} />
     </div>
   );
 }

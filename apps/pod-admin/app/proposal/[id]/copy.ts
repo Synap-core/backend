@@ -47,7 +47,10 @@ export const en = {
   "html.unchanged": "The page is the same before and after.",
   openInDesktop: "Open in the Synap desktop app",
   "decide.pickFirst": "Pick the record for each item first.",
-  "decide.as": "You decide as {identity} · recorded in the",
+  // An irreversible approve asks once more, in place (feedback-and-forms §3):
+  // the verb on the button, named, and Cancel focused beside it.
+  "decide.confirmIrreversible": "{verb} · can’t be undone",
+  "decide.confirmCancel": "Cancel",
   "decide.recorded": "Recorded in the",
   "outcome.approved": "You approved this change: it’s now in your pod.",
   "outcome.auto_approved":
@@ -145,7 +148,8 @@ export const fr: Catalog<typeof en> = {
   "html.unchanged": "La page est identique avant et après.",
   openInDesktop: "Ouvrir dans l’application Synap pour ordinateur",
   "decide.pickFirst": "Choisissez d’abord la fiche de chaque élément.",
-  "decide.as": "Vous décidez en tant que {identity} · enregistré dans",
+  "decide.confirmIrreversible": "{verb} · irréversible",
+  "decide.confirmCancel": "Annuler",
   "decide.recorded": "Enregistré dans",
   "outcome.approved":
     "Vous avez approuvé ce changement\u00a0: il est maintenant dans votre pod.",

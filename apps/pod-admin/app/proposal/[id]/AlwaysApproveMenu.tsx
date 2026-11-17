@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * "Approve & always…" — the secondary affordance beside the primary Approve
- * button. Approving normally decides once; picking a granularity here does
+ * "Approve & always…" — the chevron segment of the Approve split button
+ * (founder, 17 Nov 2026: the verbs in one row on a phone). Approving normally decides once; picking a granularity here does
  * that AND writes one revocable `governance_rules` row (Governance
  * Convergence Plan, Phase A/D) so the same kind of write auto-approves next
  * time — until someone takes it back in Settings (`request-rules.tsx`).
@@ -33,6 +33,8 @@
  * with `DENIED_BY_RULE`, above the floors (decision 956930ad). Pod admin runs
  * the pod: a rule about what an agent may do. Both menus are offered to a pod
  * admin only (`ProposalReviewCard`): the rule door refuses anyone else.
+ * Each trigger is a chevron segment of its verb's split button, named by
+ * `aria-label` (`always.trigger` / `never.trigger`), never a row of its own.
  */
 
 import { useState } from "react";
@@ -43,7 +45,7 @@ import {
   DropdownMenu,
   DropdownTrigger,
 } from "@heroui/react";
-import { Ban, ChevronDown, Repeat } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import {
   deriveGovernanceGrantOptions,
   deriveGovernanceNeverOption,
@@ -313,17 +315,20 @@ export function AlwaysApproveMenu({
   }
 
   return (
-    <Dropdown placement="bottom-start">
+    <Dropdown placement="bottom-end">
       <DropdownTrigger>
+        {/* The chevron segment of Approve's split button: its name says
+            which menu it opens; 44 px square on a phone. */}
         <Button
-          variant="flat"
-          className="h-auto min-h-10 max-w-full whitespace-normal py-2 text-left"
-          startContent={<Repeat size={14} />}
-          endContent={<ChevronDown size={14} />}
+          isIconOnly
+          color="success"
+          className="min-h-11 min-w-11"
+          aria-label={t("always.trigger")}
+          data-rule-menu="always"
           isLoading={running}
           isDisabled={disabled || running}
         >
-          {t("always.trigger")}
+          <ChevronDown aria-hidden size={16} />
         </Button>
       </DropdownTrigger>
       <DropdownMenu
@@ -429,18 +434,19 @@ export function RejectNeverMenu({
   }
 
   return (
-    <Dropdown placement="bottom-start">
+    <Dropdown placement="bottom-end">
       <DropdownTrigger>
+        {/* The chevron segment of Reject's split button. */}
         <Button
-          color="danger"
-          variant="light"
-          className="h-auto min-h-10 max-w-full whitespace-normal py-2 text-left"
-          startContent={<Ban size={14} />}
-          endContent={<ChevronDown size={14} />}
+          isIconOnly
+          variant="bordered"
+          className="rq-refuse min-h-11 min-w-11"
+          aria-label={t("never.trigger")}
+          data-rule-menu="never"
           isLoading={running}
           isDisabled={disabled || running}
         >
-          {t("never.trigger")}
+          <ChevronDown aria-hidden size={16} />
         </Button>
       </DropdownTrigger>
       <DropdownMenu

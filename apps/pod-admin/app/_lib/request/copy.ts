@@ -62,13 +62,9 @@ export const en = {
   "refuse.confirm":
     "{verb, select, reject {Reject and tell the agent} other {Refuse and tell the agent}}",
   "refuse.reassure":
-    "{verb, select, reject {Nothing is shared. The request closes as rejected, your reason goes in the session room, the agent picks another route.} other {Nothing is shared. The request closes as refused, your reason goes in the session room, the agent picks another route.}}",
+    "{verb, select, reject {Nothing is applied. The request closes as rejected, your reason goes in the session room, the agent picks another route.} other {Nothing is shared. The request closes as refused, your reason goes in the session room, the agent picks another route.}}",
   "refuse.proposalConsequence":
     "If you reject it, nothing is applied and {who} sees your reason.",
-  "refuse.proposalConsequenceAnyone":
-    "If you reject it, nothing is applied and whoever asked sees your reason.",
-  "refuse.proposalConsequenceAgent":
-    "If you reject it, nothing is applied and the agent sees your reason.",
   // ── The ask ────────────────────────────────────────────────────────────
   "ask.showCurrent": "Show the current question",
   "ask.movedOnBody": "It was answered, handed back, or the session ended.",
@@ -210,13 +206,9 @@ export const fr: Catalog<typeof en> = {
   "refuse.confirm":
     "{verb, select, reject {Rejeter et le dire à l’agent} other {Refuser et le dire à l’agent}}",
   "refuse.reassure":
-    "{verb, select, reject {Rien n’est partagé. La demande est close comme rejetée, votre raison va dans la salle de la session, l’agent prend une autre voie.} other {Rien n’est partagé. La demande est close comme refusée, votre raison va dans la salle de la session, l’agent prend une autre voie.}}",
+    "{verb, select, reject {Rien n’est appliqué. La demande est close comme rejetée, votre raison va dans la salle de la session, l’agent prend une autre voie.} other {Rien n’est partagé. La demande est close comme refusée, votre raison va dans la salle de la session, l’agent prend une autre voie.}}",
   "refuse.proposalConsequence":
     "Si vous la rejetez, rien n’est appliqué et {who} voit votre raison.",
-  "refuse.proposalConsequenceAnyone":
-    "Si vous la rejetez, rien n’est appliqué et le demandeur voit votre raison.",
-  "refuse.proposalConsequenceAgent":
-    "Si vous la rejetez, rien n’est appliqué et l’agent voit votre raison.",
   "ask.showCurrent": "Voir la question actuelle",
   "ask.movedOnBody":
     "Elle a reçu une réponse, a été rendue, ou la session s’est terminée.",
