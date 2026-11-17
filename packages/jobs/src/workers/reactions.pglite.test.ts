@@ -302,8 +302,10 @@ describe("default 4: a run that stops early goes to Needs you", () => {
 
   it("a move another rule made does not fire it (it does not chain)", async () => {
     const s = await session();
+    // Default 3 chains (its met outcomes may reach a stage, D2): the cause is
+    // a rule that does not.
     const t = await park(await run(s), {
-      reactionId: "builtin:outcome-met-where-filed",
+      reactionId: "builtin:approved-output-reaches-status",
       transitionId: randomUUID(),
       chainId: "chain-1",
       depth: 1,
