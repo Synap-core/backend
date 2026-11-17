@@ -11,6 +11,7 @@ import { PROCESS_STEP_RUNNER_KINDS } from "../processes/steps.js";
 import { trackStepGateLabel } from "../units/track-step.js";
 import {
   STEP_RUNNER_KIND_LABELS,
+  resolveFormerObjectNouns,
   resolveObjectNoun,
   resolveStepRunnerLabel,
   resolveToolKindLabel,
@@ -58,5 +59,15 @@ describe("the instruction-skill noun", () => {
     expect(resolveToolKindPlural("tool")).toBe("Integrations");
     expect(resolveToolKindPlural("mcp_server")).toBe("Mcp server");
     expect(resolveToolKindPlural(null)).toBe("");
+  });
+});
+
+describe("a renamed kind's former words", () => {
+  it("a playbook was a Template (and a Playbook): recognisable, never its current word", () => {
+    const former = resolveFormerObjectNouns("playbook");
+    expect(former).toEqual(expect.arrayContaining(["Template", "Playbook"]));
+    expect(former).not.toContain(resolveObjectNoun("playbook"));
+    expect(resolveFormerObjectNouns("task")).toEqual([]);
+    expect(resolveFormerObjectNouns(null)).toEqual([]);
   });
 });

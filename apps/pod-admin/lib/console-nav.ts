@@ -162,7 +162,8 @@ export const CONSOLE_NAV = [
       {
         id: "templates",
         href: "/templates",
-        label: "Templates",
+        // The registry's plural for a playbook (founder D1: "Processes").
+        label: "Processes",
         icon: "LayoutTemplate",
         kind: "playbook",
         audience: "admin",

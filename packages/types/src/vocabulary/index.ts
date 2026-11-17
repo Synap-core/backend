@@ -1077,6 +1077,18 @@ export function resolveObjectNoun(
   );
 }
 
+/**
+ * The English words a kind was called before a rename (`formerLabels` on its
+ * registry row), to RECOGNISE durable stored text that still spells them
+ * (never to show them). Empty for a kind never renamed or unknown.
+ */
+export function resolveFormerObjectNouns(
+  kind: string | null | undefined
+): readonly string[] {
+  if (!kind) return [];
+  return OBJECT_KINDS[canonicalKind(kind)]?.formerLabels ?? [];
+}
+
 function canonicalKind(kind: string): string {
   const key = kind.toLowerCase();
   return Object.hasOwn(OBJECT_KIND_ALIASES, key)

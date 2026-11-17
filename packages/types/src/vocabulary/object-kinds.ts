@@ -82,6 +82,13 @@ export interface ObjectKindDef {
   color: string;
   label: string;
   labelPlural: string;
+  /**
+   * The English words this kind was CALLED before a rename (singular and
+   * plural). Never shown: read only to recognise durable stored text that
+   * still spells the old word (a proposal summary filed before the rename,
+   * `resolveFormerObjectNouns`).
+   */
+  formerLabels?: readonly string[];
   /** Optional compact char for the densest inline chips (fallback when no icon fits). */
   glyph?: string;
 }
@@ -431,6 +438,16 @@ const OBJECT_KIND_ROWS = {
     color: ID(8),
     label: "Process",
     labelPlural: "Processes",
+    // Stored summaries filed before D1 say "Template" ("Update Template"),
+    // "Work/Goal template", or the older "Playbook".
+    formerLabels: [
+      "Template",
+      "Templates",
+      "Work template",
+      "Goal template",
+      "Playbook",
+      "Playbooks",
+    ],
   },
   // Concept glossary (`skills/synap/concepts.md` → Tools, founder D2): skill,
   // capability and tool are three DB kinds but ONE user word, "Tool". A detail
