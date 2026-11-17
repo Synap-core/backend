@@ -18,6 +18,7 @@ import {
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 import { buildAskWireSchema } from "./ask-wire-schema.js";
+import { CAPTURE_TABLE_MAX_ROWS } from "../../../services/capture-agent/capture-table.js";
 import { ASK_DETAILS } from "../../../services/knowledge/synthesize.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
 import {
@@ -4310,12 +4311,15 @@ export const tools = {
                   existingEntityId: {
                     type: "string",
                     description:
-                      "UUID of an entity that already exists. On its own this LINKS — the entity is attached and its fields are left untouched, so the properties you extracted are DISCARDED. Pair it with `updateExisting: true` to write them instead.",
+                      "UUID of an entity that already exists: this LINKS it, its fields untouched (the properties you send are dropped).",
                   },
                   updateExisting: {
                     type: "boolean",
+                    // Refused by the handler, by name (it would discard the
+                    // properties): the composite graph can create or link,
+                    // never patch. The text was trimmed to pay for `table`.
                     description:
-                      "NOT SUPPORTED ON THIS LANE — sending it here is REFUSED, by design, rather than accepted and dropped. The structured `entities[]` lane materializes through a composite graph whose operations can only create or LINK, never patch, so honouring this flag is impossible here and silently ignoring it would discard the properties you sent while reporting success. To PATCH an entity you recognise: send the same information as `text` (that lane routes to the update-capable door and will patch a confident identity match that carries new facts), or call `synap_update_entity` with the entityId and the fields to change. Note `existingEntityId` ALONE still links — the target keeps its existing fields and your extracted properties are dropped.",
+                      "REFUSED here: this lane only creates or links. To patch, send `text` or call synap_update_entity.",
                   },
                   facets: {
                     type: "array",
@@ -4368,6 +4372,32 @@ export const tools = {
                 },
                 required: ["sourceRef", "targetRef", "type"],
               },
+            },
+            // Ticket a8884743 (plan B2): a register of ONE kind as columns,
+            // expanded server-side into entities[] + relations[] (one
+            // proposal). `services/capture-agent/capture-table.ts`.
+            table: {
+              type: "object",
+              description: `Rows of ONE kind (max ${CAPTURE_TABLE_MAX_ROWS}, one proposal). Column \`title\` is the title, \`description\`/\`content\` those fields, others properties. \`linkBy\`: link each row by relation \`type\` to the \`profileSlug\` entity whose \`property\` equals its \`column\` cell exactly; misses come back in the reply's \`table\`.`,
+              properties: {
+                profileSlug: { type: "string" },
+                columns: { type: "array", items: { type: "string" } },
+                rows: { type: "array", items: { type: "array" } },
+                linkBy: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      column: { type: "string" },
+                      profileSlug: { type: "string" },
+                      property: { type: "string" },
+                      type: { type: "string" },
+                    },
+                    required: ["column", "profileSlug", "property", "type"],
+                  },
+                },
+              },
+              required: ["profileSlug", "columns", "rows"],
             },
             projects: {
               type: "array",

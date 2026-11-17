@@ -84,6 +84,15 @@ import {
 } from "../../../services/capture-agent/single-entity-create.js";
 import { createEntityData } from "./entity.js";
 import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
+import { findLinkByMatches } from "../../../services/capture-agent/capture-table-links.js";
+import {
+  expandCaptureTable,
+  linkByValues,
+  parseCaptureTable,
+  tableHasUnlinkedCells,
+  type ExpandedCaptureTable,
+} from "../../../services/capture-agent/capture-table.js";
+import { buildImportTitle } from "../../../import/import-title.js";
 import type { PendingTextMatch } from "../../../utils/pending-capture-dedup.js";
 
 /** How many new entity titles the pending text scan reads, and how many matches it returns. */
@@ -184,12 +193,56 @@ const captureHandler: McpToolHandler = async (
 
   const captureRawText = typeof args.text === "string" ? args.text : "";
   const captureNormalizedText = normalizeCaptureText(captureRawText);
-  const captureEntities = Array.isArray(args.entities)
-    ? (args.entities as Array<Record<string, unknown>>)
-    : [];
-  const captureRelations = Array.isArray(args.relations)
-    ? (args.relations as Array<Record<string, unknown>>)
-    : [];
+  // `table` (ticket a8884743): rows of ONE kind as columns, expanded here into
+  // the SAME entities[] + relations[] graph (one proposal); `linkBy` cells
+  // become links to existing entities matched exactly. Refused whole, every
+  // problem at once, when its shape is wrong or it exceeds the row cap.
+  let captureTable: ExpandedCaptureTable | null = null;
+  if (args.table !== undefined) {
+    const parsed = parseCaptureTable(args.table);
+    if (!parsed.ok) {
+      return ok({
+        ...(args.validate === true ? { status: "invalid", dryRun: true } : {}),
+        error: parsed.problems.join("; "),
+        problems: parsed.problems,
+        ...(parsed.limit ? { limit: parsed.limit } : {}),
+      });
+    }
+    const { table } = parsed;
+    const matches = await Promise.all(
+      table.linkBy.map((linkBy) =>
+        findLinkByMatches(db, {
+          userId,
+          linkBy,
+          values: linkByValues(table, linkBy),
+        })
+      )
+    );
+    captureTable = expandCaptureTable(table, matches);
+  }
+  const tableReply = captureTable
+    ? {
+        table: captureTable.report,
+        ...(tableHasUnlinkedCells(captureTable.report)
+          ? {
+              tableNote:
+                "Some linkBy cells matched no entity (`unmatched`) or several (`ambiguous`): those rows are written without that link. Fix the cell and re-send, or link them afterwards with synap_link_entities.",
+            }
+          : {}),
+      }
+    : {};
+  const captureEntities: Array<Record<string, unknown>> = [
+    ...(Array.isArray(args.entities)
+      ? (args.entities as Array<Record<string, unknown>>)
+      : []),
+    ...(captureTable?.entities ?? []),
+  ];
+  const captureRelations: Array<Record<string, unknown>> = [
+    ...(Array.isArray(args.relations)
+      ? (args.relations as Array<Record<string, unknown>>)
+      : []),
+    ...(captureTable?.relations ?? []),
+  ];
   // CONNECTED PLAN steps (sessions / documents / projects / links) and the
   // Rule Loop config steps (skills / automations / rules). Each is
   // shape-checked door-locally (an object), then validated in full — refs,
@@ -422,6 +475,20 @@ const captureHandler: McpToolHandler = async (
           : {}),
       });
     }
+
+    // A table with no summary of the caller's is titled by what approving it
+    // creates ("Import 57 expenses and 55 links, linking 50 already in your
+    // pod"), through the one import-title derivation, never by its first row.
+    const tableSummary = captureTable
+      ? buildImportTitle([
+          ...graphEntities.map((e) => ({
+            op: "create_entity",
+            profileSlug: e.profileSlug,
+            existingEntityId: e.existingEntityId,
+          })),
+          ...shapedRelations.map(() => ({ op: "create_relation" })),
+        ])
+      : null;
 
     // The RAW requested id, not the dropped-on-failure lens: a placement pin
     // must fail loud (Forbidden, below) rather than silently land pod-wide.
@@ -711,6 +778,11 @@ const captureHandler: McpToolHandler = async (
           : "NOT written — fix every problem below, then re-send without `validate`.",
         entityCount: checked.entityCount,
         relationCount: checked.relationCount,
+        ...tableReply,
+        // What the review card will be titled when the caller sent no summary.
+        ...(tableSummary && !(typeof args.summary === "string" && args.summary)
+          ? { summary: tableSummary }
+          : {}),
         ...(relationsFailed.length ? { relationsFailed } : {}),
         ...(invalidEntities.length ? { invalidEntities } : {}),
         // Advisory: a title the rubric flags still writes, so it never makes
@@ -813,6 +885,7 @@ const captureHandler: McpToolHandler = async (
         status: captureStatusForCreateState(state),
         entityCount: 1,
         relationCount: 0,
+        ...tableReply,
         applied: state === "applied" || state === "partial",
         scope: createdScope,
         sessionId: createdScope.sessionId,
@@ -834,10 +907,12 @@ const captureHandler: McpToolHandler = async (
     const graphSummary =
       typeof args.summary === "string" && args.summary
         ? args.summary
-        : buildCaptureNarrativeSummary({
-            sourceLabel: "Agent capture",
-            instruction: captureRawText,
-          });
+        : tableSummary
+          ? tableSummary
+          : buildCaptureNarrativeSummary({
+              sourceLabel: "Agent capture",
+              instruction: captureRawText,
+            });
 
     // AGENT-MODE routing (piece A): submitCaptureGraph derives the terminal
     // from identity + policy. We pass the acting `agentUserId` so the core
@@ -1012,6 +1087,7 @@ const captureHandler: McpToolHandler = async (
       // Always recorded now: a failed room still staged the text sessionless,
       // and the session error rides `intake.errors`.
       intake: graphIntake.intake,
+      ...tableReply,
       ...(crossKindLinks.length ? { links: { proposed: crossKindLinks } } : {}),
       ...(titleLint.length ? { titleLint } : {}),
       ...pendingMatchesAdvice(pendingMatches, graphResult.proposalId),
