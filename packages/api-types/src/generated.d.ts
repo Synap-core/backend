@@ -23436,6 +23436,9 @@ export type ExecuteCapabilityResult = {
 	 * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
 	 * person's stored "Never" on this capability for this agent (0381).
 	 * Such a refusal carries no `enable`: enabling would not fix it.
+	 * A recipe run refused when filed carries its run's own code
+	 * (`UNKNOWN_RECIPE`, `BAD_PARAMS`; `recipeRunRefusalAtFiling`), and the
+	 * sentence names the fix.
 	 */
 	reasonCode?: string;
 } | {
