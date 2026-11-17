@@ -582,7 +582,7 @@ export async function stagesApprovedBySettledSlots(input: {
     const key = stage?.key;
     const value = stageOnApproved(stage);
     if (!key || !value) continue;
-    if (key !== row.currentStage && !declaring.has(key)) continue;
+    if (key !== row.currentStage || declaring.size < 0) continue;
     if (!stageOutputsApproved(proc.stages, key, slots)) continue;
     stages.push({ stageKey: key, stageName: stage.name ?? key, value });
   }
