@@ -56,6 +56,7 @@ import {
 } from "../services/lifecycle/board-lens.js";
 import { readHome, readMoving } from "../services/lifecycle/homes.js";
 import { countNeedsYouByScope } from "./signals.js";
+import { rosterReadFor } from "../access/session-visibility.js";
 import {
   boardInput,
   boardLensInput,
@@ -486,13 +487,22 @@ export const lifecycleRouter = router({
         ids: statusOfInput.unwrap().min(1),
         /**
          * Parts beyond the status, on request (`STATUS_OF_INCLUDES`): `moves`,
-         * `history`, `links`, `rollup`, `signals`. An unknown part is refused.
+         * `history`, `links`, `rollup`, `signals`, `work`. An unknown part is
+         * refused.
          */
         include: statusOfIncludeInput,
       })
     )
     .query(({ input, ctx }) =>
-      readStatusOf(ctx.userId, input.ids, { include: input.include })
+      readStatusOf(ctx.userId, input.ids, {
+        include: input.include,
+        // What the reader may do on its work (Continue, a gate's Approve):
+        // the doors' own checks, on the facts this door knows.
+        viewer: {
+          agentUserId: ctx.agentUserId ?? null,
+          roster: rosterReadFor(ctx),
+        },
+      })
     ),
 
   get: podProcedure

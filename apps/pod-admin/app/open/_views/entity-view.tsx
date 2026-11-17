@@ -16,6 +16,9 @@
  * the one image door; when the body document IS that media it is not read
  * again as text.
  *
+ * The work on it (`WorkSection`, `statusOf` work): the sessions and runs on
+ * it, a run that stopped early first with its Continue; omitted when none.
+ *
  * `entities.get` re-checks access server-side; no admin role is involved.
  * The body document is read through `documents.get` on the viewer's own
  * floor: a body they cannot read says so, and shows nothing; a body that
@@ -50,6 +53,8 @@ import {
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
 import { ConnectedObjects } from "../../_lib/object/connected-objects";
+import { WorkSection } from "../../_lib/object/views/work-section";
+import { objectPage } from "../../_lib/object/content/markdown-model";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
@@ -212,6 +217,11 @@ export function EntityView({ id }: { id: string }) {
           ...proseKeys,
           ...(summary.propertySlug ? [summary.propertySlug] : []),
         ]}
+      />
+      <WorkSection
+        subjectId={id}
+        self={false}
+        sessionHref={(sid) => objectPage("session", sid)}
       />
       {prose.map((field) => (
         <ContentBlock

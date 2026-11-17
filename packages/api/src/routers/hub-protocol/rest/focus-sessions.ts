@@ -3458,6 +3458,86 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   });
 
   /**
+   * POST /focus-sessions/:id/continue — CONTINUE AT <STAGE>: a run that ended
+   * or stopped before its last stage resumes in the SAME session at the stage
+   * it stopped on, with a new run turn (an ended session is reopened for it).
+   * Same service and body as tRPC `focusSessions.continueRun` and MCP
+   * `synap_continue_session`. Refusals: 404 unknown
+   * session · 403 an agent credential (a person's move) or a key whose grant
+   * does not allow it · 409 nothing to
+   * continue / another run live on the record / the session moved.
+   */
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/continue",
+    tags: ["FocusSessions"],
+    summary: "Continue a run that stopped before its last stage",
+    description:
+      "CONTINUE AT <STAGE>: the SAME session resumes at the stage its run " +
+      "stopped on, with a new run turn (an ended session is reopened for it; " +
+      "the stopped run keeps its verdict). A person's move: an agent " +
+      "credential is refused (403 person_only). Offered by statusOf " +
+      "include work as `continue`, with `canAct` from the same check. " +
+      "Same service as tRPC focusSessions.continueRun and MCP " +
+      "synap_continue_session.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+    },
+    responses: {
+      200: {
+        description:
+          "Continued: { ok, sessionId, runId, runStatus, at, reopenedFrom, warnings }",
+        schema: z.object({}).passthrough(),
+      },
+      403: {
+        description:
+          "Refused: an agent credential (person_only) or the key's grant (denied)",
+        schema: z.object({}).passthrough(),
+      },
+      404: { description: "Not found", schema: z.object({}).passthrough() },
+      409: {
+        description:
+          "Refused: nothing to continue, another run live on the record (already_running), or the session moved (conflict)",
+        schema: z.object({}).passthrough(),
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/focus-sessions/:id/continue", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    try {
+      const { continueStoppedRun } =
+        await import("../../../services/focus-sessions/continue-run.js");
+      const result = await continueStoppedRun({
+        sessionId: id,
+        userId: c.get("userId") as string,
+        agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+      });
+      if (result.ok) return c.json(result, 200);
+      const status =
+        result.reason === "not_found"
+          ? 404
+          : result.reason === "person_only" || result.reason === "denied"
+            ? 403
+            : 409;
+      return c.json(result, status);
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.continue failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
    * POST /focus-sessions/:id/recall — "recall again": re-run session recall
    * now (same runner as the start doors and the sweep). Mirrors tRPC
    * `focusSessions.recallAgain`. Owner-floored; 404 for a foreign/unknown

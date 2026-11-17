@@ -458,6 +458,8 @@ const ACTION_VERB_ROWS = {
   // `blocked_by` edge. Dotted keys, so a bare `stop` or `release` elsewhere
   // keeps its own reading (pause, resume and rerun share their bare rows).
   "session.stop": { imperative: "Stop", past: "Stopped" },
+  // A run that stopped before its last stage resumes at it (plan 7d71ddcc).
+  "session.continue": { imperative: "Continue", past: "Continued" },
   "session.wait_on": { imperative: "Wait on", past: "Waited on" },
   "session.release": {
     imperative: "Stop waiting on",

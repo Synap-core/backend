@@ -50499,6 +50499,80 @@
         }
       }
     },
+    "/focus-sessions/{id}/continue": {
+      "post": {
+        "tags": ["FocusSessions"],
+        "summary": "Continue a run that stopped before its last stage",
+        "description": "CONTINUE AT <STAGE>: the SAME session resumes at the stage its run stopped on, with a new run turn (an ended session is reopened for it; the stopped run keeps its verdict). A person's move: an agent credential is refused (403 person_only). Offered by statusOf include work as `continue`, with `canAct` from the same check. Same service as tRPC focusSessions.continueRun and MCP synap_continue_session.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Continued: { ok, sessionId, runId, runStatus, at, reopenedFrom, warnings }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Refused: an agent credential (person_only) or the key's grant (denied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: nothing to continue, another run live on the record (already_running), or the session moved (conflict)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/lifecycle": {
       "get": {
         "tags": ["Lifecycle"],

@@ -39,6 +39,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_complete_session",
     "cp-connector": "pod__complete_session",
   },
+  synap_continue_session: {
+    "pod-mcp": "synap_continue_session",
+    "cp-connector": null,
+  },
   synap_convert_to_goal: {
     "pod-mcp": "synap_convert_to_goal",
     "cp-connector": "pod__convert_to_goal",

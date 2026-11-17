@@ -419,6 +419,11 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../utils/propose-channel-bind.js"),
     why: "binding a channel is proposed through the gate",
   },
+  "POST /focus-sessions/:id/continue": {
+    via: "continueStoppedRun",
+    load: () => import("../services/focus-sessions/continue-run.js"),
+    why: "a person continues a stopped run: the key's grant bounds it as a session update (grantWriteDenial); an agent key is refused",
+  },
   "POST /focus-sessions": {
     via: "createFocusSession",
     load: () => import("../services/focus-sessions/create-session.js"),

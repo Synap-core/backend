@@ -2251,10 +2251,11 @@ function readHeldRun(metadata: unknown): HeldRun | null {
  * Steps 4–6 of a run, on a session whose channel is wired: the run ledger row,
  * the subject's enrollment, the granted capabilities, the executor dispatch and
  * the ONE result write. Shared by a run that starts at once
- * ({@link executeSingleRun}) and a held run the person just accepted
- * ({@link startHeldRun}) — one dispatch path, never two.
+ * ({@link executeSingleRun}), a held run the person just accepted
+ * ({@link startHeldRun}) and a stopped run the person continues at its stage
+ * (`continue-run.ts`) — one dispatch path, never three.
  */
-async function dispatchRunOnSession(p: {
+export async function dispatchRunOnSession(p: {
   playbook: Playbook;
   sessionId: string;
   channelId: string;
