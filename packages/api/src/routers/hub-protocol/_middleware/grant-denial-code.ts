@@ -19,7 +19,9 @@
  * refused key is a pod app's and its document declares a permission covering
  * the refused write in that space (`askableDenial`), the body also carries
  * `askable: true` and `ask: { permission, workspaceId }`, the pair to send to
- * `POST /apps/access-requests`. Nothing else changes: an empty list read
+ * `POST /apps/access-requests`. The same for an agent's own key whose limits
+ * include the refused permission (`askableAgentDenial`): the pair to send to
+ * `POST /agents/access-requests`. Nothing else changes: an empty list read
  * stays an empty list, and no other refusal gains the field.
  */
 import type { Context, MiddlewareHandler, Next } from "hono";
@@ -90,21 +92,32 @@ export const grantDenialCodeMiddleware: MiddlewareHandler = async (
   } catch {
     return;
   }
-  // Askable only for an app's key with a space named: one read of the app's
-  // document, never for any other refusal.
+  // Askable only with a space named, for an app's key (one read of the app's
+  // document) or an agent's own key (one read of the key and the agent's
+  // limits), never for any other refusal.
   const asks = new Map<
     GrantDenialRecord,
     { permission: string; workspaceId: string } | null
   >();
+  const apiKeyId = c.get("apiKeyId" as never) as string | undefined;
+  const callerUserId = c.get("userId" as never) as string | undefined;
   for (const d of denials) {
-    if (!d.clientId || !d.workspaceId) continue;
-    const { askableDenial } =
-      await import("../../../services/app-access-ask.js");
+    if (!d.workspaceId) continue;
+    let hint: Promise<{ permission: string; workspaceId: string } | null>;
+    if (d.clientId) {
+      const { askableDenial } =
+        await import("../../../services/app-access-ask.js");
+      hint = askableDenial(d);
+    } else if (apiKeyId && callerUserId) {
+      const { askableAgentDenial } =
+        await import("../../../services/agent-access-ask.js");
+      hint = askableAgentDenial({ ...d, apiKeyId, callerUserId });
+    } else continue;
     // The hint failing must not turn the refusal into a 500: the refusal is
     // still sent, without `askable`, and the failure is logged.
     asks.set(
       d,
-      await askableDenial(d).catch((err: unknown) => {
+      await hint.catch((err: unknown) => {
         logger.warn({ err }, "askable hint unavailable for a grant denial");
         return null;
       })

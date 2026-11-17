@@ -401,6 +401,10 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // An app whose grant does not yet reach a space must read whether its
   // person allowed it.
   route("/apps/access-requests/:id"),
+  // An agent reads its OWN ask the same way (`readAgentAccessAsk`,
+  // services/agent-access-ask.ts): an ask of the agent whose key calls,
+  // filed for the person the key acts for (else 404) — no row a grant bounds.
+  route("/agents/access-requests/:id"),
   /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
   // The built-in skill packages' SKILL.md files, read from the image's
