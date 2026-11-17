@@ -447,7 +447,9 @@ function WhyApproval({ children }: { children: ReactNode }) {
     <p className="flex items-start gap-2 rounded-lg bg-foreground/[0.03] px-3 py-2.5 text-[12.5px] leading-relaxed text-foreground/75 ring-1 ring-inset ring-foreground/10">
       <Info aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span>
-        <span className="font-medium text-foreground/85">{t("why.lead")}</span>{" "}
+        <span className="font-medium text-foreground/85">
+          {t("approval.lead")}
+        </span>{" "}
         {children}
       </span>
     </p>
@@ -741,7 +743,7 @@ function AgentConnectBody({
         viewer={viewer}
         when={when}
       />
-      <WhyApproval>{t("agent.why")}</WhyApproval>
+      <WhyApproval>{t("agent.needsApproval")}</WhyApproval>
       {step.kind === "error" && (
         <Alert color="danger" title={t("agent.failed")}>
           {step.message}
@@ -860,7 +862,7 @@ function IssuerBody({
               })
         }
       />
-      <WhyApproval>{t("issuer.why")}</WhyApproval>
+      <WhyApproval>{t("issuer.needsApproval")}</WhyApproval>
       {issuer.status !== "pending" ? (
         <Alert
           color="default"
@@ -1010,7 +1012,7 @@ function AppRequestBody({
         viewer={viewer}
         when={t("app.when", { expiry: requestExpiry(data) })}
       />
-      <WhyApproval>{t("app.why")}</WhyApproval>
+      <WhyApproval>{t("app.needsApproval")}</WhyApproval>
       <ConnectionRequestDetails data={data} isPending={isPending} />
       {matchesApprovedConnection(data) && (
         <Alert color="success" variant="flat" title={t("app.alreadyAllowed")}>

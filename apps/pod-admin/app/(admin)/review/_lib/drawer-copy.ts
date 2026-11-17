@@ -29,7 +29,7 @@ export const en = {
   "where.podHost": "Your pod {mark}, {scope}",
   "where.space": "{space} space only.",
   "where.everywhere": "across the pod.",
-  "why.lead": "Why this needs approval.",
+  "approval.lead": "Why this needs approval.",
   // ── The decide bar ─────────────────────────────────────────────────────
   "decide.refuse": "{verb}…",
   "decide.reason": "Reason",
@@ -47,7 +47,7 @@ export const en = {
     "Everything listed below, and nothing else. Its writes still follow your review rules.",
   "agent.when": "{at} ({ago}).",
   "agent.whenFrom": "{at} ({ago}), from {from}.",
-  "agent.why": "New agents need a person to approve their access.",
+  "agent.needsApproval": "New agents need a person to approve their access.",
   "agent.refused": "Connection refused",
   "agent.failed": "Couldn’t process the request",
   "agent.keyId": "Key id",
@@ -60,7 +60,7 @@ export const en = {
   "issuer.what": "Only the scopes you tick below.",
   "issuer.when": "{at} ({ago}).",
   "issuer.whenVia": "{at} ({ago}), from a {via} request.",
-  "issuer.why":
+  "issuer.needsApproval":
     "An outside service can vouch for who is calling this pod only after a pod admin trusts it, and only for what you allow.",
   "issuer.notPending": "This issuer is no longer waiting for approval.",
   "issuer.scopes": "Allowed scopes",
@@ -80,7 +80,7 @@ export const en = {
   "app.what":
     "Call this pod’s API from {mark} in a browser. No data access and no membership: people still need to be members.",
   "app.when": "Waiting now; the request expires {expiry}.",
-  "app.why":
+  "app.needsApproval":
     "A website can call this pod from a browser only after an owner allows its exact address.",
   "app.alreadyAllowed": "Already allowed",
   "app.alreadyAllowedBody":
@@ -105,7 +105,7 @@ export const fr: Catalog<typeof en> = {
   "where.podHost": "Votre pod {mark}, {scope}",
   "where.space": "l’espace {space} seulement.",
   "where.everywhere": "sur tout le pod.",
-  "why.lead": "Pourquoi il faut une approbation.",
+  "approval.lead": "Pourquoi il faut une approbation.",
   "decide.refuse": "{verb}…",
   "decide.reason": "Raison",
   "decide.reasonHint":
@@ -121,7 +121,8 @@ export const fr: Catalog<typeof en> = {
     "Tout ce qui est listé ci-dessous, et rien d’autre. Ses écritures suivent toujours vos règles de revue.",
   "agent.when": "{at} ({ago}).",
   "agent.whenFrom": "{at} ({ago}), depuis {from}.",
-  "agent.why": "Un nouvel agent a besoin qu’une personne approuve son accès.",
+  "agent.needsApproval":
+    "Un nouvel agent a besoin qu’une personne approuve son accès.",
   "agent.refused": "Connexion refusée",
   "agent.failed": "La demande n’a pas pu être traitée",
   "agent.keyId": "Identifiant de la clé",
@@ -133,7 +134,7 @@ export const fr: Catalog<typeof en> = {
   "issuer.what": "Seulement les portées que vous cochez ci-dessous.",
   "issuer.when": "{at} ({ago}).",
   "issuer.whenVia": "{at} ({ago}), depuis une demande {via}.",
-  "issuer.why":
+  "issuer.needsApproval":
     "Un service extérieur ne peut garantir qui appelle ce pod qu’une fois qu’un administrateur du pod lui fait confiance, et seulement pour ce que vous autorisez.",
   "issuer.notPending": "Cet émetteur n’attend plus d’approbation.",
   "issuer.scopes": "Portées autorisées",
@@ -152,7 +153,7 @@ export const fr: Catalog<typeof en> = {
   "app.what":
     "Appeler l’API de ce pod depuis {mark} dans un navigateur. Aucun accès aux données ni adhésion : les personnes doivent toujours être membres.",
   "app.when": "En attente ; la demande expire {expiry}.",
-  "app.why":
+  "app.needsApproval":
     "Un site ne peut appeler ce pod depuis un navigateur qu’après qu’un propriétaire a autorisé son adresse exacte.",
   "app.alreadyAllowed": "Déjà autorisée",
   "app.alreadyAllowedBody":
