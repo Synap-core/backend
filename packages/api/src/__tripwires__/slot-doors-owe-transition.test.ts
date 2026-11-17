@@ -1,11 +1,11 @@
 /**
- * TRIPWIRE — a door that rewrites a session's slots owes the slot transition
- * (reactions W1). A slot's status is DERIVED (`slotStatusOf`), so no column
- * write can owe it: the door that writes `expected_outputs` must call
- * `oweSlotTransitions` in the same transaction, with the slots it locked and
- * the slots it wrote. `updateExpectedOutputsLocked` (the shared locked write:
- * block, unblock, delegate, return, the decision-ask raise and retire, the
- * answer's decision filing) owes for every caller.
+ * TRIPWIRE — a door that rewrites a session's slots owes the slot transition. A
+ * slot's status is DERIVED (`slotStatusOf`), so no column write can owe it: the
+ * door that writes `expected_outputs` must call `oweSlotTransitions` in the
+ * same transaction, with the slots it locked and the slots it wrote.
+ * `updateExpectedOutputsLocked` (the shared locked write: block, unblock,
+ * delegate, return, the decision-ask raise and retire, the answer's decision
+ * filing) owes for every caller.
  *
  * DERIVED: every raw `.update(focusSessions).set({ … expectedOutputs … })`
  * under the api sources is found; each must have `oweSlotTransitions(` within

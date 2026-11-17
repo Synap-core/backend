@@ -91,8 +91,8 @@ vi.mock("@synap/database", async (importOriginal) => {
         transitions: [],
       };
     },
-    // The run status door (reactions W1, pinned on PGlite by
-    // run-status.pglite.test.ts): recorded as the run row's write.
+    // The run status door (pinned on PGlite by run-status.pglite.test.ts):
+    // recorded as the run row's write.
     setRunStatus: async (
       _tx: unknown,
       input: { runId?: string; to: string; set?: Record<string, unknown> }
@@ -109,7 +109,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       return [{ ...stored("active"), ...input.set }];
     },
     db: {
-      // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+      // The proposal door's one statement (`WITH … UPDATE`).
       $with: () => ({ as: () => ({}) }),
       with() {
         return this;

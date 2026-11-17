@@ -70,7 +70,7 @@ interface CallerCtx {
 
 // ── module mocks ───────────────────────────────────────────────────────────
 const dbStub = {
-  // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+  // The proposal door's one statement (`WITH … UPDATE`).
   $with: () => ({ as: () => ({}) }),
   with() {
     return this;

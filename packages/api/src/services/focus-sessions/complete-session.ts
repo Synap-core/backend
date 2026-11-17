@@ -889,7 +889,7 @@ export async function completeFocusSession(
       },
     });
     // The slots the close retired moved (→ retired): owed in the close's own
-    // transaction (reactions W1). Nothing when the close retired none.
+    // transaction. Nothing when the close retired none.
     if (retirement && rows.length > 0) {
       await oweSlotTransitions(tx, {
         sessionId,

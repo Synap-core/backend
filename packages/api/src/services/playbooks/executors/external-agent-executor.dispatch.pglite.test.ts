@@ -197,7 +197,7 @@ describe("external-agent executor — dispatch through the stored binding", () =
       workspaceMembers,
       podMembers,
       projectMembers,
-      // The proposal and run doors owe their transitions (reactions W1).
+      // The proposal and run doors owe their transitions.
       lifecycleTransitionOutbox,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));

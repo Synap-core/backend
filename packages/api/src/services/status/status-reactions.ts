@@ -1,7 +1,7 @@
 /**
- * `statusOf` include "reactions" (plan 7d71ddcc W3): the RULES around one
- * subject, in the person's words. Two kinds, from THE one list of rules
- * (`listReactionRules`: built-in and declared, its floor, its pause):
+ * `statusOf` include "reactions": the RULES around one subject, in the person's
+ * words. Two kinds, from THE one list of rules (`listReactionRules`: built-in
+ * and declared, its floor, its pause):
  *   fires  a rule whose WHEN this subject's moves match (a run reaching
  *          "waiting on you"; a post reaching done, for its campaign's roll-up);
  *   moves  a rule whose effect moves THIS subject when what it is linked to

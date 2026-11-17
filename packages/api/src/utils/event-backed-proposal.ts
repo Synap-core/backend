@@ -226,7 +226,7 @@ export async function createAutoApprovedProposal(
     .returning();
   // Born decided, so its insert owes no transition: the rules that listen to
   // an approval (pod default 3, "an outcome is met wherever it was filed")
-  // are queued here instead (reactions W2). Best-effort, never throws.
+  // are queued here instead. Best-effort, never throws.
   if (proposal?.id) await queueReceiptReactions(proposal.id);
 
   // Second stamp: the write already happened, so the lifecycle is

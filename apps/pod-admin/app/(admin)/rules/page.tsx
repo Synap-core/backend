@@ -6,17 +6,17 @@
  * Rows are `automations.listPage` (user-floored, D1a) followed to its end so
  * the filter counts are true over every rule, joined on `flowId` with the
  * `runs.groups` automation rows for health (latest run, failures this week),
- * AND the rules the pod applies itself (`skills.listReactionRules`, plan
- * 7d71ddcc D8: one list): its built-in rules and the roll-ups a relation
- * declares. Those read as rule rows (`reaction-rule-rows.ts`): the same
- * filters and pill, their recent outcomes as their runs, and one act, Pause
- * or Turn on (`skills.setReactionRule`, the governed rule door). Their row
- * opens `/rules/<rule id>`, which draws what it does and its history.
- * The first page draws at once; the counts say "…" until both reads are
- * drained, and a pill waits for its health rather than guessing. Each row is
- * identity + one line + one act (`rule-rows.ts` decides which), drawn by the
- * shared `ResponsiveTable`; the row opens `/rules/[id]`.
- * Authoring stays in the desktop app.
+ * AND the rules the pod applies itself (`skills.listReactionRules`, decision
+ * D8: one list): its built-in rules and the roll-ups a relation declares. Those
+ * read as rule rows (`reaction-rule-rows.ts`): the same filters and pill, their
+ * recent outcomes as their runs, and one act, Pause or Turn on
+ * (`skills.setReactionRule`, the governed rule door). Their row opens
+ * `/rules/<rule id>`, which draws what it does and its history. The first page
+ * draws at once; the counts say "…" until both reads are drained, and a pill
+ * waits for its health rather than guessing. Each row is identity + one line +
+ * one act (`rule-rows.ts` decides which), drawn by the shared
+ * `ResponsiveTable`; the row opens `/rules/[id]`. Authoring stays in the
+ * desktop app.
  *
  * Receivers: `?filter=` (active · failing · never-ran · paused · drafts) and
  * `?focus=<automationId>` — Home's "rule never ran" links send both.

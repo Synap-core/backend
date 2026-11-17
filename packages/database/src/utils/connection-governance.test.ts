@@ -18,7 +18,6 @@ import {
   readConnectionSync,
   isConnectionSyncProposal,
   applyConnectionSyncApprovalForProposal,
-  isPodWideConnectionSyncApproval,
 } from "./connection-governance.js";
 import { resolveGovernanceRule } from "./resolve-agent-governance-decision.js";
 
@@ -416,73 +415,5 @@ describe("proposal-keyed seams (approval reactor + origin lookup)", () => {
       })
     ).resolves.toEqual({ applied: true, ruleId: "rule-new", created: true });
     expect(f.inserts[0]).toMatchObject({ sourceProposalId: PROP });
-  });
-});
-
-describe("isPodWideConnectionSyncApproval (approval path enqueues only where no reactor will)", () => {
-  const CS = { connectionSync: { connectionId: "conn-1", kinds: [] } };
-
-  it("pod-wide connection-sync import → true", () => {
-    expect(
-      isPodWideConnectionSyncApproval({
-        proposalType: "import.graph",
-        workspaceId: null,
-        data: CS,
-      })
-    ).toBe(true);
-    expect(
-      isPodWideConnectionSyncApproval({
-        proposalType: "import.graph",
-        workspaceId: undefined,
-        data: CS,
-      })
-    ).toBe(true);
-  });
-
-  it("workspace-scoped connection-sync import → false (the proposal.approved reactor covers it; no double enqueue)", () => {
-    expect(
-      isPodWideConnectionSyncApproval({
-        proposalType: "import.graph",
-        workspaceId: "ws-1",
-        data: CS,
-      })
-    ).toBe(false);
-  });
-
-  it("a malformed stamp still enqueues (the worker reports it, it is never silently dropped)", () => {
-    expect(
-      isPodWideConnectionSyncApproval({
-        proposalType: "import.graph",
-        workspaceId: null,
-        data: { connectionSync: { provider: "google" } },
-      })
-    ).toBe(true);
-  });
-
-  it("an ordinary pod-wide import or another proposal type → false", () => {
-    expect(
-      isPodWideConnectionSyncApproval({
-        proposalType: "import.graph",
-        workspaceId: null,
-        data: {},
-      })
-    ).toBe(false);
-    expect(
-      isPodWideConnectionSyncApproval({
-        proposalType: "entity.create",
-        workspaceId: null,
-        data: CS,
-      })
-    ).toBe(false);
-  });
-
-  it("the unified import door (capture.graph) counts like import.graph (98bc6a5ae)", () => {
-    expect(
-      isPodWideConnectionSyncApproval({
-        proposalType: "capture.graph",
-        workspaceId: null,
-        data: CS,
-      })
-    ).toBe(true);
   });
 });

@@ -219,8 +219,6 @@ export async function satisfyExpectedOutputs(
       .update(focusSessions)
       .set({ expectedOutputs: next, updatedAt: new Date() })
       .where(eq(focusSessions.id, sessionId));
-    // The delivered slot's derived status moved: owed here, in the same
-    // transaction (reactions W1).
     await oweSlotTransitions(tx, {
       sessionId,
       before: current,
@@ -563,8 +561,6 @@ export async function attestExpectedOutput(
       .update(focusSessions)
       .set({ expectedOutputs: next, updatedAt: now })
       .where(eq(focusSessions.id, sessionId));
-    // The delivered slot's derived status moved: owed here, in the same
-    // transaction (reactions W1).
     await oweSlotTransitions(tx, {
       sessionId,
       before: current,
@@ -979,8 +975,6 @@ export async function satisfyClaimsByEvidence(params: {
         .update(focusSessions)
         .set({ expectedOutputs: next, updatedAt: now })
         .where(eq(focusSessions.id, sessionId));
-      // The delivered slot's derived status moved: owed here, in the same
-      // transaction (reactions W1).
       await oweSlotTransitions(tx, {
         sessionId,
         before: current,
@@ -1101,8 +1095,6 @@ export async function satisfyPullRequestByMerge(params: {
         .update(focusSessions)
         .set({ expectedOutputs: next, updatedAt: now })
         .where(eq(focusSessions.id, sessionId));
-      // The delivered slot's derived status moved: owed here, in the same
-      // transaction (reactions W1).
       await oweSlotTransitions(tx, {
         sessionId,
         before: current,
@@ -1262,8 +1254,6 @@ export async function satisfyStageSlotsFromChild(params: {
         .update(focusSessions)
         .set({ expectedOutputs: next, updatedAt: now })
         .where(eq(focusSessions.id, sessionId));
-      // The delivered slot's derived status moved: owed here, in the same
-      // transaction (reactions W1).
       await oweSlotTransitions(tx, {
         sessionId,
         before: current,
@@ -1289,7 +1279,7 @@ export async function satisfyStageSlotsFromChild(params: {
     });
 }
 
-// ── THE SIXTH PATH: AN APPROVAL OF WHAT THE OUTCOME POINTS AT (reactions W2) ──
+// ── THE SIXTH PATH: AN APPROVAL OF WHAT THE OUTCOME POINTS AT ──
 
 /** The in-pod object an outcome points at (`ExpectedOutput.ref`, `{kind,id}`). */
 export interface OutcomeRefTarget {
@@ -1375,7 +1365,7 @@ export function sessionMayBeMetByRef(
 
 /**
  * THE APPROVAL MET ANYWHERE — an outcome is met wherever it was filed (pod
- * default 3, plan 7d71ddcc). An approved proposal used to meet only a slot of
+ * default 3). An approved proposal used to meet only a slot of
  * the session it was FILED under, by claim (`satisfyExpectedOutputs`); four
  * approved recipe proposals filed under an ambient session left the work
  * session's outcomes — whose `ref` named those very playbooks — Pending for

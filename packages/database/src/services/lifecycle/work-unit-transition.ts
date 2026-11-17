@@ -62,7 +62,7 @@ export interface TransitionBaseInput {
   hold?: RecordedHold | null;
   /** A replay: the app its proposal was filed by (`proposals.app_id`). */
   appId?: string | null;
-  /** The move that caused this one (a reaction, reactions W2); absent otherwise. */
+  /** The move that caused this one (a reaction); absent otherwise. */
   cause?: TransitionCause | null;
 }
 

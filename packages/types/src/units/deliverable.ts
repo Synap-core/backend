@@ -238,11 +238,11 @@ export function newestOwedFirst(
 }
 
 /**
- * A slot's STATUS as a transition subject (reactions W1): DERIVED from the
- * owed rule above, never stored — a slot has no status column, and gets none.
- * The doors that change it (answer, block, unblock, satisfy, attest, retire,
- * delegate, the decision-ask reactor) owe a `slot` transition when this value
- * changes (`oweSlotTransitions`, @synap/database).
+ * A slot's STATUS as a transition subject: DERIVED from the owed rule above,
+ * never stored — a slot has no status column, and gets none. The doors that
+ * change it (answer, block, unblock, satisfy, attest, retire, delegate, the
+ * decision-ask reactor) owe a `slot` transition when this value changes
+ * (`oweSlotTransitions`, @synap/database).
  *
  *   owed      outstanding and the person's (`deliverableOwedBy` = you): the
  *             ask is open;
