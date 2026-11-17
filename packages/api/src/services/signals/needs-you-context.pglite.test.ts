@@ -378,14 +378,21 @@ describe("readNeedsYouContext — a failed part is unreadable, never empty", () 
   });
 
   it("the subject read fails: the subject is unreadable, the rest answers", async () => {
-    await h.client!.exec(`alter table profiles rename to profiles_away`);
+    // A fault only the subject read meets: it selects `system_data`. Renaming
+    // `profiles` would also fail the timeline, which reads room posts through
+    // the channel floor and so the entity floor (it reads `profiles`).
+    await h.client!.exec(
+      `alter table entities rename column system_data to system_data_away`
+    );
     try {
       const ctx = await readNeedsYouContext(ROWS, reader);
       expect(ctx.rows[ROWS[0]!.id]!.subject).toEqual({ status: "unreadable" });
       expect(ctx.rows[ROWS[3]!.id]).not.toHaveProperty("subject");
       expect(ctx.sessions[S.main]!.timeline.status).toBe("ok");
     } finally {
-      await h.client!.exec(`alter table profiles_away rename to profiles`);
+      await h.client!.exec(
+        `alter table entities rename column system_data_away to system_data`
+      );
     }
   });
 });

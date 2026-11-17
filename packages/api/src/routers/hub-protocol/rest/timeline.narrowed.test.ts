@@ -55,19 +55,31 @@ describe("Hub REST GET /timeline — a key narrowed by its grant", () => {
     h.actors = [];
   });
 
-  it("a pod app reads a session's timeline, dev facts and decisions withheld", async () => {
+  it("a pod app reads a session's timeline, every source past its grant withheld", async () => {
     const res = await send(
       `/timeline?sessionId=${SESSION}`,
       grant({ permissions: ["session.read"], workspaceIds: ["w1"] })
     );
     expect(res.status).toBe(200);
-    expect(withholdOf(0)).toEqual(["dev_facts", "decisions"]);
+    expect(withholdOf(0)).toEqual([
+      "dev_facts",
+      "decisions",
+      "runners",
+      "room_posts",
+    ]);
   });
 
-  it("an unpinned proposal read brings the decisions back, never the dev facts", async () => {
+  it("unpinned proposal and channel reads and agent.read bring their sources back, never the dev facts", async () => {
     const res = await send(
       `/timeline?sessionId=${SESSION}`,
-      grant({ permissions: ["session.read", "proposal.read"] })
+      grant({
+        permissions: [
+          "session.read",
+          "proposal.read",
+          "channel.read",
+          "agent.read",
+        ],
+      })
     );
     expect(res.status).toBe(200);
     expect(withholdOf(0)).toEqual(["dev_facts"]);

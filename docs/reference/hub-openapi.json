@@ -7409,7 +7409,10 @@
           "truncated": { "type": "boolean" },
           "withheld": {
             "type": "array",
-            "items": { "type": "string", "enum": ["dev_facts", "decisions"] }
+            "items": {
+              "type": "string",
+              "enum": ["dev_facts", "decisions", "runners", "room_posts"]
+            }
           }
         },
         "required": ["subject", "events", "truncated"]
@@ -56748,7 +56751,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "What happened to a goal, a session or a pull request",
-        "description": "Newest first. Name exactly one subject: `goalId` (its history: step moves, checks, sessions, decisions, status moves), `sessionId` (its start, status moves with their holds, the dev facts of its PRs and devbox jobs, its decisions) or `pr` (`owner/name#n`: its opened / merged / closed facts and CI runs). `at` is when a thing happened; `recordedAt` appears only when the pod recorded it a second or more later (a backdated move, a late webhook). 404 when the goal or session is not yours; a PR with no recorded fact has no events. A pod app (a key holding `session.read` that does not read every subject of the timeline) reads only a session's, through its grant: the sources it may not read are skipped and named in `withheld` (`dev_facts`; `decisions` without a pod-wide `proposal.read`); a goal's or a PR's timeline is a 403 for it.",
+        "description": "Newest first. Name exactly one subject: `goalId` (its history: step moves, checks, sessions, decisions, status moves), `sessionId` (its start, status moves with their holds, the dev facts of its PRs and devbox jobs, its decisions) or `pr` (`owner/name#n`: its opened / merged / closed facts and CI runs). `at` is when a thing happened; `recordedAt` appears only when the pod recorded it a second or more later (a backdated move, a late webhook). 404 when the goal or session is not yours; a PR with no recorded fact has no events. A pod app (a key holding `session.read` that does not read every subject of the timeline) reads only a session's, through its grant: the sources it may not read are skipped and named in `withheld` (`dev_facts`; `decisions` without a pod-wide `proposal.read`; `room_posts` without a pod-wide `channel.read`; `runners` without `agent.read`); a goal's or a PR's timeline is a 403 for it.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {

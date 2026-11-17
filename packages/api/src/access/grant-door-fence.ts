@@ -568,14 +568,23 @@ export const TIMELINE_SUBJECTS: readonly string[] = [
  * What one key's grant lets the timeline read. Whole for an unfenced caller or
  * a key reading every subject unbounded. Any other key the fence admitted
  * (it holds `session.read`) reads only a SESSION's timeline, through the
- * session floor with its grant: the session's start, its status moves and its
- * slots' history (the session's own rows); the decisions filed in it only
- * when one scope reads `proposal` unbounded; never the dev facts of its PRs
- * and jobs (events anywhere in the pod). A goal's or a PR's timeline is
- * refused it (403): both read only rows outside the session floor.
+ * session floor with its grant: the session's start, its status and stage
+ * moves, its slots' history (the session's own rows) and the children it
+ * spawned (under the same floor); the decisions filed in it only when one
+ * scope reads `proposal` unbounded; its room posts only when one scope reads
+ * `channel` unbounded; its runners only when it reads the person's agents
+ * (`sessionHolderReadable`); never the dev facts of its PRs and jobs (events
+ * anywhere in the pod). A goal's or a PR's timeline is refused it (403): both
+ * read only rows outside the session floor.
  */
 export type TimelineReach =
-  { whole: true } | { whole: false; decisions: boolean };
+  | { whole: true }
+  | {
+      whole: false;
+      decisions: boolean;
+      roomPosts: boolean;
+      runners: boolean;
+    };
 
 export function timelineReach(
   grant: KeyGrant | null | undefined
@@ -589,6 +598,8 @@ export function timelineReach(
   return {
     whole: false,
     decisions: grantBoundsDoor(READS("proposal"), grant!),
+    roomPosts: grantBoundsDoor(READS("channel"), grant!),
+    runners: sessionHolderReadable(grant),
   };
 }
 
@@ -778,6 +789,22 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // may not run a turn has no use for the list), as POST /chat/stream.
   [/^\/ai-providers\/available\/?$/, NARROWED("chat", [], "stream")],
   [/^\/messaging\/accounts\/?$/, PERSON("messaging")],
+  // How the person's connected tools are doing (finding 67b6c332, founder,
+  // 2026-11-17: an agent could not tell whether a Google connection kept
+  // failing to refresh, nor list which providers are connected). The
+  // sync-status rows (`getConnectionSyncStatus`, scoped to the CALLER's own
+  // connections by `scopeSyncStatusToUser`) carry phase, counts, the
+  // `needs_reauth` connection state and the failure class and sentence; the
+  // providers list carries provider, connected and the connection id. Neither
+  // returns a credential or a token. They are the person's own account-level
+  // rows, which no space holds, so a PERSON door on `tool` (the subject
+  // `tools` and `mcp_servers` read under, grant-read.ts): the key needs
+  // `tool.read`, which the AI read preset holds, whatever it is pinned to.
+  // `/connectors/broker-diagnostics` (pod admin only) and
+  // `/connectors/connections/:provider` stay unclassified: they are not the
+  // health read.
+  [/^\/connectors\/sync-status\/?$/, PERSON("tool")],
+  [/^\/connectors\/providers\/?$/, PERSON("tool")],
   // Which agents the person has (id, name, agent type, presence; never a
   // key): an app that hands a run to one of them (`handToAgentId` on
   // POST /playbooks/:id/run) must name it. The person's own roster, which no

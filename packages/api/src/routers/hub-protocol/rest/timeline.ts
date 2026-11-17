@@ -81,8 +81,9 @@ export function registerTimelineRoutes(app: HubHono): void {
       "A pod app (a key holding `session.read` that does not read every " +
       "subject of the timeline) reads only a session's, through its grant: " +
       "the sources it may not read are skipped and named in `withheld` " +
-      "(`dev_facts`; `decisions` without a pod-wide `proposal.read`); a " +
-      "goal's or a PR's timeline is a 403 for it.",
+      "(`dev_facts`; `decisions` without a pod-wide `proposal.read`; " +
+      "`room_posts` without a pod-wide `channel.read`; `runners` without " +
+      "`agent.read`); a goal's or a PR's timeline is a 403 for it.",
     request: { query: TimelineQuerySchema },
     responses: {
       200: { description: "Timeline", schema: TimelineWireSchema },
@@ -121,7 +122,12 @@ export function registerTimelineRoutes(app: HubHono): void {
     }
     const withhold: TimelineWithheldSource[] = reach.whole
       ? []
-      : ["dev_facts", ...(reach.decisions ? [] : (["decisions"] as const))];
+      : [
+          "dev_facts",
+          ...(reach.decisions ? [] : (["decisions"] as const)),
+          ...(reach.runners ? [] : (["runners"] as const)),
+          ...(reach.roomPosts ? [] : (["room_posts"] as const)),
+        ];
     if (confined.workspaceId && subject.subject.kind === "goal") {
       return c.json(
         {
