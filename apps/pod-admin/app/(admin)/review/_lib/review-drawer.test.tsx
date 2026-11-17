@@ -37,7 +37,6 @@ const {
   NEXT_ID,
   NAME,
   PROPOSAL,
-  TARGETS,
   state,
   reads,
   query,

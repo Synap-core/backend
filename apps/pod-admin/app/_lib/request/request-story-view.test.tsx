@@ -150,7 +150,7 @@ describe("the story's frame", () => {
     );
     expect(failed?.mark).toBe("unread");
     expect(text(failed!.html)).toContain(REQUEST_EN["story.failed"]);
-    expect(failed!.html).toMatch(/<button[^>]*>.*Try again<\/button>/s);
+    expect(failed!.html).toMatch(/<button[^>]*>[\s\S]*Try again<\/button>/);
     expect(html).toContain("data-decided");
     expect(html).toContain("data-footer");
     // A failed read is never told as "nothing else waits".
