@@ -8,8 +8,9 @@
  *      Synap-core/backend." The secret's name is the current choice, with one
  *      door to change it (the person's vault secrets; ui-composition §12);
  *      no purpose → "The agent did not say what it is for" and Ask what for;
- *   2. how long: This session (up to 60 min) · One read (a new grant);
- *   3. [Give for this session] [Refuse…], then one quiet line: who can read
+ *   2. how long: This job (up to 60 min) · One read (a new grant), the
+ *      session in the vocabulary's word (founder G1);
+ *   3. [Give for this job] [Refuse…], then one quiet line: who can read
  *      it for how long, and that it stays on the pod.
  *
  * What the agent declared (For · Used by · On) and where a new secret is
@@ -23,7 +24,7 @@ import { Button, Select, SelectItem } from "@heroui/react";
 import { Check } from "lucide-react";
 import { ASK_COPY } from "@synap-core/types/ask";
 import { useT } from "../../../../lib/i18n/locale-provider";
-import { REQUEST_CATALOGS } from "../../../_lib/request/copy";
+import { REQUEST_CATALOGS, jobNoun } from "../../../_lib/request/copy";
 import { InDecisionBar } from "../../../_lib/request/decision-footer";
 import { SegmentedChoice } from "../../components/segmented-choice";
 import {
@@ -49,22 +50,19 @@ function withName(sentence: string, mark: string, name: ReactNode): ReactNode {
   );
 }
 
-/** Who can read it, for how long — one line, in this surface's one noun ("session"). */
-function secretNote(
-  card: SecretCardView,
-  t: (
-    key: "secret.noteOnce" | "secret.noteSession",
-    params: { agent: string; minutes: number }
-  ) => string
-): string {
+/**
+ * Who can read it, for how long — one line, the shared note (`ASK_COPY`), in
+ * the vocabulary's noun, as the option above it says (UX review S11).
+ */
+function secretNote(card: SecretCardView): string {
   const agent = card.usedBy ?? "";
   switch (card.until) {
     case "standing":
       return ASK_COPY.provideStandingGrantNote(agent);
     case "once":
-      return t("secret.noteOnce", { agent, minutes: card.minutes });
+      return ASK_COPY.provideGrantOnceNote(agent, card.minutes);
     case "session":
-      return t("secret.noteSession", { agent, minutes: card.minutes });
+      return ASK_COPY.provideGrantNote(agent, card.minutes);
     default:
       return ASK_COPY.provideNoGrantNote;
   }
@@ -124,7 +122,7 @@ export function SecretProvide({
     card.until === "once"
       ? t("secret.giveOnce")
       : card.until === "session"
-        ? t("secret.giveSession")
+        ? t("secret.giveSession", jobNoun())
         : t("secret.give");
 
   return (
@@ -186,6 +184,7 @@ export function SecretProvide({
               {
                 key: "session" as const,
                 label: t("secret.usesSession", {
+                  ...jobNoun(),
                   minutes: secretCard(sheet, ref || null, "session").minutes,
                 }),
               },
@@ -224,7 +223,7 @@ export function SecretProvide({
         data-secret-grant-note=""
         className="text-[12.5px] leading-relaxed text-foreground/80"
       >
-        {secretNote(card, t)} {t("secret.stays")}
+        {secretNote(card)} {t("secret.stays")}
       </p>
     </div>
   );

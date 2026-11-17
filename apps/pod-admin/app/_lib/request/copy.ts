@@ -8,7 +8,8 @@
  * title, a name) is a param, printed as written. DRAFT French ("vous"),
  * awaiting the founder's review.
  */
-import type { Catalog } from "@synap-core/types/i18n";
+import type { Catalog, Locale, NounParams } from "@synap-core/types/i18n";
+import { nounParams, resolveNoun } from "@synap-core/types/vocabulary";
 
 export const en = {
   // ── The story's frame ──────────────────────────────────────────────────
@@ -98,14 +99,14 @@ export const en = {
   "secret.giveNoAgent": "Give {name}.",
   "secret.change": "Change",
   "secret.howLong": "How long",
-  "secret.usesSession": "This session (up to {minutes} min)",
+  // The grant option and its button name the session with the vocabulary's
+  // noun (`jobNoun`): founder G1, the person's word is "job", as in the
+  // shared note under it (`ASK_COPY.provideGrantNote`, UX review S11).
+  "secret.usesSession": "This {obj} (up to {minutes} min)",
   "secret.usesOnce": "One read",
   "secret.give": "Give",
-  "secret.giveSession": "Give for this session",
+  "secret.giveSession": "Give for this {obj}",
   "secret.giveOnce": "Give for one read",
-  "secret.noteSession":
-    "{agent} can read it for up to {minutes} minutes, in this session only.",
-  "secret.noteOnce": "{agent} can read it once, within {minutes} minutes.",
   "secret.stays": "It stays on the pod and is read through your vault.",
   "secret.none": "You have no secrets in your vault that you could hand over.",
   "secret.for": "For",
@@ -240,15 +241,13 @@ export const fr: Catalog<typeof en> = {
   "secret.giveNoAgent": "Donner {name}.",
   "secret.change": "Changer",
   "secret.howLong": "Pour combien de temps",
-  "secret.usesSession": "Cette session (jusqu’à {minutes} min)",
+  "secret.usesSession":
+    "{objG, select, f {Cette {obj}} other {{objV, select, yes {Cet {obj}} other {Ce {obj}}}}} (jusqu’à {minutes} min)",
   "secret.usesOnce": "Une lecture",
   "secret.give": "Donner",
-  "secret.giveSession": "Donner pour cette session",
+  "secret.giveSession":
+    "Donner pour {objG, select, f {cette {obj}} other {{objV, select, yes {cet {obj}} other {ce {obj}}}}}",
   "secret.giveOnce": "Donner pour une lecture",
-  "secret.noteSession":
-    "{agent} peut le lire jusqu’à {minutes} minutes, dans cette session seulement.",
-  "secret.noteOnce":
-    "{agent} peut le lire une fois, dans les {minutes} minutes.",
   "secret.stays": "Il reste sur le pod et se lit via votre coffre.",
   "secret.none": "Votre coffre ne contient aucun secret à fournir.",
   "secret.for": "Pour",
@@ -297,3 +296,12 @@ export const fr: Catalog<typeof en> = {
 };
 
 export const REQUEST_CATALOGS = { en, fr };
+
+/**
+ * The person's word for a session, as a noun bundle for the grant option and
+ * its button (`secret.usesSession`, `secret.giveSession`): the vocabulary's
+ * ("job"), so they agree with the shared grant note under them (founder G1).
+ */
+export function jobNoun(locale?: Locale): NounParams {
+  return nounParams(resolveNoun("session", locale));
+}

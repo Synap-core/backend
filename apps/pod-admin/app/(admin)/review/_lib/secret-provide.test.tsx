@@ -10,7 +10,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SecretProvide } from "./secret-provide";
 import type { SecretSheet } from "./provide-options";
 import type { ProvideControlProps } from "./ask-kit";
-import { en as REQUEST_EN } from "../../../_lib/request/copy";
+import { createT } from "@synap-core/types/i18n";
+import { ASK_COPY } from "@synap-core/types/ask";
+import {
+  REQUEST_CATALOGS,
+  en as REQUEST_EN,
+  jobNoun,
+} from "../../../_lib/request/copy";
+
+const t = createT("en", REQUEST_CATALOGS);
+const GIVE_SESSION = t("secret.giveSession", jobNoun("en"));
 
 const SHEET: SecretSheet = {
   kind: "secret",
@@ -63,7 +72,7 @@ describe("SecretProvide", () => {
     const html = render(SHEET);
     expect(html).toContain("data-secret-none");
     expect(html).toContain(REQUEST_EN["secret.none"]);
-    expect(html).not.toContain(REQUEST_EN["secret.giveSession"]);
+    expect(html).not.toContain(GIVE_SESSION);
   });
 
   it("a secret to pick: the verb names how long, and no empty-vault line", () => {
@@ -80,6 +89,34 @@ describe("SecretProvide", () => {
       initialRef: "vault://s1",
     } as SecretSheet);
     expect(html).not.toContain("data-secret-none");
-    expect(html).toContain(REQUEST_EN["secret.giveSession"]);
+    expect(html).toContain(GIVE_SESSION);
+  });
+
+  // UX review S11, resolved toward founder G1: the option, its button and the
+  // note under them name the session with ONE noun, the vocabulary's.
+  it("the grant option, its button and its note say one noun, the vocabulary's", () => {
+    const html = render({
+      ...SHEET,
+      choices: [
+        {
+          ref: "vault://s1",
+          name: "GITHUB_TOKEN",
+          type: "api_key",
+          standingGrant: null,
+        },
+      ],
+      initialRef: "vault://s1",
+    } as SecretSheet);
+    const noun = jobNoun("en").obj;
+    const option = t("secret.usesSession", { ...jobNoun("en"), minutes: 60 });
+    expect(option).toContain(noun);
+    expect(GIVE_SESSION).toContain(noun);
+    expect(html).toContain(option);
+    expect(html).toContain(GIVE_SESSION);
+    // The note is the shared one (ASK_COPY), in the same noun.
+    const note = html.match(/data-secret-grant-note=""[^>]*>([^<]*)</)?.[1];
+    expect(note).toBe(ASK_COPY.provideGrantNote("Claude Code", 60));
+    expect(note).toContain(noun);
+    expect(`${option} ${GIVE_SESSION} ${note}`).not.toMatch(/\bsession\b/i);
   });
 });
