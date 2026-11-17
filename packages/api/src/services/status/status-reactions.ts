@@ -50,6 +50,8 @@ const EFFECT_TARGET: Record<
 > = {
   meet_outcomes: "slot",
   pause_session: "focus_session",
+  // D2's built-in: a stage's approved work moves the session's thing.
+  reach_stage_status: "entity",
   roll_up: "entity",
 };
 
@@ -66,6 +68,9 @@ export function ruleFiresOn(
 /** Does this rule move this subject (when what it is linked to moves)? Pure. */
 export function ruleMoves(r: ReactionDeclaration, s: ReactionSubject): boolean {
   if (EFFECT_TARGET[r.do.effect] !== SUBJECT_TYPE[s.type]) return false;
+  // D2's rule moves only a thing some session's stage declares `onApproved`
+  // for; nothing here reads that, so it is not listed on every thing.
+  if (r.via.link === "slot_stage") return false;
   if (r.via.link === "relation") {
     const parentProfile =
       r.via.parent === "target" ? r.via.targetProfileId : r.via.sourceProfileId;
