@@ -133,20 +133,7 @@ export const BUILT_IN_REACTIONS: readonly ReactionDeclaration[] = [
     source: "built_in",
     enabled: true,
   },
-  {
-    // Decision D2, approval signal 1: a stage's `onApproved` is reached when
-    // its declared outputs are all delivered — whichever door delivered the
-    // last one (an approval, an attestation, an answer, evidence, a merge, a
-    // child run, default 3 meeting it by its ref).
-    id: "builtin:approved-output-reaches-status",
-    title: "A stage's approved work moves its thing to the stage's result",
-    when: { subjectType: "slot", category: ["done"] },
-    via: { link: "slot_stage" },
-    do: { effect: "reach_stage_status" },
-    order: 30,
-    source: "built_in",
-    enabled: true,
-  },
+
 ];
 
 /** A pull request merge is not a transition: default 3's other trigger. */
