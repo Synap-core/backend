@@ -160,9 +160,14 @@ export interface EnabledWorker {
   trackId: string | null;
   /** The session that started it (`session` scope; its runs' parent). */
   sessionId: string | null;
-  /** `paused` = its rule is a draft: nothing fires. */
-  state: "running" | "paused";
-  /** The automation that fires it (null while paused). */
+  /**
+   * `paused` = its rule is a draft: nothing fires. `stopped` = a session's
+   * worker whose session ended: its rule stays as it was, but each run it
+   * would start is skipped `session_closed` (derived from the session's
+   * status here, never stored).
+   */
+  state: "running" | "paused" | "stopped";
+  /** The automation that fires it (null while paused or stopped). */
   automationId: string | null;
   /** Approvals waiting on a person, and the limit past which it stops. */
   pendingApprovals: number;
@@ -392,7 +397,7 @@ export async function listWorkerViews(
       .sort((a, b) => (a.at < b.at ? 1 : -1))
       .slice(0, RUN_HEALTH_MARK_LIMIT);
     const marks = [...marksNewestFirst].reverse();
-    const current = worker.state === "paused" ? null : auto.current;
+    const current = worker.state === "running" ? auto.current : null;
     const trigger = {
       kind: workerTriggerKind(worker.activator?.on),
       words: workerWhen(worker),
@@ -411,7 +416,7 @@ export async function listWorkerViews(
           ? (current.nextRunAt?.toISOString() ?? null)
           : null,
       health: deriveRunHealth({
-        paused: worker.state === "paused",
+        paused: worker.state !== "running",
         automationStatus: current?.status ?? null,
         automationError: current?.errorMessage ?? null,
         marks,
@@ -541,6 +546,29 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
       found.push({ pb, process, row, en, paused });
     }
   }
+  // A session's worker stops with its session (`session_closed` at run time,
+  // `executePlaybookRun`): read as stopped, from the sessions' own status in
+  // ONE read. A session gone (deleted) is ended too.
+  const sessionIds = [
+    ...new Set(
+      found.map((f) => f.en.sessionId).filter((id): id is string => !!id)
+    ),
+  ];
+  const sessionStatus = new Map(
+    sessionIds.length
+      ? (
+          await db
+            .select({ id: focusSessions.id, status: focusSessions.status })
+            .from(focusSessions)
+            .where(inArray(focusSessions.id, sessionIds))
+        ).map((s) => [s.id, s.status])
+      : []
+  );
+  const sessionEnded = (id: string | null) => {
+    if (!id) return false;
+    const status = sessionStatus.get(id);
+    return status === undefined || isTerminalSessionStatus(status);
+  };
   const automationsOf = await automationsOfRules(found.map((f) => f.row.id));
   const activeOf = (ruleId: string): string | null => {
     const c = automationsOf.get(ruleId)?.current;
@@ -557,7 +585,8 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     automations: { current: RuleAutomation | null; all: string[] };
   }> = [];
   for (const { pb, process, row, en, paused } of found) {
-    const automationId = paused ? null : activeOf(row.id);
+    const stopped = !paused && sessionEnded(en.sessionId);
+    const automationId = paused || stopped ? null : activeOf(row.id);
     if (input.liveOnly && !automationId) continue;
     const activator =
       process.activators.find((a) => activatorKey(a) === en.activatorKey) ??
@@ -583,7 +612,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
         projectId: en.projectId,
         trackId: en.trackId,
         sessionId: en.sessionId,
-        state: paused ? "paused" : "running",
+        state: paused ? "paused" : stopped ? "stopped" : "running",
         automationId,
         pendingApprovals: automationId ? (pending.get(automationId) ?? 0) : 0,
         maxPendingApprovals:

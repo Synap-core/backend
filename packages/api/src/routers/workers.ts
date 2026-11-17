@@ -63,7 +63,8 @@ const enabledWorkerWire = z.object({
   trackId: z.string().nullable(),
   /** The session that started it (`session` scope); null otherwise. */
   sessionId: z.string().nullable().optional(),
-  state: z.enum(["running", "paused"]),
+  /** `stopped`: a session's worker whose session ended. */
+  state: z.enum(["running", "paused", "stopped"]),
   automationId: z.string().nullable(),
   pendingApprovals: z.number(),
   maxPendingApprovals: z.number(),

@@ -26,7 +26,7 @@ import type { WorkerActivatorTrigger } from "./index.js";
 
 /** The fields of an enabled worker (`workers.list`) the words read. */
 export interface TriggerWorker {
-  state: "running" | "paused";
+  state: "running" | "paused" | "stopped";
   profileSlug: string | null;
   activator: {
     on: WorkerActivatorTrigger;
