@@ -1540,7 +1540,6 @@ export async function createFocusSession(
           phase: "start",
           title: sessionOut.title ?? null,
           workspaceId: sessionOut.workspaceId ?? null,
-          projectId: sessionOut.projectId ?? null,
           subjectEntityId: sessionOut.subjectEntityId ?? null,
           parentSessionId,
         });
