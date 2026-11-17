@@ -136,13 +136,16 @@ export function pendingMatchesAdvice(
  * caller never sent it (ticket 8215c66a).
  */
 function entityNamed(
-  e: { title?: unknown },
+  e: Record<string, unknown>,
   index: number,
   callerRef: unknown
 ): string {
-  if (typeof callerRef === "string" && callerRef) return `entity '${callerRef}'`;
+  if (typeof callerRef === "string" && callerRef)
+    return `entity '${callerRef}'`;
   const title =
-    typeof e.title === "string" && e.title ? ` ("${e.title.slice(0, 60)}")` : "";
+    typeof e.title === "string" && e.title
+      ? ` ("${e.title.slice(0, 60)}")`
+      : "";
   return `entities[${index}]${title}`;
 }
 

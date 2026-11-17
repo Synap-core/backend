@@ -104,10 +104,7 @@ afterAll(async () => h.client?.close());
 const idsWhere = async (where: SQL) =>
   new Set(
     (
-      await db
-        .select({ id: focusSessions.id })
-        .from(focusSessions)
-        .where(where)
+      await db.select({ id: focusSessions.id }).from(focusSessions).where(where)
     ).map((r) => r.id)
   );
 
@@ -123,7 +120,9 @@ describe("triage lenses", () => {
     const inNeither = [...all].filter(
       (id) => !pending.has(id) && !notPending.has(id)
     );
-    const inBoth = [...all].filter((id) => pending.has(id) && notPending.has(id));
+    const inBoth = [...all].filter(
+      (id) => pending.has(id) && notPending.has(id)
+    );
     expect(inNeither).toEqual([]);
     expect(inBoth).toEqual([]);
   });

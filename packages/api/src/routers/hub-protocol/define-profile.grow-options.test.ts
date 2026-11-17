@@ -144,12 +144,18 @@ describe("defineProfile — a re-declared field grows its allowed values", () =>
   });
 
   it("a declaration that drops a stored value is not a growth: reported unchanged, nothing filed (fd146324)", async () => {
-    const { calls, field } = await declare(["preferences", "rituals"], stored());
+    const { calls, field } = await declare(
+      ["preferences", "rituals"],
+      stored()
+    );
     expect(calls.update).toEqual([]);
     // Never a create proposal for a slug that already exists: approving it
     // could only apply nothing.
     expect(calls.create).toEqual([]);
-    expect(field).toMatchObject({ status: "unchanged", propertyDefId: "def-1" });
+    expect(field).toMatchObject({
+      status: "unchanged",
+      propertyDefId: "def-1",
+    });
     expect(String(field.message)).toContain("updatePropertyDef");
   });
 
