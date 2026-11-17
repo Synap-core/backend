@@ -79,7 +79,7 @@ An app that draws a kind (a board, a thing's page) reads this. It does not rebui
 
 ### Workers
 
-A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. A person may also turn it on for one open session (scope `session`, `workers.enable` with `sessionId`; not over MCP yet): its runs start as that session's children, and it files nothing once the session ends. Authoring: `processes`.
+A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. It may also be turned on for one open session (scope `session`: `synap_enable_worker` with `scopeSessionId` instead of `trackId`): its runs start as that session's children, and it files nothing once the session ends. Authoring: `processes`.
 
 ### Agents and their templates
 
