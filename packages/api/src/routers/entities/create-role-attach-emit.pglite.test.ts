@@ -285,6 +285,55 @@ describe("a role attach is announced once, from every path (R1)", () => {
     expect(attaches()).toHaveLength(1);
   }, 60_000);
 
+  // « Lead → client » W1: a SHARED role (pod-wide facet) attached from a
+  // space keeps that space as the event's lens (webhooks, the parent refresh)
+  // and says the subject is pod-wide, so the matcher also reaches the other
+  // spaces' rules — the Operations « Onboard a client » activator on a client
+  // attached from the CRM. A space-bound facet says nothing: its space only.
+  it("a pod-wide role attached from a space is announced as a pod-wide subject; a space-bound one is not", async () => {
+    const { notifyFacetAttached } = await import("@synap/database");
+    const CRM = randomUUID();
+    const facet = (workspaceId: string | null) =>
+      ({
+        id: randomUUID(),
+        entityId: randomUUID(),
+        workspaceId,
+        status: null,
+      }) as never;
+    type Sent = Emit & { workspaceId?: string | null };
+    const all = () =>
+      vi.mocked(emitSideEffects).mock.calls.map((c) => c[0] as Sent);
+
+    await notifyFacetAttached({
+      facet: facet(null),
+      profileSlug: "client",
+      userId: USER,
+      context: { fallbackWorkspaceId: CRM },
+    });
+    await settle();
+    expect(attaches()).toHaveLength(1);
+    expect(attaches()[0]).toMatchObject({
+      workspaceId: CRM,
+      podWideSubject: true,
+    });
+    // The parent refresh is the entity's own update: not flagged.
+    const refresh = all().find((p) => p.subjectType === "entity")!;
+    expect(refresh).toMatchObject({ workspaceId: CRM });
+    expect(refresh).not.toHaveProperty("podWideSubject");
+
+    vi.mocked(emitSideEffects).mockClear();
+    await notifyFacetAttached({
+      facet: facet(CRM),
+      profileSlug: "deal-owner",
+      userId: USER,
+      context: { fallbackWorkspaceId: CRM },
+    });
+    await settle();
+    expect(attaches()).toHaveLength(1);
+    expect(attaches()[0]).toMatchObject({ workspaceId: CRM });
+    expect(attaches()[0]).not.toHaveProperty("podWideSubject");
+  }, 60_000);
+
   // A role MOVED by a merge is not a new role. The announcement still goes
   // out (listeners see the role arrive), marked `origin: "merge"`; the
   // activator a role's `created` compiles to does not fire on it — so merging
