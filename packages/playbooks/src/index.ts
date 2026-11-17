@@ -1431,12 +1431,28 @@ export interface PlaybookStage {
    */
   domain?: string;
   /**
-   * The value of the playbook's `subjectProfile.statusProperty` this stage
-   * CORRESPONDS to. Advancing a run INTO the stage writes it to the run's
-   * subject (governed); the subject ENTERING the value advances an open run on
-   * it to this stage. Absent ⇒ the stage is not tied to the subject lifecycle.
+   * The value of the playbook's `subjectProfile.statusProperty` the subject
+   * holds WHILE this stage is worked (an in-progress status: In Draft,
+   * Review, in_progress). Entering the stage writes it to the run's subject
+   * (governed; a gated stage at its gate's pass); the subject ENTERING the
+   * value advances an open run on it to this stage. Absent ⇒ entering the
+   * stage moves nothing.
    */
   subjectStatus?: string;
+  /**
+   * The value the subject REACHES when this stage's work is APPROVED (a
+   * result status: Scripted, Published, sent, won). Decision D2, 17 Nov 2026.
+   * The approval, in order:
+   *  1. the stage's declared `expectedOutputs` are all delivered (approved,
+   *     attested, answered);
+   *  2. else the NEXT stage's gate passes (the gate approves the work left).
+   * A stage with neither is never written by the engine: the person or the
+   * worker who finishes it moves the subject. Never written on a session's
+   * end (decision 5e377b06). The subject ENTERING the value means the run
+   * stands at the NEXT stage (the last stage: on itself) —
+   * {@link stageForSubjectStatus}. Absent ⇒ approving the stage moves nothing.
+   */
+  onApproved?: string;
   /**
    * Where the run returns when this stage's gate FAILS — a rejected human gate
    * or a check gate that holds. Absent ⇒ today's behaviour (the run pauses).
@@ -1637,29 +1653,88 @@ export function resolveStageRef(
   return byName ? byName.key : null;
 }
 
+/** A stage's declared status value for `field`, trimmed; null when absent. */
+function stageStatusValue(
+  stage: unknown,
+  field: "subjectStatus" | "onApproved"
+): string | null {
+  if (!stage || typeof stage !== "object") return null;
+  const v = (stage as Record<string, unknown>)[field];
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/** A stage's `onApproved` value (trimmed), or null. PURE. */
+export function stageOnApproved(stage: unknown): string | null {
+  return stageStatusValue(stage, "onApproved");
+}
+
 /**
- * The stage a subject status value CORRESPONDS to (`PlaybookStage.subjectStatus`)
- * — the first in declaration order. `null` when no stage covers the value
- * (e.g. a `humanOnlyStatuses` value like "idea").
+ * Who OWNS a subject status value in a stage list, and where a run stands
+ * when its subject holds it (decision D2):
+ *  - `via: "enter"` — a stage's `subjectStatus`: the run stands AT that stage;
+ *  - `via: "reach"` — a stage's `onApproved`: that stage's work is approved,
+ *    so the run stands at the NEXT stage (the last stage: on itself).
+ * First in stage order wins, reading each stage's `subjectStatus` before its
+ * `onApproved` (a stage is entered before it is approved). `null` when no
+ * stage covers the value (e.g. a `humanOnlyStatuses` value like "idea").
+ */
+export interface SubjectStatusOwner {
+  /** The stage that DECLARES the value. */
+  ownerKey: string;
+  via: "enter" | "reach";
+  /** The stage a run on a subject holding the value stands at. */
+  standsAt: string;
+}
+
+export function subjectStatusOwner(
+  stages: readonly unknown[],
+  value: unknown
+): SubjectStatusOwner | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const v = value.trim();
+  const keyed = stages.filter(
+    (s): s is { key: string } =>
+      !!s &&
+      typeof s === "object" &&
+      typeof (s as { key?: unknown }).key === "string"
+  );
+  for (let i = 0; i < keyed.length; i++) {
+    const st = keyed[i]!;
+    if (stageStatusValue(st, "subjectStatus") === v) {
+      return { ownerKey: st.key, via: "enter", standsAt: st.key };
+    }
+    if (stageStatusValue(st, "onApproved") === v) {
+      const next = keyed[i + 1];
+      return {
+        ownerKey: st.key,
+        via: "reach",
+        standsAt: next ? next.key : st.key,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * The stage a run stands at when its subject holds `value` — THE follow's
+ * mapping ({@link subjectStatusOwner}`.standsAt`): the stage whose
+ * `subjectStatus` it is, or the stage AFTER the one whose `onApproved` it is.
+ * `null` when no stage covers the value.
  */
 export function stageForSubjectStatus(
   stages: readonly unknown[],
   value: unknown
 ): string | null {
-  if (typeof value !== "string" || !value.trim()) return null;
-  const v = value.trim();
-  for (const s of stages) {
-    if (!s || typeof s !== "object") continue;
-    const st = s as { key?: unknown; subjectStatus?: unknown };
-    if (
-      typeof st.key === "string" &&
-      typeof st.subjectStatus === "string" &&
-      st.subjectStatus.trim() === v
-    ) {
-      return st.key;
-    }
-  }
-  return null;
+  return subjectStatusOwner(stages, value)?.standsAt ?? null;
+}
+
+/** Does any stage tie the run to its subject's lifecycle (either field)? PURE. */
+export function stagesMapSubjectStatus(stages: readonly unknown[]): boolean {
+  return stages.some(
+    (s) =>
+      stageStatusValue(s, "subjectStatus") !== null ||
+      stageStatusValue(s, "onApproved") !== null
+  );
 }
 
 /**
