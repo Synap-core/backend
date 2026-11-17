@@ -294,29 +294,40 @@ const sessionRecapReactor: Reactor = {
 
 // 8. Connection sync approval — approving a connection's
 // first `import.graph` with "keep syncing" on mints the connection's `auto`
-// governance rule. Hangs off the proposal's TRANSITION into `approved` (the
-// proposal door owes one per move, a pod-wide proposal's too), so no approval
-// door needs to know about sync, and a re-stamp owes nothing. The old
-// `proposal.approved` event the review door still sends is for rules and
-// webhooks; this reactor does not read it, so an approval reaches it once.
-// The payload carries no proposal type, so every approval enqueues; the
-// worker loads the row and no-ops for anything that is not a connection sync.
-// Idempotent (`ensureConnectionAutoRule`), so a redelivered job cannot mint a
-// second rule.
+// governance rule. Hangs off the ONE approved-proposal emit
+// (`emitProposalReviewed`), so no approval door needs to know about sync. The
+// payload carries no proposal type, so every approval enqueues; the worker loads
+// the row and no-ops for anything that is not a connection sync. Idempotent
+// (`ensureConnectionAutoRule`), so a redelivered job cannot mint a second rule.
 const connectionSyncApprovalReactor: Reactor = {
   id: "connection-sync-approval",
   match: (payload) =>
-    payload.subjectType === "proposal" &&
-    payload.action === "transition" &&
-    payload.data?.to === "approved",
+    payload.subjectType === "proposal" && payload.action === "approved",
   async handler(payload, { boss }) {
-    await boss.send(
-      "connection-sync-approval",
+    await enqueueConnectionSyncApproval(
       { proposalId: payload.subjectId, userId: payload.userId },
-      { singletonKey: `connection-sync-approval:${payload.subjectId}` }
+      boss
     );
   },
 };
+
+/**
+ * THE one enqueue for the connection-sync-approval job — used by the reactor
+ * above AND by the approval path for a pod-wide (workspace-less) proposal, which
+ * `emitProposalReviewed` does not fan out. Same job shape + same singletonKey on
+ * both, so a proposal reached by both can never be processed twice concurrently,
+ * and `ensureConnectionAutoRule` is idempotent behind it.
+ */
+export async function enqueueConnectionSyncApproval(
+  input: { proposalId: string; userId: string },
+  boss: Pick<ReturnType<typeof getBoss>, "send"> = getBoss()
+): Promise<void> {
+  await boss.send(
+    "connection-sync-approval",
+    { proposalId: input.proposalId, userId: input.userId },
+    { singletonKey: `connection-sync-approval:${input.proposalId}` }
+  );
+}
 
 // 9. Document passages (recall plan A-W2): a document's create or update
 // rebuilds its recall passages, once the burst of saves is over. Skipped

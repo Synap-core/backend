@@ -74,6 +74,7 @@ export {
 export {
   emitSideEffects,
   fanOutSideEffects,
+  enqueueConnectionSyncApproval,
   enqueueDocumentPassages,
   type SideEffectPayload,
 } from "./side-effects.js";
