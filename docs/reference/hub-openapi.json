@@ -29559,7 +29559,8 @@
                       "dispatched_via",
                       "assigned_to",
                       "serves",
-                      "advances"
+                      "advances",
+                      "orchestrated_by"
                     ]
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },
@@ -44043,7 +44044,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "The work graph: open work, recently settled work, every edge",
-        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list. A pod app (a key holding `session.read` that does not read every subject of the graph) gets the sessions its grant covers and the edges between them; `window.omittedByGrant` counts the sessions it does not cover, and the parts that read past its grant (next move, interactions, waits on an output, PR facts, goals; holder without `agent.read`) are `unavailable` with a reason saying they were withheld.",
+        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. `playbookId` narrows it to the sessions that follow a playbook: run from it, or filed in a goal whose method it is (each window node's `playbookMatch` says which: `session` or `goal`). `subjectEntityId` narrows it to the sessions on one thing (its subject, or a worker targeting it). Each goal carries its method (`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list. A pod app (a key holding `session.read` that does not read every subject of the graph) gets the sessions its grant covers and the edges between them; `window.omittedByGrant` counts the sessions it does not cover, and the parts that read past its grant (next move, interactions, waits on an output, PR facts, goals; holder without `agent.read`) are `unavailable` with a reason saying they were withheld.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -44092,6 +44093,18 @@
             "schema": { "type": "string" },
             "required": false,
             "name": "rootSessionId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "playbookId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "subjectEntityId",
             "in": "query"
           }
         ],
@@ -44144,7 +44157,11 @@
                             "type": "string",
                             "enum": ["owner", "member"]
                           },
-                          "inWindow": { "type": "boolean" }
+                          "inWindow": { "type": "boolean" },
+                          "playbookMatch": {
+                            "type": ["string", "null"],
+                            "enum": ["session", "goal", null]
+                          }
                         },
                         "required": [
                           "id",
@@ -44250,9 +44267,40 @@
                           "id": { "type": "string" },
                           "name": { "type": "string" },
                           "status": { "type": "string" },
-                          "projectId": { "type": "string" }
+                          "projectId": { "type": "string" },
+                          "playbookId": { "type": ["string", "null"] },
+                          "currentStage": { "type": ["string", "null"] },
+                          "stages": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": { "type": "string" },
+                                "name": { "type": "string" },
+                                "category": { "type": ["string", "null"] },
+                                "position": {
+                                  "type": "string",
+                                  "enum": ["done", "active", "not_started"]
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "name",
+                                "category",
+                                "position"
+                              ]
+                            }
+                          }
                         },
-                        "required": ["id", "name", "status", "projectId"]
+                        "required": [
+                          "id",
+                          "name",
+                          "status",
+                          "projectId",
+                          "playbookId",
+                          "currentStage",
+                          "stages"
+                        ]
                       }
                     },
                     "sections": {
@@ -48529,6 +48577,18 @@
               }
             }
           },
+          "202": {
+            "description": "Proposed for review: a hand-off to another agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
           "400": {
             "description": "Bad request",
             "content": {
@@ -50481,6 +50541,102 @@
                     "nextSince",
                     "hasMore"
                   ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/focus-sessions/orchestrate": {
+      "post": {
+        "tags": ["FocusSessions"],
+        "summary": "Start an orchestrator over several running sessions",
+        "description": "Files ONE governed write (focus_session/orchestrate). On approval (or at once for a person): an orchestrator session (goal = the brief, a merged-plan deliverable, the person's plan-approval slot), one `orchestrated_by` link per picked session, each running one paused until the person answers plan-approval, and a handoff note in each room. Same service as tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionIds": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "uuid" },
+                    "minItems": 2,
+                    "maxItems": 12
+                  },
+                  "brief": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "agentId": { "type": "string", "format": "uuid" },
+                  "reasoning": { "type": "string", "maxLength": 1000 }
+                },
+                "required": ["sessionIds", "brief"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Started: { status: 'started', orchestratorSessionId, channelId, children[] }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Proposed for review: { status: 'proposed', orchestratorSessionId, proposalId, reviewUrl }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
                 }
               }
             }

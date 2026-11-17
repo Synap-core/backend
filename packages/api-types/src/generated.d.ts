@@ -9187,7 +9187,19 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * the others it is listed and changes nothing (`services/projects/
  * pillar-health.ts`).
  */
- | "advances";
+ | "advances"
+/**
+ * session --orchestrated_by--> session. The FROM session is coordinated by
+ * the TO session, an orchestrator (founder decision D5, plan b38bc224; design
+ * doc 5fccda9b). Deliberately NOT a second `spawned_from`: every lineage
+ * reader assumes ONE parent per child (`getParentSessionId`, the packet's
+ * parent row, `parentOfGraph`), and the picked sessions already belong to
+ * their wave. Not a dependency either: what the child waits on is its HOLD
+ * (`until: answer:<orchestrator>/plan-approval`), which the person's yes
+ * clears. ONE producer: `services/focus-sessions/start-orchestrator.ts`
+ * (same owner at both ends). The Hub REST links door lists and refuses it.
+ */
+ | "orchestrated_by";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /** The normalized state of an external agent's task (the `status` verb). */
@@ -20178,6 +20190,25 @@ export type HolderSource = {
 } | {
 	from: "roster";
 };
+/**
+ * The process the holder's agent runs in (`session_runners`, see the header):
+ * which harness, which model, which computer, in what state. Each `null` =
+ * its client named none (unknown), never a default.
+ */
+export interface HolderRunner {
+	harness: string | null;
+	model: string | null;
+	provider: SessionRunner["provider"];
+	/** The computer hosting the agent (a `machine` agent user); its name is `agent.computer`. */
+	machineUserId: string | null;
+	/** The host the process named itself on. */
+	processHost: string | null;
+	state: SessionRunner["state"];
+	stateSince: string | null;
+	lastSeenAt: string | null;
+	/** Stamped recently and not ended: it is running now. */
+	live: boolean;
+}
 export interface SessionHolder {
 	/** Whose move: the ball of `waitKind` (`agent` → agent, `me` → person); nobody when none. */
 	kind: "agent" | "nobody" | "person";
@@ -20187,6 +20218,8 @@ export interface SessionHolder {
 	since: string | null;
 	/** The agent on it — for a person, the one that handed it back; `null` = none. */
 	agent: HolderAgent | null;
+	/** Where that agent runs (see the header); `null` = no runner of it was ever seen. */
+	runner: HolderRunner | null;
 	source: HolderSource;
 	/** Nobody only: the session ended, or no agent is on it. */
 	reason?: "ended" | "no_agent";
@@ -25990,12 +26023,25 @@ export interface WorkGraphHold {
 	/** `reviewBy` has passed. */
 	reviewDue: boolean;
 }
+/**
+ * One stage of a goal's method, as `deriveTrackStages` places it against the
+ * goal's `currentStage` — the rule every track surface uses. Only what a map
+ * draws: the stage's brief, tasks, outputs and criteria stay on the goal's
+ * own read (`getTrack`).
+ */
+export type WorkGraphGoalStage = Pick<TrackStage, "category" | "key" | "name" | "position">;
 /** A goal (track) a node is filed into, as the track floor lets the caller see it. */
 export interface WorkGraphGoal {
 	id: string;
 	name: string;
 	status: string;
 	projectId: string;
+	/** The goal's METHOD (`project_tracks.playbook_id`); `null` = it follows none. */
+	playbookId: string | null;
+	/** The stage key the goal is at; `null` = stageless, or not started. */
+	currentStage: string | null;
+	/** The method's stages in order, each placed against `currentStage`; `[]` = stageless. */
+	stages: WorkGraphGoalStage[];
 }
 declare const WORK_GRAPH_EDGE_KINDS: readonly [
 	"blocked_by",
@@ -26065,9 +26111,18 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 	inWindow: boolean;
 	live: SessionActivityLive | null;
 	nextMove: ContinuationNextMove;
+	/**
+	 * With the `playbookId` narrow, how this window node follows it: `session`
+	 * = its own `playbookId` is the playbook, `goal` = only through the method
+	 * of the goal it is filed in; `null` on a far end (far ends are not
+	 * narrowed). ABSENT without the narrow: there is nothing to match.
+	 */
+	playbookMatch?: WorkGraphPlaybookMatch | null;
 	unitFacts: SessionUnitCounts;
 	viewerRole: SessionViewerRole;
 };
+/** How a node follows the graph's `playbookId` narrow (see {@link WorkGraphNode.playbookMatch}). */
+export type WorkGraphPlaybookMatch = "goal" | "session";
 export interface WorkGraph {
 	nodes: WorkGraphNode[];
 	edges: WorkGraphEdge[];
@@ -26275,6 +26330,30 @@ export type ContinueRunResult = {
 	message: string;
 	ok: false;
 	reason: "already_running" | "conflict" | "denied" | "not_found" | "nothing_to_continue" | "person_only";
+};
+export type OrchestratedChildOutcome = {
+	/** `paused`: held on the yes. `already_paused`: keeps its own hold. `moved`: it changed status meanwhile, not held. `ended`: closed since; neither linked nor held. */
+	held: "already_paused" | "ended" | "moved" | "paused";
+	linked: boolean;
+	noteError?: string;
+	/** The note in its room; a failed post is said, never hidden. */
+	noted: boolean;
+	sessionId: string;
+};
+export type StartOrchestratorResult = {
+	channelId: string | null;
+	children: OrchestratedChildOutcome[];
+	orchestratorSessionId: string;
+	status: "started";
+} | {
+	message: string;
+	orchestratorSessionId: string;
+	proposalId: string;
+	proposalType?: string;
+	reviewPath?: string;
+	reviewUrl?: string;
+	status: "proposed";
+	summary?: string;
 };
 export type SessionRecallOutcome = {
 	posted: boolean;
@@ -41756,8 +41835,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				kind?: "all" | "receipt" | "run" | "work" | undefined;
 				lens?: "all" | "default" | "triage" | undefined;
+				playbookId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				rootSessionId?: string | undefined;
+				subjectEntityId?: string | undefined;
 				trackId?: string | undefined;
 				windowHours?: number | undefined;
 				workspaceId?: string | string[] | null | undefined;
@@ -42093,6 +42174,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "spawned";
 				subjectBound?: boolean | undefined;
 			};
+		}>;
+		startOrchestrator: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentId?: string | undefined;
+				brief: string;
+				reasoning?: string | undefined;
+				sessionIds: string[];
+				title?: string | undefined;
+			};
+			meta: object;
+			output: StartOrchestratorResult;
 		}>;
 		structureAgain: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

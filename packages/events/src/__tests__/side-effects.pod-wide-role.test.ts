@@ -54,6 +54,39 @@ describe("automation matcher reactor — pod-wide role attach", () => {
     });
   });
 
+  // « Lead → client » W1: a shared role attached from a space keeps the space
+  // as its lens and tells the matcher the subject is pod-wide, so the
+  // matcher also reaches the other spaces' rules. A space-bound facet's
+  // event carries no flag.
+  it("forwards podWideSubject for a shared role attached from a space, and only then", async () => {
+    await emitSideEffects({
+      subjectType: "entity_facet",
+      action: "attach",
+      subjectId: "facet-1",
+      userId: "user-1",
+      workspaceId: "ws-crm",
+      podWideSubject: true,
+      data: { entityId: "entity-1", facetId: "facet-1", profileSlug: "client" },
+    });
+    await emitSideEffects({
+      subjectType: "entity_facet",
+      action: "attach",
+      subjectId: "facet-2",
+      userId: "user-1",
+      workspaceId: "ws-crm",
+      data: { entityId: "entity-1", facetId: "facet-2", profileSlug: "client" },
+    });
+    const [podWide, spaceBound] = matcherJobs();
+    expect(podWide).toMatchObject({
+      workspaceId: "ws-crm",
+      podWideSubject: true,
+    });
+    // Never inside `data`: `data` feeds the event fingerprint.
+    expect(podWide!.data).not.toHaveProperty("podWideSubject");
+    expect(spaceBound).toMatchObject({ workspaceId: "ws-crm" });
+    expect(spaceBound).not.toHaveProperty("podWideSubject");
+  });
+
   it("still keeps other pod-wide events away from the matcher", async () => {
     for (const [subjectType, action] of [
       ["entity", "create"],

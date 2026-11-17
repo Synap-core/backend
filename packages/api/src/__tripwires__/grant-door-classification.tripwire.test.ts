@@ -404,6 +404,51 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../services/sharing/share-service.js"),
     why: "a share is a governed write",
   },
+  "POST /shares/publish": {
+    via: "publishResource",
+    load: () => import("../services/sharing/publish-service.js"),
+    why: "share.create through checkPermissionOrPropose (an agent's publish is a proposal)",
+  },
+  "POST /shares/unpublish": {
+    via: "unpublishResource",
+    load: () => import("../services/sharing/publish-service.js"),
+    why: "narrowing only, still within the key's grant (grantWriteDenial, share.update in the record's space)",
+  },
+  "POST /shares/publication/revoke": {
+    via: "revokePublication",
+    load: () => import("../services/sharing/publish-service.js"),
+    why: "a permanent revoke within the key's grant (grantWriteDenial, share.delete in the record's space)",
+  },
+  "POST /shares/unshare": {
+    via: "unshareResource",
+    load: () => import("../services/sharing/share-service.js"),
+    why: "narrowing only, still within the key's grant (grantWriteDenial, share.delete)",
+  },
+  "POST /shares/links/:id/revoke": {
+    via: "revokeLink",
+    load: () => import("../services/sharing/share-service.js"),
+    why: "a link revoke within the key's grant (grantWriteDenial, share.delete on the anchor)",
+  },
+  "POST /shares/sites": {
+    via: "configureSite",
+    load: () => import("../services/sharing/site-service.js"),
+    why: "share.create through checkPermissionOrPropose (an agent's configure is a proposal)",
+  },
+  "POST /shares/sites/:id/publish": {
+    via: "publishToSite",
+    load: () => import("../services/sharing/site-service.js"),
+    why: "share.create through checkPermissionOrPropose (an agent's batch is one proposal)",
+  },
+  "POST /shares/sites/:id/unpublish": {
+    via: "unpublishFromSite",
+    load: () => import("../services/sharing/site-service.js"),
+    why: "narrowing only, still within the key's grant (grantWriteDenial, share.update)",
+  },
+  "POST /shares/sites/:id/revoke": {
+    via: "revokeSite",
+    load: () => import("../services/sharing/site-service.js"),
+    why: "a permanent revoke within the key's grant (grantWriteDenial, share.delete)",
+  },
   "POST /shares/sites/:id/charts/publish": {
     via: "publishChartsToSite",
     load: () => import("../services/sharing/site-charts.js"),
@@ -418,6 +463,11 @@ const GATED_ELSEWHERE: Readonly<
     via: "proposeChannelBind",
     load: () => import("../utils/propose-channel-bind.js"),
     why: "binding a channel is proposed through the gate",
+  },
+  "POST /focus-sessions/orchestrate": {
+    via: "startOrchestrator",
+    load: () => import("../services/focus-sessions/start-orchestrator.js"),
+    why: "focus_session.orchestrate through checkPermissionOrPropose (an agent's orchestrator is a proposal; nothing is written before the gate), shared with tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator",
   },
   "POST /focus-sessions/:id/continue": {
     via: "continueStoppedRun",

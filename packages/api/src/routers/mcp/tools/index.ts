@@ -3024,6 +3024,51 @@ export const tools = {
         },
       },
       {
+        name: "synap_start_orchestrator",
+        annotations: {
+          title: "Start an orchestrator",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Start ONE orchestrator over 2 to 12 of your running sessions: a new session (goal = brief) that reads their rooms, writes a merged plan (slot 'merged-plan') and waits on the person's yes (slot 'plan-approval'). Each picked session is linked to it (`orchestrated_by`), paused if running with a hold that the person's answer to 'plan-approval' clears, and gets a handoff note in its room. Governed: an agent gets { status:'proposed', proposalId } (nothing is paused until the person approves); a person { status:'started', orchestratorSessionId, children }. A session that is not yours is not found; one that is not running or paused is refused. Optional agentId (synap_list_agents) hands the orchestrator to that agent on its computer.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionIds: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 2,
+              maxItems: 12,
+              description:
+                "The running (or paused) sessions to coordinate: yours, 2 to 12.",
+            },
+            brief: {
+              type: "string",
+              description:
+                "What the orchestrator is for, one paragraph: its goal, and the note each picked session's room gets.",
+            },
+            title: {
+              type: "string",
+              description:
+                "Optional short name; default 'Orchestrate N sessions'.",
+            },
+            agentId: {
+              type: "string",
+              description:
+                "Optional agent user id (synap_list_agents) that runs the orchestrator; omit to leave it for the person.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why, in the person's words: shown to whoever reviews the proposal.",
+            },
+          },
+          required: ["sessionIds", "brief"],
+        },
+      },
+      {
         name: "synap_rerun_session",
         annotations: {
           title: "Rerun a session",
@@ -3524,52 +3569,62 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "The whole map of YOUR work in one read — read-only. Every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge: `nodes`, flat `edges` (`blocked_by` from waiter to blocker, `spawned_from` child to parent, `waits_on_output`, `triggered`, `updated`), `pullRequests` (each PR a session recorded, with its state), `holds` (what each paused session waits on), `goals` (the goals the sessions serve), `sections` (a read that FAILED is `unavailable`, never an empty list) and `window` (`truncated` + `omitted` when the 500-session ceiling cut). Use it instead of one `synap_get_session` per session to see what waits on what. Pod-wide unless you narrow to a workspace or project; `trackId` narrows it to one goal, `rootSessionId` to one wave.",
+          "The map of YOUR work in one read — read-only: every OPEN session, every session settled in the last `windowHours` (default 72), and the far end of every edge. `nodes`, flat `edges` (`blocked_by` waiter→blocker, `spawned_from` child→parent, `waits_on_output`, `triggered`, `updated`), `pullRequests` (with state), `holds`, `goals` (with their method: `playbookId`, `currentStage`, `stages`), `sections` (a FAILED read is `unavailable`, never empty) and `window` (`truncated` + `omitted` past the 500-session ceiling). Use it instead of one `synap_get_session` per session. Pod-wide unless narrowed by workspace, project, goal, wave, playbook or thing.",
         inputSchema: {
           type: "object",
           properties: {
             windowHours: {
               type: "number",
               default: WORK_GRAPH_DEFAULT_WINDOW_HOURS,
-              description: `Settled sessions from this many hours back, 1–${WORK_GRAPH_MAX_WINDOW_HOURS}. Open sessions are in the graph whatever their age.`,
+              description: `Settled sessions from this many hours back, 1–${WORK_GRAPH_MAX_WINDOW_HOURS}. Open ones are always in.`,
             },
             workspaceId: {
               type: "string",
-              description: "Optional: only sessions in this workspace.",
+              description: "Optional: only this workspace.",
             },
             projectId: {
               type: "string",
-              description: "Optional: only sessions scoped to this project.",
+              description: "Optional: only this project.",
             },
             trackId: {
               type: "string",
               description:
-                "Optional: only the sessions filed in this goal (track). Not with rootSessionId.",
+                "Optional: only one goal's sessions. Not with rootSessionId.",
             },
             rootSessionId: {
               type: "string",
               description:
-                "Optional: only this wave, the session and every session spawned under it. Not with trackId.",
+                "Optional: only one wave, the session and all spawned under it. Not with trackId.",
+            },
+            playbookId: {
+              type: "string",
+              description:
+                "Optional: only sessions following this playbook: run from it, or filed in a goal whose method it is (node `playbookMatch`: session | goal).",
+            },
+            subjectEntityId: {
+              type: "string",
+              description:
+                "Optional: only sessions on this thing (subject, or worker target).",
             },
             kind: {
               type: "string",
               // DERIVED from the ONE vocabulary, as synap_list_sessions.
               enum: [...SESSION_KINDS, "all"],
               description:
-                "Which population is in the window. 'work', 'run', 'receipt', or 'all' (default). Far ends of edges are any kind.",
+                "Population of the window; 'all' (default). Far ends are any kind.",
             },
             lens: {
               type: "string",
               enum: ["default", "triage", "all"],
               description:
-                "'all' (default) = every session. 'default' hides agent drafts not yet accepted by a person; 'triage' = only those.",
+                "'all' (default). 'default' hides agent drafts no person accepted; 'triage' = only those.",
             },
             detail: {
               type: "string",
               enum: ["lean", "full"],
               default: "lean",
               description:
-                "'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, projectId, workspaceId, updatedAt, inWindow and the next move (kind, actor, label). 'full' = the whole list row per node: large.",
+                "'lean' (default) = per node id, title, status, kind, parentSessionId, trackId, trackStage, playbookId, currentStage(Name), playbookMatch, projectId, workspaceId, updatedAt, inWindow, next move. 'full' = the whole row: large.",
             },
           },
           required: [],

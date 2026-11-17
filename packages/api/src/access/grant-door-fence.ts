@@ -1315,6 +1315,7 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_complete_session: WRITE,
     synap_rerun_session: WRITE,
     synap_continue_session: WRITE,
+    synap_start_orchestrator: WRITE,
     // Not read-only only because an agent's read stamps the "Picked up"
     // receipt: it RETURNS the person's answers and the session's changes. The
     // same door as its REST twin, GET /focus-sessions/:id/answers/wait

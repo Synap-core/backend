@@ -60,6 +60,19 @@
  * list's `waveRootId` narrow). Far ends
  * are still fetched, so a wave blocked by another goal's session still says so.
  *
+ * ── ONE PLAYBOOK OR ONE THING ──────────────────────────────────────────────
+ * Two more narrows of the WINDOW, both clauses of the list's ONE WHERE (never
+ * a filter here), combinable with `focus` and with each other:
+ *   - `playbookId`: the sessions that FOLLOW that playbook, run from it OR
+ *     filed in a goal whose method it is (`sessionFollowsPlaybookWhere`,
+ *     founder decision D2). Each window node then says which way it matched
+ *     (`playbookMatch`: `session` = its own playbook, `goal` = only through
+ *     its goal's method), so a board places the first by the session's
+ *     `currentStage` and the second by its `trackStage` on the goal's stages.
+ *   - `subjectEntityId`: the sessions ON that thing, its subject or a worker
+ *     targeting it (`sessionSubjectWhere`, the list's `subject` narrow).
+ * Far ends are not narrowed: an edge still says what it points at.
+ *
  * ── WHAT THE SESSIONS POINT AT ──────────────────────────────────────────────
  * Besides sessions, the read carries three kinds of node, each derived by the
  * rule that already owns it (`work-graph-nodes.ts`), never here:
@@ -121,6 +134,8 @@ import {
   attachSessionHolder,
   type SessionHolderSection,
 } from "./session-holder.js";
+
+import { resolveSessionSubject } from "./session-subject.js";
 
 import {
   WORK_GRAPH_CEILING,
@@ -231,7 +246,17 @@ export type WorkGraphNode = Awaited<
   holder: SessionHolderSection;
   viewerRole: SessionViewerRole;
   inWindow: boolean;
+  /**
+   * With the `playbookId` narrow, how this window node follows it: `session`
+   * = its own `playbookId` is the playbook, `goal` = only through the method
+   * of the goal it is filed in; `null` on a far end (far ends are not
+   * narrowed). ABSENT without the narrow: there is nothing to match.
+   */
+  playbookMatch?: WorkGraphPlaybookMatch | null;
 };
+
+/** How a node follows the graph's `playbookId` narrow (see {@link WorkGraphNode.playbookMatch}). */
+export type WorkGraphPlaybookMatch = "session" | "goal";
 
 export interface WorkGraph {
   nodes: WorkGraphNode[];
@@ -268,6 +293,13 @@ export interface BuildWorkGraphInput {
   boundWorkspaceId?: string;
   /** Narrow the window to one goal or one wave (see the header). */
   focus?: WorkGraphFocus;
+  /**
+   * Narrow the window to the sessions that follow this playbook: run from it,
+   * or filed in a goal whose method it is (see the header).
+   */
+  playbookId?: string;
+  /** Narrow the window to the sessions on this thing (see the header). */
+  subjectEntityId?: string;
   /**
    * What the calling key's grant lets the graph draw (`workGraphReach`).
    * Absent = whole (a person, or a key that reads every subject). Narrowed:
@@ -324,6 +356,14 @@ export async function buildWorkGraph(
     ...(focus && "trackId" in focus ? { trackId: focus.trackId } : {}),
     ...(focus && "rootSessionId" in focus
       ? { waveRootId: focus.rootSessionId }
+      : {}),
+    ...(input.playbookId ? { followsPlaybookId: input.playbookId } : {}),
+    ...(input.subjectEntityId
+      ? {
+          subject: await resolveSessionSubject({
+            entityIds: [input.subjectEntityId],
+          }),
+        }
       : {}),
   };
   const windowRows = await queryUserSessions(
@@ -511,9 +551,22 @@ export async function buildWorkGraph(
           // A bound key's PR facts stay in its workspace, as the PR nodes' do.
           { userId, roster, lens: input.boundWorkspaceId }
         );
-  const nodes: WorkGraphNode[] = withHolder.map((n) =>
-    withViewerRole(n, userId)
-  );
+  // A window node passed the WHERE, so it follows the playbook one way or
+  // the other: its own playbook first, else its goal's method. Without the
+  // narrow there is nothing to match, and the field is left out.
+  const playbookId = input.playbookId;
+  const nodes: WorkGraphNode[] = withHolder.map((n) => ({
+    ...withViewerRole(n, userId),
+    ...(playbookId
+      ? {
+          playbookMatch: !n.inWindow
+            ? null
+            : n.playbookId === playbookId
+              ? ("session" as const)
+              : ("goal" as const),
+        }
+      : {}),
+  }));
 
   // Interactions are derived among the nodes (both ends on the read), from
   // events and automation runs: withheld from a narrowed key.

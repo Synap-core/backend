@@ -31,6 +31,7 @@ import { z } from "@hono/zod-openapi";
 import { and, db, eq, skills } from "@synap/database";
 
 import { skillsRouter } from "../../skills.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { buildProviderRequest } from "../../../services/capabilities/execute-provider-verb.js";
 import { runSkill } from "../../../services/skills/run-skill.js";
 import { visibleSkillsAnyWorkspaceWhere } from "../../../services/skills/visibility.js";
@@ -461,6 +462,22 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
     const approved = parsed.data.approved;
 
     try {
+      // The key's grant bounds the act (T13: an app acting as the person never
+      // holds a review verb): turning a verb on or off is the `skill.approve`
+      // gate verb in the skill's own space. A pod-wide skill has none, so only
+      // a grant pinned to no space reaches it. No grant = a signed-in person.
+      const [target] = await db
+        .select({ workspaceId: skills.workspaceId })
+        .from(skills)
+        .where(eq(skills.id, id))
+        .limit(1);
+      const denial = await grantWriteDenial({
+        subjectType: "skill",
+        action: "approve",
+        workspaceId: target?.workspaceId ?? null,
+      });
+      if (denial) return c.json({ error: denial }, 403);
+
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 

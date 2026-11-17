@@ -10,6 +10,7 @@
 
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { projectSessionRecall } from "@synap-core/types/focus-sessions";
+import { readTrackStage } from "@synap-core/types/units";
 import { readRunCost } from "../../../services/runs/run-cost.js";
 import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
@@ -1072,6 +1073,25 @@ export const sessionHandlers: McpHandlerMap = {
       })
     );
   },
+  /**
+   * START AN ORCHESTRATOR (D5) — the same service and input schema as tRPC
+   * `focusSessions.startOrchestrator` and Hub `POST /focus-sessions/orchestrate`.
+   */
+  synap_start_orchestrator: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const { startOrchestrator } =
+      await import("../../../services/focus-sessions/start-orchestrator.js");
+    return ok(
+      await startOrchestrator({
+        userId,
+        agentUserId: agentUserId ?? null,
+        input: args,
+      })
+    );
+  },
   synap_get_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
@@ -1369,9 +1389,15 @@ export const sessionHandlers: McpHandlerMap = {
     if (trackIdArg && rootArg) {
       return ok({ error: "Pass trackId or rootSessionId, not both." });
     }
+    const playbookIdArg =
+      typeof args.playbookId === "string" ? args.playbookId : "";
+    const subjectEntityIdArg =
+      typeof args.subjectEntityId === "string" ? args.subjectEntityId : "";
     for (const [name, value] of [
       ["trackId", trackIdArg],
       ["rootSessionId", rootArg],
+      ["playbookId", playbookIdArg],
+      ["subjectEntityId", subjectEntityIdArg],
     ] as const) {
       if (value && !isUuid(value)) {
         return ok({ error: `${name} is not a valid id: ${value}` });
@@ -1411,6 +1437,8 @@ export const sessionHandlers: McpHandlerMap = {
         : rootArg
           ? { rootSessionId: rootArg }
           : undefined,
+      playbookId: playbookIdArg || undefined,
+      subjectEntityId: subjectEntityIdArg || undefined,
     });
     return ok({
       // `lean` (default): enough to draw and to choose — a full node carries
@@ -1425,6 +1453,15 @@ export const sessionHandlers: McpHandlerMap = {
               kind: n.kind,
               parentSessionId: n.parentSessionId,
               trackId: n.trackId,
+              trackStage: n.trackStage,
+              playbookId: n.playbookId,
+              currentStage: n.currentStage,
+              // The stage's own name, from the session's stage snapshot (the
+              // stage reader every track surface uses); null = no stage.
+              currentStageName: n.currentStage
+                ? (readTrackStage(n.stages, n.currentStage)?.name ?? null)
+                : null,
+              playbookMatch: n.playbookMatch ?? null,
               projectId: n.projectId,
               workspaceId: n.workspaceId,
               updatedAt: n.updatedAt,
