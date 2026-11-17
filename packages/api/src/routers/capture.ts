@@ -4105,7 +4105,6 @@ const captureBaseRouter = router({
           await createAutoApprovedProposal({
             id: captureReceiptId,
             userId,
-            reviewedBy: userId,
             workspaceId: workspaceId ?? null,
             // `createdBy` stays the HUMAN explicitly: the helper falls back
             // `createdBy ?? agentUserId ?? userId`, and every consumer (the
