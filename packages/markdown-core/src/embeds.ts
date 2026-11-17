@@ -22,11 +22,12 @@ import type { RootContent } from "mdast";
 import type { Diagnostic } from "./diagnostics.js";
 import { fenceColonsFor, scanContainers } from "./scan.js";
 
-/** The reference embeds (frames — `FRAME_DIRECTIVES` — carry content, not a reference). */
+/** The reference embeds (frames — `FRAME_DIRECTIVES` — carry content, not a reference). `synap-ask` is a session's live question. */
 export const EMBED_DIRECTIVES = [
   "synap-entity",
   "synap-view",
   "synap-cell",
+  "synap-ask",
 ] as const;
 export type EmbedDirective = (typeof EMBED_DIRECTIVES)[number];
 
@@ -234,7 +235,7 @@ export function readEmbed(node: DirectiveLike): Embed | null {
     diagnostics.push({
       code: "missing-ref",
       severity: "error",
-      message: `\`:::${directive}\` names nothing to show: it needs ${REQUIRED_REF[directive as EmbedDirective]?.join(" or ") ?? "a reference attribute"}.`,
+      message: `\`:::${directive}\` names nothing to show: it needs ${requiredWords(directive)}.`,
       line,
       directive,
     });
@@ -256,17 +257,39 @@ export function readEmbed(node: DirectiveLike): Embed | null {
   };
 }
 
-/** The attributes, any one of which makes an embed resolvable. */
-export const REQUIRED_REF: Record<EmbedDirective, readonly string[]> = {
-  "synap-entity": ["id"],
-  "synap-view": ["viewId", "data-view-id"],
-  "synap-cell": ["instanceId", "cellKey", "data-instance-id", "data-cell-key"],
+/**
+ * What makes an embed resolvable: any one of `anyOf`, or every one of `allOf`
+ * (a question is addressed by its session AND its slot: either alone names
+ * nothing).
+ */
+export const REQUIRED_REF: Record<
+  EmbedDirective,
+  { anyOf: readonly string[] } | { allOf: readonly string[] }
+> = {
+  "synap-entity": { anyOf: ["id"] },
+  "synap-view": { anyOf: ["viewId", "data-view-id"] },
+  "synap-cell": {
+    anyOf: ["instanceId", "cellKey", "data-instance-id", "data-cell-key"],
+  },
+  "synap-ask": { allOf: ["sessionId", "slot"] },
 };
 
 function hasReference(directive: string, ref: Record<string, string>): boolean {
   const required = REQUIRED_REF[directive as EmbedDirective];
   if (!required) return true; // an unknown synap-* directive: nothing to require
-  return required.some((key) => !!ref[key]?.trim());
+  const present = (key: string) => !!ref[key]?.trim();
+  return "allOf" in required
+    ? required.allOf.every(present)
+    : required.anyOf.some(present);
+}
+
+/** The attributes a missing reference names, joined as the rule reads them. */
+function requiredWords(directive: string): string {
+  const required = REQUIRED_REF[directive as EmbedDirective];
+  if (!required) return "a reference attribute";
+  return "allOf" in required
+    ? required.allOf.join(" and ")
+    : required.anyOf.join(" or ");
 }
 
 // ─── The writer ─────────────────────────────────────────────────────────────
@@ -274,7 +297,7 @@ function hasReference(directive: string, ref: Record<string, string>): boolean {
 export class EmbedSerializeError extends Error {}
 
 export interface EmbedInput {
-  /** `synap-cell` | `synap-view` | `synap-entity` (any `synap-*` except a frame). */
+  /** `synap-cell` | `synap-view` | `synap-entity` | `synap-ask` (any `synap-*` except a frame). */
   directive: string;
   /** Reference-only attributes, written in this order. */
   ref: Record<string, string>;

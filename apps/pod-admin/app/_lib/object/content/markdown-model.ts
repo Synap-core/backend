@@ -239,7 +239,7 @@ export type EmbedEntityRead =
   | { state: "hidden" }
   | { state: "failed"; retry?: () => void };
 
-const HIDDEN_CODES: ReadonlySet<string> = new Set([
+export const HIDDEN_CODES: ReadonlySet<string> = new Set([
   "NOT_FOUND",
   "FORBIDDEN",
   "BAD_REQUEST",

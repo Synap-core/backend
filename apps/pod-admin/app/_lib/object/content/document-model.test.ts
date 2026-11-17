@@ -173,6 +173,21 @@ describe("isLivingDocument — the app is the first door (Q8)", () => {
     }
   });
 
+  it("a page whose only embed is a question is NOT living: its card answers here", () => {
+    const ask =
+      ':::synap-ask{sessionId="00000000-0000-4000-8000-000000000001" slot="ship-it"}\nWhich do you prefer?\n:::';
+    expect(isLivingDocument(md(`Intro\n\n${ask}`))).toBe(false);
+    // …but a question beside a live cell or view is still living.
+    expect(isLivingDocument(md(`${ask}\n\n${CELL}`))).toBe(true);
+    expect(
+      isLivingDocument(
+        md(
+          `${ask}\n\n:::synap-view{viewId="00000000-0000-4000-8000-000000000002"}\n:::`
+        )
+      )
+    ).toBe(true);
+  });
+
   it("a stored scope or a bound refresher makes it living with no embed", () => {
     const base = md("Plain words.");
     expect(

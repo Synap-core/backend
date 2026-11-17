@@ -85,6 +85,12 @@ export interface AskSlot {
   sessionId: string;
   /** The DECLARED label — the key every slot door matches on. */
   label: string;
+  /**
+   * The slot's own key, when the reader resolved the slot by key (an embed):
+   * the doors take it where they take the label (`slotRefOf`), so a label two
+   * slots share cannot send the answer to the other one.
+   */
+  slotKey?: string;
   sessionTitle: string | null;
   /** Null = no typed ask: a free-text answer, "I did this" or "Not mine". */
   ask: Ask | null;
@@ -560,6 +566,24 @@ function valueOf(
  * fingerprint of the ask the reader SAW, so an ask the agent changed
  * underneath is refused as stale instead of answered blind.
  */
+/** What every slot door is sent to name the slot: its key when held, else its label. */
+export function slotRefOf(slot: Pick<AskSlot, "label" | "slotKey">): string {
+  return slot.slotKey ?? slot.label;
+}
+
+/**
+ * A door's refusal quotes the slot by what it was sent (`"ship-it"`). When the
+ * slot was addressed by its key, say its label, which is what the reader knows.
+ */
+export function withSlotLabel(
+  message: string,
+  slot: Pick<AskSlot, "label" | "slotKey">
+): string {
+  return slot.slotKey && slot.slotKey !== slot.label
+    ? message.split(`"${slot.slotKey}"`).join(`"${slot.label}"`)
+    : message;
+}
+
 export function answerCall(slot: AskSlot, draft: AskDraft): AnswerCallResult {
   const built = valueOf(slot, draft);
   if (!built.ok) return built;
@@ -569,7 +593,7 @@ export function answerCall(slot: AskSlot, draft: AskDraft): AnswerCallResult {
     ok: true,
     call: {
       sessionId: slot.sessionId,
-      expectedLabel: slot.label,
+      expectedLabel: slotRefOf(slot),
       value: checked.value,
       ...(built.text ? { text: built.text } : {}),
       askFingerprint: askFingerprint(slot.ask),
@@ -580,7 +604,7 @@ export function answerCall(slot: AskSlot, draft: AskDraft): AnswerCallResult {
 export function slotCall(slot: AskSlot): SlotCall {
   return {
     sessionId: slot.sessionId,
-    expectedLabel: slot.label,
+    expectedLabel: slotRefOf(slot),
     askFingerprint: askFingerprint(slot.ask),
   };
 }
@@ -626,7 +650,7 @@ export type RelayCall =
   | { sessionId: string; expectedLabel: string; rejectRelayed: true };
 
 export function relayCall(slot: AskSlot, act: "confirm" | "reject"): RelayCall {
-  const at = { sessionId: slot.sessionId, expectedLabel: slot.label };
+  const at = { sessionId: slot.sessionId, expectedLabel: slotRefOf(slot) };
   return act === "confirm"
     ? { ...at, confirmRelayed: true }
     : { ...at, rejectRelayed: true };
