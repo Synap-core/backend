@@ -7,6 +7,9 @@
  * whether a value may be added, are the pod's answers.
  */
 
+import { serverErrorHref } from "../../../lib/console-nav";
+import type { ConsoleRole } from "../../../lib/route-policy";
+
 /** One field of `proposals.repairOptions`, as the pod returns it. */
 export interface RepairOptionsField {
   key: string;
@@ -84,4 +87,25 @@ export function repairRows(fields: RepairOptionsField[]): RepairRow[] {
 /** The act for picking `value` from a row's choices. */
 export function pickAct(row: RepairRow, value: string): RepairAct {
   return { set: { [row.key]: value } };
+}
+
+/**
+ * Where a pod admin reads the exact cause of this failure: the server error
+ * the pod recorded for it (`data.failure.errorId`, plan 8032a127 D5), or null.
+ * Only for an admin: the cause behind it is read only with pod-admin rights
+ * (`system.getServerFault`), so a member would be shown a door that 403s.
+ */
+export function failureCauseHref(
+  data: unknown,
+  role: ConsoleRole
+): string | null {
+  if (role !== "admin") return null;
+  const failure = (data as { failure?: unknown } | null | undefined)?.failure;
+  const errorId =
+    failure && typeof failure === "object"
+      ? (failure as { errorId?: unknown }).errorId
+      : undefined;
+  return typeof errorId === "string" && errorId
+    ? serverErrorHref(errorId)
+    : null;
 }

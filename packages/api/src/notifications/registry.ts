@@ -646,6 +646,45 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
+    /**
+     * An approval failed with nobody watching (plan 8032a127 D6): an agent's
+     * auto-applied receipt whose materialization threw, or an approval the
+     * background job applied after the request returned. A person who clicked
+     * Approve and read the failure in their toast gets no row. Producer:
+     * `notifyUnseenApprovalFailure` (`services/proposals/unseen-approval-failure.ts`),
+     * to the proposal's human owner. One open row per proposal (its groupKey
+     * is the proposal); every door that ends or approves the proposal settles
+     * it (`markProposalNotificationsActioned`, sourceType `proposal`). Like
+     * `proposal.created`, needs-you counts the proposal itself, never this row.
+     * Tokens: `named` (yes | no) + `name`, the proposal's display name for
+     * the owner; `reason` (yes | no) + `sentence`, the safe classified sentence.
+     */
+    type: "proposal.approval_failed",
+    category: "governance",
+    label: "Approval couldn’t apply",
+    icon: "triangle-alert",
+    priority: "high",
+    messageSyntax: "icu",
+    titleTemplate:
+      "{named, select, yes {Couldn’t apply: {name}} other {A change couldn’t apply}}",
+    bodyTemplate:
+      "{reason, select, yes {{sentence}} other {It failed while nobody was watching.}} Open it to retry, repair or dismiss it.",
+    // In the bell. A phone push needs a `PUSH_TYPE_RULES` entry
+    // (`@synap-core/types/push`): not decided yet.
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "review",
+        label: "Review",
+        variant: "primary",
+        // `sourceId` is the proposalId.
+        handler: { type: "navigate-object", kind: "proposal" },
+      },
+    ],
+  },
+  {
     // Proactive twin of the approve-time preflight: a pending proposal whose
     // target workspace the owner can no longer reach will FAIL on approve. Surface
     // it before they try. Hygiene, not blocking → `normal` (reserve high/urgent for

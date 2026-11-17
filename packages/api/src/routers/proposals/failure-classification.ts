@@ -88,6 +88,12 @@ export interface ProposalFailureMeta {
    * (`utils/kind-missing.ts`). Names and ids only, never raw error text.
    */
   kindMissing?: KindMissingDetail;
+  /**
+   * The `server_faults` row that keeps this failure's exact cause (error and
+   * stack, redacted) for the pod's owner (`recordProposalFault`, plan 8032a127
+   * D5). An opaque id: the cause behind it is read only with pod-admin rights.
+   */
+  errorId?: string;
 }
 
 /** A record that already exists — a door, never a sentence. */
@@ -669,5 +675,6 @@ export function failureRecord(
       ? { kindMissing: meta.kindMissing }
       : {}),
     ...(meta.detail !== undefined ? { detail: meta.detail } : {}),
+    ...(meta.errorId !== undefined ? { errorId: meta.errorId } : {}),
   };
 }

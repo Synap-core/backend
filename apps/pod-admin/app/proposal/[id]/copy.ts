@@ -69,6 +69,7 @@ export const en = {
   "repair.approved": "Repaired and approved",
   "repair.approveFailed": "Repaired, but couldn’t approve",
   "repair.failed": "Couldn’t repair this request",
+  "repair.cause": "Open the exact cause",
   "stopped.filed":
     "{filed} of {total, plural, one {# item} other {# items}} filed",
   "stopped.couldNot": "{n} could not be filed",
@@ -169,6 +170,7 @@ export const fr: Catalog<typeof en> = {
   "repair.approved": "Corrigée et approuvée",
   "repair.approveFailed": "Corrigée, mais impossible de l’approuver",
   "repair.failed": "Impossible de corriger cette demande",
+  "repair.cause": "Ouvrir la cause exacte",
   "stopped.filed":
     "{filed} sur {total, plural, one {# élément classé} other {# éléments classés}}",
   "stopped.couldNot":

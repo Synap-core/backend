@@ -20,6 +20,10 @@
  * filed records as links, the item that failed with its reason (a missing
  * kind names the space and where the kind exists), and what was never tried.
  * Approve and Reject are unchanged.
+ *
+ * For a pod admin, a link to the exact cause the pod kept for this failure
+ * (`data.failure.errorId` → its server error page): a diagnostic door, the
+ * cause itself is never drawn here.
  */
 
 import { addToast, Button } from "@heroui/react";
@@ -36,7 +40,9 @@ import {
   type StoppedGraphReport,
   type StoppedItem,
 } from "./stopped-graph-model";
+import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 import {
+  failureCauseHref,
   pickAct,
   repairRows,
   type RepairAct,
@@ -224,6 +230,9 @@ export function FailedApproval({
   graph?: unknown;
 }) {
   const stopped = stoppedGraphReport({ data, graph });
+  // The exact cause, kept for the pod's owner and admins (plan 8032a127 D5).
+  const role = useConsoleRole();
+  const causeHref = failureCauseHref(data, role);
   const utils = trpc.useUtils();
   const t = proposalPageT();
   const options = trpc.proposals.repairOptions.useQuery({ proposalId });
@@ -274,6 +283,15 @@ export function FailedApproval({
         />
         <span>{reason ?? t("repair.default")}</span>
       </p>
+      {causeHref && (
+        <a
+          href={causeHref}
+          data-failure-cause=""
+          className="self-start text-[12px] text-foreground/65 underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground/60"
+        >
+          {t("repair.cause")}
+        </a>
+      )}
       {stopped && <StoppedGraph report={stopped} />}
       {options.isError ? (
         <div className="flex items-center gap-2 text-[12px] text-foreground/65">

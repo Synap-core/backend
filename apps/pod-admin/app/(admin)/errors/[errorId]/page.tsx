@@ -89,13 +89,24 @@ export default function ServerErrorPage() {
       { label: t("fact.request"), value: faultRequest(fault), mono: true },
       {
         label: t("fact.door"),
-        value: fault.door === "trpc" ? t("door.trpc") : t("door.rest"),
+        value:
+          fault.door === "trpc"
+            ? t("door.trpc")
+            : fault.door === "proposal"
+              ? t("door.proposal")
+              : t("door.rest"),
       },
-      {
-        label: t("fact.caller"),
-        value: fault.userId ?? t("caller.none"),
-        mono: Boolean(fault.userId),
-      },
+      // An approval's fault with no caller recorded is not "before sign-in":
+      // its proposal (the Request) says whose it was.
+      ...(fault.userId || fault.door !== "proposal"
+        ? [
+            {
+              label: t("fact.caller"),
+              value: fault.userId ?? t("caller.none"),
+              mono: Boolean(fault.userId),
+            },
+          ]
+        : []),
       ...(fault.agentUserId
         ? [{ label: t("fact.agent"), value: fault.agentUserId, mono: true }]
         : []),
