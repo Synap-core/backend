@@ -22,6 +22,11 @@ const h = vi.hoisted(() => ({
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   db: {
+    // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
     select: () => ({ from: () => ({ where: async () => [] }) }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),
   },

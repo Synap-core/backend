@@ -122,6 +122,7 @@ import {
   messages,
   apiKeys,
   sessionEvaluations,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import {
   secrets,
@@ -236,6 +237,7 @@ const SECRET = "sk_live_DO_NOT_STORE_123";
 describe("param / criterion / provide / room question on the ONE answer door", () => {
   beforeAll(async () => {
     for (const t of [
+      lifecycleTransitionOutbox,
       focusSessions,
       notifications,
       notificationPreferences,

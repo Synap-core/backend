@@ -184,6 +184,7 @@ import {
   findRedeemableGrant,
   resolveVaultSecret,
   VaultGrantError,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import {
   secrets,
@@ -429,6 +430,7 @@ const slotOf = async (sessionId: string) =>
 describe("provide asks — the server doors", () => {
   beforeAll(async () => {
     for (const t of [
+      lifecycleTransitionOutbox,
       focusSessions,
       notifications,
       notificationPreferences,

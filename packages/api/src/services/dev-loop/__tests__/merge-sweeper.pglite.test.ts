@@ -111,7 +111,7 @@ vi.mock("../../../lib/event-helpers.js", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions } from "@synap/database";
+import { focusSessions, lifecycleTransitionOutbox } from "@synap/database";
 import { sweepMergedPullRequest } from "../merge-sweeper.js";
 import { resolvePullRequestSessions } from "../pr-session-resolver.js";
 import { runDevLoopObservation } from "../run-observation.js";
@@ -193,6 +193,8 @@ const job = (
 
 beforeAll(async () => {
   await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
+  // The slot doors owe their transition (reactions W1).
+  await h.client!.exec(ddlFor(lifecycleTransitionOutbox as unknown as PgTable));
 }, 120_000);
 afterAll(async () => {
   await h.client?.close();

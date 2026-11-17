@@ -114,6 +114,7 @@ import {
   proposals,
   messages,
   apiKeys,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { askFingerprint, type Ask } from "@synap-core/types/ask";
 import { PUSH_DAILY_CAP, type PushQuickAnswer } from "@synap-core/types/push";
@@ -210,6 +211,7 @@ const rowsFor = (sourceId: string) =>
 describe("W8 — a push is earned", () => {
   beforeAll(async () => {
     for (const t of [
+      lifecycleTransitionOutbox,
       focusSessions,
       notifications,
       notificationPreferences,

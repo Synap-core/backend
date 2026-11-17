@@ -189,6 +189,7 @@ import {
   resolveProfileForApply,
   podMembers,
   projectMembers,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import {
   proposeProfileRetire,
@@ -368,6 +369,7 @@ async function approve(proposalId: string, approver: string) {
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     proposals,
     profiles,
     entities,

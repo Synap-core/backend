@@ -88,6 +88,7 @@ import {
   links,
   playbooks,
   type db as DatabaseHandle,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { createFocusSession } from "../create-session.js";
 import { registerFocusSessionExecutors } from "../../../routers/proposals/executors/focus-session.js";
@@ -190,7 +191,13 @@ async function approve(opts: {
 
 describe("session dedup — one open session per goal + scope", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, proposals, links, playbooks]) {
+    for (const t of [
+      lifecycleTransitionOutbox,
+      focusSessions,
+      proposals,
+      links,
+      playbooks,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
     await h.client!.exec(

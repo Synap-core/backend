@@ -162,6 +162,7 @@ import {
   tools,
   playbookRuns,
   sessionStageRuns,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
 import { type RunTurnsState } from "../run-turn-end.js";
@@ -341,6 +342,7 @@ const questions = async (channelId: string) =>
 describe("the pod raises a stage's ask at the stage's end; runs never ask", () => {
   beforeAll(async () => {
     for (const t of [
+      lifecycleTransitionOutbox,
       focusSessions,
       notifications,
       notificationPreferences,
