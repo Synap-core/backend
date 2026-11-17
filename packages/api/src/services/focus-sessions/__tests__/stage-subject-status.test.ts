@@ -610,7 +610,10 @@ describe("REACHED ON APPROVAL (decision D2): a stage's onApproved", () => {
     },
   ];
   beforeEach(() => {
-    h.proc = { ...h.proc!, stages: PRODUCE };
+    h.proc = {
+      ...h.proc!,
+      stages: [...PRODUCE] as unknown as Array<Record<string, unknown>>,
+    };
     h.entity = {
       properties: { "post-status": "Briefed" },
       workspaceId: "ws-1",
