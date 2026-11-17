@@ -53,14 +53,47 @@ export interface ActiveSecretGrant extends VaultSecretGrantResult {
 }
 
 /**
- * THE active grants identical in principal + workspace on these secrets, by
- * secret id: not revoked, not expired (in SQL), and, with `scope`, only of
- * that scope. Where several qualify, the OLDEST is the one (`createdAt`, then
- * id): the ONE derivation the provide sheet's "already can read it"
- * (`standingGrantsFor`), the reuse of a hand-over and its Take back all name,
- * so the sheet never names one grant while the answer reuses another (review
- * a089b624 S6). With `scope`, a caller that reuses only a permanent grant
- * finds it even when a shorter one for the same agent sits beside it.
+ * THE active grant predicate: identical in principal + workspace, on these
+ * secrets, not revoked, not expired (in SQL), and, with `scope`, only of that
+ * scope. With its ordering ({@link activeSecretGrantOrder}) it is the ONE
+ * derivation of "the grant the agent already holds": the provide sheet's
+ * "already can read it" (`standingGrantsFor`), the reuse of a hand-over and
+ * its Take back all name the same grant, never one each (review a089b624
+ * S6). With `scope`, a caller that reuses only a permanent grant finds it
+ * even when a shorter one for the same agent sits beside it.
+ */
+function activeSecretGrantWhere(
+  secretIds: readonly string[],
+  grantedTo: string | null,
+  workspaceId: string | null,
+  scope: VaultSecretGrantScope | undefined
+) {
+  return and(
+    eq(vaultGrants.grantableType, "secret"),
+    inArray(vaultGrants.grantableId, [...secretIds]),
+    grantedTo
+      ? eq(vaultGrants.grantedTo, grantedTo)
+      : isNull(vaultGrants.grantedTo),
+    workspaceId
+      ? eq(vaultGrants.workspaceId, workspaceId)
+      : isNull(vaultGrants.workspaceId),
+    isNull(vaultGrants.revokedAt),
+    or(
+      isNull(vaultGrants.expiresAt),
+      gt(vaultGrants.expiresAt, drizzleSql`now()`)
+    ),
+    scope ? eq(vaultGrants.scope, scope) : undefined
+  );
+}
+
+/** Where several grants qualify, the OLDEST is the one (`createdAt`, then id). */
+function activeSecretGrantOrder() {
+  return [asc(vaultGrants.createdAt), asc(vaultGrants.id)];
+}
+
+/**
+ * The active grant on each of these secrets, by secret id: the batch form of
+ * {@link findActiveSecretGrant}, under the same predicate and ordering.
  */
 export async function findActiveSecretGrants(
   secretIds: readonly string[],
@@ -80,24 +113,9 @@ export async function findActiveSecretGrants(
     })
     .from(vaultGrants)
     .where(
-      and(
-        eq(vaultGrants.grantableType, "secret"),
-        inArray(vaultGrants.grantableId, [...secretIds]),
-        grantedTo
-          ? eq(vaultGrants.grantedTo, grantedTo)
-          : isNull(vaultGrants.grantedTo),
-        workspaceId
-          ? eq(vaultGrants.workspaceId, workspaceId)
-          : isNull(vaultGrants.workspaceId),
-        isNull(vaultGrants.revokedAt),
-        or(
-          isNull(vaultGrants.expiresAt),
-          gt(vaultGrants.expiresAt, drizzleSql`now()`)
-        ),
-        opts?.scope ? eq(vaultGrants.scope, opts.scope) : undefined
-      )
+      activeSecretGrantWhere(secretIds, grantedTo, workspaceId, opts?.scope)
     )
-    .orderBy(asc(vaultGrants.createdAt), asc(vaultGrants.id));
+    .orderBy(...activeSecretGrantOrder());
   for (const r of rows) {
     if (out.has(r.secretId)) continue;
     out.set(r.secretId, {
@@ -111,21 +129,28 @@ export async function findActiveSecretGrants(
   return out;
 }
 
-/** The active grant on ONE secret ({@link findActiveSecretGrants}), if any. */
+/** The active grant on ONE secret, if any (the predicate and ordering above). */
 export async function findActiveSecretGrant(
   secretId: string,
   grantedTo: string | null,
   workspaceId: string | null,
   opts?: { scope?: VaultSecretGrantScope }
 ): Promise<VaultSecretGrantResult | null> {
-  const found = (
-    await findActiveSecretGrants([secretId], grantedTo, workspaceId, opts)
-  ).get(secretId);
-  if (!found) return null;
+  const existing = await db.query.vaultGrants.findFirst({
+    where: activeSecretGrantWhere(
+      [secretId],
+      grantedTo,
+      workspaceId,
+      opts?.scope
+    ),
+    orderBy: activeSecretGrantOrder(),
+    columns: { id: true, scope: true, expiresAt: true },
+  });
+  if (!existing) return null;
   return {
-    grantId: found.grantId,
-    scope: found.scope,
-    expiresAt: found.expiresAt,
+    grantId: existing.id,
+    scope: existing.scope ?? "permanent",
+    expiresAt: existing.expiresAt ? existing.expiresAt.toISOString() : null,
     reused: true,
   };
 }
