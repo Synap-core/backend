@@ -5071,6 +5071,137 @@ export async function parkWriteOnWorkspaceJoin(opts: {
   return null;
 }
 
+/** What {@link requestWorkspaceJoin} answers. */
+export type WorkspaceJoinRequestResult =
+  | {
+      status: "member";
+      workspaceId: string;
+      /** The actor's role in the space, when one is recorded. */
+      role: string | null;
+      /** Set when the role does not cover writing: writes are proposed. */
+      note?: string;
+    }
+  | {
+      status: "proposed";
+      workspaceId: string;
+      proposalId: string;
+      summary: string;
+      reviewUrl: string;
+      message: string;
+    }
+  | { status: "refused"; workspaceId: string; reason: string };
+
+/** Said with a filed (or reused) join request. */
+export const WORKSPACE_JOIN_REQUESTED_MESSAGE =
+  "A workspace JOIN request is pending the person's review (a pending one for " +
+  "this space is reused, never doubled). Until it is approved, a write into " +
+  "this space is kept on the join and replayed for you on approval: do not " +
+  "resend it, and do not retry it into another space.";
+
+/**
+ * ASK, on purpose, for the workspace JOIN the gate would otherwise file on an
+ * agent's first write into a space it is not a member of (ticket 4790c862).
+ * The SAME join: the gate's own membership check (`verifyWorkspaceAccess`)
+ * and its only producer (`maybeCreateWorkspaceJoinProposal`: agent rows only,
+ * an archived space refused, a pending join reused), so a write made after
+ * this request is kept on that join and replayed with the rest.
+ *
+ * Refused before anything is filed when the key's grant does not reach the
+ * space: the gate's rung 0 would deny every write there whatever the
+ * membership, so a join would only put a card in front of the person that
+ * changes nothing.
+ */
+export async function requestWorkspaceJoin(opts: {
+  userId: string;
+  agentUserId?: string | null;
+  workspaceId: string;
+  sessionId?: string;
+}): Promise<WorkspaceJoinRequestResult> {
+  const { workspaceId } = opts;
+  const grant = getRequestGrant();
+  if (
+    grant &&
+    !grant.scopes.some(
+      (scope) => !scope.workspaceIds || scope.workspaceIds.includes(workspaceId)
+    )
+  ) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason:
+        "This key's grant does not reach this space, so joining it would not let you write there. The person can add the space to this key's permissions, or give you a key that has it. Nothing was filed.",
+    };
+  }
+  const [ws] = await db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  if (!ws) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason: "No space has this id: find it with synap_list_workspaces.",
+    };
+  }
+  const agentUserId = getActingAgentUserId() ?? opts.agentUserId ?? undefined;
+  const access = await verifyWorkspaceAccess({
+    userId: opts.userId,
+    agentUserId,
+    workspaceId,
+    requiredPermission: requiredPermissionFor("create"),
+    subjectType: "workspace",
+    action: "join",
+    sessionId: opts.sessionId,
+  });
+  if (access.allowed || access.reason !== WORKSPACE_MEMBERSHIP_MISS) {
+    return {
+      status: "member",
+      workspaceId,
+      role: access.role ?? null,
+      ...(access.allowed
+        ? {}
+        : {
+            note: `${access.reason}: a write beyond this role is proposed for the person's review.`,
+          }),
+    };
+  }
+  const join = agentUserId
+    ? await maybeCreateWorkspaceJoinProposal({
+        agentUserId,
+        requesterUserId: opts.userId,
+        workspaceId,
+        sessionId: opts.sessionId,
+      })
+    : null;
+  if (!join || "__dryRunPropose" in join) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason:
+        "Only an agent asks to join a space; a person is added by an owner of the space.",
+    };
+  }
+  if ("denied" in join && join.denied) {
+    return { status: "refused", workspaceId, reason: join.reason };
+  }
+  if (!("proposalId" in join)) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason: "The join request could not be filed.",
+    };
+  }
+  return {
+    status: "proposed",
+    workspaceId,
+    proposalId: join.proposalId,
+    summary: join.summary,
+    reviewUrl: join.reviewUrl,
+    message: WORKSPACE_JOIN_REQUESTED_MESSAGE,
+  };
+}
+
 /**
  * Workspace-join proposal: an agent actor that is not yet a member of the
  * workspace files this instead of being hard-denied. On approval the

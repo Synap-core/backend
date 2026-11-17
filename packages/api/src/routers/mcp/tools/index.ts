@@ -1042,6 +1042,31 @@ export const tools = {
         },
       },
       {
+        name: "synap_get_file",
+        annotations: {
+          title: "Get a stored file",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Look at a stored file (a `file` entity: an upload, an image, a PDF). Returns `url`, a signed download link that expires in 15 minutes (`expiresAt`), with `title`, `mimeType` and `size`. A PNG, JPEG, GIF or WebP image up to 3 MB also comes back as an image you can see (`inline.sent`); pass inline:false to get only the link. Refused when the file is outside this key's grant or the person cannot read it: the error says which (`refusedBy`).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description: "The file entity's UUID.",
+            },
+            inline: {
+              type: "boolean",
+              description:
+                "Default true: send a small image inline. false: the link only.",
+            },
+          },
+          required: ["entityId"],
+        },
+      },
+      {
         name: "synap_get_thread_context",
         annotations: {
           title: "Get thread context",
@@ -5518,6 +5543,27 @@ export const tools = {
         },
       },
       {
+        name: "synap_request_workspace_access",
+        annotations: {
+          title: "Request space access",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Ask to join a space BEFORE you work in it, instead of finding out on your first write. Already a member: `status: member` with your `role`, nothing filed. Not a member: files ONE join request for the person to approve (`proposed` is success; a pending one is reused); writes you make there meanwhile are kept on it and replayed when it is approved. Refused, nothing filed, when this key's grant does not reach the space or the space is archived.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description: "The space's UUID (synap_list_workspaces).",
+            },
+          },
+          required: ["workspaceId"],
+        },
+      },
+      {
         name: "synap_file_into_project",
         annotations: {
           title: "File into project",
@@ -5763,6 +5809,57 @@ export const tools = {
             },
           },
           required: ["propertyDefId"],
+        },
+      },
+      {
+        name: "synap_change_lifecycle_options",
+        annotations: {
+          title: "Change a kind's lifecycle options",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Propose adding, relabelling, reordering, recategorising or retiring the options of a kind that already has a lifecycle (a kind with none: synap_declare_lifecycle). `options` is the complete new list, in order: an option you keep needs only its `key` plus what changes (a field you leave out keeps its stored value). A key left out is retired: `remap` names where its records move. Always a proposal, for anyone: `proposed` is success; on approval records at a retired key move and no status-change events are sent. REFUSED, nothing filed, with the reason: a retired key with no `remap`, a new key with no category, a kind with no lifecycle. Keys stay stable: rename what people read with `label`.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            profileId: {
+              type: "string",
+              description: "The kind's profile UUID (synap_list_profiles).",
+            },
+            options: {
+              type: "array",
+              description:
+                "The complete new option list, in order. Each: `key`, and for a new key its `category`.",
+              items: {
+                type: "object",
+                properties: {
+                  key: { type: "string", description: "The stored value." },
+                  category: {
+                    type: "string",
+                    enum: ["open", "active", "paused", "done", "lost"],
+                  },
+                  label: {
+                    type: "string",
+                    description: "The words people read.",
+                  },
+                },
+                required: ["key"],
+              },
+            },
+            remap: {
+              type: "object",
+              description:
+                "Retired key → the kept key its records move to, e.g. { \"dropped\": \"lost\" }.",
+              additionalProperties: { type: "string" },
+            },
+            reasoning: {
+              type: "string",
+              description: "Why — shown to the reviewer. One line.",
+            },
+          },
+          required: ["profileId", "options"],
         },
       },
       {
@@ -6579,18 +6676,22 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, ask with synap_request_installation.",
+          "What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Filter with `computerId` or `capabilityKey`. `installationId` reads ONE row with its approved snapshot (`manifest`, `digests`), the pod's `current` definition and `drift` (same: an update is a repair; changed: an update asks again). Read-only; to install, update, check or remove, ask with synap_request_installation.",
         inputSchema: {
           type: "object",
           properties: {
             computerId: {
               type: "string",
-              description: "One computer's id (its users id).",
+              description: "One computer's id (synap_list_agents).",
             },
             capabilityKey: {
               type: "string",
               description:
                 "A capability's catalog slug, e.g. media-transcribe: which computers have it.",
+            },
+            installationId: {
+              type: "string",
+              description: "One installation: its snapshot and drift.",
             },
           },
           required: [],

@@ -206,23 +206,42 @@ export type ChangeLifecycleOptionsResult =
   | { status: "unchanged" }
   | { status: "refused"; reason: string };
 
+export interface ChangeLifecycleOptionsInput {
+  propertyDefId: string;
+  options: unknown[];
+  remap?: Record<string, string>;
+}
+
+/** What {@link changeLifecycleOptions} would write, decided before it writes. */
+export interface LifecycleOptionsPlan {
+  status: "planned";
+  /** The def's key (`status`): where every thing stores its option. */
+  slug: string;
+  /** The profiles whose lifecycle this def is (their heirs follow). */
+  profileIds: string[];
+  /** The def's stored constraints, which the new options are written into. */
+  constraints: Record<string, unknown>;
+  /** The stored options before the change, in order. */
+  before: StoredEnumOption[];
+  /** The complete new list, parsed and categorised. */
+  options: ReturnType<typeof parseLifecycleOptions>["options"];
+  /** Each retired key and the key its things move to. */
+  moves: Array<[from: string, to: string]>;
+}
+
 /**
- * THE LIFECYCLE DOOR for an option change the generic path refuses:
- * recategorise, rename or retire. `options` is the complete new list (every
- * option categorised). Every key that disappears names its destination in
- * `remap`, which must be a key of the new list; the things at it move there,
- * the def is rewritten through the one mapper, and the columns re-project —
- * one transaction. A move here is a schema change, not a status move: no
- * transition events are emitted for the remapped rows.
+ * The lifecycle door's PREFLIGHT, read-only: the same verdict
+ * {@link changeLifecycleOptions} reaches before it writes (refused, unchanged,
+ * or the plan it would apply). A governed door that files the change for
+ * approval asks it first, so a change the door would refuse is never filed.
  */
-export async function changeLifecycleOptions(
+export async function planLifecycleOptionsChange(
   db: Db,
-  input: {
-    propertyDefId: string;
-    options: unknown[];
-    remap?: Record<string, string>;
-  }
-): Promise<ChangeLifecycleOptionsResult> {
+  input: ChangeLifecycleOptionsInput
+): Promise<
+  | LifecycleOptionsPlan
+  | Exclude<ChangeLifecycleOptionsResult, { status: "changed" }>
+> {
   const profileIds = await lifecycleProfilesOfDef(db, input.propertyDefId);
   if (profileIds.length === 0) {
     return { status: "refused", reason: "this property is not a lifecycle" };
@@ -269,8 +288,33 @@ export async function changeLifecycleOptions(
       );
     });
   if (same) return { status: "unchanged" };
+  return {
+    status: "planned",
+    slug: def.slug,
+    profileIds,
+    constraints: (def.constraints ?? {}) as Record<string, unknown>,
+    before,
+    options,
+    moves,
+  };
+}
 
-  const slug = def.slug;
+/**
+ * THE LIFECYCLE DOOR for an option change the generic path refuses:
+ * recategorise, rename or retire. `options` is the complete new list (every
+ * option categorised). Every key that disappears names its destination in
+ * `remap`, which must be a key of the new list; the things at it move there,
+ * the def is rewritten through the one mapper, and the columns re-project —
+ * one transaction. A move here is a schema change, not a status move: no
+ * transition events are emitted for the remapped rows.
+ */
+export async function changeLifecycleOptions(
+  db: Db,
+  input: ChangeLifecycleOptionsInput
+): Promise<ChangeLifecycleOptionsResult> {
+  const plan = await planLifecycleOptionsChange(db, input);
+  if (plan.status !== "planned") return plan;
+  const { slug, profileIds, constraints, options, moves } = plan;
   let remapped = 0;
   await db.transaction(async (tx) => {
     const t = tx as unknown as Db;
@@ -303,14 +347,11 @@ export async function changeLifecycleOptions(
       .update(propertyDefs)
       .set({
         constraints: buildStoredConstraints({
-          constraints: {
-            ...((def.constraints ?? {}) as Record<string, unknown>),
-            enumOptions: options,
-          },
+          constraints: { ...constraints, enumOptions: options },
         }),
         updatedAt: new Date(),
       })
-      .where(eq(propertyDefs.id, def.id));
+      .where(eq(propertyDefs.id, input.propertyDefId));
     await reprojectLifecycleProfiles(t, profileIds);
   });
   return { status: "changed", remapped };

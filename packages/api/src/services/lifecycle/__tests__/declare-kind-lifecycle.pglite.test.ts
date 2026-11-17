@@ -17,6 +17,13 @@
  *     and a lifecycle declared between filing and approval refuses at
  *     approval, leaving the schema as it was;
  *   - authority on the LOADED kind: a non-member cannot file.
+ *
+ * And its sibling `synap_change_lifecycle_options` →
+ * `property_def/change_lifecycle_options` (fd146324): adding, relabelling and
+ * retiring options of a kind that HAS a lifecycle is always a proposal that
+ * writes nothing; a kept option sent as `{ key, label }` keeps its stored
+ * category; a retired key with no remap is refused and files nothing; on
+ * approval the lifecycle door rewrites the options and moves the records.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -113,6 +120,10 @@ const RACE = randomUUID(); // gains a lifecycle between filing and approval
 const RACE_STAGE_DEF = randomUUID();
 const OLD_FINDING_1 = randomUUID();
 const OLD_FINDING_2 = randomUUID();
+const COMPOSITION = randomUUID(); // has a lifecycle the agent revises
+const COMPOSITION_STATUS = randomUUID();
+const DROPPED_COMPOSITION = randomUUID();
+const PLAIN_KIND = randomUUID(); // no lifecycle
 
 const FINDING_OPTIONS = [
   { key: "open", category: "open", label: "Open" },
@@ -279,6 +290,39 @@ beforeAll(async () => {
       ($2,$3,$4,$5,'finding','Old finding 2','{}'::jsonb)`,
     [OLD_FINDING_1, OLD_FINDING_2, ADMIN, WS, FINDING]
   );
+  // `composition` declares a lifecycle; one record stands at `dropped`.
+  await q(
+    `insert into profiles (id, slug, display_name, scope, profile_kind, is_active, workspace_id, user_id)
+     values ($1,'composition','Composition','shared','kind',true,$3,null),
+            ($2,'plain-kind','Plain kind','shared','kind',true,$3,null)`,
+    [COMPOSITION, PLAIN_KIND, WS]
+  );
+  await q(
+    `insert into property_defs (id, slug, profile_id, workspace_id, value_type, constraints)
+     values ($1,'status',$2,null,'string',$3::jsonb)`,
+    [
+      COMPOSITION_STATUS,
+      COMPOSITION,
+      JSON.stringify({
+        enum: ["draft", "generating", "done", "dropped"],
+        enumOptions: [
+          { key: "draft", category: "open", label: "Draft" },
+          { key: "generating", category: "active", label: "Generating" },
+          { key: "done", category: "done", label: "Done" },
+          { key: "dropped", category: "lost", label: "Dropped" },
+        ],
+      }),
+    ]
+  );
+  await q(
+    `insert into profile_properties (profile_id, property_def_id, is_lifecycle) values ($1,$2,true)`,
+    [COMPOSITION, COMPOSITION_STATUS]
+  );
+  await q(
+    `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties) values
+      ($1,$2,$3,$4,'composition','Dropped one','{"status":"dropped"}'::jsonb)`,
+    [DROPPED_COMPOSITION, ADMIN, WS, COMPOSITION]
+  );
   registerPodHygieneExecutors();
 }, 120_000);
 
@@ -415,7 +459,7 @@ describe("synap_declare_lifecycle — always a proposal, applied on approval", (
     });
     expect(res.status).toBe("refused");
     expect((res.reasons as string[])[0]).toMatch(
-      /already declares "status" as its lifecycle \(todo, done\).*changeLifecycleOptions/
+      /already declares "status" as its lifecycle \(todo, done\).*synap_change_lifecycle_options/
     );
     expect(await proposalsFor(TICKET)).toEqual([]);
   });
@@ -455,5 +499,164 @@ describe("synap_declare_lifecycle — always a proposal, applied on approval", (
     await expect(
       declareTool(ADMIN, { profileId: randomUUID(), options: FINDING_OPTIONS })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+const changeTool = (userId: string, args: Record<string, unknown>) =>
+  capabilityHandlers.synap_change_lifecycle_options!({
+    toolName: "synap_change_lifecycle_options",
+    args,
+    userId,
+    apiKeyScopes: ["mcp.read", "mcp.write"],
+    agentUserId: AGENT,
+  } as never).then(
+    (r) =>
+      JSON.parse(
+        (r as { content: Array<{ text: string }> }).content[0]!.text
+      ) as Record<string, unknown>
+  );
+
+const compositionOptions = () =>
+  q<{ constraints: { enum: string[]; enumOptions: Array<Record<string, unknown>> } }>(
+    `select constraints from property_defs where id = $1`,
+    [COMPOSITION_STATUS]
+  ).then((r) => r.rows[0]!.constraints);
+const droppedStatus = () =>
+  q<{ status: string | null }>(
+    `select properties->>'status' as status from entities where id = $1`,
+    [DROPPED_COMPOSITION]
+  ).then((r) => r.rows[0]!.status);
+
+describe("synap_change_lifecycle_options — revise a lifecycle, always a proposal (fd146324)", () => {
+  // The ticket's change: add one option, relabel one, retire one.
+  const REVISION = {
+    profileId: COMPOSITION,
+    options: [
+      { key: "draft" },
+      { key: "generating", label: "Stills" },
+      { key: "stills_approved", category: "active", label: "Stills approved" },
+      { key: "done" },
+    ],
+    remap: { dropped: "done" },
+    reasoning: "storyboard stills are their own step",
+  };
+
+  it("a retired key with no remap is refused, and nothing is filed", async () => {
+    const res = await changeTool(ADMIN, { ...REVISION, remap: {} });
+    expect(res.status).toBe("refused");
+    expect((res.reasons as string[])[0]).toMatch(
+      /"dropped" is retired: name where its things move/
+    );
+    expect(
+      (await proposalsFor(COMPOSITION_STATUS)).filter(
+        (p) => p.status === "pending"
+      )
+    ).toEqual([]);
+  });
+
+  it("a kind with no lifecycle is refused, pointing at synap_declare_lifecycle", async () => {
+    const res = await changeTool(ADMIN, { ...REVISION, profileId: PLAIN_KIND });
+    expect(res.status).toBe("refused");
+    expect((res.reasons as string[])[0]).toMatch(/synap_declare_lifecycle/);
+  });
+
+  it("proposes and writes nothing; approval rewrites the options and moves the records", async () => {
+    const res = await changeTool(ADMIN, REVISION);
+    expect(res).toMatchObject({
+      status: "proposed",
+      propertyDefId: COMPOSITION_STATUS,
+      property: "status",
+      moves: [{ from: "dropped", to: "done" }],
+    });
+    const proposalId = res.proposalId as string;
+    const row = (
+      await q<{
+        status: string;
+        target_type: string;
+        proposal_type: string;
+        agent_user_id: string | null;
+        data: { summary: string; properties: Record<string, string> };
+      }>(
+        `select status, target_type, proposal_type, agent_user_id, data from proposals where id = $1`,
+        [proposalId]
+      )
+    ).rows[0]!;
+    expect(row).toMatchObject({
+      status: "pending",
+      target_type: "property_def",
+      proposal_type: "change_lifecycle_options",
+      agent_user_id: AGENT,
+    });
+    expect(row.data.summary).toBe('Change lifecycle options "composition"');
+    expect(row.data.properties.after).toContain(
+      "generating = Stills (active)"
+    );
+    expect(row.data.properties.moves).toContain(
+      'things at "dropped" move to "done"'
+    );
+    // Nothing applied yet.
+    expect((await compositionOptions()).enum).toEqual([
+      "draft",
+      "generating",
+      "done",
+      "dropped",
+    ]);
+    expect(await droppedStatus()).toBe("dropped");
+
+    // A second filing does not stack a duplicate.
+    expect(await changeTool(ADMIN, REVISION)).toMatchObject({
+      status: "already_pending",
+      proposalId,
+    });
+
+    const applied = await proposalExecRegistry
+      .resolve("property_def/change_lifecycle_options")!
+      .execute({
+        proposal: {
+          id: proposalId,
+          targetType: "property_def",
+          targetId: COMPOSITION_STATUS,
+          proposalType: "change_lifecycle_options",
+          workspaceId: null,
+          subjectUserId: ADMIN,
+          data: row.data,
+        },
+        payload: row.data,
+        userId: ADMIN,
+        input: { proposalId },
+        ctx: {},
+        deps: {
+          reportProposalOutcome: vi.fn(),
+          emitProposalReviewed: vi.fn(),
+        },
+      } as never);
+    expect(applied).toMatchObject({
+      success: true,
+      effect: { applied: "verified", subject: "property_defs" },
+    });
+
+    const after = await compositionOptions();
+    expect(after.enum).toEqual([
+      "draft",
+      "generating",
+      "stills_approved",
+      "done",
+    ]);
+    // The kept options kept their stored categories; the relabel landed.
+    expect(
+      after.enumOptions.map((o) => `${o.key}:${o.category}:${o.label}`)
+    ).toEqual([
+      "draft:open:Draft",
+      "generating:active:Stills",
+      "stills_approved:active:Stills approved",
+      "done:done:Done",
+    ]);
+    expect(await droppedStatus()).toBe("done");
+  });
+
+  it("a non-member cannot file on the kind", async () => {
+    await expect(changeTool(OUTSIDER, REVISION)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
   });
 });

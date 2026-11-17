@@ -308,6 +308,83 @@ export async function listInstallations(
   return toViews(rows);
 }
 
+/** One installation with its approved snapshot, read by id (`detail`). */
+export interface InstallationDetail extends InstallationView {
+  capabilityId: string | null;
+  /** The pod definition's version the snapshot was taken at (`h-…`). */
+  capabilityVersion: string | null;
+  /** The computer block AS APPROVED: what the runner builds from. */
+  manifest: Record<string, unknown>;
+  /** Service id → image digest, pinned at approval. */
+  digests: Record<string, string>;
+  /** The pod capability row's CURRENT computer block; null when the pod has none. */
+  current: {
+    capabilityId: string;
+    version: string | null;
+    manifest: Record<string, unknown>;
+  } | null;
+  /**
+   * The snapshot against `current`, the comparison an update request makes
+   * (`requestNeedsApproval`): `same` ⇒ an update is a repair at the approved
+   * definition (asks nobody); `changed` ⇒ an update asks the person again;
+   * `no_current_definition` ⇒ the pod has no installable definition of it.
+   */
+  drift:
+    | {
+        verdict: "same" | "changed";
+        recipesAdded: string[];
+        recipesRemoved: string[];
+      }
+    | { verdict: "no_current_definition" };
+}
+
+/**
+ * ONE live installation by id with its approved snapshot and its drift
+ * against the pod's current definition (ticket c5e95df3), through the same
+ * owner floor as {@link listInstallations}. Null when the floor reaches no
+ * such live row.
+ */
+export async function getInstallationDetail(
+  access: AccessContext,
+  installationId: string
+): Promise<InstallationDetail | null> {
+  const [row] = await scopedDb(access).findMany<InstallationRow>(
+    installations,
+    {
+      where: and(
+        eq(installations.id, installationId),
+        ne(installations.status, "removed")
+      ),
+    }
+  );
+  if (!row) return null;
+  const [view] = await toViews([row]);
+  const current = await loadInstallableCapability(row.capabilityKey);
+  const manifest = row.manifest ?? {};
+  const change = current ? definitionChange(manifest, current.manifest) : null;
+  return {
+    ...view!,
+    capabilityId: row.capabilityId,
+    capabilityVersion: row.capabilityVersion,
+    manifest,
+    digests: row.digests ?? {},
+    current: current
+      ? {
+          capabilityId: current.capabilityId,
+          version: current.version,
+          manifest: current.manifest,
+        }
+      : null,
+    drift: change
+      ? {
+          verdict: change.same ? "same" : "changed",
+          recipesAdded: change.recipesAdded,
+          recipesRemoved: change.recipesRemoved,
+        }
+      : { verdict: "no_current_definition" },
+  };
+}
+
 /**
  * What is installed on ONE computer, read for that computer's own key: its
  * person's live rows on it (owner AND machine), the floor the host-job

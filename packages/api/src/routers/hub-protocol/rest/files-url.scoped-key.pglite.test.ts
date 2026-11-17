@@ -244,6 +244,8 @@ describe("GET /files/{entityId}/url — a signed URL bounded by the key's grant"
     expect(body.url).toBeUndefined();
     // Refused by the READ FLOOR (the grant), not by the fence.
     expect(body.code).not.toBe("GRANT_DOOR_UNSUPPORTED");
+    // And the 403 says WHICH floor: the key's grant, not the person (66e66dce).
+    expect(body.error).toMatch(/outside what this key's grant reaches/);
   });
 
   it("control: the same file IS signed for a full-access key (the floor alone admits it)", async () => {

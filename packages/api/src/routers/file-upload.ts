@@ -23,6 +23,8 @@ import {
   resolveImportEntityPlacement,
   eventRepository,
   EntityBodyService,
+  getRequestGrant,
+  runWithoutGrant,
 } from "@synap/database";
 import { channelContextItems } from "@synap/database/schema";
 import { appSessionMiddleware } from "../middleware/app-session.js";
@@ -869,18 +871,41 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
   }
 });
 
+/** Which floor refused a file the caller asked for (the 403's `refusedBy`). */
+export type FileReadRefusal = "key_grant" | "person";
+
+/** The 403's words, by the floor that refused (ticket 66e66dce). */
+export const FILE_READ_REFUSED: Readonly<Record<FileReadRefusal, string>> = {
+  key_grant:
+    "Forbidden: this file is outside what this key's grant reaches (its spaces, projects or objects). The person can widen the key's grant, or share the file into a space the key reaches. Nothing was signed.",
+  person:
+    "Forbidden: the person this key acts for cannot read this file (it is not theirs and was not shared with them). Nothing was signed.",
+};
+
 /**
  * The file entity `userId` may READ, or why not — the read floor and the
  * 403/404 split every `…/:entityId/…` file door shares (`signFileEntityUrl`,
  * Hub `POST /files/:entityId/transcribe`). `loadSignableFileEntity` reads
  * through `scopedDb`, so a key's grant narrows it.
+ *
+ * A 403 says WHICH floor refused (`refusedBy`): when a key's grant is in
+ * force, the same read is asked again for the person alone
+ * (`runWithoutGrant`, a verdict about the person, never rows returned). A
+ * file the person reads is outside the key's grant; one the person cannot
+ * read is refused for the person. A bare "Forbidden" sent agents guessing
+ * between a missing scope, a space pin and a sharing gap.
  */
 export async function readableFileEntity(
   userId: string,
   entityId: string
 ): Promise<
   | { ok: true; entity: SignableFileEntity }
-  | { ok: false; status: 403 | 404; error: string }
+  | {
+      ok: false;
+      status: 403 | 404;
+      error: string;
+      refusedBy?: FileReadRefusal;
+    }
 > {
   const entity = await loadSignableFileEntity(userId, entityId);
   if (entity) return { ok: true, entity };
@@ -888,9 +913,20 @@ export async function readableFileEntity(
     where: eq(entities.id, entityId),
     columns: { id: true },
   });
-  return exists
-    ? { ok: false, status: 403, error: "Forbidden" }
-    : { ok: false, status: 404, error: "File entity not found" };
+  if (!exists) {
+    return { ok: false, status: 404, error: "File entity not found" };
+  }
+  const refusedBy: FileReadRefusal =
+    getRequestGrant() &&
+    (await runWithoutGrant(() => loadSignableFileEntity(userId, entityId)))
+      ? "key_grant"
+      : "person";
+  return {
+    ok: false,
+    status: 403,
+    error: FILE_READ_REFUSED[refusedBy],
+    refusedBy,
+  };
 }
 
 /** What a file-entity URL door answers: the signed GET, or why not. */
@@ -901,7 +937,12 @@ export type FileEntityUrlResult =
       /** The file the URL signs, as the read floor returned it (never on the wire). */
       entity: SignableFileEntity;
     }
-  | { ok: false; status: 403 | 404; error: string };
+  | {
+      ok: false;
+      status: 403 | 404;
+      error: string;
+      refusedBy?: FileReadRefusal;
+    };
 
 /**
  * Sign a file entity's blob for `userId` — the ONE body of every

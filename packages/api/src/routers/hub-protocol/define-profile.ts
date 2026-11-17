@@ -514,7 +514,7 @@ function alreadyOnKind(
     status: "unchanged",
     propertyDefId: stored.id,
     message: stored.isLifecycle
-      ? `'${slug}' is already this kind's status field (id ${stored.id}); this door never rewrites it, so nothing was filed. Its statuses are changed through the lifecycle door (\`propertyDefs.changeLifecycleOptions\`, the kind's schema page): ask the person.`
+      ? `'${slug}' is already this kind's status field (id ${stored.id}); this door never rewrites it, so nothing was filed. To add, relabel, reorder or retire its statuses, propose it with \`synap_change_lifecycle_options\` (the lifecycle door, tools:schema).`
       : `A field '${slug}' (id ${stored.id}) is already on this kind; this door never rewrites a stored definition, so nothing was filed. To change it, use the edit door \`profiles.updatePropertyDef\` / \`PATCH /api/hub/property-defs/${stored.id}\` (governed). To add allowed values, re-declare its \`constraints.enum\` with every stored value plus the new ones.`,
   };
 }

@@ -22,10 +22,15 @@ import {
   parentToolMissingMessage,
   buildProviderVerbSpec,
 } from "../../../services/capabilities/create-declarative-verb.js";
-import { db, tools as toolsTable } from "@synap/database";
+import {
+  db,
+  tools as toolsTable,
+  ProfileResolutionService,
+} from "@synap/database";
 import { defineProfile } from "../../hub-protocol/define-profile.js";
 import { proposePropertyDefRetire } from "../../../services/pod-hygiene/retire-property-def.js";
 import { proposeKindLifecycle } from "../../../services/lifecycle/declare-kind-lifecycle.js";
+import { proposeLifecycleOptionsChange } from "../../../services/lifecycle/change-lifecycle-options.js";
 import {
   ok,
   requireScope,
@@ -89,6 +94,66 @@ export const capabilityHandlers: McpHandlerMap = {
           ...(typeof args.initialStatus === "string"
             ? { initialStatus: args.initialStatus }
             : {}),
+        },
+        reason: readReasoning(args),
+      })
+    );
+  },
+  // Relabel, reorder or retire a kind's lifecycle options
+  // (`services/lifecycle/change-lifecycle-options.ts`, fd146324): the person's
+  // lifecycle door (tRPC `propertyDefs.changeLifecycleOptions`) filed as an
+  // always-pending proposal, or a refusal in that door's own words.
+  synap_change_lifecycle_options: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const profileId = args.profileId;
+    if (typeof profileId !== "string" || !profileId) {
+      return ok({ error: "profileId is required" });
+    }
+    if (!Array.isArray(args.options)) {
+      return ok({
+        error:
+          "options is required: the complete new list, each { key, category, label? }",
+      });
+    }
+    const lifecycle = await new ProfileResolutionService(
+      db
+    ).getEffectiveLifecycle(profileId);
+    if (!lifecycle) {
+      return ok({
+        status: "refused",
+        reasons: [
+          "This kind declares no lifecycle: declare one with synap_declare_lifecycle.",
+        ],
+      });
+    }
+    const remap =
+      args.remap && typeof args.remap === "object" && !Array.isArray(args.remap)
+        ? Object.fromEntries(
+            Object.entries(args.remap as Record<string, unknown>).filter(
+              (e): e is [string, string] => typeof e[1] === "string"
+            )
+          )
+        : undefined;
+    return ok(
+      await proposeLifecycleOptionsChange({
+        userId,
+        agentUserId: agentUserId ?? null,
+        input: {
+          propertyDefId: lifecycle.propertyDefId,
+          // A kept key starts from its stored option: a field the caller
+          // leaves out (a category, a wait, a date binding) keeps its value
+          // instead of being dropped by a relabel.
+          options: (args.options as unknown[]).map((o) => {
+            const key = (o as { key?: unknown } | null)?.key;
+            const stored = lifecycle.options.find((s) => s.key === key);
+            return stored && o && typeof o === "object"
+              ? { ...stored, ...(o as Record<string, unknown>) }
+              : o;
+          }),
+          ...(remap ? { remap } : {}),
         },
         reason: readReasoning(args),
       })
