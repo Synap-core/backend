@@ -499,6 +499,16 @@ export {
   type SetRunStatusResult,
 } from "./services/lifecycle/run-status.js";
 export {
+  REACTION_LOG_SUBJECT_TYPE,
+  REACTION_OUTCOMES,
+  listReactionOutcomes,
+  reactionLogEventType,
+  recordReactionOutcomes,
+  type ReactionLogEntry,
+  type ReactionLogRow,
+  type ReactionOutcome,
+} from "./services/lifecycle/reaction-log.js";
+export {
   oweSlotTransitions,
   slotTransitionsOf,
   type SlotForTransition,

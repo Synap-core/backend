@@ -718,6 +718,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/utils/session-close.js");
         const { registerHoldResumeFollowUp } =
           await import("@synap/jobs/workers/hold-resume.js");
+        const { registerReactionEffect } =
+          await import("@synap/jobs/utils/reaction-effects.js");
         const { registerStatusWatcherRunner } =
           await import("@synap/jobs/workers/status-watcher-cron.js");
         const { registerStageAdvancer } =
@@ -767,6 +769,11 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         registerHoldResumeFollowUp((resumed) =>
           api.holdResumeFollowUp(resumed)
         );
+        // The reactions reactor (plan 7d71ddcc W2): the effect whose door is
+        // api-side — an outcome met wherever it was filed (pod default 3)
+        // goes through THE done door. Unfilled, its writes are skipped and
+        // logged `effect_unavailable`.
+        registerReactionEffect(api.meetOutcomesReactionEffect);
         // The status watcher (W6): late, approaching, stuck and
         // hold-review signals, raised once per episode, owner told.
         registerStatusWatcherRunner(() => api.runStatusWatcher());
