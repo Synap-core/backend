@@ -97,6 +97,14 @@ vi.mock("../services/activity/list-activity.js", () => ({
   listActivity: async (...args: unknown[]) => activitySpy(...args),
 }));
 
+// The page's request context (`include: ["context"]`): its parts are pinned
+// by its own PGlite suite (`needs-you-context.pglite.test.ts`); here, the
+// router's wiring: never read unless asked, read ONCE for the whole page.
+const contextSpy = vi.fn();
+vi.mock("../services/signals/needs-you-context.js", () => ({
+  readNeedsYouContext: async (...args: unknown[]) => contextSpy(...args),
+}));
+
 vi.mock("../services/outputs/landed-outputs.js", () => ({
   LANDED_OUTPUTS_MAX_LIMIT: 100,
   listLandedOutputs: async (...args: unknown[]) => landedSpy(...args),
@@ -748,5 +756,49 @@ describe("signals — the access-request halves (pending issuers, app requests)"
       kinds: ["access-request"],
     });
     expect(only.signals.map((s) => s.id)).toEqual(["access:issuer:iss-1"]);
+  });
+});
+
+describe("signals.needsYou — include context", () => {
+  const broken = [
+    {
+      capabilityId: "cap-a",
+      name: "Gmail",
+      brokenAt: new Date("2026-10-12T07:00:00Z"),
+    },
+    {
+      capabilityId: "cap-b",
+      name: "Slack",
+      brokenAt: new Date("2026-10-12T08:00:00Z"),
+    },
+  ];
+
+  it("not asked: no context read and no `context` key, the answer as before", async () => {
+    brokenConnectionsSpy.mockResolvedValue({ rows: broken, truncated: false });
+    const r = await caller().needsYou();
+    expect(contextSpy).not.toHaveBeenCalled();
+    expect("context" in r).toBe(false);
+  });
+
+  it("asked: ONE read for every row of every fold, with the reader and its item count", async () => {
+    brokenConnectionsSpy.mockResolvedValue({ rows: broken, truncated: false });
+    const read = { timelineItems: 6, sessions: {}, rows: {} };
+    contextSpy.mockResolvedValue(read);
+    const r = await caller().needsYou({
+      include: ["context"],
+      timelineItems: 6,
+    });
+    expect(contextSpy).toHaveBeenCalledTimes(1);
+    const [rows, reader] = contextSpy.mock.calls[0]! as [
+      Array<{ id: string }>,
+      { userId: string; timelineItems?: number },
+    ];
+    const all = Object.values(r.rows)
+      .flat()
+      .map((s) => s.id);
+    expect(all).toHaveLength(2);
+    expect(rows.map((s) => s.id).sort()).toEqual([...all].sort());
+    expect(reader).toMatchObject({ userId: "user-1", timelineItems: 6 });
+    expect(r.context).toEqual(read);
   });
 });

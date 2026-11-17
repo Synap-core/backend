@@ -201,6 +201,11 @@ export const vocabularySentencesEn = {
   "vocabulary.processHealth.not_enough_activity.label": "Status unknown",
   "vocabulary.processHealth.not_enough_activity.reason":
     "There is not enough loaded activity to determine current health.",
+  // `resolveJobsStartedHereLabel`: a job's folded child jobs on its Activity
+  // line (plan 5207fbb6: a child job is drawn as a fork, never named a
+  // "branch"), counted with the Job word.
+  "vocabulary.job.startedHere":
+    "{n, plural, one {# job started from here} other {# jobs started from here}}",
 } as const;
 
 export type VocabularySentencesEn = typeof vocabularySentencesEn;

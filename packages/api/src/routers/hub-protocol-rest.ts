@@ -52,6 +52,7 @@ import {
   registerHealthDependenciesRoutes,
   registerIdentityRoutes,
   registerKnowledgeRoutes,
+  registerFindRoutes,
   registerMcpServersRoutes,
   registerMemoryRoutes,
   registerNotificationsRoutes,
@@ -342,6 +343,7 @@ registerCapabilityConnectionsRoutes(app); // GET/POST/PATCH/DELETE /capabilities
 registerLoopsRoutes(app); // POST /loops/apply (loop / autonomy-template applier)
 registerMemoryRoutes(app); // /memory*
 registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse
+registerFindRoutes(app); // GET /find (the one find door, as MCP synap_find)
 registerCommandsRoutes(app); // /commands*, /commands/execute
 registerAgentUsersRoutes(app); // /agent-users
 registerAgentConfigsRoutes(app); // /agent-configs

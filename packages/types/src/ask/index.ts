@@ -40,7 +40,12 @@ import {
 } from "../vault/index.js";
 import { isHttpUrl } from "../navigation/index.js";
 import { resolveServiceName } from "../service-marks/index.js";
-import { provideSecretAccessLine, type ProvideSecretGrant } from "./provide.js";
+import {
+  PROVIDE_SECRET_USES,
+  provideSecretAccessLine,
+  type ProvideSecretGrant,
+} from "./provide.js";
+import { DECLINED_ANSWER_TYPE, declinedAnswerText } from "./declined.js";
 
 // ─── Limits ─────────────────────────────────────────────────────────────────
 
@@ -68,6 +73,10 @@ export const ASK_LIMITS = {
   urlMaxChars: 2000,
   /** A provide(connection)'s service id, a provide(secret)'s name. */
   provideNameMaxChars: 120,
+  /** A provide(secret)'s purpose: what the secret is for ("Merging the PR"). */
+  secretPurposeMaxChars: 200,
+  /** A provide(secret)'s purpose: the tool, the action, the resource. */
+  secretPurposePartMaxChars: 120,
   acceptMax: 10,
   /** "What I looked at" — the objects the agent read before asking. */
   lookedAtMax: 8,
@@ -500,6 +509,63 @@ const httpUrl = z
   .max(ASK_LIMITS.urlMaxChars)
   .refine(isHttpUrl, "Must be an http(s) URL");
 
+/**
+ * A purpose part must name a thing, never carry a credential: one unbroken
+ * run of 24+ token characters (no `/` or `.`, so a path or a URL passes)
+ * holding a piece of 16+ characters, between its separators (`_ - + =`),
+ * that mixes letters and digits (`ghp_…`, `sk_live_…`, a JWT segment) is
+ * refused. The piece, not the whole run: an id an agent names the work by
+ * (a UUID, `synap-intelligence-service-v2`, `merge_pull_request_2026_11_16`)
+ * is short pieces joined, and passes. A heuristic floor, not a scanner: the
+ * field is bounded and shown to the person, so a pasted value would be seen
+ * there.
+ */
+const CREDENTIAL_LIKE_RUN = /[A-Za-z0-9_\-+=]{24,}/g;
+const CREDENTIAL_PIECE_MIN = 16;
+export function looksLikeCredential(text: string): boolean {
+  for (const run of text.match(CREDENTIAL_LIKE_RUN) ?? []) {
+    for (const piece of run.split(/[_\-+=]+/)) {
+      if (
+        piece.length >= CREDENTIAL_PIECE_MIN &&
+        /[A-Za-z]/.test(piece) &&
+        /[0-9]/.test(piece)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+const purposePart = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .refine(
+      (v) => !looksLikeCredential(v),
+      "Name what the secret is for, never a key or token"
+    );
+
+/**
+ * What a secret asked for will be used for, declared by the agent (plan
+ * d717d6ac §4, modelled on the vault request door's required `purpose`): the
+ * work it serves, which tool or capability uses it, the action, and on what.
+ * Short words for the person's card, never the secret.
+ */
+export const AskSecretPurposeSchema = z.object({
+  /** The work it serves ("Merging the delivery PR"). */
+  for: purposePart(ASK_LIMITS.secretPurposeMaxChars),
+  /** The tool or capability that reads it ("GitHub tool"). */
+  tool: purposePart(ASK_LIMITS.secretPurposePartMaxChars),
+  /** What that tool does with it ("merge"). */
+  action: purposePart(ASK_LIMITS.secretPurposePartMaxChars).optional(),
+  /** What it acts on ("Synap-core/backend"). */
+  on: purposePart(ASK_LIMITS.secretPurposePartMaxChars).optional(),
+});
+export type AskSecretPurpose = z.infer<typeof AskSecretPurposeSchema>;
+
 export const AskProvideSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("connection"),
@@ -518,6 +584,18 @@ export const AskProvideSchema = z.discriminatedUnion("kind", [
     kind: z.literal("secret"),
     /** What the secret is ("Stripe restricted key") — NEVER the secret. */
     name: z.string().min(1).max(ASK_LIMITS.provideNameMaxChars),
+    /**
+     * What the agent will DO with it, declared (`AskSecretPurposeSchema`).
+     * Optional so an ask posed before it keeps parsing; without it the card
+     * says the agent did not say what it is for. Never inferred.
+     */
+    purpose: AskSecretPurposeSchema.optional(),
+    /**
+     * How long the agent asks to read it: `once` (one read) or `session`
+     * (until the job closes; the default). The person may pick the other on
+     * the answer (`secretUses`).
+     */
+    uses: z.enum(PROVIDE_SECRET_USES).optional(),
   }),
 ]);
 export type AskProvide = z.infer<typeof AskProvideSchema>;
@@ -891,6 +969,16 @@ export const AskAnswerValueSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("form"), values: AskFormValuesSchema }),
   z.object({ type: z.literal("provide"), ref: AskProvideRefSchema }),
+  /**
+   * REFUSE (`./declined.ts`): the person will not give this. Taken for EVERY
+   * mode and for a slot with no ask; the slot goes back to the agent with
+   * the reason, nothing is granted, and the same ask cannot be asked again
+   * while the refusal stands. `reason` is the person's words, for the agent.
+   */
+  z.object({
+    type: z.literal(DECLINED_ANSWER_TYPE),
+    reason: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  }),
 ]);
 export type AskAnswerValue = z.infer<typeof AskAnswerValueSchema>;
 
@@ -1072,6 +1160,10 @@ export function questionDisposition(
  *              the answer door hands the slot back and wakes the agent.
  *   `attest` — `act`: the person did it; the attest door ("I did this").
  *   `legacy` — no ask: today's behaviour (free text, "I did this", "Not mine").
+ *
+ * ONE EXCEPTION, on every resolution: a REFUSAL (`{ type: "declined" }`,
+ * `./declined.ts`) always goes through the ANSWER door, an `act` ask and an
+ * ask-less slot included. Refusing is not doing, so it is never an attest.
  */
 export type AskResolution = "answer" | "attest" | "legacy";
 
@@ -1081,6 +1173,15 @@ export function resolveAskResolution(
   if (!ask) return "legacy";
   return ask.mode === "act" ? "attest" : "answer";
 }
+
+/** The refusal rule's readers — see `./declined.ts` (zod-free). */
+export {
+  DECLINED_ANSWER_TYPE,
+  declinedAnswerText,
+  declinedReasonOf,
+  isDeclinedAnswer,
+  isDeclinedValue,
+} from "./declined.js";
 
 /** The decision-ask rule and the slot's effective ask — see `./ends-with-session.ts` (zod-free). */
 export {
@@ -1160,6 +1261,9 @@ export function chooseTakesOwnAnswer(
  * already bounded and redacted). `text` is the accompanying free text: required
  * for a `text` answer, an optional note otherwise.
  *
+ * - a refusal (`{ type: "declined" }`) ⇒ accepted for EVERY mode and for no
+ *   ask, before anything else: the person may always say no, and an `act`
+ *   ask is refused through the answer door, never attested.
  * - no ask ⇒ only free text (today's behaviour).
  * - `act` ⇒ refused (`wrong_door`): it resolves through the attest door.
  * - `confirm` ⇒ a confirm value.
@@ -1174,6 +1278,15 @@ export function validateAnswerAgainstAsk(
   value: AskAnswerValue,
   text?: string | null
 ): AskAnswerValidation {
+  if (value.type === DECLINED_ANSWER_TYPE) {
+    const reason = value.reason?.trim();
+    return {
+      ok: true,
+      value: reason
+        ? { type: DECLINED_ANSWER_TYPE, reason }
+        : { type: DECLINED_ANSWER_TYPE },
+    };
+  }
   const hasText = typeof text === "string" && text.trim().length > 0;
   if (value.type === "text" && !hasText) {
     return refuse("text_required", "A free-text answer needs its text.");
@@ -1468,6 +1581,9 @@ export function summarizeAnswer(
         .map(([k, v]) => `${labels.get(k) ?? k}: ${formatFormValue(v)}`);
       return withNote(parts.join("; ") || "Submitted the form");
     }
+    case DECLINED_ANSWER_TYPE:
+      // "Refused: <reason>", the agent's words to act on (`./declined.ts`).
+      return withNote(declinedAnswerText(value.reason));
     case "provide": {
       const head =
         value.ref.kind === "secret"
@@ -1605,6 +1721,9 @@ export {
 /** Handing something over for a `provide` ask — see `./provide.ts`. */
 export {
   PROVIDE_SECRET_GRANT_MINUTES,
+  PROVIDE_SECRET_ONCE_MINUTES,
+  PROVIDE_SECRET_USES,
+  provideSecretUsesMinutes,
   provideSecretAccessLine,
   provideGrantNote,
   provideExpectedGranteeId,
@@ -1615,6 +1734,9 @@ export {
   type ProvideSecretGrant,
   type ProvideSecretGrantRefusal,
   type ProvideSecretGrantOffer,
+  type ProvideSecretUses,
+  type ProvideSecretGrantUses,
+  type ProvideStandingGrant,
   type ProvideConnectUnavailableReason,
   type ProvideConnectionRowLite,
   type ProvideAccountChoice,
@@ -1661,6 +1783,7 @@ export {
   type AskCardAnswer,
   type AskCardAsker,
   type AskCardDue,
+  type AskCardRefuse,
   type AskCardSlot,
   type AskCardView,
   type AskCardViewOptions,

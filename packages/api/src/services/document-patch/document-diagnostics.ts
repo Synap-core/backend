@@ -233,7 +233,7 @@ export const GRAMMAR_FIX: Record<DocumentDiagnosticCode, string> = {
   bad_columns: `Write a row as \`:::::synap-columns\` holding 2 to ${MAX_COLUMNS} \`::::synap-column\` blocks (the row's fence longer than its columns'), inside a section, never around one.`,
   bad_width: `Give every column a whole-percentage width from ${MIN_COLUMN_WIDTH}% to ${MAX_COLUMN_WIDTH}% (\`width="40%"\`), adding up to 100%, or give none.`,
   missing_attr:
-    "Name what the embed shows: `id` (synap-entity), `viewId` (synap-view), `cellKey` or `instanceId` (synap-cell).",
+    "Name what the embed shows: `id` (synap-entity), `viewId` (synap-view), `cellKey` or `instanceId` (synap-cell), `sessionId` and `slot` (synap-ask).",
   unknown_key:
     'Call synap_list_widgets({ surface: "document" }) for the keys a document can embed.',
   not_found:

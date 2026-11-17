@@ -34,6 +34,7 @@ import {
   like,
   lt,
   transitionProposal,
+  expireOrphanedStageGates,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
@@ -303,12 +304,46 @@ export async function expireLapsedProposals(
   for (const id of selectLapsedGuestIds(guestRows, now)) {
     if (!lapsed.includes(id)) lapsed.push(id);
   }
+  // An app's ask for one more thing past its own `expiresAt` (7 days, plan
+  // 647ebfd4): the app's next ask expires its own too; this is the backstop
+  // for an app that never asks again. Same failure rule as the guest scan.
+  try {
+    // Lazy: `permission-check.ts` imports this module, and the ask service
+    // imports `permission-check.ts` (a static import here is a cycle).
+    const { lapsedAppAskIds } = await import("../app-access-ask.js");
+    for (const id of await lapsedAppAskIds(now)) {
+      if (!lapsed.includes(id)) lapsed.push(id);
+    }
+  } catch (err) {
+    logger.warn({ err }, "expiry: app-ask scan failed (retried next run)");
+  }
   const seen = new Set(pending.map((p) => p.id));
   const candidates = [...pending, ...guestRows.filter((g) => !seen.has(g.id))];
 
+  // Stage gates of a session that already ENDED: their approval can only fail
+  // (the session's end expires its gates since 9 Nov; these were left before
+  // that, or by a race). Expired here by the same door, stamped
+  // `expiredBy: "session_ended"`. Same failure rule as the scans above.
+  let orphanedGates: string[] = [];
+  try {
+    orphanedGates = await expireOrphanedStageGates(db);
+  } catch (err) {
+    logger.warn(
+      { err },
+      "expiry: orphaned stage-gate scan failed (retried next run)"
+    );
+  }
+  if (orphanedGates.length > 0) {
+    markProposalNotificationsActioned(orphanedGates);
+    logger.info(
+      { expired: orphanedGates.length, proposalIds: orphanedGates },
+      "expired stage gates of sessions that had already ended"
+    );
+  }
+
   if (lapsed.length === 0) {
     await scrubExpiredGuestPayloadsSafely();
-    return { scanned: pending.length, expired: 0 };
+    return { scanned: pending.length, expired: orphanedGates.length };
   }
 
   // Chunked, and re-asserting PENDING in the WHERE: a human may have approved
@@ -348,7 +383,7 @@ export async function expireLapsedProposals(
     { scanned: pending.length, expired },
     "expired lapsed proposals (moment passed, never decided)"
   );
-  return { scanned: pending.length, expired };
+  return { scanned: pending.length, expired: expired + orphanedGates.length };
 }
 
 /**

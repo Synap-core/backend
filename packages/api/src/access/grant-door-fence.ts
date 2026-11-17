@@ -203,6 +203,22 @@ const THREAD_CONTEXT = READS("channel", "entity", "document");
  */
 const GET_CHANNEL = READS("channel");
 
+/**
+ * The find door (`findForCaller`): MCP `synap_find` and Hub `GET /find` call
+ * the same function, so they share this one declaration. The subjects are
+ * the catalogs that read on the person's floor with no grant clause:
+ * runnable verbs (`tool`, `command`), playbooks, and automations. The object
+ * catalogs (skills and rules, automations, sessions, goals, projects, views,
+ * documents; `find-objects.ts`) AND the key's grant row by row
+ * (`grantReadPredicate`; guarded by
+ * `services/capabilities/__tests__/find-objects.grants.pglite.test.ts`),
+ * except skills, which have no read subject yet (as LOAD_SKILL). The spaces
+ * catalog reads the person's member spaces (name, purpose, kinds), which no
+ * subject here names (`/workspaces` declares entity, project, proposal). A key
+ * pinned to a space, project or object never passes it.
+ */
+const FIND = READS("tool", "command", "playbook", "automation");
+
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
   return grant.scopes.some((scope) =>
@@ -403,6 +419,12 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // key is fenced, and `synap keys list|templates` must still answer.
   /^\/keys\/requested\/?$/,
   /^\/keys\/templates\/?$/,
+  // A pod app reads its OWN ask for one more thing (`readAppAccessAsk`,
+  // services/app-access-ask.ts): the ask must be of the app the caller's
+  // grant names, filed for the caller (else 404) — no row a grant bounds.
+  // An app whose grant does not yet reach a space must read whether its
+  // person allowed it.
+  route("/apps/access-requests/:id"),
   /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
   // The built-in skill packages' SKILL.md files, read from the image's
@@ -850,6 +872,8 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // entities (`loadProfileFill`). The same rule as MCP `synap_list_profiles`,
   // plus the relation vocabulary.
   [/^\/discover\/?$/, READS("entity", "relation_def")],
+  // Find by words (`findForCaller`): the same door as MCP `synap_find` (FIND).
+  [/^\/find\/?$/, FIND],
   // Full-text recall of remembered facts: the twin of POST /memory/search.
   // GET only: every other /memory route is an owner-wide write
   // (GRANT_OWNER_WIDE_REST_WRITES).
@@ -1098,7 +1122,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
     "project"
   ),
   synap_orient: ORIENT,
-  synap_find: READS("tool", "command", "playbook", "automation"),
+  // Same door as `GET /find` (FIND).
+  synap_find: FIND,
   synap_get_entity: READS("entity", "relation", "facet", "document"),
   synap_get_graph: READS(
     "entity",

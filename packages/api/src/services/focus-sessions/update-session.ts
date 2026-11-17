@@ -86,6 +86,11 @@ import type {
 } from "@synap-core/types/units";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { restatedAskHints, withoutRestatedWhy } from "./ask-text.js";
+import {
+  declinedReaskError,
+  isIdenticalReaskOfDecline,
+  type ReaskSlotLite,
+} from "./declined-reask.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { sessionGoalPayload } from "./session-update-goal.js";
@@ -499,6 +504,9 @@ const slotAnswerWireSchema = z.object({
   // here so an echo keeps it: an undeclared nested key is stripped at the
   // parse, and the stripped echo then reads as a forged answer.
   ...AnswerProvenanceSchema.shape,
+  // A refusal's record of WHICH ask was refused (`declined-reask.ts`).
+  // Round-trip only, declared so an echo keeps the re-ask guard armed.
+  askFingerprint: z.string().max(64).optional(),
 });
 
 /**
@@ -1124,6 +1132,29 @@ export function pastAnswerByError(labels: string[]): string {
     .map((l) => `"${l}"`)
     .join(", ");
   return `Refused: ${named}: ${ASK_ANSWER_BY_PAST_MESSAGE} Nothing was changed.`;
+}
+
+/**
+ * The labels of incoming slots that hand the person back the very ask they
+ * REFUSED, while that refusal stands (`isIdenticalReaskOfDecline`,
+ * `declined-reask.ts`) — refused at write like a past deadline. Judged on the
+ * slot as the patch would leave it (the stored twin with the item over it). Pure.
+ */
+export function declinedReaskLabels(
+  current: OutputItem[],
+  incoming: readonly (OutputItem | undefined)[]
+): string[] {
+  const { twinOf } = storedTwins(current);
+  return incoming
+    .filter((item): item is OutputItem => {
+      if (!item) return false;
+      const twin = twinOf(item);
+      return isIdenticalReaskOfDecline(
+        twin as ReaskSlotLite | undefined,
+        { ...twin, ...item } as ReaskSlotLite
+      );
+    })
+    .map((item) => item.label);
 }
 
 /** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
@@ -2143,6 +2174,11 @@ export async function updateFocusSession(
       const past = pastAnswerByLabels(stored, declared as OutputItem[]);
       if (past.length > 0) {
         return { status: "denied", reason: pastAnswerByError(past) };
+      }
+      // The very ask the person refused, asked again while the no stands.
+      const reasked = declinedReaskLabels(stored, declared as OutputItem[]);
+      if (reasked.length > 0) {
+        return { status: "denied", reason: declinedReaskError(reasked) };
       }
     }
   }

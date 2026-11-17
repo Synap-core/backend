@@ -51,11 +51,24 @@ export type PlaybookRunStatus =
   | "stale";
 
 /**
- * Why a `failed` run stopped when nothing broke (`playbook_runs.stop_reason`,
- * `automation_runs.stop_reason`). `budget`: its token budget or step limit,
- * with nobody in the loop to ask (`run-turn-end.ts`).
+ * Why a `failed` run stopped before it finished (`playbook_runs.stop_reason`),
+ * with nobody in the loop to ask (`run-turn-end.ts`). `budget`: its token
+ * budget or step limit — nothing broke, so its automation's breakers SKIP it
+ * (`automation-parent-settle.ts`). `stages_left`: its turns kept ending before
+ * it reached its last stage — a fault of the run, so the breakers COUNT it
+ * (only `budget` is exempt). A text column with no CHECK (0361): a new value
+ * needs no migration.
  */
-export const RUN_STOP_REASONS = ["budget"] as const;
+export const RUN_STOP_REASONS = ["budget", "stages_left"] as const;
+
+/**
+ * `automation_runs.stop_reason`: the parent settle stamps `budget` only when
+ * EVERY failed child stopped at its budget, else NULL
+ * (`automation-parent-settle.ts`), so `stages_left` never reaches a parent
+ * row. Kept to `budget`, the published wire row (`@synap-core/types`
+ * `AutomationRun.stopReason`, wire-parity/automations.ts) is unchanged.
+ */
+export const AUTOMATION_RUN_STOP_REASONS = ["budget"] as const;
 
 /** The normalized state of an external agent's task (the `status` verb). */
 export type ExternalAgentState = "running" | "needs_input" | "done" | "failed";

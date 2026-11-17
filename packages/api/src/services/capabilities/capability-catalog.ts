@@ -28,7 +28,11 @@ import {
   links,
   secrets,
 } from "@synap/database/schema";
-import type { CapabilityDefinition } from "@synap/playbooks";
+import type {
+  CapabilityDefinition,
+  CapabilityParamObtain,
+} from "@synap/playbooks";
+import { readParamObtain } from "./param-obtain.js";
 
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import {
@@ -264,6 +268,8 @@ export interface CapabilityCardInstallParam {
   required?: boolean;
   description?: string;
   secret?: boolean;
+  /** How a person gets this value (manifest `obtain`, `param-obtain.ts`). */
+  obtain?: CapabilityParamObtain;
 }
 
 export interface CapabilityCard {
@@ -346,6 +352,8 @@ export function extractInstallParams(
   if (!Array.isArray(params)) return [];
   return params.map((p) => {
     const type = typeof p.type === "string" ? p.type : undefined;
+    // Dropped when invalid: a cached manifest was not validated here.
+    const obtain = readParamObtain(p.obtain);
     return {
       name: String(p.name),
       ...(typeof p.label === "string" ? { label: p.label } : {}),
@@ -354,6 +362,7 @@ export function extractInstallParams(
       ...(typeof p.description === "string"
         ? { description: p.description }
         : {}),
+      ...(obtain ? { obtain } : {}),
       // Prompt these masked: an explicit secret/password type, or the
       // conventional credential param names used by vault-generic templates.
       ...(type === "password" ||

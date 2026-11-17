@@ -2420,8 +2420,10 @@ export class HubRestClient {
 
   /**
    * Run a playbook. Returns `running`, `proposed` (agent launch awaiting
-   * review), or `blocked` (nothing ran: it uses skills that are not enabled —
-   * `enableProposals` holds the requests filed to enable them).
+   * review), `blocked` (nothing ran: it uses skills that are not enabled —
+   * `enableProposals` holds the requests filed to enable them), or
+   * `already_running` (nothing started: your live run of it on the subject is
+   * `session`; pass `startAnother` for a second run).
    */
   async runPlaybook(
     playbookId: string,

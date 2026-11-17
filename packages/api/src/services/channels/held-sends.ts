@@ -17,9 +17,15 @@
  * And a send the person made OUTSIDE the pod (straight from LinkedIn) closes
  * the drafts it replaces (`withdrawDraftsSentOutside`, contract E).
  *
- * Only `not_connected` holds. Every other refusal is what it was: a failed
- * READ (LinkedIn down) files as before and is checked again at dispatch; an
- * unknown reach is never "not connected".
+ * Two things hold:
+ *   - `not_connected` (above). Every other refusal is what it was: a failed
+ *     READ (LinkedIn down) files as before and is checked again at dispatch;
+ *     an unknown reach is never "not connected".
+ *   - `linkedin_limit`: the sending LinkedIn account used today's limit, or
+ *     LinkedIn paused it for the day (`linkedin-account-limits.ts`). Held
+ *     until `until` (the next UTC midnight): from then it reads as not held
+ *     and can be approved again; nothing has to release it. A connection
+ *     request (a `capability.run` proposal) holds the same way.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -31,10 +37,12 @@ import {
   isNotNull,
   lte,
   or,
+  inArray,
   drizzleSql,
   transitionProposal,
 } from "@synap/database";
 import { proposals, ProposalStatus } from "@synap/database/schema";
+import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
 
@@ -45,11 +53,13 @@ const SEND_TYPE = "messaging.external.send";
 
 /** Why a pending send cannot go out yet, on `proposals.data.held`. */
 export interface HeldSend {
-  errorClass: "not_connected";
+  errorClass: "not_connected" | "linkedin_limit";
   /** The sentence that names the next step ("Ask to connect first."). */
   reason: string;
   /** When the pod last found it unreachable (ISO). */
   at: string;
+  /** `linkedin_limit`: when it can go (ISO); from then it is not held. */
+  until?: string;
 }
 
 /** The `held` record for a `not_connected` refusal. */
@@ -57,16 +67,34 @@ export function heldSend(reason: string, now: Date = new Date()): HeldSend {
   return { errorClass: "not_connected", reason, at: now.toISOString() };
 }
 
-/** The `held` record a proposal's data carries, or null. */
-export function readHeld(data: unknown): HeldSend | null {
+/**
+ * The `held` record a proposal's data carries while it still holds, or null.
+ * A `linkedin_limit` hold past its `until` no longer holds.
+ */
+export function readHeld(
+  data: unknown,
+  now: Date = new Date()
+): HeldSend | null {
   if (!data || typeof data !== "object") return null;
   const held = (data as Record<string, unknown>).held;
   if (!held || typeof held !== "object") return null;
   const h = held as Record<string, unknown>;
-  return typeof h.reason === "string" && typeof h.at === "string"
-    ? { errorClass: "not_connected", reason: h.reason, at: h.at }
-    : null;
+  if (typeof h.reason !== "string" || typeof h.at !== "string") return null;
+  if (h.errorClass !== "linkedin_limit") {
+    return { errorClass: "not_connected", reason: h.reason, at: h.at };
+  }
+  const until = typeof h.until === "string" ? Date.parse(h.until) : NaN;
+  if (Number.isNaN(until) || until <= now.getTime()) return null;
+  return {
+    errorClass: "linkedin_limit",
+    reason: h.reason,
+    at: h.at,
+    until: h.until as string,
+  };
 }
+
+/** The proposals a hold may be written on: a message, or a connection request run. */
+const HOLDABLE_TYPES = [SEND_TYPE, CAPABILITY_RUN_PROPOSAL_TYPE];
 
 /**
  * Keep an approved-but-unreachable send PENDING with `held` (never
@@ -80,6 +108,10 @@ export async function holdPendingSend(
   held: HeldSend
 ): Promise<void> {
   const patch = JSON.stringify({ held });
+  const typeFloor =
+    held.errorClass === "linkedin_limit"
+      ? inArray(proposals.proposalType, HOLDABLE_TYPES)
+      : eq(proposals.proposalType, SEND_TYPE);
   await db
     .update(proposals)
     .set({
@@ -89,7 +121,7 @@ export async function holdPendingSend(
     .where(
       and(
         eq(proposals.id, proposalId),
-        eq(proposals.proposalType, SEND_TYPE),
+        typeFloor,
         eq(proposals.status, ProposalStatus.PENDING)
       )
     );
@@ -101,10 +133,7 @@ export async function holdPendingSend(
       rejectionReason: null,
       updatedAt: new Date(),
     },
-    where: and(
-      eq(proposals.id, proposalId),
-      eq(proposals.proposalType, SEND_TYPE)
-    ),
+    where: and(eq(proposals.id, proposalId), typeFloor),
   });
 }
 
@@ -124,7 +153,9 @@ export async function releaseHeldSends(entityId: string): Promise<number> {
         eq(proposals.proposalType, SEND_TYPE),
         eq(proposals.status, ProposalStatus.PENDING),
         drizzleSql`${proposals.data} ->> 'entityId' = ${entityId}`,
-        drizzleSql`${proposals.data} ? 'held'`
+        drizzleSql`${proposals.data} ? 'held'`,
+        // A daily-limit hold ends with its day, not with the connection.
+        drizzleSql`COALESCE(${proposals.data} -> 'held' ->> 'errorClass', 'not_connected') = 'not_connected'`
       )
     )
     .returning({ id: proposals.id });

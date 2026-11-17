@@ -133,6 +133,45 @@ describe("approving an agent's run proposal", () => {
     );
   });
 
+  it("already running (one live run per object) → names the live run, starts nothing, approve again later", async () => {
+    h.result = {
+      status: "already_running",
+      session: { id: "sess-live" },
+      run: null,
+      reason: "live_run",
+      message: "x",
+    };
+    await expect(approve()).rejects.toThrow(
+      /Couldn't apply — this playbook is already running on this record \(session sess-live\), so approving did not start a second run/
+    );
+  });
+
+  it("a run asked as 'start another' is replayed as one", async () => {
+    await executor.execute({
+      proposal: {
+        id: "p-3",
+        workspaceId: "ws-1",
+        targetType: "playbook",
+        proposalType: "run",
+        agentUserId: null,
+        sourceMessageId: null,
+        data: {
+          data: { playbookId: "pb-1", startAnother: true },
+        },
+      },
+      userId: "owner-1",
+      input: { proposalId: "p-3" },
+      deps: {
+        reportProposalOutcome: vi.fn(),
+        emitProposalReviewed: vi.fn(),
+      },
+    } as never);
+    expect(h.runs[0]).toMatchObject({ startAnother: true });
+    // …and one asked without it is replayed without it.
+    await approve();
+    expect(h.runs[1]).not.toHaveProperty("startAnother");
+  });
+
   it("only a re-proposal on the approver's own check blames the role", () => {
     expect(notStartedReason({ status: "proposed", message: "x" })).toMatch(
       /^your workspace role cannot run this playbook/

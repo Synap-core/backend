@@ -38,7 +38,9 @@ import { focusSessions } from "../schema/focus-sessions.js";
  * NOT a decision the person answered (`isDecidedByAnswer`,
  * `@synap-core/types/units`): delivered when the slot names a non-empty
  * string `decisionId`, its answer is an object whose `askSnapshot.mode` is
- * confirm / choose, and it is not a criterion's grade slot. The whole test
+ * confirm / choose, its answer is not a REFUSAL (`answer.value.type` is not
+ * `declined`: a refused decision decides nothing), and it is not a
+ * criterion's grade slot. The whole test
  * sits in `coalesce(…, false)`: a missing field reads NULL, and a NULL here
  * would drop the row instead of keeping it owed.
  */
@@ -50,6 +52,7 @@ const DECIDED_BY_ANSWER_CLAUSE = `NOT coalesce(${[
   "jsonb_typeof(slot->'answer') = 'object'",
   "jsonb_typeof(slot->'answer'->'askSnapshot') = 'object'",
   "slot->'answer'->'askSnapshot'->>'mode' IN ('confirm', 'choose')",
+  "slot->'answer'->'value'->>'type' IS DISTINCT FROM 'declined'",
 ].join(" AND ")}, false)`;
 
 /**

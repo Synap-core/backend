@@ -191,9 +191,11 @@ describe("the apply is a compare-and-set, then the auto path's materializer", ()
     const { set, where } = h.updates[0]!;
     expect(set).toMatchObject({
       status: "auto_approved",
-      reviewedBy: OWNER,
+      // The agent's rule applied it: no person reviewed it.
+      reviewedBy: null,
       governanceReason: null,
     });
+    expect(set.reviewedAt).toBeInstanceOf(Date);
     const { sql, params } = sqlOf(where);
     expect(sql).toContain('"status" = $');
     expect(params).toContain("pending");

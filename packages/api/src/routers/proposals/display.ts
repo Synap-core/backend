@@ -139,6 +139,7 @@ import {
 import {
   humanizeToken,
   resolveActionLabel,
+  resolveFormerObjectNouns,
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
@@ -3263,6 +3264,9 @@ export function summaryNamesTheObject(
     subtract(resolveObjectNounPlural(kind));
     subtract(humanizeToken(kind));
     subtract(kind);
+    // A durable summary filed before a kind was renamed spells its OLD noun
+    // ("Update Template" for a playbook, now a "Process"): still metadata.
+    for (const former of resolveFormerObjectNouns(kind)) subtract(former);
   }
 
   return wordsOf(summary).some((word) => !identityFree.has(word));

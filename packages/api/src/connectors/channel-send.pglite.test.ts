@@ -316,7 +316,8 @@ beforeEach(async () => {
   // Every test starts from a person with no channel and no proposal.
   await h.client!.exec(
     `delete from messages; delete from proposals; delete from channels; delete from tools;
-     delete from messaging_accounts where external_id <> '${ACCOUNT}';`
+     delete from messaging_accounts where external_id <> '${ACCOUNT}';
+     update messaging_accounts set metadata = '{}'::jsonb;`
   );
 });
 
@@ -832,12 +833,15 @@ describe("security review (lane D)", () => {
     expect((await statusOf(out.proposalId as string)).status).toBe("approved");
   });
 
-  it("the provider refusing the send (a 429) releases the claim; the retry sends once", async () => {
+  // A LinkedIn 429 now pauses the account for the day and holds the send
+  // (`channel-send.linkedin-limits.pglite.test.ts`); a 408 is the transient
+  // refusal that releases the claim and is sent on the retry.
+  it("the provider refusing the send (a 408) releases the claim; the retry sends once", async () => {
     startChat
       .mockRejectedValueOnce(
-        new Error("Unipile startChat failed: 429 — too many requests")
+        new Error("Unipile startChat failed: 408 — request timeout")
       )
-      .mockResolvedValue({ chatId: "chat-429", messageId: "m-429" });
+      .mockResolvedValue({ chatId: "chat-408", messageId: "m-408" });
     const out = await appSendsTo(PERSON);
     let caught: unknown;
     try {

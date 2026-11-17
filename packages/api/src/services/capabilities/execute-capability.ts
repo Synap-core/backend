@@ -161,6 +161,7 @@ import {
 } from "./capability-enable-link.js";
 import { answeringSkillOrder, answeringSkillsWhere } from "./verb-skill.js";
 import type { IntentRequestRecord } from "./intent-actions.js";
+import type { HeldSend } from "../channels/held-sends.js";
 import { describeIntentRun } from "./intent-input.js";
 import { resolveEntityVerbRunSubject } from "./capability-run-subject.js";
 import {
@@ -1108,6 +1109,13 @@ export async function executeCapability(input: {
  *   nothing. A capability.run proposal would not show in the channel, and on
  *   approval would have replayed the verb as the approver — an owner send.
  *
+ *   market.install → `runMarketInstall`: with `mustPropose` it files a
+ *   `capability.install` proposal (the one whose setup form asks the person
+ *   for the key, with the manifest's steps) and installs nothing. A
+ *   capability.run proposal replayed as the approver installed directly and
+ *   failed with "Needs setup", with no form to give the key (finding
+ *   91a3bfd3, proposal 118d24bd).
+ *
  * Tighten-only: only a `propose` verdict is handed down (a deny stays a deny,
  * a dry-run a dry-run, an unattended run with no review surface is refused
  * as before), and the handler's grant check still runs before anything. A
@@ -1117,6 +1125,7 @@ export async function executeCapability(input: {
  */
 export const SELF_GATED_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "messaging.send",
+  "market.install",
 ]);
 
 function isSelfGatedBuiltin(skill: { kind: string; name: string }): boolean {
@@ -1882,6 +1891,8 @@ async function runResolvedSkillInner(
       message: string;
       errorClass?: FailureErrorClass;
       providerRef?: string;
+      /** Not sent and waiting: a LinkedIn action its account may not make today. */
+      held?: HeldSend;
     }
   | { kind: "not_found"; message: string }
   | {
@@ -2041,12 +2052,14 @@ async function runResolvedSkillInner(
         const env = (result ?? {}) as {
           errorClass?: FailureErrorClass;
           providerRef?: string;
+          held?: HeldSend;
         };
         return {
           kind: "error",
           message: errMessage,
           errorClass: env.errorClass,
           providerRef: env.providerRef,
+          ...(env.held ? { held: env.held } : {}),
         };
       }
     }
@@ -2094,6 +2107,7 @@ async function runResolvedSkillInner(
       // in-process sandbox (dispatch result); undefined for a non-provider failure.
       errorClass: envelope.errorClass,
       providerRef: envelope.providerRef,
+      ...(envelope.held ? { held: envelope.held } : {}),
     };
   }
   return { kind: "run", skillId: skill.id, result: envelope.result };

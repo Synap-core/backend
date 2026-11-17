@@ -27,6 +27,7 @@ import {
   type PacketSlotItem,
   type PacketWorkUnitItem,
 } from "../continuation-packet.js";
+import { stagesLeft } from "../../runs/stages-left.js";
 
 const ok = <T>(items: T[]): PacketSection<T> => ({
   status: "ok",
@@ -840,5 +841,81 @@ describe("deriveNextMove — a paused session's hold (dev-work plan P0.4)", () =
         })
       ).kind
     ).toBe("agent_slot");
+  });
+});
+
+describe("deriveNextMove — a session that ENDED before its last stage (stopped_early)", () => {
+  // Produce Content, as session 12dbd086 ran it: one turn, still on `brief`.
+  const PRODUCE = [
+    { key: "brief", name: "Brief" },
+    { key: "script", name: "Script" },
+    { key: "draft", name: "Draft", gate: { kind: "human" } },
+    { key: "review", name: "Review", gate: { kind: "human" } },
+    { key: "schedule", name: "Schedule" },
+    { key: "publish", name: "Publish", gate: { kind: "human" } },
+  ];
+
+  it("a closed run still on its first stage says where it stopped, and it is the person's move", () => {
+    const move = deriveNextMove(
+      input({ status: "closed", stagesLeft: stagesLeft(PRODUCE, "brief") })
+    );
+    expect(move).toMatchObject({
+      kind: "stopped_early",
+      actor: "user",
+      label: "Stopped at Brief",
+    });
+    expect(move.reason).toContain(
+      "at Brief, with 5 stages left: Script, Draft, Review, Schedule, Publish."
+    );
+    expect(move.reason).toContain(
+      "Whether to run it again is yours to decide."
+    );
+  });
+
+  it("a failed run names its stage too; an unknown current stage reads as before the first", () => {
+    expect(
+      deriveNextMove(
+        input({ status: "failed", stagesLeft: stagesLeft(PRODUCE, "review") })
+      )
+    ).toMatchObject({ kind: "stopped_early", label: "Stopped at Review" });
+    expect(
+      deriveNextMove(
+        input({ status: "closed", stagesLeft: stagesLeft(PRODUCE, null) })
+      )
+    ).toMatchObject({ kind: "stopped_early", label: "Stopped before Brief" });
+  });
+
+  it("a run that reached its last stage, a stageless session, and a CANCELLED run still read none", () => {
+    for (const over of [
+      { status: "closed", stagesLeft: stagesLeft(PRODUCE, "publish") },
+      { status: "closed", stagesLeft: stagesLeft([], null) },
+      { status: "closed" },
+      { status: "cancelled", stagesLeft: stagesLeft(PRODUCE, "brief") },
+    ]) {
+      expect(deriveNextMove(input(over)).kind).toBe("none");
+    }
+  });
+
+  it("an OPEN session with stages left is never told it stopped", () => {
+    expect(
+      deriveNextMove(
+        input({ status: "active", stagesLeft: stagesLeft(PRODUCE, "brief") })
+      ).kind
+    ).not.toBe("stopped_early");
+  });
+
+  it("what the person owes still comes first", () => {
+    const owed = ok([
+      { label: "Stripe key", kind: "secret" } as PacketSlotItem,
+    ]);
+    expect(
+      deriveNextMove(
+        input({
+          status: "closed",
+          owedSlots: owed,
+          stagesLeft: stagesLeft(PRODUCE, "brief"),
+        })
+      ).kind
+    ).toBe("owed_slot");
   });
 });

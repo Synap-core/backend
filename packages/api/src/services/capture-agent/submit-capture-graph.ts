@@ -1729,7 +1729,6 @@ export async function submitCaptureGraph(
           const { proposal } = await createAutoApprovedProposal({
             id: captureProposalId,
             userId,
-            reviewedBy: userId,
             // The AGENT that captured this: the policy above judged ITS write,
             // so the receipt names it (as the pending path's row does). Without
             // it every auto-applied capture read as the person's own write.

@@ -4517,6 +4517,13 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "playbook_id" uuid;
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_playbook_id"
   ON "focus_sessions" ("playbook_id")
   WHERE "playbook_id" IS NOT NULL;
+-- 0427: one live run per object. A run started by the run door holds its
+-- object's one live slot; at most one live slot-holder per (playbook,
+-- subject, owner).
+ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "one_live_per_subject" boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS "uniq_focus_sessions_one_live_run"
+  ON "focus_sessions" ("playbook_id", "subject_entity_id", "user_id")
+  WHERE "one_live_per_subject" AND "status" IN ('active', 'paused', 'forming', 'stale');
 
 -- ── Playbook Runs (0129_playbook_runs.sql catch-up) ───────────────────────────
 -- The run ledger — one row per execution of a Playbook (executor spine, P3).
@@ -4958,6 +4965,8 @@ ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispat
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispatch_daily';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_pending_approvals';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_irreversible_sends_daily';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'linkedin_invitations_daily';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'linkedin_actions_daily';
 CREATE TABLE IF NOT EXISTS "governance_ceilings" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "axis"                governance_ceiling_axis NOT NULL,

@@ -18,9 +18,15 @@
  * the human who created that agent: an agent works for its person, and its
  * person leaving the space is what ends its access.
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { automations, users, workspaceMembers } from "../schema/index.js";
 import { personOfOwner } from "./owner-person.js";
+import {
+  AUTOMATION_AUDIENCE_KEY,
+  type AutomationAudience,
+} from "@synap-core/types/automations";
+
+const EVERYONE: AutomationAudience = "everyone";
 
 export const AUTOMATION_OWNER_LEFT_SPACE =
   "Paused: the person it runs for is no longer a member of this space.";
@@ -83,4 +89,33 @@ export async function pauseAutomationsOfRemovedMember(
     )
     .returning({ id: automations.id });
   return paused.length;
+}
+
+/**
+ * WHICH POD-WIDE AUTOMATIONS answer to an event — the ONE predicate the trigger
+ * matcher (`@synap/jobs` automation-trigger-matcher) and every surface that
+ * replays it (`services/signal/channel-stack.ts`) select with.
+ *
+ * `eventActorIds` is `actorsOfSamePerson(db, <event userId>)`: the event's
+ * person and that person's agents. A pod-wide automation answers when
+ *  - its owner is one of them (audience `me`, the default: an automation an
+ *    agent of P made answers to P's events and to P's other agents' events), or
+ *  - its `triggerConfig.audience` is `everyone` (any member's events; the
+ *    matcher then drops a run in a space the automation's person cannot see).
+ *
+ * Before decision 782c862e (2026-11-16) this was `createdBy = <event userId>`,
+ * so an agent-authored automation never met an event by its person or by
+ * another of its person's agents (finding 54095e11: two automations active for
+ * nine days, runCount 0).
+ */
+export function podWideAutomationAnswersTo(
+  eventActorIds: readonly string[]
+): SQL {
+  return and(
+    isNull(automations.workspaceId),
+    or(
+      inArray(automations.createdBy, [...eventActorIds]),
+      sql`${automations.triggerConfig}->>${AUTOMATION_AUDIENCE_KEY} = ${EVERYONE}`
+    )
+  ) as SQL;
 }

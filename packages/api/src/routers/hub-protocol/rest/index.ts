@@ -52,6 +52,7 @@ export { registerCapabilityConnectionsRoutes } from "./capability-connections.js
 export { registerLoopsRoutes } from "./loops.js";
 export { registerMemoryRoutes } from "./memory.js";
 export { registerKnowledgeRoutes } from "./knowledge.js";
+export { registerFindRoutes } from "./find.js";
 export { registerCommandsRoutes } from "./commands.js";
 export { registerAgentUsersRoutes } from "./agent-users.js";
 export { registerAgentConfigsRoutes } from "./agent-configs.js";

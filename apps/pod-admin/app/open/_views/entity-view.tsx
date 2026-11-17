@@ -49,6 +49,7 @@ import {
 } from "../open-model";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
+import { ConnectedObjects } from "../../_lib/object/connected-objects";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
@@ -142,6 +143,16 @@ export function EntityView({ id }: { id: string }) {
   const summaryShownBelow =
     summary.propertySlug !== null && proseKeys.includes(summary.propertySlug);
   const openInApp = <OpenInAppLink type="entity" id={id} />;
+  const hasBody = Boolean(entity.documentId) && !bodyIsMedia;
+  // With a body of its own, what it is connected to follows the body.
+  const connected = (
+    <ConnectedObjects
+      key={id}
+      entityId={id}
+      kind={profileSlug}
+      definitions={data.effectiveProperties}
+    />
+  );
 
   return (
     <OpenObject
@@ -210,7 +221,8 @@ export function EntityView({ id }: { id: string }) {
           openInApp={openInApp}
         />
       ))}
-      {entity.documentId && !bodyIsMedia && (
+      {!hasBody && connected}
+      {hasBody && (
         <DocumentContentSection
           title="Content"
           content={body.content}
@@ -218,6 +230,7 @@ export function EntityView({ id }: { id: string }) {
           onRetry={body.retry}
         />
       )}
+      {hasBody && connected}
     </OpenObject>
   );
 }

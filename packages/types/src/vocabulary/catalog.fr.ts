@@ -428,6 +428,9 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.decline.imperative": "Refuser",
   "action.decline.past": "Refusé",
   "action.decline.progressive": "Refus en cours",
+  "action.refuse.imperative": "Refuser",
+  "action.refuse.past": "Refusé",
+  "action.refuse.progressive": "Refus en cours",
   "action.disconnect.imperative": "Déconnecter",
   "action.disconnect.past": "Déconnecté",
   "action.disconnect.progressive": "Déconnexion en cours",
@@ -442,6 +445,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.ask.progressive": "Demande en cours",
   "action.attest.imperative": "Marquer comme fait",
   "action.attest.past": "Marqué comme fait",
+  "action.hand_back.imperative": "Rendre",
+  "action.hand_back.past": "Rendu",
   "action.post.imperative": "Poster",
   "action.post.past": "Posté",
   "action.post.progressive": "Publication en cours",
@@ -774,6 +779,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "vocabulary.processHealth.not_enough_activity.label": "Statut inconnu",
   "vocabulary.processHealth.not_enough_activity.reason":
     "Il n’y a pas assez d’activité chargée pour déterminer l’état actuel.",
+  "vocabulary.job.startedHere":
+    "{n, plural, one {# travail lancé d’ici} many {# de travaux lancés d’ici} other {# travaux lancés d’ici}}",
 };
 
 /** A noun's grammar in French: what a sentence agrees with. */

@@ -144,6 +144,18 @@ vi.mock("../../../lib/trpc", async () => ({
     // A decided (or expired) proposal's page offers the next door from
     // Review's rows: nothing waits here.
     signals: {
+      needsYou: {
+        // The request story's context read (`useRequestContext`): no row
+        // stands for this proposal, so its story has no Before or Next.
+        useQuery: () => ({
+          data: {
+            rows: { needs_you: [] },
+            context: { timelineItems: 4, sessions: {}, rows: {} },
+          },
+          isError: false,
+          refetch() {},
+        }),
+      },
       list: {
         useQuery: () => ({
           data: { signals: [{ id: "next-row" }] },
@@ -162,6 +174,7 @@ vi.mock("../../../lib/trpc", async () => ({
 
 import { ProposalReview } from "./ProposalReview";
 import { ProposedDocumentBody } from "./ProposedDocumentBody";
+import { UpdatedDoor } from "./UpdatedDoor";
 import { READS_WIDE_ATTR } from "../../_lib/receiver-shell";
 
 const text = (html: string) =>
@@ -518,23 +531,41 @@ describe("an Update document request that is not an HTML page", () => {
 });
 
 describe("the door to the object an update changes", () => {
-  it("a pending update names the document and links to its page", () => {
+  /** The door alone: from its mark to the span that closes it. */
+  const doorOf = (html: string) => {
+    const at = html.indexOf("data-updated-object");
+    return html.slice(at, html.indexOf("</span>", at));
+  };
+
+  it("a pending update is a door to the document's page, named by what it is", () => {
     state.proposal = documentUpdate("pending");
     state.document = liveDocument("html", PAGE_BEFORE);
-    const html = render();
-    const door = html.slice(html.indexOf("data-updated-object"));
-    expect(text(door)).toMatch(/^[^<]*>?\s*Update · Lean report/);
+    const door = doorOf(render());
+    expect(door).toContain(`href="/open/document/${ids.DOC}"`);
+    expect(text(door)).toContain("Open document");
+    // The change's title is the heading's, said once there — not here.
+    expect(text(door)).not.toContain("Lean report");
+  });
+
+  it("an approved one still opens the document", () => {
+    state.proposal = documentUpdate("approved", { stamped: true });
+    state.document = liveDocument("html", PAGE_AFTER);
+    const door = doorOf(render());
     expect(door).toContain(`href="/open/document/${ids.DOC}"`);
     expect(text(door)).toContain("Open document");
   });
 
-  it("an approved one says Updated, and still opens the document", () => {
-    state.proposal = documentUpdate("approved", { stamped: true });
-    state.document = liveDocument("html", PAGE_AFTER);
-    const door = render();
-    const at = door.slice(door.indexOf("data-updated-object"));
-    expect(text(at)).toContain("Updated · Lean report");
-    expect(at).toContain(`href="/open/document/${ids.DOC}"`);
+  it("an entity update is named by its profile's noun, never its table", () => {
+    const door = renderToStaticMarkup(
+      createElement(UpdatedDoor, {
+        updated: { kind: "entity", id: ids.DOC, title: "Gap" },
+        kind: "finding",
+      })
+    );
+    expect(text(door)).toContain("Open finding");
+    expect(text(door)).not.toMatch(/Open entity/);
+    // The door still opens the object where the pod hosts it.
+    expect(door).toContain(`href="/open/entity/${ids.DOC}"`);
   });
 
   it("comes before the change it is about", () => {

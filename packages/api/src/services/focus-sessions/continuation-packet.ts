@@ -68,7 +68,11 @@ import {
   listHolds,
   sessionStageRuns,
 } from "@synap/database";
-import { questionDisposition } from "@synap-core/types/ask";
+import {
+  declinedReasonOf,
+  isDeclinedValue,
+  questionDisposition,
+} from "@synap-core/types/ask";
 import {
   questionShortId,
   readRoomPostMeta,
@@ -91,6 +95,12 @@ import type { OpenBlocker } from "@synap-core/types/connections";
 import type { RecordedHold } from "@synap-core/types/lifecycle";
 import { readDependencyState } from "../links/dependency-links.js";
 import { holdNextMove } from "../status/next-move.js";
+import {
+  stagesLeft,
+  stagesLeftWords,
+  stoppedWhere,
+  type StagesLeft,
+} from "../runs/stages-left.js";
 import {
   holdWaitingOnRef,
   readWaitingOn,
@@ -562,7 +572,9 @@ export interface PacketDecision {
  * `waiting_on` (a wait on someone or something, its `waitKind` saying whose
  * ball), `step` (a thing's next step on its path, `to`), `judge_review` (a
  * goal's claims wait on its judge) and `start_work` (no open session works
- * on a goal).
+ * on a goal). `stopped_early` is a session's that ENDED before its last
+ * declared stage (wave 0, plan 7d71ddcc): the person decides whether to run
+ * it again.
  */
 export type NextMoveKind =
   | "owed_slot"
@@ -575,6 +587,7 @@ export type NextMoveKind =
   | "agent_slot"
   | "undeclared"
   | "ready_to_close"
+  | "stopped_early"
   | "waiting_on"
   | "step"
   | "judge_review"
@@ -1128,6 +1141,34 @@ export function isOpenAgentSlot(slot: ExpectedOutput): boolean {
     slot.retiredAt == null &&
     slot.claimedDone !== true
   );
+}
+
+/**
+ * What the agent can do now: its open slots (`isOpenAgentSlot`). An ANSWERED
+ * slot is the agent's most actionable work (the person already replied), so
+ * it leads (stable sort: declaration order otherwise). ONE rule for the
+ * packet's `aiCanDo` and the needs-you context's "Meanwhile".
+ */
+export function aiCanDoItems(all: readonly ExpectedOutput[]): PacketSlotItem[] {
+  return all
+    .filter(isOpenAgentSlot)
+    .map((s): PacketSlotItem => ({
+      label: s.label,
+      kind: s.kind,
+      ...kindIdentity(s.kind),
+      ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
+      ...(s.answer
+        ? {
+            answer: {
+              text: s.answer.text,
+              answeredAt: s.answer.answeredAt,
+              messageId: s.answer.messageId,
+              ...(s.answer.value ? { value: s.answer.value } : {}),
+            },
+          }
+        : {}),
+    }))
+    .sort((a, b) => Number(!!b.answer) - Number(!!a.answer));
 }
 
 /** The session's step entries, with the agent's and the computer's names. */
@@ -2369,6 +2410,11 @@ function readLastCompletion(
  * A blocker as a next move names it: its title in quotes, or — unnamed or not
  * visible — "the <noun>" through the vocabulary door (no a/an guessing).
  */
+/** The person's words in a next-move reason: at most 140 characters. */
+function clip140(text: string): string {
+  return text.length > 140 ? `${text.slice(0, 140)}…` : text;
+}
+
 function blockerName(b: OpenBlocker): string {
   return b.title
     ? `"${b.title}"`
@@ -2484,7 +2530,12 @@ function pullRequestMove(
  *     a PR whose checks have not answered (nobody acts). A PR outcome is never
  *     "Produce …" once the pod knows the PR exists. The PR rungs are skipped
  *     for a terminal session: a closed session's open PR is no move of its own;
- *  4. `none` for a terminal session;
+ *  4. `stopped_early` for a terminal session that ended before its last
+ *     declared stage (`stages-left.ts`: its current stage is not the last
+ *     one), unless the person CANCELLED it (they chose to stop: nothing
+ *     waits on them) — the person's move: whether to run it again. Before,
+ *     such a run read "Nothing waiting" (session 12dbd086: one turn, still on
+ *     `brief`, closed). Then `none` for a terminal session;
  *  5. `waiting_on_session` while a sub-session is still OPEN: a parent never
  *     auto-closes, and its children are still producing;
  *  6. `ready_to_close` ONLY when there is evidence of work — a declared,
@@ -2527,6 +2578,12 @@ export function deriveNextMove(input: {
   workUnits: PacketSection<PacketWorkUnitItem>;
   /** The current hold — rung 2c reads it for a paused session only. */
   hold: NextMoveHold;
+  /**
+   * The declared stages the session has not reached (`stagesLeft` over its
+   * `stages` and `currentStage`); `null`/absent = none, or no stages. Rung 4
+   * reads it for a terminal session only.
+   */
+  stagesLeft?: StagesLeft | null;
 }): ContinuationNextMove {
   const { owedSlots, pendingProposals, aiCanDo, blockers } = input;
   const terminal = isTerminalSessionStatus(input.status);
@@ -2666,16 +2723,25 @@ export function deriveNextMove(input: {
       : [];
   if (ownSlots[0]) {
     const s = ownSlots[0];
+    // The person REFUSED the ask: the next move is a new plan, never the
+    // same question again (the ask doors refuse an identical re-ask).
+    if (s.answer && isDeclinedValue(s.answer.value)) {
+      const reason = declinedReasonOf(s.answer);
+      return {
+        kind: "agent_slot",
+        actor: "ai",
+        label: `Re-plan "${s.label}"`,
+        reason:
+          `The person refused your ask${reason ? `: "${clip140(reason)}"` : ""}. ` +
+          "Do it another way, ask something new, withdraw the slot (retireOutput), or close the session failed.",
+      };
+    }
     if (s.answer) {
-      const said =
-        s.answer.text.length > 140
-          ? `${s.answer.text.slice(0, 140)}…`
-          : s.answer.text;
       return {
         kind: "agent_slot",
         actor: "ai",
         label: `Continue "${s.label}"`,
-        reason: `The person answered: "${said}"`,
+        reason: `The person answered: "${clip140(s.answer.text)}"`,
       };
     }
     return {
@@ -2721,6 +2787,19 @@ export function deriveNextMove(input: {
     ? undefined
     : prWith((pr) => pr.state === "open" && !pr.checks);
   if (pending) return pullRequestMove(pending, "checks_pending");
+  if (terminal && input.stagesLeft && input.status !== "cancelled") {
+    const left = input.stagesLeft;
+    const where = stoppedWhere(left);
+    return {
+      kind: "stopped_early",
+      actor: "user",
+      label: `Stopped ${where}`,
+      reason:
+        `The run ended (${resolveStatusLabel(input.status).toLowerCase()}) ${where}, ` +
+        `with ${stagesLeftWords(left)}: ${left.left.map((s) => s.name).join(", ")}. ` +
+        "Whether to run it again is yours to decide.",
+    };
+  }
   if (terminal) {
     return {
       kind: "none",
@@ -2869,29 +2948,7 @@ export async function projectContinuationPacket(
   const blockers = section(
     owed.filter((s) => s.blockedReason !== undefined).map(owedItem)
   );
-  // An ANSWERED slot is the agent's most actionable work — the person already
-  // replied — so it leads (stable sort: declaration order otherwise).
-  const aiCanDo = section(
-    all
-      .filter(isOpenAgentSlot)
-      .map((s): PacketSlotItem => ({
-        label: s.label,
-        kind: s.kind,
-        ...kindIdentity(s.kind),
-        ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
-        ...(s.answer
-          ? {
-              answer: {
-                text: s.answer.text,
-                answeredAt: s.answer.answeredAt,
-                messageId: s.answer.messageId,
-                ...(s.answer.value ? { value: s.answer.value } : {}),
-              },
-            }
-          : {}),
-      }))
-      .sort((a, b) => Number(!!b.answer) - Number(!!a.answer))
-  );
+  const aiCanDo = section(aiCanDoItems(all));
 
   // One rejected promise, shared: `outputs` and `alreadyDone` each turn it into
   // their own `unavailable` below.
@@ -3379,6 +3436,7 @@ export async function projectContinuationPacket(
       criteria: evaluation,
       workUnits: allWorkUnits,
       hold,
+      stagesLeft: stagesLeft(row.stages, row.currentStage),
     }),
     evaluation,
   };

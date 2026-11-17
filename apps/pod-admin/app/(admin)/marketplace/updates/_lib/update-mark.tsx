@@ -13,6 +13,7 @@ import {
   Database,
   Equal,
   GitMerge,
+  Hourglass,
   PenLine,
   type LucideIcon,
 } from "lucide-react";
@@ -25,6 +26,7 @@ const GLYPHS: Readonly<Record<MarkGlyph, LucideIcon>> = {
   equal: Equal,
   records: Database,
   alert: CircleAlert,
+  approval: Hourglass,
 };
 
 /** Ink per tone: the needs-you accent is the one ochre (primary). */

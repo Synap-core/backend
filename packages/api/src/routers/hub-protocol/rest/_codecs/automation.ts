@@ -52,6 +52,16 @@ export const ListAutomationsQuerySchema = z
   })
   .openapi("ListAutomationsQuery");
 
+/**
+ * Request-side `triggerConfig`: a free record (the doors validate each field),
+ * described so a caller can find `audience` (decision 782c862e).
+ */
+const TriggerConfigRequestSchema = z
+  .record(z.string(), z.unknown())
+  .describe(
+    "Trigger settings (eventPattern, filters, expression, ...). audience: whose events a POD-WIDE automation answers to: 'me' (default; your own events and your agents') or 'everyone' (any member's, in a space you can see). A space automation ignores it."
+  );
+
 /** POST /automations/create request body. */
 export const CreateAutomationRequestSchema = z
   .object({
@@ -62,7 +72,7 @@ export const CreateAutomationRequestSchema = z
     name: z.string(),
     description: z.string().optional(),
     triggerType: AutomationTriggerTypeSchema,
-    triggerConfig: z.record(z.string(), z.unknown()).optional(),
+    triggerConfig: TriggerConfigRequestSchema.optional(),
     flowDefinition: FlowDefinitionSchema,
     status: AutomationStatusSchema.optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
@@ -77,7 +87,7 @@ export const UpdateAutomationRequestSchema = z
     name: z.string().optional(),
     description: z.string().optional(),
     triggerType: AutomationTriggerTypeSchema.optional(),
-    triggerConfig: z.record(z.string(), z.unknown()).optional(),
+    triggerConfig: TriggerConfigRequestSchema.optional(),
     flowDefinition: FlowDefinitionSchema.optional(),
     status: AutomationStatusSchema.optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),

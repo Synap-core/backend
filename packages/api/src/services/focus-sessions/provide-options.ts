@@ -29,16 +29,22 @@ import type { ExpectedOutput } from "@synap/playbooks";
 import {
   askFingerprint,
   effectiveSlotAsk,
-  PROVIDE_SECRET_GRANT_MINUTES,
+  provideSecretUsesMinutes,
   type AskProvide,
+  type AskSecretPurpose,
   type ProvideConnectUnavailableReason,
   type ProvideSecretGrantOffer,
+  type ProvideStandingGrant,
 } from "@synap-core/types/ask";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { canWrite, userPrincipal } from "../../access/door.js";
 import { selectSlotToAnswer } from "./answer-slot.js";
 import { describeAnswerRefusal } from "./session-answer.js";
-import { resolveAskingAgent } from "./provide-secret-grant.js";
+import { listOwnHandableSecrets } from "../vault-handable-secrets.js";
+import {
+  resolveAskingAgent,
+  standingGrantsFor,
+} from "./provide-secret-grant.js";
 import {
   capabilitiesForService,
   resolveProvideProvider,
@@ -214,6 +220,14 @@ export interface ProvideSecretRow {
   ref: string;
   name: string;
   type: string;
+  /**
+   * A permanent grant the asking agent ALREADY holds on this secret: handing
+   * it over writes nothing new and the agent reads it until the person takes
+   * this grant back (`provideGrantNote` with the picked row says so). null:
+   * a new grant of the offer's `uses` is written. This pod always sets it;
+   * optional only so an older pod's reply and a client's fixtures still type.
+   */
+  standingGrant?: ProvideStandingGrant | null;
 }
 
 export interface ProvideConnectionRow {
@@ -239,6 +253,12 @@ export type ProvideOptions = {
         rows: ProvideSecretRow[];
         /** What handing one over lets the asking agent do. */
         grant: ProvideSecretGrantOffer;
+        /**
+         * What the agent declared it will do with it (`provide.purpose`);
+         * null when it did not say (never inferred). Always set by this pod;
+         * optional only so an older pod's reply still types.
+         */
+        purpose?: AskSecretPurpose | null;
       };
     }
   | {
@@ -274,7 +294,7 @@ export async function readProvideOptions(
   const provide = owed.provide;
   switch (provide.kind) {
     case "secret": {
-      const [rows, agent] = await Promise.all([
+      const [ownRows, agent] = await Promise.all([
         ownSecretRows(userId),
         resolveAskingAgent({
           sessionId: owed.session.id,
@@ -282,20 +302,34 @@ export async function readProvideOptions(
           askFingerprint: owed.askFingerprint,
         }),
       ]);
+      // The truth per row: the grant that WILL apply when this one is
+      // picked (finding ebc40493).
+      const standing = agent
+        ? await standingGrantsFor(
+            agent.agentUserId,
+            ownRows.map((r) => r.id)
+          )
+        : new Map<string, ProvideStandingGrant>();
+      const uses = provide.uses ?? "session";
       return {
         ...base,
         kind: "secret",
         secret: {
           name: provide.name,
-          rows,
+          rows: ownRows.map(({ id, ...row }) => ({
+            ...row,
+            standingGrant: standing.get(id) ?? null,
+          })),
           grant: agent
             ? {
                 status: "will_grant",
                 agentUserId: agent.agentUserId,
                 agentName: agent.agentName,
-                minutes: PROVIDE_SECRET_GRANT_MINUTES,
+                minutes: provideSecretUsesMinutes(uses),
+                uses,
               }
             : { status: "no_grant", reason: "agent_unknown" },
+          purpose: provide.purpose ?? null,
         },
       };
     }
@@ -334,24 +368,15 @@ export async function readProvideOptions(
 }
 
 /**
- * The person's own vault entries an agent could be granted: server-encrypted
- * (a legacy client row cannot be read by the pod) and not a connection
- * pointer (those are handed over as connections).
+ * The person's own vault entries an agent could be granted: the one floor
+ * (`listOwnHandableSecrets`) the proposal setup rows read too.
  */
-async function ownSecretRows(userId: string): Promise<ProvideSecretRow[]> {
-  const rows = await db
-    .select({ id: secrets.id, name: secrets.name, type: secrets.type })
-    .from(secrets)
-    .where(
-      and(
-        eq(secrets.userId, userId),
-        isNull(secrets.deletedAt),
-        isNull(secrets.capabilityId),
-        eq(secrets.encryptionMode, "server")
-      )
-    )
-    .orderBy(asc(secrets.name));
+async function ownSecretRows(
+  userId: string
+): Promise<Array<Omit<ProvideSecretRow, "standingGrant"> & { id: string }>> {
+  const rows = await listOwnHandableSecrets(userId);
   return rows.map((r) => ({
+    id: r.id,
     ref: `vault://${r.id}`,
     name: r.name,
     type: r.type,

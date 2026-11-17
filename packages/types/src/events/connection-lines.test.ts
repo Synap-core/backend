@@ -160,10 +160,22 @@ const ROWS: Row[] = [
   ],
   ["focus_session.slot_answered.completed", undefined, "Answered question"],
   [
+    "focus_session.slot_answered.completed",
+    { label: "Budget", value: { type: "declined", reason: "Not now" } },
+    'Refused question "Budget"',
+  ],
+  [
     "focus_session.slot_attested.completed",
     { label: "Deck" },
     'Marked done "Deck"',
   ],
+  // "Not mine" (review a089b624 S3), named as the history row names it.
+  [
+    "focus_session.slot_handed_back.completed",
+    { expectedLabel: "Budget" },
+    'Handed back "Budget"',
+  ],
+  ["focus_session.slot_handed_back.completed", undefined, "Handed back"],
   ["focus_session.closed.completed", undefined, "Closed job"],
   [
     "track.stage_changed.completed",

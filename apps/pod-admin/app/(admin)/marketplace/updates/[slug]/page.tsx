@@ -73,6 +73,7 @@ import {
   usePackageUpdateList,
   usePackageUpdatePlan,
   useUndoPackageUpdate,
+  useUpdateHolds,
 } from "../_lib/use-package-updates";
 
 const CATALOGS = { en, fr };
@@ -181,6 +182,7 @@ function ReviewUpdate({
   onReload: () => void;
 }) {
   const t = useT(CATALOGS);
+  const { holds } = useUpdateHolds();
   const [chosen, setChosen] = useState<Record<string, ChoiceId>>(() =>
     initialChoices(plan)
   );
@@ -193,8 +195,8 @@ function ReviewUpdate({
   const detach = useDetachPackage();
 
   const decision = decisionOf(plan, chosen, edits, accepted);
-  const { group, label: markLabel } = summaryMark(t, plan);
-  const queue = list ? queuePosition(list, plan.slug) : null;
+  const { group, label: markLabel } = summaryMark(t, plan, holds);
+  const queue = list ? queuePosition(list, plan.slug, holds) : null;
   const kindWord = catalogKindLabel(plan.kind);
   const busy = apply.isPending || detach.isPending;
 
@@ -264,7 +266,7 @@ function ReviewUpdate({
         <Receipt
           plan={plan}
           outcome={outcome}
-          next={list ? nextAfter(list, plan.slug) : null}
+          next={list ? nextAfter(list, plan.slug, holds) : null}
         />
       </PageShell>
     );
@@ -501,7 +503,7 @@ function reviewSummary(
   whole: boolean
 ): string {
   const k = kind.toLowerCase();
-  if (whole && group !== "consent") {
+  if (whole && group !== "consent" && group !== "approval") {
     return t("review.summary.package", { kind: k });
   }
   switch (group) {
@@ -509,6 +511,8 @@ function reviewSummary(
       return t("review.summary.choose", { kind: k });
     case "consent":
       return t("review.summary.consent");
+    case "approval":
+      return t("group.approval.meta");
     case "nothing":
       return t("review.summary.yours", { kind: k });
     default:

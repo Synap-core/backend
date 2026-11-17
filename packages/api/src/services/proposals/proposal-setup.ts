@@ -53,13 +53,22 @@ import {
   type CapabilityNextAction,
 } from "../capabilities/capability-enable-link.js";
 import { lookupCatalogEntry } from "../capabilities/marketplace-install.js";
+import { fetchCPCapabilityTemplate } from "../capabilities/cp-template-client.js";
+import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
+import { ProposalStatus } from "@synap/database/schema";
+import { createLogger } from "@synap-core/core";
 import { isBlankParamValue } from "./setup-required-error.js";
 import {
   makeVaultReference,
   parseVaultReference,
   vaultSecretIdOf,
 } from "@synap-core/types/vault";
-import type { CapabilityDefinition } from "@synap/playbooks";
+import type {
+  CapabilityDefinition,
+  CapabilityParamObtain,
+} from "@synap/playbooks";
+
+const logger = createLogger({ module: "proposal-setup" });
 
 /** THE proposal type that carries a manifest-derived setup gap. See the docblock. */
 export const SETUP_PROPOSAL_TYPE = "capability.install";
@@ -73,6 +82,12 @@ export interface ProposalSetupParam {
   description?: string;
   /** Prompt masked and NEVER echo. Derived by `extractInstallParams`. */
   secret: boolean;
+  /**
+   * How a person gets this value: numbered steps and the https page they
+   * start on, from the manifest's `obtain` (`param-obtain.ts`). Absent when
+   * the manifest declares none, or an invalid one.
+   */
+  obtain?: CapabilityParamObtain;
   /** A non-blank value is present, OR a resolvable `vault://` ref is. */
   satisfied: boolean;
   /** `vault://<id>` when this param points at a vault secret. Never a value. */
@@ -113,12 +128,80 @@ export interface ProposalSetup {
    * exactly the fork this codebase keeps paying for.
    */
   nextAction?: CapabilityNextAction;
+  /**
+   * The pod could NOT read the manifest of a proposal that is still to be
+   * decided (not in the catalog cache, and the by-key read from the catalog
+   * failed or found nothing): what it needs is UNKNOWN. `params` is then empty
+   * and `blocking` true, never an invented "nothing needed". Proposal eaa77f7d
+   * (github-merge, an opt-in capability the cache never holds) read as no
+   * setup at all while its approval, which re-resolves by key, said "Needs
+   * setup: GitHub token". Absent whenever the manifest was read.
+   */
+  unreadable?: true;
+}
+
+/** Still to be decided: the only rows whose setup a person can act on. */
+function isActionable(row: Record<string, unknown>): boolean {
+  return (
+    row.status === ProposalStatus.PENDING ||
+    row.status === ProposalStatus.APPROVAL_FAILED
+  );
+}
+
+/**
+ * A manifest read BY KEY from the catalog (`fetchCPCapabilityTemplate`, the
+ * door the approval installs through), for an official package the cache
+ * never held (an opt-in `syncByDefault:false` capability). Memoized briefly
+ * per slug: a review list polls, and a miss costs a Control Plane round-trip
+ * (8 s timeout) each time. A failed read is kept for a shorter time than a
+ * found one, so a Control Plane that comes back is read again soon.
+ */
+const BY_KEY_TTL_MS = 5 * 60_000;
+const BY_KEY_FAILED_TTL_MS = 60_000;
+const byKeyMemo = new Map<
+  string,
+  { def: CapabilityDefinition | null; until: number }
+>();
+
+async function readDefinitionByKey(
+  slug: string
+): Promise<CapabilityDefinition | null> {
+  const now = Date.now();
+  const hit = byKeyMemo.get(slug);
+  if (hit && hit.until > now) return hit.def;
+  let def: CapabilityDefinition | null = null;
+  try {
+    def = await fetchCPCapabilityTemplate(slug);
+  } catch (err) {
+    // A refused or failed read is not a manifest: the row says `unreadable`,
+    // and the log says why (a Control Plane outage is otherwise invisible).
+    logger.warn(
+      { err, slug },
+      "the catalog's by-key manifest read failed — the setup row is unreadable"
+    );
+    def = null;
+  }
+  byKeyMemo.set(slug, {
+    def,
+    until: now + (def ? BY_KEY_TTL_MS : BY_KEY_FAILED_TTL_MS),
+  });
+  return def;
+}
+
+/** Tests only: forget the by-key reads. */
+export function resetSetupDefinitionMemo(): void {
+  byKeyMemo.clear();
 }
 
 /** The shape `data` must have for a setup to be derivable. */
 function installTarget(
   row: { proposalType: string; data: unknown } | Record<string, unknown>
-): { slug: string; params: Record<string, unknown>; name: string } | null {
+): {
+  slug: string;
+  params: Record<string, unknown>;
+  name: string;
+  source: string | null;
+} | null {
   const r = row as { proposalType?: unknown; data?: unknown };
   if (r.proposalType !== SETUP_PROPOSAL_TYPE) return null;
   const data = (r.data ?? {}) as Record<string, unknown>;
@@ -132,7 +215,11 @@ function installTarget(
     data.params && typeof data.params === "object"
       ? (data.params as Record<string, unknown>)
       : {};
-  return { slug, params, name: slug };
+  // The source the approval installs from (`runMarketInstall` stamps it);
+  // absent on older rows, which were official.
+  const source =
+    typeof data.source === "string" && data.source ? data.source : null;
+  return { slug, params, name: slug, source };
 }
 
 /**
@@ -143,9 +230,14 @@ function installTarget(
  * needed". A page with no install rows does ZERO database and ZERO broker work:
  * the early return is load-bearing, because `loadConnState` talks to Nango.
  *
- * Degrades honestly: a catalog cache MISS (an opt-in or just-published package
- * the pod never synced) yields no entry rather than an invented empty setup —
- * we do not know the manifest, so we do not claim the proposal is unblocked.
+ * A catalog cache MISS of an official package still to be decided (an opt-in
+ * `syncByDefault:false` capability, or one just published) is read BY KEY from
+ * the catalog, the same door its approval installs through, so the setup the
+ * person sees is the one the approval will check. When that read fails too,
+ * the row gets `{params: [], blocking: true, unreadable: true}`: what it needs
+ * is unknown, which is neither "nothing needed" nor an absent setup a surface
+ * would read as "no setup". A decided row on a miss keeps no entry (nothing is
+ * left to hand over, and a history page never pays a Control Plane read).
  */
 export async function resolveProposalSetups(
   rows: ReadonlyArray<Record<string, unknown>>,
@@ -155,30 +247,56 @@ export async function resolveProposalSetups(
 
   const targets: Array<{
     id: string;
+    /** `source` + slug: one manifest per package of one source. */
+    key: string;
     slug: string;
+    source: string | null;
     params: Record<string, unknown>;
+    actionable: boolean;
   }> = [];
   for (const row of rows) {
     const t = installTarget(row);
     const id = typeof row.id === "string" ? row.id : null;
-    if (t && id) targets.push({ id, slug: t.slug, params: t.params });
+    if (t && id) {
+      targets.push({
+        id,
+        key: `${t.source ?? OFFICIAL_SOURCE_ID}\u0000${t.slug}`,
+        slug: t.slug,
+        source: t.source,
+        params: t.params,
+        actionable: isActionable(row),
+      });
+    }
   }
   if (targets.length === 0) return out;
 
-  // One cache read per DISTINCT slug, not per row.
-  const defBySlug = new Map<string, CapabilityDefinition | null>();
+  // One cache read per DISTINCT package, not per row; a miss of an official
+  // package still to be decided is read by key (see the docblock).
+  const defByKey = new Map<string, CapabilityDefinition | null>();
+  const distinct = new Map<string, (typeof targets)[number]>();
+  for (const t of targets) {
+    const seen = distinct.get(t.key);
+    if (!seen || (t.actionable && !seen.actionable)) distinct.set(t.key, t);
+  }
   await Promise.all(
-    [...new Set(targets.map((t) => t.slug))].map(async (slug) => {
+    [...distinct.values()].map(async (t) => {
+      let def: CapabilityDefinition | null = null;
       try {
-        const entry = await lookupCatalogEntry("capability", slug);
-        defBySlug.set(
-          slug,
-          (entry?.definition as CapabilityDefinition | undefined) ?? null
+        const entry = await lookupCatalogEntry("capability", t.slug, t.source);
+        def = (entry?.definition as CapabilityDefinition | undefined) ?? null;
+      } catch (err) {
+        // A failed cache read is NOT an empty manifest.
+        logger.warn(
+          { err, slug: t.slug },
+          "the catalog cache read failed — the setup row is unreadable"
         );
-      } catch {
-        // A failed cache read is NOT an empty manifest. No entry ⇒ no claim.
-        defBySlug.set(slug, null);
+        def = null;
       }
+      const official = !t.source || t.source === OFFICIAL_SOURCE_ID;
+      if (!def && official && t.actionable) {
+        def = await readDefinitionByKey(t.slug);
+      }
+      defByKey.set(t.key, def);
     })
   );
 
@@ -186,7 +304,7 @@ export async function resolveProposalSetups(
   // the ids params point at, plus the ids the manifests' tools already name.
   const vaultIds = new Set<string>();
   for (const t of targets) {
-    const def = defBySlug.get(t.slug);
+    const def = defByKey.get(t.key);
     if (!def) continue;
     for (const p of extractInstallParams(def)) {
       // Only a WELL-FORMED id may reach the lookup: a malformed pointer in
@@ -205,8 +323,14 @@ export async function resolveProposalSetups(
   const conn = await loadConnState(userId, [...vaultIds]);
 
   for (const t of targets) {
-    const def = defBySlug.get(t.slug);
-    if (!def) continue;
+    const def = defByKey.get(t.key);
+    if (!def) {
+      // Unknown manifest: say so on a row the person can still act on.
+      if (t.actionable) {
+        out.set(t.id, { params: [], blocking: true, unreadable: true });
+      }
+      continue;
+    }
 
     const params: ProposalSetupParam[] = extractInstallParams(def).map((p) => {
       const raw = t.params[p.name];
@@ -229,6 +353,7 @@ export async function resolveProposalSetups(
         required: p.required === true,
         ...(p.description ? { description: p.description } : {}),
         secret: p.secret === true,
+        ...(p.obtain ? { obtain: p.obtain } : {}),
         satisfied,
         ...(ref ? { ref: makeVaultReference(ref) } : {}),
         // LABELS ONLY. `refName`/`refService` come from the same scoped read
@@ -299,6 +424,8 @@ export const REDACTED_PARAM = "***REDACTED***";
  * an object is returned untouched rather than coerced.
  */
 export function redactSecretParams<T>(data: T, setup: ProposalSetup): T {
+  // No manifest, no `secret` flags: mask by NAME, as for an absent setup.
+  if (setup.unreadable) return redactSecretParamsByName(data);
   const secretNames = setup.params.filter((p) => p.secret).map((p) => p.name);
   if (secretNames.length === 0) return data;
   if (!data || typeof data !== "object" || Array.isArray(data)) return data;

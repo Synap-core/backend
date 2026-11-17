@@ -63,6 +63,14 @@ export interface AutomationTriggerConfig {
    */
   filters?: Record<string, unknown>;
 
+  /**
+   * Whose events a POD-WIDE automation answers to: `me` (default — its person's
+   * own events, its person's agents' included) or `everyone` (any pod member's,
+   * in a space its person can see). A space automation ignores it. Grammar and
+   * reader: `readAutomationAudience` (./rule-run-policy.ts), decision 782c862e.
+   */
+  audience?: "me" | "everyone";
+
   // ── cron trigger ───────────────────────────────────────────────────────
   /** Cron expression (e.g. "0 9 * * MON") */
   expression?: string;

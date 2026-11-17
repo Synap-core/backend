@@ -15,6 +15,11 @@
  *   - CONNECT-AND-ANSWER: a pending intent is answered once by the new
  *     connection row — through the real reconciler too — and never by someone
  *     else's connection, another provider, a re-asked slot or an expired one.
+ *   - AN HONEST SECRET (plan d717d6ac §4, finding ebc40493): a permanent grant
+ *     the agent already holds is reported before and after (never "60
+ *     minutes"), a one-read grant is one read, the declared purpose is the
+ *     secret's "used by", and every redeem writes a `read` row (no value) that
+ *     the slot's use read counts.
  */
 
 import {
@@ -29,6 +34,8 @@ import {
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
+  // The REAL redeem decrypts: a server vault key for this run only.
+  _vault: (process.env.VAULT_SERVER_KEY = "ab".repeat(32)),
   client: null as null | {
     exec: (sql: string) => Promise<unknown>;
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
@@ -65,6 +72,8 @@ vi.mock("@synap/database", async (importOriginal) => {
       sessionEvaluations: actual.sessionEvaluations as never,
       vaultGrants: schema.vaultGrants as never,
       secrets: schema.secrets as never,
+      secretAuditLog: schema.secretAuditLog as never,
+      secretUsages: schema.secretUsages as never,
     },
   });
   return {
@@ -173,9 +182,12 @@ import {
   apiKeys,
   sessionEvaluations,
   findRedeemableGrant,
+  resolveVaultSecret,
+  VaultGrantError,
 } from "@synap/database";
 import {
   secrets,
+  secretAuditLog,
   entities,
   events,
   vaultGrants,
@@ -186,6 +198,7 @@ import {
   tools,
 } from "@synap/database/schema";
 import { askFingerprint, type Ask } from "@synap-core/types/ask";
+import { readProvideSecretUse } from "../provide-secret-use.js";
 import { answerSessionSlot } from "../session-answer.js";
 import { slotAskedEventData } from "../slot-asked-event.js";
 import {
@@ -426,6 +439,7 @@ describe("provide asks — the server doors", () => {
       apiKeys,
       sessionEvaluations,
       secrets,
+      secretAuditLog,
       entities,
       events,
       vaultGrants,
@@ -437,6 +451,10 @@ describe("provide asks — the server doors", () => {
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
+    // The "used by" join keeps its unique key: the provide door upserts on it.
+    await h.client!.exec(
+      `create table "secret_usages" (id uuid primary key default gen_random_uuid(), secret_id uuid not null, consumer_type text not null, consumer_id text not null, consumer_label text, workspace_id uuid, context_type text, context_id text, created_at timestamp with time zone not null default now(), constraint secret_usages_unique unique (secret_id, consumer_type, consumer_id, context_id));`
+    );
     await q(
       `insert into users (id, email, name, timezone, user_type, agent_type) values
         ($1, 'a@example.test', 'Antoine', 'UTC', 'human', null),
@@ -713,6 +731,368 @@ describe("provide asks — the server doors", () => {
 
   // ── options ─────────────────────────────────────────────────────────────
 
+  // ── an honest secret: what the agent gets, and what it did with it ──────
+
+  describe("an honest secret (finding ebc40493)", () => {
+    const PURPOSE = {
+      for: "Merging the delivery PR",
+      tool: "GitHub tool",
+      action: "merge",
+      on: "Synap-core/backend",
+    };
+    const purposeAsk = (
+      extra: Record<string, unknown> = {},
+      name = "STRIPE_KEY"
+    ): Ask =>
+      ({
+        mode: "provide",
+        provide: { kind: "secret", name, ...extra },
+      }) as Ask;
+    // Made up, built at run time (a literal key shape trips push protection).
+    const PLAINTEXT = [
+      "plain",
+      "value",
+      "never",
+      "in",
+      "a",
+      "row",
+      "7f3a",
+    ].join("-");
+
+    /** A secret the REAL resolver can decrypt. */
+    async function seedReadableSecret(): Promise<string> {
+      const id = await seedSecret({ userId: OWNER });
+      const real = await vi.importActual<{
+        encryptServerSide: (
+          plaintext: string,
+          ref: { column: string; rowId: string }
+        ) => { encryptedData: string; iv: string; authTag: string };
+      }>("@synap/database");
+      const blob = real.encryptServerSide(PLAINTEXT, {
+        column: "secrets.encrypted_data",
+        rowId: id,
+      });
+      await q(
+        `update secrets set encrypted_data = $2, iv = $3, auth_tag = $4 where id = $1`,
+        [id, blob.encryptedData, blob.iv, blob.authTag]
+      );
+      return id;
+    }
+    async function seedPermanentGrant(secretId: string): Promise<string> {
+      const id = randomUUID();
+      await q(
+        `insert into vault_grants (id, grantable_type, grantable_id, exec_mode, granted_to, workspace_id, scope, expires_at, max_uses, use_count, created_by)
+         values ($1, 'secret', $2, 'auto', $3, null, 'permanent', null, null, 4, $4)`,
+        [id, secretId, AGENT, OWNER]
+      );
+      return id;
+    }
+    const redeem = (secretId: string) =>
+      resolveVaultSecret(secretId, OWNER, undefined, {
+        requireGrant: true,
+        redeemer: { agentUserId: AGENT },
+      });
+    const readsOf = async (secretId: string) =>
+      (
+        await q<{
+          user_id: string;
+          action: string;
+          metadata: Record<string, unknown>;
+        }>(
+          `select user_id, action, metadata from secret_audit_log where secret_id = $1 and action = 'read' order by created_at`,
+          [secretId]
+        )
+      ).rows;
+    const slotGrants = async (sessionId: string) =>
+      (
+        await q<{ m: Record<string, Record<string, unknown>> | null }>(
+          `select metadata -> 'provideSecretGrantBySlot' as m from focus_sessions where id = $1`,
+          [sessionId]
+        )
+      ).rows[0]!.m ?? {};
+    const optionsFor = async (sessionId: string) => {
+      const owed = await loadOwedProvideAsk({
+        sessionId,
+        userId: OWNER,
+        expectedLabel: LABEL,
+      });
+      if ("status" in owed) throw new Error(owed.status);
+      return readProvideOptions(owed, OWNER);
+    };
+
+    it("a permanent grant the agent already holds is said before the press, reused, and never revoked by the close", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const permanent = await seedPermanentGrant(secretId);
+      // A shorter grant beside it must not hide it (a first-match read did).
+      await q(
+        `insert into vault_grants (id, grantable_type, grantable_id, exec_mode, granted_to, workspace_id, scope, expires_at, use_count, created_by)
+         values ($1, 'secret', $2, 'auto', $3, null, 'session', now() + interval '30 minutes', 0, $4)`,
+        [randomUUID(), secretId, AGENT, OWNER]
+      );
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(sessionId, secretAsk(), AGENT);
+
+      const o = await optionsFor(sessionId);
+      if (o.kind !== "secret") throw new Error(o.kind);
+      expect(
+        o.secret.rows.find((r) => r.ref === `vault://${secretId}`)
+      ).toMatchObject({ standingGrant: { grantId: permanent, useCount: 4 } });
+
+      const before = (await grantsFor(secretId)).length;
+      const r = await answerSecret(sessionId, secretId);
+      expect(r.status).toBe("answered");
+      if (r.status !== "answered") return;
+      expect(r.secretGrant).toEqual({
+        status: "granted",
+        agentUserId: AGENT,
+        agentName: "Researcher",
+        expiresAt: null,
+        grantId: permanent,
+        uses: "standing",
+      });
+      expect((r.answer as { text: string }).text).toBe(
+        'Stored the secret "STRIPE_KEY" in the vault · Researcher can read it until you take it back'
+      );
+      // Nothing new written, and the person's grant is not the session's.
+      expect(await grantsFor(secretId)).toHaveLength(before);
+      expect(await sessionGrantIds(sessionId)).not.toContain(permanent);
+      expect((await slotGrants(sessionId))[LABEL]).toEqual({
+        grantId: permanent,
+        secretId,
+        agentUserId: AGENT,
+        uses: "standing",
+      });
+    });
+
+    it("one read: asked by the ask, or picked by the person, is a 15-minute, one-use grant", async () => {
+      for (const how of ["ask", "person"] as const) {
+        const secretId = await seedReadableSecret();
+        const ask = how === "ask" ? purposeAsk({ uses: "once" }) : secretAsk();
+        const { sessionId } = await seedSession([slotFor(ask)]);
+        await recordAsked(sessionId, ask, AGENT);
+        const r = await answerSessionSlot({
+          sessionId,
+          userId: OWNER,
+          expectedLabel: LABEL,
+          value: {
+            type: "provide",
+            ref: { kind: "secret", vaultRef: `vault://${secretId}` },
+          },
+          ...(how === "person" ? { secretUses: "once" as const } : {}),
+        });
+        expect(r.status).toBe("answered");
+        if (r.status !== "answered") return;
+        expect(r.secretGrant).toMatchObject({
+          status: "granted",
+          uses: "once",
+        });
+        const [grant] = await grantsFor(secretId);
+        expect(grant!.scope).toBe("once");
+        expect(Date.parse(grant!.expires_at!) - Date.now()).toBeLessThanOrEqual(
+          15 * 60_000 + 5_000
+        );
+        expect(await sessionGrantIds(sessionId)).toEqual([grant!.id]);
+
+        await expect(redeem(secretId)).resolves.toBe(PLAINTEXT);
+        await expect(redeem(secretId)).rejects.toBeInstanceOf(VaultGrantError);
+        // The refused second read writes no read row.
+        expect(await readsOf(secretId)).toHaveLength(1);
+        const use = await readProvideSecretUse({
+          sessionId,
+          userId: OWNER,
+          expectedLabel: LABEL,
+        });
+        expect(use).toMatchObject({
+          status: "ok",
+          use: { uses: "once", useCount: 1, maxUses: 1, active: false },
+        });
+        expect(use.status === "ok" && use.use.takeBack).toBeNull();
+      }
+    });
+
+    it("the declared purpose is offered back, and written as the secret's 'used by' in this session", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const ask = purposeAsk({ purpose: PURPOSE });
+      const { sessionId } = await seedSession([slotFor(ask)]);
+      await recordAsked(sessionId, ask, AGENT);
+      const o = await optionsFor(sessionId);
+      expect(o.kind === "secret" && o.secret.purpose).toEqual(PURPOSE);
+
+      const r = await answerSecret(sessionId, secretId);
+      expect(r.status).toBe("answered");
+      const usages = await q<Record<string, unknown>>(
+        `select consumer_type, consumer_id, consumer_label, context_type, context_id from secret_usages where secret_id = $1`,
+        [secretId]
+      );
+      expect(usages.rows).toEqual([
+        {
+          consumer_type: "tool",
+          consumer_id: "GitHub tool",
+          consumer_label: "GitHub tool · merge",
+          context_type: "focus_session",
+          context_id: sessionId,
+        },
+      ]);
+    });
+
+    it("no declared purpose: no 'used by' row is invented", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(sessionId, secretAsk(), AGENT);
+      await answerSecret(sessionId, secretId);
+      const usages = await q(
+        `select id from secret_usages where secret_id = $1`,
+        [secretId]
+      );
+      expect(usages.rows).toHaveLength(0);
+    });
+
+    it("every redeem writes a read row with no value, and the slot's use read counts them", async () => {
+      const secretId = await seedReadableSecret();
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(sessionId, secretAsk(), AGENT);
+      const r = await answerSecret(sessionId, secretId);
+      if (r.status !== "answered" || r.secretGrant?.status !== "granted")
+        throw new Error("no grant");
+      const grantId = r.secretGrant.grantId!;
+
+      const none = await readProvideSecretUse({
+        sessionId,
+        userId: OWNER,
+        expectedLabel: LABEL,
+      });
+      expect(none).toMatchObject({
+        status: "ok",
+        use: { useCount: 0, lastUsedAt: null, active: true },
+      });
+
+      await expect(redeem(secretId)).resolves.toBe(PLAINTEXT);
+      await expect(redeem(secretId)).resolves.toBe(PLAINTEXT);
+
+      const reads = await readsOf(secretId);
+      expect(reads).toHaveLength(2);
+      for (const row of reads) {
+        expect(row.user_id).toBe(AGENT);
+        expect(row.metadata).toEqual({
+          via: "redeem",
+          grantId,
+          reader: "agent",
+          workspaceId: null,
+        });
+      }
+      const all = await q(
+        `select * from secret_audit_log where secret_id = $1`,
+        [secretId]
+      );
+      expect(JSON.stringify(all.rows)).not.toContain(PLAINTEXT);
+
+      const use = await readProvideSecretUse({
+        sessionId,
+        userId: OWNER,
+        expectedLabel: LABEL,
+      });
+      expect(use).toMatchObject({
+        status: "ok",
+        use: {
+          grantId,
+          secretId,
+          secretName: "STRIPE_KEY",
+          agentUserId: AGENT,
+          agentName: "Researcher",
+          uses: "session",
+          useCount: 2,
+          maxUses: null,
+          active: true,
+          revokedAt: null,
+          takeBack: { door: "secretsVault.revokeGrant", grantId },
+        },
+      });
+      if (use.status !== "ok") return;
+      expect(use.use.lastUsedAt).not.toBeNull();
+      expect(use.use.expiresAt).not.toBeNull();
+      expect(JSON.stringify(use)).not.toContain(PLAINTEXT);
+    });
+
+    it("the use read is the owner's alone, and says none for a slot that granted nothing", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await expect(
+        readProvideSecretUse({ sessionId, userId: OWNER, expectedLabel: LABEL })
+      ).resolves.toEqual({ status: "none" });
+      await recordAsked(sessionId, secretAsk(), AGENT);
+      await answerSecret(sessionId, secretId);
+      await expect(
+        readProvideSecretUse({ sessionId, userId: OTHER, expectedLabel: LABEL })
+      ).resolves.toEqual({ status: "not_found" });
+    });
+
+    // Review a089b624 S5: the slot's link and the "used by" row are claims
+    // about a hand-over that happened, so a refused answer leaves neither.
+    it("an answer refused at the commit leaves no 'used by' row and no slot link, and the standing grant stands", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const permanent = await seedPermanentGrant(secretId);
+      const ask = purposeAsk({ purpose: PURPOSE });
+      const { sessionId } = await seedSession([slotFor(ask)]);
+      await recordAsked(sessionId, ask, AGENT);
+      h.forceAnswerRefusal = true;
+      expect(await answerSecret(sessionId, secretId)).toEqual({
+        status: "ask_changed",
+      });
+      const usages = await q(
+        `select id from secret_usages where secret_id = $1`,
+        [secretId]
+      );
+      expect(usages.rows).toHaveLength(0);
+      expect((await slotGrants(sessionId))[LABEL]).toBeUndefined();
+      await expect(
+        readProvideSecretUse({ sessionId, userId: OWNER, expectedLabel: LABEL })
+      ).resolves.toEqual({ status: "none" });
+      const standing = (await grantsFor(secretId)).find(
+        (g) => g.id === permanent
+      );
+      expect(standing?.revoked_at).toBeNull();
+    });
+
+    // Review a089b624 S6: one derivation of "the standing grant", so the sheet
+    // never names one grant while the answer reuses (and Take back revokes)
+    // another.
+    it("two permanent grants on one secret: the sheet names the one the answer reuses, the oldest", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const insertPermanent = async (createdAt: string) => {
+        const id = randomUUID();
+        await q(
+          `insert into vault_grants (id, grantable_type, grantable_id, exec_mode, granted_to, workspace_id, scope, expires_at, max_uses, use_count, created_by, created_at)
+           values ($1, 'secret', $2, 'auto', $3, null, 'permanent', null, null, 0, $4, ${createdAt})`,
+          [id, secretId, AGENT, OWNER]
+        );
+        return id;
+      };
+      // The NEWER one first, so a read with no order meets it first.
+      await insertPermanent("now()");
+      const oldest = await insertPermanent("now() - interval '1 day'");
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(sessionId, secretAsk(), AGENT);
+
+      const o = await optionsFor(sessionId);
+      if (o.kind !== "secret") throw new Error(o.kind);
+      expect(
+        o.secret.rows.find((r) => r.ref === `vault://${secretId}`)
+          ?.standingGrant?.grantId
+      ).toBe(oldest);
+
+      const r = await answerSecret(sessionId, secretId);
+      if (r.status !== "answered") throw new Error(r.status);
+      expect(r.secretGrant).toMatchObject({
+        status: "granted",
+        grantId: oldest,
+        uses: "standing",
+      });
+      expect((await slotGrants(sessionId))[LABEL]).toMatchObject({
+        grantId: oldest,
+      });
+    });
+  });
+
   describe("provideOptions", () => {
     const options = async (sessionId: string, userId = OWNER) => {
       const owed = await loadOwedProvideAsk({
@@ -737,7 +1117,7 @@ describe("provide asks — the server doors", () => {
       expect(o.kind).toBe("secret");
       if (o.kind !== "secret") return;
       expect(o.secret.rows.filter((r) => r.name === name)).toEqual([
-        { ref: `vault://${own}`, name, type: "api_key" },
+        { ref: `vault://${own}`, name, type: "api_key", standingGrant: null },
       ]);
       expect(JSON.stringify(o)).not.toContain('"x"');
       expect(o.secret.grant).toEqual({
@@ -745,7 +1125,9 @@ describe("provide asks — the server doors", () => {
         agentUserId: AGENT,
         agentName: "Researcher",
         minutes: 60,
+        uses: "session",
       });
+      expect(o.secret.purpose).toBeNull();
       expect(o.askFingerprint).toBe(askFingerprint(secretAsk()));
     });
 

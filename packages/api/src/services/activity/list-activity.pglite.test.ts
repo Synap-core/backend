@@ -901,3 +901,85 @@ describe("activity.daily — parity with activity.list", () => {
     });
   });
 });
+
+describe("an automatic receipt's failure: by its agent or the pod, never the person", () => {
+  // A failed receipt names no reviewer; the decision source must still list
+  // it: by the agent that filed it, or by the pod (`system`) when the row
+  // records no agent. Its own session, so the ledgers pinned above hold.
+  const S_RCPT = randomUUID();
+  const F_AGENT = randomUUID();
+  const F_POD = randomUUID();
+  const F_APPLIED = randomUUID();
+
+  beforeAll(async () => {
+    await session(S_RCPT, {
+      goal: "Capture the call notes",
+      status: "active",
+      started: 4,
+      origin: "agent",
+      metadata: { agentUserId: AGENT },
+    });
+    const receipt = (id: string, status: string, agent: string | null) =>
+      proposal({
+        id,
+        status,
+        proposalType: "capture.graph",
+        at: ago(3),
+        agent,
+        sessionId: S_RCPT,
+        reviewedBy: null,
+        reviewedAt: ago(3),
+      });
+    await receipt(F_AGENT, "approval_failed", AGENT);
+    await receipt(F_POD, "approval_failed", null);
+    // An applied receipt is not a decision: the proposal source carries it.
+    await receipt(F_APPLIED, "auto_approved", AGENT);
+  });
+
+  it("lists each failure, answered by its agent, or the pod with none recorded", async () => {
+    const { items } = await list({
+      source: "decision",
+      sessionId: S_RCPT,
+      limit: 100,
+    });
+    const by = new Map(items.map((r) => [r.id, r]));
+    expect(new Set(by.keys())).toEqual(
+      new Set([`decision:${F_AGENT}`, `decision:${F_POD}`])
+    );
+    expect(by.get(`decision:${F_AGENT}`)!.actor).toEqual({
+      kind: "agent",
+      id: AGENT,
+      name: "Claude Code",
+    });
+    expect(by.get(`decision:${F_AGENT}`)!.outcome).toBe("failed");
+    expect(by.get(`decision:${F_POD}`)!.actor).toEqual({
+      kind: "system",
+      id: null,
+      name: null,
+    });
+  });
+
+  it("is the agent's under actor=agents and agent:<id>, never the viewer's under actor=me", async () => {
+    const agents = await list({
+      source: "decision",
+      sessionId: S_RCPT,
+      actor: "agents",
+      limit: 100,
+    });
+    expect(ids(agents.items)).toEqual([`decision:${F_AGENT}`]);
+    const one = await list({
+      source: "decision",
+      sessionId: S_RCPT,
+      actor: `agent:${AGENT}`,
+      limit: 100,
+    });
+    expect(ids(one.items)).toEqual([`decision:${F_AGENT}`]);
+    const mine = await list({
+      source: "decision",
+      sessionId: S_RCPT,
+      actor: "me",
+      limit: 100,
+    });
+    expect(mine.items).toEqual([]);
+  });
+});

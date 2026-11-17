@@ -5,7 +5,7 @@
  *
  *   GET  /installations           ?computer=me | computerId, capabilityKey → { items }
  *   POST /installations/request   { capabilityKey, action, computer?, version?, sessionId? }
- *                                 → { status: approved | proposed, installationId?, jobId?, reviewUrl? }
+ *                                 → { status: approved | installed | already_on_pod | proposed, … }
  *
  * `computer: "me"` (the default for the request, and a query value for the
  * read) is the computer the caller's key speaks for: the computer's own key,
@@ -23,6 +23,14 @@
  * (services/installations/request-installation.ts), which MCP
  * `synap_request_installation` asks through too.
  *
+ * `computer: "pod"` (any case) names the pod itself: only `install`, and the
+ * capability comes from Synap's catalog through the one marketplace door
+ * (`requestPodInstall`, the same rule as the MCP door's "pod" target). A
+ * person's ask installs it (`installed`), one already on the pod answers
+ * `already_on_pod`, an agent's is a `capability.install` proposal. On a
+ * computer, this door names an installed capability only: adding one to a
+ * computer from the catalog is the MCP door's.
+ *
  * What the computer OBSERVED is never written here: only its own key with
  * `host.runner`, through `/host-jobs/*`.
  */
@@ -33,6 +41,7 @@ import {
   hasScope,
   httpStatusForTrpcError,
   logger,
+  refuseStaleDeviceSession,
   type HubHono,
   type HubVariables,
 } from "./_shared.js";
@@ -52,7 +61,10 @@ import {
   resolveCallerComputer,
   type ComputerRef,
 } from "../../../services/installations/installations.js";
-import { requestInstallation } from "../../../services/installations/request-installation.js";
+import {
+  requestInstallation,
+  requestPodInstall,
+} from "../../../services/installations/request-installation.js";
 
 type C = Context<{ Variables: HubVariables }>;
 
@@ -92,7 +104,7 @@ export const InstallationRequestBodySchema = z
   .object({
     capabilityKey: z.string().min(1).max(200),
     action: z.enum(INSTALLATION_REQUEST_ACTIONS),
-    /** "me" (default) = the caller's own computer; else a computer id. */
+    /** "me" (default) = the caller's own computer; "pod" = the pod itself; else a computer id. */
     computer: z.string().min(1).max(200).optional(),
     version: z.string().min(1).max(128).optional(),
     sessionId: z.string().uuid().optional(),
@@ -138,7 +150,7 @@ export function registerInstallationsRoutes(app: HubHono): void {
       path: "/installations/request",
       tags: ["Installations"],
       summary:
-        "Ask for a capability on one of your computers: install, update to a version, check or remove. An agent's install, update or removal becomes a proposal",
+        "Ask for a capability on one of your computers (install, update to a version, check or remove), or on the pod itself (`computer: \"pod\"`, install only, from Synap's catalog). An agent's install, update or removal becomes a proposal",
       request: {
         body: {
           content: {
@@ -150,16 +162,29 @@ export function registerInstallationsRoutes(app: HubHono): void {
         ...trpcErrorResponses,
         200: {
           description:
-            "Applied (`approved`): the asked state is recorded and the job, when one is due, is queued",
+            'Applied. On a computer (`approved`): the asked state is recorded and the job, when one is due, is queued. On the pod (`computer: "pod"`): `installed` (added from Synap\'s catalog), or `already_on_pod`',
           content: {
             "application/json": {
               schema: z
-                .object({
-                  status: z.literal("approved"),
-                  installationId: z.string(),
-                  jobId: z.string().nullable(),
-                })
-                .openapi("InstallationRequested"),
+                .union([
+                  z
+                    .object({
+                      status: z.literal("approved"),
+                      installationId: z.string(),
+                      jobId: z.string().nullable(),
+                    })
+                    .openapi("InstallationRequested"),
+                  z
+                    .object({ status: z.literal("installed") })
+                    .openapi("InstallationInstalledOnPod"),
+                  z
+                    .object({
+                      status: z.literal("already_on_pod"),
+                      capabilityKey: z.string(),
+                    })
+                    .openapi("InstallationAlreadyOnPod"),
+                ])
+                .openapi("InstallationRequestApplied"),
             },
           },
         },
@@ -181,7 +206,7 @@ export function registerInstallationsRoutes(app: HubHono): void {
         },
         409: {
           description:
-            'The computer cannot take it ("Installs from the pod" is off, or its placement refuses it), or nothing is installed to check or remove',
+            'The computer cannot take it ("Installs from the pod" is off, or its placement refuses it), or nothing is installed to check or remove. On the pod (`computer: "pod"`): an action other than install, or a capability that runs only on a computer (`code: CANNOT_INSTALL`)',
           content: { "application/json": { schema: ErrorSchema } },
         },
       },
@@ -192,14 +217,63 @@ export function registerInstallationsRoutes(app: HubHono): void {
       const req = c.req.valid("json");
       const { userId, agentUserId } = callerOf(c);
       try {
+        // The pod itself, before any computer is looked up: the one rule
+        // (`requestPodInstall`), shared with MCP `synap_request_installation`.
+        if (req.computer?.trim().toLowerCase() === "pod") {
+          // A person's install applies the template, which can enrol an agent
+          // in a space (a credential): a Synap app's device session must have
+          // signed in recently (tripwire credential-doors-refuse-device-session).
+          const stale = refuseStaleDeviceSession(c);
+          if (stale) return stale as never;
+          if (req.action !== "install")
+            return c.json(
+              {
+                code: "CANNOT_INSTALL",
+                error:
+                  "On the pod, ask only to install: a capability on the pod is updated or removed from the Marketplace.",
+              },
+              409
+            ) as never;
+          const pod = await requestPodInstall({
+            userId,
+            agentUserId,
+            capabilityKey: req.capabilityKey,
+          });
+          if (pod.status === "refused")
+            return c.json(
+              {
+                code: pod.code,
+                error: pod.error,
+                ...(pod.reason ? { reason: pod.reason } : {}),
+              },
+              pod.httpStatus
+            ) as never;
+          if (pod.status === "proposed")
+            return jsonGoverned(c, {
+              status: "proposed" as const,
+              proposalId: pod.proposalId,
+              reviewUrl: pod.reviewUrl,
+              message: `Proposed: ${req.capabilityKey} is added to the pod once the person approves it.`,
+            }) as never;
+          if (pod.status === "installed")
+            return c.json({ status: "installed" as const }, 200);
+          return c.json(
+            {
+              status: "already_on_pod" as const,
+              capabilityKey: pod.capabilityKey,
+            },
+            200
+          );
+        }
         const computer = await computerFor(c, req.computer);
         if (computer === "not_a_computer")
           return c.json(NOT_A_COMPUTER, 403) as never;
         if (computer === "not_found")
           return c.json({ error: "Computer not found" }, 404) as never;
         // The one rule (`requestInstallation`), shared with MCP
-        // `synap_request_installation`. This door names an installed
-        // capability only: adding one from the catalog is the MCP door's.
+        // `synap_request_installation`. On a computer this door names an
+        // installed capability only: adding one to a computer from the
+        // catalog is the MCP door's.
         const out = await requestInstallation({
           userId,
           agentUserId,

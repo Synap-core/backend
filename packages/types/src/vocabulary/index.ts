@@ -645,6 +645,16 @@ const ACTION_VERB_ROWS = {
     past: "Declined",
     progressive: "Declining",
   },
+  // The person's NO to an agent's ask, on every mode (founder, 16 Nov 2026,
+  // plan d717d6ac §3): the stored answer is `{ type: "declined" }`
+  // (`@synap-core/types/ask`). Not `decline` (a connection asking for reach)
+  // and not `reject` (a proposal): the ask closes as refused, the reason goes
+  // to the agent, nothing is handed over.
+  refuse: {
+    imperative: "Refuse",
+    past: "Refused",
+    progressive: "Refusing",
+  },
   // Cutting a connection's sign-in (an account, a channel, an agent's keys).
   // Reversible by connecting again — never "Deleted".
   disconnect: {
@@ -671,6 +681,10 @@ const ACTION_VERB_ROWS = {
   // into a channel (`channel_message.created`).
   ask: { imperative: "Ask", past: "Asked", progressive: "Asking" },
   attest: { imperative: "Mark done", past: "Marked done" },
+  // The person's "Not mine" on a slot an agent handed them
+  // (`focus_session.slot_handed_back`): the slot is the agent's again,
+  // unanswered. Not an answer and not a refusal.
+  hand_back: { imperative: "Hand back", past: "Handed back" },
   post: { imperative: "Post", past: "Posted", progressive: "Posting" },
   see_failure: { imperative: "See what failed", past: "Saw what failed" },
   turn_on: {
@@ -1079,6 +1093,18 @@ export function resolveObjectNoun(
     translatedWord(`kind.${slug}.one`, catalogLocaleOf(locale)) ??
     englishNoun(slug).one
   );
+}
+
+/**
+ * The English words a kind was called before a rename (`formerLabels` on its
+ * registry row), to RECOGNISE durable stored text that still spells them
+ * (never to show them). Empty for a kind never renamed or unknown.
+ */
+export function resolveFormerObjectNouns(
+  kind: string | null | undefined
+): readonly string[] {
+  if (!kind) return [];
+  return OBJECT_KINDS[canonicalKind(kind)]?.formerLabels ?? [];
 }
 
 function canonicalKind(kind: string): string {
@@ -3801,6 +3827,20 @@ export function resolveHandedToLabel(
 ): string {
   const name = displayName?.trim() || humanizeToken(agentType);
   return sentences(catalogLocaleOf(locale))("vocabulary.handedTo", { name });
+}
+
+/**
+ * A job's child jobs folded on its Activity line: "3 jobs started from here"
+ * (plan 5207fbb6, `@synap-core/types/work-view` `jobBranches`
+ * `descendants`). A child job is a Job, never a "branch" on screen.
+ */
+export function resolveJobsStartedHereLabel(
+  n: number,
+  locale?: Locale
+): string {
+  return sentences(catalogLocaleOf(locale))("vocabulary.job.startedHere", {
+    n,
+  });
 }
 
 // ─── The one-line aim of a sitting (decision D3, 2026-10-23) ────────────────

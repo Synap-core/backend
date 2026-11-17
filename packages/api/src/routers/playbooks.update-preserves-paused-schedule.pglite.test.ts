@@ -131,7 +131,9 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(async () => {
-  await h.client!.exec(`delete from automations; delete from playbooks;`);
+  await h.client!.exec(
+    `delete from automations; delete from playbooks; delete from playbook_automations;`
+  );
   await q(
     `insert into automations (id, workspace_id, created_by, name, trigger_type, trigger_config, flow_definition, status, next_run_at, metadata)
      values ($1,$2,$3,'CRM Hygiene (schedule)','cron','{"expression":"0 8 * * *"}'::jsonb,'{}'::jsonb,'paused',null,'{}'::jsonb)`,
@@ -141,6 +143,12 @@ beforeEach(async () => {
     `insert into playbooks (id, workspace_id, created_by, name, goal_template, params, input_strategy, channel_spec, expected_outputs, stages, criteria, status, executor, schedule, flow_automation_id, metadata, version)
      values ($1,$2,$3,'CRM Hygiene','Keep the pipeline healthy','[]'::jsonb,'{"kind":"none"}'::jsonb,'{}'::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,'active','is-agent',$4::jsonb,$5,'{}'::jsonb,1)`,
     [PB, CRM, OWNER, JSON.stringify(HYGIENE_SCHEDULE), AUTO]
+  );
+  // The backing row as a pod holds it since 0425: the ONE link
+  // (`playbook_automations`, role `schedule`) beside the legacy column.
+  await q(
+    `insert into playbook_automations (id, playbook_id, automation_id, role) values ($1,$2,$3,'schedule')`,
+    [randomUUID(), PB, AUTO]
   );
 });
 
@@ -171,6 +179,7 @@ describe("playbooks.update never re-arms a paused schedule on adoption", () => {
     await q(`update playbooks set flow_automation_id = null where id = $1`, [
       PB,
     ]);
+    await q(`delete from playbook_automations`);
     await q(`delete from automations`);
     await caller().update({ id: PB, description: "tidy" } as never);
     expect(await automationCount()).toBe(0);

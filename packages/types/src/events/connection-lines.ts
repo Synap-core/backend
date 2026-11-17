@@ -29,6 +29,7 @@ import {
   sentenceCaseLabel,
 } from "../vocabulary/index.js";
 import { resolveServiceName } from "../service-marks/index.js";
+import { isDeclinedValue } from "../ask/declined.js";
 
 /** One lifecycle event, as a line. */
 export interface ConnectionEventLine {
@@ -269,13 +270,25 @@ function sessionOrTrackLine(
       break;
   }
   if (kind !== "focus_session") return null;
-  const label = str(data, "label", "slotLabel", "title");
+  // A slot history row names its slot `expectedLabel` (`lifecycle-events.ts`).
+  const label = str(data, "label", "slotLabel", "expectedLabel", "title");
   switch (action) {
     case "slot_asked":
       return line("ask", "question", verbNoun("ask", "question", label), {
         name: label,
       });
     case "slot_answered":
+      // A refusal is an answer on the wire, and its own act in the history.
+      if (isDeclinedValue(data?.value)) {
+        return line(
+          "refuse",
+          "question",
+          verbNoun("refuse", "question", label),
+          {
+            name: label,
+          }
+        );
+      }
       return line("answer", "question", verbNoun("answer", "question", label), {
         name: label,
       });
@@ -284,6 +297,13 @@ function sessionOrTrackLine(
         ? `${past("attest")} ${quoted(label)}`
         : past("attest");
       return line("attest", "output", text, { name: label });
+    }
+    case "slot_handed_back": {
+      // "Not mine": the slot went back to the agent, unanswered.
+      const text = label
+        ? `${past("hand_back")} ${quoted(label)}`
+        : past("hand_back");
+      return line("hand_back", "output", text, { name: label });
     }
     default:
       return null;
@@ -304,7 +324,7 @@ function sessionOrTrackLine(
  *   connection_sync.progress                   terminal phases only (synced / review_ready / failed)
  *   connector.auth_expire                      "Sign-in expired · Gmail"
  *   webhooks.deliver                           "Sent to Zapier" / "Failed to send to Zapier"
- *   focus_session.{stage_changed,slot_asked,slot_answered,slot_attested,closed}
+ *   focus_session.{stage_changed,slot_asked,slot_answered,slot_attested,slot_handed_back,closed}
  *   track.{stage_changed,closed}
  */
 export function parseConnectionEvent(

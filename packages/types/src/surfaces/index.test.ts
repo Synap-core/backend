@@ -40,7 +40,8 @@ describe("DEPRECATED_SURFACES", () => {
   it("contains the specific relay ids the V1 plan marks DEPRECATE", () => {
     const relayIds = deprecatedSurfacesFor("relay").map((s) => s.id);
     expect(relayIds.sort()).toEqual(
-      ["feed", "gallery", "idea-studio", "rules"].sort()
+      // `work`: the Goals tab, a redirect to `/goals` (16 Nov 2026).
+      ["feed", "gallery", "idea-studio", "rules", "work"].sort()
     );
   });
 
@@ -50,6 +51,9 @@ describe("DEPRECATED_SURFACES", () => {
     // negative control: a real, non-deprecated id must read false
     expect(isDeprecatedSurface("browser", "sessions")).toBe(false);
     expect(isDeprecatedSurface("relay", "home")).toBe(false);
+    // The relay Goals tab (id `work`) is retired; the browser's Work is not.
+    expect(isDeprecatedSurface("relay", "work")).toBe(true);
+    expect(isDeprecatedSurface("browser", "work")).toBe(false);
     // wrong surface for a real id must also read false (no cross-surface leak)
     expect(isDeprecatedSurface("relay", "governance")).toBe(false);
   });

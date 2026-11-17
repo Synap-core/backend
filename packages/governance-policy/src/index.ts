@@ -334,6 +334,24 @@ export const DEFAULT_DAILY_WRITE_CEILING: number | null = null;
 export const WORKER_IRREVERSIBLE_DAILY_CEILING = 50;
 
 /**
+ * LinkedIn connection requests ONE connected LinkedIn account may send per UTC
+ * day, through every door (the channel send door and a verb's provider call).
+ * Past it, the send is HELD and goes the next day
+ * (`services/channels/linkedin-account-limits.ts`). The default of the
+ * `linkedin_invitations_daily` axis; a row whose subject is the account
+ * (`messaging_account` + its row id) sets another value for that account.
+ */
+export const LINKEDIN_INVITATIONS_DAILY_LIMIT = 20;
+
+/**
+ * LinkedIn actions (messages and connection requests together) ONE connected
+ * LinkedIn account may make per UTC day. The default of the
+ * `linkedin_actions_daily` axis, per account like
+ * {@link LINKEDIN_INVITATIONS_DAILY_LIMIT}.
+ */
+export const LINKEDIN_ACTIONS_DAILY_LIMIT = 50;
+
+/**
  * THE CAPS FOLD (agent routing W1c, 0330): the fallback value of every
  * `governance_ceilings` axis, in ONE table. A stored row overrides it for its
  * (subject, principal, scope); `resolveCeiling` (@synap/database) is the one
@@ -351,6 +369,8 @@ export const CEILING_DEFAULTS = {
   automation_ai_dispatch_daily: 50,
   worker_pending_approvals: 20,
   worker_irreversible_sends_daily: WORKER_IRREVERSIBLE_DAILY_CEILING,
+  linkedin_invitations_daily: LINKEDIN_INVITATIONS_DAILY_LIMIT,
+  linkedin_actions_daily: LINKEDIN_ACTIONS_DAILY_LIMIT,
 } as const;
 
 /**

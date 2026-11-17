@@ -14,6 +14,7 @@
  * is pending" would merge them); a repeated subject → not counted twice.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
@@ -144,7 +145,7 @@ describe("proposeRulePlaybookRun — one batch files ONE proposal", () => {
     expect(inner.subjectId).toBe(subjects[0]);
     // The title, through the vocabulary door — what every renderer shows.
     expect(rows[0]!.summary).toBe(
-      'Run Template "Qualify a lead" for 4 new leads'
+      `Run ${resolveObjectNoun("playbook")} "Qualify a lead" for 4 new leads`
     );
     // The pod's words name the first subjects, and how many more — as the
     // POLICY reason, never the proposer's WHY.

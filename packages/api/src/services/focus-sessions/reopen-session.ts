@@ -45,13 +45,37 @@ import {
   setSessionStatus,
   workUnitActorOf,
   LifecycleConflictError,
+  inArray,
+  ne,
+  uniqueViolationConstraint,
   type FocusSession,
 } from "@synap/database";
+import { ONE_LIVE_RUN_INDEX } from "@synap/database/schema";
 import type { ExpectedOutput } from "@synap/playbooks";
+import { LIVE_RUN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { createLogger } from "@synap-core/core";
+import { TRPCError } from "@trpc/server";
 import { carrySlotKeys } from "./slot-keys.js";
 
 const logger = createLogger({ module: "reopen-focus-session" });
+
+/**
+ * The reopen of a run that held its object's live slot, refused because
+ * another run of the same playbook is live on that object (0427). Says which,
+ * and how to go on.
+ */
+export function reopenWhileAnotherRunsError(
+  liveSessionId: string | null
+): TRPCError {
+  return new TRPCError({
+    code: "CONFLICT",
+    message:
+      "This run cannot be reopened: another run of the same playbook is live on this record" +
+      (liveSessionId ? ` (session ${liveSessionId})` : "") +
+      ". Keep working in that run, or end it first, then reopen this one.",
+    cause: { reasonCode: "ALREADY_RUNNING", liveSessionId },
+  });
+}
 
 /** What a reopen leaves as the cancel left it — said to the person. */
 export const REOPEN_NOT_RESTORED = [
@@ -122,6 +146,9 @@ export async function reopenCancelledSession(params: {
       .select({
         status: focusSessions.status,
         expectedOutputs: focusSessions.expectedOutputs,
+        oneLivePerSubject: focusSessions.oneLivePerSubject,
+        playbookId: focusSessions.playbookId,
+        subjectEntityId: focusSessions.subjectEntityId,
       })
       .from(focusSessions)
       .where(
@@ -131,6 +158,33 @@ export async function reopenCancelledSession(params: {
     if (!locked) return null;
     if (locked.status !== "cancelled") {
       throw new LifecycleConflictError("cancelled", locked.status);
+    }
+
+    // ONE LIVE RUN PER OBJECT (0427): a run that held its object's live slot
+    // comes back holding it. When the person has started another run of the
+    // playbook on that object since the cancel, the reopen is refused by
+    // name — two live runs of one playbook on one object is what the slot
+    // forbids, and the index would refuse the status write anyway.
+    if (
+      locked.oneLivePerSubject &&
+      locked.playbookId &&
+      locked.subjectEntityId
+    ) {
+      const [live] = await tx
+        .select({ id: focusSessions.id })
+        .from(focusSessions)
+        .where(
+          and(
+            eq(focusSessions.playbookId, locked.playbookId),
+            eq(focusSessions.subjectEntityId, locked.subjectEntityId),
+            eq(focusSessions.userId, userId),
+            eq(focusSessions.oneLivePerSubject, true),
+            inArray(focusSessions.status, [...LIVE_RUN_SESSION_STATUSES]),
+            ne(focusSessions.id, sessionId)
+          )
+        )
+        .limit(1);
+      if (live) throw reopenWhileAnotherRunsError(live.id);
     }
 
     const storedOutputs = Array.isArray(locked.expectedOutputs)
@@ -163,6 +217,12 @@ export async function reopenCancelledSession(params: {
           true
         )`,
       },
+    }).catch((err: unknown) => {
+      // The read above raced a run that started meanwhile: same refusal.
+      if (uniqueViolationConstraint(err) === ONE_LIVE_RUN_INDEX) {
+        throw reopenWhileAnotherRunsError(null);
+      }
+      throw err;
     });
     const [session] = rows;
     if (!session) {
@@ -189,11 +249,19 @@ export async function reopenCancelledSession(params: {
         .orderBy(desc(playbookRuns.startedAt))
         .limit(1);
       if (cancelledRun?.status === "cancelled") {
-        await tx
+        // COMPARE-AND-SET: only the run still `cancelled` is revived (a
+        // concurrent reopen, or any writer between the read and here, wins).
+        const revived = await tx
           .update(playbookRuns)
           .set({ status: "running", completedAt: null, error: null })
-          .where(eq(playbookRuns.id, cancelledRun.id));
-        reopenedRunId = cancelledRun.id;
+          .where(
+            and(
+              eq(playbookRuns.id, cancelledRun.id),
+              eq(playbookRuns.status, "cancelled")
+            )
+          )
+          .returning({ id: playbookRuns.id });
+        if (revived.length > 0) reopenedRunId = cancelledRun.id;
       }
     }
 
