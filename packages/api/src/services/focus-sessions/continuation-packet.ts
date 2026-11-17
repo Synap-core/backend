@@ -2926,6 +2926,129 @@ export function deriveNextMove(input: {
  * owner floor (every door loads it anyway; re-reading it here would be a second
  * query answering the same question).
  */
+/** A part of {@link SessionShape} this key's grant does not read. */
+export interface PacketWithheld {
+  status: "withheld";
+  reason: string;
+}
+
+/**
+ * A runner as a key narrowed by its grant reads it: who and where (harness,
+ * computer, model, state), never the local details a person's own client
+ * needs to reopen it (`cwd`, `conversationId`, `processId`, `twin`, `resume`).
+ */
+export type PacketAppRunnerItem = Omit<
+  PacketRunnerItem,
+  "cwd" | "conversationId" | "processId" | "twin" | "resume"
+>;
+
+/**
+ * The parts of a session's packet a key NARROWED by its grant may read
+ * (a pod app holding `session.read` but not every packet subject, founder
+ * decision D1, 17 Nov 2026): GET /focus-sessions/:id answers them beside the
+ * row when the packet itself is withheld. Each is read by the packet's OWN
+ * reader, so the two cannot drift:
+ *  - `parent`, `children`, `siblings`: the neighbour sessions, under the
+ *    session floor (`sessionReadableWhere`, which ANDs the key's grant): a
+ *    neighbour the grant does not read is neither listed nor counted;
+ *  - `workUnits`: the PRs and branches the row RECORDED (its own slots),
+ *    without `prState` (the recorded PR facts are events anywhere in the pod,
+ *    which no pinned key reads);
+ *  - `runners`: who works it (harness, computer, model, state), only when the
+ *    key reads the person's agents (`sessionHolderReadable`), else withheld.
+ * The stage history is a column of the row (`stageHistory`), already served.
+ */
+export interface SessionShape {
+  parent: ContinuationPacket["parent"];
+  children: PacketSection<PacketChildItem>;
+  siblings: ContinuationPacket["siblings"];
+  workUnits: PacketSection<PacketWorkUnitItem>;
+  runners: PacketSection<PacketAppRunnerItem> | PacketWithheld;
+}
+
+export async function projectSessionShape(
+  row: SessionRow,
+  ctx: {
+    database?: typeof db;
+    userId: string;
+    /** Whether the key reads the person's agents (`sessionHolderReadable`). */
+    runners: boolean;
+    /** The sentence a withheld part carries. */
+    withheldReason: string;
+  }
+): Promise<SessionShape> {
+  const database = ctx.database ?? db;
+  const reader: SessionReader = { userId: ctx.userId, roster: false };
+  const trackRead: TrackRead = row.trackId
+    ? getTrack(row.trackId, { userId: reader.userId })
+    : Promise.resolve(null);
+  trackRead.catch(() => undefined);
+  const [parentRow, children, siblings, runners] = await Promise.all([
+    readParentRow(database, reader, row.id).catch((err) => {
+      logger.warn(
+        { err, sessionId: row.id, section: "parent" },
+        "session shape: section read failed"
+      );
+      return "unavailable" as const;
+    }),
+    readInboundSessions(database, reader, row.id, "spawned_from").catch(
+      unavailable(
+        row.id,
+        "children",
+        "This session's sub-sessions could not be read."
+      )
+    ),
+    readSiblings(database, reader, row, trackRead).catch(
+      unavailable(
+        row.id,
+        "siblings",
+        "The sessions beside this one could not be read."
+      )
+    ),
+    ctx.runners
+      ? loadSessionRunners(row.id, { database, limit: 100 })
+          .then((all) =>
+            section(
+              all.map((r): PacketAppRunnerItem => {
+                const {
+                  cwd: _cwd,
+                  conversationId: _conversationId,
+                  processId: _processId,
+                  twin: _twin,
+                  resume: _resume,
+                  ...app
+                } = runnerItem(r);
+                return app;
+              })
+            )
+          )
+          .catch(
+            unavailable(
+              row.id,
+              "runners",
+              "Who is attached to this session could not be read."
+            )
+          )
+      : Promise.resolve<PacketWithheld>({
+          status: "withheld",
+          reason: ctx.withheldReason,
+        }),
+  ]);
+  return {
+    parent:
+      parentRow === "unavailable"
+        ? {
+            status: "unavailable",
+            reason: "This session's parent session could not be read.",
+          }
+        : parentSection(parentRow),
+    children,
+    siblings,
+    workUnits: workUnitsSection(slots(row)),
+    runners,
+  };
+}
+
 export async function projectContinuationPacket(
   row: SessionRow,
   ctx: ProjectContinuationPacketCtx
