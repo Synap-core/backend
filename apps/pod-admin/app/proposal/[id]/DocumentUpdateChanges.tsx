@@ -188,9 +188,7 @@ export function HtmlPagesPanel({
 function PageColumn({ name, children }: { name: string; children: ReactNode }) {
   return (
     <section className="flex min-w-0 flex-col gap-1.5">
-      <h4 className="text-[12px] font-medium uppercase tracking-wide text-foreground/65">
-        {name}
-      </h4>
+      <h4 className="text-[12.5px] font-medium text-foreground/70">{name}</h4>
       {children}
     </section>
   );

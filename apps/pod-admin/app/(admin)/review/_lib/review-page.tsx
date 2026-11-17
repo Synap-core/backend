@@ -101,7 +101,7 @@ import { ReviewOnboarding } from "./review-onboarding";
 import { showReviewOnboarding } from "./review-onboarding-model";
 import { HistoryList } from "../../history/_lib/history-list";
 import { useRequestContext } from "../../../_lib/request/use-request-context";
-import { requestFamily } from "./review-row-view";
+import { reviewRowView, tileNoun } from "./review-row-view";
 import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
 import { useT } from "../../../../lib/i18n/locale-provider";
@@ -767,7 +767,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                 </span>
               </Button>
               {laterOpen && (
-                <p className="mt-1 text-[12px] text-foreground/55">
+                <p className="mt-1 text-[12px] text-foreground/70">
                   {FATE_COPY.reviewLaterCaption}
                 </p>
               )}
@@ -880,14 +880,15 @@ function alwaysRuleOf(group: RowGroup) {
 function openOf(row: ReviewRow): OpenReview | null {
   const detail = row.detail;
   if (!detail || detail.kind === "open") return null;
+  const view = reviewRowView(row);
   return {
     detail,
     // An ask's row title is its question (`askCardView`), so the frame
     // names the question once and the detail does not repeat it.
     title: row.title,
     lens: row.lens,
-    family: requestFamily(row),
-    session: row.sessionTitle,
+    family: view.family,
+    noun: tileNoun(view),
     // What it is for, in the agent's words: the ask's why, else what
     // answering unblocks.
     sentence: row.lens.detail?.trim() || row.lens.unblocks?.trim() || null,

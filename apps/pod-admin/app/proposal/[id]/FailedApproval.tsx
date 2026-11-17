@@ -143,7 +143,7 @@ export function StoppedGraph({ report }: { report: StoppedGraphReport }) {
       </p>
       {report.failed && (
         <div data-stopped-failed="" className="flex flex-col gap-1">
-          <span className="text-[12px] text-foreground/55">
+          <span className="text-[12px] text-foreground/70">
             {t("stopped.failed")}
           </span>
           <span>
@@ -158,7 +158,7 @@ export function StoppedGraph({ report }: { report: StoppedGraphReport }) {
       )}
       {report.landed.length > 0 && (
         <div data-stopped-landed="" className="flex flex-col gap-1">
-          <span className="text-[12px] text-foreground/55">
+          <span className="text-[12px] text-foreground/70">
             {t("stopped.landed")}
           </span>
           <ul className="flex flex-col gap-0.5">
@@ -172,14 +172,14 @@ export function StoppedGraph({ report }: { report: StoppedGraphReport }) {
       )}
       {report.skipped.length > 0 && (
         <div data-stopped-skipped="" className="flex flex-col gap-1">
-          <span className="text-[12px] text-foreground/55">
+          <span className="text-[12px] text-foreground/70">
             {t("stopped.skipped")}
           </span>
           <ul className="flex flex-col gap-0.5">
             {report.skipped.map((item) => (
               <li key={item.key}>
                 <ItemLabel item={item} />
-                <span className="text-[12px] text-foreground/55">
+                <span className="text-[12px] text-foreground/70">
                   {" "}
                   · {item.reason}
                 </span>
@@ -190,7 +190,7 @@ export function StoppedGraph({ report }: { report: StoppedGraphReport }) {
       )}
       {report.notRun.length > 0 && (
         <div data-stopped-not-run="" className="flex flex-col gap-1">
-          <span className="text-[12px] text-foreground/55">
+          <span className="text-[12px] text-foreground/70">
             {t("stopped.notRun")}
           </span>
           <ul className="flex flex-col gap-0.5 text-foreground/65">
@@ -255,8 +255,7 @@ export function FailedApproval({
   // A proposal that needs an input (finding 91a3bfd3) hands it over in
   // its setup rows: repair, reopened as pending, then approved with the
   // revision the repair made — not just the sentence.
-  const needsInput =
-    (options.data as { setup?: unknown } | undefined)?.setup !== undefined;
+  const needsInput = options.data?.setup !== undefined;
   const rows =
     options.data?.repairable === true && !needsInput
       ? repairRows(options.data.fields as RepairOptionsField[])
@@ -288,7 +287,7 @@ export function FailedApproval({
           </Button>
         </div>
       ) : options.isLoading ? (
-        <p className="text-[12px] text-foreground/55">{t("repair.checking")}</p>
+        <p className="text-[12px] text-foreground/70">{t("repair.checking")}</p>
       ) : needsInput ? (
         <SetupHandOver
           proposalId={proposalId}

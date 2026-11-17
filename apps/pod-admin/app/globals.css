@@ -146,13 +146,14 @@ body {
 /* ----------------------------------------------------------------------
  * One request (Review's rows and the request story, plan d717d6ac §1):
  * the kind tiles and the story's rail marks, from the shared tokens. One
- * grammar: colour = state, icon = kind, never a chip alone.
- *   done        a solid sage dot
- *   your call   a filled ochre ring (the only loud mark on a page)
- *   also yours  an open ochre ring
- *   agent on it a teal ring
- *   not yet     a dashed muted ring
- *   refused     a clay square
+ * grammar for the marks: colour = state, never a chip alone; a kind tile is
+ * neutral, its icon carries the kind.
+ *   done       a solid sage dot on a solid rail
+ *   your call  a filled ochre ring (the only loud mark on a page)
+ *   not yet    a dashed ring on a dashed rail
+ *   reading    a neutral ring (a read in flight, nothing happened yet)
+ *   unread     a stale ring (a read that failed)
+ * A rail carries state, so it holds 3:1 against the card in both themes.
  * -------------------------------------------------------------------- */
 .rq-tile {
   display: inline-flex;
@@ -163,18 +164,6 @@ body {
   height: 28px;
   border-radius: var(--synap-radius-control);
 }
-.rq-tile-secret {
-  background: color-mix(in srgb, var(--synap-primary) 16%, transparent);
-  color: var(--synap-primary-ink);
-}
-.rq-tile-change {
-  background: color-mix(in srgb, var(--synap-info) 18%, transparent);
-  color: var(--synap-info-ink);
-}
-.rq-tile-step {
-  background: color-mix(in srgb, var(--synap-success) 20%, transparent);
-  color: var(--synap-success-ink);
-}
 .rq-tile-neutral {
   background: color-mix(in srgb, var(--synap-muted) 14%, transparent);
   color: var(--synap-color-secondary);
@@ -183,10 +172,11 @@ body {
   border: 1px solid var(--synap-border-color);
   border-radius: var(--synap-radius-container);
 }
-.rq-row[aria-current="true"] {
+.rq-row:has([aria-current="true"]) {
   background: var(--synap-background-surface);
   border-color: color-mix(in srgb, var(--synap-primary) 55%, transparent);
 }
+/* Text set in the accent: the accent's ink, never its fill (a fill is never text). */
 .rq-ink {
   color: var(--synap-primary-ink);
 }
@@ -195,16 +185,11 @@ body {
   flex-shrink: 0;
   box-sizing: border-box;
   border-radius: 9999px;
+  width: 10px;
+  height: 10px;
 }
 .rq-mark-done {
-  width: 10px;
-  height: 10px;
   background: var(--synap-success);
-}
-.rq-mark-also {
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--synap-primary);
 }
 .rq-mark-now {
   width: 14px;
@@ -212,41 +197,51 @@ body {
   border: 2px solid var(--synap-primary);
   background: color-mix(in srgb, var(--synap-primary) 35%, transparent);
 }
-.rq-mark-agent {
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--synap-info);
-}
 .rq-mark-next {
-  width: 10px;
-  height: 10px;
   border: 2px dashed var(--synap-muted);
 }
-.rq-mark-refused {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  background: var(--synap-error);
+.rq-mark-wait {
+  border: 2px solid color-mix(in srgb, var(--synap-muted) 85%, transparent);
+}
+.rq-mark-unread {
+  border: 2px solid var(--synap-warning);
 }
 .rq-rail-done {
   border-left: 2px solid
-    color-mix(in srgb, var(--synap-success) 45%, transparent);
+    color-mix(in srgb, var(--synap-success) 75%, transparent);
 }
 .rq-rail-next {
   border-left: 2px dashed
-    color-mix(in srgb, var(--synap-muted) 60%, transparent);
+    color-mix(in srgb, var(--synap-muted) 85%, transparent);
 }
-.rq-now-box {
-  border: 1px solid color-mix(in srgb, var(--synap-primary) 45%, transparent);
-  border-radius: var(--synap-radius-container);
-  background: color-mix(in srgb, var(--synap-primary) 10%, transparent);
-  padding: 16px;
+/* The story's columns follow ITS width, not the viewport's (UX S14): in a
+ * narrow story (a phone, the docked panel) the "when" goes inline above the
+ * line and the rail narrows. */
+.rq-story {
+  container-type: inline-size;
 }
-.rq-eyebrow {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.rq-item {
+  gap: 0.5rem;
+}
+.rq-when-col {
+  display: none;
+}
+.rq-rail-col {
+  width: 1rem;
+}
+@container (min-width: 480px) {
+  .rq-item {
+    gap: 0.75rem;
+  }
+  .rq-when-col {
+    display: block;
+  }
+  .rq-when-inline {
+    display: none;
+  }
+  .rq-rail-col {
+    width: 1.25rem;
+  }
 }
 .rq-refuse {
   border: 1px solid color-mix(in srgb, var(--synap-error) 55%, transparent);

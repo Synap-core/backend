@@ -1,8 +1,7 @@
 "use client";
 
 /**
- * The way into the object a proposal UPDATES: "Update · Q3 plan → Open
- * document". The review page is not the object's page (it shows a proposed
+ * The way into the object a proposal UPDATES: "Open document". The review page is not the object's page (it shows a proposed
  * change, not the thing), so a reviewer who wants the whole picture needs a
  * door to the real object, at every status: the question comes before the
  * decision, and an approved change is read against the object it changed.
@@ -22,24 +21,22 @@ import type { UpdatedObject } from "./proposal-review-model";
 
 export function UpdatedDoor({
   updated,
-  applied,
+  kind,
 }: {
   updated: UpdatedObject;
-  /** Approved: the change is on the object now. */
-  applied: boolean;
+  /** The object's own kind (a profile slug: `finding`), when the pod named it. */
+  kind?: string | null;
 }) {
-  const noun = resolveObjectNoun(updated.kind);
-  const verb = resolveActionLabel("update", applied ? "past" : "imperative");
+  // The change's title is the drawer's and the record card's: said once
+  // there. Here only the door, named by what the object IS ("Open finding"),
+  // never by its table ("Open entity").
+  const noun = resolveObjectNoun(kind || updated.kind);
   const open = resolveActionLabel("open", "imperative");
   return (
     <span
       data-updated-object={updated.id}
-      className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] text-foreground/80"
+      className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px]"
     >
-      <span className="min-w-0 break-words">
-        {verb}
-        {updated.title ? ` · ${updated.title}` : ""}
-      </span>
       <ExitLink
         exit={openIn({
           kind: "object",

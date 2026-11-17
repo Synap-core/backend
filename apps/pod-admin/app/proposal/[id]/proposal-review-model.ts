@@ -22,6 +22,7 @@ import { objectReadsWide } from "../../_lib/object/object-width";
 import { governanceReasonMark } from "@synap-core/types/proposals";
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
 import { needsYouRisk } from "@synap-core/types/needs-you";
+import { proposalPageT } from "./copy";
 import type { UnitTone } from "@synap-core/types/units";
 
 /** One field of the pod's diff, read structurally. */
@@ -79,10 +80,12 @@ export function undoMark(
 ): ReviewMark | null {
   const risk = needsYouRisk({ kind: "proposal", revertable });
   if (!risk) return null;
+  const t = proposalPageT();
   return {
     tone: risk.tone,
     label: risk.label,
-    sentence: "Approving applies it now, and it cannot be undone from here.",
+    // Unmeasured is said as unmeasured: nobody checked (S12).
+    sentence: revertable === false ? t("undo.cannot") : t("undo.unknown"),
   };
 }
 

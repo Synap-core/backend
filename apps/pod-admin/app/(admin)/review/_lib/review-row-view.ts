@@ -21,6 +21,7 @@ import {
   resolveReviewPackageLabel,
 } from "@synap-core/types/vocabulary";
 import type { ReviewRow } from "./review-rows";
+import type { RequestFamily } from "../../../_lib/request/family";
 
 export type ReviewRowVerb =
   | { kind: "answer" }
@@ -29,14 +30,9 @@ export type ReviewRowVerb =
   | { kind: "exit" }
   | null;
 
-/**
- * The request's family, drawn as its kind tile (one grammar, icon = kind):
- * a secret or connection to hand over, a change to approve, a question, a
- * step to approve (a go / no-go), an access request.
- */
-export type RequestFamily =
-  "secret" | "change" | "question" | "step" | "access";
+export type { RequestFamily };
 
+/** The request's family (`../../../_lib/request/family.ts`), from what the row holds. */
 export function requestFamily(row: ReviewRow): RequestFamily {
   if (row.group === "access") return "access";
   if (row.detail?.kind === "ask") {
@@ -59,35 +55,51 @@ export interface ReviewRowView extends RequestRowView {
   inlineApprove: boolean;
 }
 
+/** The kind tile's accessible name (its kind noun), when the row draws one. */
+export function tileNoun(
+  view: Pick<RequestRowView, "what">
+): string | undefined {
+  const tile = view.what.find((p) => p.kind === "tile");
+  return tile?.kind === "tile" ? tile.noun : undefined;
+}
+
 export function reviewRowView(
   row: ReviewRow,
   { showPackage = false }: { showPackage?: boolean } = {}
 ): ReviewRowView {
   const base = requestRow(row.lens);
-  // A proposal's tile is the kind of thing it creates or changes (a Person,
-  // a Rule), which only `proposals.list` names (`proposalSubjectKind`); the
-  // lens row knows it only as "a proposal".
-  const what =
-    row.group === "asks"
-      ? base.what
-      : base.what.map((p) =>
-          p.kind === "tile"
-            ? {
-                kind: "tile" as const,
-                objectKind: row.nounKind,
-                noun: resolveObjectNoun(row.nounKind),
-              }
-            : p
-        );
+  // The row draws no state mark (everything on this list waits on you): its
+  // kind tile carries the family. A proposal's tile is the kind of thing it
+  // creates or changes (a Person, a Rule), which only `proposals.list` names
+  // (`proposalSubjectKind`); the lens row knows it only as "a proposal".
+  const what = base.what
+    .filter((p) => p.kind !== "state")
+    .map((p) =>
+      p.kind === "tile" && row.group !== "asks"
+        ? {
+            kind: "tile" as const,
+            objectKind: row.nounKind,
+            noun: resolveObjectNoun(row.nounKind),
+          }
+        : p
+    );
+  // Who asked, in the ONE requester sentence (`proposalRequester`, D1/M5):
+  // a proposal's row names its requester the way its review does.
+  const requester = row.group !== "asks" ? row.who : null;
+  const who = requester
+    ? base.who.map((p) =>
+        p.kind === "door" && p.role === "by" ? { ...p, label: requester } : p
+      )
+    : base.who;
   const pkg = showPackage ? resolveReviewPackageLabel(row.package) : null;
   // A kind that reads the same word as its package (a Knowledge item in
   // Knowledge) says it once: the tile carries the kind.
-  const tile = what.find((p) => p.kind === "tile");
-  const kindNoun = tile?.kind === "tile" ? tile.noun : null;
+  const kindNoun = tileNoun({ what }) ?? null;
   return {
     ...base,
     family: requestFamily(row),
     what,
+    who,
     packageLabel: pkg && pkg !== kindNoun ? pkg : null,
     repeat: row.lens.repeat,
     action:

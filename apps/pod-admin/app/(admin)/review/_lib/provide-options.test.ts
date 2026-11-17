@@ -5,9 +5,10 @@ import {
   provideReceipt,
   provideSheet,
   secretCard,
-  secretUseView,
+  secretUseState,
   type ProvideOptions,
 } from "./provide-options";
+import type { ProvideSecretUse } from "../../../_lib/request/api";
 
 const base = {
   sessionId: "11111111-1111-4111-8111-111111111111",
@@ -89,7 +90,6 @@ describe("provideSheet · secret: the person's existing secrets only", () => {
         },
       ],
       initialRef: "vault://a",
-      grantNote: ASK_COPY.provideGrantNote("Scout", 60),
       // Sent back on the answer: the read goes to Scout or to no one.
       expectedGranteeId: "agent-scout",
       grant: {
@@ -118,9 +118,11 @@ describe("provideSheet · secret: the person's existing secrets only", () => {
     );
     expect(sheet).toMatchObject({
       initialRef: null,
-      grantNote: ASK_COPY.provideNoGrantNote,
       expectedGranteeId: null,
+      agentName: null,
     });
+    // The sheet carries facts, never a worded note: the card words them.
+    expect(sheet).not.toHaveProperty("grantNote");
   });
 });
 
@@ -331,7 +333,8 @@ describe("secretCard · the honest secret card (plan d717d6ac §4)", () => {
     expect(card.usedBy).toBe("Claude Code");
     expect(card.until).toBe("session");
     expect(card.canPickUses).toBe(true);
-    expect(card.note).toBe(ASK_COPY.provideGrantNote("Claude Code", 60));
+    // The facts the card words: a session read lasts the grant's minutes.
+    expect(card.minutes).toBe(60);
   });
 
   it("no purpose: nothing inferred, the card says the agent did not say", () => {
@@ -345,7 +348,7 @@ describe("secretCard · the honest secret card (plan d717d6ac §4)", () => {
     if (sheet.kind !== "secret") throw new Error("secret sheet");
     const card = secretCard(sheet, "vault://s1", "once");
     expect(card.until).toBe("once");
-    expect(card.note).toBe(ASK_COPY.provideGrantOnceNote("Claude Code", 15));
+    expect(card.minutes).toBe(15);
   });
 
   it("a standing grant on the picked secret is said as such, never as an hour", () => {
@@ -361,32 +364,72 @@ describe("secretCard · the honest secret card (plan d717d6ac §4)", () => {
     const card = secretCard(sheet, "vault://s1", "session");
     expect(card.until).toBe("standing");
     expect(card.canPickUses).toBe(false);
-    expect(card.note).toBe(ASK_COPY.provideStandingGrantNote("Claude Code"));
+    expect(card.usedBy).toBe("Claude Code");
   });
 });
 
-describe("secretUseView · what became of a handed-over secret", () => {
-  const use = {
+describe("secretUseState · what became of a handed-over secret", () => {
+  const use: ProvideSecretUse = {
+    grantId: "g1",
+    secretId: "s1",
     secretName: "GITHUB_TOKEN",
+    agentUserId: "a1",
     agentName: "Claude Code",
-    uses: "session" as const,
+    uses: "session",
     expiresAt: "2026-11-16T15:00:00.000Z",
+    revokedAt: null,
     active: true,
     useCount: 2,
+    maxUses: null,
     lastUsedAt: "2026-11-16T14:02:00.000Z",
     takeBack: { door: "secretsVault.revokeGrant", grantId: "g1" },
   };
-  it("reads how often, when last, until when, and offers Take back", () => {
-    expect(secretUseView(use)).toEqual({
-      secretName: "GITHUB_TOKEN",
-      agentName: "Claude Code",
-      useCount: 2,
-      lastUsedAt: "2026-11-16T14:02:00.000Z",
-      until: "session",
-      takeBack: { grantId: "g1" },
+
+  it("still readable: the grant Take back revokes, never standing for a new grant", () => {
+    expect(secretUseState(use)).toEqual({
+      kind: "active",
+      grantId: "g1",
+      standing: false,
+    });
+    expect(secretUseState({ ...use, uses: "standing" })).toMatchObject({
+      kind: "active",
+      standing: true,
     });
   });
-  it("nothing left to take back once it ended", () => {
-    expect(secretUseView({ ...use, active: false }).takeBack).toBeNull();
+
+  it("revoked: taken back, and only then", () => {
+    expect(
+      secretUseState({
+        ...use,
+        active: false,
+        takeBack: null,
+        revokedAt: "2026-11-16T14:30:00.000Z",
+      })
+    ).toEqual({ kind: "takenBack" });
+  });
+
+  it("a one-read grant read once: used up, never Taken back", () => {
+    const state = secretUseState({
+      ...use,
+      uses: "once",
+      active: false,
+      takeBack: null,
+      useCount: 1,
+      maxUses: 1,
+    });
+    expect(state).toEqual({ kind: "usedUp" });
+    expect(state.kind).not.toBe("takenBack");
+  });
+
+  it("expired: ended, with its time; with none, ended with no time", () => {
+    const ran = { ...use, active: false, takeBack: null, useCount: 0 };
+    expect(secretUseState(ran)).toEqual({
+      kind: "ended",
+      at: "2026-11-16T15:00:00.000Z",
+    });
+    expect(secretUseState({ ...ran, expiresAt: null })).toEqual({
+      kind: "ended",
+      at: null,
+    });
   });
 });

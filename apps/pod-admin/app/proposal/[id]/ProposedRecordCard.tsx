@@ -61,7 +61,7 @@ export function CodeValue({ text, lines }: { text: string; lines: number }) {
         <Button
           size="sm"
           variant="light"
-          className="self-start px-1 text-[12.5px] text-foreground/65"
+          className="self-start px-1 text-[12.5px] text-foreground/70"
           onPress={() => setAll(true)}
         >
           Show all {lines} lines
@@ -102,7 +102,7 @@ function TextValue({
         <Button
           size="sm"
           variant="light"
-          className="h-6 min-w-0 px-1 text-[12px] text-foreground/65"
+          className="h-6 min-w-0 px-1 text-[12px] text-foreground/70"
           onPress={() => setAll(true)}
         >
           Show all
@@ -134,7 +134,7 @@ function Value({ value, title }: { value: RecordValue; title?: string }) {
           href={value.href}
           target="_blank"
           rel="noreferrer noopener"
-          className="break-all text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary"
+          className="break-all rq-ink underline decoration-current/40 underline-offset-2 hover:decoration-current"
         >
           {value.text}
         </a>
@@ -195,7 +195,7 @@ function CodeSide({
       : value;
   return (
     <div className="flex w-full min-w-0 flex-col gap-1">
-      <span className="text-[11px] text-foreground/55">{label}</span>
+      <span className="text-[11px] text-foreground/70">{label}</span>
       <Value value={shown} title={title} />
     </div>
   );
@@ -204,7 +204,7 @@ function CodeSide({
 function Field({ field }: { field: RecordField }) {
   const { before, after, op } = field;
   const label = (
-    <dt className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+    <dt className="text-[12px] font-medium text-foreground/70">
       {field.label}
     </dt>
   );
@@ -234,7 +234,7 @@ function Field({ field }: { field: RecordField }) {
       {label}
       <dd className="flex min-w-0 flex-wrap items-center gap-1.5 text-[13px] leading-relaxed text-foreground/90">
         {op !== "add" && before !== undefined && (
-          <span className="text-foreground/50 line-through decoration-foreground/30">
+          <span className="text-foreground/70 line-through decoration-foreground/30">
             {before ? <Value value={before} /> : <em>empty</em>}
           </span>
         )}
@@ -248,7 +248,7 @@ function Field({ field }: { field: RecordField }) {
           (after ? (
             <Value value={after} title={field.label} />
           ) : (
-            <em className="text-foreground/50">empty</em>
+            <em className="text-foreground/70">empty</em>
           ))}
         {op === "remove" && (
           <span className="text-[12px] text-status-down">removed</span>
@@ -304,7 +304,7 @@ export function ProposedRecordCard({
         {record.kind && KindIcon && (
           <span
             data-record-kind=""
-            className="inline-flex items-center gap-1 text-[12px] text-foreground/55"
+            className="inline-flex items-center gap-1 text-[12px] text-foreground/70"
           >
             <KindIcon aria-hidden className="h-3.5 w-3.5" />
             {kindLabel(record.kind)}
@@ -332,7 +332,7 @@ export function ProposedRecordCard({
         <Button
           size="sm"
           variant="light"
-          className="self-start px-1 text-[12.5px] text-foreground/65"
+          className="self-start px-1 text-[12.5px] text-foreground/70"
           onPress={() => setAll(true)}
         >
           Show all {record.fields.length} fields
@@ -364,7 +364,7 @@ export function RecordGroupList<T extends ProposedRecord>({
         <Button
           size="sm"
           variant="light"
-          className="self-start px-1 text-[12.5px] text-foreground/65"
+          className="self-start px-1 text-[12.5px] text-foreground/70"
           onPress={() => setAll(true)}
         >
           Show all {group.all.length} {noun.toLowerCase()}
@@ -402,7 +402,7 @@ export function PartEdgeList({ edges }: { edges: readonly PartEdge[] }) {
             className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[13px] text-foreground/85"
           >
             <span className="break-words">{edge.from}</span>
-            <span className="text-[12px] text-foreground/55">{edge.verb}</span>
+            <span className="text-[12px] text-foreground/70">{edge.verb}</span>
             <span className="break-words">{edge.to}</span>
           </li>
         ))}
@@ -411,7 +411,7 @@ export function PartEdgeList({ edges }: { edges: readonly PartEdge[] }) {
         <Button
           size="sm"
           variant="light"
-          className="self-start px-1 text-[12.5px] text-foreground/65"
+          className="self-start px-1 text-[12.5px] text-foreground/70"
           onPress={() => setAll(true)}
         >
           Show all {edges.length} {noun.toLowerCase()}

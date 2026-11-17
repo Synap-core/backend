@@ -4,6 +4,7 @@
  * proposal. DRAFT French ("vous"), awaiting the founder's review.
  */
 import type { Catalog } from "@synap-core/types/i18n";
+import { NEEDS_YOU_RISK_LABELS } from "@synap-core/types/needs-you";
 
 export const en = {
   title: "History",
@@ -14,7 +15,8 @@ export const en = {
   "row.askedBy": "Asked by {who}",
   "row.decidedBy": "Decided by {who}",
   "row.decidedByRule": "Approved by a standing rule",
-  "row.noUndo": "Can’t be undone",
+  // The one words of the mark (`needsYouRisk`), never a third copy.
+  "row.noUndo": NEEDS_YOU_RISK_LABELS.irreversible,
   showAll: "{n, plural, one {Show # decision} other {Show all # decisions}}",
   showOlder: "Show older decisions",
   olderFailed: "Couldn’t load older decisions.",

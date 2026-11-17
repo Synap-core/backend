@@ -68,15 +68,13 @@ import {
 } from "./issuer-review";
 import { AskAnswer } from "./ask-answer";
 import type { LensRow } from "@synap-core/types/lens";
-import {
-  requestStory,
-  type NeedsYouContextRead,
-  type RequestStory,
-} from "@synap-core/types/needs-you";
+import { requestStory, type RequestStory } from "@synap-core/types/needs-you";
 import type { StoryRead } from "../../../_lib/request/request-story-view";
-import { REQUEST_CATALOGS } from "../../../_lib/request/copy";
-import type { RequestFamily } from "./review-row-view";
+import type { RequestContext } from "../../../_lib/request/use-request-context";
+import { RequestKindTile } from "../../../_lib/request/request-row-lines";
+import type { RequestFamily } from "../../../_lib/request/family";
 import { useConsoleLocale, useT } from "../../../../lib/i18n/locale-provider";
+import { REQUEST_CATALOGS } from "../../../_lib/request/copy";
 import type { AskSlot } from "./ask-detail";
 import type { ReviewDetail } from "./review-rows";
 
@@ -98,18 +96,22 @@ export interface OpenReview {
    * longer waiting: the review then reads its own (a proposal) or none.
    */
   lens?: LensRow;
-  /** The request's family and session: the detail's eyebrow ("An agent needs a secret · Pod-run delivery"). */
+  /** The request's family: its kind tile beside the title (the row's own). */
   family?: RequestFamily;
-  session?: string | null;
-  /** One sentence under the title: what it is for. */
+  /** The tile's accessible name (the row's kind noun). */
+  noun?: string;
+  /**
+   * One sentence under the title: what it is for (the ask's why). When it
+   * is drawn, the ask does not draw its why again (`showContext`).
+   */
   sentence?: string | null;
 }
 
 /** The page's request context read (`useRequestContext`), shared by every open request. */
-export interface ReviewStoryContext {
-  context: NeedsYouContextRead | null;
-  read: StoryRead;
-}
+export type ReviewStoryContext = Pick<
+  RequestContext,
+  "context" | "read" | "refetch" | "updatedAt"
+>;
 
 interface ReviewFrameProps {
   open: OpenReview | null;
@@ -127,12 +129,24 @@ export type DetailProps = Omit<ReviewFrameProps, "open"> & { open: OpenReview };
 
 /** Below `lg`: the decision in a modal drawer over the list. */
 export function ReviewDrawer({ open, ...rest }: ReviewFrameProps) {
+  const rt = useT(REQUEST_CATALOGS);
   return (
     <DetailDrawer
       isOpen={open !== null}
       onClose={rest.onClose}
-      title={open?.title ?? "Review"}
-      titleLines={2}
+      title={open?.title ?? rt("detail.fallbackTitle")}
+      // The ONE head the dock draws too: the kind tile, the title, what it
+      // is for (code review M2).
+      header={
+        open ? (
+          <RequestHeader
+            family={open.family}
+            noun={open.noun}
+            title={open.title}
+            sentence={open.sentence ?? null}
+          />
+        ) : undefined
+      }
       size="lg"
     >
       {open && <ReviewDetail open={open} {...rest} />}
@@ -146,51 +160,88 @@ export function ReviewDrawer({ open, ...rest }: ReviewFrameProps) {
  * pinned decision bar sits the same in both.
  */
 export function ReviewDock({ open, ...rest }: ReviewFrameProps) {
-  const t = useT(REQUEST_CATALOGS);
   if (!open) return null;
   const { onClose } = rest;
-  const what = open.family ? t(`eyebrow.${open.family}`) : null;
-  const eyebrow =
-    what && open.session
-      ? t("eyebrow.inSession", { what, session: open.session })
-      : what;
+  return (
+    <DockFrame open={open} onClose={onClose}>
+      <ReviewDetail open={open} {...rest} />
+    </DockFrame>
+  );
+}
+
+function DockFrame({
+  open,
+  onClose,
+  children,
+}: {
+  open: OpenReview;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const rt = useT(REQUEST_CATALOGS);
   return (
     <aside
       aria-label={open.title}
       className="sticky top-4 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-col overflow-hidden rounded-xl bg-content1 ring-1 ring-inset ring-foreground/10"
     >
       <div className="flex items-start gap-3 px-6 pb-2 pt-6">
-        <header className="flex min-w-0 flex-1 flex-col gap-1.5">
-          {eyebrow && (
-            <span data-story-eyebrow="" className="rq-eyebrow rq-ink">
-              {eyebrow}
-            </span>
-          )}
-          <h2 className="line-clamp-3 break-words font-heading text-[24px] font-medium leading-tight text-foreground">
-            {open.title}
-          </h2>
-          {open.sentence && (
-            <p className="text-[15px] leading-relaxed text-foreground/75">
-              {open.sentence}
-            </p>
-          )}
-        </header>
+        <RequestHeader
+          family={open.family}
+          noun={open.noun}
+          title={open.title}
+          sentence={open.sentence ?? null}
+        />
         <Button
           isIconOnly
           size="sm"
           variant="light"
           radius="full"
           onPress={onClose}
-          aria-label="Close details"
-          className="shrink-0 text-foreground/65 hover:text-foreground"
+          aria-label={rt("detail.close")}
+          className="min-h-11 min-w-11 shrink-0 text-foreground/70 hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <ReviewDetail open={open} {...rest} />
-      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">{children}</div>
     </aside>
+  );
+}
+
+/**
+ * The detail's head: the request's kind tile beside its title (the row's own
+ * mark, one grammar on the row and here), the title in the heading face, and
+ * one sentence for what it is for. No eyebrow (page-grammar §5).
+ */
+function RequestHeader({
+  family,
+  noun,
+  title,
+  sentence,
+}: {
+  family?: RequestFamily;
+  noun?: string;
+  title: string;
+  sentence: string | null;
+}) {
+  return (
+    <header className="flex min-w-0 flex-1 flex-col gap-1.5">
+      <div className="flex min-w-0 items-start gap-3">
+        {family && (
+          <span className="mt-1">
+            <RequestKindTile family={family} noun={noun ?? title} />
+          </span>
+        )}
+        <h2 className="line-clamp-3 min-w-0 break-words font-heading text-[24px] font-medium leading-tight text-foreground">
+          {title}
+        </h2>
+      </div>
+      {sentence && (
+        <p className="text-[15px] leading-relaxed text-foreground/80">
+          {sentence}
+        </p>
+      )}
+    </header>
   );
 }
 
@@ -213,16 +264,7 @@ function ReviewDetail({
 }: DetailProps) {
   const { detail } = open;
   const locale = useConsoleLocale();
-  // The request's story, from the row it was opened on and the page's one
-  // context read. While the read is in flight (or failed) the story still
-  // has its Now and what the row itself says comes next.
-  const story =
-    open.lens && storyContext
-      ? {
-          story: requestStory(open.lens, storyContext.context, { locale }),
-          read: storyContext.read,
-        }
-      : undefined;
+  const story = useOpenStory(open.lens, storyContext, locale);
   return (
     <>
       {detail.kind === "ask" && (
@@ -232,9 +274,13 @@ function ReviewDetail({
           live={liveAsk}
           onSettled={onAskSettled}
           onClose={onClose}
-          // The frame's title IS the question: read once.
+          // The frame's title IS the question, and its sentence the why:
+          // each read once.
           showHeading={false}
+          showContext={!open.sentence}
           story={story}
+          identity={viewer.identity}
+          barClassName={DECISION_BAR_PIN}
         />
       )}
       {detail.kind === "proposal" && (
@@ -264,6 +310,48 @@ function ReviewDetail({
       )}
     </>
   );
+}
+
+/**
+ * The open request's story, from the row it was opened on and the page's one
+ * context read. While the read is in flight (or failed) the story still has
+ * its Now and what the row itself says comes next. A row the read does not
+ * cover yet (it arrived after the cached read) is read again ONCE, and stays
+ * "reading" meanwhile: an uncovered row is not a failed read (S1). Covered
+ * by neither read, it tells only what the row itself carries.
+ */
+function useOpenStory(
+  lens: LensRow | undefined,
+  ctx: ReviewStoryContext | undefined,
+  locale: ReturnType<typeof useConsoleLocale>
+): { story: RequestStory | null; read: StoryRead } | undefined {
+  const covered =
+    !!lens && !!ctx?.context && Object.hasOwn(ctx.context.rows, lens.key);
+  const uncovered = !!lens && ctx?.read.status === "ok" && !covered;
+  // Once PER ROW: the re-read is keyed by the row it was asked for, so the
+  // next uncovered row is read again too.
+  const [asked, setAsked] = useState<{ key: string; at: number } | null>(null);
+  const askedAt = lens && asked?.key === lens.key ? asked.at : null;
+  useEffect(() => {
+    if (uncovered && askedAt === null && ctx && lens) {
+      setAsked({ key: lens.key, at: ctx.updatedAt });
+      ctx.refetch();
+    }
+  }, [uncovered, askedAt, ctx, lens]);
+  if (!lens || !ctx) return undefined;
+  if (uncovered) {
+    const reread = askedAt !== null && ctx.updatedAt > askedAt;
+    return reread
+      ? { story: requestStory(lens, null, { locale }), read: { status: "off" } }
+      : {
+          story: requestStory(lens, null, { locale }),
+          read: { status: "loading" },
+        };
+  }
+  return {
+    story: requestStory(lens, ctx.context, { locale }),
+    read: ctx.read,
+  };
 }
 
 // ─── Shared parts ────────────────────────────────────────────────────────────
@@ -306,7 +394,7 @@ function TrustSignals({
     <dl className="flex flex-col gap-3">
       {rows.map(([label, value]) => (
         <div key={label} className="flex flex-col gap-0.5">
-          <dt className="text-[12px] font-medium text-foreground/65">
+          <dt className="text-[12px] font-medium text-foreground/70">
             {label}
           </dt>
           <dd className="text-[13px] leading-relaxed text-foreground/85">
@@ -509,7 +597,8 @@ function ProposalBody({
   onClose: () => void;
   story?: { story: RequestStory | null; read: StoryRead };
 }) {
-  const { query, sourceExits, workspaceName } = useProposalReview(proposalId);
+  const { query, sourceExits, sourceState, workspaceName } =
+    useProposalReview(proposalId);
   const afterDecision = useAfterDecision();
   useEffect(() => {
     if (query.error) redirectToLoginIfUnauthorized(query.error);
@@ -566,6 +655,7 @@ function ProposalBody({
     <ProposalReviewBody
       proposal={p}
       sourceExits={sourceExits}
+      sourceState={sourceState}
       workspaceName={workspaceName}
       identity={viewer.identity}
       onDecided={() => {
@@ -595,6 +685,7 @@ function AgentConnectBody({
   viewer: ReviewViewer;
   onDone: () => void;
 }) {
+  const rt = useT(REQUEST_CATALOGS);
   const agent = useAgentConnect(facts.keyId, facts.agentType);
   const { step } = agent;
   useEffect(() => {
@@ -636,7 +727,7 @@ function AgentConnectBody({
       <AgentConnectDecision agent={agent} agentType={facts.agentType} />
       <AdvancedPanel
         ids={[
-          { label: "Proposal id", value: proposalId },
+          { label: rt("detail.proposalId"), value: proposalId },
           { label: "Key id", value: facts.keyId },
         ]}
       />
@@ -834,7 +925,7 @@ function AppRequestBody({
           <p className="text-sm font-medium text-foreground">
             {gate.link.heading}
           </p>
-          <p className="text-sm text-foreground/65">{gate.link.body}</p>
+          <p className="text-sm text-foreground/70">{gate.link.body}</p>
         </div>
         {gate.needsAcknowledge && isPending && data.canReview ? (
           <UnverifiedAccountNotice

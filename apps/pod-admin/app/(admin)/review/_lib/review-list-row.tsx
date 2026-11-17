@@ -88,7 +88,6 @@ export function ReviewListRow({
   return (
     <div
       data-row-id={row.key}
-      aria-current={active ? "true" : undefined}
       className={[
         "rq-row relative flex min-h-11 items-start gap-3 p-3",
         selected ? "bg-primary/[0.06]" : "",
@@ -135,7 +134,7 @@ export function ReviewListRow({
           }
           trail={
             view.repeat ? (
-              <span className="text-[12px] text-foreground/55">
+              <span className="text-[12px] text-foreground/70">
                 {view.repeat}
               </span>
             ) : undefined
@@ -148,6 +147,7 @@ export function ReviewListRow({
                   <button
                     type="button"
                     onClick={onOpen}
+                    aria-current={active ? "true" : undefined}
                     aria-label={t("row.openDecision", { title: text })}
                     className="text-left after:absolute after:inset-0 after:rounded-[inherit] after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-primary/40"
                   >

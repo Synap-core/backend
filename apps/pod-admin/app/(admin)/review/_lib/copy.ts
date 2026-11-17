@@ -10,6 +10,8 @@ import type { Catalog } from "@synap-core/types/i18n";
 export const en = {
   title: "Requests",
   description: "Everything waiting on your decision, in one place.",
+  "list.showAll": "Show all {n}",
+  "list.showFewer": "Show fewer",
   "view.waiting": "Waiting",
   "view.history": "History",
   groupBy: "Group by",
@@ -43,6 +45,8 @@ export const en = {
 export const fr: Catalog<typeof en> = {
   title: "Demandes",
   description: "Tout ce qui attend votre décision, au même endroit.",
+  "list.showAll": "Tout afficher ({n})",
+  "list.showFewer": "Afficher moins",
   "view.waiting": "En attente",
   "view.history": "Historique",
   groupBy: "Regrouper par",

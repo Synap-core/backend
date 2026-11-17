@@ -2,34 +2,41 @@
 
 /**
  * ONE REQUEST AS ONE STORY (option B, founder 16 Nov 2026, plan d717d6ac
- * §1): a vertical timeline of the session it came from, drawn from the
- * shared model (`requestStory`, `@synap-core/types/needs-you`), for an
- * agent's ask AND a proposal, in Review's detail and on `/proposal/[id]`.
+ * §1), ONE frame for an agent's ask AND a proposal, in Review's detail and on
+ * `/proposal/[id]`, drawn from the shared model (`requestStory`,
+ * `@synap-core/types/needs-you`):
  *
- *   header  an eyebrow (what kind of request · its session), the title, one
- *           sentence (what for);
- *   before  who asked and what the work is for (the head);
- *   the timeline, one item per line: [when | rail mark | what]
- *     past     a solid sage dot on a solid rail: the last steps, repeats
- *              grouped ("2 times"), older ones folded ("3 more events ·
- *              Show", a door to the whole story);
- *     NOW      the one loud mark, a filled ochre ring, "Now": the decision
- *              (the subject, what it needs from you, the verbs, what refusing
- *              does), in a tinted box for an ask;
- *     next     dashed muted rings on a dashed rail ("next", "then"): what it
- *              unblocks, the status the thing cannot reach yet, an agent or
- *              sessions that wait on it.
- *   depth   behind Show, last (Advanced, what the agent looked at).
+ *   head     "Asked by <requester> · For <session>" (`StoryHead`), both kinds;
+ *   timeline one item per line: [when | rail mark | what]
+ *     past   a solid sage dot on a solid rail: the last steps, repeats
+ *            grouped; older ones folded into their own first row, a door to
+ *            the whole story;
+ *     NOW    the one loud mark, a filled ochre ring: what you decide (the
+ *            subject, the change or question, what it needs from you), and
+ *            what the agent does meanwhile; below it the rail turns dashed;
+ *     next   dashed rings ("Next", "Then"): what deciding does, what it
+ *            unblocks, the status the thing cannot reach yet, sessions that
+ *            wait on it;
+ *   footer   the decision bar, the story's own footer: pinned to the bottom
+ *            of the scroll box on the card's own surface (never inside Now,
+ *            where it cut the rail);
+ *   depth    behind Show, last.
  *
- * A part whose read FAILED is said where it belongs ("couldn't read"), never
- * drawn as "nothing happened" or "nothing waits" (ui-composition §2). The
- * marks are `globals.css` `.rq-mark-*`: colour = state, never a chip alone.
+ * In a story narrower than 480 px (a phone, the docked panel: a container
+ * query, not the viewport) the "when" column folds into the line ("11h ago ·
+ * Checks passed") and the rail narrows. A part whose read FAILED is said where it
+ * belongs, never drawn as "nothing happened" or "nothing waits"
+ * (ui-composition §2). The marks are `globals.css` `.rq-mark-*`.
  */
 
 import { useState, type ReactNode } from "react";
 import { Button } from "@heroui/react";
-import { ChevronRight, RotateCw } from "lucide-react";
-import { activityActorName } from "@synap-core/types/activity";
+import { ArrowUpRight, ChevronRight, RotateCw } from "lucide-react";
+import {
+  activityActorName,
+  type ActivityActor,
+} from "@synap-core/types/activity";
+import type { LensDoor } from "@synap-core/types/lens";
 import type {
   RequestContextPartName,
   RequestStory,
@@ -51,64 +58,66 @@ export type StoryRead =
   /** Nothing to read: a decided proposal, a request no session holds. */
   | { status: "off" };
 
-/** The detail's head: what kind of request, the title, what it is for. */
-export interface StoryHeader {
-  eyebrow: string | null;
-  title: string;
-  sentence: string | null;
-}
-
 const BEFORE_PARTS: ReadonlySet<RequestContextPartName> = new Set(["timeline"]);
 const NOW_PARTS: ReadonlySet<RequestContextPartName> = new Set([
   "aiCanDo",
   "subject",
 ]);
 
-type Mark = "done" | "now" | "next";
+type Mark = "done" | "now" | "next" | "wait" | "unread";
 
 // ─── One item of the timeline ───────────────────────────────────────────────
 
 function Item({
   when,
   mark,
-  last,
+  rail,
   node,
   children,
 }: {
-  when: ReactNode;
+  when: string;
   mark: Mark;
-  /** No rail below the last item. */
-  last?: boolean;
+  /** The rail BELOW this item, toward the next one; none on the last. */
+  rail: "done" | "next" | null;
   /** `data-story-node`: which part of the story it is. */
   node: "past" | "now" | "after";
   children: ReactNode;
 }) {
+  const now = mark === "now";
   return (
-    <li data-story-node={node} className="flex gap-3">
+    <li data-story-node={node} className="rq-item flex">
       <span
-        className={`w-16 shrink-0 pt-0.5 text-right text-[12px] tabular-nums ${
-          mark === "now" ? "rq-ink font-semibold" : "text-foreground/55"
+        className={`rq-when-col w-16 shrink-0 pt-0.5 text-right text-[12px] tabular-nums ${
+          now ? "rq-ink font-semibold" : "text-foreground/70"
         }`}
       >
         {when}
       </span>
-      <span aria-hidden className="relative flex w-5 shrink-0 justify-center">
+      <span
+        aria-hidden
+        className="rq-rail-col relative flex shrink-0 justify-center"
+      >
         <span
-          className={`rq-mark rq-mark-${mark} relative z-[1] ${mark === "now" ? "mt-0.5" : "mt-1"}`}
+          className={`rq-mark rq-mark-${mark} relative z-[1] ${now ? "mt-0.5" : "mt-1"}`}
         />
-        {!last && (
+        {rail && (
           <span
-            className={`absolute bottom-0 left-1/2 top-4 -translate-x-1/2 ${
-              mark === "next" ? "rq-rail-next" : "rq-rail-done"
-            }`}
+            className={`absolute bottom-0 left-1/2 top-4 -translate-x-1/2 rq-rail-${rail}`}
           />
         )}
       </span>
       <div
-        className={`flex min-w-0 flex-1 flex-col gap-3 pb-5 ${
-          mark === "next" ? "text-foreground/70" : ""
+        className={`flex min-w-0 flex-1 flex-col gap-2 pb-5 ${
+          mark === "next" ? "text-foreground/80" : ""
         }`}
       >
+        {when && (
+          <span
+            className={`rq-when-inline text-[12px] ${now ? "rq-ink font-semibold" : "text-foreground/70"}`}
+          >
+            {when}
+          </span>
+        )}
         {children}
       </div>
     </li>
@@ -132,30 +141,99 @@ function Unreadable({ lines }: { lines: RequestStory["unreadable"] }) {
   );
 }
 
+// ─── The head ────────────────────────────────────────────────────────────────
+
+/** Who asked, named once, as a door. */
+export interface StoryRequester {
+  label: string;
+  door: LensDoor | null;
+}
+
+/**
+ * "Asked by <requester> · For <session>": the ONE head of every request. A
+ * proposal names its requester with the shared sentence (`proposalRequester`);
+ * an ask with the agent the pod named.
+ */
+export function StoryHead({
+  requester,
+  session,
+  extra,
+}: {
+  requester: StoryRequester | null;
+  session: { title: string; door: LensDoor } | null;
+  /** Said after them (an ask's age and what silence does). */
+  extra?: ReactNode;
+}) {
+  const t = useT(REQUEST_CATALOGS);
+  if (!requester && !session && !extra) return null;
+  return (
+    <dl
+      data-story-head=""
+      className="flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[13px]"
+    >
+      {requester && (
+        <div className="flex items-baseline gap-2">
+          <dt className="text-foreground/70">{t("story.askedBy")}</dt>
+          <dd>
+            <DoorMark
+              door={requester.door}
+              className="font-medium text-foreground"
+            >
+              {requester.label}
+            </DoorMark>
+          </dd>
+        </div>
+      )}
+      {session && (
+        <div className="flex items-baseline gap-2">
+          <dt className="text-foreground/70">{t("story.forSession")}</dt>
+          <dd>
+            <DoorMark door={session.door} className="text-foreground">
+              {session.title}
+            </DoorMark>
+          </dd>
+        </div>
+      )}
+      {extra}
+    </dl>
+  );
+}
+
+/** The head the shared model gives: its `by` (or cause) and its session. */
+export function storyRequester(
+  story: RequestStory | null
+): StoryRequester | null {
+  if (!story) return null;
+  const { by, cause } = story.head;
+  if (by)
+    return { label: by.label, door: by.door ?? { kind: "agent", id: by.id } };
+  if (cause) return { label: cause.label, door: cause.door };
+  return null;
+}
+
 // ─── Before ──────────────────────────────────────────────────────────────────
 
 function PastLine({
   group,
-  fold,
+  actorName,
 }: {
   group: RequestStoryGroup;
-  /** On the oldest shown line: "3 more events · Show". */
-  fold: ReactNode;
+  actorName: (actor: ActivityActor) => string;
 }) {
   return (
     <div data-story-event={group.kind} className="flex flex-col gap-0.5">
       <DoorMark
         door={group.door}
-        className="min-w-0 break-words text-[13.5px] text-foreground/90"
+        className="min-w-0 break-words text-[13.5px] text-foreground"
       >
         {group.line}
       </DoorMark>
-      <span className="flex flex-wrap items-baseline gap-x-1.5 text-[12px] text-foreground/55">
-        <span>{activityActorName(group.actor)}</span>
+      <span className="flex flex-wrap items-baseline gap-x-1.5 text-[12px] text-foreground/70">
+        <span data-story-actor="">{actorName(group.actor)}</span>
         {group.repeat && (
           <>
             <span aria-hidden>·</span>
-            <span>{group.repeat}</span>
+            <span data-story-repeat="">{group.repeat}</span>
           </>
         )}
         {group.url && (
@@ -165,61 +243,22 @@ function PastLine({
               href={group.url}
               target="_blank"
               rel="noreferrer noopener"
-              className="text-primary underline-offset-2 hover:underline"
+              className="rq-ink inline-flex items-center gap-0.5 underline underline-offset-2"
             >
-              {group.url.replace(/^https:\/\/(www\.)?/, "").slice(0, 48)}
+              {group.url.replace(/^https:\/\/(www\.)?/, "")}
+              <ArrowUpRight aria-hidden className="h-3 w-3" />
             </a>
           </>
         )}
-        {fold}
       </span>
     </div>
-  );
-}
-
-function StoryHead({ story }: { story: RequestStory }) {
-  const t = useT(REQUEST_CATALOGS);
-  const { by, cause, session } = story.head;
-  if (!by && !cause && !session) return null;
-  return (
-    <dl className="flex flex-wrap gap-x-5 gap-y-1 text-[12.5px]">
-      {(by || cause) && (
-        <div className="flex items-baseline gap-2">
-          <dt className="text-foreground/55">{t("story.askedBy")}</dt>
-          <dd>
-            {by ? (
-              <DoorMark
-                door={by.door ?? { kind: "agent", id: by.id }}
-                className="font-medium text-foreground/85"
-              >
-                {by.label}
-              </DoorMark>
-            ) : cause ? (
-              <DoorMark door={cause.door} className="text-foreground/85">
-                {cause.label}
-              </DoorMark>
-            ) : null}
-          </dd>
-        </div>
-      )}
-      {session && (
-        <div className="flex items-baseline gap-2">
-          <dt className="text-foreground/55">{t("story.forSession")}</dt>
-          <dd>
-            <DoorMark door={session.door} className="text-foreground/85">
-              {session.title}
-            </DoorMark>
-          </dd>
-        </div>
-      )}
-    </dl>
   );
 }
 
 // ─── Now ─────────────────────────────────────────────────────────────────────
 
 /** What the request is about: a preview when it has media, and its door. */
-export function StorySubject({
+function StorySubject({
   subject,
 }: {
   subject: NonNullable<RequestStory["now"]["subject"]>;
@@ -228,14 +267,14 @@ export function StorySubject({
   if (subject.kind === "url") {
     return (
       <section data-story-subject="url" className="flex flex-col gap-1">
-        <span className="text-[12px] font-medium text-foreground/65">
+        <span className="text-[12.5px] font-medium text-foreground/70">
           {t("story.subject")}
         </span>
         <a
           href={subject.url}
           target="_blank"
           rel="noreferrer noopener"
-          className="break-all text-[13px] text-primary underline-offset-2 hover:underline"
+          className="rq-ink break-all text-[13px] underline underline-offset-2"
         >
           {subject.url}
         </a>
@@ -246,7 +285,7 @@ export function StorySubject({
   const title = subject.title?.trim() || null;
   return (
     <section data-story-subject={subject.kind} className="flex flex-col gap-2">
-      <span className="text-[12px] font-medium text-foreground/65">
+      <span className="text-[12.5px] font-medium text-foreground/70">
         {t("story.subject")}
       </span>
       {subject.media && (
@@ -276,7 +315,7 @@ function Step({ step }: { step: RequestStoryStep }) {
     case "unblocks":
       return (
         <div data-story-after="unblocks" className="text-[13.5px]">
-          <span className="text-foreground/55">{step.label}</span>{" "}
+          <span className="text-foreground/70">{step.label}</span>{" "}
           <DoorMark door={step.door}>{step.text}</DoorMark>
         </div>
       );
@@ -290,7 +329,7 @@ function Step({ step }: { step: RequestStoryStep }) {
             {step.line ?? step.thing.name ?? ""}
           </DoorMark>
           {step.statusNow && step.statusNext && (
-            <span className="text-[12px] text-foreground/55">
+            <span className="text-[12px] text-foreground/70">
               {t("story.statusMove", {
                 now: step.statusNow.label,
                 next: step.statusNext.label,
@@ -317,7 +356,7 @@ function Step({ step }: { step: RequestStoryStep }) {
               <DoorMark
                 key={s.id}
                 door={s.door}
-                className="text-[12px] text-foreground/60"
+                className="text-[12.5px] text-foreground/80"
               >
                 {s.title}
               </DoorMark>
@@ -340,7 +379,7 @@ export function StoryDepth({ children }: { children: ReactNode }) {
         size="sm"
         variant="light"
         radius="md"
-        className="-ml-2 self-start text-foreground/70"
+        className="-ml-2 min-h-11 self-start text-foreground/80"
         aria-expanded={open}
         startContent={
           <ChevronRight
@@ -352,43 +391,45 @@ export function StoryDepth({ children }: { children: ReactNode }) {
       >
         {t("story.depth")}
       </Button>
-      {open && <div className="flex flex-col gap-3">{children}</div>}
+      {/* Kept in the page while closed (hidden), so what it holds stays one
+          read away and is never fetched twice. */}
+      <div hidden={!open} className="flex flex-col gap-3">
+        {children}
+      </div>
     </div>
   );
 }
+
+/** The decision bar's base: the story's footer, on the card's own surface. */
+export const STORY_FOOTER =
+  "z-10 flex flex-col gap-2 border-t border-foreground/[0.08] bg-content1";
 
 // ─── The story ───────────────────────────────────────────────────────────────
 
 export function RequestStoryView({
   story,
   read,
-  header,
   head,
   showSubject = true,
-  boxed = false,
   afterExtra,
+  footer,
   depth,
   children,
 }: {
   /** The shared model; null while nothing is known (loading, failed, off). */
   story: RequestStory | null;
   read: StoryRead;
-  /** The eyebrow, title and sentence above the story (a host with no frame title). */
-  header?: StoryHeader;
-  /** Replaces the default head (who asked, what the work is for). */
+  /** The head (`StoryHead`); default: the shared model's requester and session. */
   head?: ReactNode;
   /** Draw the context's subject at the top of Now (asks); a proposal's change is its subject. */
   showSubject?: boolean;
-  /** The decision in a tinted box (an ask's Now). */
-  boxed?: boolean;
   /** Said first under Next, before the shared steps (what approving does). */
   afterExtra?: ReactNode;
-  /**
-   * Depth, last and collapsed: the host's own disclosures (a proposal's ONE
-   * Advanced; an ask's `StoryDepth`).
-   */
+  /** The decision bar, the story's footer (the host pins it). */
+  footer?: ReactNode;
+  /** Depth, last and collapsed (a proposal's ONE Advanced; an ask's `StoryDepth`). */
   depth?: ReactNode;
-  /** The decision, in the Now order the host owns. */
+  /** What is decided, in the Now order the host owns. */
   children: ReactNode;
 }) {
   const t = useT(REQUEST_CATALOGS);
@@ -399,7 +440,9 @@ export function RequestStoryView({
     (u) => !BEFORE_PARTS.has(u.part) && !NOW_PARTS.has(u.part)
   );
   const subject = story?.now.subject ?? null;
-  const steps = story?.after ?? [];
+  // "An agent waits on this" says what holds NOW, not what comes next.
+  const waits = (story?.after ?? []).filter((s) => s.kind === "agent_waits");
+  const steps = (story?.after ?? []).filter((s) => s.kind !== "agent_waits");
   // "Nothing else waits" only when the read answered and named nothing:
   // never over a failed or missing read.
   const reassure =
@@ -407,152 +450,201 @@ export function RequestStoryView({
     steps.length === 0 &&
     afterUnreadable.length === 0 &&
     !afterExtra;
-  const hasAfter =
-    steps.length > 0 || afterUnreadable.length > 0 || !!afterExtra || reassure;
-  const fold =
-    story && (story.folded || story.olderExist) && story.timelineDoor ? (
-      <>
-        <span aria-hidden>·</span>
-        {story.folded && <span>{story.folded.label}</span>}
-        <DoorMark
-          door={story.timelineDoor}
-          className="relative font-medium text-primary"
-        >
-          {story.folded ? t("story.foldShow") : t("story.fullTimeline")}
-        </DoorMark>
-      </>
-    ) : null;
   const past = story?.before ?? [];
+  const fold =
+    story && (story.folded || story.olderExist) && story.timelineDoor
+      ? { label: story.folded?.label ?? null, door: story.timelineDoor }
+      : null;
+  // The requester is named once, the same way in the head and the past.
+  const requester = storyRequester(story);
+  const actorName = (actor: ActivityActor) =>
+    requester &&
+    story?.head.by &&
+    actor.kind === "agent" &&
+    actor.id === story.head.by.id
+      ? requester.label
+      : activityActorName(actor);
+
+  type Entry = {
+    key: string;
+    when: string;
+    mark: Mark;
+    node: "past" | "now" | "after";
+    body: ReactNode;
+  };
+  const entries: Entry[] = [];
+  if (read.status === "loading") {
+    for (const k of ["load-1", "load-2"])
+      entries.push({
+        key: k,
+        when: "",
+        mark: "wait",
+        node: "past",
+        body: (
+          <span
+            aria-hidden={k === "load-2"}
+            className="h-4 w-48 max-w-full animate-pulse rounded bg-foreground/[0.08]"
+          >
+            <span className="sr-only">{t("story.loading")}</span>
+          </span>
+        ),
+      });
+  }
+  if (read.status === "error") {
+    entries.push({
+      key: "failed",
+      when: "",
+      mark: "unread",
+      node: "past",
+      body: (
+        <p
+          data-story-unreadable="all"
+          className="flex flex-wrap items-center gap-2 text-[12.5px] text-status-stale"
+        >
+          {t("story.failed")}
+          <Button
+            size="sm"
+            variant="light"
+            className="min-h-11"
+            startContent={<RotateCw className="h-3 w-3" aria-hidden />}
+            onPress={read.retry}
+          >
+            {t("story.retry")}
+          </Button>
+        </p>
+      ),
+    });
+  }
+  if (fold) {
+    entries.push({
+      key: "fold",
+      when: "",
+      mark: "wait",
+      node: "past",
+      body: (
+        <span
+          data-story-fold=""
+          className="flex flex-wrap items-baseline gap-x-1.5 text-[12.5px] text-foreground/70"
+        >
+          {fold.label && <span>{fold.label}</span>}
+          {fold.label && <span aria-hidden>·</span>}
+          <DoorMark door={fold.door} className="rq-ink font-medium">
+            {t("story.fullTimeline")}
+          </DoorMark>
+        </span>
+      ),
+    });
+  }
+  let lastWhen = "";
+  for (const g of past) {
+    const when = formatRelative(g.at, { empty: "" });
+    entries.push({
+      key: g.key,
+      // A time is printed when it changes from the line above.
+      when: when === lastWhen ? "" : when,
+      mark: "done",
+      node: "past",
+      body: <PastLine group={g} actorName={actorName} />,
+    });
+    lastWhen = when;
+  }
+  if (pastUnreadable.length > 0)
+    entries.push({
+      key: "past-unread",
+      when: "",
+      mark: "unread",
+      node: "past",
+      body: <Unreadable lines={pastUnreadable} />,
+    });
+  const pastCount = entries.length;
+  entries.push({
+    key: "now",
+    when: t("story.now"),
+    mark: "now",
+    node: "now",
+    body: (
+      <>
+        <div className="flex flex-col gap-5">
+          {showSubject && subject && <StorySubject subject={subject} />}
+          {children}
+        </div>
+        {waits.map((s) => (
+          <Step key={s.key} step={s} />
+        ))}
+        {story?.now.meanwhile && (
+          <p className="text-[12.5px] text-foreground/80">
+            <span className="font-medium text-foreground/70">
+              {story.now.meanwhile.label}
+            </span>{" "}
+            {story.now.meanwhile.text}
+          </p>
+        )}
+        <Unreadable lines={nowUnreadable} />
+      </>
+    ),
+  });
+  const next: ReactNode[] = [];
+  if (afterExtra) next.push(afterExtra);
+  for (const s of steps) next.push(<Step key={s.key} step={s} />);
+  if (afterUnreadable.length > 0)
+    next.push(<Unreadable key="after-unread" lines={afterUnreadable} />);
+  if (reassure)
+    next.push(
+      <p key="reassure" className="text-[12.5px] text-foreground/70">
+        {t("story.nothingAfter")}
+      </p>
+    );
+  next.forEach((body, i) =>
+    entries.push({
+      key: `next-${i}`,
+      when: i === 0 ? t("story.whenNext") : t("story.whenThen"),
+      mark: "next",
+      node: "after",
+      body,
+    })
+  );
 
   return (
-    <div className="flex flex-col gap-5">
-      {header && (
-        <header className="flex flex-col gap-1.5">
-          {header.eyebrow && (
-            <span data-story-eyebrow="" className="rq-eyebrow rq-ink">
-              {header.eyebrow}
-            </span>
-          )}
-          <h2 className="font-heading text-[24px] font-medium leading-tight text-foreground">
-            {header.title}
-          </h2>
-          {header.sentence && (
-            <p className="text-[15px] leading-relaxed text-foreground/75">
-              {header.sentence}
-            </p>
-          )}
-        </header>
-      )}
+    <div className="rq-story flex flex-col gap-5">
       <div data-story-node="before" className="flex flex-col gap-3">
-        {head ?? (story && <StoryHead story={story} />)}
+        {head ?? (
+          <StoryHead
+            requester={requester}
+            session={
+              story?.head.session
+                ? {
+                    title: story.head.session.title,
+                    door: story.head.session.door,
+                  }
+                : null
+            }
+          />
+        )}
       </div>
       <ol
         aria-label={t("story.label")}
         data-request-story=""
         className="flex flex-col"
       >
-        {read.status === "loading" && (
-          <Item when="" mark="done" node="past">
-            <p className="text-[12.5px] text-foreground/55">
-              {t("story.loading")}
-            </p>
-          </Item>
-        )}
-        {read.status === "error" && (
-          <Item when="" mark="done" node="past">
-            <p
-              data-story-unreadable="all"
-              className="flex flex-wrap items-center gap-2 text-[12.5px] text-status-stale"
+        {entries.map((e, i) => {
+          const below = entries[i + 1];
+          // The rail toward the next item: solid through the past into Now,
+          // dashed from Now on.
+          const rail = !below ? null : i >= pastCount ? "next" : "done";
+          return (
+            <Item
+              key={e.key}
+              when={e.when}
+              mark={e.mark}
+              rail={rail}
+              node={e.node}
             >
-              {t("story.failed")}
-              <Button
-                size="sm"
-                variant="light"
-                startContent={<RotateCw className="h-3 w-3" aria-hidden />}
-                onPress={read.retry}
-              >
-                {t("story.retry")}
-              </Button>
-            </p>
-          </Item>
-        )}
-        {past.map((g, i) => (
-          <Item
-            key={g.key}
-            when={formatRelative(g.at, { empty: "" })}
-            mark="done"
-            node="past"
-          >
-            <PastLine group={g} fold={i === 0 ? fold : null} />
-          </Item>
-        ))}
-        {past.length === 0 && fold && (
-          <Item when="" mark="done" node="past">
-            <span className="flex flex-wrap gap-x-1.5 text-[12px] text-foreground/55">
-              {fold}
-            </span>
-          </Item>
-        )}
-        {pastUnreadable.length > 0 && (
-          <Item when="" mark="done" node="past">
-            <Unreadable lines={pastUnreadable} />
-          </Item>
-        )}
-        <Item when={t("story.now")} mark="now" node="now" last={!hasAfter}>
-          <div
-            className={
-              boxed ? "rq-now-box flex flex-col gap-4" : "flex flex-col gap-5"
-            }
-          >
-            {showSubject && subject && <StorySubject subject={subject} />}
-            {children}
-          </div>
-          {story?.now.meanwhile && (
-            <p className="text-[12.5px] text-foreground/65">
-              <span className="font-medium text-foreground/55">
-                {story.now.meanwhile.label}
-              </span>{" "}
-              {story.now.meanwhile.text}
-            </p>
-          )}
-          <Unreadable lines={nowUnreadable} />
-        </Item>
-        {afterExtra && (
-          <Item
-            when={t("story.whenNext")}
-            mark="next"
-            node="after"
-            last={steps.length === 0 && afterUnreadable.length === 0}
-          >
-            {afterExtra}
-          </Item>
-        )}
-        {steps.map((s, i) => (
-          <Item
-            key={s.key}
-            when={
-              i === 0 && !afterExtra ? t("story.whenNext") : t("story.whenThen")
-            }
-            mark="next"
-            node="after"
-            last={i === steps.length - 1 && afterUnreadable.length === 0}
-          >
-            <Step step={s} />
-          </Item>
-        ))}
-        {afterUnreadable.length > 0 && (
-          <Item when={t("story.whenNext")} mark="next" node="after" last>
-            <Unreadable lines={afterUnreadable} />
-          </Item>
-        )}
-        {reassure && (
-          <Item when={t("story.whenNext")} mark="next" node="after" last>
-            <p className="text-[12.5px] text-foreground/55">
-              {t("story.nothingAfter")}
-            </p>
-          </Item>
-        )}
+              {e.body}
+            </Item>
+          );
+        })}
       </ol>
+      {footer}
       {depth}
     </div>
   );

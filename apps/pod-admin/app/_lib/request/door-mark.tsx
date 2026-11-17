@@ -19,8 +19,9 @@ import {
   usePlacedExit,
 } from "../../../lib/exit-link";
 
+/** A door reads as one at rest (no hover on a phone): a quiet underline. */
 const LINK =
-  "rounded-sm underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+  "rounded-sm underline decoration-foreground/30 underline-offset-2 transition-colors hover:text-foreground hover:decoration-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 /** The exit a lens door opens. */
 export function lensDoorExit(door: LensDoor) {

@@ -6,46 +6,28 @@
  * draws, and the entry each row sends to `proposals.repair` `setup`.
  *
  * PURE. The pod decides everything here: which rows block (`satisfied`,
- * `blocking`), how to get a value (`obtain`, from the manifest), and the
- * write (vault first, refs only, `repair-setup.ts`). A key's value is held
- * only in the field until it is sent; nothing here keeps it.
+ * `blocking`), how to get a value (`obtain`, from the manifest), what a
+ * connection block asks (`nextAction`), and the write (vault first, refs
+ * only, `repair-setup.ts`). The shapes are the generated API types
+ * (`app/_lib/request/api.ts`). A key's value is held only in the field until
+ * it is sent; nothing here keeps it.
  */
 import { humanizeToken } from "@synap-core/types/vocabulary";
+import type {
+  ProposalSetup,
+  ProposalSetupParam,
+  SetupRepairEntry,
+} from "../../_lib/request/api";
 
-/** One setup row as the pod projects it (`ProposalSetupParam`), structurally. */
-export interface ProposalSetupParamView {
-  name: string;
-  label?: string;
-  required: boolean;
-  description?: string;
-  secret: boolean;
-  satisfied: boolean;
-  obtain?: { url?: string; steps: string[] };
-  refName?: string;
-  refUnresolved?: boolean;
-}
-
-export interface ProposalSetupView {
-  params: ProposalSetupParamView[];
-  blocking: boolean;
-  /**
-   * The pod cannot tell what it needs (its manifest could not be read):
-   * `params` is then empty and `blocking` true. Said as such, never as
-   * "nothing needed".
-   */
-  unreadable?: true;
-}
-
-/** What keeps Approve waiting (B5): a row to fill, or a need nobody can tell. */
+/**
+ * What keeps Approve waiting (B5): a row to fill, a connection to make, or a
+ * need nobody can tell. null = nothing holds it.
+ */
 export type SetupBlock =
-  { kind: "fill"; name: string } | { kind: "unreadable" } | null;
-
-/** One of the person's own vault secrets (`repairOptions.setup.secretChoices`). */
-export interface SetupSecretChoiceView {
-  ref: string;
-  label: string;
-  service?: string;
-}
+  | { kind: "fill"; name: string }
+  | { kind: "connect"; hint: string; url: string | null }
+  | { kind: "unreadable" }
+  | null;
 
 export interface SetupRowView {
   name: string;
@@ -59,26 +41,44 @@ export interface SetupRowView {
   unresolved: boolean;
 }
 
-function labelOf(p: ProposalSetupParamView): string {
+function labelOf(p: Pick<ProposalSetupParam, "name" | "label">): string {
   return p.label?.trim() || humanizeToken(p.name);
+}
+
+/** A link the console may open as is: https, or one of its own routes. */
+function safeHref(url: string | undefined): string | null {
+  if (!url) return null;
+  return url.startsWith("https://") || /^\/(?!\/)/.test(url) ? url : null;
 }
 
 /**
  * What keeps Approve waiting (B5): the first REQUIRED row still empty
- * ("Fill in X first"), or a need the pod cannot tell; null = nothing.
+ * ("Fill in X first"), else a required connection that is not connected
+ * (the pod's `nextAction`), else a need the pod cannot tell; null = nothing.
  */
 export function proposalSetupBlock(
-  setup: ProposalSetupView | null | undefined
+  setup: ProposalSetup | null | undefined
 ): SetupBlock {
   if (!setup?.blocking) return null;
   if (setup.unreadable) return { kind: "unreadable" };
   const row = setup.params.find((p) => p.required && !p.satisfied);
-  return row ? { kind: "fill", name: labelOf(row) } : null;
+  if (row) return { kind: "fill", name: labelOf(row) };
+  const c = setup.connection;
+  if (c?.required && c.state !== "connected") {
+    return {
+      kind: "connect",
+      hint:
+        setup.nextAction?.hint?.trim() ||
+        humanizeToken(c.provider ?? "connection"),
+      url: safeHref(setup.nextAction?.url),
+    };
+  }
+  return { kind: "unreadable" };
 }
 
 /** The rows the person still has to hand over, required first. */
 export function setupRows(
-  setup: ProposalSetupView | null | undefined
+  setup: Pick<ProposalSetup, "params"> | null | undefined
 ): SetupRowView[] {
   if (!setup) return [];
   return setup.params
@@ -99,18 +99,6 @@ export function setupRows(
     });
 }
 
-/** What the person picked or typed for one row. */
-export type SetupDraft =
-  | { kind: "existing"; ref: string }
-  | { kind: "new"; value: string }
-  | { kind: "value"; value: string };
-
-/** `proposals.repair`'s `setup` entry for a row (`setupRepairEntrySchema`). */
-export type SetupEntry =
-  | { kind: "existing"; ref: string }
-  | { kind: "new"; value: string }
-  | { kind: "value"; value: string };
-
 /**
  * The entry a row sends, or null while there is nothing to send. A secret
  * row takes a saved key or a new one, never a plain value; a plain row takes
@@ -118,18 +106,15 @@ export type SetupEntry =
  */
 export function setupEntry(
   row: Pick<SetupRowView, "secret">,
-  draft: SetupDraft | null
-): SetupEntry | null {
+  draft: SetupRepairEntry | null
+): SetupRepairEntry | null {
   if (!draft) return null;
   if (draft.kind === "existing")
     return row.secret && draft.ref.startsWith("vault://")
       ? { kind: "existing", ref: draft.ref }
       : null;
+  const value = typeof draft.value === "string" ? draft.value.trim() : "";
   if (draft.kind === "new")
-    return row.secret && draft.value.trim()
-      ? { kind: "new", value: draft.value.trim() }
-      : null;
-  return !row.secret && draft.value.trim()
-    ? { kind: "value", value: draft.value.trim() }
-    : null;
+    return row.secret && value ? { kind: "new", value } : null;
+  return !row.secret && value ? { kind: "value", value } : null;
 }
