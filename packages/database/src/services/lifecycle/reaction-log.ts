@@ -18,7 +18,7 @@
  * meanwhile), so "why did nothing happen" has an answer.
  */
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../../schema/index.js";
 import { events } from "../../schema/events.js";
@@ -106,7 +106,16 @@ export interface ReactionLogRow extends Omit<ReactionLogEntry, "userId"> {
  */
 export async function listReactionOutcomes(
   db: Db,
-  input: { userId: string; reactionIds?: readonly string[]; limit?: number }
+  input: {
+    userId: string;
+    reactionIds?: readonly string[];
+    /**
+     * Only outcomes about this subject (`<subjectType>:<subjectId>`): it
+     * moved (the source) or a rule moved, or would have moved, it (the target).
+     */
+    subject?: string;
+    limit?: number;
+  }
 ): Promise<ReactionLogRow[]> {
   const rows = await db
     .select({ data: events.data, at: events.timestamp })
@@ -117,6 +126,12 @@ export async function listReactionOutcomes(
         eq(events.userId, input.userId),
         input.reactionIds && input.reactionIds.length > 0
           ? inArray(events.subjectId, [...input.reactionIds])
+          : undefined,
+        input.subject
+          ? or(
+              sql`${events.data}->>'source' = ${input.subject}`,
+              sql`${events.data}->>'target' = ${input.subject}`
+            )
           : undefined
       )
     )
