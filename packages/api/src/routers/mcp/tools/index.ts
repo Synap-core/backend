@@ -2562,7 +2562,7 @@ export const tools = {
               },
               maxItems: STATUS_OF_INCLUDES.length,
               description:
-                "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals; reactions = the rules around it; work = where its sessions and runs stand. An unknown part is refused.",
+                "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals; reactions = its rules; work = where its sessions and runs stand.",
             },
             only: {
               type: "string",
