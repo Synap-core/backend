@@ -67,6 +67,7 @@ import {
   type AppAccessAskStatus,
 } from "@synap-core/types/grants";
 import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
+import { isUuid } from "@synap-core/types/property-render";
 import {
   assertPermissions,
   InvalidPermissionError,
@@ -97,8 +98,6 @@ export const AGENT_ACCESS_ASK_TTL_DAYS = APP_ACCESS_ASK_TTL_DAYS;
 export const AGENT_ACCESS_ASK_QUIET_DAYS = APP_ACCESS_ASK_QUIET_DAYS;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** One pair an agent asks for: a permission in one space. */
 export interface AgentAccessAskPair {
@@ -122,7 +121,7 @@ function assertEverySpaceNamed(
   pairs: ReadonlyArray<{ permission: string; workspaceId?: string | null }>
 ): void {
   const placeless = pairs.filter(
-    (p) => typeof p.workspaceId !== "string" || !UUID_RE.test(p.workspaceId)
+    (p) => typeof p.workspaceId !== "string" || !isUuid(p.workspaceId)
   );
   if (placeless.length > 0)
     throw refuse(
@@ -729,7 +728,7 @@ export async function askableAgentDenial(denial: {
     !denial.workspaceId ||
     !denial.apiKeyId ||
     !denial.callerUserId ||
-    !UUID_RE.test(denial.workspaceId)
+    !isUuid(denial.workspaceId)
   )
     return null;
   try {
