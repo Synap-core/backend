@@ -5,8 +5,18 @@
  * role, a workspace-private role, and a kind keep the caller's own choice.
  * Drives the REAL `defineProfile` with a recording caller.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ProfileResolutionService } from "@synap/database";
 import { defineProfile } from "./define-profile.js";
+
+// An existing role's stored fields are read (a field already on it is never
+// filed again); none here, so `tier` is new.
+beforeEach(() => {
+  vi.spyOn(
+    ProfileResolutionService.prototype,
+    "getEffectiveProperties"
+  ).mockResolvedValue([]);
+});
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const WS = "22222222-2222-4222-8222-222222222222";

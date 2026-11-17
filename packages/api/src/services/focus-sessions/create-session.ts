@@ -106,6 +106,7 @@ import {
 } from "./agent-hand-off.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
 import { readStartOffers, type StartOffersRead } from "./start-offers.js";
+import { PLAYBOOK_OFFERED_AT_KEY } from "./session-nudges.js";
 // Types only: the writer is loaded lazily by `session-birth.ts`.
 import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
@@ -170,6 +171,20 @@ function readConversationCwd(metadata: unknown): string | null {
       ? (metadata as { conversationCwd?: unknown }).conversationCwd
       : undefined;
   return typeof cwd === "string" && cwd !== "" ? cwd : null;
+}
+
+/**
+ * `templateId: null` is the caller's explicit "no playbook": recorded as the
+ * offer already made (`PLAYBOOK_OFFERED_AT_KEY`), so a later update's nudge
+ * does not offer the pod's playbooks again (ticket dddeb66c). Absent = the
+ * caller said nothing, and the offer stays open.
+ */
+function playbookOptOutPatch(
+  templateId: string | null | undefined
+): Record<string, string> {
+  return templateId === null
+    ? { [PLAYBOOK_OFFERED_AT_KEY]: new Date().toISOString() }
+    : {};
 }
 
 /** `reasonCode` of an agent's start that declares no criterion. */
@@ -314,6 +329,13 @@ export interface CreateFocusSessionParams {
    * person's starts and every automatic start leave it unset.
    */
   requireCriteria?: boolean;
+  /**
+   * The caller declared an outcome with an explicit `verify`
+   * (`declaresVerify`): that says what done means even when the outcome is a
+   * deliverable checked by its own evidence, which makes no criterion. Read
+   * only with `requireCriteria`.
+   */
+  declaredVerify?: boolean;
   /**
    * ONE open session per (user, track, stage): inside the insert transaction,
    * take an advisory lock on `stage-session|user|track|stage`, re-read the
@@ -815,6 +837,7 @@ export async function createFocusSession(
   if (
     params.requireCriteria &&
     criteria.length === 0 &&
+    !params.declaredVerify &&
     (!playbook || collectPlaybookCriteria(playbook).length === 0)
   ) {
     throw Object.assign(new Error(NO_CRITERIA_MESSAGE), {
@@ -1219,6 +1242,7 @@ export async function createFocusSession(
               clientKey,
               adoptedAt: new Date().toISOString(),
               ...(params.governance ? { governance: params.governance } : {}),
+              ...playbookOptOutPatch(params.templateId),
               // What this run was actually given — same key, same meaning as
               // the run funnel's (`RUN_PARAMS_METADATA_KEY`). Only when a
               // playbook resolved; an ad-hoc session has no params to store.
@@ -1270,6 +1294,7 @@ export async function createFocusSession(
           // The agent that starts it (orient's `handedToYou` leaves it out).
           ...startedByAgentPatch(agentUserId),
           ...(params.governance ? { governance: params.governance } : {}),
+          ...playbookOptOutPatch(params.templateId),
           ...(title ? titleSourcePatch(agentUserId ? "agent" : "human") : {}),
           // @see the adopt branch above.
           ...(paramResolution

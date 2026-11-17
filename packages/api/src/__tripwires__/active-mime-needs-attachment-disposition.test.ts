@@ -31,13 +31,20 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isAllowedMimeType } from "../routers/file-upload.js";
 
-/** Types a browser executes as a document when navigated to. */
+/**
+ * Types a browser executes as a document when navigated to — and script or
+ * style source, which a page includes and runs (stored as-is since 15bc541d,
+ * under the same rule).
+ */
 const ACTIVE_MIME_TYPES = [
   "text/html",
   "image/svg+xml",
   "application/xhtml+xml",
   "text/xml",
   "application/xml",
+  "text/javascript",
+  "application/javascript",
+  "text/css",
 ];
 
 const STORAGE_SRC = resolve(__dirname, "../../../storage/src");
@@ -91,6 +98,11 @@ describe("active upload types require attachment-disposition signed GETs", () =>
     // The classifier is live: an inert type passes, an executable does not.
     expect(isAllowedMimeType("application/pdf")).toBe(true);
     expect(isAllowedMimeType("application/x-msdownload")).toBe(false);
+    // Site source can be stored (15bc541d) — so it is in the active set
+    // this guard holds to an attachment disposition.
+    for (const t of ["text/javascript", "application/javascript", "text/css"]) {
+      expect(isAllowedMimeType(t), t).toBe(true);
+    }
     const files = signerFiles().map((s) => s.file);
     expect(files).toEqual(
       expect.arrayContaining(["minio-provider.ts", "r2-provider.ts"])

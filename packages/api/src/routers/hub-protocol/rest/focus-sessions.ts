@@ -25,6 +25,8 @@
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import {
   mergeOutcomesForStart,
+  declaresVerify,
+  factOutcomeWarnings,
   outcomeDeclarationsSchema,
   upsertOutcomes,
 } from "../../../services/focus-sessions/outcome-declarations.js";
@@ -2042,6 +2044,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // NO_CRITERIA). A person's key and the capture path (X-Capture: 1, a
         // person capturing through a key) are exempt.
         requireCriteria: !!ctxAgentUserId && c.req.header("x-capture") !== "1",
+        // An outcome with `verify` says what done means (F11's own words).
+        declaredVerify: declaresVerify(body.outcomes),
         ...(body.outcomes && body.outcomes.length > 0
           ? mergeOutcomesForStart({
               outcomes: body.outcomes,
@@ -2220,6 +2224,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         );
       }
 
+      // A fact outcome's owner/ask/blocker is not kept: said, never silent.
+      const outcomeWarnings = factOutcomeWarnings(patch.outcomes);
       // `outcomes` → the same two fields, UPSERTED by key onto the
       // loaded row (or onto the wholesale lists this same PATCH sent). From
       // here on the patch is an ordinary `expectedOutputs` / `criteria` write:
@@ -2582,6 +2588,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
           ...(filing ? { filing } : {}),
+          ...(outcomeWarnings.length > 0 ? { warnings: outcomeWarnings } : {}),
           session: null,
         });
       }
@@ -2884,8 +2891,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               ...restatedAskHints(
                 patch.expectedOutputs as Parameters<typeof restatedAskHints>[0]
               ),
+              ...outcomeWarnings,
             ]
-          : [];
+          : outcomeWarnings;
 
       return c.json({
         ...updated,

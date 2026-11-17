@@ -628,10 +628,10 @@ export const sessionHandlers: McpHandlerMap = {
     // call (the aliases first: they were said first).
     const outcomes = await parseOutcomesArg(args.outcomes);
     if ("error" in outcomes) return ok(outcomes);
+    const { mergeOutcomesForStart, declaresVerify } =
+      await import("../../../services/focus-sessions/outcome-declarations.js");
     const declared = outcomes.list
-      ? (
-          await import("../../../services/focus-sessions/outcome-declarations.js")
-        ).mergeOutcomesForStart({
+      ? mergeOutcomesForStart({
           outcomes: outcomes.list,
           expectedOutputs: slots.expectedOutputs,
           criteria: args.criteria as SessionCriterion[] | undefined,
@@ -695,6 +695,8 @@ export const sessionHandlers: McpHandlerMap = {
         }),
         // An agent's NEW session declares what done means (F11, NO_CRITERIA).
         requireCriteria: !!agentUserId,
+        // An outcome with `verify` says what done means (F11's own words).
+        declaredVerify: declaresVerify(outcomes.list),
         // Validated by the service with the shared criteria schema.
         criteria: declared.criteria,
         // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
@@ -1685,6 +1687,10 @@ export const sessionHandlers: McpHandlerMap = {
     // `expectedOutputs` / `criteria` fields — one merge, one governance path.
     const outcomes = await parseOutcomesArg(args.outcomes);
     if ("error" in outcomes) return reply(outcomes);
+    // A fact outcome's owner/ask/blocker is not kept: said, never silent.
+    const outcomeWarnings = (
+      await import("../../../services/focus-sessions/outcome-declarations.js")
+    ).factOutcomeWarnings(outcomes.list);
     let outcomeLists:
       | { expectedOutputs: ExpectedOutput[]; criteria: SessionCriterion[] }
       | undefined;
@@ -1878,6 +1884,7 @@ export const sessionHandlers: McpHandlerMap = {
           reviewUrl: result.reviewUrl,
           // The filing was proposed on its own beside this proposal.
           ...(result.filing ? { filing: result.filing } : {}),
+          ...(outcomeWarnings.length > 0 ? { warnings: outcomeWarnings } : {}),
           session: null,
         });
       case "updated": {
@@ -1951,7 +1958,9 @@ export const sessionHandlers: McpHandlerMap = {
           ...(result.stageRun ? { stageRun: result.stageRun } : {}),
           // Same reason as `completeOutput`: part of the patch the pod did not
           // keep as sent (an ask on a slot that is not the person's).
-          ...(result.warnings ? { warnings: result.warnings } : {}),
+          ...(result.warnings || outcomeWarnings.length > 0
+            ? { warnings: [...(result.warnings ?? []), ...outcomeWarnings] }
+            : {}),
           // Same reason as `completeOutput`: a hand-off to another agent that
           // is WAITING on a person is not on the roster yet, and the session
           // alone reads as if it were never asked for.

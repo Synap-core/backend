@@ -101,6 +101,12 @@ describe("entry-key MCP instructions", () => {
     expect(text).not.toMatch(/reconnect|next conversation/i);
   });
 
+  it("name the door for reading a link: the `web.read` capability and its group (1ad78b69)", () => {
+    const text = liveInstructions("entry");
+    expect(text).toContain("`web.read`");
+    expect(text).toContain(toolGroupRef("capabilities"));
+  });
+
   it("teach the question protocol: `Q-<id8>` in chat, `relay_answer` verbatim, close open asks before complete", () => {
     const text = liveInstructions("entry");
     expect(text).toContain("`Q-<id8>`");

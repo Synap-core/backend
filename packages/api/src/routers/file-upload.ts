@@ -61,6 +61,12 @@ const ALLOWED_MIME_TYPES = new Set([
   // `attachment` and `/synap-storage/*` carries `CSP: sandbox`; viewing is a
   // sandboxed `srcdoc` iframe. Tripwire: active-mime-needs-attachment-disposition.
   "text/html",
+  // Site source (ticket 15bc541d), stored as-is under the same D10 rule as
+  // text/html: a signed GET is `attachment`, so navigating to one downloads
+  // it. Pinned by the same tripwire.
+  "text/javascript",
+  "application/javascript",
+  "text/css",
   // Brand fonts (C4: 5 MB cap). Font files are inert data — no script vector.
   "font/woff2",
   "font/woff",

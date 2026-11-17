@@ -130,6 +130,38 @@ export function pendingMatchesAdvice(
     : {};
 }
 
+/**
+ * An `entities[]` item named the way the caller knows it: its own `ref`, else
+ * its position (and title). The auto-assigned ref (`e0`) is never shown — the
+ * caller never sent it (ticket 8215c66a).
+ */
+function entityNamed(
+  e: { title?: unknown },
+  index: number,
+  callerRef: unknown
+): string {
+  if (typeof callerRef === "string" && callerRef) return `entity '${callerRef}'`;
+  const title =
+    typeof e.title === "string" && e.title ? ` ("${e.title.slice(0, 60)}")` : "";
+  return `entities[${index}]${title}`;
+}
+
+/** The field names an entity is often sent with that this door does not read. */
+function misnamedFieldHint(e: Record<string, unknown>): string {
+  const hints: string[] = [];
+  for (const k of ["type", "kind"] as const) {
+    if (typeof e[k] === "string" && e[k]) {
+      hints.push(
+        `you sent \`${k}: "${String(e[k])}"\`: the field is \`profileSlug\``
+      );
+    }
+  }
+  if (e.key !== undefined && e.ref === undefined) {
+    hints.push("`key` is not read: name an entity with `ref`");
+  }
+  return hints.length > 0 ? ` (${hints.join("; ")})` : "";
+}
+
 const captureHandler: McpToolHandler = async (
   ctx: McpToolContext
 ): Promise<CallToolResult> => {
@@ -315,18 +347,19 @@ const captureHandler: McpToolHandler = async (
     // `declaredRefs` are additive.
     const dryRun = args.validate === true;
     const problems: string[] = [...capturePlanShapeProblems];
-    for (const e of graphEntities) {
+    graphEntities.forEach((e, i) => {
+      // Named the way the CALLER knows it: its own `ref`, else its position
+      // and title — never the auto-assigned `e0` it never sent (8215c66a).
+      const named = entityNamed(e, i, captureEntities[i]?.ref);
       if (typeof e.profileSlug !== "string" || !e.profileSlug) {
         problems.push(
-          `entity '${e.ref}' needs a \`profileSlug\` — discover slugs with synap_list_profiles`
+          `${named} needs a \`profileSlug\` — discover slugs with synap_list_profiles${misnamedFieldHint(captureEntities[i] ?? e)}`
         );
       }
       if (typeof e.title === "string" && e.title.length > TITLE_HARD_MAX) {
-        problems.push(
-          `entity '${e.ref}': ${titleTooLongReason(e.title.length)}`
-        );
+        problems.push(`${named}: ${titleTooLongReason(e.title.length)}`);
       }
-    }
+    });
     // The title rubric per entity — stored as sent, reported so the writer
     // can rewrite. Same rubric as the create_entity receipt.
     const titleLint = graphEntities.flatMap((e) => {
