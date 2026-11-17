@@ -27,6 +27,7 @@ import {
   isNeedsYou,
   type NeedsYouFoldCounts,
 } from "@synap-core/types/needs-you/rule";
+import { newestOwedFirst } from "@synap-core/types/units";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
 import { owedSlotClassOf } from "../signals/needs-you-union.js";
 
@@ -121,10 +122,8 @@ export function foldOwedByPerson(p: {
   add(headline, "needs-you");
   add(p.proposed, "proposed");
 
-  const newestFirst = (a: OwedSlot, b: OwedSlot) =>
-    a.owedSince < b.owedSince ? 1 : a.owedSince > b.owedSince ? -1 : 0;
   const rows = [...bySession].map(([sessionId, { slots, inbox }]) => {
-    const sorted = [...slots].sort(newestFirst);
+    const sorted = [...slots].sort(newestOwedFirst);
     const head = sorted[0]!;
     return {
       sessionId,
@@ -138,11 +137,10 @@ export function foldOwedByPerson(p: {
     };
   });
   rows.sort((a, b) =>
-    a.newestOwedSince < b.newestOwedSince
-      ? 1
-      : a.newestOwedSince > b.newestOwedSince
-        ? -1
-        : 0
+    newestOwedFirst(
+      { owedSince: a.newestOwedSince },
+      { owedSince: b.newestOwedSince }
+    )
   );
   return {
     count: headline.length + p.proposed.length,
