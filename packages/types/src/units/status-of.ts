@@ -20,7 +20,14 @@
  *   rollup   a goal's tree, down its `serves` edges: its work per category, its
  *            stuck sessions and its waits per `waitKind`, each node once;
  *   signals  the status signals (`status_signal_raised`) whose episode is still
- *            open: raised in the step it stands in, or on the hold it is under.
+ *            open: raised in the step it stands in, or on the hold it is under;
+ *   work     WHERE ITS WORK STANDS ({@link StatusOfWork}): the sessions and
+ *            runs on it, each with its stages, gates, owed asks, hold, stop
+ *            reason, next move and, for a run that ended or stopped with
+ *            stages left, the person's Continue.
+ *
+ * `reactions` ({@link StatusOfReaction}) is a typed slot the answer does not
+ * fill yet: the rules that fire when it moves (plan 7d71ddcc, waves 2 and 3).
  *
  * Pure: types and constants only.
  */
@@ -56,6 +63,7 @@ export const STATUS_OF_INCLUDES = [
   "links",
   "rollup",
   "signals",
+  "work",
 ] as const;
 export type StatusOfInclude = (typeof STATUS_OF_INCLUDES)[number];
 
@@ -254,4 +262,248 @@ export interface StatusOfSignal {
   /** The role whose lifecycle raised it; null for the thing's own. */
   role: string | null;
   raisedAt: string;
+}
+
+// ── include: ["work"] — where its work stands ─────────────────────────────
+
+/**
+ * Sessions `include: ["work"]` lists on one thing or goal (live first, then
+ * newest); more sets `truncated`. A session or a run asked about lists itself.
+ */
+export const STATUS_OF_WORK_MAX = 5;
+
+/**
+ * A part of a work item that could not be read: the continuation packet's
+ * own shape (`PacketSection`), never an empty list.
+ */
+export interface StatusOfWorkUnavailable {
+  status: "unavailable";
+  reason: string;
+}
+
+/** A declared stage, as the room names it (`key`, its `name` else its key). */
+export interface StatusOfWorkStageRef {
+  key: string;
+  name: string;
+}
+
+/**
+ * Where one declared stage stands: `done` before the stage the run stands
+ * on, `current` the stage it stands on (`focus_sessions.current_stage`),
+ * `left` after it. A run that stands on no declared stage has every stage
+ * `left` (the reading `stagesLeft` gives).
+ */
+export type StatusOfWorkStagePosition = "done" | "current" | "left";
+
+/** One declared stage of a run, with its newest entry in the stage ledger. */
+export interface StatusOfWorkStage extends StatusOfWorkStageRef {
+  position: StatusOfWorkStagePosition;
+  /**
+   * The newest entry of this stage (`session_stage_runs`, the packet's
+   * `stageRuns`): who worked it and how that ended. `null` = never entered.
+   */
+  entry: {
+    /** running | waiting_tools | waiting_start | unreached | waiting_child | done | failed | cancelled */
+    status: string;
+    attempt: number;
+    startedAt: string;
+    endedAt: string | null;
+    /** The agent on it, by name; `null` = Synap AI or unnamed. */
+    agentName: string | null;
+  } | null;
+}
+
+/**
+ * A gated stage and where its gate stands (the packet's `gates`, from
+ * proposal rows only). Approve / Send back go through the gate's proposal.
+ */
+export interface StatusOfWorkGate {
+  stageKey: string;
+  stageName: string;
+  kind: "human" | "check" | "awaits";
+  state:
+    | "not_reached"
+    | "pending"
+    | "approved"
+    | "rejected"
+    | "void"
+    | "by_criteria";
+  /** The latest proposal that decides it, when one exists. */
+  proposalId?: string;
+  /** A PERSON decided it (never the proposal's own payload). */
+  decidedByHuman: boolean;
+  decidedAt?: string;
+}
+
+/** A slot the run owes the PERSON (the packet's `userMustDecide.owedSlots`). */
+export interface StatusOfWorkAsk {
+  label: string;
+  /** The slot's kind (`decision`, `document`, …). */
+  kind: string;
+  /** "Task", "Decision": the kind as the vocabulary names it. */
+  noun: string;
+  why?: string;
+  blockedReason?: string;
+  /** When it was handed to the person (ISO). */
+  owedSince?: string;
+  criterionKey?: string;
+  /** How it asks (`confirm`, `choose`, `form`, `act`, `provide`), when it declares an ask. */
+  askKind?: string;
+}
+
+/** A proposal filed in the session that waits on a decision. */
+export interface StatusOfWorkProposal {
+  id: string;
+  /** Imperative: what approving it does. */
+  title: string;
+  proposalType: string;
+}
+
+/** The session's newest playbook run (`playbook_runs`). */
+export interface StatusOfWorkRun {
+  id: string;
+  status: string;
+  label: string;
+  category: LifecycleCategory | null;
+  /**
+   * Why it stopped before it finished, with nobody broken (`RUN_STOP_REASONS`:
+   * `budget`, `stages_left`); `null` otherwise.
+   */
+  stopReason: string | null;
+  /** What the run recorded when it ended failed, in the room's words. */
+  error: string | null;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+/**
+ * A run that ended before its last declared stage: where it stopped and what
+ * is left. `label` is the person's words ("Stopped at Script").
+ */
+export interface StatusOfWorkStopped {
+  /** The stage it stands on; `null` = before the first stage. */
+  at: StatusOfWorkStageRef | null;
+  /** The declared stages after it, in order. Never empty. */
+  left: StatusOfWorkStageRef[];
+  label: string;
+}
+
+/**
+ * THE CONTINUE DOOR, offered: a run that ended or stopped with stages left
+ * and nothing live on it. The SAME session resumes at `at` with a new run
+ * turn (tRPC `focusSessions.continueRun`, Hub `POST
+ * /focus-sessions/:id/continue`, MCP `synap_update_session` `continueRun`).
+ * A person's move; an agent is refused. Absent = nothing to continue.
+ */
+export interface StatusOfWorkContinue {
+  at: StatusOfWorkStageRef | null;
+  left: StatusOfWorkStageRef[];
+  /** "Continue at Script". */
+  label: string;
+}
+
+/** THE next move of a work item (the packet's `nextMove`), as the wire carries it. */
+export interface StatusOfWorkNextMove {
+  /** The packet's `NextMoveKind` (`stopped_early`, `owed_slot`, …). */
+  kind: string;
+  actor: "user" | "ai" | "none";
+  label: string;
+  reason: string;
+  proposalId?: string;
+  sessionId?: string;
+  url?: string;
+}
+
+/** Who has the session now (the packet's `holder`). */
+export interface StatusOfWorkHolder {
+  kind: "agent" | "person" | "nobody";
+  waitKind: WaitKind | null;
+  since: string | null;
+  /** The agent on it, by name. */
+  agentName: string | null;
+  /** Nobody only: the session ended, or no agent is on it. */
+  reason?: "ended" | "no_agent";
+}
+
+/** One session or run on the subject, and where it stands. */
+export interface StatusOfWorkItem {
+  sessionId: string;
+  name: string | null;
+  /** The session's kind (`work`, `run`, …). */
+  kind: string;
+  status: string;
+  label: string;
+  category: LifecycleCategory | null;
+  tone: UnitTone | null;
+  /**
+   * How it is on the subject: the session asked about (`self`), the thing
+   * is its `subject`, a worker `target`s it, or it is filed in the `goal`.
+   */
+  on: "self" | "subject" | "target" | "goal";
+  playbookId: string | null;
+  /** Its newest playbook run; `null` = it follows no playbook. */
+  run: StatusOfWorkRun | null | StatusOfWorkUnavailable;
+  /** Its declared stages, in order; `items: []` = a run with no stages. */
+  stages:
+    | { status: "ok"; items: StatusOfWorkStage[]; current: string | null }
+    | StatusOfWorkUnavailable;
+  /** Every gated stage, in stage order. */
+  gates: { status: "ok"; items: StatusOfWorkGate[] } | StatusOfWorkUnavailable;
+  /** What it owes the person, oldest first (`total` exact, items capped). */
+  asks:
+    | { status: "ok"; total: number; items: StatusOfWorkAsk[] }
+    | StatusOfWorkUnavailable;
+  /** Proposals filed in it waiting on a decision (`total` exact, capped). */
+  proposals:
+    | { status: "ok"; total: number; items: StatusOfWorkProposal[] }
+    | StatusOfWorkUnavailable;
+  /** Its CURRENT hold, when it stands paused under one. */
+  hold?: RecordedHold | StatusOfWorkUnavailable;
+  holder: StatusOfWorkHolder | StatusOfWorkUnavailable;
+  /** Is an agent working on it now (the 5-minute rule). */
+  live:
+    | { status: "ok"; state: "working" | "idle"; lastActivityAt: string | null }
+    | StatusOfWorkUnavailable;
+  /** It ended before its last stage; `null` otherwise. */
+  stopped: StatusOfWorkStopped | null;
+  /** The last close or verification it recorded; `null` = none. */
+  lastCompletion: {
+    closedAt: string | null;
+    summary?: string;
+    unfinishedOutputs?: number;
+  } | null;
+  nextMove: StatusOfWorkNextMove;
+  /** Offered only when the door would run ({@link StatusOfWorkContinue}). */
+  continue?: StatusOfWorkContinue;
+  link: string;
+}
+
+/** `include: ["work"]`: the work on a thing, goal, session or run. */
+export interface StatusOfWork {
+  items: StatusOfWorkItem[];
+  /** More sessions are on it than listed ({@link STATUS_OF_WORK_MAX}). */
+  truncated: boolean;
+}
+
+// ── reactions (typed slot; not filled yet) ────────────────────────────────
+
+/**
+ * A RULE that fires when the subject moves (plan 7d71ddcc §2: WHEN a subject
+ * reaches a status or category → VIA one link → DO one effect through the
+ * target's own door). The person sees the word "Rules" (decision D8).
+ * RESERVED: no read fills it yet; waves 2 and 3 do.
+ */
+export interface StatusOfReaction {
+  ruleId: string;
+  /** The rule's name, as the Rules list shows it. */
+  name: string;
+  /** Who declared it: a pod default, a relation, a playbook stage, a person. */
+  source: "default" | "relation" | "stage" | "user";
+  /** The status or category that fires it. */
+  when: { to?: string; category?: LifecycleCategory };
+  /** The link it follows to its target. */
+  via: string | null;
+  /** What it does there, in words. */
+  does: string;
+  paused: boolean;
 }

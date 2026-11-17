@@ -77,6 +77,7 @@ describe("tRPC lifecycle.statusOf", () => {
       "links",
       "rollup",
       "signals",
+      "work",
     ]);
     const parsed = input().safeParse({
       ids: [ID],
