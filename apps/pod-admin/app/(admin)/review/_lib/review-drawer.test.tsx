@@ -424,8 +424,8 @@ afterEach(() => {
 
 /** The reader: by default the person the agent acts for. */
 const READER = "Ada Lovelace";
-/** The one Refuse trigger, from the vocabulary door. */
-const REFUSE = `${resolveActionLabel("refuse", "imperative")}…`;
+/** A proposal's trigger: its verb, reject, from the vocabulary door. */
+const REFUSE = `${resolveActionLabel("reject", "imperative")}…`;
 
 const dock = (identity = READER) =>
   renderToStaticMarkup(
@@ -539,7 +539,8 @@ describe.each([
     expect(bar).toContain(">Approve<");
     expect(count(bar, /data-refuse-trigger/)).toBe(1);
     expect(bar.indexOf(">Approve<")).toBeLessThan(bar.indexOf(REFUSE));
-    expect(text(html)).not.toMatch(/\bReject\b/);
+    // A proposal is rejected (the verb follows the object): never Refuse.
+    expect(text(html)).not.toMatch(/\bRefuse\b/);
     // What refusing does names the ONE requester the head names.
     const refusing = text(bar.slice(bar.indexOf("data-review-refusing")));
     expect(refusing).toContain("Claude-code");

@@ -2,8 +2,9 @@
  * The words of the review detail's GRANT requests (an agent asking to
  * connect, an outside identity issuer, an app's origin): the five trust
  * signals, why it needs approval, the decide bar and each body, as catalogs
- * (`@synap-core/types/i18n`). The refuse verb is the vocabulary's
- * (`resolveActionLabel("refuse")`), the same one asks and proposals say.
+ * (`@synap-core/types/i18n`). A grant request is approved or REJECTED, as a
+ * proposal is (the verb follows the object; an ask is refused): the verb is
+ * the vocabulary's (`resolveActionLabel("reject")`).
  * What a requester wrote or the pod resolved (a name, a URL, an origin, a
  * space) is a param, printed as written. `{mark}` is where the surface draws
  * that name in its own type (bold, mono): a mark, never a word. DRAFT French
@@ -31,11 +32,11 @@ export const en = {
   "where.everywhere": "across the pod.",
   "approval.lead": "Why this needs approval.",
   // ── The decide bar ─────────────────────────────────────────────────────
-  "decide.refuse": "{verb}…",
+  "decide.reject": "{verb}…",
   "decide.reason": "Reason",
   "decide.reasonHint":
     "The requester sees this, so say what would change your mind.",
-  "decide.confirmRefuse": "Refuse and tell them",
+  "decide.confirmReject": "Reject and tell them",
   "decide.cancel": "Keep it open",
   "decide.alreadyDecided": "Already decided",
   "decide.failed": "Action couldn’t be completed",
@@ -48,7 +49,7 @@ export const en = {
   "agent.when": "{at} ({ago}).",
   "agent.whenFrom": "{at} ({ago}), from {from}.",
   "agent.needsApproval": "New agents need a person to approve their access.",
-  "agent.refused": "Connection refused",
+  "agent.rejected": "Connection rejected",
   "agent.failed": "Couldn’t process the request",
   "agent.keyId": "Key id",
   // ── An outside identity issuer ─────────────────────────────────────────
@@ -66,9 +67,9 @@ export const en = {
   "issuer.scopes": "Allowed scopes",
   "issuer.approve": "Approve access",
   "issuer.approved": "Issuer approved",
-  "issuer.refused": "Issuer refused",
+  "issuer.rejected": "Issuer rejected",
   "issuer.approveFailed": "Approval failed",
-  "issuer.refuseFailed": "Refusing failed",
+  "issuer.rejectFailed": "Rejecting failed",
   "issuer.id": "Issuer id",
   "issuer.url": "Issuer URL",
   // ── An app asking for its origin ───────────────────────────────────────
@@ -87,7 +88,7 @@ export const en = {
     "This origin is already on the allowlist for this app; the requester only needs to choose Check connection.",
   "app.approve": "Allow this origin",
   "app.allowed": "Origin allowed",
-  "app.refused": "Request refused",
+  "app.rejected": "Request rejected",
   "app.requestId": "Request id",
   "app.appId": "App id",
 } as const;
@@ -106,11 +107,11 @@ export const fr: Catalog<typeof en> = {
   "where.space": "l’espace {space} seulement.",
   "where.everywhere": "sur tout le pod.",
   "approval.lead": "Pourquoi il faut une approbation.",
-  "decide.refuse": "{verb}…",
+  "decide.reject": "{verb}…",
   "decide.reason": "Raison",
   "decide.reasonHint":
     "Le demandeur la voit : dites ce qui vous ferait changer d’avis.",
-  "decide.confirmRefuse": "Refuser et le lui dire",
+  "decide.confirmReject": "Rejeter et le lui dire",
   "decide.cancel": "Laisser ouvert",
   "decide.alreadyDecided": "Déjà décidé",
   "decide.failed": "L’action n’a pas pu aboutir",
@@ -123,7 +124,7 @@ export const fr: Catalog<typeof en> = {
   "agent.whenFrom": "{at} ({ago}), depuis {from}.",
   "agent.needsApproval":
     "Un nouvel agent a besoin qu’une personne approuve son accès.",
-  "agent.refused": "Connexion refusée",
+  "agent.rejected": "Connexion rejetée",
   "agent.failed": "La demande n’a pas pu être traitée",
   "agent.keyId": "Identifiant de la clé",
   "issuer.loading": "Lecture de l’émetteur…",
@@ -140,9 +141,9 @@ export const fr: Catalog<typeof en> = {
   "issuer.scopes": "Portées autorisées",
   "issuer.approve": "Approuver l’accès",
   "issuer.approved": "Émetteur approuvé",
-  "issuer.refused": "Émetteur refusé",
+  "issuer.rejected": "Émetteur rejeté",
   "issuer.approveFailed": "L’approbation a échoué",
-  "issuer.refuseFailed": "Le refus a échoué",
+  "issuer.rejectFailed": "Le rejet a échoué",
   "issuer.id": "Identifiant de l’émetteur",
   "issuer.url": "URL de l’émetteur",
   "app.loading": "Lecture de la demande…",
@@ -160,7 +161,7 @@ export const fr: Catalog<typeof en> = {
     "Cette origine est déjà sur la liste autorisée de cette app ; le demandeur n’a qu’à choisir Vérifier la connexion.",
   "app.approve": "Autoriser cette origine",
   "app.allowed": "Origine autorisée",
-  "app.refused": "Demande refusée",
+  "app.rejected": "Demande rejetée",
   "app.requestId": "Identifiant de la demande",
   "app.appId": "Identifiant de l’app",
 };

@@ -146,8 +146,8 @@ vi.mock("../../../lib/trpc", async () => ({
 import { ProposalReview } from "./ProposalReview";
 import { alwaysEn } from "./copy";
 
-/** The one Refuse trigger (the vocabulary door's verb) and the rule menu's. */
-const REFUSE = `${resolveActionLabel("refuse", "imperative")}…`;
+/** A proposal's one trigger, reject (the vocabulary door's verb), and the rule menu's. */
+const REFUSE = `${resolveActionLabel("reject", "imperative")}…`;
 const NEVER = alwaysEn["never.trigger"];
 
 const TWIN = {
@@ -374,13 +374,14 @@ describe("a create with no twin", () => {
 });
 
 describe("Refuse and never allow", () => {
-  it("an agent's change offers it beside Refuse", () => {
+  it("an agent's change offers it beside Reject", () => {
     state.proposal = personCreate(null);
     const seen = text(render());
     expect(seen).toContain(REFUSE);
     expect(seen).toContain(NEVER);
-    // The verb is Refuse everywhere: never the old Reject.
-    expect(seen).not.toMatch(/\bReject\b/);
+    // A proposal's verb is Reject everywhere (the verb follows the object):
+    // never an ask's Refuse.
+    expect(seen).not.toMatch(/\bRefuse\b/);
   });
 
   it("a person's own change does not: a person is never refused", () => {

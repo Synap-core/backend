@@ -489,10 +489,10 @@ function Unreadable({ message }: { message: string }) {
 }
 
 /**
- * Approve + Refuse with a reason, for the kinds whose receiver has no
- * decision card of its own to reuse here. The verb is the vocabulary's
- * refuse, as on asks and proposals. The reason is required: it is what the
- * requester reads.
+ * Approve + Reject with a reason, for the kinds whose receiver has no
+ * decision card of its own to reuse here. A grant request is rejected, as a
+ * proposal is (the verb follows the object), through the vocabulary door.
+ * The reason is required: it is what the requester reads.
  */
 function DecideButtons({
   approveLabel,
@@ -538,7 +538,7 @@ function DecideButtons({
               isDisabled={busy || reason.trim().length < minReason}
               onPress={() => onReject(reason.trim())}
             >
-              {t("decide.confirmRefuse")}
+              {t("decide.confirmReject")}
             </Button>
             <Button
               variant="light"
@@ -574,7 +574,7 @@ function DecideButtons({
           isDisabled={busy}
           onPress={() => setOpen(true)}
         >
-          {t("decide.refuse", { verb: resolveActionLabel("refuse") })}
+          {t("decide.reject", { verb: resolveActionLabel("reject") })}
         </Button>
       </div>
     </DecisionBar>
@@ -721,7 +721,7 @@ function AgentConnectBody({
       addToast({ title: step.outcome.title, color: "success" });
       onDone();
     } else if (step.kind === "rejected") {
-      addToast({ title: drawerT()("agent.refused"), color: "default" });
+      addToast({ title: drawerT()("agent.rejected"), color: "default" });
       onDone();
     }
     // `onDone` is a fresh closure each render; the step is what changes.
@@ -823,8 +823,8 @@ function IssuerBody({
     }
   );
   const reject = trpc.trustedIssuers.reject.useMutation({
-    onSuccess: () => done(t("issuer.refused"), "default"),
-    onError: fail(t("issuer.refuseFailed")),
+    onSuccess: () => done(t("issuer.rejected"), "default"),
+    onError: fail(t("issuer.rejectFailed")),
   });
 
   if (list.isLoading) return <Loading label={t("issuer.loading")} />;
@@ -928,7 +928,7 @@ function AppRequestBody({
       onClose();
     },
     onRejected: () => {
-      addToast({ title: drawerT()("app.refused"), color: "default" });
+      addToast({ title: drawerT()("app.rejected"), color: "default" });
       afterDecision();
       onClose();
     },

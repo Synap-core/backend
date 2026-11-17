@@ -697,7 +697,11 @@ function DecisionButtons({
   }
 
   const rejectButton = (
-    <RefuseTrigger isDisabled={busy} onPress={() => setRejecting(true)} />
+    <RefuseTrigger
+      kind="proposal"
+      isDisabled={busy}
+      onPress={() => setRejecting(true)}
+    />
   );
   const undoChip = undo && <DisclosedMark mark={undo} icon={TriangleAlert} />;
 

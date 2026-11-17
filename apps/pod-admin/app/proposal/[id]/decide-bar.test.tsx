@@ -129,9 +129,9 @@ vi.mock("../../../lib/trpc", async () => ({
 import { ProposalReview } from "./ProposalReview";
 import { alwaysEn } from "./copy";
 
-/** The one Refuse verb (the vocabulary door) and the rule menu's trigger. */
+/** A proposal's one verb, reject (the vocabulary door), and the rule menu's trigger. */
 const REFUSE_TRIGGER = new RegExp(
-  `${resolveActionLabel("refuse", "imperative")}…`
+  `${resolveActionLabel("reject", "imperative")}…`
 );
 const NEVER = new RegExp(alwaysEn["never.trigger"].replace("…", ""));
 
@@ -197,7 +197,7 @@ afterEach(() => setAmbientCatalogLocale("en"));
 const ENGLISH_OUTCOMES = [
   "You approved this change",
   "matched an auto-approve rule",
-  "You refused this",
+  "You rejected this",
   "was undone after it was applied",
   "Its moment passed",
   "withdrew this",

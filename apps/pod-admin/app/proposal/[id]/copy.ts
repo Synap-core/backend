@@ -52,8 +52,8 @@ export const en = {
   "outcome.approved": "You approved this change: it’s now in your pod.",
   "outcome.auto_approved":
     "This matched an auto-approve rule and is already applied.",
-  // One verb with the bar, its sheet and its consequence: refuse.
-  "outcome.rejected": "You refused this: the AI was told why.",
+  // One verb with the bar, its sheet and its consequence: reject.
+  "outcome.rejected": "You rejected this: the AI was told why.",
   "outcome.reverted": "This change was undone after it was applied.",
   "outcome.expired":
     "Its moment passed before anyone decided: nothing was applied.",
@@ -152,7 +152,7 @@ export const fr: Catalog<typeof en> = {
   "outcome.auto_approved":
     "Cette demande correspondait à une règle d’approbation automatique et est déjà appliquée.",
   "outcome.rejected":
-    "Vous avez refusé cette demande\u00a0: l’IA a été prévenue du motif.",
+    "Vous avez rejeté cette demande\u00a0: l’IA a été prévenue du motif.",
   "outcome.reverted": "Ce changement a été annulé après son application.",
   "outcome.expired":
     "Le délai est passé avant toute décision\u00a0: rien n’a été appliqué.",
@@ -256,8 +256,8 @@ export const alwaysEn = {
   "always.ruleSaved": "Rule saved",
   "always.ruleFailed": "Approved, but the rule wasn’t saved",
   "always.ruleFailedHint": "The next request like this one will ask you again.",
-  "never.trigger": "Refuse and never allow…",
-  "never.menu": "Refuse, and refuse this from now on",
+  "never.trigger": "Reject and never allow…",
+  "never.menu": "Reject, and never allow this from now on",
   "never.action.label": "This change from this AI, never",
   "never.action.covers":
     "Refused from now on, without asking you. Your other AIs and other changes still ask.",
@@ -297,8 +297,8 @@ export const alwaysFr: Catalog<typeof alwaysEn> = {
   "always.ruleFailed": "Approuvée, mais la règle n’a pas été enregistrée",
   "always.ruleFailedHint":
     "La prochaine demande comme celle-ci vous sera de nouveau soumise.",
-  "never.trigger": "Refuser et ne plus autoriser…",
-  "never.menu": "Refuser et ne plus l’autoriser",
+  "never.trigger": "Rejeter et ne plus autoriser…",
+  "never.menu": "Rejeter et ne plus l’autoriser",
   "never.action.label": "Ce changement par cette IA, jamais",
   "never.action.covers":
     "Refusé désormais, sans vous demander. Vos autres IA et les autres changements vous sont toujours demandés.",

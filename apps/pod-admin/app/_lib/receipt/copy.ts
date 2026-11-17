@@ -17,9 +17,9 @@ export const en = {
     "{n, plural, one {# part wasn’t applied.} other {# parts weren’t applied.}}",
   "approve.already": "Already approved: nothing changed",
   "approve.failed": "Couldn’t approve this request",
-  // One verb with the decision bar that took it: refuse.
-  "reject.applied": "Request refused",
-  "reject.failed": "Couldn’t refuse this request",
+  // A proposal is rejected: the verb its decision bar said.
+  "reject.applied": "Request rejected",
+  "reject.failed": "Couldn’t reject this request",
   "approve.undoHint":
     "Undo takes the change back and returns the request to you. Anything already sent stays sent.",
   "reject.undoHint": "Undo returns the request to you.",
@@ -60,8 +60,8 @@ export const fr: Catalog<typeof en> = {
     "{n, plural, one {# élément n’a pas été appliqué.} other {# éléments n’ont pas été appliqués.}}",
   "approve.already": "Déjà approuvée : rien n’a changé",
   "approve.failed": "Impossible d’approuver cette demande",
-  "reject.applied": "Demande refusée",
-  "reject.failed": "Impossible de refuser cette demande",
+  "reject.applied": "Demande rejetée",
+  "reject.failed": "Impossible de rejeter cette demande",
   "approve.undoHint":
     "Annuler retire la modification et vous rend la demande. Ce qui a déjà été envoyé le reste.",
   "reject.undoHint": "Annuler vous rend la demande.",

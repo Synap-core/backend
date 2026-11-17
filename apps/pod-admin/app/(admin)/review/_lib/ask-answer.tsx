@@ -398,6 +398,11 @@ export function AskAnswer({
   // "Refuse…", the same trigger on every mode, beside the control's verb.
   const refuseTrigger = (
     <RefuseTrigger
+      kind={
+        view.control.mode === "provide" && view.control.kind === "secret"
+          ? "secret"
+          : "ask"
+      }
       isDisabled={busy || staleness === "changed"}
       onPress={() => setRefusing(true)}
     />

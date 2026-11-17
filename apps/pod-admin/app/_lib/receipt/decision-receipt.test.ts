@@ -109,7 +109,7 @@ describe("decisionReceipt: each outcome, its words", () => {
 
   it("an applied reject offers Undo (the request is reopened)", () => {
     const r = decisionReceipt(readRejectAnswer({ success: true }));
-    expect(r).toMatchObject({ title: "Request refused", undo: true });
+    expect(r).toMatchObject({ title: "Request rejected", undo: true });
   });
 
   it("nothing changed is said, never 'approved', and has no Undo", () => {
@@ -149,7 +149,7 @@ describe("decisionReceipt: each outcome, its words", () => {
         data: { code: "INTERNAL_SERVER_ERROR" },
       })
     );
-    expect(internal.title).toBe("Couldn’t refuse this request");
+    expect(internal.title).toBe("Couldn’t reject this request");
     expect(internal.description).toBe("Nothing changed. Try again.");
 
     const raw = decisionReceipt(

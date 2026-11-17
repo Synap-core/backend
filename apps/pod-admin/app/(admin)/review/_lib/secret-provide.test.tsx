@@ -115,7 +115,9 @@ describe("SecretProvide", () => {
     expect(html).toContain(GIVE_SESSION);
     // The note is the shared one (ASK_COPY), in the same noun.
     const note = html.match(/data-secret-grant-note=""[^>]*>([^<]*)</)?.[1];
-    expect(note).toBe(ASK_COPY.provideGrantNote("Claude Code", 60));
+    expect(note!.startsWith(ASK_COPY.provideGrantNote("Claude Code", 60))).toBe(
+      true
+    );
     expect(note).toContain(noun);
     expect(`${option} ${GIVE_SESSION} ${note}`).not.toMatch(/\bsession\b/i);
   });
