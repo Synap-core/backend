@@ -17,6 +17,7 @@ export const en = {
     "{n, plural, one {# part wasn’t applied.} other {# parts weren’t applied.}}",
   "approve.already": "Already approved: nothing changed",
   "approve.failed": "Couldn’t approve this request",
+  // A proposal is rejected: the verb its decision bar said.
   "reject.applied": "Request rejected",
   "reject.failed": "Couldn’t reject this request",
   "approve.undoHint":

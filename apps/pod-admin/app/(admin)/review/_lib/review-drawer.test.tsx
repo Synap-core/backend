@@ -19,7 +19,13 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
+import {
+  GOVERNANCE_POLICY_SENTENCES,
+  GOVERNANCE_REASON_SHORT_LABELS,
+} from "@synap-core/types/proposals";
+
+/** The reason mark, read from its one home (`GOVERNANCE_REASON_SHORT_LABELS`). */
+const IDENTITY_MARK = GOVERNANCE_REASON_SHORT_LABELS.SCOPE_IDENTITY_CHANGE!;
 import { resolveActionLabel } from "@synap-core/types/vocabulary";
 
 vi.mock("next/navigation", () => ({
@@ -33,7 +39,6 @@ const {
   PROPOSAL_ID,
   SESSION_ID,
   TRACK_ID,
-  PROJECT_ID,
   NEXT_ID,
   NAME,
   PROPOSAL,
@@ -394,6 +399,7 @@ vi.mock("../../../../lib/trpc", async () => ({
 
 import { ReviewDock, ReviewDrawer } from "./review-drawer";
 import { en as REQUEST_EN } from "../../../_lib/request/copy";
+import { en as PAGE_EN } from "../../../proposal/[id]/copy";
 import { ProposalReview } from "../../../proposal/[id]/ProposalReview";
 import { ProposalReviewBody } from "../../../proposal/[id]/ProposalReviewCard";
 
@@ -418,8 +424,8 @@ afterEach(() => {
 
 /** The reader: by default the person the agent acts for. */
 const READER = "Ada Lovelace";
-/** The one Refuse trigger, from the vocabulary door. */
-const REFUSE = `${resolveActionLabel("refuse", "imperative")}…`;
+/** A proposal's trigger: its verb, reject, from the vocabulary door. */
+const REFUSE = `${resolveActionLabel("reject", "imperative")}…`;
 
 const dock = (identity = READER) =>
   renderToStaticMarkup(
@@ -444,11 +450,11 @@ const page = (identity = READER) =>
     />
   );
 
-/** The story's depth, behind its Show: from its mark to Advanced. */
-const depthOf = (html: string) => {
-  const at = html.indexOf("data-story-depth");
-  expect(at, "the depth is drawn").toBeGreaterThanOrEqual(0);
-  return html.slice(at);
+/** The request's one head: its row of chips, up to what is decided. */
+const headOf = (html: string) => {
+  const at = html.indexOf("data-story-head");
+  expect(at, "the head is drawn").toBeGreaterThanOrEqual(0);
+  return html.slice(at, html.indexOf('data-story-node="now"', at));
 };
 
 describe.each([
@@ -470,57 +476,50 @@ describe.each([
     expect(seen).not.toMatch(/Requested by/);
   });
 
-  it("the provenance sits behind Show: the agent, 'for you', the session (a door) and when", () => {
+  it("the head at the top: the agent, 'for you', the session (a door) and when, as one row of chips", () => {
     const html = render();
-    const depth = depthOf(html);
-    const at = depth.indexOf("data-review-provenance");
-    expect(at).toBeGreaterThan(0);
-    // Behind Show: inside the depth's container, hidden until opened.
-    expect(depth.slice(0, at)).toMatch(/aria-expanded="false"/);
-    expect(depth.slice(0, at)).toContain('hidden=""');
-    const line = depth.slice(at, depth.indexOf("data-review-session"));
-    const seen = text(line);
-    expect(seen).toContain("Claude-code");
+    const head = headOf(html);
+    expect(head).toContain('data-review-provenance=""');
+    expect(head).toMatch(/data-head-part="agent"[^>]*>Claude-code</);
     // The person it acts for IS the reader: said "for you", never their name.
-    expect(seen).toMatch(/\bfor you\b/);
-    expect(seen).not.toContain(READER);
-    expect(seen).toContain("Build wave 2");
-    expect(line).toContain(`href="/open/session/${SESSION_ID}"`);
+    expect(text(head)).toMatch(/\bfor you\b/);
+    expect(text(head)).not.toContain(READER);
+    expect(head).toMatch(/data-head-part="session"[^>]*>Build wave 2</);
+    expect(head).toContain(`href="/open/session/${SESSION_ID}"`);
     // The absolute date rides on the relative one, for hover.
-    expect(line).toMatch(/<time dateTime="[^"]+" title="[^"]+">1d ago<\/time>/);
+    expect(head).toMatch(
+      /<time data-head-part="age" dateTime="[^"]+" title="[^"]+">1d ago<\/time>/
+    );
+    // At the top: before what is decided.
+    expect(html.indexOf("data-story-head")).toBeLessThan(
+      html.indexOf('data-story-node="now"')
+    );
   });
 
-  it("the provenance names the person it acts for when the reader is someone else", () => {
-    const depth = depthOf(render("Grace Hopper"));
-    const line = text(
-      depth.slice(
-        depth.indexOf("data-review-provenance"),
-        depth.indexOf("data-review-session")
-      )
-    );
-    expect(line).toContain(READER);
-    expect(line).not.toMatch(/\bfor you\b/);
+  it("the head names the person it acts for when the reader is someone else", () => {
+    const head = text(headOf(render("Grace Hopper")));
+    expect(head).toContain(READER);
+    expect(head).not.toMatch(/\bfor you\b/);
   });
 
   it("the change comes first, in words: Kind Finding → Issue", () => {
     const seen = text(render());
     expect(seen).toMatch(/Kind Finding Issue/);
     expect(seen).not.toMatch(/ProfileSlug/);
-    expect(seen.indexOf("Finding")).toBeLessThan(
-      seen.indexOf("Changes what it is")
-    );
+    expect(seen.indexOf("Finding")).toBeLessThan(seen.indexOf(IDENTITY_MARK));
   });
 
   it("why: the reason as ONE mark (its sentence behind it), the proposer's words as theirs", () => {
     const html = render();
     const seen = text(html);
-    expect(html).toContain('data-review-mark="Changes what it is"');
+    expect(html).toContain(`data-review-mark="${IDENTITY_MARK}"`);
     // The sentence is read from its one home, so a rewording never reds this.
     expect(seen).not.toContain(
       GOVERNANCE_POLICY_SENTENCES.SCOPE_IDENTITY_CHANGE
     );
+    // Theirs, without naming them again: the head names who asked, once.
     expect(seen).toContain(
-      "Note from Claude-code Product problems move from finding to issue."
+      `${PAGE_EN["review.note"]} Product problems move from finding to issue.`
     );
   });
 
@@ -528,42 +527,38 @@ describe.each([
     const html = render();
     expect(count(html, /data-review-decision/)).toBe(1);
     const at = html.indexOf("data-review-decision");
-    const bar = html.slice(at, html.indexOf("data-story-depth"));
+    const bar = html.slice(at, html.indexOf("Advanced", at));
     const seen = text(bar);
     expect(seen).toMatch(/Can't be undone/);
     // Approve, then the ONE Refuse trigger; the verb is Refuse, never Reject.
     expect(bar).toContain(">Approve<");
     expect(count(bar, /data-refuse-trigger/)).toBe(1);
     expect(bar.indexOf(">Approve<")).toBeLessThan(bar.indexOf(REFUSE));
-    expect(text(html)).not.toMatch(/\bReject\b/);
-    // What refusing does names the ONE requester the head names.
+    // A proposal is rejected (the verb follows the object): never Refuse.
+    expect(text(html)).not.toMatch(/\bRefuse\b/);
+    // What rejecting does, without naming the requester again (the head does).
     const refusing = text(bar.slice(bar.indexOf("data-review-refusing")));
-    expect(refusing).toContain("Claude-code");
+    expect(refusing).toContain(REQUEST_EN["refuse.proposalConsequenceAgent"]);
     expect(seen).toMatch(
       /You decide as Ada Lovelace · recorded in the Audit log/
     );
-    // The bar is the story's footer: after the timeline, before the depth;
-    // Advanced is the last thing.
+    // The bar is the story's footer: after the timeline; Advanced is last.
     expect(at).toBeGreaterThan(html.indexOf("</ol>"));
     expect(html.indexOf("Advanced")).toBeGreaterThan(at);
-    expect(html.indexOf("Advanced")).toBeGreaterThan(
-      html.indexOf("data-story-depth")
-    );
   });
 
-  it("ONE head names who asked and for what, once: 'Asked by · For'", () => {
+  // Founder, 17 Nov 2026: "no duplication". Each of who asked, for whom, the
+  // session and the age is named exactly once on the page: in the head.
+  it("ONE head; the agent, the person, the session and the age each named exactly once", () => {
     const html = render();
     expect(count(html, /data-story-head/)).toBe(1);
-    const head = html.slice(
-      html.indexOf("data-story-head"),
-      html.indexOf("data-request-story")
-    );
-    const seen = text(head);
-    expect(seen).toContain(REQUEST_EN["story.askedBy"]);
-    expect(seen).toContain(REQUEST_EN["story.forSession"]);
-    expect(seen).toContain("Claude-code");
-    expect(seen).toContain("Build wave 2");
-    expect(head).toContain(`href="/open/session/${SESSION_ID}"`);
+    const seen = text(html);
+    expect(count(seen, /Claude-code/)).toBe(1);
+    expect(count(seen, /\bfor you\b/)).toBe(1);
+    expect(count(seen, /Build wave 2/)).toBe(1);
+    expect(count(seen, /\b1d ago\b/)).toBe(1);
+    for (const part of ["agent", "person", "session", "age"])
+      expect(count(html, new RegExp(`data-head-part="${part}"`))).toBe(1);
   });
 });
 
@@ -588,53 +583,42 @@ describe.each([
     const before = at(html, 'data-story-node="before"');
     const head = at(html, "data-story-head");
     const now = at(html, 'data-story-node="now"');
-    const change = at(html, "Changes what it is");
+    const change = at(html, IDENTITY_MARK);
     const after = at(html, 'data-story-node="after"');
     const decision = at(html, "data-review-decision");
-    const depth = at(html, "data-story-depth");
     const provenance = at(html, "data-review-provenance");
-    const purpose = at(html, "data-review-session");
     const advanced = html.indexOf("Advanced");
     expect(before).toBeLessThan(head);
+    // Who asked is the head's one row of chips, at the top.
+    expect(head).toBeLessThan(provenance);
+    expect(provenance).toBeLessThan(now);
     expect(head).toBeLessThan(now);
     expect(now).toBeLessThan(change);
     expect(change).toBeLessThan(after);
     // The decision bar is the story's footer: never inside Now.
     expect(after).toBeLessThan(decision);
-    expect(decision).toBeLessThan(depth);
-    // Provenance and what the session is for sit behind Show (the depth).
-    expect(depth).toBeLessThan(provenance);
-    expect(provenance).toBeLessThan(purpose);
-    expect(purpose).toBeLessThan(advanced);
+    expect(decision).toBeLessThan(advanced);
+    // What the session is for is not drawn here: its chip is the door.
+    expect(html).not.toContain("data-review-session");
     // The change still comes first inside Now (in words, before the mark).
     expect(text(html.slice(now))).toMatch(/Kind Finding Issue/);
   });
 
-  it("the past: repeats grouped, older steps folded into a door, the request itself never a past line", () => {
+  // Founder, 17 Nov 2026: the past is THIS request's. The fixture's session
+  // timeline holds only the session's checks, PRs and start: none is this
+  // proposal's, so no past line and no fold.
+  it("the past keeps only this request's own events: the session's checks, PRs and start are gone", () => {
     const html = render();
     const pastHtml = html.slice(
       at(html, 'data-story-node="before"'),
       at(html, 'data-story-node="now"')
     );
+    expect(pastHtml).not.toContain("data-story-event");
+    expect(pastHtml).not.toContain("data-story-fold");
     const past = text(pastHtml);
-    // Older steps fold into their own first row: the count, then the door
-    // to the whole story.
-    const fold = pastHtml.slice(pastHtml.indexOf("data-story-fold"));
-    expect(text(fold.slice(0, fold.indexOf("</span></span>")))).toMatch(
-      /1 more event/
+    expect(past).not.toMatch(
+      /Checks (passed|failed)|Opened o\/r#7|Session started/
     );
-    expect(fold).toContain(REQUEST_EN["story.fullTimeline"]);
-    expect(pastHtml.indexOf("data-story-fold")).toBeLessThan(
-      pastHtml.indexOf("data-story-event")
-    );
-    // Repeats grouped: the failed checks, said once with their count.
-    expect(count(pastHtml, /data-story-event="checks_finished"/)).toBe(2);
-    expect(pastHtml).toMatch(/data-story-repeat="">2 times</);
-    expect(past).toMatch(/Checks passed/);
-    expect(past).toMatch(/Opened o\/r#7/);
-    expect(past).not.toMatch(/Session started/);
-    // Its own proposal is Now, not "Proposed: …" in the past.
-    expect(past).not.toMatch(/Proposed:/);
   });
 
   it("what holds on the decision is said in Now; Next names what waits, each a door", () => {
@@ -786,106 +770,45 @@ describe.each([
   });
 });
 
-/** The session strip alone (from its marker, in the depth, to Advanced). */
-const sessionStrip = (html: string) => {
-  const at = html.indexOf("data-review-session");
-  return at < 0 ? null : html.slice(at, html.indexOf("Advanced", at));
-};
-
+// Founder, 17 Nov 2026: when the story says nothing the head and the bar do
+// not (no own past, nothing waiting beyond the consequence), Now is drawn
+// flat and what approving does is said once, in the bar.
 describe.each([
   ["the Review dock", dock],
   ["the /proposal page", page],
-])("%s — what the session is for", (_host, render) => {
-  it("goal, criteria progress, track and project (doors), what else waits", () => {
-    const strip = sessionStrip(render());
-    expect(strip).not.toBeNull();
-    expect(text(strip!)).toMatch(
-      /Every search tool goes through the capability gate\. 2 of 3 criteria met Hardening Synap 1 more waiting/
-    );
-    // The criteria mark is a door to the session, named by the verdict's word.
-    expect(strip).toMatch(
-      new RegExp(
-        `href="/open/session/${SESSION_ID}"[^>]*title="Partly checked"`
-      )
-    );
-    // A goal is hosted on the web (`/open/track/:id`), so its door stays here.
-    expect(strip).toContain(`href="/open/track/${TRACK_ID}"`);
-    expect(strip).toContain(`href="synap://open/project/${PROJECT_ID}"`);
-    expect(strip).toContain(`href="/review?session=${SESSION_ID}"`);
-  });
-
-  it("sits behind Show, right under the provenance line, after the decision", () => {
-    const html = render();
-    const at = html.indexOf("data-review-session");
-    expect(at).toBeGreaterThan(html.indexOf("data-review-provenance"));
-    expect(at).toBeGreaterThan(html.indexOf("data-story-depth"));
-    expect(at).toBeGreaterThan(html.indexOf("data-review-decision"));
-    expect(text(html.slice(at))).not.toMatch(/Kind Finding Issue/);
-  });
-
-  it("a session the reader may not read draws nothing", () => {
-    state.session = reads.fail("NOT_FOUND");
-    const html = render();
-    expect(sessionStrip(html)).toBeNull();
-    // …and no failure either: "not yours" is not "could not be read".
-    expect(text(html)).not.toMatch(/couldn’t be read/);
-  });
-
-  it("a FAILED session read says so, with a retry — never vanishes", () => {
-    state.session = reads.fail("INTERNAL_SERVER_ERROR");
-    const seen = text(render());
-    expect(seen).toMatch(/This session couldn’t be read\. Retry/);
-  });
-
-  it("an expired sign-in is not drawn as a failure (the reader is sent to sign in)", () => {
-    state.session = reads.fail("UNAUTHORIZED");
-    expect(text(render())).not.toMatch(/couldn’t be read/);
-  });
-
-  it("no criteria, no project, no track, nothing else waiting: only the goal", () => {
-    state.session = reads.ok({
-      ...reads.SESSION,
-      trackId: null,
-      continuation: {
-        evaluation: {
-          status: "ok",
-          verdict: { passed: 0, total: 0, state: "none" },
-        },
-        project: { status: "ok", project: null },
-      },
+])("%s — nothing more to tell: no rail", (_host, render) => {
+  it("no rail and no Now/Next labels; 'If you approve' joins the bar's line, once", () => {
+    Object.assign(state, {
+      context: reads.contextOf({
+        ...reads.SESSION_PARTS,
+        waiting: { status: "ok", value: { items: [], total: 0 } },
+      }),
     });
-    state.waiting = reads.ok({ signals: [reads.cluster(PROPOSAL_ID, NAME)] });
-    const strip = text(sessionStrip(render())!);
-    expect(strip).toMatch(
-      /Every search tool goes through the capability gate\./
-    );
-    expect(strip).not.toMatch(/criteri|Hardening|Synap|more waiting/);
-  });
-
-  it("failed criteria, track and count reads: said ONCE, with ONE retry", () => {
-    state.session = reads.ok({
-      ...reads.SESSION,
-      continuation: {
-        ...reads.SESSION.continuation,
-        evaluation: { status: "unavailable" },
-      },
-    });
-    state.track = reads.fail("INTERNAL_SERVER_ERROR");
-    state.waiting = reads.fail("INTERNAL_SERVER_ERROR");
-    const strip = text(sessionStrip(render())!);
-    expect(strip).toMatch(/Part of this session couldn’t be read\. Retry/);
-    expect(count(strip, /couldn’t be read/)).toBe(1);
-    expect(count(strip, /\bRetry\b/)).toBe(1);
+    const html = render();
+    expect(html).toContain("data-story-flat");
+    expect(html).not.toContain("data-request-story");
+    expect(html).not.toMatch(/rq-rail-|rq-mark-now/);
+    const approve = REQUEST_EN["story.approveDoes"].split("{change}")[0]!;
+    expect(count(text(html), new RegExp(approve))).toBe(1);
+    const bar = html.slice(html.indexOf("data-review-decision"));
+    expect(text(bar)).toContain(approve);
   });
 });
 
-describe("the Review dock narrowed to this session", () => {
-  it("drops the 'more waiting' door: it would reload the page the reader is on", () => {
-    state.search = `session=${SESSION_ID}`;
-    const strip = sessionStrip(dock())!;
-    expect(text(strip)).toMatch(/2 of 3 criteria met/);
-    expect(text(strip)).not.toMatch(/more waiting/);
-    expect(strip).not.toContain("/review?session=");
+// Founder, 17 Nov 2026: what the session is for (goal, criteria, track,
+// project, how many more wait) is work status, and pod admin is not a work
+// surface. The head's session chip is the door to it.
+describe.each([
+  ["the Review dock", dock],
+  ["the /proposal page", page],
+])("%s — what the session is for is not drawn", (_host, render) => {
+  it("no goal, criteria, track, project or 'more waiting' on the request", () => {
+    const html = render();
+    expect(html).not.toContain("data-review-session");
+    expect(text(html)).not.toMatch(
+      /Every search tool goes through the capability gate|criteria met|Hardening Synap|more waiting/
+    );
+    expect(html).not.toContain(`href="/open/track/${TRACK_ID}"`);
   });
 });
 

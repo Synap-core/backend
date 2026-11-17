@@ -6,7 +6,11 @@
  * `/proposal/[id]`, drawn from the shared model (`requestStory`,
  * `@synap-core/types/needs-you`):
  *
- *   head     "Asked by <requester> · For <session>" (`StoryHead`), both kinds;
+ *   head     ONE row of chips, [agent] for [person] · [session] · [age], each
+ *            a door, said once on the page (`RequestHead`), both kinds;
+ *   flat     when the shared model says the story adds nothing the head and
+ *            the bar do not (`story.rail` false): Now alone, no rail, no
+ *            labels; the plain consequence joins the bar's line (the host's);
  *   timeline one item per line: [when | rail mark | what]
  *     past   a solid sage dot on a solid rail: the last steps, repeats
  *            grouped; older ones folded into their own first row, a door to
@@ -31,7 +35,14 @@
 
 import { useState, type ReactNode } from "react";
 import { Button } from "@heroui/react";
-import { ArrowUpRight, ChevronRight, RotateCw } from "lucide-react";
+import {
+  AppWindow,
+  ArrowUpRight,
+  ChevronRight,
+  Clock,
+  RotateCw,
+  UserRound,
+} from "lucide-react";
 import {
   activityActorName,
   type ActivityActor,
@@ -43,12 +54,19 @@ import type {
   RequestStoryGroup,
   RequestStoryStep,
 } from "@synap-core/types/needs-you";
-import { formatRelative } from "../../../lib/format";
+import { proposalRequester } from "@synap-core/types/proposals";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import { formatRelative, formatTimestamp } from "../../../lib/format";
+import { StatusPill } from "../../(admin)/components/status-pill";
+import { statusPillFor } from "../../(admin)/components/status-tone";
+import { AgentMark, Pill, PersonAvatar } from "../object/provenance-chips";
 import { useT } from "../../../lib/i18n/locale-provider";
 import { MediaView } from "../media/media-view";
 import { kindIcon } from "../object/kind-icon";
 import { REQUEST_CATALOGS } from "./copy";
-import { DoorMark } from "./door-mark";
+import { DoorMark, lensDoorExit } from "./door-mark";
+
+const SessionIcon = kindIcon("session");
 
 /** How the page's context read stands, for the parts the story reads from it. */
 export type StoryRead =
@@ -150,52 +168,205 @@ export interface StoryRequester {
 }
 
 /**
- * "Asked by <requester> · For <session>": the ONE head of every request. A
- * proposal names its requester with the shared sentence (`proposalRequester`);
- * an ask with the agent the pod named.
+ * The ONE head of every request (founder, 17 Nov 2026): one row of chips,
+ * [agent] for [person] · [session] · [age], each a door, said once on the
+ * page (no "Asked by" line above, no provenance chips below). A part the
+ * pod did not resolve is absent, never guessed and never an id.
  */
-export function StoryHead({
-  requester,
-  session,
+export interface RequestHeadParts {
+  /** Who asked: an agent, an app, a guest through a form, or a person. */
+  agent: {
+    name: string;
+    role: "agent" | "app" | "guest" | "person";
+    door: LensDoor | null;
+  } | null;
+  /** For whom it acts: "for you" when it is the reader. */
+  forWhom: { name: string | null; text: string; you: boolean } | null;
+  session: { title: string; door: LensDoor } | null;
+  /** When it was asked (ISO); null = unknown. */
+  at: string | null;
+}
+
+function doorExit(door: LensDoor | null) {
+  return door ? lensDoorExit(door) : undefined;
+}
+
+export function RequestHead({
+  parts,
+  status,
   extra,
 }: {
-  requester: StoryRequester | null;
-  session: { title: string; door: LensDoor } | null;
-  /** Said after them (an ask's age and what silence does). */
+  parts: RequestHeadParts;
+  /** The request's status mark, when the host draws none of its own. */
+  status?: ReactNode;
+  /** A quiet line under the chips (an ask's "what silence does"). */
   extra?: ReactNode;
 }) {
   const t = useT(REQUEST_CATALOGS);
-  if (!requester && !session && !extra) return null;
+  const { agent, forWhom, session, at } = parts;
+  const asked = at && !Number.isNaN(Date.parse(at)) ? at : null;
+  if (!agent && !forWhom && !session && !asked && !status && !extra)
+    return null;
   return (
-    <dl
-      data-story-head=""
-      className="flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[13px]"
-    >
-      {requester && (
-        <div className="flex items-baseline gap-2">
-          <dt className="text-foreground/70">{t("story.askedBy")}</dt>
-          <dd>
-            <DoorMark
-              door={requester.door}
-              className="font-medium text-foreground"
+    <div data-story-head="" className="flex flex-col gap-1.5">
+      <div
+        role="group"
+        aria-label={t("head.label")}
+        data-review-provenance=""
+        className="flex flex-wrap items-center gap-1.5"
+      >
+        {status}
+        {agent && (
+          <Pill exit={doorExit(agent.door)}>
+            {agent.role === "agent" ? (
+              <AgentMark name={agent.name} />
+            ) : agent.role === "app" ? (
+              <AppWindow
+                aria-hidden
+                className="h-3.5 w-3.5 text-foreground/70"
+              />
+            ) : agent.role === "guest" ? (
+              <UserRound
+                aria-hidden
+                className="h-3.5 w-3.5 text-foreground/70"
+              />
+            ) : (
+              <PersonAvatar name={agent.name} />
+            )}
+            <span
+              data-head-part="agent"
+              className="truncate font-medium text-foreground"
             >
-              {requester.label}
-            </DoorMark>
-          </dd>
-        </div>
-      )}
-      {session && (
-        <div className="flex items-baseline gap-2">
-          <dt className="text-foreground/70">{t("story.forSession")}</dt>
-          <dd>
-            <DoorMark door={session.door} className="text-foreground">
+              {agent.role === "guest"
+                ? (proposalRequester({
+                    agentActorName: agent.name,
+                    actorKind: "guest",
+                  }) ?? agent.name)
+                : agent.name}
+            </span>
+          </Pill>
+        )}
+        {forWhom && (
+          <Pill>
+            <span data-head-part="person" className="flex items-center gap-1.5">
+              {forWhom.you ? (
+                <span className="text-foreground/80">{t("head.forYou")}</span>
+              ) : forWhom.name ? (
+                <>
+                  <span className="text-foreground/70">{t("head.for")}</span>
+                  <PersonAvatar name={forWhom.name} />
+                  <span className="truncate">{forWhom.name}</span>
+                </>
+              ) : (
+                <span className="text-foreground/75">{forWhom.text}</span>
+              )}
+            </span>
+          </Pill>
+        )}
+        {session && (
+          <Pill
+            exit={doorExit(session.door)}
+            title={resolveObjectNoun("session")}
+          >
+            <SessionIcon
+              aria-hidden
+              className="h-3.5 w-3.5 text-foreground/70"
+            />
+            <span data-head-part="session" className="truncate">
               {session.title}
-            </DoorMark>
-          </dd>
-        </div>
-      )}
+            </span>
+          </Pill>
+        )}
+        {asked && (
+          <Pill>
+            <Clock aria-hidden className="h-3.5 w-3.5 text-foreground/70" />
+            <time
+              data-head-part="age"
+              dateTime={asked}
+              title={formatTimestamp(asked)}
+            >
+              {formatRelative(asked)}
+            </time>
+          </Pill>
+        )}
+      </div>
       {extra}
-    </dl>
+    </div>
+  );
+}
+
+/** The head parts the shared model gives: its asker (or cause), its session and age. */
+export function storyHeadParts(
+  story: RequestStory | null,
+  forWhom: RequestHeadParts["forWhom"] = null
+): RequestHeadParts {
+  const requester = storyRequester(story);
+  return {
+    agent: requester
+      ? {
+          name: requester.label,
+          role: story?.head.by ? "agent" : "app",
+          door: requester.door,
+        }
+      : null,
+    forWhom,
+    session: story?.head.session
+      ? { title: story.head.session.title, door: story.head.session.door }
+      : null,
+    at: story?.now.at ?? null,
+  };
+}
+
+/**
+ * The status mark with the request's own newest event folded in, when that
+ * event IS its status ("Approval failed · 8h ago", `story.status`): said once.
+ */
+export function StoryStatusMark({
+  status,
+  at,
+}: {
+  /** The status token (`approval_failed`). */
+  status: string;
+  /** When the status event happened (ISO); null = the bare status. */
+  at: string | null;
+}) {
+  const t = useT(REQUEST_CATALOGS);
+  const pill = statusPillFor(status);
+  if (!pill) return null;
+  const ago = at ? formatRelative(at, { empty: "" }) : "";
+  return (
+    <StatusPill
+      kind={pill.kind}
+      label={
+        ago ? t("head.statusAgo", { status: pill.label, ago }) : pill.label
+      }
+    />
+  );
+}
+
+/** A story's folded status: the token and when, or null. */
+export function storyStatusOf(
+  story: RequestStory | null
+): { status: string; at: string } | null {
+  const g = story?.status;
+  const e = g?.events.at(-1);
+  return e && e.kind === "decision_answered"
+    ? { status: e.decision, at: g!.at }
+    : null;
+}
+
+/**
+ * Flat (no rail, no Now/Next labels) when the shared model says the story
+ * adds nothing the head and the bar do not (`story.rail`), once its read
+ * answered. While it reads or failed, the rail holds the skeleton or the
+ * failure in its place.
+ */
+export function storyIsFlat(
+  story: RequestStory | null,
+  read: StoryRead
+): boolean {
+  return (
+    !!story && !story.rail && (read.status === "ok" || read.status === "off")
   );
 }
 
@@ -218,8 +389,25 @@ function PastLine({
   actorName,
 }: {
   group: RequestStoryGroup;
-  actorName: (actor: ActivityActor) => string;
+  /** Null for the requester: the head names it, once. */
+  actorName: (actor: ActivityActor) => string | null;
 }) {
+  const actor = actorName(group.actor);
+  const meta: ReactNode[] = [];
+  if (actor) meta.push(<span data-story-actor="">{actor}</span>);
+  if (group.repeat) meta.push(<span data-story-repeat="">{group.repeat}</span>);
+  if (group.url)
+    meta.push(
+      <a
+        href={group.url}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="rq-ink inline-flex items-center gap-0.5 underline underline-offset-2"
+      >
+        {group.url.replace(/^https:\/\/(www\.)?/, "")}
+        <ArrowUpRight aria-hidden className="h-3 w-3" />
+      </a>
+    );
   return (
     <div data-story-event={group.kind} className="flex flex-col gap-0.5">
       <DoorMark
@@ -228,29 +416,16 @@ function PastLine({
       >
         {group.line}
       </DoorMark>
-      <span className="flex flex-wrap items-baseline gap-x-1.5 text-[12px] text-foreground/70">
-        <span data-story-actor="">{actorName(group.actor)}</span>
-        {group.repeat && (
-          <>
-            <span aria-hidden>·</span>
-            <span data-story-repeat="">{group.repeat}</span>
-          </>
-        )}
-        {group.url && (
-          <>
-            <span aria-hidden>·</span>
-            <a
-              href={group.url}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="rq-ink inline-flex items-center gap-0.5 underline underline-offset-2"
-            >
-              {group.url.replace(/^https:\/\/(www\.)?/, "")}
-              <ArrowUpRight aria-hidden className="h-3 w-3" />
-            </a>
-          </>
-        )}
-      </span>
+      {meta.length > 0 && (
+        <span className="flex flex-wrap items-baseline gap-x-1.5 text-[12px] text-foreground/70">
+          {meta.map((m, i) => (
+            <span key={i} className="contents">
+              {i > 0 && <span aria-hidden>·</span>}
+              {m}
+            </span>
+          ))}
+        </span>
+      )}
     </div>
   );
 }
@@ -410,6 +585,7 @@ export function RequestStoryView({
   story,
   read,
   head,
+  statusMark = "head",
   showSubject = true,
   afterExtra,
   footer,
@@ -419,8 +595,13 @@ export function RequestStoryView({
   /** The shared model; null while nothing is known (loading, failed, off). */
   story: RequestStory | null;
   read: StoryRead;
-  /** The head (`StoryHead`); default: the shared model's requester and session. */
+  /** The head (`RequestHead`); default: the shared model's asker, session and age. */
   head?: ReactNode;
+  /**
+   * Where the folded status (`story.status`, "Approval failed · 8h ago") is
+   * drawn: in the default head, or by the host's own status mark.
+   */
+  statusMark?: "head" | "host";
   /** Draw the context's subject at the top of Now (asks); a proposal's change is its subject. */
   showSubject?: boolean;
   /** Said first under Next, before the shared steps (what approving does). */
@@ -455,15 +636,18 @@ export function RequestStoryView({
     story && (story.folded || story.olderExist) && story.timelineDoor
       ? { label: story.folded?.label ?? null, door: story.timelineDoor }
       : null;
-  // The requester is named once, the same way in the head and the past.
-  const requester = storyRequester(story);
+  // The requester is named once, by the head: a past line it acted in names
+  // no actor.
   const actorName = (actor: ActivityActor) =>
-    requester &&
-    story?.head.by &&
-    actor.kind === "agent" &&
-    actor.id === story.head.by.id
-      ? requester.label
+    story?.head.by && actor.kind === "agent" && actor.id === story.head.by.id
+      ? null
       : activityActorName(actor);
+  const flat = storyIsFlat(story, read);
+  const folded = storyStatusOf(story);
+  const statusNode =
+    statusMark === "head" && folded ? (
+      <StoryStatusMark status={folded.status} at={folded.at} />
+    ) : undefined;
 
   type Entry = {
     key: string;
@@ -604,22 +788,35 @@ export function RequestStoryView({
     })
   );
 
+  const headNode = head ?? (
+    <RequestHead parts={storyHeadParts(story)} status={statusNode} />
+  );
+  if (flat) {
+    // Nothing the head and the bar do not say: Now, flat, no rail, no labels.
+    const nowEntry = entries.find((e) => e.key === "now");
+    return (
+      <div className="rq-story flex flex-col gap-5">
+        <div data-story-node="before" className="flex flex-col gap-3">
+          {headNode}
+        </div>
+        <div
+          data-story-node="now"
+          data-story-flat=""
+          className="flex flex-col gap-2"
+        >
+          {nowEntry?.body}
+          <Unreadable lines={[...pastUnreadable, ...afterUnreadable]} />
+        </div>
+        {footer}
+        {depth}
+      </div>
+    );
+  }
+
   return (
     <div className="rq-story flex flex-col gap-5">
       <div data-story-node="before" className="flex flex-col gap-3">
-        {head ?? (
-          <StoryHead
-            requester={requester}
-            session={
-              story?.head.session
-                ? {
-                    title: story.head.session.title,
-                    door: story.head.session.door,
-                  }
-                : null
-            }
-          />
-        )}
+        {headNode}
       </div>
       <ol
         aria-label={t("story.label")}

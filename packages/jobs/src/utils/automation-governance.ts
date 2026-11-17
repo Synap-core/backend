@@ -70,6 +70,7 @@ import {
   readRunSubjectIds,
   ruleBatchRunSentence,
 } from "@synap-core/types/proposals";
+import { queueReceiptReactions } from "../workers/reactions.js";
 
 const logger = createLogger({ module: "automation-governance" });
 
@@ -483,7 +484,9 @@ async function recordAutomationAutoApproveReceipt(opts: {
       sessionId: opts.sessionId ?? null,
     });
 
+    const receiptId = randomUUID();
     await db.insert(proposals).values({
+      id: receiptId,
       workspaceId: opts.workspaceId,
       targetType: AUTO_APPROVE_RECEIPT_TARGET_TYPE,
       targetId: automationRunId,
@@ -520,6 +523,9 @@ async function recordAutomationAutoApproveReceipt(opts: {
       // this is `{}` today; spread here so the one rule holds at every door.
       ...callingKeyAttribution(),
     });
+    // Born decided: the rules that listen to an approval are queued here
+    // (its insert owes no transition). Best-effort, never throws.
+    await queueReceiptReactions(receiptId);
     receiptedRuns.add(automationRunId);
     if (receiptedRuns.size > RECEIPTED_RUNS_MAX) {
       const oldest = receiptedRuns.values().next();

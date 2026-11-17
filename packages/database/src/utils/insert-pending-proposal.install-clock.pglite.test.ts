@@ -20,6 +20,10 @@
  *
  * The payload is the live row's shape (f5f08937): the request envelope
  * `checkPermissionOrPropose` stores, the record one level down.
+ *
+ * The same clock rides on an UPDATE: the reconcile of a playbook already on
+ * the pod re-stamps the source-link on every run, so the second describe
+ * holds the update path to the same rule (one row per real change).
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
@@ -198,6 +202,181 @@ describe("a package playbook create re-filed by a later install run", () => {
         ws,
         installedAt: "2026-11-16T22:05:00.000Z",
         packageVersion: "1.5.0",
+      }),
+      db as never
+    );
+    expect(other.deduped).toBe(false);
+    expect(await pendingCount(ws)).toBe(2);
+  });
+});
+
+/**
+ * What one reconcile run files when a package playbook already on the pod
+ * needs converging: `reconcile-installed-playbooks.ts` replays the plan's
+ * patch through `playbooks.update` together with the re-stamped source-link
+ * (`metadata.marketSource`, a fresh `installedAt` per run), and the update
+ * door hands the gate `{ id, …patch, metadata }`. Stored as the request
+ * envelope, the patch one level down; the target is the existing playbook.
+ *
+ * Each case rules out one wrong rule:
+ *   - two runs differing ONLY in plumbing and the install clock → one row
+ *     (the defect: the clock left in an update's hash);
+ *   - a real field difference (a stage's goal) → its own row (rules out
+ *     dropping the patch from the hash);
+ *   - a source-link naming another package version → its own row (rules out
+ *     dropping the whole `metadata` or `marketSource`: the strip is one leaf);
+ *   - the same patch on ANOTHER playbook → its own row (rules out dropping
+ *     the patch's `id` / the target from an update's identity).
+ */
+function templateUpdate(run: {
+  ws: string;
+  playbookId: string;
+  installedAt: string;
+  stageGoal?: string;
+  packageVersion?: string;
+}) {
+  const stages = [
+    {
+      key: "fix-in-code",
+      name: "Fix in code",
+      goal: run.stageGoal ?? "Reproduce the finding and fix it at the root.",
+      category: "started",
+    },
+  ];
+  const patch = {
+    id: run.playbookId,
+    stages,
+    metadata: {
+      marketSource: {
+        packageSlug: "builder-dev",
+        packageVersion: run.packageVersion ?? "1.4.0",
+        installedAt: run.installedAt,
+        baseline: { scope: "session", stages, tools: [] },
+      },
+    },
+  };
+  return {
+    workspaceId: run.ws,
+    targetType: "playbook",
+    targetId: run.playbookId,
+    proposalType: "update",
+    createdBy: OWNER,
+    subjectUserId: OWNER,
+    agentUserId: AGENT,
+    data: {
+      requestId: randomUUID(),
+      correlationId: randomUUID(),
+      requestedEventId: randomUUID(),
+      source: "intelligence",
+      sourceId: OWNER,
+      targetType: "playbook",
+      targetId: run.playbookId,
+      targetName: "Fix in code",
+      changeType: "update",
+      workspaceId: run.ws,
+      summary: 'Update Template "Fix in code"',
+      authorshipMode: "delegated",
+      data: patch,
+    },
+  };
+}
+
+describe("a package playbook update re-filed by a later reconcile run", () => {
+  it("two runs differing only in the install clock (and per-attempt ids) leave ONE pending row", async () => {
+    const ws = randomUUID();
+    const playbookId = randomUUID();
+    const first = await insertPendingProposal(
+      templateUpdate({
+        ws,
+        playbookId,
+        installedAt: "2026-11-15T09:00:00.000Z",
+      }),
+      db as never
+    );
+    const second = await insertPendingProposal(
+      templateUpdate({
+        ws,
+        playbookId,
+        installedAt: "2026-11-16T21:30:00.000Z",
+      }),
+      db as never
+    );
+    expect(first.deduped).toBe(false);
+    expect(second.deduped).toBe(true);
+    expect(second.proposal.id).toBe(first.proposal.id);
+    expect(await pendingCount(ws)).toBe(1);
+    // The stored row keeps the stamp it was filed with: only the hash ignores it.
+    const stored = first.proposal.data as {
+      data: { metadata: { marketSource: { installedAt: string } } };
+    };
+    expect(stored.data.metadata.marketSource.installedAt).toBe(
+      "2026-11-15T09:00:00.000Z"
+    );
+  });
+
+  it("an update that changes a real field (a stage's goal) is NOT deduped", async () => {
+    const ws = randomUUID();
+    const playbookId = randomUUID();
+    await insertPendingProposal(
+      templateUpdate({
+        ws,
+        playbookId,
+        installedAt: "2026-11-15T09:00:00.000Z",
+      }),
+      db as never
+    );
+    const other = await insertPendingProposal(
+      templateUpdate({
+        ws,
+        playbookId,
+        installedAt: "2026-11-16T22:00:00.000Z",
+        stageGoal: "Reproduce, fix, gate and open a draft pull request.",
+      }),
+      db as never
+    );
+    expect(other.deduped).toBe(false);
+    expect(await pendingCount(ws)).toBe(2);
+  });
+
+  it("an update whose source-link names another package version is NOT deduped", async () => {
+    const ws = randomUUID();
+    const playbookId = randomUUID();
+    await insertPendingProposal(
+      templateUpdate({
+        ws,
+        playbookId,
+        installedAt: "2026-11-15T09:00:00.000Z",
+      }),
+      db as never
+    );
+    const other = await insertPendingProposal(
+      templateUpdate({
+        ws,
+        playbookId,
+        installedAt: "2026-11-16T22:05:00.000Z",
+        packageVersion: "1.5.0",
+      }),
+      db as never
+    );
+    expect(other.deduped).toBe(false);
+    expect(await pendingCount(ws)).toBe(2);
+  });
+
+  it("the same update of ANOTHER playbook is NOT deduped", async () => {
+    const ws = randomUUID();
+    await insertPendingProposal(
+      templateUpdate({
+        ws,
+        playbookId: randomUUID(),
+        installedAt: "2026-11-15T09:00:00.000Z",
+      }),
+      db as never
+    );
+    const other = await insertPendingProposal(
+      templateUpdate({
+        ws,
+        playbookId: randomUUID(),
+        installedAt: "2026-11-15T09:00:00.000Z",
       }),
       db as never
     );

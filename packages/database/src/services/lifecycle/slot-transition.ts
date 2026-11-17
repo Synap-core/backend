@@ -24,7 +24,10 @@ import {
   slotSubjectId,
   type SlotStatusFacts,
 } from "@synap-core/types/units";
-import type { SlotTransitionPayload } from "@synap-core/types/lifecycle";
+import type {
+  SlotTransitionPayload,
+  TransitionCause,
+} from "@synap-core/types/lifecycle";
 import type * as schema from "../../schema/index.js";
 import { focusSessions } from "../../schema/focus-sessions.js";
 import { insertTransitionOutbox } from "./transition-outbox.js";
@@ -66,6 +69,8 @@ export function slotTransitionsOf(input: {
   reason?: string | null;
   proposalId?: string | null;
   occurredAt?: Date | null;
+  /** The move that caused this one (a reaction, reactions W2). */
+  cause?: TransitionCause | null;
 }): SlotTransitionPayload[] {
   const prior = new Map<string, SlotForTransition>();
   for (const slot of input.before ?? []) {
@@ -99,6 +104,7 @@ export function slotTransitionsOf(input: {
         proposalId: input.proposalId,
         workspaceId: input.session.workspaceId,
         occurredAt: input.occurredAt,
+        cause: input.cause,
       }),
       subjectType: "slot",
       slotKey: name,
@@ -127,6 +133,8 @@ export async function oweSlotTransitions(
     reason?: string | null;
     proposalId?: string | null;
     occurredAt?: Date | null;
+    /** The move that caused this one (a reaction, reactions W2). */
+    cause?: TransitionCause | null;
   }
 ): Promise<SlotTransitionPayload[]> {
   // Cheap first: most writes change no slot's status.

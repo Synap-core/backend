@@ -51,13 +51,15 @@ const STORY = {
     group("g2", "Checks passed", ago(5 * H)),
     group("g3", "Opened o/r#7", ago(2 * H)),
   ],
+  status: null,
+  rail: true,
   folded: { groups: 1, events: 1, label: "1 more event" },
   olderExist: false,
   timelineDoor: { kind: "session", id: SESSION_ID },
   now: {
     title: "Ship it?",
     detail: null,
-    at: null,
+    at: ago(26 * H),
     verb: null,
     door: null,
     meanwhile: null,
@@ -157,16 +159,70 @@ describe("the story's frame", () => {
     expect(html).not.toContain(REQUEST_EN["story.nothingAfter"]);
   });
 
-  it("the head says who asked and for what, before the timeline; the bar after it", () => {
+  it("the head is ONE row of chips before the timeline: agent, session, age; the bar after it", () => {
     const html = render(STORY, { status: "ok" });
     const head = html.indexOf("data-story-head");
     expect(head).toBeGreaterThanOrEqual(0);
     expect(head).toBeLessThan(html.indexOf("<ol"));
     expect(html.indexOf("data-footer")).toBeGreaterThan(html.indexOf("</ol>"));
-    const seen = text(html.slice(head, html.indexOf("<ol")));
-    expect(seen).toContain(REQUEST_EN["story.askedBy"]);
-    expect(seen).toContain("Claude-code");
-    expect(seen).toContain(REQUEST_EN["story.forSession"]);
-    expect(seen).toContain("Build wave 2");
+    const chips = html.slice(head, html.indexOf("<ol"));
+    expect(chips).toContain('data-review-provenance=""');
+    expect(chips).toMatch(/data-head-part="agent"[^>]*>Claude-code</);
+    expect(chips).toMatch(/data-head-part="session"[^>]*>Build wave 2</);
+    expect(chips).toMatch(/data-head-part="age"[^>]*>1d ago</);
+    // Each chip is a door to its object.
+    expect(chips).toContain(`href="/open/session/${SESSION_ID}"`);
+  });
+
+  it("a past line the requester acted in names no actor: the head names it, once", () => {
+    const html = render(STORY, { status: "ok" });
+    expect(html).not.toContain("data-story-actor");
+    expect(text(html).split("Claude-code").length - 1).toBe(1);
+  });
+});
+
+// Founder, 17 Nov 2026: the rail only when the story says something the
+// head and the bar do not (`story.rail`); a status event folds into the mark.
+describe("the story drawn flat", () => {
+  const FLAT = {
+    ...STORY,
+    before: [],
+    folded: null,
+    rail: false,
+    status: {
+      ...group("f1", "Approval failed: Install", ago(8 * H)),
+      kind: "decision_answered",
+      events: [{ kind: "decision_answered", decision: "approval_failed" }],
+    },
+  } as unknown as RequestStory;
+
+  it("no rail, no Now or Next labels: the decision, then the bar", () => {
+    const html = render(FLAT, { status: "ok" });
+    expect(html).not.toContain("<ol");
+    expect(html).not.toMatch(/rq-rail-|rq-mark-now/);
+    expect(html).toContain("data-story-flat");
+    const seen = text(html);
+    expect(seen).not.toContain(REQUEST_EN["story.now"]);
+    expect(seen).not.toContain(REQUEST_EN["story.whenNext"]);
+    // The host's plain consequence is not drawn as a Next line here.
+    expect(html).not.toContain("data-next-extra");
+    expect(html.indexOf("data-decided")).toBeLessThan(
+      html.indexOf("data-footer")
+    );
+  });
+
+  it('the status event folds into the status mark in the head: "Approval failed · 8h ago"', () => {
+    const html = render(FLAT, { status: "ok" });
+    const head = html.slice(
+      html.indexOf("data-story-head"),
+      html.indexOf("data-story-flat")
+    );
+    expect(text(head)).toContain("Approval failed · 8h ago");
+    expect(text(html).split("Approval failed").length - 1).toBe(1);
+  });
+
+  it("while the read is in flight the rail holds its place (never flat on a guess)", () => {
+    const html = render(FLAT, { status: "loading" });
+    expect(html).toContain("<ol");
   });
 });

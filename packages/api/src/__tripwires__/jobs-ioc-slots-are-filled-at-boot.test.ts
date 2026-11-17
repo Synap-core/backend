@@ -52,6 +52,17 @@ const UNFILLED_BY_DESIGN: Record<string, string> = {
   // (which apps/api calls at boot) registers the hold-resume reactor (W4).
   registerHoldResumeReactor:
     "registers a jobs-owned reactor from registerAllWorkers, which boot calls",
+  // The reactions reactor (W2): the same, registered by registerAllWorkers.
+  registerReactionsReactor:
+    "registers a jobs-owned reactor from registerAllWorkers, which boot calls",
+  // Optional by design: the built-in rules need no source; lane E's compiled
+  // declarations (relation roll-ups, stage outputs) join the list through it.
+  registerReactionSource:
+    "optional: adds declared rules to the one list; the built-ins need none",
+  // Optional by design: unfilled, each rule keeps its declared enabled flag;
+  // lane E backs it with the Rules list's own pause.
+  registerReactionStateSource:
+    "optional: unfilled, every rule keeps its declared enabled flag",
 };
 
 function read(file: string): string {

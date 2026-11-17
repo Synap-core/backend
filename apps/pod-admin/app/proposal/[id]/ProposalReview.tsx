@@ -5,8 +5,8 @@ import { CardBody, CardHeader, Spinner } from "@heroui/react";
 import { ShieldCheck } from "lucide-react";
 import { openIn } from "../../../lib/open-in";
 import { ExitLink } from "../../../lib/exit-link";
-import { StatusPill } from "../../(admin)/components/status-pill";
 import { statusPillFor } from "../../(admin)/components/status-tone";
+import { StoryStatusMark } from "../../_lib/request/request-story-view";
 import { trpc } from "../../../lib/trpc";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -37,6 +37,9 @@ export function ProposalReview({
   const utils = trpc.useUtils();
   // Decided HERE — what `afterDecisionShown` reads.
   const [decided, setDecided] = useState(false);
+  // When the request's own newest event IS its status ("Approval failed",
+  // 8h ago): folded into the status mark, said once (the body reports it).
+  const [statusAt, setStatusAt] = useState<string | null>(null);
 
   // A session that expired mid-review returns tRPC UNAUTHORIZED — bounce to
   // login and back. Run it as an effect (not during render, matching
@@ -136,9 +139,7 @@ export function ProposalReview({
         {/* The one status door (`statusPillFor`): the tone every console
             pill and app chip paints `status` with, never a table of this
             page's own (it painted `rejected` red, `approval_failed` amber). */}
-        {statusPill && (
-          <StatusPill kind={statusPill.kind} label={statusPill.label} />
-        )}
+        {statusPill && <StoryStatusMark status={status} at={statusAt} />}
       </CardHeader>
 
       {/* Clips nothing, so the decision bar pins to the window. */}
@@ -156,6 +157,8 @@ export function ProposalReview({
             void query.refetch();
           }}
           barClassName={DECISION_BAR_PIN}
+          statusMark="host"
+          onStatusAt={setStatusAt}
           /* The reader often arrives in an overlay (a Glance of `/open/<id>`)
              with no list behind it: once this one is decided, the next one
              is a door here, not a trip back to Review. */

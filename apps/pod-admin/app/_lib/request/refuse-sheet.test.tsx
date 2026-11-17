@@ -7,7 +7,10 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { resolveActionLabel } from "@synap-core/types/vocabulary";
-import { en as REQUEST_EN } from "./copy";
+import { createT } from "@synap-core/types/i18n";
+import { REQUEST_CATALOGS, en as REQUEST_EN } from "./copy";
+
+const t = createT("en", REQUEST_CATALOGS);
 import {
   RefuseSheet,
   RefuseTrigger,
@@ -90,16 +93,25 @@ describe("RefuseSheet — the reasons fit the request", () => {
 
   it("Refuse and tell the agent, then Keep it open; what refusing does is said", () => {
     const seen = text(sheet("ask"));
-    const confirm = seen.indexOf(REQUEST_EN["refuse.confirm"]);
+    const confirm = seen.indexOf(t("refuse.confirm", { verb: "refuse" }));
     const keep = seen.indexOf(REQUEST_EN["refuse.cancel"]);
     expect(confirm).toBeGreaterThanOrEqual(0);
     expect(keep).toBeGreaterThan(confirm);
-    expect(seen).toContain(REQUEST_EN["refuse.reassure"]);
+    expect(seen).toContain(t("refuse.reassure", { verb: "refuse" }));
   });
 
-  it("the trigger is the vocabulary's Refuse, never a module-load English copy", () => {
-    const html = renderToStaticMarkup(<RefuseTrigger onPress={() => {}} />);
+  it("the trigger is the vocabulary's verb for the object, never a module-load English copy", () => {
+    const html = renderToStaticMarkup(
+      <RefuseTrigger kind="ask" onPress={() => {}} />
+    );
     expect(html).toContain("data-refuse-trigger");
     expect(text(html)).toBe(`${resolveActionLabel("refuse", "imperative")}…`);
+    expect(
+      text(
+        renderToStaticMarkup(
+          <RefuseTrigger kind="proposal" onPress={() => {}} />
+        )
+      )
+    ).toBe(`${resolveActionLabel("reject", "imperative")}…`);
   });
 });

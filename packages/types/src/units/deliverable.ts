@@ -222,6 +222,22 @@ export function deliverableOwedBy(
 }
 
 /**
+ * NEWEST OWED FIRST: the order every "what does the person owe, latest
+ * first" read uses (orient's owed-by-person rows, the slot a stopped run
+ * waits on). `owedSince` is an ISO instant, so text order is time order; a
+ * slot with none sorts last. A comparator for `Array.prototype.sort` (stable:
+ * ties keep their order).
+ */
+export function newestOwedFirst(
+  a: { owedSince?: string | null },
+  b: { owedSince?: string | null }
+): number {
+  const x = a.owedSince ?? "";
+  const y = b.owedSince ?? "";
+  return x < y ? 1 : x > y ? -1 : 0;
+}
+
+/**
  * A slot's STATUS as a transition subject (reactions W1): DERIVED from the
  * owed rule above, never stored — a slot has no status column, and gets none.
  * The doors that change it (answer, block, unblock, satisfy, attest, retire,

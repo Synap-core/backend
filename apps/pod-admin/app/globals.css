@@ -206,13 +206,13 @@ body {
 .rq-mark-unread {
   border: 2px solid var(--synap-warning);
 }
+/* Solid tokens, no mix: at 75% the sage rail measured 3.02:1 on the card and
+ * 2.77:1 on the page in light (`rail-contrast.test.ts` holds >= 3:1). */
 .rq-rail-done {
-  border-left: 2px solid
-    color-mix(in srgb, var(--synap-success) 75%, transparent);
+  border-left: 2px solid var(--synap-success);
 }
 .rq-rail-next {
-  border-left: 2px dashed
-    color-mix(in srgb, var(--synap-muted) 85%, transparent);
+  border-left: 2px dashed var(--synap-muted);
 }
 /* The story's columns follow ITS width, not the viewport's (UX S14): in a
  * narrow story (a phone, the docked panel) the "when" goes inline above the

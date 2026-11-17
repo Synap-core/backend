@@ -119,6 +119,7 @@ import {
   resolveProposalAction,
 } from "@synap-core/types/proposals";
 import { broadcastNotification } from "@synap/jobs";
+import { queueReceiptReactions } from "@synap/jobs/workers/reactions.js";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { notifyProposalCreatedOrdered } from "../notifications/notify-proposal-created-ordered.js";
@@ -2589,6 +2590,9 @@ async function evaluatePermission(
           // `.completed` event (events.proposal_id, 0231) — proving this agent
           // write WAS governed (auto-approved), not an ungoverned direct write.
           autoApprovedProposalId = receipt?.id;
+          // Born decided, so its insert owes no transition: the rules that
+          // listen to an approval (pod default 3) are queued here instead.
+          if (receipt?.id) await queueReceiptReactions(receipt.id);
         } catch (err) {
           logger.error(
             { err, workspaceId, agentUserId, eventKey },
@@ -2916,6 +2920,8 @@ async function evaluatePermission(
             })
             .returning({ id: proposals.id });
           autoApprovedProposalId = receipt?.id;
+          // Born decided: the rules that listen to an approval are queued here.
+          if (receipt?.id) await queueReceiptReactions(receipt.id);
         } catch (err) {
           logger.error(
             { err, workspaceId, userId, eventKey },

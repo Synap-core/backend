@@ -12,12 +12,30 @@
  */
 
 import {
+  nounParams,
   resolveActionLabel,
-  resolveObjectNoun,
+  resolveNoun,
 } from "@synap-core/types/vocabulary";
 import { ExitLink } from "../../../lib/exit-link";
 import { openIn } from "../../../lib/open-in";
+import { proposalPageT } from "./copy";
 import type { UpdatedObject } from "./proposal-review-model";
+
+/**
+ * The door's words: ONE catalog message carrying the verb and the noun bundle
+ * (`updated.open`), never a concatenation, so a translation agrees with the
+ * noun ("Ouvrir le constat", "Ouvrir la tâche"). Named by what the object IS
+ * (`kind`, a profile slug), never by its table ("Open entity").
+ */
+export function updatedDoorLabel(
+  updated: Pick<UpdatedObject, "kind">,
+  kind?: string | null
+): string {
+  return proposalPageT()("updated.open", {
+    verb: resolveActionLabel("open", "imperative"),
+    ...nounParams(resolveNoun(kind || updated.kind)),
+  });
+}
 
 export function UpdatedDoor({
   updated,
@@ -28,10 +46,7 @@ export function UpdatedDoor({
   kind?: string | null;
 }) {
   // The change's title is the drawer's and the record card's: said once
-  // there. Here only the door, named by what the object IS ("Open finding"),
-  // never by its table ("Open entity").
-  const noun = resolveObjectNoun(kind || updated.kind);
-  const open = resolveActionLabel("open", "imperative");
+  // there. Here only the door.
   return (
     <span
       data-updated-object={updated.id}
@@ -43,7 +58,7 @@ export function UpdatedDoor({
           objectKind: updated.kind,
           id: updated.id,
         })}
-        label={`${open} ${noun.toLowerCase()}`}
+        label={updatedDoorLabel(updated, kind)}
       />
     </span>
   );

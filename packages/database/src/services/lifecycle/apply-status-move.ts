@@ -52,6 +52,7 @@ import {
   type LifecycleOptionWaits,
   type LifecycleTransitionPayload,
   type MoveHoldDecision,
+  type TransitionCause,
   type TransitionWait,
 } from "@synap-core/types/lifecycle";
 import { insertTransitionOutbox } from "./transition-outbox.js";
@@ -270,6 +271,8 @@ export interface ApplyStatusMoveInput {
    * move between two paused statuses keeps the hold it had).
    */
   hold?: Hold | null;
+  /** The move that caused this one (a reaction, reactions W2). */
+  cause?: TransitionCause | null;
 }
 
 export type ApplyStatusMoveResult =
@@ -494,6 +497,7 @@ export async function applyStatusMove(
       ...stamp,
       hold: held.hold,
       ...(wait ? { wait } : {}),
+      ...(input.cause ? { cause: input.cause } : {}),
     };
     await insertTransitionOutbox(tx, transition, input.emitContext);
     return { status: "moved", transition };

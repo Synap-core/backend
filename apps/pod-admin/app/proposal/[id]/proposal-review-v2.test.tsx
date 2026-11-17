@@ -146,8 +146,8 @@ vi.mock("../../../lib/trpc", async () => ({
 import { ProposalReview } from "./ProposalReview";
 import { alwaysEn } from "./copy";
 
-/** The one Refuse trigger (the vocabulary door's verb) and the rule menu's. */
-const REFUSE = `${resolveActionLabel("refuse", "imperative")}…`;
+/** A proposal's one trigger, reject (the vocabulary door's verb), and the rule menu's. */
+const REFUSE = `${resolveActionLabel("reject", "imperative")}…`;
 const NEVER = alwaysEn["never.trigger"];
 
 const TWIN = {
@@ -374,13 +374,14 @@ describe("a create with no twin", () => {
 });
 
 describe("Refuse and never allow", () => {
-  it("an agent's change offers it beside Refuse", () => {
+  it("an agent's change offers it beside Reject", () => {
     state.proposal = personCreate(null);
     const seen = text(render());
     expect(seen).toContain(REFUSE);
     expect(seen).toContain(NEVER);
-    // The verb is Refuse everywhere: never the old Reject.
-    expect(seen).not.toMatch(/\bReject\b/);
+    // A proposal's verb is Reject everywhere (the verb follows the object):
+    // never an ask's Refuse.
+    expect(seen).not.toMatch(/\bRefuse\b/);
   });
 
   it("a person's own change does not: a person is never refused", () => {
@@ -518,11 +519,11 @@ describe("why, the note and undo", () => {
     expect(text(html)).not.toMatch(/Always asks a person/);
   });
 
-  it("the agent's words are labelled as theirs", () => {
+  it("the agent's words are labelled as theirs, without naming them again (the head does)", () => {
     state.proposal = withTwin();
-    expect(text(render())).toMatch(
-      /Note from Claude-code Same kind and name as a person you have/
-    );
+    const seen = text(render());
+    expect(seen).toMatch(/Their note Same kind and name as a person you have/);
+    expect(seen.split("Claude-code").length - 1).toBe(1);
   });
 
   it("an undoable change draws no undo copy at all", () => {
@@ -545,7 +546,9 @@ describe("why, the note and undo", () => {
       GOVERNANCE_POLICY_SENTENCES.WRITES_REQUIRE_PROPOSAL
     );
     // The requester's own words still show; only the class chip is gone.
-    expect(text(html)).toContain("Note from Claude-code");
+    expect(text(html)).toContain(
+      "Their note Same kind and name as a person you have"
+    );
   });
 });
 
