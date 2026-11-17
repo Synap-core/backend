@@ -1,7 +1,7 @@
 /**
- * REACTIONS DECLARED ON A LINK (plan 7d71ddcc §2, wave 3) — what a relation
- * between two kinds says should happen when one end moves. Stored on the
- * pair, `profile_relations.metadata.reactions` (a status name is per kind, so
+ * REACTIONS DECLARED ON A LINK — what a relation between two kinds says
+ * should happen when one end moves. Stored on the pair,
+ * `profile_relations.metadata.reactions` (a status name is per kind, so
  * the move a declaration asks for is per pair): the home nothing read before.
  *
  * A CLOSED union, validated like `LifecycleOptionRequirement`: a declaration

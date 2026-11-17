@@ -193,11 +193,11 @@ export interface RuleMetadata {
    */
   seed?: RuleSeed;
   /**
-   * A REACTION's rule (plan 7d71ddcc W3, decision D1): the row that makes a
-   * rule the reactions reactor applies (a built-in one, or one a relation
-   * declares) visible and pausable in the ONE rule list. It has no automation
-   * half: the reactor runs it, never the matcher. Draft = paused. Seeded by
-   * the compile pass (`services/reactions/reaction-rules-compile.ts`).
+   * A REACTION's rule (decision D1): the row that makes a rule the reactions
+   * reactor applies (a built-in one, or one a relation declares) visible and
+   * pausable in the ONE rule list. It has no automation half: the reactor runs
+   * it, never the matcher. Draft = paused. Seeded by the compile pass
+   * (`services/reactions/reaction-rules-compile.ts`).
    */
   reaction?: RuleReaction;
   createdAt: string;

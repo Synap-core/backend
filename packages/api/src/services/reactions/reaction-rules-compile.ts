@@ -1,11 +1,11 @@
 /**
- * REACTIONS → RULES (plan 7d71ddcc W3, decision D1): every rule the
- * reactions reactor applies — the built-in ones and the ones a relation
- * declares — gets ONE row in the pod's rule list, through the ONE rule door
- * (`createRuleGoverned` / `updateRuleGoverned`), exactly as a playbook's
- * activators do (`playbook-activators.ts`). That row is what makes the rule
- * visible, owned and PAUSABLE: draft = paused, read back by the reactor
- * through {@link reactionEnabledStates} (`registerReactionStateSource`).
+ * REACTIONS → RULES (decision D1): every rule the reactions reactor applies —
+ * the built-in ones and the ones a relation declares — gets ONE row in the
+ * pod's rule list, through the ONE rule door (`createRuleGoverned` /
+ * `updateRuleGoverned`), exactly as a playbook's activators do
+ * (`playbook-activators.ts`). That row is what makes the rule visible, owned
+ * and PAUSABLE: draft = paused, read back by the reactor through
+ * {@link reactionEnabledStates} (`registerReactionStateSource`).
  *
  * The row carries NO automation: the reactor runs the rule, never the
  * matcher, so a compiled automation would fire it twice. It is a prose rule

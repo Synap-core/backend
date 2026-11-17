@@ -123,7 +123,7 @@ export function registerEntityTransitionExecutors(): void {
   });
 }
 
-/** The `cause` a reaction filed with its proposed move (reactions W2), or null. */
+/** The `cause` a reaction filed with its proposed move, or null. */
 function readFiledCause(raw: unknown): TransitionCause | null {
   if (!raw || typeof raw !== "object") return null;
   const c = raw as Record<string, unknown>;

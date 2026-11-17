@@ -78,8 +78,7 @@ const CAPABILITIES_PAYLOAD = {
     OperationalEventTypes.CHANNEL_MESSAGE_CREATED.type,
     OperationalEventTypes.NOTIFICATION_CREATED.type,
     // Every status move, one shape per subject (the transition door):
-    // things, goals, sessions, and since reactions W1 runs, proposals and
-    // owed slots.
+    // things, goals, sessions, runs, proposals and owed slots.
     ...Object.values(TRANSITION_EVENT_TYPES),
     "workspace.member.added",
     "workspace.member.removed",

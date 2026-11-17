@@ -201,9 +201,9 @@ const job = (
 
 beforeAll(async () => {
   await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
-  // The slot doors owe their transition (reactions W1).
+  // The slot doors owe their transition.
   await h.client!.exec(ddlFor(lifecycleTransitionOutbox as unknown as PgTable));
-  // The reaction log (reactions W2).
+  // The reaction log.
   await h.client!.exec(ddlFor(events as unknown as PgTable));
 }, 120_000);
 afterAll(async () => {
@@ -211,7 +211,7 @@ afterAll(async () => {
 });
 
 /**
- * Pod default 3 ("an outcome is met wherever it was filed", reactions W2) is
+ * Pod default 3 ("an outcome is met wherever it was filed") is
  * a rule the person can pause. The suites below were written for the sweep
  * WITHOUT it: they run with it paused, so they keep testing the governed path
  * a session the body does not name takes then. The default-3 suite at the end
@@ -945,7 +945,7 @@ describe("the pod completes the outcome the merged PR names, outside the key's g
   });
 });
 
-describe("pod default 3 on: a merge meets the outcome in EVERY session that points at the PR (reactions W2)", () => {
+describe("pod default 3 on: a merge meets the outcome in EVERY session that points at the PR", () => {
   beforeEach(() => {
     metAnywhere = true;
     h.perm.length = 0;

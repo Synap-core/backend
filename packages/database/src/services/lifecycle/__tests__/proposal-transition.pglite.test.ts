@@ -1,6 +1,6 @@
 /**
- * `transitionProposal`, THE proposal status door, OWES each move's transition
- * (reactions W1), on a real Postgres (PGlite):
+ * `transitionProposal`, THE proposal status door, OWES each move's transition,
+ * on a real Postgres (PGlite):
  *  - a move owes ONE `proposal` transition in the one shape, in the same
  *    transaction as the write: D9 categories, the reviewer as the actor, the
  *    proposal's own id, type and target;
@@ -114,7 +114,7 @@ describe("transitionProposal owes the move's transition", () => {
     });
   });
 
-  it("a move a rule caused carries its cause; one nobody caused carries none (reactions W2)", async () => {
+  it("a move a rule caused carries its cause; one nobody caused carries none", async () => {
     const id = await proposal("pending");
     await transitionProposal(db, {
       to: "expired",

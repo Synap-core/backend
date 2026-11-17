@@ -281,7 +281,7 @@ export async function updateExpectedOutputsLocked(
       .set({ expectedOutputs: next, updatedAt: new Date() })
       .where(eq(focusSessions.id, sessionId));
     // Each slot whose derived status moved owes its transition, in this
-    // same transaction (reactions W1, `oweSlotTransitions`).
+    // same transaction (`oweSlotTransitions`).
     await oweSlotTransitions(tx, {
       sessionId,
       before: current,
