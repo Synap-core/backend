@@ -40,6 +40,7 @@ const h = vi.hoisted(() => ({
     queue: string;
     automationId: string;
     workspaceId: string | null;
+    producerAgentUserId?: string | null;
   }>,
 }));
 
@@ -56,12 +57,17 @@ vi.mock("@synap/events", () => ({
   getBoss: () => ({
     send: async (
       queue: string,
-      payload: { automationId: string; workspaceId: string | null }
+      payload: {
+        automationId: string;
+        workspaceId: string | null;
+        producerAgentUserId?: string | null;
+      }
     ) => {
       h.sent.push({
         queue,
         automationId: payload.automationId,
         workspaceId: payload.workspaceId,
+        producerAgentUserId: payload.producerAgentUserId,
       });
       return "job-id";
     },
@@ -303,5 +309,113 @@ describe("a shared role attached from one space reaches every space's rules", ()
     });
 
     expect(runsOf(crmClientRule)).toEqual([CRM]);
+  });
+});
+
+/**
+ * THE APPROVER ACTS (founder, 17 Nov 2026, W1b). An approved agent move fans
+ * out as the person who approved it (`emitLifecycleTransition`, proved in
+ * @synap/events `lifecycle-transition.approver-acts.test.ts`). Here, the next
+ * hops on that job: the rule it fires is triggered by the person (the run's
+ * `triggeredBy`, which `resolveExecutionActor` makes the steps' acting user)
+ * with the person as producer (so the confused-deputy guard has no agent to
+ * escalate to), and the client role that run attaches AS the person reaches
+ * the person's other spaces. A direct agent move keeps the agent, and its
+ * attach stays in the lens.
+ */
+describe("an approved conversion runs as the person who approved it", () => {
+  /** The trigger « lead enters converted » compiles to (a declared lifecycle). */
+  const convertedTrigger = () => {
+    const sentence = playbookActivatorSentence({
+      playbookId: randomUUID(),
+      profileSlug: "lead",
+      on: "enters_status",
+      statusProperty: "leadStage",
+      status: "converted",
+      lifecycle: "declared",
+      mode: "run",
+    });
+    return toBackendTrigger(sentence.trigger!, sentence.conditions)
+      .triggerConfig as Record<string, unknown>;
+  };
+
+  /** The lead's move as the reactor hands it over, acting as `actor`. */
+  const converted = (actor: string) => {
+    const transitionId = randomUUID();
+    const entityId = randomUUID();
+    return handleAutomationTriggerMatch({
+      data: {
+        eventType: "entity.transition.completed",
+        subjectId: entityId,
+        userId: actor,
+        workspaceId: CRM,
+        eventId: transitionId,
+        data: {
+          transitionId,
+          subjectType: "entity",
+          subjectId: entityId,
+          entityId,
+          profileSlug: "person",
+          role: "lead",
+          lifecycleProfile: "lead",
+          property: "leadStage",
+          from: "qualified",
+          to: "converted",
+          category: "done",
+          agentUserId: AGENT,
+          ...(actor === PERSON ? { approvedBy: PERSON } : {}),
+        },
+        producerAgentUserId: actor,
+      } as never,
+    });
+  };
+
+  const triggeredBy = async (automationId: string) =>
+    (
+      await q<{ triggered_by: string }>(
+        `select triggered_by from automation_runs where automation_id = $1`,
+        [automationId]
+      )
+    ).rows.map((r) => r.triggered_by);
+
+  const producersOf = (automationId: string) =>
+    h.sent
+      .filter(
+        (s) =>
+          s.queue === "automation-execute" && s.automationId === automationId
+      )
+      .map((s) => s.producerAgentUserId);
+
+  it("(f) approved: the run is the person's, and its client attach reaches Operations", async () => {
+    const becomesClient = await automationIn(CRM, convertedTrigger());
+    const onboard = await automationIn(OPS, activatorTrigger("client"));
+
+    await converted(PERSON);
+
+    expect(runsOf(becomesClient)).toEqual([CRM]);
+    expect(await triggeredBy(becomesClient)).toEqual([PERSON]);
+    expect(producersOf(becomesClient)).toEqual([PERSON]);
+
+    // The run's facet_attach, as the person: the pod-wide client reaches
+    // the person's Operations activator.
+    await attached({ profileSlug: "client", podWideSubject: true });
+    expect(runsOf(onboard)).toEqual([OPS]);
+  });
+
+  it("(g) direct agent move: the run stays the agent's, and its attach stays in the CRM", async () => {
+    const becomesClient = await automationIn(CRM, convertedTrigger());
+    const onboard = await automationIn(OPS, activatorTrigger("client"));
+
+    await converted(AGENT);
+
+    expect(await triggeredBy(becomesClient)).toEqual([AGENT]);
+    expect(producersOf(becomesClient)).toEqual([AGENT]);
+
+    await attached({
+      profileSlug: "client",
+      podWideSubject: true,
+      userId: AGENT,
+    });
+    expect(runsOf(onboard)).toEqual([]);
   });
 });

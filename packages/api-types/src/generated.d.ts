@@ -530,6 +530,13 @@ export interface TransitionBase {
 	/** A person moved it from a value they had not seen ("moved meanwhile"). */
 	staleExpected: boolean;
 	proposalId: string | null;
+	/**
+	 * The person whose approval of a proposal applied this move (the
+	 * proposal's `reviewedBy`); absent when no one approved it. What the move
+	 * sets off acts as them (founder, 17 Nov 2026: the approver acts), while
+	 * `agentUserId` keeps the agent that proposed it.
+	 */
+	approvedBy?: string | null;
 	/** The lens the move happened in. */
 	workspaceId: string | null;
 	/**
