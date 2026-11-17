@@ -860,11 +860,20 @@ describe("the decision bar on a phone: one row of verbs, nothing else", () => {
     const at = html.indexOf("data-review-decision");
     return html.slice(at, html.indexOf("Advanced", at));
   };
-  /** The one verb row's own markup (it holds no nested div). */
+  /** The one verb row's own markup, up to its own closing tag (each split
+   *  button is a nested `div role="group"`, so the row ends where the div
+   *  depth returns to zero, not at the first `</div>`). */
   const rowOf = (html: string) => {
     const at = html.indexOf("data-decision-verbs");
     expect(at, "the verb row is drawn").toBeGreaterThanOrEqual(0);
-    return html.slice(at, html.indexOf("</div>", at));
+    const tags = /<div\b|<\/div>/g;
+    tags.lastIndex = html.lastIndexOf("<div", at);
+    let depth = 0;
+    for (let m = tags.exec(html); m; m = tags.exec(html)) {
+      depth += m[0] === "</div>" ? -1 : 1;
+      if (depth === 0) return html.slice(at, m.index);
+    }
+    return html.slice(at);
   };
 
   it("Approve and Reject are split buttons in ONE row; each chevron is named and 44 px", () => {
