@@ -41,6 +41,19 @@ export const TIMELINE_SUBJECT_KINDS = [
 ] as const;
 export type TimelineSubjectKind = (typeof TIMELINE_SUBJECT_KINDS)[number];
 
+/**
+ * The session's CHAIN kinds (founder decision D3, plan b38bc224): what the
+ * Operations session lens shows beyond the dev facts and asks. Only a session
+ * timeline carries them; the request story leaves them out.
+ */
+export const SESSION_CHAIN_EVENT_KINDS = [
+  "stage_moved",
+  "child_started",
+  "runner_seen",
+  "room_post",
+] as const;
+export type SessionChainEventKind = (typeof SESSION_CHAIN_EVENT_KINDS)[number];
+
 export const DEV_TIMELINE_EVENT_KINDS = [
   "session_started",
   "status_moved",
@@ -56,6 +69,7 @@ export const DEV_TIMELINE_EVENT_KINDS = [
   "relay_corrected",
   "question_withdrawn",
   "slot_handed_back",
+  ...SESSION_CHAIN_EVENT_KINDS,
 ] as const;
 export type DevTimelineEventKind = (typeof DEV_TIMELINE_EVENT_KINDS)[number];
 
@@ -67,6 +81,42 @@ export interface DevTimelineRefs {
   url?: string;
   /** The session slot an ask event is about (its label): a door to the ask. */
   slotLabel?: string;
+  /** A room post: the message (open the room at it). */
+  messageId?: string;
+  /** A room post: the room it sits in. */
+  channelId?: string;
+  /** A runner: `<harness>:<conversation id>`, the conversation it is. */
+  runnerId?: string;
+}
+
+/** Characters of a room post's one line; longer text ends in "…". */
+export const TIMELINE_POST_LINE_MAX = 120;
+
+/**
+ * A room post as ONE line: its first non-empty line, whitespace collapsed, at
+ * most {@link TIMELINE_POST_LINE_MAX} characters (cut ending in "…"). The
+ * timeline never carries a post's body: the room is the door to it. Pure.
+ */
+export function timelinePostLine(text: string): {
+  line: string;
+  truncated: boolean;
+} {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter((l) => l.length > 0);
+  const first = lines[0] ?? "";
+  const chars = [...first];
+  if (chars.length > TIMELINE_POST_LINE_MAX) {
+    return {
+      line: `${chars
+        .slice(0, TIMELINE_POST_LINE_MAX - 1)
+        .join("")
+        .trimEnd()}…`,
+      truncated: true,
+    };
+  }
+  return { line: first, truncated: lines.length > 1 };
 }
 
 /** Below this, a record time is the occurrence time (no "recorded at"). */
@@ -175,6 +225,65 @@ export type DevTimelineEvent = DevTimelineEventBase &
         /** The person said "Not mine" about a slot an agent handed them: it is the agent's again, unanswered. */
         kind: "slot_handed_back";
         slot: string;
+      }
+    | {
+        /** The session entered a stage (`focus_sessions.stage_history`). */
+        kind: "stage_moved";
+        /** The stage key it left; null = it had none. */
+        from: string | null;
+        to: string;
+        /** The stage door (`advance`) or a re-applied approval. */
+        via: string;
+      }
+    | {
+        /** The session spawned a child (its `spawned_from` link). */
+        kind: "child_started";
+        child: { id: string; title: string; status: string };
+      }
+    | {
+        /**
+         * A runner (one process of a client conversation) first held this
+         * session (`session_runners.first_seen_at`). Its state now, not a
+         * history of states.
+         */
+        kind: "runner_seen";
+        runner: {
+          /** `claude-code`, `codex`… */
+          harness: string;
+          conversationId: string;
+          /** The computer: its pod name, else the host the process named; null = unknown. */
+          computer: string | null;
+          /** As its client names it; null = unknown. */
+          model: string | null;
+          provider: string | null;
+          /** What it last said it is doing (`busy`, `idle`…); null = it names none. */
+          state: string | null;
+          lastSeenAt: string;
+        };
+      }
+    | {
+        /**
+         * A post in the session's room, or one it sent to another session's
+         * room: ONE line, never the body (decision D3). `refs.messageId` and
+         * `refs.channelId` open the room at it.
+         */
+        kind: "room_post";
+        post: {
+          /**
+           * `person`: a person typed it. `question` / `update`: an agent's
+           * post (a question notifies the person). `session_message`: a
+           * coordination post between sessions (`direction`, `intent`).
+           */
+          form: "person" | "question" | "update" | "session_message";
+          /** A session_message: received (`in`) or sent (`out`); else null. */
+          direction: "in" | "out" | null;
+          /** A session_message's intent (`handoff`, `fyi`…); else null. */
+          intent: string | null;
+          /** {@link timelinePostLine}: at most 120 characters. */
+          line: string;
+          /** The post holds more than its line. */
+          truncated: boolean;
+        };
       }
   );
 
