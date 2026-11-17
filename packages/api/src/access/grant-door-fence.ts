@@ -498,6 +498,103 @@ export function sessionPacketReadable(
 }
 
 /**
+ * What THE work graph (`buildWorkGraph`, work-graph.ts) reads WHOLE: session
+ * rows (sessionListConditions), links (blocked_by, spawned_from,
+ * targets/produced), the next move's reads (proposals, room inboxes,
+ * cross-kind blockers on entities and tracks), liveness (chat turns, events,
+ * proposals) and the derived interactions (events, automation runs). MCP
+ * `synap_get_work_graph` admits only a key that reads all of it unbounded.
+ */
+export const WORK_GRAPH_SUBJECTS: readonly string[] = [
+  "session",
+  "link",
+  "proposal",
+  "channel",
+  "event",
+  "automation",
+  "entity",
+  "track",
+];
+
+/**
+ * What one key's grant lets the work graph draw (Operations view, founder
+ * decision D1, 17 Nov 2026). A key that reads every subject unbounded (and
+ * every unfenced caller) gets the graph whole. Any other key the fence
+ * admitted (`NARROWED("session", …)`: it holds `session.read`) gets:
+ *  - the SESSIONS its grant reads (`sessionReadableWhere` ANDs the grant), and
+ *    how many the person could see in the same window that it does not;
+ *  - the edges BETWEEN two of those sessions (`spawned_from`, `blocked_by`):
+ *    the same session-to-session reads the packet's `children` and `parent`
+ *    floor on the session rule alone;
+ *  - each session's standing hold (its own row's status);
+ *  - the PRs the sessions RECORDED (their own outcome slots), without the
+ *    recorded PR facts (events anywhere in the pod: no pinned key reads them);
+ *  - who holds each session only when the key reads `agent` (the PERSON door
+ *    `sessionHolderReadable`, as GET /focus-sessions/:id does);
+ *  - never the next move, the derived interactions, the waits on another
+ *    session's output, or the goals: their reads cross subjects the key does
+ *    not hold. Each is said withheld, never an empty answer.
+ */
+export type WorkGraphReach =
+  | { whole: true }
+  | { whole: false; holder: boolean; goals: boolean };
+
+export function workGraphReach(
+  grant: KeyGrant | null | undefined
+): WorkGraphReach {
+  if (
+    !isFencedGrant(grant) ||
+    grantBoundsDoor(READS(...WORK_GRAPH_SUBJECTS), grant!)
+  ) {
+    return { whole: true };
+  }
+  return {
+    whole: false,
+    holder: sessionHolderReadable(grant),
+    // The goals are read through the track floor with the grant ANDed; served
+    // only when that floor removes nothing (one scope reads `track` unbounded).
+    goals: grantBoundsDoor(READS("track"), grant!),
+  };
+}
+
+/** What `readTimeline` (services/timeline/read-timeline.ts) reads WHOLE. */
+export const TIMELINE_SUBJECTS: readonly string[] = [
+  "track",
+  "session",
+  "event",
+  "proposal",
+];
+
+/**
+ * What one key's grant lets the timeline read. Whole for an unfenced caller or
+ * a key reading every subject unbounded. Any other key the fence admitted
+ * (it holds `session.read`) reads only a SESSION's timeline, through the
+ * session floor with its grant: the session's start, its status moves and its
+ * slots' history (the session's own rows); the decisions filed in it only
+ * when one scope reads `proposal` unbounded; never the dev facts of its PRs
+ * and jobs (events anywhere in the pod). A goal's or a PR's timeline is
+ * refused it (403): both read only rows outside the session floor.
+ */
+export type TimelineReach =
+  | { whole: true }
+  | { whole: false; decisions: boolean };
+
+export function timelineReach(
+  grant: KeyGrant | null | undefined
+): TimelineReach {
+  if (
+    !isFencedGrant(grant) ||
+    grantBoundsDoor(READS(...TIMELINE_SUBJECTS), grant!)
+  ) {
+    return { whole: true };
+  }
+  return {
+    whole: false,
+    decisions: grantBoundsDoor(READS("proposal"), grant!),
+  };
+}
+
+/**
  * What THE needs-you read (`signals.needsYou`: Hub `GET /needs-you`, MCP
  * `synap_needs_you`) reads WHOLE: sessions and their asks, proposals, the
  * room-pointer notifications and the things they are about. MCP admits only a
@@ -791,18 +888,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // (proposals, room inboxes, cross-kind blockers on entities and tracks),
   // liveness (chat turns, events, proposals) and the derived interactions
   // (events, automation runs). Same projection as MCP `synap_get_work_graph`.
+  // Narrowed by the route (`workGraphReach`): a key reading every subject
+  // unbounded gets it whole; a key holding `session.read` (a pod app) gets
+  // the sessions its grant reads, the edges between them, how many it does
+  // not read, and the rest said withheld (founder decision D1, 17 Nov 2026).
   [
     /^\/focus-sessions\/graph\/?$/,
-    READS(
-      "session",
-      "link",
-      "proposal",
-      "channel",
-      "event",
-      "automation",
-      "entity",
-      "track"
-    ),
+    NARROWED("session", WORK_GRAPH_SUBJECTS),
   ],
   // Intent actions (decision 3A, 2026-10-28): which of the person's tools can
   // do ONE intent, for a key holding `capability.<intent>.run`. The route
@@ -851,8 +943,10 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // `readTimeline` (services/timeline/read-timeline.ts): a goal's history (the
   // track, its sessions, their proposals and evaluations), a session's
   // transition log, dev facts and proposals, or a PR's dev facts. Same as MCP
-  // `synap_get_timeline`.
-  [/^\/timeline\/?$/, READS("track", "session", "event", "proposal")],
+  // `synap_get_timeline`. Narrowed by the route (`timelineReach`): a key
+  // holding `session.read` reads a session's own history under its grant,
+  // the rest said withheld; a goal's or a PR's is refused it.
+  [/^\/timeline\/?$/, NARROWED("session", TIMELINE_SUBJECTS)],
   // One proposal: the same door as MCP `synap_get_proposal` (PROPOSAL_GET).
   [route("/proposals/:id"), PROPOSAL_GET],
   // The capability catalog of one space (`synap connect <tool>`, `synap
@@ -1144,17 +1238,9 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_get_proposal: PROPOSAL_GET,
   synap_list_sessions: READS("session", "project"),
   synap_needs_you: READS(...NEEDS_YOU_SUBJECTS),
-  // Same subjects as `GET /focus-sessions/graph` (GRANT_REST_GET_READS).
-  synap_get_work_graph: READS(
-    "session",
-    "link",
-    "proposal",
-    "channel",
-    "event",
-    "automation",
-    "entity",
-    "track"
-  ),
+  // The subjects of `GET /focus-sessions/graph`, read whole: the MCP door
+  // does not narrow (no pod app reads over MCP), the REST door does.
+  synap_get_work_graph: READS(...WORK_GRAPH_SUBJECTS),
   synap_get_session: READS(
     "session",
     "channel",
@@ -1181,8 +1267,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   // Same door as `GET /work-release` (GRANT_REST_GET_READS): the read
   // narrows itself (`workReleaseReach`).
   synap_get_work_release: NARROWED("event", WORK_RELEASE_SUBJECTS),
-  // Same subjects as `GET /timeline` (GRANT_REST_GET_READS).
-  synap_get_timeline: READS("track", "session", "event", "proposal"),
+  // The subjects of `GET /timeline`, read whole (the REST door narrows).
+  synap_get_timeline: READS(...TIMELINE_SUBJECTS),
   synap_export_project_pack: READS(
     "project",
     "entity",

@@ -86,7 +86,13 @@ export interface WorkGraphGoal {
  */
 export async function readGraphPullRequests(
   nodes: ReadonlyArray<Pick<FocusSession, "id" | "expectedOutputs">>,
-  reader: { userId: string; roster: boolean; lens?: string }
+  reader: { userId: string; roster: boolean; lens?: string },
+  /**
+   * Set when the caller may not read the recorded PR facts (a key narrowed
+   * by its grant, `workGraphReach`): the PRs the nodes recorded are listed
+   * with no `prState`, and the section says why, never "no fact recorded".
+   */
+  statesWithheld?: string
 ): Promise<{ items: WorkGraphPullRequest[]; section: Section }> {
   const owners: string[] = [];
   const units: PacketWorkUnitItem[] = [];
@@ -103,11 +109,13 @@ export async function readGraphPullRequests(
       units.push(item);
     }
   }
-  const read = await withPullRequestStates(
-    { status: "ok", total: units.length, items: units },
-    reader
-  );
-  const items = read.status === "ok" ? read.items : units;
+  const read = statesWithheld
+    ? null
+    : await withPullRequestStates(
+        { status: "ok", total: units.length, items: units },
+        reader
+      );
+  const items = read?.status === "ok" ? read.items : units;
   const byKey = new Map<string, WorkGraphPullRequest>();
   let unavailable: string | null = null;
   for (const [i, item] of items.entries()) {
@@ -132,8 +140,9 @@ export async function readGraphPullRequests(
   }
   return {
     items: [...byKey.values()],
-    section:
-      unavailable === null
+    section: statesWithheld
+      ? { status: "unavailable", reason: statesWithheld }
+      : unavailable === null
         ? { status: "ok" }
         : { status: "unavailable", reason: unavailable },
   };

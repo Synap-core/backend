@@ -77,6 +77,7 @@ import {
   type DevTimelineEvent,
   type DevTimelineRefs,
   type TimelineWire,
+  type TimelineWithheldSource,
 } from "@synap-core/types/units";
 
 import {
@@ -279,8 +280,15 @@ async function finish(
   return named;
 }
 
-/** Who reads: the goal history's actor, plus a bound key's workspace. */
-export type TimelineReader = TrackActor & { lens?: string };
+/**
+ * Who reads: the goal history's actor, plus a bound key's workspace, plus the
+ * session sources a key narrowed by its grant may not read (`timelineReach`):
+ * skipped, and named on the wire's `withheld`.
+ */
+export type TimelineReader = TrackActor & {
+  lens?: string;
+  withhold?: readonly TimelineWithheldSource[];
+};
 
 export async function readTimeline(
   subject: TimelineSubject,
@@ -687,10 +695,20 @@ export async function readSessionTimelines(
     )
     .as("slots_ranked");
 
+  // A source the reader's key may not read is not read at all (never read
+  // and dropped); the wire names it on `withheld`.
+  const skip = new Set<TimelineWithheldSource>(actor.withhold ?? []);
   const [moves, facts, decisions, slotRows] = await Promise.all([
     db.select().from(movesRanked).where(lte(movesRanked.rank, limit)),
-    db.select().from(factsRanked).where(lte(factsRanked.rank, limit)),
-    db.select().from(decisionsRanked).where(lte(decisionsRanked.rank, limit)),
+    skip.has("dev_facts")
+      ? []
+      : db.select().from(factsRanked).where(lte(factsRanked.rank, limit)),
+    skip.has("decisions")
+      ? []
+      : db
+          .select()
+          .from(decisionsRanked)
+          .where(lte(decisionsRanked.rank, limit)),
     db.select().from(slotsRanked).where(lte(slotsRanked.rank, limit)),
   ]);
 
@@ -781,6 +799,7 @@ async function readSessionTimeline(
     subject: { kind: "session", id: sessionId, title: read.title },
     events: read.events,
     truncated: read.truncated,
+    ...(actor.withhold?.length ? { withheld: [...actor.withhold] } : {}),
   };
 }
 

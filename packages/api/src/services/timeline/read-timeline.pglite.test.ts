@@ -385,6 +385,40 @@ describe("readTimeline on PGlite", () => {
     expect(t!.truncated).toBe(false);
   });
 
+  it("a key narrowed by its grant (a pod app): the sources it may not read are skipped and named, never empty", async () => {
+    const t = await readTimeline(
+      { kind: "session", id: S.mine },
+      {
+        userId: USER,
+        isHubProtocol: true,
+        withhold: ["dev_facts", "decisions"],
+      }
+    );
+    const events = t!.events as DevTimelineEvent[];
+    // The session's own rows only: its start and its move.
+    expect(kinds(events)).toEqual(["status_moved", "session_started"]);
+    expect(t).toMatchObject({ withheld: ["dev_facts", "decisions"] });
+    // With an unpinned proposal read, the decisions come back.
+    const withDecisions = await readTimeline(
+      { kind: "session", id: S.mine },
+      { userId: USER, isHubProtocol: true, withhold: ["dev_facts"] }
+    );
+    expect(kinds(withDecisions!.events as DevTimelineEvent[])).toEqual([
+      "decision_answered",
+      "status_moved",
+      "session_started",
+    ]);
+    expect(withDecisions).toMatchObject({ withheld: ["dev_facts"] });
+  });
+
+  it("CONTROL: a whole read names nothing withheld", async () => {
+    const t = await readTimeline(
+      { kind: "session", id: S.mine },
+      { userId: USER, isHubProtocol: true }
+    );
+    expect(t).not.toHaveProperty("withheld");
+  });
+
   it("another person's session is missing, not empty", async () => {
     expect(
       await readTimeline(
