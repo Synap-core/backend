@@ -18,14 +18,15 @@ function call(args: Record<string, unknown>) {
 }
 
 describe("synap_get_entity — a missing entityId is named entityId", () => {
-  it.each([{ id: "0667d277-0000-4000-8000-000000000000" }, {}, { entityId: " " }])(
-    "%j is refused naming `entityId`, never `id`",
-    async (args) => {
-      const res = await call(args);
-      expect(res.isError).toBe(true);
-      const text = (res.content[0] as { text: string }).text;
-      expect(text).toContain("`entityId`");
-      expect(text).not.toMatch(/"path":\["id"\]/);
-    }
-  );
+  it.each([
+    { id: "0667d277-0000-4000-8000-000000000000" },
+    {},
+    { entityId: " " },
+  ])("%j is refused naming `entityId`, never `id`", async (args) => {
+    const res = await call(args);
+    expect(res.isError).toBe(true);
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("`entityId`");
+    expect(text).not.toMatch(/"path":\["id"\]/);
+  });
 });

@@ -100,9 +100,6 @@ describe("synap_list_tracks — lean rows by default", () => {
     expect(out.items.map((t: { id: string }) => t.id)).toEqual(["t2"]);
     expect(out.total).toBe(1);
     // Only the matching row is read in full.
-    expect(h.loadTrackViews).toHaveBeenCalledWith(
-      [ROWS[1]],
-      expect.anything()
-    );
+    expect(h.loadTrackViews).toHaveBeenCalledWith([ROWS[1]], expect.anything());
   });
 });

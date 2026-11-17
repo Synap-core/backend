@@ -459,7 +459,11 @@ describe("rankRouteCandidates — the name is the evidence, a relevance floor", 
         "Every Monday, draft each active client's update from what happened in the pod (done, next, decisions needed, risks, budget used) for a person to edit and send.",
         ["Draft the updates", "Person edits and sends"]
       ),
-      pb("bill", "Bill a client", "Issue an invoice for delivered work and send it."),
+      pb(
+        "bill",
+        "Bill a client",
+        "Issue an invoice for delivered work and send it."
+      ),
       pb("plan", "Plan Next Content", "Decide what to publish next."),
     ];
     for (const candidates of [pool, [...pool].reverse()]) {
@@ -492,12 +496,18 @@ describe("rankRouteCandidates — the name is the evidence, a relevance floor", 
             "Prove the build on a preview before production; the backend stays the pod's own; apply the plan the person approved.",
           ]
         ),
-        pb("letter", "Newsletter issue", "Take a newsletter issue from idea to sent.", [
-          "Write the issue this week",
-        ]),
-        pb("content", "Produce Content", "Take a briefed post from brief to published.", [
-          "Publish what is new on the pod's channels",
-        ]),
+        pb(
+          "letter",
+          "Newsletter issue",
+          "Take a newsletter issue from idea to sent.",
+          ["Write the issue this week"]
+        ),
+        pb(
+          "content",
+          "Produce Content",
+          "Take a briefed post from brief to published.",
+          ["Publish what is new on the pod's channels"]
+        ),
       ],
     });
     expect(ranked).toEqual([]);
@@ -517,7 +527,9 @@ describe("rankRouteCandidates — the name is the evidence, a relevance floor", 
             "Route each draft to the spec first; read where the piece stands; the records of the brand identity come first.",
           ]
         ),
-        pb("website", "Website Factory", "Create a new website.", ["Read the spec"]),
+        pb("website", "Website Factory", "Create a new website.", [
+          "Read the spec",
+        ]),
       ],
     });
     expect(ranked).toEqual([]);

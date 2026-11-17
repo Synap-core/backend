@@ -37,8 +37,7 @@ async function inputNames(
   const { tools } = await import("./tools/index.js");
   const def = (await tools.list()).find((t) => t.name === toolName);
   const schema = def?.inputSchema as
-    | { properties?: Record<string, unknown>; required?: unknown }
-    | undefined;
+    { properties?: Record<string, unknown>; required?: unknown } | undefined;
   if (!schema?.properties) return null;
   const required = Array.isArray(schema.required)
     ? schema.required.filter((k): k is string => typeof k === "string")
