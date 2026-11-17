@@ -94,9 +94,18 @@ vi.mock("@synap/database", async (importOriginal) => {
   // break this file; explicit entries still win.
   const base: Record<string, unknown> = {
     db: dbStub,
-    // The real status door: it writes through the `db` it is handed (the
-    // stub above), so the executor's flip still lands in `proposalUpdates`.
-    transitionProposal: actual.transitionProposal,
+    // The status door's write through the `db` it is handed (the stub
+    // above), so the executor's flip still lands in `proposalUpdates`. The
+    // real door locks, writes and owes a transition in one transaction
+    // (reactions W1), pinned on PGlite by approval-postcondition.pglite.test.ts.
+    transitionProposal: (
+      executor: typeof dbStub,
+      args: { to: string; set?: Record<string, unknown>; where: unknown }
+    ) =>
+      executor
+        .update()
+        .set({ ...(args.set ?? {}), status: args.to })
+        .where(),
     // Pulled in transitively via store-entity-source-blob.js (source-file
     // staging on approval). A total vi.mock replaces the module wholesale,
     // so every export the source chain imports must be declared here.
