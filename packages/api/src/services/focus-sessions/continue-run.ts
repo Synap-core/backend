@@ -115,7 +115,7 @@ export function stoppedEarly(f: ContinueFacts): StagesLeft | null {
 export function continueAt(f: ContinueFacts): StagesLeft | null {
   const left = stoppedEarly(f);
   if (!left) return null;
-  if (isLiveRunStatus(f.runStatus) || f.runStatus === "proposed") return null;
+  // NEGCTL: the live-run guard removed (never merged).
   return left;
 }
 
