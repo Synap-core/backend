@@ -499,6 +499,12 @@ export {
   type SetRunStatusResult,
 } from "./services/lifecycle/run-status.js";
 export {
+  oweSlotTransitions,
+  slotTransitionsOf,
+  type SlotForTransition,
+  type SlotSessionPlace,
+} from "./services/lifecycle/slot-transition.js";
+export {
   buildWorkUnitTransition,
   transitionBaseOf,
   workUnitActorOf,

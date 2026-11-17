@@ -48,7 +48,14 @@
  * files no decision.
  */
 
-import { db, focusSessions, and, eq } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  and,
+  eq,
+  oweSlotTransitions,
+  workUnitActorOf,
+} from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import type {
@@ -353,6 +360,17 @@ export async function answerExpectedOutput(
           updatedAt: now,
         })
         .where(eq(focusSessions.id, locked.id));
+      // The slot's derived status moved (owed → answered, or done when the
+      // answer decides it): owed in the same transaction. Not a wake: the
+      // `slot_answered` event below stays the one.
+      await oweSlotTransitions(tx, {
+        sessionId: locked.id,
+        before: current,
+        after: next,
+        actor: workUnitActorOf(params.userId, null),
+        reason: "The person answered.",
+        occurredAt: now,
+      });
 
       // The history row commits iff the answer does.
       await logEvent(
