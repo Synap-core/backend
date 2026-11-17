@@ -175,7 +175,9 @@ describe("GET /focus-sessions/:id — a narrowed key reads the session's shape u
       ],
     });
     const inGrant = await seedSession(WS_CRM, { title: "Child in CRM" });
-    const outOfGrant = await seedSession(WS_OTHER, { title: "Child elsewhere" });
+    const outOfGrant = await seedSession(WS_OTHER, {
+      title: "Child elsewhere",
+    });
     await spawn(inGrant, id);
     await spawn(outOfGrant, id);
     await runner(id);

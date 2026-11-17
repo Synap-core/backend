@@ -183,7 +183,10 @@ describe("the work graph for a key narrowed by its grant (a pod app, D1)", () =>
 
   it("withholds every part that reads past its grant, and says so", async () => {
     const g = await graph(APP());
-    const withheld = { status: "unavailable", reason: WORK_GRAPH_WITHHELD_REASON };
+    const withheld = {
+      status: "unavailable",
+      reason: WORK_GRAPH_WITHHELD_REASON,
+    };
     expect(g.sections.waitsOnOutputs).toEqual(withheld);
     expect(g.sections.interactions).toEqual(withheld);
     expect(g.sections.pullRequests).toEqual(withheld);

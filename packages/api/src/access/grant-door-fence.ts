@@ -536,8 +536,7 @@ export const WORK_GRAPH_SUBJECTS: readonly string[] = [
  *    not hold. Each is said withheld, never an empty answer.
  */
 export type WorkGraphReach =
-  | { whole: true }
-  | { whole: false; holder: boolean; goals: boolean };
+  { whole: true } | { whole: false; holder: boolean; goals: boolean };
 
 export function workGraphReach(
   grant: KeyGrant | null | undefined
@@ -576,8 +575,7 @@ export const TIMELINE_SUBJECTS: readonly string[] = [
  * refused it (403): both read only rows outside the session floor.
  */
 export type TimelineReach =
-  | { whole: true }
-  | { whole: false; decisions: boolean };
+  { whole: true } | { whole: false; decisions: boolean };
 
 export function timelineReach(
   grant: KeyGrant | null | undefined
@@ -892,10 +890,7 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // unbounded gets it whole; a key holding `session.read` (a pod app) gets
   // the sessions its grant reads, the edges between them, how many it does
   // not read, and the rest said withheld (founder decision D1, 17 Nov 2026).
-  [
-    /^\/focus-sessions\/graph\/?$/,
-    NARROWED("session", WORK_GRAPH_SUBJECTS),
-  ],
+  [/^\/focus-sessions\/graph\/?$/, NARROWED("session", WORK_GRAPH_SUBJECTS)],
   // Intent actions (decision 3A, 2026-10-28): which of the person's tools can
   // do ONE intent, for a key holding `capability.<intent>.run`. The route
   // narrows itself (`capabilities-intent.ts`): `intent` and `workspaceId`
