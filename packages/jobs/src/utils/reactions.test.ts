@@ -234,7 +234,8 @@ describe("the guards", () => {
     expect(out.skipped).toEqual([
       expect.objectContaining({
         code: "paused",
-        reason: "Left \u201cThing e1\u201d as it was: this automation is paused.",
+        reason:
+          "Left \u201cThing e1\u201d as it was: this automation is paused.",
       }),
     ]);
   });
