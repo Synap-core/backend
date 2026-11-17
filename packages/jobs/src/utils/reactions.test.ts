@@ -58,13 +58,18 @@ const SOURCE = { transitionId: "t-1" };
 afterEach(() => resetReactionRegistryForTests());
 
 describe("the built-in rules", () => {
-  it("declares defaults 3 and 4 with stable ids, plain titles and a fixed order", () => {
+  it("declares defaults 3 and 4, and D2's reached status, with stable ids, plain titles and a fixed order", () => {
     expect(BUILT_IN_REACTIONS.map((r) => [r.id, r.title, r.order])).toEqual([
       [OUTCOME_MET_REACTION_ID, "An outcome is met wherever it was filed", 10],
       [
         "builtin:stopped-run-needs-you",
         "A run that stops early goes to Needs you",
         20,
+      ],
+      [
+        "builtin:approved-output-reaches-status",
+        "A stage's approved work moves its thing to the stage's result",
+        30,
       ],
     ]);
   });
@@ -76,10 +81,11 @@ describe("the built-in rules", () => {
     expect(stopped!.terminal).toBeUndefined();
   });
 
-  it("listens to proposals and runs only (the reactor's pre-filter)", () => {
+  it("listens to proposals, runs and slots only (the reactor's pre-filter)", () => {
     expect([...reactionSubjectTypes()].sort()).toEqual([
       "playbook_run",
       "proposal",
+      "slot",
     ]);
   });
 });
@@ -134,6 +140,7 @@ describe("the one list", () => {
       "declared:b",
       OUTCOME_MET_REACTION_ID,
       "builtin:stopped-run-needs-you",
+      "builtin:approved-output-reaches-status",
     ]);
     expect(all.find((r) => r.id === OUTCOME_MET_REACTION_ID)!.enabled).toBe(
       false

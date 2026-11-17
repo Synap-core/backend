@@ -112,7 +112,6 @@ import {
 } from "./slot-keys.js";
 import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
 import { linkSatisfiedOutputsToSubject } from "./subject-edge.js";
-import type { StageApprover } from "./stage-subject-status.js";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_SLOT_ATTEST_ACTION,
@@ -150,13 +149,6 @@ export interface SatisfyExpectedOutputsParams {
    * before keys existed carries only the label, which still resolves.
    */
   expectedKey?: string | null;
-  /**
-   * Who approved (`StageApprover`): the reviewer on the approval door, the
-   * agent on the auto-approve door. When the stage the run stands on is now
-   * fully delivered, its `onApproved` moves as them (decision D2). Absent ⇒
-   * no stage status is reached.
-   */
-  approver?: StageApprover;
 }
 
 export interface SatisfyExpectedOutputsResult {
@@ -241,44 +233,11 @@ export async function satisfyExpectedOutputs(
     return { satisfied: [current[index]!.label] };
   });
   // After commit: a slot declaring `relationToSubject` gets its output →
-  // subject edge (subject-edge.ts — best-effort, never fails the satisfy),
-  // and a stage whose outputs are now all approved reaches its status.
+  // subject edge (subject-edge.ts — best-effort, never fails the satisfy).
   if (result.satisfied.length > 0) {
-    await afterSlotsSettled({
-      sessionId,
-      approver: params.approver,
-      settled: result.satisfied.map((label) => ({ label })),
-    });
+    await linkSatisfiedOutputsToSubject({ sessionId });
   }
   return result;
-}
-
-/**
- * After a slot-settling commit, every door: the satisfied slots' output →
- * subject edges, then APPROVAL SIGNAL 1 of decision D2 — the stage the run
- * stands on reaches its `onApproved` when its declared outputs are now all
- * delivered (`reachApprovedStageOutputs`, as `approver`). Best-effort: both
- * halves log and never fail the settle that already committed.
- */
-async function afterSlotsSettled(input: {
-  sessionId: string;
-  now?: Date;
-  approver: StageApprover | undefined;
-  /** The slots this door settled: a stage the run already left may own one. */
-  settled: ReadonlyArray<{ key?: string | null; label?: string | null }>;
-}): Promise<void> {
-  await linkSatisfiedOutputsToSubject({
-    sessionId: input.sessionId,
-    ...(input.now ? { now: input.now } : {}),
-  });
-  if (!input.approver) return;
-  const { reachApprovedStageOutputs } =
-    await import("./stage-subject-status.js");
-  await reachApprovedStageOutputs({
-    sessionId: input.sessionId,
-    approver: input.approver,
-    settled: input.settled,
-  });
 }
 
 /**
@@ -675,13 +634,8 @@ export async function attestExpectedOutput(
     // acceptance door, after commit, idempotent (accept-on-engagement.ts).
     await acceptDraftOnEngagement({ sessionId: result.session.id, userId });
     // The attested slot's declared output → subject edge, when its `ref`
-    // names the entity (subject-edge.ts; best-effort); the person's "I did
-    // this" approves it, so its stage may reach its status as them (D2).
-    await afterSlotsSettled({
-      sessionId: result.session.id,
-      approver: { kind: "person", userId },
-      settled: [{ label: expectedLabel }],
-    });
+    // names the entity (subject-edge.ts; best-effort).
+    await linkSatisfiedOutputsToSubject({ sessionId: result.session.id });
     // The person DID what the criterion checks: their word is its grade,
     // through THE owner grade door (never throws: the stamp stands). Loaded
     // on use: the grade door imports this module (it discharges an escalated
@@ -1046,14 +1000,8 @@ export async function satisfyClaimsByEvidence(params: {
     })
     .then(async (r) => {
       // After commit — the evidenced slots' declared output → subject edges.
-      // No person approved: a reached status moves as an agent (governed).
       if (r.satisfied.length > 0) {
-        await afterSlotsSettled({
-          sessionId,
-          now,
-          approver: { kind: "agent", userId },
-          settled: r.satisfied,
-        });
+        await linkSatisfiedOutputsToSubject({ sessionId, now });
       }
       return r;
     });
@@ -1174,14 +1122,8 @@ export async function satisfyPullRequestByMerge(params: {
     })
     .then(async (r) => {
       // After commit — the closed slots' declared output → subject edges.
-      // A recorded merge is no person's approval: governed as an agent.
       if (r.satisfied.length > 0) {
-        await afterSlotsSettled({
-          sessionId,
-          now,
-          approver: { kind: "agent", userId },
-          settled: r.satisfied,
-        });
+        await linkSatisfiedOutputsToSubject({ sessionId, now });
       }
       return r;
     });
@@ -1340,14 +1282,8 @@ export async function satisfyStageSlotsFromChild(params: {
       };
     })
     .then(async (r) => {
-      // A child run's delivery is no person's approval: governed as an agent.
       if (r.satisfied.length > 0) {
-        await afterSlotsSettled({
-          sessionId,
-          now,
-          approver: { kind: "agent", userId },
-          settled: r.satisfied,
-        });
+        await linkSatisfiedOutputsToSubject({ sessionId, now });
       }
       return r;
     });

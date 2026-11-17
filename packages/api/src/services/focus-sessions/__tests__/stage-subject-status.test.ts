@@ -35,7 +35,7 @@ const h = vi.hoisted(() => ({
   ),
   // Where a move would read the thing's CURRENT value (the birth's
   // never-backwards check). Default: no declared lifecycle.
-  /** The focus_sessions row `reachApprovedStageOutputs` reads. */
+  /** The focus_sessions row `stagesApprovedBySettledSlots` reads. */
   sessionRow: null as null | Record<string, unknown>,
   target: vi.fn(
     async (_db: unknown, _input: Record<string, unknown>) =>
@@ -95,7 +95,7 @@ vi.mock("../../../routers/entities.js", () => ({
 }));
 
 import {
-  reachApprovedStageOutputs,
+  stagesApprovedBySettledSlots,
   statusesAheadOfStage,
   writeBirthStageSubjectStatus,
   writeGatePassStatuses,
@@ -733,41 +733,40 @@ describe("REACHED ON APPROVAL (decision D2): a stage's onApproved", () => {
     expect(h.move.mock.calls.map((c) => c[0]!.to)).toEqual(["Scheduled"]);
   });
 
-  describe("approval signal 1: the stage's declared outputs, all delivered", () => {
+  describe("approval signal 1, the plan: which stages a settled slot approves", () => {
     const row = (slots: unknown[]) => ({
       id: "sess-1",
       playbookId: "pb-1",
       subjectEntityId: "post-1",
       workspaceId: "ws-1",
+      userId: "owner-1",
       currentStage: "script",
       expectedOutputs: slots,
     });
+    const settled = [{ key: "script", label: "Script" }];
 
-    it("reaches the status once the Script is approved, as the approver", async () => {
+    it("the Script approved: the script stage reaches Scripted (read only)", async () => {
       h.sessionRow = row([
         { kind: "document", label: "Script", status: "done" },
       ]);
-      h.target.mockResolvedValue({ ok: true, target: { current: "Briefed" } });
-      const out = await reachApprovedStageOutputs({
+      const out = await stagesApprovedBySettledSlots({
         sessionId: "sess-1",
-        approver: { kind: "person", userId: "approver-1" },
+        settled,
       });
-      expect(out).toMatchObject({ status: "written", value: "Scripted" });
-      expect(h.move.mock.calls[0]![0]).toMatchObject({
-        actor: { kind: "human", userId: "approver-1" },
-      });
+      expect(out?.stages).toEqual([{ stageKey: "script", value: "Scripted" }]);
+      // A plan: nothing is moved here (the reactor writes it, D1).
+      expect(h.move).not.toHaveBeenCalled();
     });
 
-    it("NEGATIVE: an output still owed reaches nothing", async () => {
+    it("NEGATIVE: an output still owed approves nothing", async () => {
       h.sessionRow = row([
         { kind: "document", label: "Script", status: "pending" },
       ]);
-      const out = await reachApprovedStageOutputs({
+      const out = await stagesApprovedBySettledSlots({
         sessionId: "sess-1",
-        approver: { kind: "person", userId: "approver-1" },
+        settled,
       });
-      expect(out).toBeUndefined();
-      expect(h.move).not.toHaveBeenCalled();
+      expect(out?.stages).toEqual([]);
     });
 
     it("a stage with NO declared outputs is not approved by a slot (its approval is the next gate)", async () => {
@@ -775,12 +774,11 @@ describe("REACHED ON APPROVAL (decision D2): a stage's onApproved", () => {
         ...row([{ kind: "document", label: "Other", status: "done" }]),
         currentStage: "schedule",
       };
-      const out = await reachApprovedStageOutputs({
+      const out = await stagesApprovedBySettledSlots({
         sessionId: "sess-1",
-        approver: { kind: "person", userId: "approver-1" },
+        settled: [{ key: "other", label: "Other" }],
       });
-      expect(out).toBeUndefined();
-      expect(h.move).not.toHaveBeenCalled();
+      expect(out?.stages).toEqual([]);
     });
   });
 });

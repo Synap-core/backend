@@ -126,7 +126,6 @@ vi.mock("../stage-subject-status.js", () => ({
       entered: { status: "written", property: "post-status", value: "x" },
     };
   },
-  reachApprovedStageOutputs: async () => undefined,
 }));
 
 // The session room's posts (the spent-criterion news): captured, so the news
