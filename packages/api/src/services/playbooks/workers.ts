@@ -12,6 +12,15 @@
  *   project  — `workers.enable` for a project (a track enables for its own
  *              project, and its sessions are filed in the track):
  *              `playbook-worker:<pbId>`, key `<activatorKey>@project:<id>`.
+ *   session  — `workers.enable` for a SESSION the caller may write (its
+ *              owner — the session write floor), while it is open: works over
+ *              the session's project (the space when it is unfiled), files
+ *              its runs where the session is filed, and each run is the
+ *              session's CHILD (`spawned_from`, the node's `parentSessionId`).
+ *              Same namespace, key `<activatorKey>[@project:<id>[@track:<id>]]
+ *              @session:<id>`. Once the session is no longer open its rule
+ *              files nothing (`session_closed`, `executePlaybookRun`); nothing
+ *              on the session moves (decision 5e377b06).
  *
  * Every write goes through the ONE rule door (`createRuleGoverned` /
  * `updateRuleGoverned`): a person's call executes, an agent's files a
@@ -48,9 +57,12 @@ import {
   skills,
   links,
   projectTracks,
+  focusSessions,
   countWorkerPendingApprovalsBulk,
   userVisibleWhere,
 } from "@synap/database";
+import { isUuid } from "@synap-core/types/property-render";
+import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import type { PlaybookActivator } from "@synap/playbooks";
 import {
@@ -121,6 +133,8 @@ export class WorkerScopeOverlapError extends Error {
       scope: WorkerScopeKind;
       projectId: string | null;
       trackId: string | null;
+      /** The session that started it (a `session` holder); else null. */
+      sessionId: string | null;
     }
   ) {
     super(message);
@@ -144,6 +158,8 @@ export interface EnabledWorker {
   scope: WorkerScopeKind;
   projectId: string | null;
   trackId: string | null;
+  /** The session that started it (`session` scope; its runs' parent). */
+  sessionId: string | null;
   /** `paused` = its rule is a draft: nothing fires. */
   state: "running" | "paused";
   /** The automation that fires it (null while paused). */
@@ -208,6 +224,7 @@ function enablementOf(
   scope: WorkerScopeKind;
   projectId: string | null;
   trackId: string | null;
+  sessionId: string | null;
 } | null {
   const seed = meta.seed;
   if (!seed) return null;
@@ -217,6 +234,7 @@ function enablementOf(
       scope: "space",
       projectId: null,
       trackId: null,
+      sessionId: null,
     };
   }
   if (seed.template === workerSeedTemplate(pbId)) {
@@ -224,9 +242,10 @@ function enablementOf(
     return p
       ? {
           activatorKey: p.activatorKey,
-          scope: "project",
+          scope: p.sessionId ? "session" : "project",
           projectId: p.projectId,
           trackId: p.trackId,
+          sessionId: p.sessionId,
         }
       : null;
   }
@@ -341,6 +360,7 @@ async function recentRunMarksOf(
  *                 that run R1: two goals of one project never see each
  *                 other's workers; a space-wide or project-wide worker is
  *                 not the goal's).
+ *   sessionId   — the workers that session started, and only those.
  * `liveOnly` drops paused ones (what `hasWorker` asks).
  */
 export async function listEnabledWorkers(
@@ -412,6 +432,8 @@ export interface ListEnabledWorkersInput {
    * (`tracks.list`); nothing is looked up per goal.
    */
   trackIds?: readonly string[];
+  /** The workers this session started (strict, like `trackId`). */
+  sessionId?: string | null;
   playbookId?: string;
   /** Bulk: the workers of any of these playbooks. */
   playbookIds?: readonly string[];
@@ -498,8 +520,17 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     for (const row of rows) {
       const en = enablementOf(pb.id, row.meta);
       if (!en) continue;
-      if (projectId && en.scope === "project" && en.projectId !== projectId)
+      // A project's workers: the space's, and every project or session one
+      // over THAT project (a session worker of an unfiled session works over
+      // the whole space, so it covers every project, like the space's).
+      if (
+        projectId &&
+        en.scope !== "space" &&
+        en.projectId !== null &&
+        en.projectId !== projectId
+      )
         continue;
+      if (input.sessionId && en.sessionId !== input.sessionId) continue;
       // A goal's workers are the ones enabled ON it — never its project's
       // or the space's (R1).
       if (input.trackId && en.trackId !== input.trackId) continue;
@@ -530,7 +561,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     if (input.liveOnly && !automationId) continue;
     const activator =
       process.activators.find((a) => activatorKey(a) === en.activatorKey) ??
-      (en.scope === "project"
+      (en.scope !== "space"
         ? chosenClockActivator({
             profileSlug: process.profileSlug,
             activatorKey: en.activatorKey,
@@ -551,6 +582,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
         scope: en.scope,
         projectId: en.projectId,
         trackId: en.trackId,
+        sessionId: en.sessionId,
         state: paused ? "paused" : "running",
         automationId,
         pendingApprovals: automationId ? (pending.get(automationId) ?? 0) : 0,
@@ -568,6 +600,10 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
  * when it is free. `projectId` null = the whole space, which overlaps every
  * live project enablement of the activator; a project overlaps the space one
  * and the same project's (any track of it). Two different projects never do.
+ * A SESSION enablement's things are its project's (the space's when its
+ * session is unfiled), so it overlaps exactly as that project (or the space)
+ * would: a worker runs once over the same things, whoever started it.
+ * `sessionId` only names the asker in the refusal.
  *
  * Of several holders the one with the SMALLEST id is named: the post-write
  * settle in `enableWorker` keeps the smallest live id, so with three
@@ -577,16 +613,12 @@ async function findOverlap(input: {
   playbookId: string;
   activatorKey: string;
   projectId: string | null;
+  sessionId?: string | null;
   excludeRuleId?: string;
 }): Promise<WorkerScopeOverlapError | null> {
   const live = (r: { id: string; meta: RuleMetadata }) =>
     !r.meta.draft && r.id !== input.excludeRuleId;
-  const holders: Array<{
-    ruleId: string;
-    scope: WorkerScopeKind;
-    projectId: string | null;
-    trackId: string | null;
-  }> = [];
+  const holders: Array<WorkerScopeOverlapError["holder"]> = [];
   for (const r of await rulesOfSeedTemplate(
     activatorSeedTemplate(input.playbookId)
   )) {
@@ -596,6 +628,7 @@ async function findOverlap(input: {
         scope: "space",
         projectId: null,
         trackId: null,
+        sessionId: null,
       });
     }
   }
@@ -603,30 +636,42 @@ async function findOverlap(input: {
     workerSeedTemplate(input.playbookId)
   )) {
     const p = parseWorkerEnablementKey(r.meta.seed!.key);
+    // Disjoint only when BOTH are over a project and the projects differ; a
+    // holder over the space (an unfiled session's) overlaps every asker.
     if (
       !p ||
       p.activatorKey !== input.activatorKey ||
-      (input.projectId !== null && p.projectId !== input.projectId) ||
+      (input.projectId !== null &&
+        p.projectId !== null &&
+        p.projectId !== input.projectId) ||
       !live(r)
     )
       continue;
     holders.push({
       ruleId: r.id,
-      scope: "project",
+      scope: p.sessionId ? "session" : "project",
       projectId: p.projectId,
       trackId: p.trackId,
+      sessionId: p.sessionId,
     });
   }
   if (holders.length === 0) return null;
   const holder = holders.reduce((min, h) => (h.ruleId < min.ruleId ? h : min));
+  const here = input.sessionId
+    ? "this session"
+    : input.projectId === null
+      ? "the whole space"
+      : "this project";
   return new WorkerScopeOverlapError(
     holder.scope === "space"
-      ? "This worker already runs for the whole space — pause it there first, then enable it for this project."
-      : input.projectId === null
-        ? "This worker already runs for a project — pause it there first, then run it for the whole space."
-        : holder.trackId
-          ? "This worker already runs for this project, enabled by one of its tracks — a worker runs once per project."
-          : "This worker already runs for this project.",
+      ? `This worker already runs for the whole space — pause it there first, then enable it for ${here}.`
+      : holder.scope === "session"
+        ? `This worker already runs for a session over the same things — pause it there first, then enable it for ${here}.`
+        : input.projectId === null
+          ? `This worker already runs for a project — pause it there first, then run it for ${here}.`
+          : holder.trackId
+            ? "This worker already runs for this project, enabled by one of its tracks — a worker runs once per project."
+            : "This worker already runs for this project.",
     holder
   );
 }
@@ -662,6 +707,7 @@ export async function assertNoWorkerOverlap(input: {
     playbookId: string;
     activatorKey: string;
     projectId: string | null;
+    sessionId?: string | null;
   } | null = null;
   const space = activatorSeedTemplate("");
   const project = workerSeedTemplate("");
@@ -678,6 +724,7 @@ export async function assertNoWorkerOverlap(input: {
         playbookId: seed.template.slice(project.length),
         activatorKey: p.activatorKey,
         projectId: p.projectId,
+        sessionId: p.sessionId,
       };
     }
   }
@@ -696,8 +743,9 @@ export type EnableWorkerResult =
 
 /**
  * Enable a declared worker for ONE project (or one track, which files its
- * sessions there and enables for the track's project). See the header for
- * overlap and governance.
+ * sessions there and enables for the track's project), or for ONE SESSION the
+ * caller may write (its runs are the session's children, filed where the
+ * session is). See the header for overlap and governance.
  *
  * Name the worker by its `activatorKey`, or answer "How often?" with a clock
  * (`schedule`, daily / weekly), read by the ONE `howOftenEnable`: a clock the
@@ -717,6 +765,8 @@ export async function enableWorker(input: {
   mode?: "run" | "propose";
   projectId?: string | null;
   trackId?: string | null;
+  /** A SESSION enablement: the session that starts the worker. */
+  sessionId?: string | null;
 }): Promise<EnableWorkerResult> {
   const [pb] = await visiblePlaybooks({
     userId: input.userId,
@@ -746,10 +796,27 @@ export async function enableWorker(input: {
     });
   }
 
-  // Filing: a track names its project; a bare project must be visible.
+  // Filing: a session brings its own; a track names its project; a bare
+  // project must be visible.
   let projectId = input.projectId ?? null;
   let trackId: string | null = null;
-  if (input.trackId) {
+  let sessionId: string | null = null;
+  if (input.sessionId) {
+    if (input.projectId || input.trackId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "A session's worker is filed where its session is — name the session alone, without a project or goal.",
+      });
+    }
+    const session = await loadWritableOpenSession(
+      input.sessionId,
+      input.userId
+    );
+    sessionId = session.id;
+    projectId = session.projectId;
+    trackId = session.projectId ? session.trackId : null;
+  } else if (input.trackId) {
     const { resolveTrackFiling } = await import("../tracks/tracks-service.js");
     const filed = await resolveTrackFiling({
       trackId: input.trackId,
@@ -772,7 +839,7 @@ export async function enableWorker(input: {
       throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
     }
   }
-  if (!projectId) {
+  if (!projectId && !sessionId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:
@@ -784,6 +851,7 @@ export async function enableWorker(input: {
     activatorKey: workerKey,
     projectId,
     trackId,
+    sessionId,
   });
   const subject = process.profileSlug
     ? await readSubjectProfile(process.profileSlug, pb.workspaceId)
@@ -795,15 +863,23 @@ export async function enableWorker(input: {
     profileSlug: process.profileSlug,
     statusProperty: process.statusProperty,
     subject,
-    scope: { projectId, trackId },
+    scope: { projectId, trackId, parentSessionId: sessionId },
   });
   if ("error" in decl) return { status: "denied", reason: decl.error };
   if ("manual" in decl) {
     return { status: "denied", reason: "A manual worker compiles no rule." };
   }
-  // Narrowed once, for the closures below.
+  // Narrowed once, for the closures below. `project` null = a session
+  // worker of an unfiled session: over the whole space, no project lens.
   const rule: TemplateRuleDecl = decl;
-  const project: string = projectId;
+  const project: string | null = projectId;
+  const ruleScope = pb.workspaceId
+    ? {
+        kind: "workspace" as const,
+        workspaceId: pb.workspaceId,
+        ...(project ? { projectId: project } : {}),
+      }
+    : { kind: "pod" as const, ...(project ? { projectId: project } : {}) };
   const seed = {
     template: workerSeedTemplate(pb.id),
     key,
@@ -816,6 +892,7 @@ export async function enableWorker(input: {
     playbookId: pb.id,
     activatorKey: workerKey,
     projectId: project,
+    sessionId,
   });
   if (before) throw before;
 
@@ -831,6 +908,7 @@ export async function enableWorker(input: {
       playbookId: pb.id,
       activatorKey: workerKey,
       projectId: project,
+      sessionId,
       excludeRuleId: result.ruleId,
     });
     if (after && after.holder.ruleId < result.ruleId) {
@@ -839,13 +917,7 @@ export async function enableWorker(input: {
         ruleId: result.ruleId,
         workspaceId: pb.workspaceId,
         intent: rule.intent,
-        scope: pb.workspaceId
-          ? {
-              kind: "workspace",
-              workspaceId: pb.workspaceId,
-              projectId: project,
-            }
-          : { kind: "pod", projectId: project },
+        scope: ruleScope,
         draft: true,
         auditSource: "playbook-worker",
       });
@@ -893,13 +965,7 @@ export async function enableWorker(input: {
       ...agent,
       workspaceId: pb!.workspaceId,
       intent: rule.intent,
-      scope: pb!.workspaceId
-        ? {
-            kind: "workspace",
-            workspaceId: pb!.workspaceId,
-            projectId: project,
-          }
-        : { kind: "pod", projectId: project },
+      scope: ruleScope,
       sentence: rule.sentence,
       seed,
       auditSource: "playbook-worker",
@@ -916,6 +982,45 @@ export async function enableWorker(input: {
     await applyPlaybookActivators({ playbookId: pb.id, userId: input.userId });
   }
   return result;
+}
+
+/**
+ * The session a SESSION enablement is for: one the caller may WRITE — its
+ * owner, the floor every session write door keeps (`eq(focus_sessions.user_id,
+ * me)`; `recordSessionSpawn` floors the `spawned_from` edge on the same) —
+ * and still open: a worker started from an ended session would never run.
+ * Anything else, a malformed id included, is NOT_FOUND (never "exists but is
+ * not yours").
+ */
+export async function loadWritableOpenSession(
+  sessionId: string,
+  userId: string
+): Promise<{ id: string; projectId: string | null; trackId: string | null }> {
+  const [row] = isUuid(sessionId)
+    ? await db
+        .select({
+          id: focusSessions.id,
+          status: focusSessions.status,
+          projectId: focusSessions.projectId,
+          trackId: focusSessions.trackId,
+        })
+        .from(focusSessions)
+        .where(
+          and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+        )
+        .limit(1)
+    : [];
+  if (!row) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+  }
+  if (isTerminalSessionStatus(row.status)) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "This session has ended — a worker started from it would never run.",
+    });
+  }
+  return { id: row.id, projectId: row.projectId, trackId: row.trackId };
 }
 
 /**
@@ -1030,6 +1135,7 @@ export async function setWorkerPaused(input: {
       playbookId: w.playbookId,
       activatorKey: w.activatorKey,
       projectId: w.scope === "space" ? null : w.projectId,
+      sessionId: w.sessionId,
       excludeRuleId: w.ruleId,
     });
     if (overlap) throw overlap;

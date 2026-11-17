@@ -150,7 +150,9 @@ export function setWorkerPausedDoor(
  * Run a worker's playbook NOW, filed in the goal (or project) it is enabled
  * on, through the shared playbook run door — the same governance as
  * `synap_run_playbook` with that `trackId`. A paused worker still runs once
- * when asked: "run now" is a person's or an agent's explicit act.
+ * when asked: "run now" is a person's or an agent's explicit act. A SESSION's
+ * worker runs as that session's child (its `parentSessionId`, over the
+ * caller's bound session), exactly as its rule's runs are.
  */
 export async function runWorkerDoor(
   identity: PlaybookDoorIdentity,
@@ -169,6 +171,7 @@ export async function runWorkerDoor(
     playbookId: worker.playbookId,
     ...(worker.projectId ? { projectId: worker.projectId } : {}),
     ...(worker.trackId ? { trackId: worker.trackId } : {}),
+    ...(worker.sessionId ? { parentSessionId: worker.sessionId } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     source: input.source,
   });

@@ -309,6 +309,11 @@ export interface GoalWorkerView {
   projectId: string | null;
   /** The goal it serves (`project_tracks.id`); null for a project or space one. */
   trackId: string | null;
+  /**
+   * The session that started it (`scope: "session"`; its runs are that
+   * session's children); null / absent for any other scope.
+   */
+  sessionId?: string | null;
   /** `paused` = a person paused it. */
   state: "running" | "paused";
   /** The automation that fires it (null while paused or turned off). */
