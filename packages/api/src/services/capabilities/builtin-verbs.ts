@@ -2585,6 +2585,71 @@ const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * inbound_source.connect — wire a space's inbound webhook source into the
+ * site that posts to it (decision abaaa696): the pod mints the source and
+ * sets its URL and secret in the host's environment, so no person pastes the
+ * secret and no agent ever holds it. The handler NEVER acts: whatever the
+ * caller and the verdict, it files the direct proposal
+ * `webhook/inbound_source.connect` after a preflight, and the person's
+ * console approval does the work (`executors/webhook.ts`). Self-gated
+ * (`SELF_GATED_BUILTIN_VERBS`) so a propose verdict reaches it instead of a
+ * generic capability run, whose approval would store the secret's value.
+ */
+const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/;
+const inboundSourceConnectParams = z
+  .object({
+    /** The space the source belongs to (defaults to the run's space). */
+    workspaceId: z.string().uuid().optional(),
+    /** The source name the space's automations declare. */
+    name: z.string().trim().min(1).max(200),
+    host: z.enum(["vercel"]).default("vercel"),
+    /** The host project, by id or name. */
+    project: z.string().trim().min(1).max(200),
+    teamId: z.string().trim().min(1).max(200).optional(),
+    urlEnvKey: z.string().regex(ENV_KEY),
+    secretEnvKey: z.string().regex(ENV_KEY),
+    target: z
+      .enum(["production", "preview", "development"])
+      .default("production"),
+    redeploy: z.boolean().default(true),
+    replaceExistingSecret: z.boolean().default(false),
+    /** Why, in the agent's words, for the card. */
+    reasoning: z.string().max(2000).optional(),
+  })
+  .strict();
+
+const inboundSourceConnectHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { reasoning, workspaceId, ...rest } =
+    inboundSourceConnectParams.parse(params);
+  const space = workspaceId ?? ctx.workspaceId;
+  if (!space) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "inbound_source.connect needs the space the source belongs to (workspaceId).",
+    });
+  }
+  // An automation step has no one to show the card to at run time, and this
+  // approval is a console act: refused, never filed unattended.
+  if (ctx.automationRun) {
+    return {
+      success: false,
+      error:
+        "An automation cannot connect an inbound source: a person files it from a session and approves it on the console.",
+    };
+  }
+  const { proposeInboundSourceConnect } =
+    await import("../webhooks/connect-inbound-source.js");
+  return proposeInboundSourceConnect({
+    request: { ...rest, workspaceId: space },
+    userId: ctx.userId,
+    agentUserId: ctx.agentUserId ?? null,
+    sessionId: ctx.sessionId ?? null,
+    ...(reasoning ? { reasoning } : {}),
+  });
+};
+
+/**
  * market.scaffold — generate a marketplace package SKELETON and PERSIST it on
  * the pod as a `document` ENTITY, returning an id + URL rather than the
  * definition body.
@@ -4857,6 +4922,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Marketplace (Wave 3b) — search/install over cp_catalog_cache.
   "market.search": marketSearchHandler,
   "market.install": marketInstallHandler,
+  // Wire a space's inbound source into its host: always a proposal.
+  "inbound_source.connect": inboundSourceConnectHandler,
   // Marketplace AUTHORING — generate a package skeleton and persist it on the
   // pod as a draft document (the CLI writes it to disk; an agent door cannot).
   "market.scaffold": marketScaffoldHandler,
@@ -4976,6 +5043,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "entity_facet.list": entityFacetListParams,
   "market.search": marketSearchParams,
   "market.install": marketInstallParams,
+  "inbound_source.connect": inboundSourceConnectParams,
   "market.scaffold": marketScaffoldParams,
   "tool.request": toolRequestParams,
   "computer.run_recipe": runRecipeParams,

@@ -26,6 +26,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   sendInputs: [] as Array<Record<string, unknown>>,
   installInputs: [] as Array<Record<string, unknown>>,
+  connectInputs: [] as Array<Record<string, unknown>>,
   gateDecision: {
     decision: "propose",
     reasonCode: "APP_OUTWARD_INTENT",
@@ -93,6 +94,15 @@ vi.mock("../services/capabilities/marketplace-install.js", async (orig) => ({
       : { status: "installed", result: {} };
   },
 }));
+// inbound_source.connect files its own `webhook/inbound_source.connect` under
+// EVERY verdict (its preflight and filing run for real on PGlite in
+// `services/webhooks/connect-inbound-source.pglite.test.ts`).
+vi.mock("../services/webhooks/connect-inbound-source.js", () => ({
+  proposeInboundSourceConnect: async (input: Record<string, unknown>) => {
+    h.connectInputs.push(input);
+    return { status: "proposed", proposalId: "inner-proposal" };
+  },
+}));
 vi.mock("../services/capabilities/market-sources.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   resolveMarketSource: async () => ({ official: true }),
@@ -128,11 +138,24 @@ const PROBES: Record<
     params: { kind: "capability", slug: "cal-com" },
     innerGateSaw: () => h.installInputs.at(-1)?.mustPropose,
   },
+  // Its handler proposes with or without `mustPropose`: the probe is that the
+  // proposal door was reached with the request, and nothing else ran.
+  "inbound_source.connect": {
+    params: {
+      workspaceId: "33333333-3333-4333-8333-333333333333",
+      name: "Architech contact form",
+      project: "thearchitech",
+      urlEnvKey: "CONTACT_WEBHOOK_URL",
+      secretEnvKey: "CONTACT_WEBHOOK_SECRET",
+    },
+    innerGateSaw: () => h.connectInputs.length === 1,
+  },
 };
 
 beforeEach(() => {
   h.sendInputs.length = 0;
   h.installInputs.length = 0;
+  h.connectInputs.length = 0;
   h.capabilityProposals.length = 0;
   h.gateDecision = { decision: "propose", reasonCode: "APP_OUTWARD_INTENT" };
 });
@@ -142,6 +165,12 @@ describe("every self-gated builtin verb hands mustPropose to its inner gate", ()
     // Finding 91a3bfd3: a generic capability.run of market.install replayed as
     // the approver installed directly and failed "Needs setup" with no form.
     expect(SELF_GATED_BUILTIN_VERBS.has("market.install")).toBe(true);
+  });
+
+  it("inbound_source.connect is self-gated: a propose verdict files its own card", () => {
+    // Decision abaaa696: a generic capability.run would store the call's
+    // parameters and its approval would write the run result to recall.
+    expect(SELF_GATED_BUILTIN_VERBS.has("inbound_source.connect")).toBe(true);
   });
 
   it("the set is not empty and every member has a probe", () => {

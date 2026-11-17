@@ -1116,6 +1116,12 @@ export async function executeCapability(input: {
  *   failed with "Needs setup", with no form to give the key (finding
  *   91a3bfd3, proposal 118d24bd).
  *
+ *   inbound_source.connect → `proposeInboundSourceConnect`: files a
+ *   `webhook/inbound_source.connect` proposal under EVERY verdict and acts on
+ *   nothing; its approval mints the source and hands the secret to the host.
+ *   A capability.run proposal would have stored the call's parameters and
+ *   its approval written the run result to recall (decision abaaa696).
+ *
  * Tighten-only: only a `propose` verdict is handed down (a deny stays a deny,
  * a dry-run a dry-run, an unattended run with no review surface is refused
  * as before), and the handler's grant check still runs before anything. A
@@ -1126,6 +1132,7 @@ export async function executeCapability(input: {
 export const SELF_GATED_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "messaging.send",
   "market.install",
+  "inbound_source.connect",
 ]);
 
 function isSelfGatedBuiltin(skill: { kind: string; name: string }): boolean {

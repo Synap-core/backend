@@ -12,11 +12,15 @@
  * `X-Hub-Signature-256`; the door fires the space's automations whose
  * `triggerConfig.webhookSubscriptionId` is the source.
  *
- * A SOURCE IS A CREDENTIAL, minted only by a PERSON (a fresh-auth door): the
- * sender must hold its secret, and whoever holds it can post events that fire
- * the space's automations with no agent in their causal chain. The secret is
- * shown ONCE: on create, and again only by replacing it
- * (`rotateInboundWebhookSecret`, the old one stops at once).
+ * A SOURCE IS A CREDENTIAL, minted only by a PERSON (a fresh-auth door), or
+ * by a person's console approval of a named `inbound_source.connect` proposal
+ * (decision abaaa696, amending f6852c36 / 4872b139;
+ * `connect-inbound-source.ts`): the sender must hold its secret, and whoever
+ * holds it can post events that fire the space's automations with no agent in
+ * their causal chain. The secret is shown ONCE: on create, and again only by
+ * replacing it (`rotateInboundWebhookSecret`, the old one stops at once). The
+ * connect approval shows it to no one: it hands it to the host in the same
+ * function and keeps it in memory only.
  *
  * An automation (an agent's, a package install's, a template's) only
  * DECLARES the source it listens to, by name (`triggerConfig.webhookSource.name`):
@@ -25,7 +29,7 @@
  * @synap/database, which never creates one), and creating the source later
  * binds every automation in the space that declared it
  * (`createInboundWebhookSource`). Either order works; no door but a person's
- * mints the credential.
+ * (or a person's approval of a connect proposal) mints the credential.
  *
  * Every door here takes a workspace the caller has already been checked
  * against: the router's doors are POD ADMIN only (creating a source re-binds

@@ -2984,6 +2984,12 @@ export const DIRECT_PROPOSAL_DOORS = {
   "profile/merge": "direct",
   "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",
+  // Wiring a space's inbound webhook source into a host (decision abaaa696):
+  // the Synap Core verb `inbound_source.connect` ALWAYS files this, for anyone
+  // (`services/webhooks/connect-inbound-source.ts`). Approved by
+  // `routers/proposals/executors/webhook.ts` (pod admin, console only): it
+  // mints the source and hands its secret to the host, never to a person.
+  "webhook/inbound_source.connect": "direct",
   "workspace/join": "direct",
   // D7 — owner consent to a trusted issuer's wider scopes. Filed at boot by
   // `services/trusted-issuers/scope-request-proposal.ts`; approved by

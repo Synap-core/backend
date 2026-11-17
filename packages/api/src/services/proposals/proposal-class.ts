@@ -164,6 +164,10 @@ export const ACCESS_DOORS: ReadonlySet<string> = new Set([
   // scopes beyond its pinned grant. Approving decides what that service may
   // do here. Filed by `services/trusted-issuers/scope-request-proposal.ts`.
   "trusted_issuer/trusted_issuer.widen_scopes",
+  // Minting a space's inbound webhook source and handing its secret to a host
+  // (decision abaaa696): whoever holds that secret fires the space's
+  // automations. `services/webhooks/connect-inbound-source.ts`.
+  "webhook/inbound_source.connect",
 ]);
 
 /**

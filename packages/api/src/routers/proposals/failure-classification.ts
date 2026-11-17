@@ -353,10 +353,12 @@ const ROW_RECORDED_KEY = "__synapRowRecordedByExecutor";
 
 /**
  * Mark an approval failure whose executor already wrote the proposal's
- * outcome itself, and wrote it as something other than a failure: a message
- * to someone not connected yet stays PENDING and held
- * (`services/channels/held-sends.ts`), never APPROVAL_FAILED. The approval
- * catch must not write a failure over it; the caller still sees the error.
+ * outcome itself: a message to someone not connected yet stays PENDING and
+ * held (`services/channels/held-sends.ts`), never APPROVAL_FAILED; an
+ * `inbound_source.connect` that failed half-way records its failure merged
+ * into the row's CURRENT data, so the `data.progress` its retry resumes from
+ * survives (`executors/webhook.ts`). The approval catch must not write over
+ * it; the caller still sees the error.
  */
 export function keepRowAsRecorded<E extends object>(err: E): E {
   (err as Record<string, unknown>)[ROW_RECORDED_KEY] = true;

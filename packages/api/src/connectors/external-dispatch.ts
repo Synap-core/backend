@@ -1873,7 +1873,13 @@ export interface TriggerProviderActionInput {
   connectionSelector?: ConnectionSelector | null;
   /**
    * BYPASS CONTRACT (Wave 3a/3b): set ONLY by the `capability/run` proposal
-   * executor (and the auto `run` decision re-entry). When `true`, the
+   * executor (and the auto `run` decision re-entry), and by
+   * `services/webhooks/connect-inbound-source.ts`: its approval executor
+   * (`webhook/inbound_source.connect`, with `sourceProposalId`) writes the
+   * host's env vars and redeploys, and its filing preflight READS the host
+   * (project, env var keys) under the outer gate that let the verb run, as
+   * `executeProviderVerb` treats every read. That module checks the tool's
+   * enable floor itself, since this flag skips it. When `true`, the
    * capability-execution gate is SKIPPED and the dispatch runs directly, exactly
    * once — so an already-approved proposal never loops back into a new proposal.
    * No external/untrusted caller may supply it.
