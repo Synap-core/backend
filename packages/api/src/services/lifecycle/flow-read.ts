@@ -5,8 +5,9 @@
  *   states   the declared lifecycle (key, label, category, tone, humanOnly,
  *            order), each with the stage(s) that OWN it and its things;
  *   flows    the active playbooks working the profile in that space, each
- *            stage with the status it owns (`stageForSubjectStatus`, the
- *            runtime's own stage ↔ status rule), its gate, the flow's
+ *            stage with the statuses it owns (`subjectStatusOwner`, the
+ *            runtime's own stage ↔ status rule: the status it ENTERS and the
+ *            one its approved work REACHES, decision D2), its gate, the flow's
  *            executor and enabled workers, and its open runs, marked when
  *            they run a frozen copy older than the live flow;
  *   cards    the things by state with who works them (`readBoard`, the
@@ -51,7 +52,8 @@ import {
 import {
   resolveStageCategory,
   resolveStageGate,
-  stageForSubjectStatus,
+  stageOnApproved,
+  subjectStatusOwner,
 } from "@synap/playbooks";
 import {
   isTerminalLifecycleCategory,
@@ -283,13 +285,15 @@ export async function readFlowOf(
         typeof (s as { key?: unknown }).key === "string"
     );
     const owns: string[] = [];
-    // The runtime's own rule: the stage a status corresponds to.
+    // The runtime's own rule: the stage that declares a status, and whether
+    // it ENTERS it (`subjectStatus`) or its approved work REACHES it
+    // (`onApproved`) — both kinds are owners.
     for (const o of lifecycle.options) {
-      const stageKey = stageForSubjectStatus(stages, o.key);
-      if (!stageKey) continue;
-      const stage = stages.find((s) => s.key === stageKey)!;
+      const owner = subjectStatusOwner(stages, o.key);
+      if (!owner) continue;
+      const stage = stages.find((s) => s.key === owner.ownerKey)!;
       owns.push(o.key);
-      ownersOf.get(o.key)!.push(stageRefOf(pb, stage));
+      ownersOf.get(o.key)!.push({ ...stageRefOf(pb, stage), via: owner.via });
     }
     const undeclared = new Set<string>();
     const shaped: FlowStage[] = stages.map((s) => {
@@ -297,13 +301,16 @@ export async function readFlowOf(
         typeof s.subjectStatus === "string" && s.subjectStatus.trim()
           ? s.subjectStatus.trim()
           : null;
-      if (subjectStatus && !declared.has(subjectStatus))
-        undeclared.add(subjectStatus);
+      const onApproved = stageOnApproved(s);
+      for (const v of [subjectStatus, onApproved]) {
+        if (v && !declared.has(v)) undeclared.add(v);
+      }
       return {
         key: String(s.key),
         name: typeof s.name === "string" ? s.name : String(s.key),
         category: resolveStageCategory(s),
         subjectStatus,
+        onApproved,
         gate: resolveStageGate(s)?.kind ?? null,
       };
     });

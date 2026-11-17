@@ -426,6 +426,12 @@ export type UpdateFocusSessionResult =
        */
       subjectMove?: StageSubjectStatusOutcome;
       /**
+       * The status the stage LEFT reached because the entered stage's check
+       * gate passed on this advance (decision D2: its `onApproved`), written
+       * before `subjectMove`. Absent when nothing was reached.
+       */
+      subjectReached?: StageSubjectStatusOutcome;
+      /**
        * Who works the stage a `currentStage` advance entered (the stage
        * runner, `enterStage`): its runner, the hand-off, the tools it waits on.
        */
@@ -2953,6 +2959,7 @@ export async function updateFocusSession(
   // above (inside the outputs row lock); the door must not write it a second time.
   let gatedStatus: typeof updated.status | undefined;
   let subjectMove: StageSubjectStatusOutcome | undefined;
+  let subjectReached: StageSubjectStatusOutcome | undefined;
   let stageRun: EnterStageResult | undefined;
   if (params.currentStage !== undefined) {
     const { advanceSessionStage } = await import("./advance-stage.js");
@@ -2983,6 +2990,7 @@ export async function updateFocusSession(
     // for a move: a move that did not happen is never silent.
     const { reportedSubjectMove } = await import("./stage-subject-status.js");
     subjectMove = reportedSubjectMove(advance.subjectStatus);
+    subjectReached = reportedSubjectMove(advance.subjectReached);
   }
 
   // ── FOLLOW / RELEASE A PLAYBOOK ─────────────────────────────────────────────
@@ -3142,6 +3150,7 @@ export async function updateFocusSession(
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
     ...(targetsWrite ? { targets: targetsWrite } : {}),
     ...(subjectMove ? { subjectMove } : {}),
+    ...(subjectReached ? { subjectReached } : {}),
     ...(stageRun ? { stageRun } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),

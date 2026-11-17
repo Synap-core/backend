@@ -3,9 +3,14 @@
  * off the ONE trigger hop (`automation-trigger-match`), with no new queue:
  *
  *  1. SUBJECT → RUN (stage follows status). When a subject entity's
- *     `statusProperty` CHANGES, every OPEN session whose
- *     subject is that entity and whose playbook has a stage declaring that
- *     `subjectStatus` is advanced to it — through the ONE advance door
+ *     `statusProperty` CHANGES, every OPEN session whose subject is that
+ *     entity and whose playbook ties a stage to that value is advanced to
+ *     where the value says the run stands (`stageForSubjectStatus`, decision
+ *     D2): the stage whose `subjectStatus` it is (entered, worked), or the
+ *     stage AFTER the one whose `onApproved` it is (that stage's work is
+ *     approved; the last stage: itself) — a deal a person moves to "Proposal
+ *     sent" lands its run on `await-answer`, not back on `send`. Through the
+ *     ONE advance door
  *     (`advanceSessionStageViaSlot` → api `advanceSessionStage`), so the gate,
  *     the `stage_changed` emit and the forward status write all run exactly as
  *     for any other advance. The change arrives as ONE of two events:
@@ -387,6 +392,8 @@ async function followSubjectStatus(
         out.push({ kind: "ignored", sessionId: s.id, reason: "stale_event" });
         continue;
       }
+      // Where the value says the run stands: the stage it enters, or the one
+      // after the stage whose approved work reaches it (D2).
       let target = stageForSubjectStatus(proc.stages, value);
       if (!target || target === s.currentStage) continue;
       const keys = proc.stages.map((st) => st?.key);

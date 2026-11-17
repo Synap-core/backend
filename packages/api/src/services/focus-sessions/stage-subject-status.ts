@@ -51,6 +51,27 @@
  *
  * Source of the definition: `loadSessionProcess` (@synap/jobs) — the RUN's
  * frozen `definitionSnapshot` first, the live playbook second.
+ *
+ * ── REACHED ON APPROVAL (decision D2, 17 Nov 2026) ─────────────────────────
+ * A stage's `subjectStatus` is the status written when it is ENTERED (an
+ * in-progress status). Its `onApproved` is the status the subject REACHES
+ * when the stage's work is APPROVED (a result status), written by
+ * {@link writeStageReachedStatus} through the same {@link writeSubjectStatusValue}
+ * door, at exactly two signals:
+ *  1. the stage's declared outputs are all delivered
+ *     ({@link reachApprovedStageOutputs}, called by every slot-settling door);
+ *  2. else the NEXT stage's gate passes ({@link writeGatePassStatuses}: the
+ *     stage-gate executor, `resumeCheckGateIfMet`, a check gate that passes
+ *     on advance) — the reached status of the stage LEFT, THEN the entered
+ *     status of the gated stage, both named with the session.
+ * Never on a session's end (decision 5e377b06), never at birth. A reached
+ * write never moves the subject backwards from any status the process puts
+ * after it. A humanOnly `onApproved` is written AS THE APPROVING PERSON (a
+ * human actor: governance does not force a person into a proposal), so a
+ * person's approval never turns into a second proposal; an agent-driven or
+ * automatic approval moves as the agent and proposes it.
+ * A run started before D2 keeps its `definitionSnapshot`: a stage with only
+ * `subjectStatus` behaves exactly as before.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -58,6 +79,7 @@ import {
   db,
   entities,
   eq,
+  focusSessions,
   getWorkspaceMembership,
   resolveStatusMoveTarget,
   type StatusMoveActor,
@@ -66,10 +88,16 @@ import { findLifecycleOption, type Hold } from "@synap-core/types/lifecycle";
 // The ONE reader of a session's process definition — shared with the reverse
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
-import { resolveStageGate, type PlaybookStage } from "@synap/playbooks";
+import {
+  resolveStageGate,
+  stageOnApproved,
+  type ExpectedOutput,
+  type PlaybookStage,
+} from "@synap/playbooks";
 import type { Context } from "../../types/context.js";
 import { moveStatus, type MoveStatusResult } from "../lifecycle/move-status.js";
 import { readSubjectProfile } from "../playbooks/playbook-activators.js";
+import { stageOutputsApproved } from "./stage-outputs-approved.js";
 
 const logger = createLogger({ module: "focus-sessions/stage-subject-status" });
 
@@ -93,6 +121,7 @@ export type StageSubjectStatusOutcome =
         | "no_subject"
         | "no_status_property"
         | "stage_has_no_subject_status"
+        | "stage_has_no_on_approved"
         | "already_set"
         | "subject_not_found"
         | "no_process"
@@ -124,36 +153,43 @@ const NOTHING_TO_MOVE: ReadonlySet<string> = new Set([
   "no_process",
   "stage_not_found",
   "stage_has_no_subject_status",
+  "stage_has_no_on_approved",
 ]);
 
 /**
- * The status values a process reaches only AFTER `stageKey`: the
- * `subjectStatus` of every later stage, minus any value an earlier-or-same
- * stage also writes (a loop back to a shared status is not "ahead"). A
- * subject already holding one of them is further along this very process
- * than the stage — moving it to the stage's value would move it BACKWARDS.
+ * The status values a process reaches only AFTER a point in its stages: the
+ * `subjectStatus` and `onApproved` of every later point, minus any value an
+ * earlier-or-same point also writes (a loop back to a shared status is not
+ * "ahead"). A stage has two points, in order: ENTERED (its `subjectStatus`),
+ * then APPROVED (its `onApproved`). `reached: false` (default) stands at the
+ * stage's entry — its own `onApproved` is ahead; `reached: true` stands after
+ * its approval. A subject already holding one of them is further along this
+ * very process — moving it to the point's value would move it BACKWARDS.
  * Empty for an unknown stage. PURE.
  */
 export function statusesAheadOfStage(
   stages: readonly (PlaybookStage | null | undefined)[],
-  stageKey: string
+  stageKey: string,
+  opts: { reached?: boolean } = {}
 ): Set<string> {
   const at = stages.findIndex((s) => s?.key === stageKey);
   if (at < 0) return new Set();
-  const valueOf = (s: PlaybookStage | null | undefined) =>
+  const entered = (s: PlaybookStage | null | undefined) =>
     typeof s?.subjectStatus === "string" && s.subjectStatus.trim()
       ? s.subjectStatus.trim()
       : null;
+  // Every point in order: stage i entered (2i), stage i approved (2i + 1).
+  const points: Array<string | null> = stages.flatMap((s) => [
+    entered(s),
+    stageOnApproved(s),
+  ]);
+  const here = 2 * at + (opts.reached ? 1 : 0);
   const upTo = new Set(
-    stages
-      .slice(0, at + 1)
-      .map(valueOf)
-      .filter((v): v is string => v !== null)
+    points.slice(0, here + 1).filter((v): v is string => v !== null)
   );
   return new Set(
-    stages
-      .slice(at + 1)
-      .map(valueOf)
+    points
+      .slice(here + 1)
       .filter((v): v is string => v !== null && !upTo.has(v))
   );
 }
@@ -179,6 +215,12 @@ export async function writeStageSubjectStatus(input: {
    * sets it; an advance never does): a move out of done/lost proposes.
    */
   atSessionBirth?: boolean;
+  /**
+   * What the subject must hold for the move (the status door's
+   * compare-and-set, strict for an agent): a gate pass sets it to the status
+   * it just reached ({@link writeGatePassStatuses}).
+   */
+  expectedFrom?: string;
 }): Promise<StageSubjectStatusOutcome> {
   const { session } = input;
   if (!session.subjectEntityId)
@@ -233,6 +275,9 @@ export async function writeStageSubjectStatus(input: {
       },
       ...(input.atSessionBirth ? { atSessionBirth: true } : {}),
       ...(notBackFrom && notBackFrom.size > 0 ? { notBackFrom } : {}),
+      ...(input.expectedFrom !== undefined
+        ? { expectedFrom: input.expectedFrom }
+        : {}),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -282,6 +327,221 @@ export async function writeBirthStageSubjectStatus(
   return writeStageSubjectStatus({ ...input, atSessionBirth: true });
 }
 
+/** Why a reached status is written: the two approval signals (D2). */
+export type StageApprovalSignal = "output_approved" | "gate_passed";
+
+/**
+ * WHO APPROVED a stage's work — who its reached status moves as:
+ *  - `person`: a person approved (a gate, a proposal, "I did this", an
+ *    answer). Moves as them: a humanOnly value is theirs to write.
+ *  - `agent`: no person did — an agent's write auto-approved by a rule, an
+ *    evidenced claim, a recorded merge, a delivered child run. Moves as an
+ *    agent (`agentUserId`, else unattributed) on `userId`'s behalf, governed:
+ *    a humanOnly value, or one into done or lost, is proposed to the person.
+ */
+export type StageApprover =
+  | { kind: "person"; userId: string }
+  | { kind: "agent"; userId: string; agentUserId?: string | null };
+
+function approverActor(a: StageApprover): StatusMoveActor {
+  return a.kind === "person"
+    ? { kind: "human", userId: a.userId }
+    : { kind: "agent", userId: a.userId, agentUserId: a.agentUserId ?? null };
+}
+
+/**
+ * REACHED ON APPROVAL: write stage `stageKey`'s `onApproved` onto the
+ * session's subject — its work was approved (`signal`). Through the same
+ * door as the entered status ({@link writeSubjectStatusValue}), named with
+ * the session. Never moves the subject back from a status the process puts
+ * after this stage's approval, done and lost included (`subject_ahead`).
+ * `userId` with no `agentUserId` is the APPROVING PERSON: a humanOnly value
+ * is theirs to write, so it is written, never re-proposed. Never throws.
+ */
+export async function writeStageReachedStatus(input: {
+  session: {
+    id: string;
+    playbookId: string | null;
+    subjectEntityId: string | null;
+    workspaceId: string | null;
+  };
+  /** The stage whose work was approved. */
+  stageKey: string;
+  signal: StageApprovalSignal;
+  /** Who approved — see {@link StageApprover}. */
+  approver: StageApprover;
+}): Promise<StageSubjectStatusOutcome> {
+  const { session } = input;
+  if (!session.subjectEntityId)
+    return { status: "skipped", reason: "no_subject" };
+  try {
+    const proc = await loadSessionProcess({
+      sessionId: session.id,
+      playbookId: session.playbookId,
+    });
+    if (!proc) return { status: "skipped", reason: "no_process" };
+    const stage = proc.stages.find((s) => s?.key === input.stageKey);
+    if (!stage) return { status: "skipped", reason: "stage_not_found" };
+    const value = stageOnApproved(stage);
+    if (!value)
+      return { status: "skipped", reason: "stage_has_no_on_approved" };
+    if (!proc.statusProperty)
+      return { status: "skipped", reason: "no_status_property" };
+    const why =
+      input.signal === "gate_passed"
+        ? "the next stage's gate passed"
+        : "its outputs were approved";
+    const reasoning = `The work of stage "${stage.name ?? stage.key}" was approved (${why}), which is "${value}".`;
+    const notBackFrom = statusesAheadOfStage(proc.stages, stage.key, {
+      reached: true,
+    });
+    return await writeSubjectStatusValue({
+      session,
+      entityId: session.subjectEntityId,
+      process: { ...proc, statusProperty: proc.statusProperty },
+      value,
+      reason: reasoning,
+      actor: approverActor(input.approver),
+      ...(notBackFrom.size > 0 ? { notBackFrom, notBackFromStrict: true } : {}),
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      { err, sessionId: session.id, stageKey: input.stageKey },
+      "stage reached-status write failed — the approval stands"
+    );
+    return { status: "failed", reason };
+  }
+}
+
+/**
+ * A GATE PASSED on `gatedStage` (approval signal 2): the stage LEFT
+ * (`fromStage`, else the one declared just before the gated stage) reached
+ * its `onApproved`, THEN the gated stage's `subjectStatus` is written — in
+ * that order, both named with the session, so the subject's history reads
+ * "Scripted, then In Draft". The entered write expects the reached value when
+ * it was written (the door's compare-and-set). `reached` is absent when the
+ * stage left declares no `onApproved` (or none was left). Never throws.
+ */
+export async function writeGatePassStatuses(input: {
+  session: Parameters<typeof writeStageSubjectStatus>[0]["session"];
+  gatedStage: string;
+  /** The stage the run left to enter the gated one, when recorded. */
+  fromStage?: string | null;
+  userId: string;
+  agentUserId?: string | null;
+}): Promise<{
+  reached?: StageSubjectStatusOutcome;
+  entered: StageSubjectStatusOutcome;
+}> {
+  const left = await stageLeftForGate(
+    input.session,
+    input.gatedStage,
+    input.fromStage
+  );
+  const reached = left
+    ? reportedSubjectMove(
+        await writeStageReachedStatus({
+          session: input.session,
+          stageKey: left,
+          signal: "gate_passed",
+          approver: input.agentUserId
+            ? {
+                kind: "agent",
+                userId: input.userId,
+                agentUserId: input.agentUserId,
+              }
+            : { kind: "person", userId: input.userId },
+        })
+      )
+    : undefined;
+  const entered = await writeStageSubjectStatus({
+    session: input.session,
+    toStage: input.gatedStage,
+    userId: input.userId,
+    agentUserId: input.agentUserId ?? null,
+    ...(reached?.status === "written" ? { expectedFrom: reached.value } : {}),
+  });
+  return { ...(reached ? { reached } : {}), entered };
+}
+
+/** The stage a gate pass approves: the recorded `fromStage`, else the previous. */
+async function stageLeftForGate(
+  session: { id: string; playbookId: string | null },
+  gatedStage: string,
+  fromStage: string | null | undefined
+): Promise<string | null> {
+  if (typeof fromStage === "string" && fromStage && fromStage !== gatedStage)
+    return fromStage;
+  try {
+    const proc = await loadSessionProcess({
+      sessionId: session.id,
+      playbookId: session.playbookId,
+    });
+    const at = proc?.stages.findIndex((s) => s?.key === gatedStage) ?? -1;
+    return at > 0 ? (proc!.stages[at - 1]?.key ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * APPROVAL SIGNAL 1: a slot of the session was just settled (approved,
+ * attested, answered, evidenced). When the stage the run stands on declares
+ * an `onApproved` and outputs, and every one of them is now delivered
+ * ({@link stageOutputsApproved}), the subject reaches that status. The
+ * approver is who settled the slot. Called AFTER the settling commit by each
+ * slot-settling door; idempotent (a status already held is `already_set`);
+ * never throws. `undefined` when nothing was due.
+ */
+export async function reachApprovedStageOutputs(input: {
+  sessionId: string;
+  /** Who settled the slot — see {@link StageApprover}. */
+  approver: StageApprover;
+}): Promise<StageSubjectStatusOutcome | undefined> {
+  try {
+    const [row] = await db
+      .select({
+        id: focusSessions.id,
+        playbookId: focusSessions.playbookId,
+        subjectEntityId: focusSessions.subjectEntityId,
+        workspaceId: focusSessions.workspaceId,
+        currentStage: focusSessions.currentStage,
+        expectedOutputs: focusSessions.expectedOutputs,
+      })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, input.sessionId))
+      .limit(1);
+    if (!row?.subjectEntityId || !row.currentStage) return undefined;
+    const proc = await loadSessionProcess({
+      sessionId: row.id,
+      playbookId: row.playbookId,
+    });
+    const stage = proc?.stages.find((s) => s?.key === row.currentStage);
+    if (!proc || !stage || !stageOnApproved(stage)) return undefined;
+    const slots: ExpectedOutput[] = Array.isArray(row.expectedOutputs)
+      ? (row.expectedOutputs as ExpectedOutput[])
+      : [];
+    if (!stageOutputsApproved(proc.stages, row.currentStage, slots))
+      return undefined;
+    return await writeStageReachedStatus({
+      session: row,
+      stageKey: row.currentStage,
+      signal: "output_approved",
+      approver: input.approver,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: input.sessionId },
+      "approved-output reach failed — the slot stands"
+    );
+    return {
+      status: "failed",
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 /**
  * THE ONE WRITER of a process's status value onto ONE thing it works on (the
  * stage path above: the subject, on entering a stage, or at the session's
@@ -325,6 +585,13 @@ async function writeSubjectStatusValue(input: {
    * it is, `skipped: subject_ahead`.
    */
   notBackFrom?: ReadonlySet<string>;
+  /**
+   * `notBackFrom` holds for EVERY status, done and lost included: a reached
+   * status never reopens a thing (a birth's reopen is proposed instead).
+   */
+  notBackFromStrict?: boolean;
+  /** The status door's compare-and-set belief (`moveStatus.expectedFrom`). */
+  expectedFrom?: string;
 }): Promise<StageSubjectStatusOutcome> {
   const { session, entityId, value, reason, actor } = input;
   const proc = input.process;
@@ -374,8 +641,8 @@ async function writeSubjectStatusValue(input: {
       if (
         typeof current === "string" &&
         input.notBackFrom.has(current) &&
-        category !== "done" &&
-        category !== "lost"
+        (input.notBackFromStrict ||
+          (category !== "done" && category !== "lost"))
       ) {
         return { status: "skipped", reason: "subject_ahead" };
       }
@@ -394,6 +661,9 @@ async function writeSubjectStatusValue(input: {
       forcePropose: humanOnly || undefined,
       ...(input.pauseHold ? { pauseHold: input.pauseHold } : {}),
       ...(input.atSessionBirth ? { atSessionBirth: true } : {}),
+      ...(input.expectedFrom !== undefined
+        ? { expectedFrom: input.expectedFrom }
+        : {}),
     };
 
     if (isRole) {
