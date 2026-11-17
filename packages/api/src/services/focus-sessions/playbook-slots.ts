@@ -27,7 +27,8 @@ import { normalizeExpectedLabel } from "./expected-label.js";
 
 /**
  * The playbook's slots that `current` does not already carry, by label —
- * UNSANITIZED: the writing door sanitizes them.
+ * UNSANITIZED: the writing door sanitizes them. PLAYBOOK-LEVEL only: what a
+ * stage declares is owed on entering it (`stage-slots.ts`).
  */
 export function playbookSlotsMissingFrom(
   playbook: { expectedOutputs: unknown },

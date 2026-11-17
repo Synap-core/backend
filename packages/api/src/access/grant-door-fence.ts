@@ -1808,7 +1808,8 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "automations.activateAutomation": GATED,
     "automations.triggerAutomation": GATED,
     // D3: revising honours the key's space / project / object pins, and a
-    // fenced key never changes the payload or the space (issue 314a6554).
+    // fenced key never changes the payload or the space (issue 314a6554),
+    // save a message's words and its own proposal's title.
     "proposals.updateProposal": GATED,
     // D5: an observation is `event.create` where it lands; never widened.
     "observations.append": GATED,

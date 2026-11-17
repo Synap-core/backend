@@ -411,6 +411,25 @@ function patchChangesPinnedPlacement(
 }
 
 /**
+ * The stored level an inner patch merges into: `.data` of a nested envelope,
+ * else the envelope itself (`computeRevisedEnvelope`).
+ */
+function patchedLevel(
+  envelope: unknown,
+  patch: ProposalRevisionPatch
+): Record<string, unknown> {
+  const env = (envelope ?? {}) as Record<string, unknown>;
+  const inner = env.data;
+  return patch.kind === "inner" &&
+    isNestedEnvelope(env) &&
+    inner &&
+    typeof inner === "object" &&
+    !Array.isArray(inner)
+    ? (inner as Record<string, unknown>)
+    : env;
+}
+
+/**
  * The protected field a patch would SET or ALTER at either level, or null.
  *
  * ALTER means a value that DIFFERS from the stored one (deep-equal), never mere
@@ -931,9 +950,21 @@ export async function mergeProposalRevision(
       Object.keys(patch.fields).every((k) => MESSAGE_WORD_FIELDS.includes(k)) &&
       params.workspaceId === undefined &&
       params.projectId === undefined;
+    // And the author agent may RENAME what it asked for (60dae4c8: the title
+    // lint flags a defect after filing): a title already in the payload, and
+    // nothing else. A name changes no target, space or act.
+    const renamesOwnOnly =
+      isAuthor &&
+      !!patch &&
+      Object.keys(patch.fields).length === 1 &&
+      typeof patch.fields.title === "string" &&
+      typeof patchedLevel(existing.data, patch).title === "string" &&
+      params.workspaceId === undefined &&
+      params.projectId === undefined;
     if (
       isFencedGrant(getRequestGrant()) &&
       !rewordsMessageOnly &&
+      !renamesOwnOnly &&
       ((patch && Object.keys(patch.fields).length > 0) ||
         params.workspaceId !== undefined ||
         params.projectId !== undefined)

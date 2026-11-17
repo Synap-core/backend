@@ -57,6 +57,10 @@ vi.mock("./record.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../capabilities/execute-capability.js", () => ({
+  executeCapability: async () => ({ kind: "run", result: { passed: true } }),
+}));
+
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { focusSessions } from "@synap/database";
 import { evaluateSession } from "./evaluate.js";
@@ -144,6 +148,58 @@ describe("evaluateSession criterionKeys", () => {
       "docs",
       "pr-backend-255",
     ]);
+  });
+});
+
+// db6a5e17: a judge run on a stage whose work does not exist yet spends one
+// of its 2 attempts for nothing.
+describe("evaluateSession is bounded to the stages the session has reached", () => {
+  const cap = (key: string, stageKey?: string) => ({
+    key,
+    statement: key,
+    check: { kind: "capability", capability: "check.verb" },
+    ...(stageKey ? { stageKey } : {}),
+  });
+  let staged = "";
+  beforeAll(async () => {
+    staged = randomUUID();
+    await h.client!.query(
+      `insert into focus_sessions (id, user_id, goal, status, current_stage, stages, expected_outputs, criteria, agent_ids, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'Stage it', 'active', 'board', $3::jsonb, '[]'::jsonb, $4::jsonb, '{}', '{}'::jsonb, now(), now(), now())`,
+      [
+        staged,
+        USER,
+        JSON.stringify([
+          { key: "open", name: "Open" },
+          { key: "board", name: "Board" },
+          { key: "act3", name: "Act 3" },
+        ]),
+        JSON.stringify([
+          cap("on-subject", "open"),
+          cap("board-drawn", "board"),
+          cap("act3-theme", "act3"),
+          cap("unstaged"),
+        ]),
+      ]
+    );
+  });
+
+  it("by default grades the current and earlier stages, and SKIPS a later one with why", async () => {
+    const r = await evaluateSession({ sessionId: staged, userId: USER });
+    expect(h.recorded.map((x) => x.criterionKey).sort()).toEqual([
+      "board-drawn",
+      "on-subject",
+      "unstaged",
+    ]);
+    if (r.status !== "evaluated") throw new Error(r.status);
+    const later = r.results.find((x) => x.key === "act3-theme");
+    expect(later).toMatchObject({ status: "skipped" });
+    expect(later?.reason).toContain("not reached");
+  });
+
+  it("an explicit stageKey still grades that stage (the check gate, unchanged)", async () => {
+    await evaluateSession({ sessionId: staged, userId: USER, stageKey: "act3" });
+    expect(h.recorded.map((x) => x.criterionKey)).toEqual(["act3-theme"]);
   });
 });
 

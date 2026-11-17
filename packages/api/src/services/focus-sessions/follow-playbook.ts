@@ -91,6 +91,7 @@ import {
 } from "../links/links-service.js";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { playbookSlotsMissingFrom } from "./playbook-slots.js";
+import { stageSlotsThrough } from "./stage-slots.js";
 import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
@@ -417,6 +418,7 @@ export async function followPlaybook(
           criteria: focusSessions.criteria,
           expectedOutputs: focusSessions.expectedOutputs,
           metadata: focusSessions.metadata,
+          currentStage: focusSessions.currentStage,
         })
         .from(focusSessions)
         .where(eq(focusSessions.id, sessionId))
@@ -439,12 +441,26 @@ export async function followPlaybook(
         followedAt,
         PARAM_SLOT_CIRCUMSTANCE.followed
       );
+      const playbookAdded = sanitizeDeclaredOutputs(
+        playbookSlotsMissingFrom(playbook, currentOutputs)
+      );
+      // STAGE SLOTS (db6a5e17): the work is IN a stage (named now, or one of
+      // this playbook's it already held), so it owes what every stage up to it
+      // declares, as a session that advanced there would (`stage-slots.ts`).
+      const inStage =
+        stageKey ??
+        (locked?.currentStage && validKeys.includes(locked.currentStage)
+          ? locked.currentStage
+          : null);
+      const stageAdded = stageSlotsThrough(playbook.stages, inStage, [
+        ...currentOutputs,
+        ...playbookAdded,
+      ]);
       // Merged by label like the playbook's own slots, so following twice does
       // not file the same question again.
       const added = [
-        ...sanitizeDeclaredOutputs(
-          playbookSlotsMissingFrom(playbook, currentOutputs)
-        ),
+        ...playbookAdded,
+        ...stageAdded,
         ...paramSlots.filter(
           (slot) =>
             !currentOutputs.some(

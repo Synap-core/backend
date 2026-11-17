@@ -15,9 +15,11 @@
  * slot echoed verbatim so its receipts survive. A slot is never removed on
  * leaving a stage: what a stage owed stays owed.
  *
- * Two entry points, one rule ({@link stageSlotsToAdd}): the run's birth seeds
- * its first stage (`playbook-lifecycle.ts`), and every advance goes through
- * `advanceSessionStage`, which calls {@link mergeEnteredStageSlots}.
+ * Three entry points, one rule ({@link stageSlotsToAdd}): the run's birth seeds
+ * its first stage (`playbook-lifecycle.ts`), every advance goes through
+ * `advanceSessionStage`, which calls {@link mergeEnteredStageSlots}, and a
+ * live session that FOLLOWS a playbook into a stage owes every stage up to it
+ * ({@link stageSlotsThrough}, `follow-playbook.ts`), as if it had advanced there.
  */
 
 import { db, focusSessions, eq } from "@synap/database";
@@ -57,6 +59,30 @@ export function stageSlotsToAdd(
     fresh.push(o);
   }
   return sanitizeDeclaredOutputs(fresh);
+}
+
+/**
+ * What a session that walked from the first stage to `stageKey` would owe and
+ * `current` does not carry yet: {@link stageSlotsToAdd} for each stage in
+ * order, up to and including `stageKey` (a slot is never removed on leaving a
+ * stage). [] when `stageKey` is null or not a stage of `stages`.
+ */
+export function stageSlotsThrough(
+  stages: unknown,
+  stageKey: string | null,
+  current: readonly ExpectedOutput[]
+): ExpectedOutput[] {
+  if (!stageKey || !Array.isArray(stages)) return [];
+  const keys = stages
+    .map((s) => (s as { key?: unknown } | null)?.key)
+    .filter((k): k is string => typeof k === "string");
+  if (!keys.includes(stageKey)) return [];
+  const added: ExpectedOutput[] = [];
+  for (const key of keys) {
+    added.push(...stageSlotsToAdd(stages, key, [...current, ...added]));
+    if (key === stageKey) break;
+  }
+  return added;
 }
 
 /**
