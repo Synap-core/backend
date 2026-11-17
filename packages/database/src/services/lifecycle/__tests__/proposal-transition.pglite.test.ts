@@ -6,8 +6,8 @@
  *    proposal's own id, type and target;
  *  - a row the transition table refuses, or a self-move, owes nothing;
  *  - the builder's contract stands: `await` it, or `.returning({ … })`;
- *  - inside a caller's transaction it is a savepoint: the caller's rollback
- *    takes the move AND the owed transition;
+ *  - ONE statement: inside a caller's transaction the caller's rollback takes
+ *    the move AND the owed transition;
  *  - a `document/*` patch addresses its section (document + op section ids);
  *  - a session that ends expires its pending stage gate and owes that
  *    proposal's transition inside `setSessionStatus`'s own transaction.
@@ -92,7 +92,7 @@ describe("transitionProposal owes the move's transition", () => {
       to: "approved",
       set: { reviewedBy: REVIEWER },
       where: eq(schema.proposals.id, id),
-    });
+    }).returning();
     expect(rows.map((r) => r.status)).toEqual(["approved"]);
     const owed = await owedFor(id);
     expect(owed).toHaveLength(1);
@@ -196,9 +196,10 @@ describe("transitionProposal owes the move's transition", () => {
       to: "approved",
       where: eq(schema.proposals.id, id),
     });
-    expect((await owedFor(id))[0]).toMatchObject({
-      section: { documentId: doc, sectionIds: ["s-intro", "s-2"] },
-    });
+    const [t] = await owedFor(id);
+    const section = t!.section as { documentId: string; sectionIds: string[] };
+    expect(section.documentId).toBe(doc);
+    expect([...section.sectionIds].sort()).toEqual(["s-2", "s-intro"]);
   });
 
   it("a session that ends owes its expired stage gate's transition in its own transaction", async () => {

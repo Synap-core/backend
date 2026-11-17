@@ -19,35 +19,25 @@
  *
  * THE TRANSITION (reactions W1): every move also OWES a
  * `proposal.transition.completed` (the one transition shape, categories from
- * `PROPOSAL_STATUS_DECLARATION`) in the SAME transaction as the write — the
- * caller's own when it hands a transaction (a savepoint), else one of its own:
- *   1. lock the rows the caller's `where` AND the table's guard match, in id
- *      order (the compare-and-set);
- *   2. ONE UPDATE writes the status and the caller's `set` on those rows;
- *   3. each row whose status changed owes its transition through the outbox.
- * The call keeps the builder's contract (await it, or chain `.returning(…)`)
- * so its ~150 call sites are unchanged: what it returns is a lazy query that
- * runs the three steps once. The sweeper delivers the transition (the old
- * `proposal.approved` / `.rejected` events stay, emitted by
- * `emitProposalReviewed`, as dual emits).
+ * `PROPOSAL_STATUS_DECLARATION`) in the SAME STATEMENT as the write: the
+ * lock, the outbox insert and the UPDATE are one `WITH … UPDATE`, atomic on
+ * any executor, with no transaction or savepoint of its own (see
+ * {@link transitionProposal}). The call keeps the builder's contract (await
+ * it, or chain `.returning(…)`), so its ~150 call sites are unchanged. The
+ * sweeper delivers the transition (the old `proposal.approved` / `.rejected`
+ * events stay, emitted by `emitProposalReviewed`, as dual emits).
  */
-import { and, asc, inArray, type SQL } from "drizzle-orm";
+import { and, inArray, sql, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import { PROPOSAL_STATUS_DECLARATION } from "@synap-core/types/units";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
-import type {
-  ProposalSectionRef,
-  ProposalTransitionPayload,
-} from "@synap-core/types/lifecycle";
 // Type-only: the door runs on the executor it is handed, never on a pool it
 // opens itself (a PGlite test or a transaction passes its own).
 import type { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
-import { insertTransitionOutbox } from "../services/lifecycle/transition-outbox.js";
-import {
-  transitionBaseOf,
-  type WorkUnitActor,
-} from "../services/lifecycle/work-unit-transition.js";
+import { lifecycleTransitionOutbox } from "../schema/lifecycle-transition-outbox.js";
+import type { WorkUnitActor } from "../services/lifecycle/work-unit-transition.js";
+import { transitionStamp } from "../services/lifecycle/transition-stamp.js";
 import { getActingAgentUserId } from "./request-write-context.js";
 
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -55,14 +45,11 @@ type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 /**
  * Anything that can run the move: the pod's db or a transaction. Typed as
  * narrowly as the callers declare it (some hand a "stamp db" typed with
- * `update` only); at runtime every caller hands a db or a transaction, which
- * is what the door uses (a savepoint inside a caller's transaction).
+ * `update` only); at runtime every caller hands a db or a transaction, whose
+ * `$with` / `with` the door builds its one statement with.
  */
 export type ProposalStatusWriter =
   Pick<typeof db, "update"> | Pick<DbTx, "update">;
-
-/** A stored proposal row. */
-export type ProposalRow = typeof proposals.$inferSelect;
 
 /** Every column but the status (the door writes it) and the id (never moves). */
 export type ProposalTransitionSet = Omit<
@@ -145,37 +132,75 @@ export const APPLIED_PROPOSAL_STATUSES: readonly ProposalStatus[] = [
   AUTO_APPROVED,
 ];
 
-/** What a move moved, as `.returning(fields)` asks for it. */
-type Projected<K extends keyof ProposalRow> = Pick<ProposalRow, K>;
+/** The CTE that locks the rows a move matches (the compare-and-set). */
+const LOCKED_CTE = "proposal_transition_locked";
+/** The CTE that owes their transitions (the outbox insert). */
+const OWED_CTE = "proposal_transition_owed";
 
-/**
- * The lazy query `transitionProposal` returns: await it for the moved rows,
- * or `.returning({ id: proposals.id, … })` for those columns of them (each
- * key named as the column's own property, as every call site does).
- */
-export interface ProposalTransitionQuery extends PromiseLike<ProposalRow[]> {
-  returning(): Promise<ProposalRow[]>;
-  returning<K extends keyof ProposalRow>(fields: {
-    [P in K]: (typeof proposals)[P];
-  }): Promise<Array<Projected<K>>>;
+/** `CASE <expr> WHEN '<status>' THEN '<category>' … END`, from the declaration. */
+function categoryCaseSql(expr: SQL): SQL {
+  const whens = Object.entries(PROPOSAL_STATUS_DECLARATION)
+    .map(([status, { category }]) => `WHEN '${status}' THEN '${category}'`)
+    .join(" ");
+  return sql`CASE ${expr} ${sql.raw(whens)} END`;
 }
 
 /**
- * Move the matching proposals to `to` — lock, ONE UPDATE that also checks the
- * transition table, and one owed transition per row that moved, in one
- * transaction: `status IN (from)` is AND-ed to the caller's `where`, so a row
- * in a status that may not become `to` is left untouched.
+ * The document section a `document/*` patch proposal addresses, as SQL over
+ * the proposal row `p`: the document (its target) and the section ids its
+ * ops name (the payload nested under `data` or flat, as the patch doors file
+ * it). Null for any other proposal. A proposed section joins the door as its
+ * proposal (reactions W1).
+ */
+function sectionSql(): SQL {
+  const types = sql.raw(
+    DOCUMENT_PATCH_PROPOSAL_TYPES.map((t) => `'${t}'`).join(", ")
+  );
+  return sql`CASE WHEN p.target_type = 'document' AND p.proposal_type IN (${types})
+    THEN jsonb_build_object(
+      'documentId', p.target_id,
+      'sectionIds', COALESCE((
+        SELECT jsonb_agg(DISTINCT s.v)
+          FROM jsonb_path_query(
+            CASE WHEN jsonb_typeof(p.data->'data') = 'object'
+                  AND jsonb_typeof(p.data->'ops') IS DISTINCT FROM 'array'
+                 THEN p.data->'data' ELSE p.data END,
+            '$.ops[*].sectionId') AS s(v)
+         WHERE jsonb_typeof(s.v) = 'string' AND s.v <> '""'::jsonb
+      ), '[]'::jsonb))
+    ELSE NULL END`;
+}
+
+/**
+ * Move the matching proposals to `to` in ONE STATEMENT that also checks the
+ * transition table and owes each move's transition: `status IN (from)` is
+ * AND-ed to the caller's `where`, so a row in a status that may not become
+ * `to` is left untouched.
+ *
+ *   WITH locked AS (SELECT … WHERE <where> AND status IN (from)
+ *                   ORDER BY id FOR UPDATE),
+ *        owed   AS (INSERT INTO lifecycle_transition_outbox
+ *                   SELECT <the transition> FROM locked JOIN proposals …
+ *                   WHERE prior status <> to)
+ *   UPDATE proposals SET … WHERE <where> AND status IN (from)
+ *                          AND id IN (SELECT id FROM locked)
+ *
+ * One statement is atomic on any executor — the pod's db, or a caller's open
+ * transaction (no savepoint) — so the move and its debt can never part. The
+ * locked CTE takes the rows in id order, so two bulk moves cannot deadlock.
  *
  * `from` narrows the guard to the statuses this caller moves (each must be
  * allowed by the table: a disallowed one throws, it is a programming error).
  * Omitted, every status the table lets reach `to` matches.
  *
  * `actor` attributes the move; absent, it is the person named as reviewer in
- * `set.reviewedBy` (an approval, a rejection), else the acting agent of the
- * request, else the system (a sweep, an expiry).
+ * `set.reviewedBy` (an approval, a rejection), else the request's acting
+ * agent, else the system (a sweep, an expiry). The transition's person is the
+ * actor's, else the proposal's (who filed it, whose principal authored it,
+ * its author).
  *
- * Returns a lazy query: awaiting it (or its `.returning(…)`) runs the move
- * once and yields the moved rows.
+ * Returns the UPDATE builder, so a caller chains `.returning(...)` exactly as
+ * it would on `db.update(proposals)`; awaiting it runs the statement.
  */
 export function transitionProposal(
   executor: ProposalStatusWriter,
@@ -187,7 +212,7 @@ export function transitionProposal(
     actor?: WorkUnitActor;
     reason?: string | null;
   }
-): ProposalTransitionQuery {
+) {
   const from = args.from ?? proposalStatusesThatMayBecome(args.to);
   const refused = from.filter((s) => !canTransitionProposal(s, args.to));
   if (refused.length > 0) {
@@ -198,79 +223,79 @@ export function transitionProposal(
   if (from.length === 0) {
     throw new Error(`transitionProposal: nothing may become ${args.to}`);
   }
-  let run: Promise<ProposalRow[]> | null = null;
-  const moved = () => (run ??= moveProposals(executor, { ...args, from }));
-  return {
-    then(onFulfilled, onRejected) {
-      return moved().then(onFulfilled, onRejected);
-    },
-    returning(fields?: Record<string, unknown>) {
-      return moved().then((rows) =>
-        fields ? rows.map((row) => project(row, fields)) : rows
-      );
-    },
-  } as ProposalTransitionQuery;
-}
+  const guard = and(args.where, inArray(proposals.status, [...from]));
+  // One builder type: a transaction's `with` / `$with` build the same
+  // statement (see `ProposalStatusWriter`).
+  const ex = executor as unknown as typeof db;
 
-/** A column object → its property name on the row. */
-const PROPERTY_OF = new Map<unknown, keyof ProposalRow>(
-  (Object.keys(proposals) as Array<keyof typeof proposals>)
-    .filter((k) => typeof k === "string")
-    .map((k) => [proposals[k], k as keyof ProposalRow])
-);
+  const locked = ex.$with(LOCKED_CTE, { id: sql<string>`id` }).as(
+    sql`SELECT ${proposals.id} AS id, ${proposals.status} AS prior_status
+            FROM ${proposals}
+           WHERE ${guard}
+           ORDER BY ${proposals.id}
+             FOR UPDATE`
+  );
 
-function project(
-  row: ProposalRow,
-  fields: Record<string, unknown>
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, column] of Object.entries(fields)) {
-    const prop = PROPERTY_OF.get(column) ?? (key as keyof ProposalRow);
-    out[key] = row[prop];
-  }
-  return out;
-}
+  const actor = args.actor ?? defaultActor(args.set);
+  const stamp = transitionStamp(actor.kind, null);
+  const setReason = args.set?.rejectionReason;
+  // A refusal's or a failure's sentence is its reason; never a stale one.
+  const reason =
+    args.reason ??
+    ((args.to === ProposalStatus.REJECTED ||
+      args.to === ProposalStatus.APPROVAL_FAILED) &&
+    typeof setReason === "string"
+      ? setReason
+      : null);
+  const toCategory = PROPOSAL_STATUS_DECLARATION[args.to].category;
+  const owed = ex.$with(OWED_CTE, { id: sql<string>`transition_id` }).as(
+    sql`INSERT INTO ${lifecycleTransitionOutbox} (transition_id, transition, emit_context)
+        SELECT m.tid, jsonb_build_object(
+          'transitionId', m.tid,
+          'subjectType', 'proposal',
+          'subjectId', p.id,
+          'property', 'status',
+          'from', m.prior_status,
+          'to', ${args.to}::text,
+          'fromCategory', ${categoryCaseSql(sql`m.prior_status`)},
+          'category', ${toCategory}::text,
+          'actorKind', ${actor.kind}::text,
+          'actorClass', ${stamp.actorClass}::text,
+          'appId', ${stamp.appId}::text,
+          'userId', COALESCE(${actor.userId ?? null}::text, p.proposed_by_user_id,
+                             p.subject_user_id, p.created_by, p.agent_user_id, 'system'),
+          'agentUserId', ${actor.agentUserId ?? null}::text,
+          'sessionId', p.session_id,
+          'reason', ${reason}::text,
+          'staleExpected', false,
+          'proposalId', p.id,
+          'workspaceId', p.workspace_id,
+          'occurredAt', ${stamp.occurredAt}::text,
+          'recordedAt', ${stamp.recordedAt}::text,
+          'backdated', false,
+          'hold', NULL::jsonb,
+          'proposalType', p.proposal_type,
+          'targetType', p.target_type,
+          'targetId', p.target_id,
+          'section', ${sectionSql()}
+        ), '{}'::jsonb
+          FROM (SELECT l.id, l.prior_status, gen_random_uuid() AS tid
+                  FROM ${sql.raw(LOCKED_CTE)} l
+                 WHERE l.prior_status <> ${args.to}::text) m
+          JOIN ${proposals} p ON p.id = m.id
+        RETURNING transition_id`
+  );
 
-async function moveProposals(
-  executor: ProposalStatusWriter,
-  args: {
-    to: ProposalStatus;
-    where: SQL | undefined;
-    from: readonly ProposalStatus[];
-    set?: ProposalTransitionSet;
-    actor?: WorkUnitActor;
-    reason?: string | null;
-  }
-): Promise<ProposalRow[]> {
-  // A db opens a transaction; a caller's transaction a savepoint — the same
-  // call at runtime (see `ProposalStatusWriter`).
-  return (executor as unknown as typeof db).transaction(async (tx) => {
-    const locked = await tx
-      .select({ id: proposals.id, status: proposals.status })
-      .from(proposals)
-      .where(and(args.where, inArray(proposals.status, [...args.from])))
-      // One lock order for every writer, so two bulk moves cannot deadlock.
-      .orderBy(asc(proposals.id))
-      .for("update", { of: proposals });
-    if (locked.length === 0) return [];
-    const rows = await tx
-      .update(proposals)
-      .set({ ...(args.set ?? {}), status: args.to })
-      .where(
-        inArray(
-          proposals.id,
-          locked.map((r) => r.id)
-        )
+  return ex
+    .with(locked, owed)
+    .update(proposals)
+    .set({ ...(args.set ?? {}), status: args.to })
+    .where(
+      and(
+        guard,
+        sql`${proposals.id} IN (SELECT id FROM ${sql.raw(LOCKED_CTE)})`
       )
-      .returning();
-    const prior = new Map(locked.map((r) => [r.id, r.status]));
-    const actor = args.actor ?? defaultActor(args.set);
-    const transitions = rows
-      .filter((row) => prior.get(row.id) !== args.to)
-      .map((row) => proposalTransitionOf(row, prior.get(row.id)!, args, actor));
-    await insertTransitionOutbox(tx, transitions);
-    return rows;
-  });
+    );
 }
 
 /** Who made a move nobody named: the reviewer, the acting agent, the system. */
@@ -281,81 +306,4 @@ function defaultActor(set: ProposalTransitionSet | undefined): WorkUnitActor {
   }
   const agent = getActingAgentUserId();
   return agent ? { kind: "agent", agentUserId: agent } : { kind: "system" };
-}
-
-function proposalTransitionOf(
-  row: ProposalRow,
-  was: ProposalStatus,
-  args: { to: ProposalStatus; reason?: string | null },
-  actor: WorkUnitActor
-): ProposalTransitionPayload {
-  return {
-    ...transitionBaseOf({
-      subjectId: row.id,
-      from: was,
-      to: args.to,
-      fromCategory: PROPOSAL_STATUS_DECLARATION[was].category,
-      category: PROPOSAL_STATUS_DECLARATION[args.to].category,
-      actor,
-      // The person the proposal is for: who filed it, else whose principal
-      // authored it, else its author (an agent's user row).
-      ownerUserId:
-        row.proposedByUserId ??
-        row.subjectUserId ??
-        row.createdBy ??
-        row.agentUserId ??
-        "system",
-      sessionId: row.sessionId ?? null,
-      // A refusal's or a failure's sentence is its reason; never a stale one.
-      reason:
-        args.reason ??
-        (args.to === ProposalStatus.REJECTED ||
-        args.to === ProposalStatus.APPROVAL_FAILED
-          ? (row.rejectionReason ?? null)
-          : null),
-      proposalId: row.id,
-      workspaceId: row.workspaceId ?? null,
-      appId: row.appId ?? null,
-    }),
-    subjectType: "proposal",
-    proposalType: row.proposalType,
-    targetType: row.targetType,
-    targetId: row.targetId,
-    section: sectionOf(row),
-  };
-}
-
-/**
- * A `document/*` patch proposal addresses a document section: the document
- * (its target) and the section ids its ops name. A proposed section joins the
- * door as its proposal (reactions W1).
- */
-export function sectionOf(
-  row: Pick<ProposalRow, "targetType" | "targetId" | "proposalType" | "data">
-): ProposalSectionRef | null {
-  if (
-    row.targetType !== "document" ||
-    !(DOCUMENT_PATCH_PROPOSAL_TYPES as readonly string[]).includes(
-      row.proposalType
-    )
-  ) {
-    return null;
-  }
-  const raw = (row.data ?? {}) as Record<string, unknown>;
-  // The patch payload, wherever the filing door nested it.
-  const payload = (
-    raw.data && typeof raw.data === "object" && !Array.isArray(raw.ops)
-      ? raw.data
-      : raw
-  ) as Record<string, unknown>;
-  const ops = Array.isArray(payload.ops) ? payload.ops : [];
-  const sectionIds = [
-    ...new Set(
-      ops.flatMap((op) => {
-        const id = (op as { sectionId?: unknown } | null)?.sectionId;
-        return typeof id === "string" && id.length > 0 ? [id] : [];
-      })
-    ),
-  ];
-  return { documentId: row.targetId, sectionIds };
 }
