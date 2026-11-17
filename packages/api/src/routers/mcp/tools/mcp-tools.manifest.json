@@ -2565,6 +2565,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why, in the person's words: shown to whoever reviews the proposal."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
         "required": ["sessionIds", "brief"]
