@@ -2562,7 +2562,7 @@ export const tools = {
               },
               maxItems: STATUS_OF_INCLUDES.length,
               description:
-                "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals; reactions = the rules that fire when it moves or move it, with a roll-up's progress; work = where its sessions and runs stand. An unknown part is refused.",
+                "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals; reactions = the rules around it; work = where its sessions and runs stand. An unknown part is refused.",
             },
             only: {
               type: "string",
@@ -5125,7 +5125,7 @@ export const tools = {
             scopeSessionId: {
               type: "string",
               description:
-                "Instead of trackId: a session you own. Its worker's runs are that session's children.",
+                "Instead of trackId: a session you own; its runs become its children.",
             },
             playbookId: {
               type: "string",
