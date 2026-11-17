@@ -722,15 +722,20 @@ describe("connector health doors (finding 67b6c332): the person's connections, b
     ])
       expect(restDoorAllowed("GET", path, READER), path).toBe(false);
   });
-  it("opens no write: connecting, disconnecting and running a tool stay fenced", () => {
+  it("opens no write: tool.read changes no connector write's verdict", () => {
+    // The fence leaves a write to its gate, so a write door's verdict is not
+    // "refused"; what this pins is that `tool.read` adds nothing to it: the
+    // same verdict as a key holding only another door's read.
     const READER = pinned("tool.read");
+    const OTHER = pinned("messaging.read");
     for (const [method, path] of [
       ["POST", "/connectors/connect"],
+      ["POST", "/connectors/session"],
       ["POST", "/connectors/disconnect"],
       ["DELETE", "/connectors/connections/conn-1"],
     ] as const)
       expect(restDoorAllowed(method, path, READER), `${method} ${path}`).toBe(
-        false
+        restDoorAllowed(method, path, OTHER)
       );
   });
 });
