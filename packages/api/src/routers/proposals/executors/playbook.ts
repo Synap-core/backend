@@ -897,14 +897,28 @@ export function registerPlaybookExecutors(): void {
         // run that STARTED and finished at once: delivered like `running`.
         const started =
           result.status === "running" || result.status === "generated";
-        if (started && subjects.length > 1) {
+        // A BATCH whose first subject already has its run live (one live run
+        // per object): that subject is skipped, never failed, and the rest of
+        // the batch still runs. A single proposal's `already_running` stays a
+        // refusal below (nothing started, the claim is released).
+        const firstSkipped =
+          !started &&
+          subjects.length > 1 &&
+          result.status === "already_running";
+        if ((started || firstSkipped) && subjects.length > 1) {
           batch = await runBatchRest(
             subjects.slice(1),
             runFor,
-            startedRun(subjects[0]!, result)
+            started
+              ? { started: [startedRun(subjects[0]!, result)], failed: [] }
+              : {
+                  started: [],
+                  failed: [],
+                  skipped: [skippedRun(subjects[0]!, result)],
+                }
           );
         }
-        if (started) {
+        if (started || (batch && batch.started.length > 0)) {
           receipt = batch ?? {
             started: [startedRun(firstSubject, result)],
             failed: [],
@@ -913,7 +927,12 @@ export function registerPlaybookExecutors(): void {
         }
         // Nothing started, so the claim is released and the person can approve
         // again once the reason is fixed.
-        return { delivered: false as const, reason: notStartedReason(result) };
+        return {
+          delivered: false as const,
+          reason: batch
+            ? "no record in this batch started a run: each one already has this playbook running or could not run — open those runs, or approve again once they have ended"
+            : notStartedReason(result),
+        };
       });
 
       // A run that starts now supersedes an earlier failed attempt: the
@@ -953,7 +972,15 @@ export function registerPlaybookExecutors(): void {
         // The approve response's "what this created" (REST/CLI callers).
         ...(firstSessionId ? { primaryId: firstSessionId } : {}),
         ...(batch
-          ? { batch: { started: batch.started.length, failed: batch.failed } }
+          ? {
+              batch: {
+                started: batch.started.length,
+                failed: batch.failed,
+                ...(batch.skipped
+                  ? { skipped: batch.skipped.map((s) => s.subjectId) }
+                  : {}),
+              },
+            }
           : {}),
       };
     },
@@ -1213,10 +1240,24 @@ export interface StartedRun {
   runId?: string;
 }
 
+/**
+ * A subject of a batch approval that started nothing because the person
+ * already has a live run of the playbook on it (the run door's
+ * `already_running`, one live run per object): skipped, never failed. The
+ * live session is the run to open.
+ */
+export interface SkippedRun {
+  subjectId: string;
+  sessionId?: string;
+  reason: "already_running";
+}
+
 /** What a run approval started — stamped on the proposal as `data.runResult`. */
 export interface BatchRunReceipt {
   started: StartedRun[];
   failed: string[];
+  /** Present only when a subject was skipped (its run was already live). */
+  skipped?: SkippedRun[];
 }
 
 function startedRun(
@@ -1234,19 +1275,32 @@ function startedRun(
   };
 }
 
+function skippedRun(subjectId: string, result: unknown): SkippedRun {
+  const r = result as { session?: { id?: unknown } | null };
+  return {
+    subjectId,
+    ...(typeof r.session?.id === "string" ? { sessionId: r.session.id } : {}),
+    reason: "already_running",
+  };
+}
+
 /**
- * Start the rest of a batch's runs, {@link BATCH_RUN_CONCURRENCY} at a time.
- * A subject whose run fails (deleted since, no longer visible) is reported,
- * never allowed to stop its siblings: the approval stands for every subject
- * that can still run. Every started run is returned with its session.
+ * Start the rest of a batch's runs, {@link BATCH_RUN_CONCURRENCY} at a time,
+ * on top of what the first subject did (`seed`). A subject whose run fails
+ * (deleted since, no longer visible) is reported, never allowed to stop its
+ * siblings: the approval stands for every subject that can still run. A
+ * subject whose run is already live (`already_running`) is SKIPPED with that
+ * session, never counted as failed. Every started run is returned with its
+ * session.
  */
 export async function runBatchRest(
   subjects: string[],
   runFor: (subjectId: string) => Promise<{ status: string }>,
-  first: StartedRun
+  seed: BatchRunReceipt
 ): Promise<BatchRunReceipt> {
-  const started: StartedRun[] = [first];
-  const failed: string[] = [];
+  const started: StartedRun[] = [...seed.started];
+  const failed: string[] = [...seed.failed];
+  const skipped: SkippedRun[] = [...(seed.skipped ?? [])];
   let next = 0;
   const worker = async () => {
     while (next < subjects.length) {
@@ -1256,6 +1310,8 @@ export async function runBatchRest(
         // `generated`: a one-shot run filed its draft (it has no session).
         if (r.status === "running" || r.status === "generated")
           started.push(startedRun(subjectId, r));
+        else if (r.status === "already_running")
+          skipped.push(skippedRun(subjectId, r));
         else failed.push(subjectId);
       } catch {
         failed.push(subjectId);
@@ -1268,5 +1324,5 @@ export async function runBatchRest(
       worker
     )
   );
-  return { started, failed };
+  return { started, failed, ...(skipped.length > 0 ? { skipped } : {}) };
 }
