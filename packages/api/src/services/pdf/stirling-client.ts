@@ -300,16 +300,6 @@ export function stirlingCallFor<V extends PdfVerb>(
       return std("/api/v1/convert/pdf/markdown", {}, "markdown");
     case "pdf.info":
       return std("/api/v1/security/get-info-on-pdf", {}, "json");
-    case "pdf.protect": {
-      const i = input as PdfVerbInput<"pdf.protect">;
-      return std("/api/v1/security/add-password", { password: i.password });
-    }
-    case "pdf.unprotect": {
-      const i = input as PdfVerbInput<"pdf.unprotect">;
-      return std("/api/v1/security/remove-password", {
-        password: i.password,
-      });
-    }
   }
   throw new Error(`No engine call for ${String(verb)}`);
 }

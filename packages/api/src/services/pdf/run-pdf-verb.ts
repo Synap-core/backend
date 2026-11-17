@@ -391,8 +391,6 @@ const TITLE_KEYS = {
   "pdf.redact": "pdf.title.redact",
   "pdf.to_pdf": "pdf.title.to_pdf",
   "pdf.to_markdown": "pdf.title.to_markdown",
-  "pdf.protect": "pdf.title.protect",
-  "pdf.unprotect": "pdf.title.unprotect",
 } as const satisfies Record<PdfTransformVerb, PdfCopyKey>;
 
 /** A title without a trailing file extension ("Report.pdf" → "Report"). */

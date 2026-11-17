@@ -87,13 +87,6 @@ export const pdfToPdfParams = z.object({ fileId }).strict();
 export const pdfToMarkdownParams = z.object({ fileId }).strict();
 export const pdfInfoParams = z.object({ fileId }).strict();
 
-export const pdfProtectParams = z
-  .object({ fileId, password: z.string().min(1).max(256) })
-  .strict();
-export const pdfUnprotectParams = z
-  .object({ fileId, password: z.string().min(1).max(256) })
-  .strict();
-
 /** Every PDF verb and its schema, in one table (the runner reads it). */
 export const PDF_VERB_PARAMS = {
   "pdf.ocr": pdfOcrParams,
@@ -104,8 +97,6 @@ export const PDF_VERB_PARAMS = {
   "pdf.to_pdf": pdfToPdfParams,
   "pdf.to_markdown": pdfToMarkdownParams,
   "pdf.info": pdfInfoParams,
-  "pdf.protect": pdfProtectParams,
-  "pdf.unprotect": pdfUnprotectParams,
 } as const;
 
 export type PdfVerb = keyof typeof PDF_VERB_PARAMS;

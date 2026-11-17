@@ -116,12 +116,10 @@ import {
   pdfInfoParams,
   pdfMergeParams,
   pdfOcrParams,
-  pdfProtectParams,
   pdfRedactParams,
   pdfSplitParams,
   pdfToMarkdownParams,
   pdfToPdfParams,
-  pdfUnprotectParams,
 } from "../pdf/params.js";
 // marketplace-install.ts pulls in the full router graph (create-from-definition.ts
 // imports playbooksRouter/automationsRouter/toolsRouter/skillsRouter at top
@@ -4804,20 +4802,6 @@ const pdfToMarkdownHandler: BuiltinVerbHandler = async (params, ctx) => {
   return runPdfVerb("pdf.to_markdown", params, ctx, { caller });
 };
 
-const pdfProtectHandler: BuiltinVerbHandler = async (params, ctx) => {
-  const { relationsRouter } = await import("../../routers/relations.js");
-  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
-  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
-  return runPdfVerb("pdf.protect", params, ctx, { caller });
-};
-
-const pdfUnprotectHandler: BuiltinVerbHandler = async (params, ctx) => {
-  const { relationsRouter } = await import("../../routers/relations.js");
-  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
-  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
-  return runPdfVerb("pdf.unprotect", params, ctx, { caller });
-};
-
 const pdfInfoHandler: BuiltinVerbHandler = async (params, ctx) => {
   const { runPdfInfo } = await import("../pdf/run-pdf-verb.js");
   return runPdfInfo(params, ctx);
@@ -4942,8 +4926,6 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "pdf.to_pdf": pdfToPdfHandler,
   "pdf.to_markdown": pdfToMarkdownHandler,
   "pdf.info": pdfInfoHandler,
-  "pdf.protect": pdfProtectHandler,
-  "pdf.unprotect": pdfUnprotectHandler,
 };
 
 /**
@@ -5027,8 +5009,6 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "pdf.to_pdf": pdfToPdfParams,
   "pdf.to_markdown": pdfToMarkdownParams,
   "pdf.info": pdfInfoParams,
-  "pdf.protect": pdfProtectParams,
-  "pdf.unprotect": pdfUnprotectParams,
 };
 
 /**

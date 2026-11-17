@@ -1460,40 +1460,6 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
-    {
-      name: "pdf.protect",
-      kind: "builtin",
-      scope: "pod",
-      // No intent fits a pod-internal file transform: reached by name
-      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
-      description:
-        "Make a password-protected copy of a PDF (AES-256): the password is needed to open it. Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file); password (the new opening password).",
-      parameters: {
-        type: "object",
-        required: ["fileId", "password"],
-        properties: {
-          fileId: { type: "string", format: "uuid" },
-          password: { type: "string", minLength: 1, maxLength: 256 },
-        },
-      },
-    },
-    {
-      name: "pdf.unprotect",
-      kind: "builtin",
-      scope: "pod",
-      // No intent fits a pod-internal file transform: reached by name
-      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
-      description:
-        "Make an unlocked copy of a password-protected PDF, with its password. Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file); password (the PDF's current password).",
-      parameters: {
-        type: "object",
-        required: ["fileId", "password"],
-        properties: {
-          fileId: { type: "string", format: "uuid" },
-          password: { type: "string", minLength: 1, maxLength: 256 },
-        },
-      },
-    },
   ],
 };
 

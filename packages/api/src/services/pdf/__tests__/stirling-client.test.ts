@@ -307,19 +307,6 @@ describe("each verb's endpoint and fields", () => {
         "/api/v1/security/get-info-on-pdf",
         {},
       ],
-      [
-        stirlingCallFor("pdf.protect", { fileId: FILE_ID, password: "s3cret" }),
-        "/api/v1/security/add-password",
-        { password: "s3cret" },
-      ],
-      [
-        stirlingCallFor("pdf.unprotect", {
-          fileId: FILE_ID,
-          password: "s3cret",
-        }),
-        "/api/v1/security/remove-password",
-        { password: "s3cret" },
-      ],
     ];
     for (const [spec, path, fields] of table) {
       expect(spec.path).toBe(path);
@@ -406,7 +393,7 @@ describe("failures are typed refusals", () => {
             new Response(
               JSON.stringify({
                 title: "Bad Request",
-                detail: "Password is incorrect",
+                detail: "File is not a valid PDF",
               }),
               {
                 status: 400,
@@ -418,7 +405,7 @@ describe("failures are typed refusals", () => {
     );
     expect(err.code).toBe("PDF_ENGINE_REFUSED");
     expect(err.errorClass).toBe("provider");
-    expect(err.message).toContain("Password is incorrect (HTTP 400)");
+    expect(err.message).toContain("File is not a valid PDF (HTTP 400)");
   });
 
   it("a file gone from storage is target_missing FILE_NOT_FOUND, not 'engine down'", async () => {

@@ -132,8 +132,6 @@ describe("registration", () => {
     "pdf.to_pdf",
     "pdf.to_markdown",
     "pdf.info",
-    "pdf.protect",
-    "pdf.unprotect",
   ];
   it("every PDF verb has a handler and a param schema; only pdf.info is read-only", () => {
     for (const v of VERBS) {

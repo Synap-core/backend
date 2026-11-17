@@ -22,8 +22,6 @@ export const PDF_COPY_EN = {
   "pdf.title.redact": "{source} (redacted)",
   "pdf.title.to_pdf": "{source} (PDF)",
   "pdf.title.to_markdown": "{source} (Markdown)",
-  "pdf.title.protect": "{source} (protected)",
-  "pdf.title.unprotect": "{source} (unprotected)",
 
   "pdf.untitled_source": "Untitled file",
 

@@ -683,8 +683,6 @@ const REENTRY_CLASS: Record<string, Classification> = {
   "pdf.redact": "gated",
   "pdf.to_pdf": "gated",
   "pdf.to_markdown": "gated",
-  "pdf.protect": "gated",
-  "pdf.unprotect": "gated",
   "playbook.update": "gated",
   "automation.activate": "gated",
   "automation.update": "gated",

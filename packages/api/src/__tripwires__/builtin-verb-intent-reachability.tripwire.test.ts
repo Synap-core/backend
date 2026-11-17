@@ -412,8 +412,6 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
   "pdf.redact": PDF_TRANSFORM_UNROUTABLE,
   "pdf.to_pdf": PDF_TRANSFORM_UNROUTABLE,
   "pdf.to_markdown": PDF_TRANSFORM_UNROUTABLE,
-  "pdf.protect": PDF_TRANSFORM_UNROUTABLE,
-  "pdf.unprotect": PDF_TRANSFORM_UNROUTABLE,
   "pdf.info":
     "Reads a pod PDF's facts on the pod's own engine. No outside record is fetched (fetch_record) and no file is managed; reached by name until a transform intent exists (PDF tools W1).",
 };
