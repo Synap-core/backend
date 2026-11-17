@@ -240,7 +240,31 @@ const NOT_A_FIELD_UPDATE = new Set([
   "workspaceId",
   "addBlockedBySessionIds",
   "removeBlockedBySessionIds",
+  "alsoServesTrackIds",
 ]);
+
+/**
+ * `alsoServesTrackIds` on `synap_update_session`: the goals this session also
+ * serves, beside its `trackId` (ticket 3fb0e2c3). Refused whole (nothing
+ * changed) when malformed.
+ */
+function parseServesEdits(
+  args: Record<string, unknown>,
+  max: number
+): { add: string[] } | { error: string } {
+  const raw = args.alsoServesTrackIds;
+  if (raw === undefined || raw === null) return { add: [] };
+  if (
+    !Array.isArray(raw) ||
+    raw.length > max ||
+    !raw.every((id) => typeof id === "string" && isUuid(id))
+  ) {
+    return {
+      error: `alsoServesTrackIds must be an array of at most ${max} goal (track) UUIDs — NOTHING WAS CHANGED.`,
+    };
+  }
+  return { add: raw as string[] };
+}
 
 /**
  * The caller's answers to a template's declared params, off the MCP wire.
@@ -1630,8 +1654,17 @@ export const sessionHandlers: McpHandlerMap = {
 
     const blockerEdits = parseBlockerEdits(args);
     if ("error" in blockerEdits) return reply(blockerEdits);
-    const editsBlockers =
-      blockerEdits.add.length > 0 || blockerEdits.remove.length > 0;
+    const { SERVES_TRACK_IDS_MAX, addSessionServes } =
+      await import("../../../services/focus-sessions/session-serves.js");
+    const servesEdits = parseServesEdits(args, SERVES_TRACK_IDS_MAX);
+    if ("error" in servesEdits) return reply(servesEdits);
+    // Blockers and served goals are both EDGES on the session, each through
+    // the dependency door with its own governance: applied together, after
+    // the owner floor, and reported per id.
+    const editsLinks =
+      blockerEdits.add.length > 0 ||
+      blockerEdits.remove.length > 0 ||
+      servesEdits.add.length > 0;
 
     /**
      * BLOCKERS ON A RUNNING SESSION — "this session now waits on that one",
@@ -1644,7 +1677,7 @@ export const sessionHandlers: McpHandlerMap = {
      * `blockerRemovals` (removed | absent | proposed | failed).
      */
     const applyBlockerEdits = async (): Promise<Record<string, unknown>> => {
-      if (!editsBlockers) return {};
+      if (!editsLinks) return {};
       const { addCreateTimeBlockers, removeSessionBlockers } =
         await import("../../../services/focus-sessions/session-blocked-by.js");
       const sessionId = args.sessionId as string;
@@ -1666,13 +1699,25 @@ export const sessionHandlers: McpHandlerMap = {
               agentUserId,
             })
           : undefined;
+      // The goals it also serves (`session --serves--> track`).
+      const servesLinks =
+        servesEdits.add.length > 0
+          ? await addSessionServes({
+              sessionId,
+              trackIds: servesEdits.add,
+              userId,
+              agentUserId,
+              door: "mcp:synap_update_session",
+            })
+          : undefined;
       return {
         ...(blockerLinks ? { blockerLinks } : {}),
         ...(blockerRemovals ? { blockerRemovals } : {}),
+        ...(servesLinks ? { servesLinks } : {}),
       };
     };
 
-    if (editsBlockers) {
+    if (editsLinks) {
       // Owner floor first — the same one `updateFocusSession` applies — so a
       // session that is not the caller's is "not found", never half-edited.
       const [own] = await db
@@ -1705,7 +1750,7 @@ export const sessionHandlers: McpHandlerMap = {
           sessionId: args.sessionId,
           ...(await applyBlockerEdits()),
           message:
-            "Only this session's blockers were changed — read each id's outcome: linked / removed / absent applied now; proposed was filed for review (success — do not retry); failed says why.",
+            "Only this session's blockers or served goals were changed — read each id's outcome: linked / exists / removed / absent applied now; proposed was filed for review (success — do not retry); failed says why.",
         });
       }
     }
@@ -1885,7 +1930,7 @@ export const sessionHandlers: McpHandlerMap = {
     });
     // The field patch was refused ⇒ the blocker edits riding with it are not
     // applied either (say so; both are idempotent, so the retry is safe).
-    const blockersNotApplied = editsBlockers
+    const blockersNotApplied = editsLinks
       ? {
           blockerEdits:
             "not applied — the rest of this update was refused; fix it and send the call again.",

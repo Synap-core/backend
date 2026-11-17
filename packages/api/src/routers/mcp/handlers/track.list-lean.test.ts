@@ -11,6 +11,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   listTracks: vi.fn(),
   loadTrackViews: vi.fn(),
+  placements: new Map<
+    string,
+    { parentGoalId: string | null; pillars: string[] }
+  >(),
+}));
+
+// Where each goal sits has its own PGlite test (pillar-health.pglite.test.ts).
+vi.mock("../../../services/tracks/goal-placement.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readGoalPlacements: async (ids: string[]) =>
+    new Map(
+      ids.map((id) => [
+        id,
+        h.placements.get(id) ?? { parentGoalId: null, pillars: [] },
+      ])
+    ),
 }));
 
 vi.mock("../../../services/tracks/tracks-service.js", async (orig) => ({
@@ -60,6 +76,7 @@ async function body(args: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  h.placements.clear();
   h.listTracks.mockReset().mockResolvedValue(ROWS);
   h.loadTrackViews
     .mockReset()
@@ -101,5 +118,30 @@ describe("synap_list_tracks — lean rows by default", () => {
     expect(out.total).toBe(1);
     // Only the matching row is read in full.
     expect(h.loadTrackViews).toHaveBeenCalledWith([ROWS[1]], expect.anything());
+  });
+});
+
+describe("synap_list_tracks — where each goal sits (ticket 3fb0e2c3)", () => {
+  const PARENT = "44444444-4444-4444-8444-444444444444";
+  const SALES = "55555555-5555-4555-8555-555555555555";
+  const BRAND = "66666666-6666-4666-8666-666666666666";
+
+  it("a sub-goal's row names its parent and pillars; a root row carries neither key", async () => {
+    h.placements.set("t2", { parentGoalId: PARENT, pillars: [BRAND, SALES] });
+    const out = await body({});
+    const sub = out.items.find((t: { id: string }) => t.id === "t2");
+    expect(sub.parentGoalId).toBe(PARENT);
+    expect(sub.pillars).toEqual([BRAND, SALES]);
+    const root = out.items.find((t: { id: string }) => t.id === "t1");
+    expect(root).not.toHaveProperty("parentGoalId");
+    expect(root).not.toHaveProperty("pillars");
+  });
+
+  it("detail:'full' rows carry them too", async () => {
+    h.placements.set("t3", { parentGoalId: PARENT, pillars: [] });
+    const out = await body({ detail: "full" });
+    const row = out.items.find((t: { id: string }) => t.id === "t3");
+    expect(row.parentGoalId).toBe(PARENT);
+    expect(row).not.toHaveProperty("pillars");
   });
 });

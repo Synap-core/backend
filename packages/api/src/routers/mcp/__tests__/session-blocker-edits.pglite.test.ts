@@ -43,6 +43,18 @@ const h = vi.hoisted(() => ({
   ) => Promise<unknown>,
   permCalls: [] as Array<Record<string, unknown>>,
   updates: [] as Array<Record<string, unknown>>,
+  serves: [] as Array<Record<string, unknown>>,
+}));
+
+// `addSessionServes` (THE dependency door for `session --serves--> track`)
+// has its own PGlite test beside the goal reads (pillar-health.pglite.test.ts);
+// here it is captured so the DOOR's wiring is what is proven.
+vi.mock("../../../services/focus-sessions/session-serves.js", () => ({
+  SERVES_TRACK_IDS_MAX: 5,
+  addSessionServes: async (input: { trackIds: string[] }) => {
+    h.serves.push(input);
+    return input.trackIds.map((trackId) => ({ trackId, status: "linked" }));
+  },
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -162,6 +174,7 @@ describe("synap_update_session — blockers on a running session", () => {
     );
     h.permCalls.length = 0;
     h.updates.length = 0;
+    h.serves.length = 0;
     h.perm = async () => ({ granted: true });
   });
 
@@ -333,5 +346,48 @@ describe("synap_update_session — blockers on a running session", () => {
       await call({ sessionId: theirs, addBlockedBySessionIds: [prereq] })
     ).toMatchObject({ error: expect.stringMatching(/not found/) });
     expect(await blockersOf(theirs)).toEqual([]);
+  });
+
+  it("alsoServesTrackIds files the session under more goals through the serves door, and touches nothing else", async () => {
+    const work = await seedSession(USER);
+    const g1 = randomUUID();
+    const g2 = randomUUID();
+    const out = await call(
+      { sessionId: work, alsoServesTrackIds: [g1, g2] },
+      AGENT
+    );
+    expect(h.serves).toEqual([
+      {
+        sessionId: work,
+        trackIds: [g1, g2],
+        userId: USER,
+        agentUserId: AGENT,
+        door: "mcp:synap_update_session",
+      },
+    ]);
+    expect(out.servesLinks).toEqual([
+      { trackId: g1, status: "linked" },
+      { trackId: g2, status: "linked" },
+    ]);
+    // A links-only call never reaches the update membrane.
+    expect(h.updates).toHaveLength(0);
+  });
+
+  it("refuses a malformed alsoServesTrackIds whole, and another user's session is not found", async () => {
+    const work = await seedSession(USER);
+    expect(
+      await call({ sessionId: work, alsoServesTrackIds: ["not-a-uuid"] })
+    ).toMatchObject({ error: expect.stringMatching(/NOTHING WAS CHANGED/) });
+    expect(
+      await call({
+        sessionId: work,
+        alsoServesTrackIds: Array.from({ length: 6 }, () => randomUUID()),
+      })
+    ).toMatchObject({ error: expect.stringMatching(/at most 5/) });
+    const theirs = await seedSession(OTHER);
+    expect(
+      await call({ sessionId: theirs, alsoServesTrackIds: [randomUUID()] })
+    ).toMatchObject({ error: expect.stringMatching(/not found/) });
+    expect(h.serves).toHaveLength(0);
   });
 });

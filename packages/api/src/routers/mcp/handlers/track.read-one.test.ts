@@ -12,6 +12,22 @@ const h = vi.hoisted(() => ({
   getTrack: vi.fn(),
   listTracks: vi.fn(),
   loadTrackViews: vi.fn(),
+  placements: new Map<
+    string,
+    { parentGoalId: string | null; pillars: string[] }
+  >(),
+}));
+
+// Where each goal sits has its own PGlite test (pillar-health.pglite.test.ts).
+vi.mock("../../../services/tracks/goal-placement.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readGoalPlacements: async (ids: string[]) =>
+    new Map(
+      ids.map((id) => [
+        id,
+        h.placements.get(id) ?? { parentGoalId: null, pillars: [] },
+      ])
+    ),
 }));
 
 vi.mock("../../../services/tracks/tracks-service.js", async (orig) => ({

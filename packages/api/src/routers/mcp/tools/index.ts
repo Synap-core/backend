@@ -2809,7 +2809,7 @@ export const tools = {
             addOutput: {
               type: "object",
               description:
-                "DEPRECATED alias — prefer `outcomes` (one entry upserts one deliverable). Append ONE new deliverable (stored with status 'pending'). This is also how you HAND WORK BACK: set owner='human' with a blockedReason, a one-line why AND an `ask` (confirm yes/no, choose options, ...) so the person answers in one tap instead of a bare 'I did this' button.",
+                "DEPRECATED alias — prefer `outcomes` (one entry upserts one deliverable).",
             },
             retireOutput: {
               type: "string",
@@ -2862,6 +2862,13 @@ export const tools = {
               maxItems: 20,
               description:
                 "Stop waiting on these sessions — how you RE-PLAN when a blocker was dropped (cancelled / failed), or when it is no longer needed. Reported per id on `blockerRemovals` (removed | absent — there was no such edge | proposed | failed with a reason). To wait on a retry instead, remove the old one and add the retry (`addBlockedBySessionIds`) in the same call.",
+            },
+            alsoServesTrackIds: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+              maxItems: 5,
+              description:
+                "Goals this session ALSO serves, beside `trackId` (a `serves` link each). Reported per id on `servesLinks`.",
             },
           },
         },
@@ -4867,7 +4874,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List a project's GOALS — what people call a goal is a TRACK in tool and field names (say 'goal' to the person; the tools keep 'track'): the goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. LEGACY: an old track also follows a project-scoped playbook (its method, with stages), pinned at the version it started with; a new track has none (playbookId null, no stages). Each row (lean, the default): id, name, status (proposed|agreed|ready|active|paused|completed|archived — completed reads Closed, archived Dropped), pausedBy (check|human|null), verdict (how a closed or dropped goal ended, else null), direction, kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED), updatedAt. detail:'full' adds the rest (criteria, stages, participants…). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects; `trackId` reads one goal in full.",
+          "List a project's GOALS — what people call a goal is a TRACK in tool and field names (say 'goal' to the person; the tools keep 'track'): the goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. LEGACY: an old track follows a staged playbook; a new one has none. Each row (lean, the default): id, name, status (proposed|agreed|ready|active|paused|completed|archived — completed reads Closed, archived Dropped), pausedBy (check|human|null), verdict (how a closed or dropped goal ended, else null), direction, kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED), updatedAt, and when set parentGoalId and pillars (space ids, primary first). detail:'full' adds the rest (criteria, stages, participants…). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects; `trackId` reads one goal in full.",
         inputSchema: {
           type: "object",
           properties: {

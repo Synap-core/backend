@@ -29,12 +29,23 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { and, db, eq, links, projectTracks } from "@synap/database";
+import {
+  and,
+  asc,
+  db,
+  drizzleSql,
+  eq,
+  inArray,
+  links,
+  or,
+  projectTracks,
+} from "@synap/database";
 import type { ProjectTrack } from "@synap/database/schema";
 import {
   ADVANCES_LINK_TYPE,
   LINK_PRIMARY_KEY,
   SERVES_LINK_TYPE,
+  isPrimaryLinkMetadata,
 } from "@synap-core/types/connections";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { listWorkspacesUsedByProject } from "../../utils/project-workspace.js";
@@ -241,6 +252,73 @@ export async function checkGoalPlacement(
 /** The refusal for a parent goal of another project. */
 export const PARENT_OTHER_PROJECT_ERROR =
   "The parent goal must be a goal of the same project.";
+
+/** Where one goal sits, as a goal list row carries it. */
+export interface GoalPlacementRead {
+  /** Its primary parent goal (else the first one written); null = a root. */
+  parentGoalId: string | null;
+  /** The spaces it advances, primary first; [] = none. */
+  pillars: string[];
+}
+
+/**
+ * Where each goal sits — its parent goal and its pillars — for a PAGE of goals
+ * in one read (ticket 3fb0e2c3: list rows carried neither, so a reader drawing
+ * the goal tree or a space chip had to invent them). The same edges the
+ * placement writes; a pillar counts only while the goal's project still
+ * `uses` that space, as in `readGoalPrimary`. THROWS on a failed read.
+ */
+export async function readGoalPlacements(
+  trackIds: readonly string[]
+): Promise<Map<string, GoalPlacementRead>> {
+  const out = new Map<string, GoalPlacementRead>(
+    trackIds.map((id) => [id, { parentGoalId: null, pillars: [] }])
+  );
+  if (trackIds.length === 0) return out;
+  // The literals keep this reader visible to the `links-type-ssot` scan.
+  const rows = await db
+    .select({
+      fromId: links.fromId,
+      linkType: links.linkType,
+      toId: links.toId,
+      metadata: links.metadata,
+    })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "track"),
+        inArray(links.fromId, [...trackIds]),
+        or(
+          and(eq(links.linkType, "serves"), eq(links.toType, "track")),
+          and(
+            eq(links.linkType, "advances"),
+            eq(links.toType, "workspace"),
+            drizzleSql`EXISTS (SELECT 1 FROM links u JOIN ${projectTracks} t ON t.project_id::text = u.from_id WHERE t.id::text = ${links.fromId} AND u.link_type = 'uses' AND u.from_type = 'project' AND u.to_type = 'workspace' AND u.to_id = ${links.toId})`
+          )
+        )
+      )
+    )
+    .orderBy(asc(links.createdAt), asc(links.id));
+  const firstParent = new Map<string, string>();
+  for (const r of rows) {
+    const goal = out.get(r.fromId);
+    if (!goal) continue;
+    const primary = isPrimaryLinkMetadata(r.metadata);
+    if (r.linkType === SERVES_LINK_TYPE) {
+      if (primary) goal.parentGoalId = r.toId;
+      else if (!firstParent.has(r.fromId)) firstParent.set(r.fromId, r.toId);
+    } else if (primary) {
+      goal.pillars.unshift(r.toId);
+    } else {
+      goal.pillars.push(r.toId);
+    }
+  }
+  for (const [id, parent] of firstParent) {
+    const goal = out.get(id)!;
+    if (goal.parentGoalId === null) goal.parentGoalId = parent;
+  }
+  return out;
+}
 
 /** Does goal `trackId` already have a PRIMARY `linkType` edge (THE reader)? */
 async function hasPrimary(
