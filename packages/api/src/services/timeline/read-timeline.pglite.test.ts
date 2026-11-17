@@ -850,6 +850,22 @@ describe("the session chain (decision D3): stage moves, spawns, runners, room po
     ]);
   });
 
+  it("a page of sessions carries the chain as the one-session door does", async () => {
+    const page = await readSessionTimelines([C.parent, C.peer], reader);
+    for (const id of [C.parent, C.peer]) {
+      const door = await readTimeline({ kind: "session", id }, reader);
+      expect(page.get(id)!.events).toEqual(door!.events);
+    }
+    expect(kinds(page.get(C.parent)!.events)).toEqual(
+      expect.arrayContaining([
+        "stage_moved",
+        "child_started",
+        "runner_seen",
+        "room_post",
+      ])
+    );
+  });
+
   it("stays bounded: each chain source keeps its newest rows and says older ones exist", async () => {
     const page = await readSessionTimelines([C.parent], reader, 1);
     const chain = page.get(C.parent)!;
