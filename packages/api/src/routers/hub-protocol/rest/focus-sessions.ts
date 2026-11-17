@@ -195,6 +195,10 @@ import {
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import {
+  startOrchestrator,
+  startOrchestratorInputSchema,
+} from "../../../services/focus-sessions/start-orchestrator.js";
+import {
   gateAgentHandOff,
   handedOffAgentIds,
   type AgentHandOffDecision,
@@ -3450,6 +3454,71 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json(result, status);
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.rerun failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/orchestrate — START AN ORCHESTRATOR (founder
+   * decision D5): ONE session coordinating the picked running sessions, each
+   * linked (`orchestrated_by`), paused until the person approves the merged
+   * plan, and told so in its room. Governed (`focus_session/orchestrate`): an
+   * agent key gets 202 `proposed`; a person 200 `started`. Same service and
+   * input schema as tRPC `focusSessions.startOrchestrator` and MCP
+   * `synap_start_orchestrator`. Refusals: 400 bad input, a session that is
+   * not running or paused, an agent that cannot take the work · 403 the gate
+   * or the key's grant · 404 a session that is not the caller's.
+   */
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/orchestrate",
+    tags: ["FocusSessions"],
+    summary: "Start an orchestrator over several running sessions",
+    description:
+      "Files ONE governed write (focus_session/orchestrate). On approval (or " +
+      "at once for a person): an orchestrator session (goal = the brief, a " +
+      "merged-plan deliverable, the person's plan-approval slot), one " +
+      "`orchestrated_by` link per picked session, each running one paused " +
+      "until the person answers plan-approval, and a handoff note in each " +
+      "room. Same service as tRPC focusSessions.startOrchestrator and MCP " +
+      "synap_start_orchestrator.",
+    request: { body: startOrchestratorInputSchema },
+    responses: {
+      200: {
+        description:
+          "Started: { status: 'started', orchestratorSessionId, channelId, children[] }",
+        schema: z.object({}).passthrough(),
+      },
+      202: {
+        description:
+          "Proposed for review: { status: 'proposed', orchestratorSessionId, proposalId, reviewUrl }",
+        schema: z.object({}).passthrough(),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/focus-sessions/orchestrate", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const raw = await c.req.json().catch(() => null);
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+    try {
+      const result = await startOrchestrator({
+        userId: c.get("userId") as string,
+        agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+        input: raw,
+      });
+      return jsonGoverned(c, result);
+    } catch (err) {
+      logger.error({ err }, "focus-sessions.orchestrate failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)

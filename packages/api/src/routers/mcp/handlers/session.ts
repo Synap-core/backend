@@ -1072,6 +1072,25 @@ export const sessionHandlers: McpHandlerMap = {
       })
     );
   },
+  /**
+   * START AN ORCHESTRATOR (D5) — the same service and input schema as tRPC
+   * `focusSessions.startOrchestrator` and Hub `POST /focus-sessions/orchestrate`.
+   */
+  synap_start_orchestrator: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const { startOrchestrator } =
+      await import("../../../services/focus-sessions/start-orchestrator.js");
+    return ok(
+      await startOrchestrator({
+        userId,
+        agentUserId: agentUserId ?? null,
+        input: args,
+      })
+    );
+  },
   synap_get_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
