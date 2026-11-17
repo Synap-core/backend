@@ -512,8 +512,9 @@ export interface StatusOfWork {
 // ── reactions (typed slot; not filled yet) ────────────────────────────────
 
 /**
- * A RULE that fires when the subject moves (WHEN a subject reaches a status or category → VIA one link → DO one effect through the
- * target's own door). The person sees the word "Rules" (decision D8).
+ * A RULE that fires when the subject moves (WHEN a subject reaches a status
+ * or category → VIA one link → DO one effect through the target's own door).
+ * The person sees the word "Rules" (decision D8).
  * RESERVED: no read fills it yet.
  */
 export interface StatusOfReaction {
