@@ -23,6 +23,8 @@ import {
   drizzleSql,
   getActingAgentUserId,
   transitionProposal,
+  computeProposalDedupHash,
+  ne,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
 import { getRequestGrant } from "@synap/database";
@@ -1031,6 +1033,40 @@ export async function mergeProposalRevision(
       eq(proposals.status, existing.status)
     );
     if (reopening) {
+      // THE DEDUP INDEX. A pending agent row is unique on its `dedup_hash`
+      // (`proposals_agent_dedup_uq`, global across agents), and a failed row is
+      // outside that partial index.
+      const dedupHash = existing.agentUserId
+        ? computeProposalDedupHash({
+            workspaceId:
+              params.workspaceId !== undefined
+                ? params.workspaceId
+                : existing.workspaceId,
+            proposalType: existing.proposalType,
+            targetType: existing.targetType,
+            targetId: existing.targetId,
+            data: merged as Record<string, unknown>,
+          })
+        : null;
+      if (dedupHash) {
+        const [twin] = await tx
+          .select({ id: proposals.id })
+          .from(proposals)
+          .where(
+            and(
+              eq(proposals.status, ProposalStatus.PENDING),
+              eq(proposals.dedupHash, dedupHash),
+              ne(proposals.id, params.proposalId)
+            )
+          )
+          .limit(1);
+        if (twin) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `The same request is already waiting for review as proposal ${twin.id}, so this one was left as it is. Revise that one instead, and withdraw this one (synap_reject_proposal, if it is yours).`,
+          });
+        }
+      }
       // Reopened: the failure is history (kept on the revision entry above),
       // and the row waits for a review again: approval_failed → pending,
       // through the status door.
@@ -1044,6 +1080,7 @@ export async function mergeProposalRevision(
           rejectionReason: null,
           reviewedBy: null,
           reviewedAt: null,
+          ...(dedupHash ? { dedupHash } : {}),
           ...(params.workspaceId !== undefined
             ? { workspaceId: params.workspaceId }
             : {}),
