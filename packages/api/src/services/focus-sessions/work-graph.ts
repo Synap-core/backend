@@ -343,10 +343,7 @@ export async function buildWorkGraph(
   // a window session (counted here) or settled before the window (not part
   // of the map); either way the edge to it is not drawn.
   const omittedByGrant = narrowed
-    ? Math.max(
-        0,
-        (await countUserSessionsForPerson(windowQuery)) - windowTotal
-      )
+    ? Math.max(0, (await countUserSessionsForPerson(windowQuery)) - windowTotal)
     : 0;
 
   // ── The edges of the window, each read settled on its own.
