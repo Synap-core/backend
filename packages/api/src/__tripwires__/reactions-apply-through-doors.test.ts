@@ -13,8 +13,11 @@
  * DERIVED, not listed:
  *   - the effects ← every `: ReactionEffect = {` declaration in
  *     packages/jobs/src and packages/api/src (non-test), with its `key`;
- *   - the built-ins ← `BUILT_IN_REACTIONS` itself.
- * Every built-in's `do.effect` must have exactly one declared effect; every
+ *   - the built-ins ← `BUILT_IN_REACTIONS` itself;
+ *   - every effect a DECLARED rule can name (wave 3: a relation's roll-up)
+ *     ← the `ReactionDo` union's `effect` keys, parsed from its source.
+ * Every built-in's `do.effect`, and every `ReactionDo` key, must have
+ * exactly one declared effect; every
  * file that declares one, and the reactor's worker, must hold no raw
  * write (`.update(`, `.delete(`, `UPDATE …`, `DELETE FROM`) and its effect
  * must call one of the status doors. Comments are stripped first.
@@ -30,6 +33,20 @@ const ROOTS = ["packages/jobs/src", "packages/api/src"].map((r) =>
   join(BACKEND_ROOT, r)
 );
 const WORKER = join(BACKEND_ROOT, "packages/jobs/src/workers/reactions.ts");
+const REGISTRY = join(BACKEND_ROOT, "packages/jobs/src/utils/reactions.ts");
+
+/** The `effect` keys of the closed `ReactionDo` union, from its source. */
+const DO_KEYS = (() => {
+  const src = stripComments(readFileSync(REGISTRY, "utf8"), "ts");
+  const from = src.indexOf("export type ReactionDo =");
+  const to = src.indexOf("export type ReactionEffectKey", from);
+  if (from < 0 || to < 0) {
+    throw new Error(`Tripwire cannot find the ReactionDo union in ${REGISTRY}`);
+  }
+  return [...src.slice(from, to).matchAll(/effect:\s*"([a-z_]+)"/g)].map(
+    (m) => m[1]!
+  );
+})();
 
 /** The doors a reaction's effect may move a status through. */
 const DOORS = [
@@ -97,6 +114,20 @@ describe("every built-in reaction applies through a door", () => {
       expect(
         found.map((d) => relative(BACKEND_ROOT, d.file)),
         `${r.id} → ${r.do.effect}`
+      ).toHaveLength(1);
+    }
+  });
+
+  it("every effect a rule can name (ReactionDo, declared rules included) is declared exactly once", () => {
+    // The union parsed to something: an empty parse is a blind guard.
+    expect(DO_KEYS).toEqual(
+      expect.arrayContaining(["meet_outcomes", "pause_session", "roll_up"])
+    );
+    for (const key of DO_KEYS) {
+      const found = declarations.filter((d) => d.key === key);
+      expect(
+        found.map((d) => relative(BACKEND_ROOT, d.file)),
+        `ReactionDo "${key}"`
       ).toHaveLength(1);
     }
   });

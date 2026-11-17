@@ -50,25 +50,50 @@ export interface ReactionWhen {
   to?: readonly string[];
   /** …or in one of these categories. */
   category?: readonly LifecycleCategory[];
+  /**
+   * Things only: the move is of one of these kinds' OWN lifecycle (a kind's
+   * slug; a role's move, on its facet, is not the kind's). Absent: any.
+   */
+  profileSlug?: readonly string[];
 }
 
 /**
  * VIA: the ONE existing link a reaction walks from what moved to what it
  * moves. A closed union: a declaration names a link, never an expression.
- * Lane E adds the relation arm (`part_of` roll-ups).
+ * The relation arm carries the roll-ups a link declares (wave 3).
  */
 export type ReactionVia =
   /** An approved proposal → every outcome (slot) whose own `ref` names its target. */
   | { link: "outcome_ref" }
   /** A run → the session it drives. */
-  | { link: "run_session" };
+  | { link: "run_session" }
+  /**
+   * A thing → the thing(s) a declared relation links it to (wave 3, a
+   * relation's `reactions`, `@synap-core/types/relations`). `parent` names
+   * the end that moves: `target` for `part_of` (child → parent), `source`
+   * for `parent_of`. The profile ids pin the declaring pair.
+   */
+  | {
+      link: "relation";
+      relation: string;
+      parent: "target" | "source";
+      relationDefId: string;
+      sourceProfileId: string;
+      targetProfileId: string;
+    };
 
 /** DO: the one effect, applied through the target's own door. Closed. */
 export type ReactionDo =
   /** Meet the outcome (the done door, `satisfy-expected-output.ts`). */
   | { effect: "meet_outcomes" }
   /** Pause the session with a hold on the person (`setSessionStatus`). */
-  | { effect: "pause_session" };
+  | { effect: "pause_session" }
+  /**
+   * Roll the parent up (decision D5): when every non-lost part is done and
+   * at least one is, the parent moves to `to`, else to its next status
+   * (`moveStatus`, the thing's own door).
+   */
+  | { effect: "roll_up"; to?: string };
 
 export type ReactionEffectKey = ReactionDo["effect"];
 
@@ -94,6 +119,20 @@ export interface ReactionDeclaration {
   source: "built_in" | "declared";
   /** Built-in rules are on unless their owner paused them. */
   enabled: boolean;
+  /**
+   * A declared rule: who declared it, in the person's words (the relation and
+   * the kinds at its two ends), for the Rules list. Absent on a built-in.
+   */
+  declaredOn?: {
+    kind: "relation";
+    relation: string;
+    relationName: string;
+    source: { profileId: string; slug: string; name: string };
+    target: { profileId: string; slug: string; name: string };
+    workspaceId: string | null;
+    /** The person who declared it (the relation's author). */
+    userId: string | null;
+  };
 }
 
 /**
@@ -213,9 +252,19 @@ export function byReactionOrder(
 /** Does this rule listen to this move? Pure. */
 export function reactionMatches(
   r: Pick<ReactionDeclaration, "when">,
-  t: Pick<AnyTransitionPayload, "subjectType" | "to" | "category">
+  t: Pick<AnyTransitionPayload, "subjectType" | "to" | "category"> & {
+    profileSlug?: string | null;
+    role?: string | null;
+  }
 ): boolean {
   if (r.when.subjectType !== t.subjectType) return false;
+  const kinds = r.when.profileSlug;
+  if (kinds && kinds.length > 0) {
+    // A kind's own lifecycle only: a role's move (its facet) is not the kind's.
+    if (t.role || !t.profileSlug || !kinds.includes(t.profileSlug)) {
+      return false;
+    }
+  }
   const byTo = r.when.to && r.when.to.length > 0;
   const byCategory = r.when.category && r.when.category.length > 0;
   if (!byTo && !byCategory) return true;

@@ -113,6 +113,33 @@ describe("matching", () => {
       })
     ).toBe(true);
   });
+
+  it("a rule naming kinds matches only those kinds' own moves, never a role's (W3)", () => {
+    const posts = rule("posts", {
+      when: {
+        subjectType: "entity",
+        category: ["done", "lost"],
+        profileSlug: ["post"],
+      },
+    });
+    const move = {
+      subjectType: "entity" as const,
+      to: "published",
+      category: "done" as const,
+    };
+    expect(
+      reactionMatches(posts, { ...move, profileSlug: "post", role: null })
+    ).toBe(true);
+    expect(
+      reactionMatches(posts, { ...move, profileSlug: "campaign", role: null })
+    ).toBe(false);
+    // A role's status moved on its facet: not the post's own lifecycle.
+    expect(
+      reactionMatches(posts, { ...move, profileSlug: "post", role: "lead" })
+    ).toBe(false);
+    // A move that names no kind cannot be one of them.
+    expect(reactionMatches(posts, move)).toBe(false);
+  });
 });
 
 describe("the one list", () => {
