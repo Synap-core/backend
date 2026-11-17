@@ -92,6 +92,19 @@ export interface SideEffectPayload {
    * feeds the event fingerprint.
    */
   origin?: "sync" | "merge";
+  /**
+   * The SUBJECT is pod-wide although the event names a workspace: a shared
+   * role (a facet with no workspace, e.g. `client`) attached from inside a
+   * space. `workspaceId` is then only the lens it was written from, not where
+   * the subject lives. The automation matcher matches such an event in that
+   * lens AND across the actor's accessible spaces, each match running in its
+   * own space — so a client attached from the CRM also starts the Operations
+   * process that declares the client role. Set by the facet attach
+   * announcement (`registerFacetAttachEmitter`, @synap/api) only.
+   *
+   * TOP-LEVEL, never in `data` (`data` feeds the event fingerprint).
+   */
+  podWideSubject?: boolean;
 }
 
 // Re-export the reactor registry surface so future reactions can register
@@ -231,6 +244,9 @@ const automationTriggerMatchReactor: Reactor = {
       // Sync-origin payloads reach the matcher (so an opted-in automation can
       // still fire); the matcher, not this reactor, decides who skips.
       ...(payload.origin ? { origin: payload.origin } : {}),
+      // A pod-wide subject announced from a space (a shared role attached
+      // from the CRM): the matcher fans it out beyond that space.
+      ...(payload.podWideSubject ? { podWideSubject: true } : {}),
       // CONFUSED-DEPUTY GUARD: carry the event's ACTOR as the causal-chain
       // producer. Agent-authored governed writes emit with `userId = agentUserId`
       // (the Hub write door collapses the two), so this IS the producing agent

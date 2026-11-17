@@ -65,7 +65,11 @@ vi.mock("@synap/database", async (importOriginal) => {
       return { linked: true, suspendedIntentRecorded: false };
     },
     getParentSessionId: async (id: string) => h.parents.get(id) ?? null,
-    resolveSessionProjectPlacement: async () => ({ projectId: null }),
+    // The caller's explicit project is the placement (no lens inference here).
+    resolveSessionProjectPlacement: async (
+      _db: unknown,
+      p: { explicitProjectId?: string | null }
+    ) => ({ projectId: p.explicitProjectId ?? null }),
   };
 });
 vi.mock("../../../utils/permission-check.js", async (importOriginal) => ({
@@ -158,17 +162,25 @@ const TASK_PROFILE = randomUUID();
 const OTHER = randomUUID(); // active, no subject
 const GRANT_PROFILE = randomUUID();
 const GRANTING = randomUUID(); // active, runs on a grant-kind, GRANTS a tool
+// A space the user owns, a project whose home is that space, and a project
+// with no home space (pod-personal).
+const SPACE = randomUUID();
+const HOMED_PROJECT = randomUUID();
+const HOMELESS_PROJECT = randomUUID();
+const IN_SPACE = randomUUID(); // active, no subject, lives in SPACE
+const MAIN_RED = randomUUID(); // active, no subject, lives in SPACE
 
 async function insertPlaybook(
   id: string,
   name: string,
   status: string,
-  subjectProfile: unknown
+  subjectProfile: unknown,
+  workspaceId: string | null = null
 ) {
   await q(
     `insert into playbooks
        (id, workspace_id, created_by, name, goal_template, executor, stages, criteria, expected_outputs, params, subject_profile, version, status, scope, created_at, updated_at)
-     values ($1, null, $2, $3, $3, 'external-agent', '[]'::jsonb,
+     values ($1, $7, $2, $3, $3, 'external-agent', '[]'::jsonb,
              $4::jsonb, '[]'::jsonb, '[]'::jsonb, $5::jsonb, 1, $6, 'session', now(), now())`,
     [
       id,
@@ -183,6 +195,7 @@ async function insertPlaybook(
       ]),
       subjectProfile === null ? null : JSON.stringify(subjectProfile),
       status,
+      workspaceId,
     ]
   );
 }
@@ -267,6 +280,16 @@ beforeAll(async () => {
     profileSlug: "grant-kind",
   });
   await q(
+    `insert into workspaces (id, name, owner_id, created_at, updated_at) values ($1, 'Builder', $2, now(), now())`,
+    [SPACE, USER]
+  );
+  await q(
+    `insert into projects (id, user_id, workspace_id, name, created_at, updated_at) values ($1, $3, $2, 'Homed', now(), now()), ($4, $3, null, 'Homeless', now(), now())`,
+    [HOMED_PROJECT, SPACE, USER, HOMELESS_PROJECT]
+  );
+  await insertPlaybook(IN_SPACE, "Run a wave", "active", null, SPACE);
+  await insertPlaybook(MAIN_RED, "Fix main red", "active", null, SPACE);
+  await q(
     `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by, created_at)
      values ($1, null, 'playbook', $2, 'tool', 'some-tool', 'grants', '{}'::jsonb, $3, now())`,
     [randomUUID(), GRANTING, USER]
@@ -339,6 +362,46 @@ describe("at start: a fact binds through the follow door", () => {
     const row = await rowOf(child.session.id);
     expect(row.playbook_id).toBe(OTHER);
     expect(row.metadata.boundBy).toMatchObject({ rung: "parent" });
+  });
+});
+
+describe("a project session with no space of its own reads its project's home space", () => {
+  it("a lane in a project inherits its parent's space playbook", async () => {
+    const parent = await start({
+      projectId: HOMED_PROJECT,
+      templateId: IN_SPACE,
+    });
+    expect(parent.session.workspaceId ?? null).toBeNull();
+    expect((await rowOf(parent.session.id)).playbook_id).toBe(IN_SPACE);
+    const child = await start({
+      projectId: HOMED_PROJECT,
+      parentSessionId: parent.session.id,
+    });
+    const row = await rowOf(child.session.id);
+    expect(row.playbook_id).toBe(IN_SPACE);
+    expect(row.metadata.boundBy).toMatchObject({ rung: "parent" });
+  });
+
+  it("a `main red:` title in a project binds the space's main-red playbook", async () => {
+    const res = await start({
+      projectId: HOMED_PROJECT,
+      title: "main red: backend Full suite @abcdef12",
+    });
+    const row = await rowOf(res.session.id);
+    expect(row.playbook_id).toBe(MAIN_RED);
+    expect(row.metadata.boundBy).toMatchObject({ rung: "main-red" });
+  });
+
+  it("a project with no home space still never binds another space's playbook", async () => {
+    const parent = await start({
+      projectId: HOMED_PROJECT,
+      templateId: IN_SPACE,
+    });
+    const child = await start({
+      projectId: HOMELESS_PROJECT,
+      parentSessionId: parent.session.id,
+    });
+    expect((await rowOf(child.session.id)).playbook_id).toBeNull();
   });
 });
 
