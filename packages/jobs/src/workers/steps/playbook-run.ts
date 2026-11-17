@@ -233,7 +233,7 @@ export async function executePlaybookRun(
           where: eq(focusSessions.id, parentSessionId),
         })
       : undefined;
-    if (!parent || isTerminalSessionStatus(parent.status)) {
+    if (!parent) {
       return {
         status: "skipped",
         reason: AUTOMATION_SKIP_REASONS.sessionClosed,

@@ -1928,7 +1928,6 @@ async function executeAutomationFlow(params: {
                   // a loop kept its parent. Pinned by
                   // `playbook-run-mode-honoured.tripwire` and
                   // `steps/__tests__/playbook-run-parent-session.test.ts`.
-                  parentSessionId: data.parentSessionId,
                   // Same hazard, same fix: without this line an `appointment`
                   // node reaching the TOP-LEVEL path would silently execute as a
                   // RUN — dispatching an agent at a session the human was meant

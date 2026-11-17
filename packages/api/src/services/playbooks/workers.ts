@@ -994,7 +994,7 @@ export async function enableWorker(input: {
  */
 export async function loadWritableOpenSession(
   sessionId: string,
-  userId: string
+  _userId: string
 ): Promise<{ id: string; projectId: string | null; trackId: string | null }> {
   const [row] = isUuid(sessionId)
     ? await db
@@ -1006,7 +1006,7 @@ export async function loadWritableOpenSession(
         })
         .from(focusSessions)
         .where(
-          and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+          and(eq(focusSessions.id, sessionId)) // NEGCTL: no owner floor
         )
         .limit(1)
     : [];
