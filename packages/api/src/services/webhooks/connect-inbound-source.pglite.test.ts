@@ -76,6 +76,8 @@ const h = vi.hoisted(() => ({
   /** The caller's gate on the filing's read verbs, and who asked it. */
   readVerdict: { decision: "run" } as { decision: string; reason?: string },
   gateCalls: [] as Array<Record<string, any>>,
+  /** How Vercel lists the existing URL variable's type. */
+  urlEnvType: "encrypted",
   /** Serialize anything a leak could hide in (an Error's message and cause too). */
   stringify: (v: unknown) =>
     JSON.stringify(v, (_k, x) =>
@@ -211,7 +213,7 @@ vi.mock("../../connectors/external-dispatch.js", async (importOriginal) => ({
             {
               id: "env_old",
               key: "CONTACT_WEBHOOK_URL",
-              type: "encrypted",
+              type: h.urlEnvType,
               target: ["production"],
             },
           ],
@@ -488,6 +490,7 @@ beforeEach(async () => {
   h.hold = null;
   h.readVerdict = { decision: "run" };
   h.gateCalls = [];
+  h.urlEnvType = "encrypted";
 });
 
 const ctxOf = (userId: string, extra: Record<string, unknown> = {}) =>
@@ -1001,5 +1004,24 @@ describe("two approvals at once: one runs, the other does nothing", () => {
     expect(envPosts).toHaveLength(2);
     expect(h.received.CONTACT_WEBHOOK_SECRET).toBe(minted!.secret);
     expect((await sources())[0]!.secret).toBe(minted!.secret);
+  });
+});
+
+describe("a URL variable already saved as a Secret", () => {
+  it("the card says it stays a Secret, and the call sends it as one", async () => {
+    h.urlEnvType = "sensitive";
+    const { proposalId } = (await file()) as { proposalId: string };
+    const { data } = await proposalRow(proposalId);
+    expect(data.preview.env[0]).toMatchObject({
+      key: "CONTACT_WEBHOOK_URL",
+      type: "sensitive",
+      existingType: "sensitive",
+    });
+    expect(data.preview.notes.join(" ")).toContain("stays a Secret");
+    await approve(proposalId);
+    const urlPost = writes().find(
+      (c) => (c.body as any).key === "CONTACT_WEBHOOK_URL"
+    );
+    expect((urlPost!.body as any).type).toBe("sensitive");
   });
 });

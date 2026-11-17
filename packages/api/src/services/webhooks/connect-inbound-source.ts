@@ -572,12 +572,21 @@ export async function inspectInboundSourceConnect(
   ).map(([key, role, type]) => {
     const found = envFor(key);
     const existingType = found ? asString(found.type) : null;
-    if (role === "url" && existingType === "sensitive") {
+    // A Secret cannot become Config in place: the URL is then sent as a
+    // Secret too, so the call does what the card says.
+    const keepsSecret = role === "url" && existingType === "sensitive";
+    if (keepsSecret) {
       notes.push(
         `${key} is saved as a Secret on Vercel; a Secret cannot become Config in place, so it stays a Secret.`
       );
     }
-    return { key, role, type, exists: !!found, existingType };
+    return {
+      key,
+      role,
+      type: keepsSecret ? "sensitive" : type,
+      exists: !!found,
+      existingType,
+    };
   });
 
   const declaring = await db
