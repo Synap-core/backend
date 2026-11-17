@@ -36,7 +36,6 @@ import {
   eq,
   getDb,
   inArray,
-  isNotNull,
   or,
   drizzleSql,
   events,
@@ -59,20 +58,16 @@ import {
 import type { ActivityActor } from "@synap-core/types/activity";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { workAndTrackedRunsWhere } from "../focus-sessions/session-list-conditions.js";
-import { decisionEvents } from "../activity/decision-events.js";
+import {
+  decisionEvents,
+  decisionRowsWhere,
+} from "../activity/decision-events.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import { TRACK_STAGE_GATE_TARGET_TYPE } from "../playbooks/stage-gate.js";
 import { getTrack, type TrackActor } from "./tracks-service.js";
 
 /** Rows read per source. Hitting it sets `truncated` — older rows exist. */
 export const TRACK_HISTORY_SOURCE_CAP = 500;
-
-const DECISION_STATUSES = [
-  "approved",
-  "rejected",
-  "reverted",
-  "approval_failed",
-] as const;
 
 const SYSTEM: ActivityActor = { kind: "system", id: null, name: null };
 
@@ -410,14 +405,7 @@ export async function readTrackHistory(
             ? inArray(proposals.sessionId, [...sessionStage.keys()])
             : undefined
         ),
-        or(
-          eq(proposals.status, "pending"),
-          and(
-            inArray(proposals.status, [...DECISION_STATUSES]),
-            isNotNull(proposals.reviewedBy),
-            isNotNull(proposals.reviewedAt)
-          )
-        )
+        decisionRowsWhere()
       )
     )
     .orderBy(desc(proposals.createdAt))

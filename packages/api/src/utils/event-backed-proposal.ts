@@ -138,8 +138,15 @@ export async function createEventBackedProposal(
 }
 
 export interface CreateAutoApprovedProposalInput extends CreateEventBackedProposalInput {
-  /** The user who performed (and is implicitly approving) the already-done write. */
-  reviewedBy: string;
+  /**
+   * The PERSON who performed (and is implicitly approving) the already-done
+   * write. Stamped only when no agent is behind it: `reviewedBy` names a person
+   * who decided (activity's `decision` source, the approver on display, the
+   * session-changes `humanDecided`), and when an agent's write auto-applied,
+   * the pod decided, not the person. The other receipt doors already leave it
+   * empty (`permission-check.ts`, `automation-governance.ts`).
+   */
+  reviewedBy?: string | null;
   /**
    * Pre-allocated proposal id. A composite caller that must stamp the receipt
    * onto the writes it is ABOUT to make (capture auto-apply threads it into
@@ -190,7 +197,11 @@ export async function createAutoApprovedProposal(
       // OWNER FLOOR (0248): this row RECORDS an already-done first-party human
       // write, so `input.userId` — the human who performed it — is the subject.
       subjectUserId: input.userId,
-      reviewedBy: input.reviewedBy,
+      // No reviewer on an agent's receipt (see `reviewedBy` above). The
+      // capture doors stamped the person here, so 1,735 agent receipts and 10
+      // of their failures (e.g. 7ad8bdde, 18 Oct 2026) read as the founder's
+      // own decisions (finding d4d20c02). `reviewedAt` stays: when it settled.
+      reviewedBy: input.agentUserId ? null : (input.reviewedBy ?? null),
       reviewedAt,
       // C2 lifecycle-hygiene fix: no default TTL — this row is already
       // terminal (auto_approved), so a synthetic expiry never did anything

@@ -493,3 +493,49 @@ describe("readSessionTimelines — a page of sessions in a fixed number of queri
     expect(three).toBe(one);
   });
 });
+
+describe("an automatic receipt's failure: answered by its agent, never by the person", () => {
+  // Finding d4d20c02 (17 Nov 2026): a failed capture receipt named the founder
+  // as its reviewer and read as their decision. It now names no reviewer; the
+  // timeline must still show the failure, answered by the agent that filed it,
+  // or by the pod (`system`) when the row records no agent.
+  it("shows each failure with no reviewer, by its agent or the pod; an applied receipt stays out", async () => {
+    const sessionId = randomUUID();
+    await session(sessionId, USER);
+    const receipt = (
+      id: string,
+      status: string,
+      agent: string | null,
+      reviewedMin: number
+    ) =>
+      q(
+        `insert into proposals (id, session_id, status, agent_user_id, created_by, subject_user_id, data, created_at, reviewed_at, reviewed_by)
+         values ($1, $2, $3, $4, $5, $5, '{"summary":"Capture a note"}'::jsonb, $6, $6, null)`,
+        [id, sessionId, status, agent, USER, at(reviewedMin)]
+      );
+    const byAgent = randomUUID();
+    const byPod = randomUUID();
+    await receipt(byAgent, "approval_failed", AGENT, -3);
+    await receipt(byPod, "approval_failed", null, -2);
+    await receipt(randomUUID(), "auto_approved", AGENT, -1);
+
+    const t = await readTimeline(
+      { kind: "session", id: sessionId },
+      { userId: USER, isHubProtocol: true }
+    );
+    const answered = t!.events.filter(
+      (e) => e.kind === "decision_answered"
+    ) as Array<Extract<DevTimelineEvent, { kind: "decision_answered" }>>;
+    expect(answered.map((e) => e.refs.proposalId)).toEqual([byPod, byAgent]);
+    expect(answered.map((e) => e.decision)).toEqual([
+      "approval_failed",
+      "approval_failed",
+    ]);
+    expect(answered[1]!.actor).toMatchObject({ kind: "agent", id: AGENT });
+    expect(answered[0]!.actor).toMatchObject({ kind: "system", id: null });
+    // Never the person the row is about.
+    expect(
+      answered.some((e) => e.actor.kind === "human" && e.actor.id === USER)
+    ).toBe(false);
+  });
+});

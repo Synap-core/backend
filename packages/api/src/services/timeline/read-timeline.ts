@@ -50,7 +50,6 @@ import {
   events,
   focusSessions,
   inArray,
-  isNotNull,
   isNull,
   lifecycleTransitionOutbox,
   lte,
@@ -79,7 +78,10 @@ import {
   type TimelineWire,
 } from "@synap-core/types/units";
 
-import { decisionEvents } from "../activity/decision-events.js";
+import {
+  decisionEvents,
+  decisionRowsWhere,
+} from "../activity/decision-events.js";
 import { eventVisibleWhere } from "../../access/event-visibility.js";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
@@ -161,13 +163,6 @@ const DEV_FACT_TYPES = [
   ...Object.keys(PR_FACT_KIND),
   DEV_LOOP_EVENT_TYPES.ciFinished,
 ];
-
-const DECISION_STATUSES = [
-  "approved",
-  "rejected",
-  "reverted",
-  "approval_failed",
-] as const;
 
 /** An event before its actor is named (named in ONE batch at the end). */
 type Unnamed<E> = E extends unknown
@@ -646,19 +641,7 @@ export async function readSessionTimelines(
       ).as("rank"),
     })
     .from(proposals)
-    .where(
-      and(
-        inArray(proposals.sessionId, readable),
-        or(
-          eq(proposals.status, "pending"),
-          and(
-            inArray(proposals.status, [...DECISION_STATUSES]),
-            isNotNull(proposals.reviewedBy),
-            isNotNull(proposals.reviewedAt)
-          )
-        )
-      )
-    )
+    .where(and(inArray(proposals.sessionId, readable), decisionRowsWhere()))
     .as("decisions_ranked");
 
   // The slots' history: the rows the ask doors write on the session.
