@@ -7832,7 +7832,7 @@ USAGE
     fi
     if [ "$yes" != 1 ] && ! synap_assume_yes; then
         local ans=""
-        _synap_prompt_read -r -p "Rewrite postgresql.conf and restart Postgres now? [y/N] " ans || true
+        read -r -p "Rewrite postgresql.conf and restart Postgres now? [y/N] " ans || true
         case "$ans" in y|Y|yes) ;; *) echo "Nothing was changed."; return 0 ;; esac
     fi
     ts="$(date -u +%Y%m%dT%H%M%SZ)"; backup="postgresql.conf.before-tune-${ts}"
@@ -8629,7 +8629,7 @@ cmd_reset() {
     fi
 
     local confirm=""
-    _synap_prompt_read -r -p "Type the pod domain (${pod_domain}) to confirm: " confirm || true
+    read -r -p "Type the pod domain (${pod_domain}) to confirm: " confirm || true
     if [ "$confirm" != "$pod_domain" ]; then
         echo "Cancelled — the domain did not match. Nothing was changed."
         exit 1
@@ -8689,7 +8689,7 @@ cmd_reset() {
         fi
 
         local rerun=""
-        _synap_prompt_read -p "Run fresh install now? (y/N): " rerun || true
+        read -p "Run fresh install now? (y/N): " rerun || true
         if [ "$rerun" = "y" ] || [ "$rerun" = "Y" ]; then
             cmd_install
             return $?

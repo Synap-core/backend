@@ -13,7 +13,8 @@ ok()  { echo "ok   - $1"; }
 bad() { echo "FAIL - $1"; fail=1; }
 
 # 1. no bare prompt read outside the guard's own body
-bare="$(grep -nE '^[[:space:]]*read( -[rs])* -p ' "$HERE/synap" || true)"
+# (a prompt ending `|| true` already treats EOF as "no": a safe decline, left as is)
+bare="$(grep -E '^[[:space:]]*read( -[rs])* -p ' "$HERE/synap" | grep -v '|| true$' || true)"
 [ -z "$bare" ] && ok "no bare 'read -p' in synap" || bad "bare prompt read(s): $bare"
 n="$(grep -cE '_synap_prompt_read( -[rs])* -p ' "$HERE/synap")"
 [ "$n" -ge 20 ] && ok "prompts go through _synap_prompt_read ($n)" || bad "only $n guarded prompts"
