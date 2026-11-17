@@ -34,6 +34,13 @@
  * never file a second `capability.run` (which would store `value` in a
  * proposal body). Nothing here calls `runResolvedSkill`, recall or an
  * embedding with a provider body.
+ *
+ * WHOSE VERBS: only the pod-wide `vercel` tool, enabled, and only enabled
+ * pod-wide verbs (`approved`, scope `pod`) count. A draft verb, or a copy made
+ * for one space or one person, is authored by whoever could write it; handed
+ * the secret under `alreadyApproved` it could send it anywhere (a `plain`
+ * variable, a `{{value}}` in its path). The filing reads pass the caller's
+ * own gate on the read verbs first (`gateHostReads`).
  */
 
 import { TRPCError } from "@trpc/server";
@@ -46,17 +53,21 @@ import {
   isNull,
   drizzleSql,
   automations,
+  lt,
+  ne,
   proposals,
   skills,
   tools,
   workspaces,
 } from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
 import type { ProviderVerbSpec } from "@synap/database/schema";
 import { triggerProviderAction } from "../../connectors/external-dispatch.js";
 import { buildProviderRequest } from "../capabilities/execute-provider-verb.js";
 import { answeringSkillsWhere } from "../capabilities/verb-skill.js";
 import { resolveNotEnabledRefusal } from "../capabilities/propose-capability-enable.js";
 import type { CapabilityEnableOffer } from "../capabilities/propose-capability-enable.js";
+import { gateCapabilityExecution } from "../capabilities/gate-capability-execution.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import {
@@ -158,11 +169,27 @@ interface HostCaller {
   userId: string;
   agentUserId: string | null;
   workspaceId: string;
+  /** The filing's session (the gate's trial rung reads it). */
+  sessionId?: string | null;
   /** Set at approval: the proposal that authorizes the host calls. */
   sourceProposalId?: string;
 }
 
-type HostVerbs = Map<VercelVerb, ProviderVerbSpec>;
+/** One installed host verb: its spec, its skill row, and the tool it calls. */
+interface HostVerb {
+  spec: ProviderVerbSpec;
+  skill: {
+    id: string;
+    name: string;
+    approved: boolean;
+    userId: string;
+    metadata: Record<string, unknown> | null;
+  };
+  /** The pod-wide, enabled `vercel` tool's id: every call is pinned to it. */
+  toolId: string;
+}
+
+type HostVerbs = Map<VercelVerb, HostVerb>;
 
 type HostCallResult =
   | { ok: true; status: number; body: unknown }
@@ -178,7 +205,12 @@ async function resolveHostVerbs(
   caller: HostCaller
 ): Promise<{ ok: true; verbs: HostVerbs } | Refusal> {
   const toolRows = await db
-    .select({ id: tools.id, name: tools.name, approved: tools.approved })
+    .select({
+      id: tools.id,
+      name: tools.name,
+      approved: tools.approved,
+      workspaceId: tools.workspaceId,
+    })
     .from(tools)
     .where(
       and(
@@ -196,11 +228,22 @@ async function resolveHostVerbs(
         'The Vercel capability is not installed on this pod. Install it with a Vercel token scoped to the team that owns the project (market.install { slug: "vercel", kind: "capability" }), then file this again.',
     };
   }
-  const tool = toolRows.find((t) => t.approved === true);
+  // Only the pod-wide tool: a space's own `vercel` tool is whoever made it,
+  // and its credential and address are theirs. Every call below names this
+  // row by id, so the dispatch cannot pick a space's copy over it.
+  const podTools = toolRows.filter((t) => t.workspaceId === null);
+  if (podTools.length === 0) {
+    return {
+      ok: false,
+      message:
+        'The Vercel capability is not installed for the whole pod (only a copy made for one space is): the secret goes only through the pod-wide one. Install it with a Vercel token scoped to the team that owns the project (market.install { slug: "vercel", kind: "capability" }), then file this again.',
+    };
+  }
+  const tool = podTools.find((t) => t.approved === true);
   if (!tool) {
     // The tool's own approval floor: `alreadyApproved` below skips the gate,
     // so this door checks the floor itself before anything is sent.
-    const first = toolRows[0]!;
+    const first = podTools[0]!;
     const refusal = await resolveNotEnabledRefusal({
       capability: {
         kind: "tool",
@@ -233,10 +276,14 @@ async function resolveHostVerbs(
   ];
   const rows = await db
     .select({
+      id: skills.id,
       name: skills.name,
       kind: skills.kind,
       providerSpec: skills.providerSpec,
       approved: skills.approved,
+      scope: skills.scope,
+      userId: skills.userId,
+      metadata: skills.metadata,
       updatedAt: skills.updatedAt,
     })
     .from(skills)
@@ -247,37 +294,113 @@ async function resolveHostVerbs(
       )
     );
   const verbs: HostVerbs = new Map();
+  const missing: VercelVerb[] = [];
+  const notEnabled: VercelVerb[] = [];
   for (const name of needed) {
-    // The run door's rule among same-named rows: approved first, then newest.
-    const row = rows
-      .filter(
-        (r) =>
-          r.name === name &&
-          r.kind === "declarative" &&
-          r.providerSpec?.tool === VERCEL_TOOL
-      )
+    const named = rows.filter(
+      (r) =>
+        r.name === name &&
+        r.kind === "declarative" &&
+        r.providerSpec?.tool === VERCEL_TOOL
+    );
+    // ONLY an enabled pod-wide verb, newest first. The run door's "approved
+    // first" would fall back to a draft, or take a space's or a person's
+    // copy, when it is the newest: neither may carry the secret.
+    const row = named
+      .filter((r) => r.approved === true && r.scope === "pod")
       .sort(
         (a, b) =>
-          Number(b.approved) - Number(a.approved) ||
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
       )[0];
-    if (row?.providerSpec) verbs.set(name, row.providerSpec);
+    if (row?.providerSpec) {
+      verbs.set(name, {
+        spec: row.providerSpec,
+        skill: {
+          id: row.id,
+          name: row.name,
+          approved: row.approved,
+          userId: row.userId,
+          metadata: row.metadata,
+        },
+        toolId: tool.id,
+      });
+    } else if (named.length > 0) {
+      notEnabled.push(name);
+    } else {
+      missing.push(name);
+    }
   }
-  const missing = needed.filter((n) => !verbs.has(n));
   if (missing.length > 0) {
     return {
       ok: false,
       message: `The installed Vercel capability has no ${missing.join(", ")} verb. Update the Vercel capability to its latest version, then file this again.`,
     };
   }
+  if (notEnabled.length > 0) {
+    return {
+      ok: false,
+      message: `The Vercel verb${notEnabled.length > 1 ? "s" : ""} ${notEnabled.join(", ")} on this pod ${notEnabled.length > 1 ? "are" : "is"} not enabled for the whole pod (a draft, or a copy made for one space or one person): only an enabled pod-wide verb may carry the secret. Enable the Vercel capability (Tools), then file this again.`,
+    };
+  }
   return { ok: true, verbs };
+}
+
+/** The verbs the filing preflight reads the host with. */
+const FILING_READS: readonly VercelVerb[] = [
+  VERCEL_VERBS.getProject,
+  VERCEL_VERBS.listEnv,
+];
+
+/**
+ * At FILING, the caller's own gate on each read verb, exactly as running that
+ * verb itself would meet it (`executeCapability`): an agent with no grant on
+ * `vercel_get_project` cannot read the project through this door either. Any
+ * verdict but `run` refuses, and nothing is filed (a `propose` here would file
+ * a stray `capability.run` the person never asked for). The approval does not
+ * pass here: the person's approval of the card is the approval of its calls.
+ */
+async function gateHostReads(
+  verbs: HostVerbs,
+  caller: HostCaller
+): Promise<{ ok: true } | Refusal> {
+  const { verbDeclaresReadOnly } =
+    await import("../capabilities/execute-capability.js");
+  for (const verb of FILING_READS) {
+    const { skill } = verbs.get(verb)!;
+    const decision = await gateCapabilityExecution({
+      capabilityKind: "skill",
+      capabilityId: skill.id,
+      skill: {
+        id: skill.id,
+        approved: skill.approved,
+        userId: skill.userId,
+        name: skill.name,
+      },
+      actorUserId: caller.userId,
+      agentUserId: caller.agentUserId,
+      workspaceId: caller.workspaceId,
+      sessionId: caller.sessionId ?? null,
+      readOnly: verbDeclaresReadOnly(skill),
+      issuer: "inbound_source.connect",
+    });
+    if (decision.decision === "run") continue;
+    return {
+      ok: false,
+      message:
+        decision.decision === "deny"
+          ? `Reading Vercel (${verb}) is refused here: ${decision.reason} Nothing was filed.`
+          : `Filing this reads the Vercel project and its variable names (${verb}), which ${caller.agentUserId ? "this agent may not run on its own" : "you may not run on your own here"}. Ask the person to grant ${caller.agentUserId ? "this agent " : ""}the Vercel read verbs, or to file it themselves. Nothing was filed.`,
+    };
+  }
+  return { ok: true };
 }
 
 /**
  * One call of an installed host verb, built by the SAME interpolation the run
- * door uses. `alreadyApproved`: a read at filing is covered by the outer gate
- * that let the verb run (as `executeProviderVerb` treats every read); a write
- * at approval is covered by the person's approval of THIS card
+ * door uses, pinned to the pod-wide tool by id. `alreadyApproved`: a read at
+ * filing passed the caller's own gate on its verb first (`gateHostReads`, as
+ * `executeProviderVerb` sends a read once its verb's gate ran); a write at
+ * approval is covered by the person's approval of THIS card
  * (`sourceProposalId`). The tool's enable floor was checked above.
  */
 async function callHostVerb(
@@ -286,7 +409,7 @@ async function callHostVerb(
   params: Record<string, unknown>,
   caller: HostCaller
 ): Promise<HostCallResult> {
-  const spec = verbs.get(verb)!;
+  const { spec, toolId } = verbs.get(verb)!;
   const req = buildProviderRequest(spec, params);
   const path = req.query
     ? `${req.path}${req.path.includes("?") ? "&" : "?"}${req.query}`
@@ -294,7 +417,7 @@ async function callHostVerb(
   const result = await triggerProviderAction({
     userId: caller.userId,
     agentUserId: caller.agentUserId,
-    provider: spec.tool,
+    provider: toolId,
     method: req.method,
     path,
     body: req.body,
@@ -385,6 +508,10 @@ export async function inspectInboundSourceConnect(
   const hostVerbs = await resolveHostVerbs(request, caller);
   if (!hostVerbs.ok) return hostVerbs;
   const { verbs } = hostVerbs;
+  if (!caller.sourceProposalId) {
+    const gated = await gateHostReads(verbs, caller);
+    if (!gated.ok) return gated;
+  }
   const team = request.teamId ? { teamId: request.teamId } : {};
 
   const project = await callHostVerb(
@@ -560,6 +687,7 @@ export async function proposeInboundSourceConnect(params: {
     userId: params.userId,
     agentUserId: params.agentUserId,
     workspaceId: request.workspaceId,
+    sessionId: params.sessionId ?? null,
   });
   if (!inspected.ok) {
     return {
@@ -641,6 +769,46 @@ export async function readConnectProposalRow(
   return row;
 }
 
+/**
+ * A claim held this long by an attempt that never ended did not finish (its
+ * process died). Taking it over is safe: the next attempt replaces the
+ * secret of the source this card minted and sets both variables again.
+ */
+export const STALE_CONNECT_CLAIM_MS = 15 * 60 * 1000;
+
+/**
+ * AT MOST ONE APPROVAL AT A TIME. Two approvals running together would each
+ * replace the secret and set it on Vercel, and could leave Vercel holding one
+ * and the source the other. The claim is `external_dispatched_at`, taken
+ * before anything is read or minted (as `dispatchExternalOnce` does) and
+ * released by a failure, so a failed attempt can be approved again. Returns
+ * the claim's stamp (the executor's final writes are guarded on it), or null
+ * when another attempt holds it or the card is already approved.
+ */
+export async function claimConnectAttempt(
+  proposalId: string
+): Promise<Date | null> {
+  const at = new Date();
+  const [row] = await db
+    .update(proposals)
+    .set({ externalDispatchedAt: at })
+    .where(
+      and(
+        eq(proposals.id, proposalId),
+        ne(proposals.status, ProposalStatus.APPROVED),
+        or(
+          isNull(proposals.externalDispatchedAt),
+          lt(
+            proposals.externalDispatchedAt,
+            new Date(at.getTime() - STALE_CONNECT_CLAIM_MS)
+          )
+        )
+      )
+    )
+    .returning({ at: proposals.externalDispatchedAt });
+  return row?.at ?? null;
+}
+
 /** Merge ids and keys into `data.progress` (never a secret). */
 async function stampProgress(
   proposalId: string,
@@ -693,6 +861,12 @@ export async function connectInboundSourceToHost(params: {
   approverUserId: string;
   request: InboundSourceConnectRequest;
   progress: InboundSourceConnectProgress;
+  /**
+   * What the card showed the person (`data.preview`, read at filing): the
+   * approval acts on that project and that source, never on another one the
+   * same request resolves to now.
+   */
+  announced: { projectId: string; existingSourceId: string | null };
 }): Promise<InboundSourceConnectReceipt> {
   const { request, proposalId } = params;
   const caller: HostCaller = {
@@ -714,6 +888,22 @@ export async function connectInboundSourceToHost(params: {
     });
   }
   const { preview, verbs } = inspected;
+  if (preview.host.projectId !== params.announced.projectId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `Nothing was created: "${request.project}" is now the Vercel project ${preview.host.projectName} (${preview.host.projectId}), not the one this card showed (${params.announced.projectId}). File the request again.`,
+    });
+  }
+  if (
+    preview.source.existingId &&
+    !preview.source.ownedByThisProposal &&
+    preview.source.existingId !== params.announced.existingSourceId
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `Nothing was created: the space's source "${preview.source.name}" is not the one this card showed (it was made or replaced since). File the request again.`,
+    });
+  }
 
   // ── Mint (the secret lives in this local only) ──
   let sourceId: string;

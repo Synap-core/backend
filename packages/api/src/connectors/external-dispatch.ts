@@ -1877,9 +1877,10 @@ export interface TriggerProviderActionInput {
    * `services/webhooks/connect-inbound-source.ts`: its approval executor
    * (`webhook/inbound_source.connect`, with `sourceProposalId`) writes the
    * host's env vars and redeploys, and its filing preflight READS the host
-   * (project, env var keys) under the outer gate that let the verb run, as
-   * `executeProviderVerb` treats every read. That module checks the tool's
-   * enable floor itself, since this flag skips it. When `true`, the
+   * (project, env var keys) once the caller's own gate on each read verb said
+   * run (`gateHostReads`), as `executeProviderVerb` sends a read once its
+   * verb's gate ran. That module checks the tool's enable floor itself, since
+   * this flag skips it, and pins the pod-wide tool by id. When `true`, the
    * capability-execution gate is SKIPPED and the dispatch runs directly, exactly
    * once — so an already-approved proposal never loops back into a new proposal.
    * No external/untrusted caller may supply it.

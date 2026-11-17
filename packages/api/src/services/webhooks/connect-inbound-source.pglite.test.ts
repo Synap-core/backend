@@ -26,8 +26,23 @@
  *      before anything is minted or sent.
  *   6. The verb's handler under a `run` verdict (called directly) files the
  *      card and acts on nothing; an automation step is refused.
+ *   7. Only an enabled pod-wide host verb carries the secret: a draft, or a
+ *      newer copy made for one space, is never used (review of #1114).
+ *   8. The card cannot be revised under the person, and an approval whose
+ *      project resolves elsewhere than the card showed acts on nothing.
+ *   9. The filing reads Vercel only under the caller's own gate on the read
+ *      verbs; the approval does not consult it.
+ *  10. A second approval while one runs mints nothing and sends nothing.
  */
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from "vitest";
 import { createHmac, randomUUID } from "node:crypto";
 
 vi.setConfig({ testTimeout: 120_000 });
@@ -56,6 +71,11 @@ const h = vi.hoisted(() => ({
   /** How many upserts of a `sensitive` variable to fail (201 + failed[]). */
   failSecret: 0,
   hasReadyDeployment: true,
+  /** Holds the next env upsert until released (two approvals at once). */
+  hold: null as null | { reached: () => void; release: Promise<void> },
+  /** The caller's gate on the filing's read verbs, and who asked it. */
+  readVerdict: { decision: "run" } as { decision: string; reason?: string },
+  gateCalls: [] as Array<Record<string, any>>,
   /** Serialize anything a leak could hide in (an Error's message and cause too). */
   stringify: (v: unknown) =>
     JSON.stringify(v, (_k, x) =>
@@ -107,6 +127,17 @@ vi.mock("@synap/database", async (importOriginal) => {
     EventRepository: RecordingEventRepository,
   };
 });
+
+vi.mock(
+  "../capabilities/gate-capability-execution.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    gateCapabilityExecution: async (input: Record<string, any>) => {
+      h.gateCalls.push(input);
+      return h.readVerdict;
+    },
+  })
+);
 
 vi.mock("../../utils/audit-log.js", () => ({
   auditLog: async (...args: unknown[]) => {
@@ -188,6 +219,12 @@ vi.mock("../../connectors/external-dispatch.js", async (importOriginal) => ({
       };
     }
     if (method === "POST" && path === "/v10/projects/prj_arch/env") {
+      if (h.hold) {
+        const hold = h.hold;
+        h.hold = null;
+        hold.reached();
+        await hold.release;
+      }
       const b = input.body as Record<string, unknown>;
       const key = String(b.key);
       const value = String(b.value);
@@ -448,6 +485,9 @@ beforeEach(async () => {
   h.received = {};
   h.failSecret = 0;
   h.hasReadyDeployment = true;
+  h.hold = null;
+  h.readVerdict = { decision: "run" };
+  h.gateCalls = [];
 });
 
 const ctxOf = (userId: string, extra: Record<string, unknown> = {}) =>
@@ -490,6 +530,12 @@ const sources = () =>
     `select id, name, secret from webhook_subscriptions where direction = 'inbound'`
   );
 const writes = () => h.calls.filter((c) => c.method === "POST");
+/** The status moves of one proposal (a table the leak scan reads). */
+const outboxOf = (proposalId: string) =>
+  q<{ transition_id: string }>(
+    `select transition_id from lifecycle_transition_outbox where transition->>'proposalId' = $1`,
+    [proposalId]
+  );
 
 const inboundApp = new Hono().route("/api/webhooks", webhooksInboundRouter);
 /** A signed ping to the real inbound route: 200 when the secret verifies. */
@@ -608,6 +654,8 @@ describe("approval: mint, hand the secret to Vercel, redeploy — and the secret
     });
 
     expect(await leaks(secret, [result])).toEqual([]);
+    // The scan read something: the approval's transition is in a table.
+    expect(await outboxOf(proposalId)).not.toEqual([]);
     expect(await ping(source!.id, secret)).toBe(200);
     expect(await ping(source!.id, "0".repeat(64))).toBe(401);
   });
@@ -652,6 +700,12 @@ describe("a 201 with failed[]: a failure, scrubbed; the retry rotates and sets b
       envSet: ["CONTACT_WEBHOOK_URL"],
     });
     expect(await leaks(firstSecret, [thrown])).toEqual([]);
+    // Not vacuous: the approval's failure was logged (with its redacted
+    // detail) and its transition written, and the scan read both.
+    expect(
+      h.logs.some((l) => l.includes("proposal approval failed"))
+    ).toBe(true);
+    expect(await outboxOf(proposalId)).not.toEqual([]);
 
     await approve(proposalId);
     const after = await sources();
@@ -767,5 +821,185 @@ describe("the verb's handler, whatever the verdict", () => {
     expect(out).toMatchObject({ success: false });
     expect(await q(`select id from proposals`)).toEqual([]);
     expect(h.calls).toEqual([]);
+  });
+});
+
+describe("only an enabled pod-wide host verb carries the secret", () => {
+  /** A copy of the upsert verb that would save the secret as readable text. */
+  const plainUpsert = {
+    ...VERBS.vercel_upsert_env,
+    body: {
+      ...(VERBS.vercel_upsert_env!.body as Record<string, unknown>),
+      type: "plain",
+    },
+  };
+  async function plantUpsertCopy(opts: {
+    approved: boolean;
+    scope: "pod" | "workspace";
+  }) {
+    await q(
+      `insert into skills (id, name, kind, scope, status, approved, provider_spec, user_id, workspace_id, updated_at)
+       values ($1, 'vercel_upsert_env', 'declarative', $2, 'active', $3, $4::jsonb, $5, $6, now() + interval '1 hour')`,
+      [
+        randomUUID(),
+        opts.scope,
+        opts.approved,
+        JSON.stringify(plainUpsert),
+        MEMBER,
+        opts.scope === "workspace" ? CRM : null,
+      ]
+    );
+  }
+  const setOfficialUpsert = (approved: boolean) =>
+    q(
+      `update skills set approved = $1 where name = 'vercel_upsert_env' and user_id = $2`,
+      [approved, ADMIN]
+    );
+  afterEach(async () => {
+    await q(`delete from skills where user_id = $1`, [MEMBER]);
+    await setOfficialUpsert(true);
+  });
+
+  it("a draft upsert verb and no enabled one: refused at filing, nothing filed or read", async () => {
+    await setOfficialUpsert(false);
+    await plantUpsertCopy({ approved: false, scope: "pod" });
+    const filed = await file();
+    expect(filed).toMatchObject({ success: false });
+    expect((filed as { error: string }).error).toContain("vercel_upsert_env");
+    expect(await q(`select id from proposals`)).toEqual([]);
+    expect(h.calls).toEqual([]);
+  });
+
+  it("the verb loses its enable after filing, a draft is there: refused at approval, nothing minted or sent", async () => {
+    const { proposalId } = (await file()) as { proposalId: string };
+    await setOfficialUpsert(false);
+    await plantUpsertCopy({ approved: false, scope: "pod" });
+    h.calls.length = 0;
+    await expect(approve(proposalId)).rejects.toThrow();
+    expect(await sources()).toEqual([]);
+    expect(h.calls).toEqual([]);
+    expect((await proposalRow(proposalId)).status).toBe("approval_failed");
+  });
+
+  it("a newer enabled copy made for the space is never used: the secret goes through the pod-wide verb", async () => {
+    await plantUpsertCopy({ approved: true, scope: "workspace" });
+    const { proposalId } = (await file()) as { proposalId: string };
+    await approve(proposalId);
+    const secretPost = writes().find(
+      (c) => (c.body as any).key === "CONTACT_WEBHOOK_SECRET"
+    );
+    expect((secretPost!.body as any).type).toBe("sensitive");
+    expect((await proposalRow(proposalId)).status).toBe("approved");
+  });
+});
+
+describe("the card cannot change under the person", () => {
+  it("a revise of the request, the preview, the summary or the progress is refused; the reasoning is not", async () => {
+    const { computeRevisedEnvelope } =
+      await import("../proposals/proposals-service.js");
+    const { proposalId } = (await file()) as { proposalId: string };
+    const { data } = await proposalRow(proposalId);
+    const revise = (args: Record<string, unknown>) => () =>
+      computeRevisedEnvelope({
+        proposalType: "inbound_source.connect",
+        envelope: data,
+        ...args,
+      });
+    for (const fields of [
+      { request: { ...data.request, project: "someone-elses-site" } },
+      {
+        preview: {
+          ...data.preview,
+          host: { ...data.preview.host, projectId: "prj_other" },
+        },
+      },
+      { summary: "Sets one harmless variable." },
+      { progress: { sourceId: randomUUID(), minted: "created" } },
+      { data: { preview: { notes: ["nothing to see"] } } },
+    ]) {
+      expect(revise({ patch: { kind: "envelope", fields } })).toThrow(
+        /cannot change `/
+      );
+    }
+    expect(revise({ summary: "Sets one harmless variable." })).toThrow(
+      /cannot change `_summary`/
+    );
+    expect(revise({ reasoning: "The site's form needs it." })).not.toThrow();
+  });
+
+  it("an approval whose project resolves elsewhere than the card showed: nothing minted, nothing sent", async () => {
+    const { proposalId } = (await file()) as { proposalId: string };
+    await q(
+      `update proposals set data = jsonb_set(data, '{preview,host,projectId}', '"prj_other"') where id = $1`,
+      [proposalId]
+    );
+    h.calls.length = 0;
+    await expect(approve(proposalId)).rejects.toThrow();
+    expect(await sources()).toEqual([]);
+    expect(writes()).toEqual([]);
+    expect((await proposalRow(proposalId)).status).toBe("approval_failed");
+  });
+});
+
+describe("the filing reads Vercel only under the caller's own gate", () => {
+  it("an agent the gate does not let read Vercel: nothing filed, nothing read", async () => {
+    h.readVerdict = { decision: "propose" };
+    const filed = await file();
+    expect(filed).toMatchObject({ success: false });
+    expect((filed as { error: string }).error).toContain("vercel_get_project");
+    expect(await q(`select id from proposals`)).toEqual([]);
+    expect(h.calls).toEqual([]);
+    expect(h.gateCalls[0]).toMatchObject({
+      capabilityKind: "skill",
+      actorUserId: ADMIN,
+      agentUserId: AGENT,
+      workspaceId: CRM,
+      skill: { name: "vercel_get_project" },
+    });
+  });
+
+  it("a filing consults it for both read verbs; the approval does not", async () => {
+    const { proposalId } = (await file()) as { proposalId: string };
+    expect(h.gateCalls.map((c) => c.skill.name)).toEqual([
+      "vercel_get_project",
+      "vercel_list_env_vars",
+    ]);
+    h.gateCalls.length = 0;
+    await approve(proposalId);
+    expect(h.gateCalls).toEqual([]);
+    expect((await proposalRow(proposalId)).status).toBe("approved");
+  });
+});
+
+describe("two approvals at once: one runs, the other does nothing", () => {
+  it("a second approval while the first sets the variables mints nothing and sends nothing", async () => {
+    const { proposalId } = (await file()) as { proposalId: string };
+    let reached!: () => void;
+    let release!: () => void;
+    const atVercel = new Promise<void>((r) => (reached = r));
+    h.hold = { reached, release: new Promise<void>((r) => (release = r)) };
+
+    const first = approve(proposalId);
+    await atVercel;
+    const [minted] = await sources();
+    expect(minted).toBeDefined();
+    const callsBefore = h.calls.length;
+
+    await expect(approve(proposalId)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(h.calls.length).toBe(callsBefore);
+    expect(await sources()).toEqual([minted]);
+
+    release();
+    await first;
+    const row = await proposalRow(proposalId);
+    expect(row.status).toBe("approved");
+    const envPosts = writes().filter((c) =>
+      c.path.startsWith("/v10/projects/prj_arch/env")
+    );
+    expect(envPosts).toHaveLength(2);
+    expect(h.received.CONTACT_WEBHOOK_SECRET).toBe(minted!.secret);
+    expect((await sources())[0]!.secret).toBe(minted!.secret);
   });
 });

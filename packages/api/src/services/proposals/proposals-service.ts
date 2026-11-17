@@ -297,6 +297,31 @@ export const PROTECTED_FIELDS_BY_TYPE: Readonly<
     "platform",
     "threadId",
   ],
+  // `webhook/inbound_source.connect` (decision abaaa696): the card's request
+  // (which source, which host project, which variables), the preview the
+  // person read and its summary ARE what the approval acts on, and the
+  // executor's own stamps (`progress`: which source this card minted;
+  // `receipt`) decide what a retry replaces. Nothing in it is the author's to
+  // reword after a person has seen it; `data` is pinned so a patch cannot
+  // nest a second envelope the card would show instead. `_summary` also
+  // stands for the revise's `summary` argument (the card shows it first).
+  "inbound_source.connect": [
+    "request",
+    "preview",
+    "summary",
+    "_summary",
+    "progress",
+    "receipt",
+    "data",
+  ],
+};
+
+/** Why a type's pinned field is refused, said to the caller that touched it. */
+const PROTECTED_TYPE_REASON: Readonly<Record<string, string>> = {
+  "messaging.external.send":
+    "it names who the message goes to and through which account; the person approves that. Withdraw it and file a new one to write to someone else.",
+  "inbound_source.connect":
+    "it is what the person approves: which source gets a new secret and which host project receives it. Withdraw it and file inbound_source.connect again.",
 };
 
 /**
@@ -574,10 +599,18 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
     patch && typeProtected
       ? patchAltersProtectedField(patch, envelope, typeProtected)
       : null;
-  if (typeField) {
+  // The revise's `summary` argument writes `_summary`, the text the card
+  // shows first: a type that pins `_summary` refuses it too.
+  const summaryField =
+    summary !== undefined &&
+    typeProtected?.includes("_summary") &&
+    summary !== envelope._summary
+      ? "_summary"
+      : null;
+  if (typeField ?? summaryField) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `A revision cannot change \`${typeField}\` — it names who the message goes to and through which account; the person approves that. Withdraw it and file a new one to write to someone else.`,
+      message: `A revision cannot change \`${typeField ?? summaryField}\` — ${PROTECTED_TYPE_REASON[params.proposalType!]}`,
     });
   }
   // A skill's `kind` is what every review labels it (code, instruction), so

@@ -11,6 +11,7 @@ import {
 import { ProposalStatus } from "@synap/database/schema";
 import { assertPodAdmin } from "../../../trpc.js";
 import {
+  claimConnectAttempt,
   connectInboundSourceToHost,
   INBOUND_SOURCE_HOSTS,
   INBOUND_SOURCE_TARGETS,
@@ -23,6 +24,7 @@ import {
   classifyThrownFailure,
   failureRecord,
   keepRowAsRecorded,
+  leaveRowToOtherAttempt,
   safeFailureSentence,
 } from "../failure-classification.js";
 import { reportApproved } from "./shared.js";
@@ -65,6 +67,28 @@ function readStoredRequest(data: Record<string, unknown>) {
   return request;
 }
 
+/**
+ * What the card showed (`data.preview`): the project and the source the
+ * person approved. A card without them was not filed by this door.
+ */
+function readAnnouncedTargets(data: Record<string, unknown>) {
+  const preview = (data.preview ?? {}) as Record<string, unknown>;
+  const host = (preview.host ?? {}) as Record<string, unknown>;
+  const source = (preview.source ?? {}) as Record<string, unknown>;
+  if (typeof host.projectId !== "string" || !host.projectId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "This connect request carries no project the person saw; nothing was created. File it again with inbound_source.connect.",
+    });
+  }
+  return {
+    projectId: host.projectId,
+    existingSourceId:
+      typeof source.existingId === "string" ? source.existingId : null,
+  };
+}
+
 export function registerWebhookExecutors(): void {
   /**
    * Approve-executor for `webhook/inbound_source.connect` (decision
@@ -78,6 +102,10 @@ export function registerWebhookExecutors(): void {
    * into the row's CURRENT data: the generic approval catch writes the data
    * it loaded before the run, which would erase `data.progress`, and the
    * retry needs it to know which source this proposal minted.
+   *
+   * ONE ATTEMPT AT A TIME (`claimConnectAttempt`): a second approval while
+   * one runs mints nothing and sends nothing; the attempt's final writes are
+   * guarded on its own claim, and a failure releases it for the retry.
    */
   registerProposalExecutor({
     key: "webhook/inbound_source.connect",
@@ -85,27 +113,51 @@ export function registerWebhookExecutors(): void {
     async execute({ proposal, userId, input, deps }) {
       await assertPodAdmin(userId);
 
-      const row = await readConnectProposalRow(input.proposalId);
-      if (row?.status === ProposalStatus.APPROVED) {
+      const before = await readConnectProposalRow(input.proposalId);
+      if (before?.status === ProposalStatus.APPROVED) {
         return { success: true, alreadyApproved: true };
       }
-      const data = (row?.data ?? proposal.data ?? {}) as Record<
-        string,
-        unknown
-      >;
-      const request = readStoredRequest(data);
-      const progress = (data.progress ?? {}) as InboundSourceConnectProgress;
+      const claim = await claimConnectAttempt(input.proposalId);
+      if (!claim) {
+        const now = await readConnectProposalRow(input.proposalId);
+        if (now?.status === ProposalStatus.APPROVED) {
+          return { success: true, alreadyApproved: true };
+        }
+        // The running attempt records its own outcome on the row.
+        throw leaveRowToOtherAttempt(
+          new TRPCError({
+            code: "CONFLICT",
+            message:
+              "Another approval of this connect is running right now. Nothing was created or sent again; its result will show on this card.",
+          })
+        );
+      }
+      // Read under the claim: the progress an earlier attempt stamped.
+      const row = await readConnectProposalRow(input.proposalId);
+      const ours = and(
+        eq(proposals.id, input.proposalId),
+        eq(proposals.externalDispatchedAt, claim)
+      );
 
       let receipt;
       try {
+        const data = (row?.data ?? proposal.data ?? {}) as Record<
+          string,
+          unknown
+        >;
+        const request = readStoredRequest(data);
+        const announced = readAnnouncedTargets(data);
+        const progress = (data.progress ?? {}) as InboundSourceConnectProgress;
         receipt = await connectInboundSourceToHost({
           proposalId: input.proposalId,
           approverUserId: userId,
           request,
           progress,
+          announced,
         });
       } catch (err) {
         const failure = classifyThrownFailure(err);
+        // Released with the failure, so approving again retries.
         await transitionProposal(db, {
           to: ProposalStatus.APPROVAL_FAILED,
           set: {
@@ -113,19 +165,17 @@ export function registerWebhookExecutors(): void {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
+            externalDispatchedAt: null,
             data: drizzleSql`coalesce(${proposals.data}, '{}'::jsonb) || jsonb_build_object('failure', ${JSON.stringify(failureRecord(failure))}::jsonb)`,
           },
-          where: and(
-            eq(proposals.id, input.proposalId),
-            ne(proposals.status, ProposalStatus.APPROVED)
-          ),
+          where: and(ours, ne(proposals.status, ProposalStatus.APPROVED)),
         });
         throw keepRowAsRecorded(
           err instanceof Error ? err : new Error(String(err))
         );
       }
 
-      await transitionProposal(db, {
+      const landed = await transitionProposal(db, {
         to: ProposalStatus.APPROVED,
         set: {
           reviewedBy: userId,
@@ -133,8 +183,19 @@ export function registerWebhookExecutors(): void {
           updatedAt: new Date(),
           data: drizzleSql`(coalesce(${proposals.data}, '{}'::jsonb) - 'failure') || jsonb_build_object('receipt', ${JSON.stringify(receipt)}::jsonb)`,
         },
-        where: eq(proposals.id, input.proposalId),
-      });
+        where: ours,
+      }).returning({ id: proposals.id });
+      if (landed.length === 0) {
+        // This attempt outlived its claim and another took the card over:
+        // that one records the outcome.
+        throw leaveRowToOtherAttempt(
+          new TRPCError({
+            code: "CONFLICT",
+            message:
+              "This approval ran past its turn and another approval took the card over; its result will show on this card.",
+          })
+        );
+      }
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(
