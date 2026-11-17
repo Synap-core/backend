@@ -84,6 +84,8 @@ const AUTOMATION = {
   automationRunId: "arun-1",
   automationId: "auto-1",
   chainDepth: 0,
+  rootRunId: "arun-1",
+  chainAutomationIds: ["auto-1"],
 };
 
 const context = () =>
