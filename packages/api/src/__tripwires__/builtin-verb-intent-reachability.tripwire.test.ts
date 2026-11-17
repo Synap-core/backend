@@ -316,6 +316,10 @@ const CALLABLE = ALL.filter((s) => s.kind !== "instruction");
  * intent fails here, and deleting an entry from this table without adding the
  * intent also fails here. Neither direction can drift silently.
  */
+/** One reason for the nine PDF transform verbs (they share it exactly). */
+const PDF_TRANSFORM_UNROUTABLE =
+  "File transforms are reached by name until a transform intent exists (PDF tools W1): it reads a pod file and writes a new pod file on the pod's own engine. manage_file is external storage, so it would be a false claim.";
+
 const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
   // ── channel plumbing: the internal machinery UNDER send_message ─────────
   "channel.create":
@@ -400,6 +404,18 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Scans rejected proposals by channel in the pod and files an internal posture proposal.",
   "automation.recommend_health":
     "Scans automations that have never produced a run row and files an advisory proposal.",
+  // ── PDF tools (W1): pod file in, NEW pod file out, on the pod's engine ──
+  "pdf.ocr": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.compress": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.merge": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.split": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.redact": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.to_pdf": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.to_markdown": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.protect": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.unprotect": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.info":
+    "Reads a pod PDF's facts on the pod's own engine. No outside record is fetched (fetch_record) and no file is managed; reached by name until a transform intent exists (PDF tools W1).",
 };
 
 // ---------------------------------------------------------------------------

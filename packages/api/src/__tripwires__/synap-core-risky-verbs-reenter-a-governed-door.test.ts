@@ -669,6 +669,22 @@ const REENTRY_CLASS: Record<string, Classification> = {
   "entity_facet.detach": "gated",
   "graph.link": "gated",
   "tool.request": "gated",
+  // PDF tools (W1): each handler builds the relations caller and hands it to
+  // `runPdfVerb` (services/pdf/run-pdf-verb.ts), which links each new file
+  // `derived_from` its source through `relations.create` (one-hop escape).
+  // The new FILE goes through `createGovernedFileEntityFromBuffer` →
+  // `entities.create`, a governed door this scan does not see (limitation b).
+  // `pdf.merge` is HIGH-RISK by name ("merge" is a destructive action word),
+  // although it deletes nothing: the sources are kept.
+  "pdf.ocr": "gated",
+  "pdf.compress": "gated",
+  "pdf.merge": "gated",
+  "pdf.split": "gated",
+  "pdf.redact": "gated",
+  "pdf.to_pdf": "gated",
+  "pdf.to_markdown": "gated",
+  "pdf.protect": "gated",
+  "pdf.unprotect": "gated",
   "playbook.update": "gated",
   "automation.activate": "gated",
   "automation.update": "gated",

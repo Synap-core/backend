@@ -217,6 +217,10 @@ describe("W6 read/resolve verbs — registry", () => {
       // accounts (labels and ids), the account source of send_message's input
       // map. Reads only; the send itself (messaging.send) stays gated.
       "messaging.accounts",
+      // pdf.info (PDF tools W1) reads one PDF the caller may read and returns
+      // the pod's own engine's report; it creates nothing. The other pdf.*
+      // verbs make a new file and stay gated.
+      "pdf.info",
       // snippet.render reads a snippet (and a subject's fields) through the
       // caller's floor and returns text; it writes nothing.
       "snippet.render",

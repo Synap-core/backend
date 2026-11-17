@@ -111,6 +111,18 @@ import {
   buildPackageSkeleton,
   SCAFFOLDABLE_CATEGORIES,
 } from "./market-scaffold.js";
+import {
+  pdfCompressParams,
+  pdfInfoParams,
+  pdfMergeParams,
+  pdfOcrParams,
+  pdfProtectParams,
+  pdfRedactParams,
+  pdfSplitParams,
+  pdfToMarkdownParams,
+  pdfToPdfParams,
+  pdfUnprotectParams,
+} from "../pdf/params.js";
 // marketplace-install.ts pulls in the full router graph (create-from-definition.ts
 // imports playbooksRouter/automationsRouter/toolsRouter/skillsRouter at top
 // level) — it and catalog-cache-query.ts are lazy-imported inside the two
@@ -4716,6 +4728,101 @@ const snippetRenderHandler: BuiltinVerbHandler = async (params, ctx) => {
   };
 };
 
+// ── PDF tools (W1) — pod PDFs in, a NEW pod file out ──────────────────────────
+//
+// First-party verbs over the pod's internal PDF engine (Stirling PDF, reached
+// only at the operator's `STIRLING_URL`). The ONE runner is
+// `services/pdf/run-pdf-verb.ts`: engine check first, the read floor per
+// source, the engine call, the GOVERNED file door for the output, and one
+// `derived_from` edge per source. Each handler builds the governed
+// `relations.create` caller here and hands it to the runner, so the re-entry is
+// visible to `synap-core-risky-verbs-reenter-a-governed-door.test.ts` (which
+// follows the caller one hop into the runner). The acting agent rides the
+// caller context: `relations.create` gates on `ctx.agentUserId`, and an agent's
+// edge must be judged as the agent's. `pdf.info` reads only
+// (READ_ONLY_BUILTIN_VERBS). Engine + runner are lazy-imported, like every
+// other heavy dependency of this module.
+
+/** The governed relations caller context for a PDF verb's `derived_from` edges. */
+function pdfLinkCallerContext(ctx: BuiltinVerbContext): Context {
+  return {
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    agentUserId: getActingAgentUserId() ?? ctx.agentUserId ?? null,
+    sessionId: ctx.sessionId ?? null,
+  } as unknown as Context;
+}
+
+const pdfOcrHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.ocr", params, ctx, { caller });
+};
+
+const pdfCompressHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.compress", params, ctx, { caller });
+};
+
+const pdfMergeHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.merge", params, ctx, { caller });
+};
+
+const pdfSplitHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.split", params, ctx, { caller });
+};
+
+const pdfRedactHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.redact", params, ctx, { caller });
+};
+
+const pdfToPdfHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.to_pdf", params, ctx, { caller });
+};
+
+const pdfToMarkdownHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.to_markdown", params, ctx, { caller });
+};
+
+const pdfProtectHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.protect", params, ctx, { caller });
+};
+
+const pdfUnprotectHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.unprotect", params, ctx, { caller });
+};
+
+const pdfInfoHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { runPdfInfo } = await import("../pdf/run-pdf-verb.js");
+  return runPdfInfo(params, ctx);
+};
+
 /**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
@@ -4826,6 +4933,17 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "web.search": webSearchHandler,
   // Render a stored snippet (text with variables) once: { text, misses }.
   "snippet.render": snippetRenderHandler,
+  // PDF tools (W1): pod PDFs in, a new governed pod file out (+ derived_from).
+  "pdf.ocr": pdfOcrHandler,
+  "pdf.compress": pdfCompressHandler,
+  "pdf.merge": pdfMergeHandler,
+  "pdf.split": pdfSplitHandler,
+  "pdf.redact": pdfRedactHandler,
+  "pdf.to_pdf": pdfToPdfHandler,
+  "pdf.to_markdown": pdfToMarkdownHandler,
+  "pdf.info": pdfInfoHandler,
+  "pdf.protect": pdfProtectHandler,
+  "pdf.unprotect": pdfUnprotectHandler,
 };
 
 /**
@@ -4901,6 +5019,16 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "web.read": webReadParams,
   "web.search": webSearchParams,
   "snippet.render": snippetRenderParams,
+  "pdf.ocr": pdfOcrParams,
+  "pdf.compress": pdfCompressParams,
+  "pdf.merge": pdfMergeParams,
+  "pdf.split": pdfSplitParams,
+  "pdf.redact": pdfRedactParams,
+  "pdf.to_pdf": pdfToPdfParams,
+  "pdf.to_markdown": pdfToMarkdownParams,
+  "pdf.info": pdfInfoParams,
+  "pdf.protect": pdfProtectParams,
+  "pdf.unprotect": pdfUnprotectParams,
 };
 
 /**
@@ -5006,4 +5134,8 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // caller's floor and RETURNS text; it writes nothing. Sending is governed
   // separately (messaging.send).
   "snippet.render",
+  // pdf.info — reads one PDF the caller may read (readableFileEntity, the
+  // caller's floor) and RETURNS the pod's own engine's report on it. Creates
+  // nothing; the bytes go only to the pod's internal engine, never outward.
+  "pdf.info",
 ]);
