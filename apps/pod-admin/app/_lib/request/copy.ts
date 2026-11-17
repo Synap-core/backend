@@ -8,13 +8,17 @@
  * title, a name) is a param, printed as written. DRAFT French ("vous"),
  * awaiting the founder's review.
  */
-import type { Catalog } from "@synap-core/types/i18n";
+import type { Catalog, Locale, NounParams } from "@synap-core/types/i18n";
+import { nounParams, resolveNoun } from "@synap-core/types/vocabulary";
 
 export const en = {
   // ── The story's frame ──────────────────────────────────────────────────
   "story.label": "What led here, what you decide, what comes next",
-  "story.askedBy": "Asked by",
-  "story.forSession": "For",
+  // The one head: a row of chips (`RequestHead`).
+  "head.label": "Who is asking",
+  "head.for": "for",
+  "head.forYou": "for you",
+  "head.statusAgo": "{status} · {ago}",
   "story.you": "you",
   "story.fullTimeline": "See the whole story",
   "story.loading": "Reading what led here…",
@@ -54,13 +58,17 @@ export const en = {
   "refuse.reason.notThisWork.hint": "Stop this part of the session",
   "refuse.reasonLabel": "Tell the agent why (optional)",
   "refuse.cancel": "Keep it open",
-  "refuse.confirm": "Refuse and tell the agent",
+  // `verb` is `refuseVerb(kind)`: an ask is refused, a proposal rejected.
+  "refuse.confirm":
+    "{verb, select, reject {Reject and tell the agent} other {Refuse and tell the agent}}",
   "refuse.reassure":
-    "Nothing is shared. The request closes as refused, your reason goes in the session room, the agent picks another route.",
+    "{verb, select, reject {Nothing is shared. The request closes as rejected, your reason goes in the session room, the agent picks another route.} other {Nothing is shared. The request closes as refused, your reason goes in the session room, the agent picks another route.}}",
   "refuse.proposalConsequence":
-    "If you refuse, nothing is applied and {who} sees your reason.",
+    "If you reject it, nothing is applied and {who} sees your reason.",
   "refuse.proposalConsequenceAnyone":
-    "If you refuse, nothing is applied and whoever asked sees your reason.",
+    "If you reject it, nothing is applied and whoever asked sees your reason.",
+  "refuse.proposalConsequenceAgent":
+    "If you reject it, nothing is applied and the agent sees your reason.",
   // ── The ask ────────────────────────────────────────────────────────────
   "ask.showCurrent": "Show the current question",
   "ask.movedOnBody": "It was answered, handed back, or the session ended.",
@@ -98,14 +106,14 @@ export const en = {
   "secret.giveNoAgent": "Give {name}.",
   "secret.change": "Change",
   "secret.howLong": "How long",
-  "secret.usesSession": "This session (up to {minutes} min)",
+  // The grant option and its button name the session with the vocabulary's
+  // noun (`jobNoun`): founder G1, the person's word is "job", as in the
+  // shared note under it (`ASK_COPY.provideGrantNote`, UX review S11).
+  "secret.usesSession": "This {obj} (up to {minutes} min)",
   "secret.usesOnce": "One read",
   "secret.give": "Give",
-  "secret.giveSession": "Give for this session",
+  "secret.giveSession": "Give for this {obj}",
   "secret.giveOnce": "Give for one read",
-  "secret.noteSession":
-    "{agent} can read it for up to {minutes} minutes, in this session only.",
-  "secret.noteOnce": "{agent} can read it once, within {minutes} minutes.",
   "secret.stays": "It stays on the pod and is read through your vault.",
   "secret.none": "You have no secrets in your vault that you could hand over.",
   "secret.for": "For",
@@ -156,8 +164,10 @@ export const en = {
 
 export const fr: Catalog<typeof en> = {
   "story.label": "Ce qui a mené ici, ce que vous décidez, ce qui suit",
-  "story.askedBy": "Demandé par",
-  "story.forSession": "Pour",
+  "head.label": "Qui demande",
+  "head.for": "pour",
+  "head.forYou": "pour vous",
+  "head.statusAgo": "{status} · {ago}",
   "story.you": "vous",
   "story.fullTimeline": "Voir toute l’histoire",
   "story.loading": "Lecture de ce qui a mené ici…",
@@ -197,13 +207,16 @@ export const fr: Catalog<typeof en> = {
   "refuse.reason.notThisWork.hint": "Arrêtez cette partie de la session",
   "refuse.reasonLabel": "Dites à l’agent pourquoi (facultatif)",
   "refuse.cancel": "Laisser ouvert",
-  "refuse.confirm": "Refuser et le dire à l’agent",
+  "refuse.confirm":
+    "{verb, select, reject {Rejeter et le dire à l’agent} other {Refuser et le dire à l’agent}}",
   "refuse.reassure":
-    "Rien n’est partagé. La demande est close comme refusée, votre raison va dans la salle de la session, l’agent prend une autre voie.",
+    "{verb, select, reject {Rien n’est partagé. La demande est close comme rejetée, votre raison va dans la salle de la session, l’agent prend une autre voie.} other {Rien n’est partagé. La demande est close comme refusée, votre raison va dans la salle de la session, l’agent prend une autre voie.}}",
   "refuse.proposalConsequence":
-    "Si vous refusez, rien n’est appliqué et {who} voit votre raison.",
+    "Si vous la rejetez, rien n’est appliqué et {who} voit votre raison.",
   "refuse.proposalConsequenceAnyone":
-    "Si vous refusez, rien n’est appliqué et le demandeur voit votre raison.",
+    "Si vous la rejetez, rien n’est appliqué et le demandeur voit votre raison.",
+  "refuse.proposalConsequenceAgent":
+    "Si vous la rejetez, rien n’est appliqué et l’agent voit votre raison.",
   "ask.showCurrent": "Voir la question actuelle",
   "ask.movedOnBody":
     "Elle a reçu une réponse, a été rendue, ou la session s’est terminée.",
@@ -240,15 +253,13 @@ export const fr: Catalog<typeof en> = {
   "secret.giveNoAgent": "Donner {name}.",
   "secret.change": "Changer",
   "secret.howLong": "Pour combien de temps",
-  "secret.usesSession": "Cette session (jusqu’à {minutes} min)",
+  "secret.usesSession":
+    "{objG, select, f {Cette {obj}} other {{objV, select, yes {Cet {obj}} other {Ce {obj}}}}} (jusqu’à {minutes} min)",
   "secret.usesOnce": "Une lecture",
   "secret.give": "Donner",
-  "secret.giveSession": "Donner pour cette session",
+  "secret.giveSession":
+    "Donner pour {objG, select, f {cette {obj}} other {{objV, select, yes {cet {obj}} other {ce {obj}}}}}",
   "secret.giveOnce": "Donner pour une lecture",
-  "secret.noteSession":
-    "{agent} peut le lire jusqu’à {minutes} minutes, dans cette session seulement.",
-  "secret.noteOnce":
-    "{agent} peut le lire une fois, dans les {minutes} minutes.",
   "secret.stays": "Il reste sur le pod et se lit via votre coffre.",
   "secret.none": "Votre coffre ne contient aucun secret à fournir.",
   "secret.for": "Pour",
@@ -297,3 +308,12 @@ export const fr: Catalog<typeof en> = {
 };
 
 export const REQUEST_CATALOGS = { en, fr };
+
+/**
+ * The person's word for a session, as a noun bundle for the grant option and
+ * its button (`secret.usesSession`, `secret.giveSession`): the vocabulary's
+ * ("job"), so they agree with the shared grant note under them (founder G1).
+ */
+export function jobNoun(locale?: Locale): NounParams {
+  return nounParams(resolveNoun("session", locale));
+}

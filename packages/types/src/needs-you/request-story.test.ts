@@ -131,17 +131,31 @@ function contextOf(
   };
 }
 
+const handedBack = (id: string, slot: string): DevTimelineEvent => ({
+  id,
+  kind: "slot_handed_back",
+  at: at(),
+  actor: ME,
+  refs: { sessionId: S, slotLabel: slot },
+  slot,
+});
+const OWN = "GitHub merge token";
+
 describe("requestStory — before", () => {
-  it("oldest first, repeats grouped with their count, its own ask never a past line", () => {
+  // Founder, 17 Nov 2026: the past is THIS request's, never the session's
+  // other asks, proposals, checks or start.
+  it("keeps only this request's own past, oldest first, its own ask never a past line", () => {
     const row = owedRow();
     // Newest first, as the timeline read returns it.
     const events = [
       started(),
       checks("c1", "failed"),
       checks("c2", "failed"),
-      checks("c3", "failed"),
+      answered("own1", OWN),
+      handedBack("own2", OWN),
       asked("read", "GitHub read token"),
-      asked("self", "GitHub merge token"),
+      answered("other", "GitHub read token"),
+      asked("self", OWN),
     ].reverse();
     const story = requestStory(
       row,
@@ -149,39 +163,42 @@ describe("requestStory — before", () => {
         timeline: { status: "ok", value: { events, olderExist: true } },
       })
     );
-    expect(story.before.map((g) => [g.kind, g.count])).toEqual([
-      ["session_started", 1],
-      ["checks_finished", 3],
-      ["slot_asked", 1],
-    ]);
-    expect(story.before[1]).toMatchObject({
-      key: "c3",
-      line: "Checks failed",
-      repeat: "3 times",
-      url: "https://ci/c3",
-    });
-    expect(story.before[2]).toMatchObject({
-      line: "Asked you: GitHub read token",
-      actor: AGENT,
+    expect(story.before.map((g) => g.key)).toEqual(["own1", "own2"]);
+    expect(story.before[0]).toMatchObject({
+      line: `Answered: ${OWN}`,
+      actor: ME,
       door: { kind: "session", id: S },
     });
-    expect(
-      story.before.flatMap((g) => g.events.map((e) => e.id))
-    ).not.toContain("self");
+    const kept = story.before.flatMap((g) => g.events.map((e) => e.id));
+    for (const other of ["start", "c1", "c2", "read", "other", "self"])
+      expect(kept).not.toContain(other);
     expect(story.folded).toBeNull();
-    expect(story.olderExist).toBe(true);
+    // The read's oldest event is the session's start, not this request's:
+    // no older events of THIS request can hide behind it.
+    expect(story.olderExist).toBe(false);
     expect(story.timelineDoor).toEqual({ kind: "session", id: S });
   });
 
-  it(`keeps the ${REQUEST_STORY_BEFORE_CAP} groups nearest Now and folds the rest as N more events`, () => {
+  it("older events of this request may exist only when its own events reach the read's edge", () => {
+    const row = owedRow();
+    const events = [answered("own1", OWN), asked("self", OWN)].reverse();
+    const story = requestStory(
+      row,
+      contextOf(row, {
+        timeline: { status: "ok", value: { events, olderExist: true } },
+      })
+    );
+    expect(story.olderExist).toBe(true);
+  });
+
+  it(`keeps the ${REQUEST_STORY_BEFORE_CAP} own groups nearest Now and folds the rest as N more events`, () => {
     const row = owedRow();
     const events = [
       started(),
-      checks("c1", "failed"),
-      checks("c2", "passed"),
-      asked("a", "Pick the target"),
-      answered("b", "Pick the target"),
-      asked("c", "GitHub read token"),
+      answered("a", OWN),
+      handedBack("b", OWN),
+      answered("c", OWN),
+      handedBack("d", OWN),
     ].reverse();
     const story = requestStory(
       row,
@@ -189,12 +206,11 @@ describe("requestStory — before", () => {
         timeline: { status: "ok", value: { events, olderExist: false } },
       })
     );
-    expect(story.before).toHaveLength(REQUEST_STORY_BEFORE_CAP);
-    expect(story.before.map((g) => g.key)).toEqual(["a", "b", "c"]);
+    expect(story.before.map((g) => g.key)).toEqual(["b", "c", "d"]);
     expect(story.folded).toEqual({
-      groups: 3,
-      events: 3,
-      label: "3 more events",
+      groups: 1,
+      events: 1,
+      label: "1 more event",
     });
   });
 
@@ -249,18 +265,47 @@ describe("requestStory — the past says each act as it was", () => {
 
   it("a decision says the vocabulary's word for its status, in each locale", () => {
     expect(requestStoryLine(decided("d1", "rejected", "Ship it"))).toBe(
-      "Rejected: Ship it"
+      "Rejected “Ship it”"
     );
     expect(requestStoryLine(decided("d2", "reverted", "Ship it"))).toBe(
-      "Reverted: Ship it"
+      "Reverted “Ship it”"
     );
     expect(requestStoryLine(decided("d3", "approval_failed", null))).toBe(
       "Approval failed"
     );
     expect(requestStoryLine(decided("d4", "rejected", "Ship it"), "fr")).toBe(
-      "Rejeté : Ship it"
+      "Rejeté «\u00a0Ship it\u00a0»"
     );
   });
+
+  // Review N3: "Proposed: Gap: search tools" said two colons. The title is
+  // set apart by quotes, so the line holds only the title's own colons.
+  it.each(["en", "fr"] as const)(
+    "a titled decision quotes its title and adds no colon of its own (%s)",
+    (locale) => {
+      const title = "Gap: search tools miss archived notes";
+      const asked: DevTimelineEvent = {
+        id: "q1",
+        kind: "decision_asked",
+        at: at(),
+        actor: ME,
+        refs: { sessionId: S, proposalId: "p-q1" },
+        title,
+      } as DevTimelineEvent;
+      const colons = (s: string) => s.split(":").length - 1;
+      for (const line of [
+        requestStoryLine(asked, locale),
+        requestStoryLine(decided("d5", "rejected", title), locale),
+      ]) {
+        expect(line).toContain(title);
+        expect(colons(line)).toBe(colons(title));
+        // The title sits between an opening and a closing quote mark.
+        const i = line.indexOf(title);
+        expect(line.slice(0, i).trim()).toMatch(/[“«]$/);
+        expect(line.slice(i + title.length).trim()).toMatch(/^[”»]/);
+      }
+    }
+  );
 
   it("a slot handed back with Not mine is its own line", () => {
     const handedBack: DevTimelineEvent = {
@@ -478,5 +523,119 @@ describe("requestStory — now.subject: the object the request is about", () => 
     expect(failed.unreadable).toEqual([
       { part: "subject", line: en["needsYou.story.unreadable.subject"] },
     ]);
+  });
+});
+
+// Founder, 17 Nov 2026: the rail is drawn only when the story says something
+// the head and the decision bar do not; a single own event that IS the
+// status folds into the status mark.
+describe("requestStory — rail and status", () => {
+  const proposalRow = () =>
+    lensItemsOfClass(
+      [
+        {
+          id: "cluster:p1",
+          kind: "proposal-cluster",
+          title: "Install Tool “github-merge”",
+          count: 1,
+          repeatCount: 1,
+          category: "governance",
+          groupKey: null,
+          ageBucket: "recent",
+          target: { kind: "proposal", id: "p1" },
+        } satisfies LensNeedsYouSignal,
+      ],
+      "blocking"
+    )[0]!.row;
+  const decision = (
+    id: string,
+    proposalId: string,
+    what: string
+  ): DevTimelineEvent => ({
+    id,
+    kind: "decision_answered",
+    at: at(),
+    actor: { kind: "system", id: null, name: null },
+    refs: { sessionId: S, proposalId },
+    title: "Install Tool “github-merge”",
+    decision: what,
+    note: null,
+  });
+  const proposalCtx = (row: LensRow, events: DevTimelineEvent[]) =>
+    contextOf(
+      row,
+      { timeline: { status: "ok", value: { events, olderExist: false } } },
+      { slotLabel: null, proposalIds: ["p1"] }
+    );
+
+  it("the founder's screen: approval failed once, nothing waits → no rail, the event is the status", () => {
+    const row = proposalRow();
+    const failed = decision("f1", "p1", "approval_failed");
+    const events = [
+      started(),
+      decision("other", "p2", "approved"),
+      checks("c1", "passed"),
+      failed,
+    ].reverse();
+    const story = requestStory(row, proposalCtx(row, events));
+    expect(story.before).toEqual([]);
+    expect(story.status?.key).toBe("f1");
+    expect(story.status?.at).toBe(failed.at);
+    expect(story.rail).toBe(false);
+  });
+
+  it("an own step that is not the status → rail", () => {
+    const row = proposalRow();
+    // Its approval failed, then it was applied and reverted: the revert is
+    // the status, the failure a step of its own past.
+    const events = [
+      decision("f1", "p1", "approval_failed"),
+      decision("r1", "p1", "reverted"),
+    ].reverse();
+    const story = requestStory(row, proposalCtx(row, events));
+    expect(story.status?.key).toBe("r1");
+    expect(story.before.map((g) => g.key)).toEqual(["f1"]);
+    expect(story.rail).toBe(true);
+  });
+
+  it("a next step beyond the plain consequence → rail (unblocks, a thing, sessions waiting)", () => {
+    expect(requestStory(owedRow(), null).rail).toBe(true);
+    const flat = owedRow({ unblocks: null, blocks: null });
+    expect(requestStory(flat, contextOf(flat, {})).rail).toBe(false);
+    expect(
+      requestStory(
+        flat,
+        contextOf(flat, {
+          waiting: {
+            status: "ok",
+            value: {
+              items: [{ id: "w1", title: "Ship", status: "active" }],
+              total: 1,
+            },
+          },
+        })
+      ).rail
+    ).toBe(true);
+  });
+
+  it("an agent waiting on it is not a next step: still no rail", () => {
+    const row = proposalRow();
+    const story = requestStory(
+      row,
+      contextOf(
+        row,
+        {},
+        {
+          slotLabel: null,
+          proposalIds: ["p1"],
+          proposalWaits: {
+            status: "ok",
+            value: { waits: true, reason: "gate" },
+          },
+        }
+      )
+    );
+    expect(story.after.map((s) => s.kind)).toEqual(["agent_waits"]);
+    expect(story.rail).toBe(false);
   });
 });

@@ -3,10 +3,13 @@
 /**
  * REFUSE, one trigger and one sheet for every request (founder D2, 16 Nov
  * 2026; UX review M2 / S8): an agent's ask of any mode and a proposal. The
- * request closes as refused, the reason goes to whoever asked, the agent
- * picks its next step. The verb comes from the vocabulary door at render
- * (in the reader's language, never a module-load English copy), the rest
- * from the request catalog; the reasons fit the kind of request.
+ * request closes, the reason goes to whoever asked, the agent picks its next
+ * step. THE VERB FOLLOWS THE OBJECT (one UX across surfaces, D3): an ask is
+ * refused, a proposal rejected ({@link refuseVerb}), as desktop and phone
+ * say it and as the proposal status vocabulary says "Rejected". The verb
+ * comes from the vocabulary door at render (in the reader's language, never
+ * a module-load English copy), the rest from the request catalog; the
+ * reasons fit the kind of request.
  *
  * The reason sent keeps what the person saw: a picked reason travels as
  * "<reason>: <its hint>", then their own words.
@@ -41,6 +44,11 @@ const REASONS = {
 
 type ReasonKey = (typeof REASONS)[RefuseKind][number];
 
+/** The verb a request of this kind is turned down with: an ask is refused, a proposal rejected. */
+export function refuseVerb(kind: RefuseKind): "refuse" | "reject" {
+  return kind === "proposal" ? "reject" : "refuse";
+}
+
 /** The reason as the agent reads it: the picked reason with its hint, then the person's words. */
 export function refuseReason(
   picked: { label: string; hint: string } | null,
@@ -59,11 +67,13 @@ export const RADIO_CARD = {
   description: "text-[12.5px] text-foreground/75",
 };
 
-/** "Refuse…": the same size and tone beside every primary verb. */
+/** "Refuse…" (an ask) or "Reject…" (a proposal): the same size and tone beside every primary verb. */
 export function RefuseTrigger({
+  kind,
   isDisabled,
   onPress,
 }: {
+  kind: RefuseKind;
   isDisabled?: boolean;
   onPress: () => void;
 }) {
@@ -75,7 +85,7 @@ export function RefuseTrigger({
       onPress={onPress}
       data-refuse-trigger=""
     >
-      {`${resolveActionLabel("refuse", "imperative")}…`}
+      {`${resolveActionLabel(refuseVerb(kind), "imperative")}…`}
     </Button>
   );
 }
@@ -138,7 +148,7 @@ export function RefuseSheet({
           isDisabled={busy}
           onPress={() => onRefuse(refuseReason(pickedReason, words_))}
         >
-          {t("refuse.confirm")}
+          {t("refuse.confirm", { verb: refuseVerb(kind) })}
         </Button>
         <Button
           variant="light"
@@ -149,7 +159,9 @@ export function RefuseSheet({
           {t("refuse.cancel")}
         </Button>
       </div>
-      <p className="text-[12.5px] text-foreground/80">{t("refuse.reassure")}</p>
+      <p className="text-[12.5px] text-foreground/80">
+        {t("refuse.reassure", { verb: refuseVerb(kind) })}
+      </p>
     </fieldset>
   );
 }

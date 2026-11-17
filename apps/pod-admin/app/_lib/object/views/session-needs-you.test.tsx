@@ -276,7 +276,12 @@ import {
 } from "./session-needs-you";
 import { AskAnswer } from "../../../(admin)/review/_lib/ask-answer";
 import { reviewRows } from "../../../(admin)/review/_lib/review-rows";
-import { en as REQUEST_EN } from "../../request/copy";
+import {
+  REQUEST_CATALOGS,
+  en as REQUEST_EN,
+  jobNoun,
+} from "../../request/copy";
+import { createT } from "@synap-core/types/i18n";
 
 /** Visible text only — attributes and tags stripped. */
 const text = (html: string) =>
@@ -848,7 +853,11 @@ describe("SecretProvide — the secret ask as one decision", () => {
     expect(options[1]).toEqual(["false", REQUEST_EN["secret.usesOnce"]]);
     // The verb names the pick; Refuse stands beside it.
     expect(
-      buttons.some((b) => b.children === REQUEST_EN["secret.giveSession"])
+      buttons.some(
+        (b) =>
+          b.children ===
+          createT("en", REQUEST_CATALOGS)("secret.giveSession", jobNoun("en"))
+      )
     ).toBe(true);
     expect(buttons.some((b) => b.children === `${ASK_COPY.refuse}…`)).toBe(
       true

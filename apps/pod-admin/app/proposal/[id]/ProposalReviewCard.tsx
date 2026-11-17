@@ -7,10 +7,10 @@
  *
  *   `useProposalReview`  — the proposal, where it came from, and its space.
  *   `ProposalReviewBody` — the Review template (page-grammar §1), top → down:
- *       who is asking, as ONE line of chips (agent · for whom · space ·
- *         session · when), each a door to its own page;
- *       what its session is FOR, under it — goal, criteria, track, project,
- *         and what else from it waits (`ProposalSessionContext.tsx`);
+ *       who is asking, as ONE row of chips at the top (agent · for whom ·
+ *         session · when, `RequestHead`), each a door, said once on the
+ *         page; what the session is FOR is behind its door (pod admin is
+ *         not a work surface);
  *       the change first: the RECORD approving creates or changes (its name
  *         as the heading, its kind beside it, its fields in a grid —
  *         `proposal-record-model.ts`), a document's diff, an app's access
@@ -41,14 +41,11 @@ import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "@heroui/react";
 import {
-  AppWindow,
   Check,
   Clock,
-  Layers,
   ShieldAlert,
   ShieldCheck,
   TriangleAlert,
-  UserRound,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -58,7 +55,6 @@ import {
   needsIdentityChoice,
   pageOnlyReasonActs,
   proposalPageOnlyReason,
-  proposalRequester,
   proposalRequesterParts,
   type ProposalPrincipalView,
   resolveProposalAction,
@@ -70,29 +66,22 @@ import {
 import {
   resolveActionLabel,
   resolveObjectNoun,
-  resolveProvenanceLabel,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
-import { openIn, type Exit } from "../../../lib/open-in";
-import { ExitFallback, ExitLink } from "../../../lib/exit-link";
+import { openIn } from "../../../lib/open-in";
+import { ExitLink } from "../../../lib/exit-link";
 /* The pod's own uuid predicate, not a fourth regex. `workspaceId` is a TEXT
    column while `workspaces.get` takes `.uuid()` — without this guard a
    non-uuid workspace ref would fire a request that can only fail. */
-import { formatRelative, formatTimestamp, isUuid } from "../../../lib/format";
+import { isUuid } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 import { computerHref } from "../../../lib/console-nav";
 import { proposalExpiresAt, proposalLapsed } from "../../_lib/proposal-expiry";
 import { mediaAlt } from "../../_lib/media/stored-media-model";
 import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 import { AdvancedPanel } from "../../_lib/object/advanced-panel";
-import { kindIcon } from "../../_lib/object/kind-icon";
 import { toneMarkClass } from "../../_lib/tone";
 import { READS_WIDE_ATTR } from "../../_lib/receiver-shell";
-import {
-  AgentMark,
-  PersonAvatar,
-  Pill,
-} from "../../_lib/object/provenance-chips";
 import { deriveDeferredWritesReview } from "@synap-core/types/proposals/deferred-writes";
 import { DocumentChanges } from "../../_lib/object/content/document-changes";
 import { DocumentUpdateChanges } from "./DocumentUpdateChanges";
@@ -115,12 +104,14 @@ import {
   ProposedRecordCard,
   RecordGroupList,
 } from "./ProposedRecordCard";
-import { ProposalSessionContext } from "./ProposalSessionContext";
 import type { RequestStory } from "@synap-core/types/needs-you";
 import {
   RequestStoryView,
-  StoryDepth,
-  StoryHead,
+  RequestHead,
+  StoryStatusMark,
+  storyIsFlat,
+  storyStatusOf,
+  type RequestHeadParts,
   type StoryRead,
 } from "../../_lib/request/request-story-view";
 import { useProposalStory } from "../../_lib/request/use-proposal-story";
@@ -304,144 +295,6 @@ function DisclosedMark({
   );
 }
 
-// ─── Who is asking: one line ─────────────────────────────────────────────────
-
-/**
- * WHO is asking, FOR whom, WHERE and WHEN, as one line of chips. Every part
- * is something the pod resolved; a part it did not resolve is absent, never
- * guessed and never an id.
- */
-function ProvenanceLine({
-  proposal: p,
-  sourceExits,
-  workspaceName,
-  identity,
-}: {
-  proposal: ProposalReviewData;
-  sourceExits: ProposalSourceExit[];
-  workspaceName: string | null;
-  /** The reader: the person it acts for reads "for you" when it is them. */
-  identity?: string;
-}) {
-  const t = proposalPageT();
-  const principal = p.principal as ProposalPrincipalView | null | undefined;
-  const forYou =
-    !!identity &&
-    principal?.kind === "delegated" &&
-    principal.name === identity;
-  // The person it acts for, said "for you" when it is the reader (S16).
-  const { actor, forWhom } = proposalRequesterParts(
-    forYou
-      ? { ...p, principal: { kind: "delegated", name: t("review.forYou") } }
-      : p
-  );
-  const created = p.createdAt ? new Date(p.createdAt) : null;
-  const asked = created && !Number.isNaN(created.getTime()) ? created : null;
-  const agentExit = sourceExits.find((s) => s.target.kind === "agent");
-  const others = sourceExits.filter((s) => s.target.kind !== "agent");
-  const spaceExit =
-    workspaceName && p.workspaceId
-      ? openIn({ kind: "object", objectKind: "workspace", id: p.workspaceId })
-      : undefined;
-
-  /* One fallback beneath the line, not one per chip — six chips must not
-     tell the reader to install the app six times (the defect `exit-link.tsx`
-     documents). */
-  const fallbackExit: Exit | undefined =
-    sourceExits.find(({ exit }) => exit.isDesktopLink)?.exit ??
-    (spaceExit?.isDesktopLink ? spaceExit : undefined);
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div
-        role="group"
-        aria-label={t("review.whoAsks")}
-        data-review-provenance=""
-        className="flex flex-wrap items-center gap-1.5"
-      >
-        {actor && (
-          <Pill exit={actor.role === "agent" ? agentExit?.exit : undefined}>
-            {actor.role === "agent" ? (
-              <AgentMark name={actor.name} />
-            ) : actor.role === "app" ? (
-              <AppWindow
-                aria-hidden
-                className="h-3.5 w-3.5 text-foreground/70"
-              />
-            ) : actor.role === "guest" ? (
-              <UserRound
-                aria-hidden
-                className="h-3.5 w-3.5 text-foreground/70"
-              />
-            ) : (
-              <PersonAvatar name={actor.name} />
-            )}
-            {actor.role === "guest" ? (
-              <span className="truncate">
-                <span className="font-medium text-foreground">
-                  {resolveProvenanceLabel("guest")}
-                </span>
-                <span className="text-foreground/70"> through </span>
-                {actor.name}
-              </span>
-            ) : (
-              <span className="truncate font-medium text-foreground">
-                {actor.name}
-              </span>
-            )}
-          </Pill>
-        )}
-        {forWhom && (
-          <Pill>
-            {forYou ? (
-              <span className="text-foreground/80">{forWhom.text}</span>
-            ) : forWhom.name ? (
-              <>
-                <span className="text-foreground/70">for</span>
-                <PersonAvatar name={forWhom.name} />
-                <span className="truncate">{forWhom.name}</span>
-              </>
-            ) : (
-              <span className="text-foreground/75">{forWhom.text}</span>
-            )}
-          </Pill>
-        )}
-        {workspaceName && (
-          <Pill exit={spaceExit} title={resolveObjectNoun("workspace")}>
-            <Layers aria-hidden className="h-3.5 w-3.5 text-foreground/70" />
-            <span className="truncate">{workspaceName}</span>
-          </Pill>
-        )}
-        {others.map(({ target, exit }) => {
-          const Icon = kindIcon(target.kind);
-          return (
-            <Pill
-              key={`${target.kind}:${target.id}`}
-              exit={exit}
-              title={resolveObjectNoun(target.kind)}
-            >
-              <Icon aria-hidden className="h-3.5 w-3.5 text-foreground/70" />
-              <span className="truncate">{target.label}</span>
-            </Pill>
-          );
-        })}
-        {asked && (
-          <Pill>
-            <Clock aria-hidden className="h-3.5 w-3.5 text-foreground/70" />
-            <time
-              dateTime={asked.toISOString()}
-              title={formatTimestamp(p.createdAt)}
-            >
-              {formatRelative(p.createdAt)}
-            </time>
-          </Pill>
-        )}
-      </div>
-      {fallbackExit && <ExitFallback exit={fallbackExit} showWeb={false} />}
-    </div>
-  );
-}
-
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section
@@ -463,7 +316,7 @@ const NOTE_CLAMP_LINES = 3;
  * The requester's own words — theirs, not the system's: labelled with who
  * wrote them, quiet, clamped to three lines.
  */
-function RequesterNote({ who, text }: { who: string | null; text: string }) {
+function RequesterNote({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const t = proposalPageT();
   const long =
@@ -472,7 +325,8 @@ function RequesterNote({ who, text }: { who: string | null; text: string }) {
   return (
     <figure data-review-note="" className="flex flex-col gap-1">
       <figcaption className="text-[12.5px] font-medium text-foreground/70">
-        {who ? t("review.noteFrom", { who }) : t("review.note")}
+        {/* The head names who wrote it, once. */}
+        {t("review.note")}
       </figcaption>
       <blockquote
         className={`whitespace-pre-line border-l-2 border-foreground/10 pl-3 text-[12.5px] leading-relaxed text-foreground/80 ${
@@ -697,7 +551,11 @@ function DecisionButtons({
   }
 
   const rejectButton = (
-    <RefuseTrigger isDisabled={busy} onPress={() => setRejecting(true)} />
+    <RefuseTrigger
+      kind="proposal"
+      isDisabled={busy}
+      onPress={() => setRejecting(true)}
+    />
   );
   const undoChip = undo && <DisclosedMark mark={undo} icon={TriangleAlert} />;
 
@@ -876,15 +734,23 @@ function graphKindsOf(payload: unknown): string[] {
 export function ProposalReviewBody({
   proposal: p,
   sourceExits,
-  workspaceName,
   identity,
   onDecided,
   barClassName = "",
   afterDecision,
   story: hostStory,
   sourceState,
+  statusMark = "head",
+  onStatusAt,
 }: {
   proposal: ProposalReviewData;
+  /**
+   * Who draws the folded status ("Approval failed · 8h ago", the story's
+   * `status`): the head here, or the host's own status mark (the page).
+   */
+  statusMark?: "head" | "host";
+  /** With `statusMark: "host"`: when the status event happened (null = none). */
+  onStatusAt?: (at: string | null) => void;
   /**
    * Whether `proposals.source` answered (`useProposalReview`). The body's own
    * story read waits on it, so it is narrowed to the proposal's session once,
@@ -897,6 +763,7 @@ export function ProposalReviewBody({
    */
   story?: { story: RequestStory | null; read: StoryRead };
   sourceExits: ProposalSourceExit[];
+  /** Kept for the hosts' call; the head names no space (founder, 17 Nov 2026). */
   workspaceName: string | null;
   /** Who the reader is signed in as, when the host knows it. */
   identity?: string;
@@ -1085,22 +952,48 @@ export function ProposalReviewBody({
   // timeline, its note, what refusing does): the agent as the story names it
   // ("Claude Code on MacBook"), else the proposal's own actor name.
   const agentName = story.story?.head.by?.label ?? p.agentActorName ?? null;
-  // The ONE requester sentence (`proposalRequester`): "Claude Code, for you"
-  // when the person it acts for is the reader.
+  // The ONE head (founder, 17 Nov 2026): who asked, for whom ("for you"
+  // when it is the reader), the session and the age, as one row of chips,
+  // each said once on the page.
   const principal = p.principal as ProposalPrincipalView | null | undefined;
-  const requesterLabel = proposalRequester(
-    {
-      ...p,
-      agentActorName: agentName,
-      principal:
-        principal?.kind === "delegated" &&
-        identity &&
-        principal.name === identity
-          ? { kind: "delegated", name: rt("story.you") }
-          : principal,
-    },
+  const forReader =
+    principal?.kind === "delegated" &&
+    !!identity &&
+    principal.name === identity;
+  const parts = proposalRequesterParts(
+    { ...p, agentActorName: agentName },
     { locale }
   );
+  const headParts: RequestHeadParts = {
+    agent: parts.actor
+      ? {
+          name: parts.actor.name,
+          role: parts.actor.role,
+          door:
+            parts.actor.role === "agent" && agentSource
+              ? { kind: "agent", id: agentSource.target.id }
+              : null,
+        }
+      : null,
+    forWhom: parts.forWhom
+      ? forReader
+        ? { name: null, text: rt("head.forYou"), you: true }
+        : { name: parts.forWhom.name, text: parts.forWhom.text, you: false }
+      : null,
+    session: session
+      ? {
+          title: session.target.label,
+          door: { kind: "session", id: session.target.id },
+        }
+      : null,
+    at: p.createdAt ? String(p.createdAt) : null,
+  };
+  const flat = storyIsFlat(story.story, story.read);
+  const folded = storyStatusOf(story.story);
+  const foldedAt = folded?.at ?? null;
+  useEffect(() => {
+    if (statusMark === "host") onStatusAt?.(foldedAt);
+  }, [statusMark, onStatusAt, foldedAt]);
   // What it still needs before it can apply (B5): the first required row.
   const setupBlock = proposalSetupBlock(p.setup);
 
@@ -1156,33 +1049,20 @@ export function ProposalReviewBody({
         // A proposal's change IS what is decided: drawn first in Now, it is
         // the subject (`UpdatedDoor` opens the object an update changes).
         showSubject={false}
-        // ONE head for every request (M2): who asked, in the shared
-        // requester sentence (M5), and what the session is. Who, for whom,
-        // where and when in full, and what the session is for, sit in depth.
+        // ONE head for every request: one row of chips, each said once.
+        statusMark={statusMark}
         head={
-          <StoryHead
-            requester={
-              requesterLabel
-                ? {
-                    label: requesterLabel,
-                    door: agentSource
-                      ? { kind: "agent", id: agentSource.target.id }
-                      : null,
-                  }
-                : null
-            }
-            session={
-              session
-                ? {
-                    title: session.target.label,
-                    door: { kind: "session", id: session.target.id },
-                  }
-                : null
+          <RequestHead
+            parts={headParts}
+            status={
+              statusMark === "head" && folded ? (
+                <StoryStatusMark status={folded.status} at={folded.at} />
+              ) : undefined
             }
           />
         }
         afterExtra={
-          actionable && !applying ? (
+          actionable && !applying && !flat ? (
             <p data-story-after="approve" className="text-[13.5px]">
               {rt("story.approveDoes", { change: heading })}
             </p>
@@ -1193,11 +1073,20 @@ export function ProposalReviewBody({
             identity={identity}
             className={`${actionable ? "sticky" : ""} ${barClassName}`}
             consequence={
-              actionable && !applying
-                ? actor?.name
-                  ? rt("refuse.proposalConsequence", { who: actor.name })
-                  : rt("refuse.proposalConsequenceAnyone")
-                : undefined
+              actionable && !applying ? (
+                <>
+                  {/* Flat: what approving does is said here, once. */}
+                  {flat && (
+                    <span data-story-after="approve">
+                      {rt("story.approveDoes", { change: heading })}{" "}
+                    </span>
+                  )}
+                  {/* The requester is named by the head, once. */}
+                  {actor?.role === "agent"
+                    ? rt("refuse.proposalConsequenceAgent")
+                    : rt("refuse.proposalConsequenceAnyone")}
+                </>
+              ) : undefined
             }
             verbs={
               applying && run ? (
@@ -1250,20 +1139,6 @@ export function ProposalReviewBody({
         }
         depth={
           <>
-            <StoryDepth>
-              <ProvenanceLine
-                proposal={p}
-                sourceExits={sourceExits}
-                workspaceName={workspaceName}
-                identity={identity}
-              />
-              {session && (
-                <ProposalSessionContext
-                  sessionId={session.target.id}
-                  proposalId={p.id}
-                />
-              )}
-            </StoryDepth>
             {/* The ONE Advanced: ids and the raw request, collapsed, last —
                 the reader decides on the change, not on the JSON. */}
             <AdvancedPanel
@@ -1448,9 +1323,7 @@ export function ProposalReviewBody({
                 )}
               </div>
             )}
-            {why.proposer && (
-              <RequesterNote who={actor?.name ?? null} text={why.proposer} />
-            )}
+            {why.proposer && <RequesterNote text={why.proposer} />}
           </section>
         )}
 

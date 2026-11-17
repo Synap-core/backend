@@ -52,6 +52,7 @@ export const en = {
   "outcome.approved": "You approved this change: it’s now in your pod.",
   "outcome.auto_approved":
     "This matched an auto-approve rule and is already applied.",
+  // One verb with the bar, its sheet and its consequence: reject.
   "outcome.rejected": "You rejected this: the AI was told why.",
   "outcome.reverted": "This change was undone after it was applied.",
   "outcome.expired":
@@ -98,6 +99,9 @@ export const en = {
   "undo.cannot": "Approving applies it now, and it cannot be undone from here.",
   "undo.unknown":
     "Nobody checked whether this can be undone, so treat it as permanent.",
+  // The door to the object a proposal updates (`UpdatedDoor`): the verb and
+  // the noun bundle, so French says "Ouvrir le constat" / "Ouvrir la tâche".
+  "updated.open": "{verb} {obj}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -199,6 +203,8 @@ export const fr: Catalog<typeof en> = {
     "Approuver l’applique maintenant, et cela ne peut pas être annulé d’ici.",
   "undo.unknown":
     "Personne n’a vérifié si cela peut être annulé : considérez-le comme définitif.",
+  "updated.open":
+    "{verb} {objG, select, f {{objV, select, yes {l’{obj}} other {la {obj}}}} m {{objV, select, yes {l’{obj}} other {le {obj}}}} other {l’élément {Obj}}}",
 };
 
 /** The catalog keys of a decided request's one-line outcome. */
@@ -250,8 +256,8 @@ export const alwaysEn = {
   "always.ruleSaved": "Rule saved",
   "always.ruleFailed": "Approved, but the rule wasn’t saved",
   "always.ruleFailedHint": "The next request like this one will ask you again.",
-  "never.trigger": "Refuse and never allow…",
-  "never.menu": "Refuse, and refuse this from now on",
+  "never.trigger": "Reject and never allow…",
+  "never.menu": "Reject, and never allow this from now on",
   "never.action.label": "This change from this AI, never",
   "never.action.covers":
     "Refused from now on, without asking you. Your other AIs and other changes still ask.",
@@ -291,8 +297,8 @@ export const alwaysFr: Catalog<typeof alwaysEn> = {
   "always.ruleFailed": "Approuvée, mais la règle n’a pas été enregistrée",
   "always.ruleFailedHint":
     "La prochaine demande comme celle-ci vous sera de nouveau soumise.",
-  "never.trigger": "Refuser et ne plus autoriser…",
-  "never.menu": "Refuser et ne plus l’autoriser",
+  "never.trigger": "Rejeter et ne plus autoriser…",
+  "never.menu": "Rejeter et ne plus l’autoriser",
   "never.action.label": "Ce changement par cette IA, jamais",
   "never.action.covers":
     "Refusé désormais, sans vous demander. Vos autres IA et les autres changements vous sont toujours demandés.",
