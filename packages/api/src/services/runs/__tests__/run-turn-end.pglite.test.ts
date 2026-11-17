@@ -145,6 +145,7 @@ import {
   links,
   tools,
   playbookRuns,
+  lifecycleTransitionOutbox,
   proposals,
   automationRuns,
   sessionStageRuns,
@@ -315,6 +316,7 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       automationRuns,
       // Who works each step (0422): a completed turn reads it (risk 2).
       sessionStageRuns,
+      lifecycleTransitionOutbox,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

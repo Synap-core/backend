@@ -24,6 +24,7 @@ import {
   entities,
   focusSessions,
   playbookRuns,
+  setRunStatus,
 } from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
 import type { PlaybookStage, RunResult } from "@synap/playbooks";
@@ -66,17 +67,17 @@ export async function redispatchAfterAgentChoice(
   if (!failed) return { status: "nothing_to_redispatch" };
 
   // CLAIM — only the claimer dispatches.
-  const [run] = await db
-    .update(playbookRuns)
-    .set({ status: "running", error: null, completedAt: null })
-    .where(
-      and(
-        eq(playbookRuns.id, failed.id),
-        eq(playbookRuns.status, "failed"),
-        drizzleSql`${playbookRuns.externalAgent} IS NULL`
-      )
-    )
-    .returning();
+  const {
+    rows: [run],
+  } = await setRunStatus(db, {
+    runId: failed.id,
+    where: drizzleSql`${playbookRuns.externalAgent} IS NULL`,
+    from: "failed",
+    to: "running",
+    actor: { kind: "system" },
+    reason: "The person chose an agent: dispatched again.",
+    set: { error: null, completedAt: null },
+  });
   if (!run) return { status: "nothing_to_redispatch" };
 
   const session = await db.query.focusSessions.findFirst({

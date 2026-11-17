@@ -120,6 +120,7 @@ import {
   focusSessions,
   channels,
   playbookRuns,
+  lifecycleTransitionOutbox,
   playbookEnrollments,
   entities,
   links,
@@ -184,6 +185,7 @@ beforeAll(async () => {
     // agent (`resolveRunHandOff`): no assignment here, so nothing changes.
     links,
     users,
+    lifecycleTransitionOutbox,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

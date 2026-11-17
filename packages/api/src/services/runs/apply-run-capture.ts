@@ -12,11 +12,10 @@
 
 import {
   db,
-  and,
-  eq,
   inArray,
-  playbookRuns,
-  liveRunStatusWhere,
+  LIVE_RUN_STATUSES,
+  setRunStatus,
+  type WorkUnitActor,
 } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import type { PlaybookRun } from "@synap/database/schema";
@@ -49,6 +48,11 @@ export async function applyRunCapture(p: {
   stopReason?: PlaybookRun["stopReason"];
   producedEntityIds?: string[];
   usedCapabilities?: Array<{ kind: "tool" | "skill" | "command"; id: string }>;
+  /**
+   * Who reports the outcome (the run's transition actor): the agent whose
+   * key captured it, else the system (a provider poll, a turn's end).
+   */
+  actor?: WorkUnitActor;
 }): Promise<PlaybookRun | null> {
   const { run } = p;
   // Terminal statuses stamp completed_at. A capture IS activity, so a run the
@@ -65,21 +69,21 @@ export async function applyRunCapture(p: {
   // and a late `running` capture never revives it. The caller's copy of the
   // row is stale, never authoritative. `null` ⇒ nothing was written (and
   // nothing settled or linked).
-  const [updated] = await db
-    .update(playbookRuns)
-    .set({
-      status: nextStatus,
+  const {
+    rows: [updated],
+  } = await setRunStatus(db, {
+    runId: run.id,
+    from: LIVE_RUN_STATUSES,
+    to: nextStatus,
+    actor: p.actor ?? { kind: "system" },
+    set: {
       summary: p.summary ?? run.summary,
       error: p.error ?? run.error,
-      // Undefined is left unwritten by `.set()`. Not a conditional spread: a
-      // nested `{` hides this writer from the terminal-settles tripwire.
+      // Undefined is left unwritten by `.set()`.
       stopReason: p.stopReason,
       completedAt: terminal ? new Date() : run.completedAt,
-    })
-    .where(
-      and(eq(playbookRuns.id, run.id), liveRunStatusWhere(playbookRuns.status))
-    )
-    .returning();
+    },
+  });
   if (!updated) return null;
   // A failed child of an automation run settles its parent (never throws).
   if (terminal)

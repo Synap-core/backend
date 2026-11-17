@@ -40,7 +40,8 @@ import {
   countWorkerPendingApprovals,
   listWorkerTargetsInFlight,
   startedByAgentPatch,
-  liveRunStatusWhere,
+  LIVE_RUN_STATUSES,
+  setRunStatus,
   uniqueViolationConstraint,
   type PlaybookRunWorkerSpec,
 } from "@synap/database";
@@ -2721,23 +2722,23 @@ export async function recordExecutorResult(
   const externalAgentPatch = result.externalAgent
     ? { externalAgent: result.externalAgent }
     : {};
-  const [updated] = await db
-    .update(playbookRuns)
-    .set({
-      status: result.status,
+  const {
+    rows: [updated],
+  } = await setRunStatus(db, {
+    runId,
+    from: LIVE_RUN_STATUSES,
+    to: result.status,
+    // The executor reports; the run's own door records it.
+    actor: { kind: "system" },
+    set: {
       summary: result.summary ?? null,
       error: result.error ?? null,
       completedAt: terminal ? new Date() : null,
       // The hand-off receipt of an external-agent dispatch (0315) — what the
       // status poll and the cancel door read. Absent for every other executor.
-      // (Built outside this literal: the terminal-settles tripwire parses a
-      // brace-free `.set({...})`, and a nested object would blind it.)
       ...externalAgentPatch,
-    })
-    .where(
-      and(eq(playbookRuns.id, runId), liveRunStatusWhere(playbookRuns.status))
-    )
-    .returning();
+    },
+  });
   if (!updated) {
     const [current] = await db
       .select()

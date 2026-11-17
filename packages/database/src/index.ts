@@ -491,8 +491,18 @@ export {
   type SetSessionStatusResult,
 } from "./services/lifecycle/session-status.js";
 export {
+  ANY_RUN_STATUS,
+  RUN_PAUSE_DEFAULT_HOLD,
+  setRunStatus,
+  type RunColumnsPatch,
+  type SetRunStatusInput,
+  type SetRunStatusResult,
+} from "./services/lifecycle/run-status.js";
+export {
   buildWorkUnitTransition,
+  transitionBaseOf,
   workUnitActorOf,
+  type TransitionBaseInput,
   type WorkUnitActor,
 } from "./services/lifecycle/work-unit-transition.js";
 export {

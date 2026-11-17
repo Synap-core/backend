@@ -51,6 +51,7 @@ import {
   sessionWaitsOnPersonWhere,
   stageRunWaitsWhere,
   stageRunAgentLiveWhere,
+  setRunStatus,
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -192,16 +193,15 @@ export async function handlePlaybookRunReaper(): Promise<void> {
     //     (answered, closed, gone) goes back to `running`, so the sweeps
     //     below judge it like any other run. The completing doors finish a
     //     live run directly (`LIVE_RUN_STATUSES`); this catches the rest.
-    const unparked = await db
-      .update(playbookRuns)
-      .set({ status: "running" })
-      .where(
-        and(
-          eq(playbookRuns.status, "waiting_on_you"),
-          drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`
-        )
-      )
-      .returning({ id: playbookRuns.id });
+    // Every sweep moves through the ONE run door (`setRunStatus`): one
+    // transition per row, owed in the sweep's own transaction.
+    const { rows: unparked } = await setRunStatus(db, {
+      where: drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`,
+      from: "waiting_on_you",
+      to: "running",
+      actor: { kind: "system" },
+      reason: "Its session no longer waits on the person.",
+    });
     if (unparked.length > 0) {
       logger.info(
         { unparked: unparked.length },
@@ -217,13 +217,17 @@ export async function handlePlaybookRunReaper(): Promise<void> {
     //    definition, so `RUN_SESSION_NOT_ACTIVE` alone read it as dead. Marked
     //    first so the fail sweep (status = 'running') can never reach it; its
     //    session is left open. No `completedAt`: it did not finish.
-    const waiting = await db
-      .update(playbookRuns)
-      .set({ status: "waiting_on_you" })
-      .where(
-        and(RUN_IS_REAPABLE, sessionWaitsOnPersonWhere(playbookRuns.sessionId))
-      )
-      .returning({ id: playbookRuns.id });
+    const { rows: waiting } = await setRunStatus(db, {
+      where: and(
+        RUN_IS_REAPABLE,
+        sessionWaitsOnPersonWhere(playbookRuns.sessionId)
+      ),
+      from: "running",
+      to: "waiting_on_you",
+      actor: { kind: "system" },
+      reason: "Its session waits on the person.",
+      defaultHold: { on: "person", reason: "Its session waits on the person." },
+    });
     if (waiting.length > 0) {
       logger.info(
         { waiting: waiting.length },
@@ -237,11 +241,14 @@ export async function handlePlaybookRunReaper(): Promise<void> {
     //     finish) and no parent settle (stale is not terminal). Its session is
     //     marked stale too — open, reopenable — instead of closed, so the
     //     agent's next write revives it rather than landing in a closed room.
-    const staled = await db
-      .update(playbookRuns)
-      .set({ status: "stale" })
-      .where(and(RUN_IS_STALE, RUN_HELD_BY_EXTERNAL_AGENT))
-      .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
+    const { rows: staled } = await setRunStatus(db, {
+      where: and(RUN_IS_STALE, RUN_HELD_BY_EXTERNAL_AGENT),
+      from: "running",
+      to: "stale",
+      actor: { kind: "system" },
+      reason: "Its external agent went quiet.",
+      defaultHold: { on: "agent", reason: "Its external agent went quiet." },
+    });
     if (staled.length > 0) {
       const staleSessionIds = staled
         .map((r) => r.sessionId)
@@ -269,15 +276,14 @@ export async function handlePlaybookRunReaper(): Promise<void> {
     }
 
     // 1. Force-fail stale running runs whose session is no longer active.
-    const reaped = await db
-      .update(playbookRuns)
-      .set({
-        status: "failed",
-        error: STALE_RUN_ERROR_MESSAGE,
-        completedAt: new Date(),
-      })
-      .where(RUN_IS_REAPABLE)
-      .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
+    const { rows: reaped } = await setRunStatus(db, {
+      where: RUN_IS_REAPABLE,
+      from: "running",
+      to: "failed",
+      actor: { kind: "system" },
+      reason: "The run never finalized: auto-failed by the run reaper.",
+      set: { error: STALE_RUN_ERROR_MESSAGE, completedAt: new Date() },
+    });
 
     if (reaped.length === 0) {
       logger.debug("No stale playbook runs to reap");

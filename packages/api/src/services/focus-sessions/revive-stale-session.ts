@@ -23,11 +23,11 @@
  */
 import {
   db,
-  and,
   eq,
   drizzleSql,
   focusSessions,
   playbookRuns,
+  setRunStatus,
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -134,15 +134,12 @@ export async function reviveStaleSession(
  * `hold-resume-follow-up.ts`). The number of runs revived.
  */
 export async function reviveStaleRuns(sessionId: string): Promise<number> {
-  const runs = await db
-    .update(playbookRuns)
-    .set({ status: "running" })
-    .where(
-      and(
-        eq(playbookRuns.sessionId, sessionId),
-        eq(playbookRuns.status, "stale")
-      )
-    )
-    .returning({ id: playbookRuns.id });
-  return runs.length;
+  const { transitions } = await setRunStatus(db, {
+    where: eq(playbookRuns.sessionId, sessionId),
+    from: "stale",
+    to: "running",
+    actor: { kind: "system" },
+    reason: "Its session came back.",
+  });
+  return transitions.length;
 }
