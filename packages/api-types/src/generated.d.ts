@@ -484,11 +484,11 @@ declare const TRANSITION_SUBJECT_TYPES: readonly [
 ];
 export type TransitionSubjectType = (typeof TRANSITION_SUBJECT_TYPES)[number];
 /**
- * WHY a move happened when another move caused it (reactions W2): the
- * reaction that fired, the transition that fired it, the chain it belongs to
- * and how deep in that chain it is. Absent on a move nobody's move caused.
- * Carried only: nothing in W1 writes or reads it, and it is never part of
- * what makes a move a move.
+ * WHY a move happened when another move caused it: the reaction that fired, the
+ * transition that fired it, the chain it belongs to and how deep in that chain
+ * it is. Absent on a move nobody's move caused. It says why, never whether: the
+ * reactions guards read its chain and depth, the history shows it, and it is
+ * never part of what makes a move a move.
  */
 export interface TransitionCause {
 	reactionId?: string;
@@ -552,7 +552,7 @@ export interface TransitionBase {
 	 * moves, whose statuses declare no waits).
 	 */
 	wait?: TransitionWait;
-	/** The move that caused this one (reactions W2); absent otherwise. */
+	/** The move that caused this one; absent otherwise. */
 	cause?: TransitionCause;
 }
 /** Who made a move, for attribution (`TransitionBase.actorClass`). */
@@ -2091,9 +2091,9 @@ export type DevTimelineEvent = DevTimelineEventBase & ({
 } | {
 	category: LifecycleCategory;
 	/**
-	 * Another move caused this one (a rule fired on it, reactions W2):
-	 * the rule, the move that fired it, its chain and depth. Absent on a
-	 * move nobody's move caused. "Moved because X moved."
+	 * Another move caused this one (a rule fired on it): the rule, the move
+	 * that fired it, its chain and depth. Absent on a move nobody's move
+	 * caused. "Moved because X moved."
 	 */
 	cause?: TransitionCause;
 	from: string | null;
@@ -2726,11 +2726,11 @@ declare const STATUS_OF_ANSWER_TYPES: readonly [
 ];
 export type StatusOfAnswerType = (typeof STATUS_OF_ANSWER_TYPES)[number];
 /**
- * A RULE around the subject (plan 7d71ddcc §2: WHEN a subject reaches a
- * status or category → VIA one link → DO one effect through the target's own
- * door). The person sees the word "Rules" (decision D8). `role` says how it
- * touches this subject: it `fires` when this subject moves, or it `moves`
- * this subject when what it is linked to moves (a roll-up's parent).
+ * A RULE around the subject (WHEN a subject reaches a status or category → VIA
+ * one link → DO one effect through the target's own door). The person sees the
+ * word "Rules" (decision D8). `role` says how it touches this subject: it
+ * `fires` when this subject moves, or it `moves` this subject when what it is
+ * linked to moves (a roll-up's parent).
  */
 export interface StatusOfReaction {
 	/** The rule's stable id (`builtin:…`, `declared:rollup:…`). */
@@ -22541,7 +22541,7 @@ export interface ReactionWhen {
 /**
  * VIA: the ONE existing link a reaction walks from what moved to what it
  * moves. A closed union: a declaration names a link, never an expression.
- * The relation arm carries the roll-ups a link declares (wave 3).
+ * The relation arm carries the roll-ups a link declares.
  */
 export type ReactionVia = 
 /** An approved proposal → every outcome (slot) whose own `ref` names its target. */
@@ -22557,7 +22557,7 @@ export type ReactionVia =
 	link: "slot_stage";
 }
 /**
- * A thing → the thing(s) a declared relation links it to (wave 3, a
+ * A thing → the thing(s) a declared relation links it to (a
  * relation's `reactions`, `@synap-core/types/relations`). `parent` names
  * the end that moves: `target` for `part_of` (child → parent), `source`
  * for `parent_of`. The profile ids pin the declaring pair.
