@@ -92,8 +92,14 @@ describe("nextStepsOf: a batch of Requests", () => {
 
 describe("nextStepsOf: an ask on the person", () => {
   it("a decision or a physical step can be handed to an agent; always talk it through", () => {
-    expect(verbs(ask("decision"))).toEqual(["hand_to_agent", "talk_it_through"]);
-    expect(verbs(ask("physical"))).toEqual(["hand_to_agent", "talk_it_through"]);
+    expect(verbs(ask("decision"))).toEqual([
+      "hand_to_agent",
+      "talk_it_through",
+    ]);
+    expect(verbs(ask("physical"))).toEqual([
+      "hand_to_agent",
+      "talk_it_through",
+    ]);
     const [hand] = nextStepsOf(ask("decision"), { now: NOW });
     expect(hand!.door).toEqual({
       kind: "call",
@@ -153,7 +159,10 @@ describe("nextStepsOf: a Job waiting", () => {
     expect(nudge).toMatchObject({
       verb: "nudge",
       usesAi: false,
-      door: { kind: "object", door: { kind: "session", id: "s1", view: "room" } },
+      door: {
+        kind: "object",
+        door: { kind: "session", id: "s1", view: "room" },
+      },
     });
   });
 });
@@ -163,7 +172,9 @@ describe("nextStepsOf: the guards that hold for every blocker", () => {
     expect(verbs(batch({ fromNextStep: true }))).toEqual([]);
     expect(verbs(ask("decision", { fromNextStep: true }))).toEqual([]);
     expect(
-      verbs(wait("devbox_job", { count: 9, medianMs: 1 }, { fromNextStep: true }))
+      verbs(
+        wait("devbox_job", { count: 9, medianMs: 1 }, { fromNextStep: true })
+      )
     ).toEqual([]);
   });
 

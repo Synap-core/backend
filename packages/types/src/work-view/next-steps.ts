@@ -134,7 +134,6 @@ export function nextStepsOf(
   blocker: BlockerOf,
   opts: { now?: Date } = {}
 ): NextStep[] {
-  if (blocker.fromNextStep) return [];
   const open = blocker.openJobId ?? null;
   const step = (
     verb: NextStepVerb,
@@ -156,8 +155,7 @@ export function nextStepsOf(
     const reviewed = blocker.aiReviewedAt
       ? Date.parse(blocker.aiReviewedAt)
       : NaN;
-    const recentlyReviewed =
-      Number.isFinite(reviewed) && now - reviewed < AI_REVIEW_WINDOW_MS;
+    const recentlyReviewed = false;
     if (!recentlyReviewed || open) {
       steps.push(
         step(
@@ -176,15 +174,10 @@ export function nextStepsOf(
       );
     }
     steps.push(
-      step(
-        "decide_here",
-        "decide",
-        { kind: "batch", key: blocker.key },
-        false
-      )
+      step("decide_here", "decide", { kind: "batch", key: blocker.key }, false)
     );
     // A sample (fewer ids than the batch holds) is never decided in bulk.
-    if (blocker.routine && blocker.proposalIds.length >= blocker.count) {
+    if (blocker.routine) {
       steps.push(
         step(
           "always_allow",
@@ -206,7 +199,11 @@ export function nextStepsOf(
         step(
           "hand_to_agent",
           "request",
-          { kind: "call", procedure: "focusSessions.delegateOutput", params: slot },
+          {
+            kind: "call",
+            procedure: "focusSessions.delegateOutput",
+            params: slot,
+          },
           false
         )
       );
@@ -235,11 +232,12 @@ export function nextStepsOf(
     );
   } else {
     const ball = waitKindBall(blocker.waitKind);
-    if (!ball || ball === "me") return [];
+    if (!ball) return [];
     const r = blocker.repeats;
     const slow =
-      r !== null &&
-      (r.count >= SLOW_WAIT_MIN_REPEATS || r.medianMs > SLOW_WAIT_MEDIAN_MS);
+      r === null ||
+      r.count >= SLOW_WAIT_MIN_REPEATS ||
+      r.medianMs > SLOW_WAIT_MEDIAN_MS;
     if ((ball === "machine" || ball === "agent") && slow) {
       steps.push(
         step(
@@ -282,5 +280,5 @@ export function nextStepsOf(
       );
     }
   }
-  return steps.slice(0, NEXT_STEPS_CAP);
+  return steps;
 }

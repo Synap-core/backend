@@ -86,10 +86,14 @@ function entries(
   ctx = { jobId: "s1" }
 ): WorkEntry[] {
   // newest first, as the wire is
-  const sorted = [...events].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  return activityLine({ events: sorted, truncated: false }, [], "trace").entries.map(
-    (l) => entryOf(l, ctx)
+  const sorted = [...events].sort(
+    (a, b) => Date.parse(b.at) - Date.parse(a.at)
   );
+  return activityLine(
+    { events: sorted, truncated: false },
+    [],
+    "trace"
+  ).entries.map((l) => entryOf(l, ctx));
 }
 
 describe("entryOf: one display entry", () => {
@@ -110,7 +114,11 @@ describe("entryOf: one display entry", () => {
       door: null,
     });
     // "It happened": the done state of the units door.
-    expect(e!.mark).toEqual({ state: "done", tone: "textSecondary", glyph: "check" });
+    expect(e!.mark).toEqual({
+      state: "done",
+      tone: "textSecondary",
+      glyph: "check",
+    });
   });
 
   it("an answer by the viewer: 'You', Answered, the Job as the door, a mark that is not a failure", () => {
@@ -163,8 +171,11 @@ describe("entryOf: one display entry", () => {
       undo: null,
       error: null,
     } as ActivityRow;
-    const [l] = activityLine({ events: [], truncated: false }, [row], "trace")
-      .entries;
+    const [l] = activityLine(
+      { events: [], truncated: false },
+      [row],
+      "trace"
+    ).entries;
     expect(entryOf(l!)).toMatchObject({
       action: "run",
       verb: "Ran",
@@ -183,8 +194,11 @@ describe("entryOf: one display entry", () => {
       stageKey: "build",
       refs: {},
     } as unknown as TrackHistoryEvent;
-    const [l] = activityLine({ events: [ev], truncated: false }, [], "trace")
-      .entries;
+    const [l] = activityLine(
+      { events: [ev], truncated: false },
+      [],
+      "trace"
+    ).entries;
     const e = entryOf(l!, {
       goal: {
         trackId: "t1",
