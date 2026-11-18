@@ -5851,7 +5851,7 @@ export const tools = {
             remap: {
               type: "object",
               description:
-                "Retired key → the kept key its records move to, e.g. { \"dropped\": \"lost\" }.",
+                'Retired key → the kept key its records move to, e.g. { "dropped": "lost" }.',
               additionalProperties: { type: "string" },
             },
             reasoning: {

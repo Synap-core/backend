@@ -517,10 +517,14 @@ const changeTool = (userId: string, args: Record<string, unknown>) =>
   );
 
 const compositionOptions = () =>
-  q<{ constraints: { enum: string[]; enumOptions: Array<Record<string, unknown>> } }>(
-    `select constraints from property_defs where id = $1`,
-    [COMPOSITION_STATUS]
-  ).then((r) => r.rows[0]!.constraints);
+  q<{
+    constraints: {
+      enum: string[];
+      enumOptions: Array<Record<string, unknown>>;
+    };
+  }>(`select constraints from property_defs where id = $1`, [
+    COMPOSITION_STATUS,
+  ]).then((r) => r.rows[0]!.constraints);
 const droppedStatus = () =>
   q<{ status: string | null }>(
     `select properties->>'status' as status from entities where id = $1`,
@@ -588,9 +592,7 @@ describe("synap_change_lifecycle_options — revise a lifecycle, always a propos
       agent_user_id: AGENT,
     });
     expect(row.data.summary).toBe('Change lifecycle options "composition"');
-    expect(row.data.properties.after).toContain(
-      "generating = Stills (active)"
-    );
+    expect(row.data.properties.after).toContain("generating = Stills (active)");
     expect(row.data.properties.moves).toContain(
       'things at "dropped" move to "done"'
     );
