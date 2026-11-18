@@ -14,11 +14,13 @@
  * route reads the same body after it.
  *
  * The reply: a refusal is a 409 `SUPERSEDES_REFUSED` and nothing was filed
- * (400 when the field is not an id). Otherwise the route's own JSON answer
- * gains `supersedes: { proposalId, replacedBy }`, plus a `note` when the call
- * filed nothing for review and the failed proposal is still failed.
+ * (400 when the field is not an id), also when the insert door refused the
+ * row the route filed as another request than the failed one. Otherwise the
+ * route's own JSON answer gains `supersedes: { proposalId, replacedBy }`,
+ * plus a `note` when the failed proposal is still failed (`leftFailedNote`).
  */
 import type { Context, MiddlewareHandler, Next } from "hono";
+import type { SupersedesSlot } from "@synap/database";
 import {
   fileSuperseding,
   leftFailedNote,
@@ -66,17 +68,35 @@ export function supersedesMiddleware(method: string): MiddlewareHandler {
       );
     }
     const run = await fileSuperseding(read.id, owner, () => next());
-    if (run.refused !== null) {
-      return c.json({ error: run.refused, code: SUPERSEDES_REFUSED }, 409);
-    }
+    if (run.refused !== null) return refuse(c, run.refused);
     if (run.slot) await withSupersedesReply(c, run.slot);
   };
+}
+
+/**
+ * The 409, whether the route ran or not. Refused BEFORE the route, a returned
+ * response is the answer; refused INSIDE it (the insert door's
+ * `SupersedesRefusedError`, which the route rethrew, answered as its own 500,
+ * or Hono's `onError` rendered), the context is already finalized and Hono
+ * ignores a returned response, so the answer is set on `c.res` itself.
+ */
+function refuse(c: Context, problem: string): Response {
+  const res = new Response(
+    JSON.stringify({ error: problem, code: SUPERSEDES_REFUSED }),
+    { status: 409, headers: { "content-type": "application/json" } }
+  );
+  // Cleared first, as in `withSupersedesReply`: the setter would otherwise
+  // copy the route's headers onto the refusal.
+  c.res = undefined;
+  c.res = res;
+  c.error = undefined;
+  return res;
 }
 
 /** The route's JSON answer, with what became of the failed proposal. */
 async function withSupersedesReply(
   c: Context,
-  slot: { proposalId: string; replacedBy: string | null }
+  slot: SupersedesSlot
 ): Promise<void> {
   if (!(c.res.headers.get("content-type") ?? "").includes("application/json"))
     return;

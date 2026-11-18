@@ -7,6 +7,9 @@
  * `synap_reject_proposal`, which counts as a rejection on the agent's
  * scorecard: an agent that did the right thing scored itself down.
  *
+ * The end names who took it back: the agent, even when a person was stamped
+ * its proposer (wave-2 code review 6).
+ *
  * SEAM: the REAL MCP `synap_reject_proposal` handler → the REAL
  * `proposals.withdraw` door, on PGlite; the scorecard is the REAL pure fold
  * (`computeAgentScorecard`) over the rows the door left. Stubbed: the realtime
@@ -215,6 +218,43 @@ describe("an agent takes back its own proposal: withdrawn, never scored", () => 
     // every row's `rejectionReason`, whatever its status: a pre-existing
     // trait, not this door's); the withdrawal adds no reason of its own.
     expect(card.rejectionReasons).toEqual(before.rejectionReasons);
+  });
+
+  it("its own proposal a PERSON was stamped proposer of: the end names the agent, never the person", async () => {
+    // `permission-check` stamps the key's human as `proposedByUserId` on an
+    // agent's filing, and an agent key's `ctx.userId` IS that human: the
+    // human-proposer rung matches, and with no actor named the door took the
+    // reviewer and stamped `ended.by: person` (wave-2 code review 6).
+    const failed = await file(AGENT, "approval_failed");
+    await q(`update proposals set proposed_by_user_id = $1 where id = $2`, [
+      OWNER,
+      failed,
+    ]);
+    await rejectAs(AGENT, failed);
+    const { rows } = await q<{
+      status: string;
+      reviewed_by: string | null;
+      ended_by: string | null;
+      actor_kind: string | null;
+      agent_user_id: string | null;
+    }>(
+      `select p.status, p.reviewed_by, p.data->'ended'->>'by' as ended_by,
+              o.transition->>'actorKind' as actor_kind,
+              o.transition->>'agentUserId' as agent_user_id
+         from proposals p
+         left join lifecycle_transition_outbox o
+           on o.transition->>'subjectId' = p.id::text
+          and o.transition->>'to' = 'withdrawn'
+        where p.id = $1`,
+      [failed]
+    );
+    expect(rows[0]).toEqual({
+      status: "withdrawn",
+      reviewed_by: null,
+      ended_by: "agent",
+      actor_kind: "agent",
+      agent_user_id: AGENT,
+    });
   });
 
   it("another agent's failed proposal is not withdrawable by it", async () => {

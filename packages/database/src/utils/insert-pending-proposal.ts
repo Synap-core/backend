@@ -7,6 +7,7 @@ import {
   isNull,
   ne,
   sql as drizzleSql,
+  type SQL,
 } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
@@ -628,15 +629,29 @@ export async function insertPendingProposal(
   const replaces = getOpenSupersedes();
   if (!replaces) return insertPendingProposalRow(input, executor);
   // THIS FILING REPLACES A FAILED PROPOSAL (plan 8032a127 D3, see
-  // `runWithSupersedes`). Checked BEFORE anything is filed, so a wrong name
-  // files nothing; then the row and the end of the failed one land together.
-  const problem = await supersedesProblem(
-    replaces.proposalId,
-    input.subjectUserId ?? null,
-    executor
-  );
-  if (problem) throw new SupersedesRefusedError(replaces.proposalId, problem);
+  // `runWithSupersedes`). Checked BEFORE anything is filed, and against the
+  // request this row IS (the same predicate the end runs, `sameRequestAs`):
+  // a filing that could not end the failed one files nothing. The check holds
+  // the failed row locked until the end commits, so no decision or retry can
+  // slip between them.
   const result = await (executor as typeof db).transaction(async (tx) => {
+    const problem = await supersedesProblem(
+      replaces.proposalId,
+      input.subjectUserId ?? null,
+      tx,
+      {
+        proposalType: input.proposalType,
+        targetType: input.targetType,
+        targetId: input.targetId,
+      }
+    );
+    if (problem) {
+      const refused = new SupersedesRefusedError(replaces.proposalId, problem);
+      // Recorded on the slot too: a route that catches the throw and answers
+      // its own way still reaches the door as a refusal (`fileSuperseding`).
+      replaces.refused = refused.message;
+      throw refused;
+    }
     const filed = await insertPendingProposalRow(input, tx);
     const ended = await endReplacedProposal(tx, {
       replacedId: replaces.proposalId,
@@ -645,9 +660,10 @@ export async function insertPendingProposal(
     });
     return { filed, ended };
   });
-  // Claimed only when the failed row really ended: one decided or retried
-  // meanwhile keeps its new state, and a row of another request (a call that
-  // files several) leaves it open for the one that asks it again.
+  replaces.filed ??= result.filed.proposal.id;
+  // Claimed only when the failed row really ended. After the locked check
+  // above it always does; were it not to, the door says "filed, but the
+  // failed one did not end" (`leftFailedNote`), never "filed nothing".
   if (result.ended.length > 0) replaces.replacedBy = result.filed.proposal.id;
   return {
     ...result.filed,
@@ -667,44 +683,11 @@ export class SupersedesRefusedError extends Error {
   }
 }
 
-/**
- * Why `failedId` cannot be replaced by a filing for `ownerUserId`, or null.
- *
- * Only a FAILED proposal: a pending one is revised (its author) or decided (a
- * person about to approve it must not lose it under them). Only one filed for
- * the SAME person, which is the whole authority: the agent may be another one
- * than its author (Ask AI wakes the orchestrator), but the person's queue
- * keeps one request, the newer one, and never loses one of another person's.
- * Never a plan that partly applied ({@link NOT_PARTLY_APPLIED}).
- */
-export async function supersedesProblem(
-  failedId: string,
-  ownerUserId: string | null,
-  executor: typeof db | DbTx = db
-): Promise<string | null> {
-  if (!isUuid(failedId)) return "is not a proposal id.";
-  const [failed] = await executor
-    .select({
-      status: proposals.status,
-      subjectUserId: proposals.subjectUserId,
-      settled: drizzleSql<boolean>`${NOT_PARTLY_APPLIED}`,
-    })
-    .from(proposals)
-    .where(eq(proposals.id, failedId))
-    .limit(1);
-  // One sentence for "absent" and "another person's": no existence oracle.
-  if (!failed || !ownerUserId || failed.subjectUserId !== ownerUserId) {
-    return "is not a proposal filed for the same person as this one.";
-  }
-  if (failed.status !== ProposalStatus.APPROVAL_FAILED) {
-    return failed.status === ProposalStatus.PENDING
-      ? "is still pending: revise it (synap_revise_proposal) instead of filing a new one."
-      : `is ${failed.status}, not failed: only a proposal whose approval failed is replaced this way.`;
-  }
-  if (!failed.settled) {
-    return "partly applied and could not be undone: it stays for the person to see what landed.";
-  }
-  return null;
+/** Which request a proposal is: what it does, to what. */
+export interface ProposalRequest {
+  proposalType: string;
+  targetType: string;
+  targetId: string;
 }
 
 /**
@@ -718,11 +701,91 @@ function mintsItsTarget(proposalType: string): boolean {
 }
 
 /**
+ * THE one "same request" predicate, over a `proposals` row: the same proposal
+ * type and target type, and the same target unless the type mints its own.
+ * {@link supersedesProblem} refuses with it and {@link endReplacedProposal}
+ * ends with it, so a replacement is filed only when its filing ends the
+ * failed one (wave-2 code review 1: the two used to differ, and a fix of
+ * another kind was filed beside a failure that never ended).
+ */
+function sameRequestAs(request: ProposalRequest): SQL {
+  return and(
+    eq(proposals.proposalType, request.proposalType),
+    eq(proposals.targetType, request.targetType),
+    ...(mintsItsTarget(request.proposalType)
+      ? []
+      : [eq(proposals.targetId, request.targetId)])
+  )!;
+}
+
+/**
+ * Why `failedId` cannot be replaced by a filing for `ownerUserId`, or null.
+ *
+ * Only a FAILED proposal: a pending one is revised (its author) or decided (a
+ * person about to approve it must not lose it under them). Only one filed for
+ * the SAME person, which is the whole authority: the agent may be another one
+ * than its author (Ask AI wakes the orchestrator), but the person's queue
+ * keeps one request, the newer one, and never loses one of another person's.
+ * Never a plan that partly applied ({@link NOT_PARTLY_APPLIED}). And, once
+ * the filing's `request` is known (the insert door), only the SAME request
+ * ({@link sameRequestAs}): a filing of another kind would leave the failed one
+ * open beside it. The doors call it without `request` first, before the
+ * route runs, so a wrong name is refused before any work.
+ *
+ * Read with a `request` (the insert door, on its transaction), the failed row
+ * stays locked until that transaction ends.
+ */
+export async function supersedesProblem(
+  failedId: string,
+  ownerUserId: string | null,
+  executor: typeof db | DbTx = db,
+  request?: ProposalRequest
+): Promise<string | null> {
+  if (!isUuid(failedId)) return "is not a proposal id.";
+  const query = executor
+    .select({
+      status: proposals.status,
+      subjectUserId: proposals.subjectUserId,
+      proposalType: proposals.proposalType,
+      targetType: proposals.targetType,
+      settled: drizzleSql<boolean>`${NOT_PARTLY_APPLIED}`,
+      sameRequest: request
+        ? drizzleSql<boolean>`${sameRequestAs(request)}`
+        : drizzleSql<boolean>`true`,
+    })
+    .from(proposals)
+    .where(eq(proposals.id, failedId))
+    .limit(1);
+  const [failed] = await (request ? query.for("update") : query);
+  // One sentence for "absent" and "another person's": no existence oracle.
+  if (!failed || !ownerUserId || failed.subjectUserId !== ownerUserId) {
+    return "is not a proposal filed for the same person as this one.";
+  }
+  if (failed.status !== ProposalStatus.APPROVAL_FAILED) {
+    return failed.status === ProposalStatus.PENDING
+      ? "is still pending: revise it (synap_revise_proposal) instead of filing a new one."
+      : `is ${failed.status}, not failed: only a proposal whose approval failed is replaced this way.`;
+  }
+  if (!failed.settled) {
+    return "partly applied and could not be undone: it stays for the person to see what landed.";
+  }
+  if (request && !failed.sameRequest) {
+    const sameKind =
+      failed.proposalType === request.proposalType &&
+      failed.targetType === request.targetType;
+    return sameKind
+      ? "is the same kind of request on another record: only the same request on the same record replaces it. File it for that record, or file this one without `supersedes`."
+      : `is another kind of request (${failed.proposalType} on ${failed.targetType}) than this call files (${request.proposalType} on ${request.targetType}): only the same request replaces it. File it again the way it was filed, or file this one without \`supersedes\`.`;
+  }
+  return null;
+}
+
+/**
  * End a proposal a newer filing REPLACED (plan 8032a127 D3 and the one
  * undecided send per channel): `withdrawn`, pointing at its replacement on the
  * key the pending supersede writes (`supersededBy`, which Relay links), and
- * its notifications leave the bell. Only by the same request (proposal type
- * and target type, and the same target when neither mints one), never a plan
+ * its notifications leave the bell. Only by the same request
+ * ({@link sameRequestAs}, the predicate `supersedesProblem` refuses with), never a plan
  * that partly applied, and naming no person (`endedByNoPersonSet`). Not
  * scored. Returns what ended, for the caller's after-commit side effects
  * (`settleSupersededProposals`).
@@ -758,11 +821,7 @@ export async function endReplacedProposal(
     where: and(
       eq(proposals.id, args.replacedId),
       ne(proposals.id, replacement.id),
-      eq(proposals.proposalType, replacement.proposalType),
-      eq(proposals.targetType, replacement.targetType),
-      ...(mintsItsTarget(replacement.proposalType)
-        ? []
-        : [eq(proposals.targetId, replacement.targetId)]),
+      sameRequestAs(replacement),
       NOT_PARTLY_APPLIED
     ),
   }).returning({

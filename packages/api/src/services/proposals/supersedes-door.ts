@@ -11,9 +11,10 @@
  *    supersedes.ts`), which is how the Intelligence Service files: it reaches
  *    the pod only through Hub REST, and Ask AI wakes it on another agent's
  *    failed proposal (finding d6ac7003).
- * The checks themselves (same person, failed, no partly-applied plan) live
- * once, in `supersedesProblem` (`@synap/database`); the insert door runs them
- * again against the row it files.
+ * The checks themselves (same person, failed, no partly-applied plan, and the
+ * same request) live once, in `supersedesProblem` (`@synap/database`): the
+ * door runs it before the route, and the insert door again against the row
+ * it files, with that row's request.
  */
 import {
   runWithSupersedes,
@@ -78,7 +79,11 @@ export type SupersedingRun<T> =
 /**
  * Run `file` as a filing that replaces `supersedes` (when named), for the
  * person `ownerUserId` the filing acts for. Refused BEFORE `file` runs when
- * the name cannot be replaced, so a wrong name files nothing.
+ * the name cannot be replaced, so a wrong name files nothing. Refused too
+ * when the insert door refused the row `file` filed as another request than
+ * the failed one (`supersedesProblem` with the request): whatever the route
+ * made of that throw (re-thrown, or answered as its own error), the door
+ * answers the refusal, so every door says SUPERSEDES_REFUSED alike.
  */
 export async function fileSuperseding<T>(
   supersedes: string | undefined,
@@ -93,14 +98,34 @@ export async function fileSuperseding<T>(
     };
   }
   const run = runWithSupersedes(supersedes, file);
-  return { refused: null, result: await run.result, slot: run.slot };
+  let result: T;
+  try {
+    result = await run.result;
+  } catch (err) {
+    if (refusedRun(run.slot)) return { refused: run.slot.refused! };
+    throw err;
+  }
+  if (refusedRun(run.slot)) return { refused: run.slot.refused! };
+  return { refused: null, result, slot: run.slot };
+}
+
+/** The insert door refused a row, and no other row of the call replaced it. */
+function refusedRun(slot: SupersedesSlot): boolean {
+  return slot.refused !== null && slot.replacedBy === null;
 }
 
 /**
- * Said when the call filed nothing for review (a refusal, a write that applied
- * at once): the failed proposal is still there, and the agent must not
- * believe it ended.
+ * Said when the call did not replace the failed proposal: the agent must not
+ * believe it ended. Two different facts, never one sentence:
+ *  - it filed nothing for review (a write that applied at once, or a reply
+ *    that filed no proposal);
+ *  - it filed a proposal, but the failed one did not end. The insert door
+ *    refuses a filing that could not end it and holds the failed row locked
+ *    from its check to the end, so this should not happen; were it to, the
+ *    agent hears it as it is, never as "filed nothing".
  */
 export function leftFailedNote(slot: SupersedesSlot): string {
-  return `supersedes: this call filed nothing for review, so proposal ${slot.proposalId} was left as it is (still failed).`;
+  return slot.filed
+    ? `supersedes: this call filed proposal ${slot.filed}, but proposal ${slot.proposalId} did not end (still failed): withdraw one of the two, or tell the person.`
+    : `supersedes: this call filed nothing for review, so proposal ${slot.proposalId} was left as it is (still failed).`;
 }
