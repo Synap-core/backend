@@ -19,10 +19,10 @@
  *    `ended` stamp handed to `transitionProposal`, a JSON stamp, a payload;
  *  - SQL text that BUILDS the key: `jsonb_build_object(… 'withdrawReason', …)`
  *    or a `'{withdrawReason}'` path (`jsonb_set`);
- *  - outside {@link WITHDRAW_CALLERS}, a call `<x>.withdraw({ … reason … })`:
- *    the tRPC door stores its `reason` as the author's words, so a helper
- *    calling it with its own sentence is the same defect one hop away (the
- *    rerun did exactly that).
+ *  - outside {@link WITHDRAW_CALLERS}, a call `<x>.withdraw({ proposalId,
+ *    reason })` (the tRPC procedure's input): it stores its `reason` as the
+ *    author's words, so a helper calling it with its own sentence is the same
+ *    defect one hop away (the rerun did exactly that).
  *
  * NOT covered, measured by the self-checks below: a key built from a variable
  * (`{ [k]: v }` with `const k = "withdrawReason"`), SQL assembled with
@@ -188,16 +188,16 @@ function scanSource(file: string, text: string): Site[] {
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
       node.expression.name.text === "withdraw" &&
-      node.arguments.some(
-        (a) =>
-          ts.isObjectLiteralExpression(a) &&
-          a.properties.some(
-            (p) =>
-              !ts.isSpreadAssignment(p) &&
-              p.name !== undefined &&
-              nameText(p.name) === "reason"
+      node.arguments.some((a) => {
+        if (!ts.isObjectLiteralExpression(a)) return false;
+        const keys = new Set(
+          a.properties.flatMap((p) =>
+            !ts.isSpreadAssignment(p) && p.name ? [nameText(p.name)] : []
           )
-      )
+        );
+        // The tRPC procedure's input: a proposal and its author's words.
+        return keys.has("proposalId") && keys.has("reason");
+      })
     ) {
       at(node, "withdraw-call");
     }
@@ -260,6 +260,8 @@ describe("withdrawReason holds an author's words: no helper writes it", () => {
       "const h = row.ended.withdrawReason;",
       "const i = new Set(['withdrawReason']);",
       "await caller.withdraw({ proposalId });",
+      // The door's own end (a reason token), not the procedure's input.
+      "await args.withdraw(p.id, { reason: 'superseded' });",
     ].join("\n");
     const found = scanSource("sample.ts", sample).map(
       (s) => `${s.line}:${s.kind}`
