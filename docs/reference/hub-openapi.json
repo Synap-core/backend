@@ -3740,7 +3740,7 @@
             ]
           }
         },
-        "required": ["intent", "lens", "scoring", "coverage"]
+        "required": ["intent", "lens", "coverage"]
       },
       "FoundObject": {
         "type": "object",
