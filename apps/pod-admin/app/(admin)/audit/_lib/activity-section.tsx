@@ -12,16 +12,8 @@
  * the cap, then add an offset.
  */
 
-import { Avatar, Button, Chip, useDisclosure } from "@heroui/react";
-import {
-  Activity,
-  Check,
-  Plus,
-  RotateCw,
-  Trash2,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { Button, useDisclosure } from "@heroui/react";
+import { Activity } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   normalizeObjectKind,
@@ -47,11 +39,9 @@ import {
   type AuditFilters,
   type WorkspaceSummary,
 } from "./filter-bar";
-import {
-  formatRelative,
-  formatTimestamp,
-  shortId,
-} from "../../../../lib/format";
+import { formatTimestamp, shortId } from "../../../../lib/format";
+import { TimelineList } from "../../../_lib/timeline/timeline-list";
+import { auditEntry } from "../../../_lib/timeline/timeline-model";
 
 interface AuditEvent {
   id: string;
@@ -70,6 +60,8 @@ interface AuditEvent {
 }
 
 const PAGE_SIZE = 50;
+/** Rows shown before "Show all". */
+const SHOWN_ROWS = 25;
 
 /**
  * An audit row's `subjectType` is the DB TABLE the row touched — plural
@@ -199,6 +191,30 @@ export function ActivitySection({
     return out;
   }, [events, filters.actions, filters.workspaceIds, filters.userIds]);
 
+  const [showAll, setShowAll] = useState(false);
+  const byId = useMemo(
+    () => new Map(filtered.map((e) => [e.id, e])),
+    [filtered]
+  );
+  const entries = useMemo(
+    () =>
+      filtered.map((ev) => {
+        const actor = actors[ev.userId];
+        return auditEntry({
+          id: ev.id,
+          timestamp: ev.timestamp,
+          action: ev.action,
+          phase: ev.phase,
+          subject: `${subjectTypeLabel(ev.subjectType)} ${shortId(ev.subjectId)}`,
+          subjectType: ev.subjectType,
+          subjectId: ev.subjectId,
+          userId: ev.userId,
+          actorName: actor?.email ?? actor?.name ?? shortId(ev.userId),
+        });
+      }),
+    [filtered, auditQuery.data]
+  );
+
   const [selected, setSelected] = useState<AuditEvent | null>(null);
   const drawer = useDisclosure({
     isOpen: !!selected,
@@ -234,17 +250,19 @@ export function ActivitySection({
             }
           />
         ) : (
-          <ol className="divide-y divide-foreground/[0.05]">
-            {filtered.map((ev) => (
-              <ActivityRow
-                key={ev.id}
-                event={ev}
-                actor={actors[ev.userId]}
-                workspace={ev.workspaceId ? workspaces[ev.workspaceId] : null}
-                onSelect={() => setSelected(ev)}
-              />
-            ))}
-          </ol>
+          <TimelineList
+            entries={entries}
+            cap={SHOWN_ROWS}
+            expanded={showAll || !!focusId}
+            onExpand={() => setShowAll(true)}
+            showAllLabel={t("showAll", { n: filtered.length })}
+            onSelect={(e) => setSelected(byId.get(e.key) ?? null)}
+            detail={(e) => {
+              const ev = byId.get(e.key);
+              if (!ev?.workspaceId) return t("podWide");
+              return workspaces[ev.workspaceId]?.name ?? null;
+            }}
+          />
         )}
       </div>
 
@@ -274,103 +292,6 @@ export function ActivitySection({
       />
     </>
   );
-}
-
-// ─── Row ──────────────────────────────────────────────────────────────────
-
-function ActivityRow({
-  event,
-  actor,
-  workspace,
-  onSelect,
-}: {
-  event: AuditEvent;
-  actor?: ActorSummary;
-  workspace?: WorkspaceSummary | null;
-  onSelect: () => void;
-}) {
-  const actorLabel = actor?.email ?? actor?.name ?? shortId(event.userId);
-  const subjectLabel = subjectTypeLabel(event.subjectType);
-
-  const Icon = actionIcon(event.action);
-
-  return (
-    <li data-row-id={event.id} className="rounded-md transition-shadow">
-      <button
-        type="button"
-        onClick={onSelect}
-        className="
-          group flex w-full items-center gap-3 px-3 py-2.5
-          text-left transition-colors hover:bg-content2/40
-          focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30
-        "
-      >
-        {/* Timestamp */}
-        <div className="flex w-[110px] shrink-0 flex-col text-[10.5px] tabular text-foreground/65">
-          <span title={new Date(event.timestamp).toISOString()}>
-            {formatRelative(event.timestamp)}
-          </span>
-          <span>{formatTimestamp(event.timestamp)}</span>
-        </div>
-
-        {/* Actor */}
-        <div className="hidden w-[150px] shrink-0 items-center gap-1.5 sm:flex">
-          <Avatar
-            size="sm"
-            name={actorLabel}
-            classNames={{
-              base: "h-5 w-5 text-[10px] bg-foreground/[0.08] text-foreground/70",
-              name: "text-[10px]",
-            }}
-          />
-          <span className="truncate text-[11.5px] text-foreground/85">
-            {actorLabel}
-          </span>
-        </div>
-
-        {/* Action */}
-        <div className="w-[100px] shrink-0">
-          <Chip
-            size="sm"
-            radius="sm"
-            variant="flat"
-            startContent={<Icon className="ml-1 h-3 w-3" />}
-            classNames={{
-              base: "bg-foreground/[0.06]",
-              content: "text-[11px] font-medium text-foreground/80",
-            }}
-          >
-            {event.action || "—"}
-          </Chip>
-        </div>
-
-        {/* Subject */}
-        <div className="min-w-0 flex-1 truncate text-[11.5px]">
-          <span className="text-foreground/85">{subjectLabel}</span>{" "}
-          <code className="text-foreground/65">{shortId(event.subjectId)}</code>
-        </div>
-
-        {/* Workspace */}
-        <div className="hidden w-[160px] shrink-0 truncate text-right text-[11px] text-foreground/65 md:block">
-          {workspace ? workspace.name : event.workspaceId ? "—" : "Pod-wide"}
-        </div>
-      </button>
-    </li>
-  );
-}
-
-/**
- * The glyph is the only cue: an audit action is a fact about what happened, not
- * a health state, so the chip stays neutral and never borrows the status tones.
- */
-function actionIcon(action: string): LucideIcon {
-  if (action === "create") return Plus;
-  if (action === "approve" || action === "validate" || action === "grant")
-    return Check;
-  if (action === "update" || action === "rotate") return RotateCw;
-  if (action === "delete") return Trash2;
-  if (action === "revoke" || action === "reject") return X;
-  return Activity;
 }
 
 // ─── Drawer ───────────────────────────────────────────────────────────────
