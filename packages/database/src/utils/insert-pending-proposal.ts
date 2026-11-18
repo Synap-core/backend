@@ -204,13 +204,6 @@ export interface SupersededVersion {
 /** `proposals.data` key on a superseded row: the id of the version that replaced it. */
 export const SUPERSEDED_BY_KEY = "supersededBy" as const;
 /**
- * The withdrawn row's reason line, on the key a person's own withdraw uses
- * (`data.withdrawReason`, `proposals.withdraw`) — never `rejectionReason`,
- * which the agent scorecard reads as a rejection.
- */
-export const SUPERSEDED_REASON = "Replaced by a newer version";
-
-/**
  * Does a new pending proposal REPLACE the agent's earlier pending versions of
  * itself? (founder, 2026-10-26: "supersede = same agent +
  * same session + same target, updates/patches only".)
@@ -804,10 +797,9 @@ export async function endReplacedProposal(
   }
 ): Promise<SupersededVersion[]> {
   const { replacement } = args;
-  const stamp = JSON.stringify({
-    [SUPERSEDED_BY_KEY]: replacement.id,
-    withdrawReason: SUPERSEDED_REASON,
-  });
+  // Why it ended is `data.ended` (`superseded`); never a sentence stored as
+  // `withdrawReason`, which reads as its author's own words.
+  const stamp = JSON.stringify({ [SUPERSEDED_BY_KEY]: replacement.id });
   const at = new Date();
   const ended = await transitionProposal(executor, {
     to: ProposalStatus.WITHDRAWN,
@@ -1030,10 +1022,7 @@ async function supersedeEarlierVersions(
     )
     .map((c) => c.id);
   if (covered.length === 0) return [];
-  const stamp = JSON.stringify({
-    [SUPERSEDED_BY_KEY]: latest.id,
-    withdrawReason: SUPERSEDED_REASON,
-  });
+  const stamp = JSON.stringify({ [SUPERSEDED_BY_KEY]: latest.id });
   // `reviewedAt` like the person's withdraw: the row was decided, now.
   const at = new Date();
   const replaced = await transitionProposal(tx, {
