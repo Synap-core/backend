@@ -287,6 +287,15 @@ export type DevTimelineEvent = DevTimelineEventBase &
       }
   );
 
+/** A session timeline source a narrowed key does not read (`TimelineWire.withheld`). */
+export const TIMELINE_WITHHELD_SOURCES = [
+  "dev_facts",
+  "decisions",
+  "runners",
+  "room_posts",
+] as const;
+export type TimelineWithheldSource = (typeof TIMELINE_WITHHELD_SOURCES)[number];
+
 /** The `GET /timeline` read. Newest first. */
 export type TimelineWire =
   | {
@@ -299,6 +308,15 @@ export type TimelineWire =
       subject: { kind: "session"; id: string; title: string };
       events: DevTimelineEvent[];
       truncated: boolean;
+      /**
+       * The sources this reader's key may not read (a pod app narrowed by its
+       * grant), so their events are absent, never "nothing happened":
+       * `dev_facts` (PR and CI facts, devbox jobs), `decisions` (proposals
+       * filed in the session), `runners` (who worked it, on which computer),
+       * `room_posts` (its room's posts and the ones it sent). Absent when
+       * every source was read.
+       */
+      withheld?: TimelineWithheldSource[];
     }
   | {
       subject: { kind: "entity"; id: string; title: string | null };

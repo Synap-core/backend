@@ -105,6 +105,7 @@ import {
   type DevTimelineEvent,
   type DevTimelineRefs,
   type TimelineWire,
+  type TimelineWithheldSource,
 } from "@synap-core/types/units";
 
 import {
@@ -326,8 +327,15 @@ function newestFirst(events: DevTimelineEvent[]): DevTimelineEvent[] {
   });
 }
 
-/** Who reads: the goal history's actor, plus a bound key's workspace. */
-export type TimelineReader = TrackActor & { lens?: string };
+/**
+ * Who reads: the goal history's actor, plus a bound key's workspace, plus the
+ * session sources a key narrowed by its grant may not read (`timelineReach`):
+ * skipped, and named on the wire's `withheld`.
+ */
+export type TimelineReader = TrackActor & {
+  lens?: string;
+  withhold?: readonly TimelineWithheldSource[];
+};
 
 export async function readTimeline(
   subject: TimelineSubject,
@@ -977,6 +985,9 @@ export async function readSessionTimelines(
     )
     .as("sent_ranked");
 
+  // A source the reader's key may not read is not read at all (never read
+  // and dropped); the wire names it on `withheld`.
+  const skip = new Set<TimelineWithheldSource>(actor.withhold ?? []);
   const [
     moves,
     facts,
@@ -988,13 +999,26 @@ export async function readSessionTimelines(
     sentPosts,
   ] = await Promise.all([
     db.select().from(movesRanked).where(lte(movesRanked.rank, limit)),
-    db.select().from(factsRanked).where(lte(factsRanked.rank, limit)),
-    db.select().from(decisionsRanked).where(lte(decisionsRanked.rank, limit)),
+    skip.has("dev_facts")
+      ? []
+      : db.select().from(factsRanked).where(lte(factsRanked.rank, limit)),
+    skip.has("decisions")
+      ? []
+      : db
+          .select()
+          .from(decisionsRanked)
+          .where(lte(decisionsRanked.rank, limit)),
     db.select().from(slotsRanked).where(lte(slotsRanked.rank, limit)),
     db.select().from(childrenRanked).where(lte(childrenRanked.rank, limit)),
-    db.select().from(runnersRanked).where(lte(runnersRanked.rank, limit)),
-    db.select().from(postsRanked).where(lte(postsRanked.rank, limit)),
-    db.select().from(sentRanked).where(lte(sentRanked.rank, limit)),
+    skip.has("runners")
+      ? []
+      : db.select().from(runnersRanked).where(lte(runnersRanked.rank, limit)),
+    skip.has("room_posts")
+      ? []
+      : db.select().from(postsRanked).where(lte(postsRanked.rank, limit)),
+    skip.has("room_posts")
+      ? []
+      : db.select().from(sentRanked).where(lte(sentRanked.rank, limit)),
   ]);
 
   const pending = new Map<string, Pending[]>();
@@ -1173,6 +1197,7 @@ async function readSessionTimeline(
     subject: { kind: "session", id: sessionId, title: read.title },
     events: read.events,
     truncated: read.truncated,
+    ...(actor.withhold?.length ? { withheld: [...actor.withhold] } : {}),
   };
 }
 

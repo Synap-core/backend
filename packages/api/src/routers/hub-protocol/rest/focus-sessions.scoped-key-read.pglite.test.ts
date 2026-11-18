@@ -74,6 +74,9 @@ vi.mock("../../../services/external-user-mapping.js", () => ({
 }));
 vi.mock("../../../services/focus-sessions/continuation-packet.js", () => ({
   projectContinuationPacket: (...a: unknown[]) => h.packet(...a),
+  // The shape a narrowed key reads beside the row runs for real in
+  // `focus-sessions.get-narrowed.pglite.test.ts`; here it only has to answer.
+  projectSessionShape: async () => ({}),
 }));
 vi.mock(
   "../../../services/focus-sessions/session-outputs.js",
