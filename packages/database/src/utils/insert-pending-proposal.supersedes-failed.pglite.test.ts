@@ -253,7 +253,9 @@ describe("supersedes: a filing that replaces a failed proposal", () => {
     const { slot, result } = runWithSupersedes(failed, () =>
       insertPendingProposal(filing({ targetId: "ch-2" }), db as never)
     );
-    await expect(result).rejects.toThrow(/same kind of request on another record/);
+    await expect(result).rejects.toThrow(
+      /same kind of request on another record/
+    );
     expect(slot.replacedBy).toBeNull();
     expect((await rowOf(failed)).status).toBe("approval_failed");
     expect(await count()).toBe(1);

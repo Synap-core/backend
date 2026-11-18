@@ -135,9 +135,8 @@ vi.mock("../../../access/guest-containment.js", async (importOriginal) => ({
 vi.mock("./auth.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   hubAuthMiddleware: async (c: Context, next: Next) => {
-    const { runWithActingAgent, runWithGrant } = await import(
-      "@synap/database"
-    );
+    const { runWithActingAgent, runWithGrant } =
+      await import("@synap/database");
     c.set("userId" as never, h.ids.owner as never);
     c.set("linkedUserId" as never, h.ids.owner as never);
     c.set("agentUserId" as never, h.ids.agent as never);
