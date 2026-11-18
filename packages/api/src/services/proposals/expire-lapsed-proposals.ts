@@ -352,7 +352,9 @@ async function scrubExpiredGuestPayloadsSafely(): Promise<void> {
  * before (census bcef4627: four playbook runs of sessions closed on 5 Oct, a
  * playbook update of one closed on 7 Oct) or whose close ran no helper.
  * Failed rows only: a pending row of an ended session is not this sweep's.
- * Returns the ids it moved.
+ * Unlike the close, it never ends a failure kept off the lapse clock, on any
+ * arm: the row has outlived its close, so it is likely waiting on a person's
+ * fix. Returns the ids it moved.
  */
 export async function expireFailedRowsOfEndedSessions(
   now: Date
@@ -375,11 +377,15 @@ export async function expireFailedRowsOfEndedSessions(
       )
     );
   // Failed rows only, re-read here: `endsWithItsSession` alone also takes a
-  // pending outward call, which is the lapse clock's.
+  // pending outward call, which is the lapse clock's. And never a failure
+  // kept off the lapse clock, whatever the arm: a send waiting on a person's
+  // fix (a missing profile, a connection) keeps its repair card.
   const ids = failed
     .filter(
       (p) =>
-        p.status === ProposalStatus.APPROVAL_FAILED && endsWithItsSession(p)
+        p.status === ProposalStatus.APPROVAL_FAILED &&
+        !failureKeptOffTheClock(p.data) &&
+        endsWithItsSession(p)
     )
     .map((p) => p.id);
   if (ids.length === 0) return [];

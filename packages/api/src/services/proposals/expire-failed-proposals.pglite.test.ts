@@ -374,6 +374,16 @@ describe("a failed proposal ends through the helpers that end a pending one", ()
       sessionId: closed,
       errorClass: "transient",
     });
+    // B 2c03fe39 / 7d21b308: an outward send waiting on a person's fix (no
+    // profile on file). Its class is kept off the lapse clock, so the
+    // catch-up keeps it, though an outward call otherwise dies with its
+    // session.
+    const sendToFix = await failedRequest({
+      proposalType: "capability.run",
+      targetType: "capability",
+      sessionId: closed,
+      errorClass: "missing_field",
+    });
     const liveRun = await failedRequest({
       proposalType: "run",
       targetType: "playbook",
@@ -387,6 +397,7 @@ describe("a failed proposal ends through the helpers that end a pending one", ()
     expect(await statusOf(durableRun)).toBe("expired");
     expect(await statusOf(create)).toBe("approval_failed");
     expect(await statusOf(retryable)).toBe("approval_failed");
+    expect(await statusOf(sendToFix)).toBe("approval_failed");
     expect(await statusOf(liveRun)).toBe("approval_failed");
     expect(res.expired).toBe(2);
     const [row] = await db
