@@ -243,9 +243,9 @@ describe("a compute start through runResolvedSkill", () => {
 describe("the TTL sweeper", () => {
   it("destroys a lease past its TTL through the declared release verb, and records it", async () => {
     await pg.query(
-      `insert into proposals (id, user_id, target_type, target_id, proposal_type, status, data)
-       values ($1, $2, 'capability', $3, 'capability.run', 'approved', '{"summary":"Start"}'::jsonb)`,
-      [PROPOSAL_ID, OWNER, PROVISION_ID]
+      `insert into proposals (id, target_type, target_id, proposal_type, status, data)
+       values ($1, 'capability', $2, 'capability.run', 'approved', '{"summary":"Start"}'::jsonb)`,
+      [PROPOSAL_ID, PROVISION_ID]
     );
     await start({ ttlMinutes: 60, maxSpendCents: 300 }, PROPOSAL_ID);
     // A second lease, not yet due, must be left alone.
