@@ -20,6 +20,13 @@
  * never acts as the person). A proof that is sent is ALWAYS verified, in
  * every mode.
  *
+ * The grace window (`grace.ts`, 18 Nov 2026): a passkey or device-key proof
+ * made from a person's own browser session lets THAT session do the
+ * graceable acts (`presenceGraceable`: today only turning a verb or tool ON,
+ * one or a set) for `PRESENCE_GRACE_SECONDS` with no new proof. Every use is
+ * recorded as `presence.grace_used`. It never covers a request filed AS the
+ * person, a key caller, an acting agent, or any row not listed graceable.
+ *
  * A person with NO proof factor is refused like anyone else, and the refusal
  * says how to add one: their first passkey and their first Relay device key
  * need no proof (`factors.ts`, the Kratos settings guard), so the way back in
@@ -37,9 +44,12 @@ import {
   presenceActorLabel,
   presenceActionDigest,
   presenceActionSubject,
+  presenceGraceable,
   presenceRequestSubject,
+  type PresenceGraceTarget,
   type PresenceRequestKind,
   sensitiveActionReason,
+  sensitiveApprovalKey,
   sensitiveApprovalReason,
   type PresenceProof,
   type SensitiveActionPath,
@@ -48,7 +58,16 @@ import {
 import { isUuid } from "@synap-core/types/property-render";
 import { readPresenceMode, readPresenceSensitivity } from "./mode.js";
 import { mintPresencePass, type PresencePass } from "./pass.js";
-import { db, eq, users, EventRepository, sql } from "@synap/database";
+import {
+  db,
+  eq,
+  users,
+  EventRepository,
+  getActingAgentUserId,
+  sql,
+} from "@synap/database";
+import { browserPersonSessionKey } from "../../utils/device-session.js";
+import { readGrace, stampGrace } from "./grace.js";
 
 export type { PresencePass } from "./pass.js";
 
@@ -63,6 +82,8 @@ const logger = createLogger({ module: "presence-gate" });
 
 const PRESENCE_PROVED_EVENT = "presence.proved";
 const PRESENCE_MISSING_EVENT = "presence.missing";
+/** A sensitive act the session's grace window covered (no proof was sent). */
+const PRESENCE_GRACE_USED_EVENT = "presence.grace_used";
 
 export interface GatedProposal {
   id: string;
@@ -89,6 +110,13 @@ async function presenceReasonFor(
   if (filedAsPerson(proposal)) return "as_person";
   if (!sensitiveApprovalReason(proposal)) return null;
   return sensitiveApprovalReason(proposal, await readPresenceSensitivity());
+}
+
+/** The approval row a grace would be asked to cover (never a request filed as the person). */
+function approvalGrace(proposal: GatedProposal): PresenceGraceTarget | null {
+  if (filedAsPerson(proposal)) return null;
+  const key = sensitiveApprovalKey(proposal);
+  return key ? { kind: "approval", key } : null;
 }
 
 /**
@@ -213,11 +241,18 @@ async function checkPresence(args: {
   requestedFrom?: string | null;
   /** The caller is a key (Bearer), not a person's session. */
   keyCaller?: boolean;
+  /**
+   * The row of the sensitive tables this act is, for the grace window. Null
+   * (or a row not listed graceable) = always a fresh proof: fail closed.
+   */
+  grace?: PresenceGraceTarget | null;
 }): Promise<PresenceVerdict | null> {
   const { userId, subject, what, reason, proof, door } = args;
   // `proposalId` names the subject on the wire (a proposal id, or the request
   // `<kind>:<id>`): the client asks `presence.challenge` for exactly that.
   if (!proof) {
+    const covered = await graceFor(args);
+    if (covered) return covered;
     if (
       reason === "as_person" ||
       (await readPresenceMode()).mode === "enforce"
@@ -278,7 +313,89 @@ async function checkPresence(args: {
     deviceKeyId: verdict.deviceKeyId,
     challengeId: verdict.challengeId,
   });
+  await openGrace({ userId, verdict, keyCaller: args.keyCaller });
   return verdict;
+}
+
+/**
+ * Open a grace window from a verified proof: only a passkey or device-key
+ * proof, never for a key caller or an acting agent, and only from a browser
+ * person session that names its key (`stampGrace` re-checks the method). A
+ * failure here only means no grace: the act itself was proved.
+ */
+async function openGrace(args: {
+  userId: string;
+  verdict: PresenceVerdict;
+  keyCaller?: boolean;
+}): Promise<void> {
+  if (args.keyCaller || getActingAgentUserId()) return;
+  const sessionKey = browserPersonSessionKey();
+  if (!sessionKey) return;
+  try {
+    await stampGrace({
+      userId: args.userId,
+      challengeId: args.verdict.challengeId,
+      method: args.verdict.method,
+      sessionKey,
+    });
+  } catch (err) {
+    logger.warn({ err }, "could not open a presence grace window");
+  }
+}
+
+/**
+ * Does this session's grace window cover the act? Only a graceable row whose
+ * reason is `setup` (never a request filed AS the person), from this
+ * person's own browser session, never a key caller or an acting agent, with a
+ * stamped proof of THIS session inside the window. A failed read is no grace.
+ * A use is recorded BEFORE the act applies (no trace, no apply): a failure
+ * to record refuses the act.
+ */
+async function graceFor(args: {
+  userId: string;
+  subject: string;
+  what: string;
+  reason: SensitiveReason | "as_person";
+  door: string;
+  keyCaller?: boolean;
+  grace?: PresenceGraceTarget | null;
+}): Promise<PresenceVerdict | null> {
+  if (
+    args.reason !== "setup" ||
+    args.keyCaller ||
+    !args.grace ||
+    !presenceGraceable(args.grace) ||
+    getActingAgentUserId()
+  ) {
+    return null;
+  }
+  const sessionKey = browserPersonSessionKey();
+  if (!sessionKey) return null;
+  let grace: Awaited<ReturnType<typeof readGrace>>;
+  try {
+    grace = await readGrace({ userId: args.userId, sessionKey });
+  } catch (err) {
+    logger.warn({ err }, "could not read the presence grace window");
+    return null;
+  }
+  if (!grace) return null;
+  await record(PRESENCE_GRACE_USED_EVENT, args.userId, {
+    proposalId: args.subject,
+    proposalType: args.what,
+    reason: args.reason,
+    door: args.door,
+    method: grace.method,
+    deviceKeyId: grace.deviceKeyId,
+    challengeId: grace.challengeId,
+    remainingSeconds: grace.remainingSeconds,
+  });
+  return {
+    method: grace.method,
+    deviceKeyId: grace.deviceKeyId,
+    deviceLabel: null,
+    challengeId: grace.challengeId,
+    viaGrace: true,
+  };
 }
 
 /**
@@ -304,6 +421,7 @@ export async function assertPresenceForApproval(args: {
     proof: args.proof,
     door: args.door,
     requestedFrom: requestedFrom(args.proposal),
+    grace: approvalGrace(args.proposal),
   });
 }
 
@@ -331,6 +449,7 @@ export async function assertPresenceForRequest(args: {
     door: args.door,
     requestedFrom: args.requestedFrom ?? null,
     keyCaller: args.keyCaller,
+    grace: { kind: "request", key: args.kind },
   });
 }
 
@@ -370,6 +489,7 @@ export async function assertPresenceForAction(args: {
     proof: args.proof,
     door: args.door ?? args.path,
     keyCaller: args.keyCaller,
+    grace: { kind: "action", key: args.path },
   });
 }
 

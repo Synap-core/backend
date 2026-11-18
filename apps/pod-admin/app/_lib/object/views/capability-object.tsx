@@ -37,12 +37,21 @@
  * could not be read says so; it never reads as "asks first".
  */
 
-import { addToast, Chip, Select, SelectItem, Switch } from "@heroui/react";
+import {
+  addToast,
+  Button,
+  Chip,
+  Select,
+  SelectItem,
+  Switch,
+} from "@heroui/react";
 import { useState } from "react";
+import { PRESENCE_BATCH_MAX } from "@synap-core/types/presence";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import {
+  useEnableMany,
   useSetToolApproved,
   useSetToolEnabled,
 } from "../../presence/use-request-doors";
@@ -77,6 +86,10 @@ import { ToolRuns } from "./tool-runs";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import { useSetActionMode } from "../../presence/use-sensitive-actions";
+import {
+  formatGraceLeft,
+  usePresenceGrace,
+} from "../../presence/use-presence-grace";
 import type { ObjectFrame } from "./object-frame";
 
 export function CapabilityObject({
@@ -163,6 +176,55 @@ export function CapabilityObject({
       }));
     },
   });
+  // "Turn all on": every action and access still off, ONE confirmation (the
+  // challenge names the whole set). The pod answers each item on its own.
+  const enableAll = useEnableMany(
+    (input) =>
+      `Turn on ${(input.skillIds?.length ?? 0) + (input.toolIds?.length ?? 0)} actions`,
+    {
+      onSuccess: (res) => {
+        const failed = res.results.filter((r) => !r.ok);
+        setRefusals((prev) => {
+          const next = { ...prev };
+          for (const r of res.results) {
+            if (r.kind === "skill") delete next[r.id];
+          }
+          for (const r of failed) {
+            if (r.kind === "skill" && !r.ok) next[r.id] = r.error;
+          }
+          return next;
+        });
+        setAccessRefusals((prev) => {
+          const next = { ...prev };
+          for (const r of res.results) {
+            if (r.kind === "tool") delete next[r.id];
+          }
+          for (const r of failed) {
+            if (r.kind === "tool" && !r.ok) next[r.id] = r.error;
+          }
+          return next;
+        });
+        if (failed.length > 0) {
+          addToast({
+            title: `${failed.length} of ${res.results.length} weren’t turned on`,
+            description: "Each one says why, on its row.",
+            color: "warning",
+          });
+        }
+        void utils.capabilities.catalog.invalidate();
+        void utils.diagnose.global.invalidate();
+      },
+      onError: (err) => {
+        if (redirectToLoginIfUnauthorized(err)) return;
+        addToast({
+          title: "Nothing was turned on",
+          description: readableError(err.message),
+          color: "danger",
+        });
+      },
+    }
+  );
+  const { secondsLeft: graceLeft } = usePresenceGrace();
   // How each action runs (one mode per action, every AI, the whole pod).
   const modeCard = (catalog.data ?? []).find((c) => c.id === id);
   const actionNames = modeCard
@@ -222,6 +284,14 @@ export function CapabilityObject({
     id,
   });
   const accessOff = card?.toolsOff ?? [];
+  // At most one confirmation's worth (`PRESENCE_BATCH_MAX`); the rest on the next press.
+  const offSkillIds = verbs
+    .flatMap((v) => (!v.enabled && v.skillId ? [v.skillId] : []))
+    .slice(0, PRESENCE_BATCH_MAX);
+  const offToolIds = accessOff
+    .map((t) => t.id)
+    .slice(0, PRESENCE_BATCH_MAX - offSkillIds.length);
+  const offCount = offSkillIds.length + offToolIds.length;
   const pendingAccess = setAccess.isPending
     ? setAccess.variables?.id
     : undefined;
@@ -338,7 +408,39 @@ export function CapabilityObject({
           />
         )}
         <section className="flex flex-col gap-2">
-          <h2 className="text-[13px] font-medium text-foreground">Actions</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-[13px] font-medium text-foreground">Actions</h2>
+            {canToggle && offCount > 1 && (
+              <div className="flex items-center gap-2">
+                {graceLeft !== null && (
+                  <span
+                    data-presence-grace=""
+                    className="text-[11.5px] text-foreground/65"
+                  >
+                    Confirmed for {formatGraceLeft(graceLeft)}
+                  </span>
+                )}
+                <Button
+                  size="sm"
+                  variant="flat"
+                  isLoading={enableAll.isPending}
+                  onPress={() =>
+                    enableAll.mutate({
+                      skillIds: offSkillIds,
+                      toolIds: offToolIds,
+                    })
+                  }
+                >
+                  Turn all on
+                </Button>
+              </div>
+            )}
+          </div>
+          {canToggle && offCount > 1 && (
+            <p className="text-[12.5px] text-foreground/65">
+              Turns on {offCount} actions. One confirmation.
+            </p>
+          )}
           {!canToggle && verbs.length > 0 && (
             <p className="text-[12.5px] text-foreground/65">
               {whoTurnsVerbsOn(workspaceId ? spaceName : null)}

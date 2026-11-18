@@ -10,7 +10,10 @@
  *   - `serviceUsageStats` aggregates message counts by serviceId from messages JSONB
  */
 
-import { presenceProofSchema } from "@synap-core/types/presence";
+import {
+  PRESENCE_BATCH_MAX,
+  presenceProofSchema,
+} from "@synap-core/types/presence";
 import { z } from "zod";
 import { RendererRefSchema } from "../services/profiles/renderer-ref-schema.js";
 import { TRPCError } from "@trpc/server";
@@ -63,6 +66,7 @@ import { completeFocusSession } from "../services/focus-sessions/complete-sessio
 import { listCapabilityCompositions } from "../services/diagnose/capability-composition.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
+import { enableMany } from "../services/capabilities/enable-many.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
@@ -909,6 +913,32 @@ export const capabilitiesRouter = router({
       });
       return { success: true };
     }),
+
+  /**
+   * Turn several verbs and tools ON with ONE proof of presence (founder,
+   * 18 Nov 2026). The proof names the whole set (`capability_batch:<digest of
+   * the sorted ids>`); each item then takes the same owner checks as its single
+   * door, and comes back with its own result (a failed item never hides the
+   * others). At most `PRESENCE_BATCH_MAX` in all.
+   */
+  enableMany: protectedProcedure
+    .input(
+      z.object({
+        skillIds: z.array(z.string().uuid()).max(PRESENCE_BATCH_MAX).default([]),
+        toolIds: z.array(z.string().uuid()).max(PRESENCE_BATCH_MAX).default([]),
+        presence: presenceProofSchema.optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) =>
+      enableMany({
+        userId: requireUserId(ctx.userId),
+        skillIds: input.skillIds,
+        toolIds: input.toolIds,
+        agentUserId: ctx.agentUserId,
+        presence: input.presence ?? null,
+        door: "trpc.capabilities.enableMany",
+      })
+    ),
 
   /**
    * Apply a capability template — instantiate {vault · tools · skills · playbooks}

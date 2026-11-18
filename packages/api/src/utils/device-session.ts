@@ -78,15 +78,33 @@ const deviceScope = new AsyncLocalStorage<DeviceSessionFacts>();
  * door that forgets to say "key caller" (Hub REST, an executor) can never
  * take one (the recovery ladder, 6 Nov 2026).
  */
-const browserPersonScope = new AsyncLocalStorage<true>();
+const browserPersonScope = new AsyncLocalStorage<{
+  sessionKey: string | null;
+}>();
 
-export function runAsBrowserPerson<T>(fn: () => T): T {
-  return browserPersonScope.run(true, fn);
+/**
+ * `sessionKey`: the session this request is (`callerSessionKey`,
+ * `kratos:<id>`), or null when the opener has none. The grace window of the
+ * gate (`services/presence/grace.ts`) binds to it: with no key there is no
+ * grace.
+ */
+export function runAsBrowserPerson<T>(
+  fn: () => T,
+  sessionKey: string | null = null
+): T {
+  return browserPersonScope.run({ sessionKey }, fn);
 }
 
 /** Is this request a person's browser session (and not a Synap app's device)? */
 export function isBrowserPersonSession(): boolean {
-  return browserPersonScope.getStore() === true && !deviceScope.getStore();
+  return browserPersonScope.getStore() !== undefined && !deviceScope.getStore();
+}
+
+/** The browser session's key (`kratos:<id>`), or null outside one or when it names none. */
+export function browserPersonSessionKey(): string | null {
+  return isBrowserPersonSession()
+    ? (browserPersonScope.getStore()?.sessionKey ?? null)
+    : null;
 }
 
 /** Run `fn` as a request made with a Synap app's device token. */

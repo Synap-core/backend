@@ -17,6 +17,7 @@
  * and nothing else.
  */
 
+import { presenceBatchId } from "@synap-core/types/presence";
 import { trpc } from "../../../lib/trpc";
 import {
   labelled,
@@ -193,6 +194,31 @@ export function useSetToolApproved(
       input.approved
         ? labelled({ request: { kind: "tool", id: input.id } }, label, input)
         : null,
+    defaults
+  );
+}
+
+/**
+ * `capabilities.enableMany`: several verbs and tools turned ON with ONE
+ * confirmation. The challenge names the exact set (`capability_batch`, the
+ * digest of the sorted ids, as the pod computes it), so the proof fits this
+ * set and no other. The pod answers each item on its own.
+ */
+export function useEnableMany(
+  label?: DoorLabel<{ skillIds?: string[]; toolIds?: string[] }>,
+  defaults: DoorHandlers<
+    Resolves<typeof trpc.capabilities.enableMany.useMutation>,
+    InputFor<typeof trpc.capabilities.enableMany.useMutation>
+  > = {}
+) {
+  return usePresenceDoor(
+    trpc.capabilities.enableMany.useMutation(),
+    async (input: { skillIds?: string[]; toolIds?: string[] }) =>
+      labelled(
+        { request: { kind: "capability_batch", id: await presenceBatchId(input) } },
+        label,
+        input
+      ),
     defaults
   );
 }

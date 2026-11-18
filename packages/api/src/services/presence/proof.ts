@@ -522,6 +522,12 @@ export interface PresenceVerdict {
   deviceKeyId: string | null;
   deviceLabel: string | null;
   challengeId: string;
+  /**
+   * Set when no proof was sent and the session's grace window covered the
+   * act (`grace.ts`): `method`, `deviceKeyId` and `challengeId` are the proof
+   * that opened the window, not one made for this act.
+   */
+  viaGrace?: true;
 }
 
 /**
