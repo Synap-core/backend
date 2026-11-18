@@ -28,7 +28,8 @@ first; the layout follows from them.
    and the diff should shrink.
 2. **Design with real components.** A design is data, not a picture: Puck JSON whose every block is a
    real component from the catalog, saved as a `ui-design` entity. Three genuinely different variants
-   by default. Lay out every state (`loop.md`).
+   by default. Lay out every state. A design is a canvas of frames, one per screen, each holding
+   a Puck page; a single screen is a canvas with one frame (`loop.md`).
 3. **Critique.** Run the three-tier rubric on each variant: Checked, Pattern, Opinion. Fix every
    Checked and Pattern blocker and critique again. Opinions go to the person, never applied by you.
 4. **Human review gate.** Move the design to `in-review` and wait. `approved` is a person's call; you
