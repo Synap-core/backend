@@ -18,6 +18,15 @@
  * two shapes, both live. RESERVED rows come from `isReservedProfileSlug`, the
  * same door the profile write paths assert on, so they are visible before that
  * floor is tightened.
+ *
+ * PROJECT TWINS (ticket 8e2c7018): projects live in the `projects` table since
+ * migration 0151, which copied each project entity into it WITH THE SAME ID
+ * and left the entity row behind. A live entity whose id is a project's, or
+ * whose profile is a reserved slug (`project`), answers recall with the
+ * project's stale facts while the table holds the current ones. A reserved
+ * slug at write time cannot clean rows written before it; this invariant makes
+ * them visible. It repairs nothing: what happens to such an entity (and the
+ * relations that point at its id) is a person's call.
  */
 
 import {
@@ -26,6 +35,9 @@ import {
   eq,
   or,
   inArray,
+  isNull,
+  entities,
+  projects,
   isReservedProfileSlug,
   profiles,
   profileProperties,
@@ -59,6 +71,15 @@ export interface ActiveProfileRow {
   workspaceId: string | null;
 }
 
+/** A live entity that twins a project. */
+export interface ProjectTwinEntity {
+  entityId: string;
+  title: string | null;
+  workspaceId: string | null;
+  /** `id_is_a_project`: its id is a `projects.id`. `reserved_kind`: its profile slug is reserved. */
+  reasons: Array<"id_is_a_project" | "reserved_kind">;
+}
+
 /** A slug held by two or more active rows. */
 export interface TwinGroup {
   slug: string;
@@ -81,6 +102,8 @@ export interface SchemaContractSignal {
   twins: TwinGroup[];
   /** Active rows on a slug `isReservedProfileSlug` refuses. */
   reservedRows: ActiveProfileRow[];
+  /** Live entities that twin a project (see the module header). */
+  projectTwins: ProjectTwinEntity[];
   retirements: Array<{
     profileSlug: string;
     propertySlug: string;
@@ -102,6 +125,8 @@ type RetiredEntries = ReadonlyArray<{
 export function classifySchemaContract(input: {
   activeProfiles: readonly ActiveProfileRow[];
   systemLinks: readonly SystemLinkRow[];
+  /** Read by the DB tier (`readProjectTwins`); none when not read. */
+  projectTwins?: readonly ProjectTwinEntity[];
   seedLinks?: SeedLinks;
   retired?: RetiredEntries;
 }): SchemaContractSignal {
@@ -169,6 +194,7 @@ export function classifySchemaContract(input: {
     undeclaredLinks,
     twins,
     reservedRows,
+    projectTwins: [...(input.projectTwins ?? [])],
     retirements: retirements.map(
       ({ profileSlug, propertySlug, state, linkedSlugs }) => ({
         profileSlug,
@@ -209,19 +235,26 @@ export function summarizeSchemaContract(
   if (outstanding.length > 0) {
     parts.push(`${outstanding.length} retirement(s) not applied`);
   }
+  if (signal.projectTwins.length > 0) {
+    parts.push(
+      `${signal.projectTwins.length} live entit(ies) twinning a project (recall reads them, not the projects table)`
+    );
+  }
   return {
     key: "schema_contract",
     status: parts.length > 0 ? "attention" : "ok",
     headline:
       parts.length > 0
         ? parts.join("; ")
-        : "System-profile schema matches the seed — no undeclared links, no same-slug twins, no reserved-slug rows, no outstanding retirements",
+        : "System-profile schema matches the seed — no undeclared links, no same-slug twins, no reserved-slug rows, no project twins, no outstanding retirements",
     detail: {
       undeclaredLinks: signal.undeclaredLinks.slice(0, MAX_REPORTED),
       undeclaredTotal: signal.undeclaredLinks.length,
       twins: signal.twins.slice(0, MAX_REPORTED),
       twinsTotal: signal.twins.length,
       reservedRows: signal.reservedRows,
+      projectTwins: signal.projectTwins.slice(0, MAX_REPORTED),
+      projectTwinsTotal: signal.projectTwins.length,
       retirements: signal.retirements,
       notes: {
         undeclared:
@@ -232,6 +265,8 @@ export function summarizeSchemaContract(
           "rows on a slug the profile write paths refuse (isReservedProfileSlug) — reactivate/sync are refused too",
         inert:
           "an inert retirement matches no link — already converged, or never present; the schema cannot tell which",
+        projectTwins:
+          "live entities whose id is a projects row (left behind by migration 0151) or whose kind is a reserved slug: recall answers from them, not from the projects table. Repairing one (and the relations pointing at its id) is a person's decision.",
       },
     },
   };
@@ -251,6 +286,55 @@ export function visibleProfileWhere(userId: string) {
     ),
     and(eq(profiles.scope, ProfileScope.USER), eq(profiles.userId, userId))
   );
+}
+
+/**
+ * The caller's live entities that twin a project: id equal to a `projects.id`,
+ * or a profile on a reserved slug (`isReservedProfileSlug`, the write paths'
+ * door, so no second list of slugs here). Owner-floored.
+ */
+export async function readProjectTwins(
+  userId: string
+): Promise<ProjectTwinEntity[]> {
+  const profileRows = await db
+    .select({ id: profiles.id, slug: profiles.slug })
+    .from(profiles);
+  const reservedProfileIds = profileRows
+    .filter((p) => isReservedProfileSlug(p.slug))
+    .map((p) => p.id);
+  const rows = await db
+    .select({
+      entityId: entities.id,
+      title: entities.title,
+      workspaceId: entities.workspaceId,
+      profileId: entities.profileId,
+      projectId: projects.id,
+    })
+    .from(entities)
+    .leftJoin(projects, eq(projects.id, entities.id))
+    .where(
+      and(
+        eq(entities.userId, userId),
+        isNull(entities.deletedAt),
+        or(
+          eq(projects.id, entities.id),
+          reservedProfileIds.length > 0
+            ? inArray(entities.profileId, reservedProfileIds)
+            : undefined
+        )
+      )
+    );
+  return rows.map((r) => ({
+    entityId: r.entityId,
+    title: r.title,
+    workspaceId: r.workspaceId,
+    reasons: [
+      ...(r.projectId ? (["id_is_a_project"] as const) : []),
+      ...(r.profileId && reservedProfileIds.includes(r.profileId)
+        ? (["reserved_kind"] as const)
+        : []),
+    ],
+  }));
 }
 
 /** DB tier: read visible active profiles, and every link on the system ones. */
@@ -294,7 +378,12 @@ export async function gatherSchemaContractSignal(params: {
           )
           .where(inArray(profileProperties.profileId, systemIds));
 
-  const signal = classifySchemaContract({ activeProfiles, systemLinks });
+  const projectTwins = await readProjectTwins(params.userId);
+  const signal = classifySchemaContract({
+    activeProfiles,
+    systemLinks,
+    projectTwins,
+  });
   if (!params.workspaceId) return signal;
   // A workspace lens narrows twins and reserved rows to that workspace; the
   // seed-contract lists are pod metadata and are not narrowed.
@@ -303,5 +392,6 @@ export async function gatherSchemaContractSignal(params: {
     ...signal,
     twins: signal.twins.filter((t) => t.rows.some((r) => r.workspaceId === ws)),
     reservedRows: signal.reservedRows.filter((r) => r.workspaceId === ws),
+    projectTwins: signal.projectTwins.filter((t) => t.workspaceId === ws),
   };
 }

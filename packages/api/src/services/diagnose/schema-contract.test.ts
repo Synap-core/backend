@@ -185,6 +185,7 @@ describe("summarizeSchemaContract", () => {
     undeclaredLinks: [],
     twins: [],
     reservedRows: [],
+    projectTwins: [],
     retirements: [],
   };
 
@@ -213,6 +214,28 @@ describe("summarizeSchemaContract", () => {
       "1 active profile row(s) on a reserved slug"
     );
     expect(section.headline).toContain("1 retirement(s) not applied");
+  });
+
+  it("names the live entities that twin a project (ticket 8e2c7018)", () => {
+    const section = summarizeSchemaContract({
+      ...empty,
+      projectTwins: [
+        {
+          entityId: "d4b84ad8",
+          title: "Synap",
+          workspaceId: null,
+          reasons: ["id_is_a_project", "reserved_kind"],
+        },
+      ],
+    });
+    expect(section.status).toBe("attention");
+    expect(section.headline).toContain(
+      "1 live entit(ies) twinning a project"
+    );
+    expect(section.detail).toMatchObject({
+      projectTwinsTotal: 1,
+      projectTwins: [{ entityId: "d4b84ad8" }],
+    });
   });
 
   it("is emitted by the global report only when computed", () => {

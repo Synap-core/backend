@@ -40,7 +40,15 @@ import {
  * `CATALOG_CUES`).
  */
 export type SubstrateKind =
-  "semantic" | "structured" | "procedural" | "episodic" | "library" | "catalog";
+  | "semantic"
+  | "structured"
+  | "procedural"
+  | "episodic"
+  | "library"
+  | "catalog"
+  // A project's row (`project-lane.ts`): read when the question is about a
+  // project, never routed by cues.
+  | "project";
 
 /**
  * Enumerative LEAD phrases — a query is list-shaped when it opens with a
