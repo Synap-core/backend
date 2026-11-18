@@ -137,7 +137,7 @@ export function usePresenceDoor<M extends DoorMutation<never, unknown>>(
         setRunning(false);
       }
       // A proof may have opened a grace window (or a grace was used): read it again.
-      void utils.presence.sensitivity.invalidate();
+      void utils.presence?.sensitivity?.invalidate();
       setData(result);
       (handlers.onSuccess ?? defaults.onSuccess)?.(result, input);
       return result;
