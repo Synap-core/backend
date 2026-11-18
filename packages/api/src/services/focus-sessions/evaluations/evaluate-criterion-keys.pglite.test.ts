@@ -198,7 +198,11 @@ describe("evaluateSession is bounded to the stages the session has reached", () 
   });
 
   it("an explicit stageKey still grades that stage (the check gate, unchanged)", async () => {
-    await evaluateSession({ sessionId: staged, userId: USER, stageKey: "act3" });
+    await evaluateSession({
+      sessionId: staged,
+      userId: USER,
+      stageKey: "act3",
+    });
     expect(h.recorded.map((x) => x.criterionKey)).toEqual(["act3-theme"]);
   });
 });

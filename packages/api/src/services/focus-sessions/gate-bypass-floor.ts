@@ -147,7 +147,10 @@ async function ungradedEntryCheck(
   const graded = new Set(
     summarizeEvaluations(
       row.criteria,
-      await listSessionEvaluations({ sessionId: session.id, userId: row.userId })
+      await listSessionEvaluations({
+        sessionId: session.id,
+        userId: row.userId,
+      })
     ).evaluations.map((e) => e.criterionKey)
   );
   const ungraded = left.filter((c) => !graded.has(c.key));
