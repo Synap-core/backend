@@ -20,8 +20,11 @@ import type { PresenceProof } from "@synap-core/types/presence";
 import {
   approveWithPresence,
   asksUpFront,
+  graceCovers,
   type PresenceSubject,
 } from "./presence-model";
+import { trpc } from "../../../lib/trpc";
+import { usePresenceGrace } from "./use-presence-grace";
 import { usePresence } from "./presence-provider";
 import { usePodSensitivity } from "./use-sensitivity";
 import type { ApproveError } from "./use-approve";
@@ -68,30 +71,59 @@ export interface DoorHandlers<O, I = never> {
  */
 export function usePresenceDoor<M extends DoorMutation<never, unknown>>(
   mutation: M,
-  subjectOf: (input: DoorInput<M>) => PresenceSubject | null,
+  subjectOf: (
+    input: DoorInput<M>
+  ) => PresenceSubject | null | Promise<PresenceSubject | null>,
   defaults: DoorHandlers<OutputOf<M>, DoorInput<M>> = {}
 ) {
   const { prove } = usePresence();
   // W5: a sensitive action a pod admin switched off is not proved up front.
   const choice = usePodSensitivity();
+  // The session's grace window: a covered act is tried with no proof first.
+  const { secondsLeft } = usePresenceGrace();
+  const utils = trpc.useUtils();
   const [running, setRunning] = useState(false);
   // The input of the call in flight (or the last one), like `variables`.
   const [variables, setVariables] = useState<DoorInput<M> | undefined>();
   const [data, setData] = useState<OutputOf<M> | undefined>();
-  const latest = useRef({ mutation, subjectOf, defaults, prove, choice });
-  latest.current = { mutation, subjectOf, defaults, prove, choice };
+  const latest = useRef({
+    mutation,
+    subjectOf,
+    defaults,
+    prove,
+    choice,
+    secondsLeft,
+    utils,
+  });
+  latest.current = {
+    mutation,
+    subjectOf,
+    defaults,
+    prove,
+    choice,
+    secondsLeft,
+    utils,
+  };
 
   const mutateAsync = useCallback(
     async (
       input: DoorInput<M>,
       handlers: DoorHandlers<OutputOf<M>, DoorInput<M>> = {}
     ) => {
-      const { mutation, subjectOf, defaults, prove, choice } = latest.current;
+      const {
+        mutation,
+        subjectOf,
+        defaults,
+        prove,
+        choice,
+        secondsLeft,
+        utils,
+      } = latest.current;
       const send = (presence?: PresenceProof) =>
         mutation.mutateAsync(
           (presence ? { ...input, presence } : input) as never
         ) as Promise<OutputOf<M>>;
-      const subject = subjectOf(input);
+      const subject = await subjectOf(input);
       setRunning(true);
       setVariables(input);
       let result: OutputOf<M>;
@@ -100,7 +132,9 @@ export function usePresenceDoor<M extends DoorMutation<never, unknown>>(
           ? await approveWithPresence({
               subject,
               prove,
-              upFront: asksUpFront(subject, choice),
+              upFront:
+                asksUpFront(subject, choice) &&
+                !graceCovers(subject, secondsLeft),
               attempt: send,
             })
           : await send();
@@ -110,6 +144,8 @@ export function usePresenceDoor<M extends DoorMutation<never, unknown>>(
       } finally {
         setRunning(false);
       }
+      // A proof may have opened a grace window (or a grace was used): read it again.
+      void utils.presence?.sensitivity?.invalidate();
       setData(result);
       (handlers.onSuccess ?? defaults.onSuccess)?.(result, input);
       return result;
