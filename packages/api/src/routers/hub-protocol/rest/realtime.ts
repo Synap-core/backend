@@ -47,7 +47,7 @@ export function registerRealtimeRoutes(app: HubHono): void {
       "edit the document, the key holds hub-protocol.write and its grant " +
       "permits `document.update` on it (or `view.update_content` on the view " +
       "that owns a canvas); otherwise `read`, and a read socket's updates are " +
-      "dropped. Send `access: \"read\"` to ask for less. The socket closes when " +
+      'dropped. Send `access: "read"` to ask for less. The socket closes when ' +
       "the app's connection is revoked. A document the person or the grant " +
       "cannot read is 404. Refused (403) to an agent and to a signed-in " +
       "session, which opens the room with its own token. Requires " +

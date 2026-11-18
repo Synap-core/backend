@@ -79,7 +79,10 @@ const scope = (
   workspaceIds: string[] | null = [SPACE]
 ): KeyGrant => ({ scopes: [{ permissions, workspaceIds }], clientId: "app_x" });
 
-const ask = (documentId: string, over: { mayWrite?: boolean; access?: "read" | "edit" } = {}) =>
+const ask = (
+  documentId: string,
+  over: { mayWrite?: boolean; access?: "read" | "edit" } = {}
+) =>
   issueRoomTicket({
     userId: "person-1",
     apiKeyId: "key-1",

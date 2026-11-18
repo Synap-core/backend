@@ -202,7 +202,8 @@ export async function liveTicketConnections(
 
   const standing = rows.filter((k) => keyIsLive(k, now));
   const rotated = rows.filter(
-    (k) => !keyIsLive(k, now) && k.keyType === APP_PERSON_KEY_TYPE && k.instanceId
+    (k) =>
+      !keyIsLive(k, now) && k.keyType === APP_PERSON_KEY_TYPE && k.instanceId
   );
   if (rotated.length > 0) {
     const successors = (await db

@@ -98,8 +98,7 @@ describe("0433 realtime_room_tickets", () => {
       'CREATE TABLE IF NOT EXISTS "realtime_room_tickets"'
     );
     expect(
-      REQUIRED_COLUMNS.filter((c) => c.table === "realtime_room_tickets")
-        .length
+      REQUIRED_COLUMNS.filter((c) => c.table === "realtime_room_tickets").length
     ).toBeGreaterThan(0);
   });
 });

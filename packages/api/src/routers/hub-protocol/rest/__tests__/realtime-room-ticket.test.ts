@@ -88,10 +88,9 @@ describe("POST /realtime/room-ticket", () => {
   });
 
   it("refuses an agent, before any ticket is made", async () => {
-    const res = await post(
-      makeApp({ ...APP_KEY, agentUserId: "agent-1" }),
-      { documentId: DOC }
-    );
+    const res = await post(makeApp({ ...APP_KEY, agentUserId: "agent-1" }), {
+      documentId: DOC,
+    });
     expect(res.status).toBe(403);
     expect((await res.json()).code).toBe("ROOM_TICKET_AGENT");
     expect(issue).not.toHaveBeenCalled();
