@@ -156,8 +156,11 @@ CREATE TABLE entities (
   status text,
   status_category text,
   deleted_at timestamptz,
-  updated_at timestamptz DEFAULT now()
+  updated_at timestamptz DEFAULT now(),
+  -- retireProjectTwins reads the title and the projects table.
+  title text
 );
+CREATE TABLE projects (id uuid PRIMARY KEY);
 CREATE TABLE entity_facets (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   entity_id uuid,
