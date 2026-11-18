@@ -1383,10 +1383,18 @@ async function checkRevisedPayload(
     .limit(1);
   // Absent row: the locked read answers NOT_FOUND.
   if (!row) return null;
+  const before = (row.data ?? {}) as Record<string, unknown>;
+  // The kind as the request envelope names it (what the approve executors
+  // replay), else as the row's columns do (a flat payload: capability.run).
+  const targetType =
+    typeof before.targetType === "string" ? before.targetType : row.targetType;
+  const proposalType =
+    typeof before.changeType === "string"
+      ? before.changeType
+      : row.proposalType;
   const { proposalCannotApply, isCheckedProposalKind } =
     await import("./can-apply.js");
-  if (!isCheckedProposalKind(row.targetType, row.proposalType)) return null;
-  const before = (row.data ?? {}) as Record<string, unknown>;
+  if (!isCheckedProposalKind(targetType, proposalType)) return null;
   let merged: Record<string, unknown>;
   try {
     ({ merged } = computeRevisedEnvelope({
@@ -1413,9 +1421,9 @@ async function checkRevisedPayload(
     return null;
   }
   const refusal = await proposalCannotApply({
-    targetType: row.targetType,
+    targetType,
     targetId: row.targetId,
-    proposalType: row.proposalType,
+    proposalType,
     data: merged,
     userId: row.subjectUserId ?? params.actorId ?? "",
     workspaceId: row.workspaceId ?? null,
@@ -1425,7 +1433,7 @@ async function checkRevisedPayload(
   return {
     base,
     problem: refusal
-      ? `Revision refused — the revised ${String(before.targetType ?? row.targetType)} cannot apply, so nothing was changed (the proposal stays pending as it was): ` +
+      ? `Revision refused — the revised ${targetType} cannot apply, so nothing was changed (the proposal stays pending as it was): ` +
         refusal.message
       : null,
   };
