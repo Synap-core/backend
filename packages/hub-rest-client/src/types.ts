@@ -1598,6 +1598,8 @@ export interface HubSessionCriterion {
     | "certified";
   /** R7 — about the result (default) or the method. */
   about?: "result" | "method";
+  /** The key of the session output this criterion checks (absent = none named). */
+  outputKey?: string;
 }
 
 /**

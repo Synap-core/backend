@@ -1878,6 +1878,8 @@ export interface SessionCriterion {
   checkKind?: CriterionCheckMeaning;
   /** R7 — about the result (absent = result) or the method. */
   about?: CriterionAbout;
+  /** The key of the session output this criterion checks (absent = none named). */
+  outputKey?: string;
 }
 
 function optionalString(v: unknown): string | undefined {
@@ -1909,6 +1911,7 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
     const evidenceKey = optionalString(check!.evidenceKey);
     const hint = optionalString(check!.hint);
     const stageKey = optionalString(e.stageKey);
+    const outputKey = optionalString(e.outputKey);
     // Closed sets: an unknown meaning or `about` is dropped (the criterion is
     // kept) — the reader stays tolerant, the write doors are strict.
     const checkKind = (CRITERION_CHECK_MEANINGS as readonly unknown[]).includes(
@@ -1933,6 +1936,7 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
       ...(stageKey ? { stageKey } : {}),
       ...(checkKind ? { checkKind } : {}),
       ...(about ? { about } : {}),
+      ...(outputKey ? { outputKey } : {}),
     });
   }
   return out;
