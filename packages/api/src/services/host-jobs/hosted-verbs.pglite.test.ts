@@ -147,7 +147,10 @@ vi.mock("../installations/request-installation.js", async (importOriginal) => {
 import { pickComputerSpec } from "@synap-core/types/capability-manifest";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerHostJobsRoutes } from "../../routers/hub-protocol/rest/host-jobs.js";
-import { BUILTIN_VERBS } from "../capabilities/builtin-verbs.js";
+import {
+  BUILTIN_VERBS,
+  recipeRunRefusalAtFiling,
+} from "../capabilities/builtin-verbs.js";
 import {
   installedRecipesFor,
   isQueuedHostVerbResult,
@@ -887,5 +890,129 @@ describe("discovery: the recipes installed on the person's computers", () => {
     );
     await setInstallation(INST_MAC, { status: "failed", verifyOk: false });
     expect((await read("loudness")).size).toBe(0);
+  });
+});
+
+/**
+ * The filing check (W3, D1 slice 1): an agent's run is planned when it is
+ * FILED by the plan its approval runs (`planRecipeRun`), so what the approval
+ * would refuse for a fact of the approved manifest is refused before anyone
+ * is asked (proposals 768f3e27, 3a1876af). Each case drives BOTH the filing
+ * check and the real handler on the same row, and asserts the same sentence:
+ * one check, never a second derivation.
+ */
+describe("computer.run_recipe — checked when it is filed", () => {
+  /** The approval's refusal on the same ask, as the handler throws it. */
+  const approvalRefusal = async (over: Record<string, unknown>) => {
+    try {
+      await run(ask(over), ctx);
+    } catch (err) {
+      return err as { code?: string; message: string };
+    }
+    throw new Error("the approval ran the ask");
+  };
+
+  it("THE FILED CASE 768f3e27: a recipe absent from the approved version is refused, with the approval's own sentence", async () => {
+    const filed = await recipeRunRefusalAtFiling(
+      ask({ recipe: "range-cut" }),
+      ctx
+    );
+    const approval = await approvalRefusal({ recipe: "range-cut" });
+    expect(filed).toEqual({
+      reasonCode: "UNKNOWN_RECIPE",
+      message: approval.message,
+    });
+    expect(filed!.message).toMatch(/recipe "range-cut"/);
+    expect(approval.code).toBe("UNKNOWN_RECIPE");
+  });
+
+  it("a value that does not fill the recipe is refused, with the approval's own sentence", async () => {
+    for (const params of [
+      { in: CLIP, out: "clip.mp4", target: "loud" },
+      { in: CLIP, out: "../../x.mp4" },
+    ]) {
+      const filed = await recipeRunRefusalAtFiling(ask({ params }), ctx);
+      const approval = await approvalRefusal({ params });
+      expect(approval.code).toBe("BAD_PARAMS");
+      expect(filed).toEqual({
+        reasonCode: "BAD_PARAMS",
+        message: approval.message,
+      });
+    }
+  });
+
+  it("files as before what can change until the approval: a computer not ready, a tool not installed", async () => {
+    // The Mac's check failed: the approval would refuse NOT_RUNNABLE now, but
+    // the Mac can be repaired before the person says yes.
+    await setInstallation(INST_MAC, { status: "failed", verifyOk: false });
+    expect(
+      await recipeRunRefusalAtFiling(ask({ recipe: "range-cut" }), ctx)
+    ).toBeNull();
+    expect((await approvalRefusal({})).code).toBe("NOT_RUNNABLE");
+    expect(
+      await recipeRunRefusalAtFiling(
+        ask({ capability: "media-transcribe" }),
+        ctx
+      )
+    ).toBeNull();
+  });
+
+  it("with no computer named, files a run another computer's approved version can take: the approval may choose it", async () => {
+    // The devbox (check failed now, repairable before the yes) approved a
+    // version with range-cut and a loudness target given as words; the Mac,
+    // chosen now, has neither.
+    const devbox = JSON.stringify({
+      recipes: [
+        RANGE_CUT,
+        {
+          ...LOUDNORM,
+          params: {
+            ...LOUDNORM.params,
+            target: {
+              type: "string",
+              description: "Loudness.",
+              default: "normal",
+            },
+          },
+        },
+      ],
+    });
+    const words = { in: CLIP, out: "clip.mp4", target: "loud" };
+    const cut = { recipe: "range-cut", params: { in: CLIP, out: "cut.mp4" } };
+    await q(`UPDATE installations SET manifest = $2::jsonb WHERE id = $1`, [
+      INST_DEVBOX,
+      devbox,
+    ]);
+    try {
+      expect((await approvalRefusal(cut)).code).toBe("UNKNOWN_RECIPE");
+      expect(await recipeRunRefusalAtFiling(ask(cut), ctx)).toBeNull();
+      expect((await approvalRefusal({ params: words })).code).toBe(
+        "BAD_PARAMS"
+      );
+      expect(
+        await recipeRunRefusalAtFiling(ask({ params: words }), ctx)
+      ).toBeNull();
+      // CONTROL: named, the run can land only on the Mac: refused.
+      expect(
+        await recipeRunRefusalAtFiling(
+          ask({ ...cut, computer: "MacBook-Pro" }),
+          ctx
+        )
+      ).toMatchObject({ reasonCode: "UNKNOWN_RECIPE" });
+    } finally {
+      await q(`UPDATE installations SET manifest = $2::jsonb WHERE id = $1`, [
+        INST_DEVBOX,
+        JSON.stringify({ recipes: [LOUDNORM] }),
+      ]);
+    }
+  });
+
+  it("a run that can apply is filed, and the check writes nothing", async () => {
+    expect(await recipeRunRefusalAtFiling(ask(), ctx)).toBeNull();
+    expect(
+      await recipeRunRefusalAtFiling(ask({ recipe: "range-cut" }), ctx)
+    ).not.toBeNull();
+    expect((await q(`SELECT 1 FROM host_jobs`)).rows).toHaveLength(0);
+    expect(h.notices).toHaveLength(0);
   });
 });

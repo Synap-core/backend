@@ -5,6 +5,7 @@ import {
   WORKER_IRREVERSIBLE_DAILY_CEILING,
   LINKEDIN_INVITATIONS_DAILY_LIMIT,
   LINKEDIN_ACTIONS_DAILY_LIMIT,
+  DEFAULT_COMPUTE_SPEND_DAILY_CEILING_CENTS,
 } from "@synap/governance-policy";
 import { AI_DISPATCH_GUARDRAILS } from "@synap-core/types/automations";
 import { DEFAULT_WORKER_MAX_PENDING_APPROVALS } from "@synap-core/types/workers";
@@ -36,6 +37,7 @@ describe("tripwire: ceiling defaults have one source", () => {
       worker_irreversible_sends_daily: WORKER_IRREVERSIBLE_DAILY_CEILING,
       linkedin_invitations_daily: LINKEDIN_INVITATIONS_DAILY_LIMIT,
       linkedin_actions_daily: LINKEDIN_ACTIONS_DAILY_LIMIT,
+      compute_spend_daily_cents: DEFAULT_COMPUTE_SPEND_DAILY_CEILING_CENTS,
     }).toEqual(CEILING_DEFAULTS);
   });
 });

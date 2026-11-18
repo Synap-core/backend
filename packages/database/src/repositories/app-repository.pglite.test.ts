@@ -681,7 +681,7 @@ describe("AppRepository — the pending request projection", () => {
 });
 
 describe("AppRepository.withdrawPendingRequests", () => {
-  it("withdraws only THIS app's still-pending requests, with a reason", async () => {
+  it("withdraws only THIS app's still-pending requests, with a reason, never stored English", async () => {
     const app = await repo.register({ ownerUserId: OWNER, name: "asking" });
     const other = await repo.register({ ownerUserId: OWNER, name: "other" });
     const req = [{ permission: "entity.person.create", workspaceId: WS_SALES }];
@@ -690,21 +690,56 @@ describe("AppRepository.withdrawPendingRequests", () => {
     const theirs = await fileConnect(other.id, req);
 
     expect(
-      await repo.withdrawPendingRequests(app.id, OWNER, "The app was revoked.")
+      await repo.withdrawPendingRequests(app.id, OWNER, {
+        reason: "app_revoked",
+      })
     ).toEqual([pending]);
     const { rows } = await pg.query<{
       id: string;
       status: string;
-      reason: string | null;
-    }>("SELECT id, status, data->>'withdrawReason' AS reason FROM proposals");
+      words: string | null;
+      ended: Record<string, unknown> | null;
+    }>(
+      "SELECT id, status, data->>'withdrawReason' AS words, data->'ended' AS ended FROM proposals"
+    );
     const by = new Map(rows.map((r) => [r.id, r]));
-    expect(by.get(pending)).toMatchObject({
-      status: "withdrawn",
-      reason: "The app was revoked.",
+    // Only a person or an agent writes words for a withdrawal: the revoke
+    // is a reason, said by the end line in the reader's language.
+    expect(by.get(pending)).toMatchObject({ status: "withdrawn", words: null });
+    expect(by.get(pending)!.ended).toMatchObject({
+      reason: "app_revoked",
+      by: "person",
     });
+    expect(by.get(pending)!.ended).not.toHaveProperty("withdrawReason");
     expect(by.get(decided)!.status).toBe("approved");
     expect(by.get(theirs)!.status).toBe("pending");
     expect((await repo.getByPublicId(app.publicId))!.pendingRequest).toBeNull();
+  });
+
+  it("a newer consent supersedes the interrupted one and names it", async () => {
+    const app = await repo.register({ ownerUserId: OWNER, name: "consent" });
+    const req = [{ permission: "entity.person.create", workspaceId: WS_SALES }];
+    const interrupted = await fileConnect(app.id, req);
+    const newer = await fileConnect(app.id, req);
+
+    expect(
+      await repo.withdrawPendingRequests(app.id, OWNER, {
+        reason: "superseded",
+        supersededBy: newer,
+      })
+    ).toEqual([interrupted]);
+    const { rows } = await pg.query<{
+      id: string;
+      status: string;
+      ended: Record<string, unknown> | null;
+    }>("SELECT id, status, data->'ended' AS ended FROM proposals");
+    const by = new Map(rows.map((r) => [r.id, r]));
+    expect(by.get(interrupted)!.ended).toMatchObject({
+      reason: "superseded",
+      supersededBy: newer,
+    });
+    // The newer request is never withdrawn as its own replacement.
+    expect(by.get(newer)!.status).toBe("pending");
   });
 });
 

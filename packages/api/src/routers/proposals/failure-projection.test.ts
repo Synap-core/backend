@@ -65,6 +65,7 @@ const FAILED_ROW = {
       providerRef: "google",
       missingFields: ["apiKey"],
       detail: SECRET,
+      errorId: "8b0e6c3a-0000-4000-8000-00000000f417",
     },
   },
 } as const;
@@ -100,6 +101,9 @@ describe("projectProposalDataForViewer", () => {
     expect(out.failure.errorClass).toBe("missing_field");
     expect(out.failure.providerRef).toBe("google");
     expect(out.failure.missingFields).toEqual(["apiKey"]);
+    // The id of the owner-only cause (plan 8032a127 D5) is what pod admin
+    // links to: kept, it names a row only a pod admin can read.
+    expect(out.failure.errorId).toBe(FAILED_ROW.data.failure.errorId);
     expect(out.summary).toBe("Run the thing");
   });
 
@@ -136,6 +140,13 @@ describe("door — withProposalClass (Hub REST view=full)", () => {
     expect(
       (out.data as { failure: Record<string, unknown> }).failure
     ).not.toHaveProperty("detail");
+  });
+
+  it("keeps the errorId of the owner-only cause", () => {
+    const out = withProposalClass({ ...FAILED_ROW });
+    expect(
+      (out.data as { failure: Record<string, unknown> }).failure.errorId
+    ).toBe(FAILED_ROW.data.failure.errorId);
   });
 
   it("still stamps the class (the strip did not break its own contract)", () => {

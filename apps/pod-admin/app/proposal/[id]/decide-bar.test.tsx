@@ -79,6 +79,13 @@ vi.mock("../../../lib/trpc", async () => ({
           isPending: state.rejecting,
         }),
       },
+      revise: {
+        useMutation: () => ({
+          mutate() {},
+          mutateAsync: async () => ({}),
+          isPending: false,
+        }),
+      },
       approvalProgress: {
         useQuery: () => ({
           data: null,
@@ -120,6 +127,7 @@ vi.mock("../../../lib/trpc", async () => ({
     },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
+      actionModes: { useQuery: () => ({ data: undefined }) },
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
       setActionMode: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
@@ -200,9 +208,71 @@ const ENGLISH_OUTCOMES = [
   "matched an auto-approve rule",
   "You rejected this",
   "was undone after it was applied",
-  "Its moment passed",
-  "withdrew this",
+  "This request expired",
+  "This request was withdrawn",
+  "Nothing was applied",
 ];
+
+describe("an ended request: one line that names who, and its doors", () => {
+  const ended = (status: string, end: Record<string, unknown>, data = {}) => {
+    const base = request(status);
+    return {
+      ...base,
+      data: {
+        ...base.data,
+        ...data,
+        ended: { by: "agent", at: "2026-11-18T00:00:00Z", ...end },
+      },
+    };
+  };
+
+  it("an author's withdrawal names its author once, never 'whoever'", () => {
+    state.proposal = ended("withdrawn", { reason: "author" });
+    const seen = text(render());
+    expect(seen).toContain("Taken back by Claude-code");
+    expect(seen).toContain("Nothing was applied.");
+    expect(seen).not.toContain("whoever");
+    expect(seen).not.toContain("This request was withdrawn");
+  });
+
+  it("the record that already exists is a door", () => {
+    state.proposal = ended("expired", {
+      reason: "record_landed",
+      landedEntityId: "33333333-3333-4333-8333-333333333333",
+    });
+    const html = render();
+    expect(text(html)).toContain("The record already exists");
+    expect(text(html)).toContain("Open the record");
+    expect(html).toContain("33333333-3333-4333-8333-333333333333");
+  });
+
+  it("a plan that left items in place never says nothing was applied", () => {
+    state.proposal = ended(
+      "withdrawn",
+      { reason: "author" },
+      {
+        planFailure: {
+          compensation: {
+            notCompensated: [
+              {
+                kind: "entity",
+                id: "44444444-4444-4444-8444-444444444444",
+                reason: "x",
+              },
+              { kind: "relation", id: "r1", reason: "x" },
+            ],
+          },
+        },
+      }
+    );
+    const html = render();
+    expect(text(html)).toContain(
+      "Not applied; 2 items could not be rolled back"
+    );
+    expect(text(html)).not.toContain("Nothing was applied");
+    expect(html).toContain("44444444-4444-4444-8444-444444444444");
+  });
+});
 
 describe("in French", () => {
   it.each([
@@ -219,7 +289,7 @@ describe("in French", () => {
     for (const sentence of ENGLISH_OUTCOMES)
       expect(seen).not.toContain(sentence);
     expect(seen).toMatch(
-      /Vous avez|règle d’approbation|prévenue|annulé|délai|retiré/
+      /Vous avez|règle d’approbation|prévenue|annulé|Rien n’a été appliqué/
     );
   });
 
@@ -227,10 +297,11 @@ describe("in French", () => {
     setAmbientCatalogLocale("fr");
     state.proposal = request("approval_failed");
     const seen = text(render());
-    expect(seen).toContain("L’approbation a échoué.");
+    expect(seen).toContain("Aucune raison n’a été enregistrée.");
     expect(seen).toContain("Le type « widget » n’existe pas ici");
     for (const english of [
       "Approving this failed",
+      "No reason was recorded",
       "does not exist here",
       "Checking what to fix",
     ]) {

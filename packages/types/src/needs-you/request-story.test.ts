@@ -341,7 +341,7 @@ describe("requestStory — the past says each act as it was", () => {
       "Reverted “Ship it”"
     );
     expect(requestStoryLine(decided("d3", "approval_failed", null))).toBe(
-      "Approval failed"
+      "Couldn't apply"
     );
     expect(requestStoryLine(decided("d4", "rejected", "Ship it"), "fr")).toBe(
       "Rejeté «\u00a0Ship it\u00a0»"

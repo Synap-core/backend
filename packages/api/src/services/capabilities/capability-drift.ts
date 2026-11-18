@@ -42,6 +42,10 @@ import {
   isBroadUrlPattern,
   isValidUrlPattern,
 } from "@synap-core/types/url-read";
+import {
+  SKILL_METADATA_PROPOSE_ONLY,
+  declaredProposeOnly,
+} from "@synap-core/types/proposals";
 
 /** Canonical (key-sorted) JSON — jsonb does not preserve key insertion order, so a
  * plain JSON.stringify would report false drift on key order alone. Normalizes
@@ -77,6 +81,18 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v17 = v16 + `metadata.compute` (a compute verb's DECLARED lifecycle: the
+ *      release verb a `provision_compute` verb names, the modes a
+ *      `release_compute` verb serves — see `declaredCompute`). The run door
+ *      refuses a start whose verb declares no release verb, so a v16 stamp
+ *      over a container whose declaration never landed would leave its starts
+ *      refused forever; retiring v16 stamps makes each container re-diff once.
+ * v16 = v15 + `metadata.proposeOnly` (the verb's DECLARED propose-only posture,
+ *      `declaredProposeOnly` in @synap-core/types: no auto grant and no auto
+ *      rule ever runs it). Before it the applier dropped the key, so a pack
+ *      could not mark a destructive verb review-only. Retiring v15 stamps
+ *      makes each container re-diff once and the flag lands (an update adding
+ *      it only tightens: no re-approval).
  * v15 = v14 + the container's COMPUTER BLOCKS (`metadata.computer`: placement,
  *      install, verify, uninstall, permissions, licence, services, recipes —
  *      see `capabilityComputerDrift`). Before it a catalog edit that only
@@ -156,7 +172,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 15;
+export const DRIFT_COMPARATOR_VERSION = 17;
 
 /**
  * Do the computer blocks a definition declares differ from the ones stored on
@@ -405,8 +421,9 @@ export const SKILL_METADATA_READ_ONLY = "readOnly";
  *   A column has one writer by construction: the applier's `resolveVerbIntent`.
  *   `metadata` keeps only keys that are genuinely bag-shaped declarations with
  *   ONE writer (this applier): `allowedHosts`, `readOnly`, `writeBack` (a
- *   nested object the runner reads; nothing else writes it) and `metering`
- *   (the same, read by the run recorder).
+ *   nested object the runner reads; nothing else writes it), `metering`
+ *   (the same, read by the run recorder), `box` and `proposeOnly` (read by the
+ *   capability gate; parsed in @synap-core/types, which the gate can import).
  */
 
 /**
@@ -478,6 +495,47 @@ export function declaredMetering(
 ): DeclaredMetering | undefined {
   const parsed = meteringSchema.safeParse(
     (metadata ?? {})[SKILL_METADATA_METERING]
+  );
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The compute lifecycle a verb DECLARES (plan a640c5bb B3; read by the run
+ * door, `services/compute/compute-contract.ts`), or `undefined` when it
+ * declares none or the declaration is malformed, the same contract as
+ * `declaredWriteBack`:
+ *
+ *   metadata.compute = { releaseVerb: "hetzner_delete_server" }   // provision_compute
+ *   metadata.compute = { modes: ["destroy"] }                     // release_compute
+ *
+ * A start whose verb names no release verb is refused (nothing could release
+ * it at its TTL); a release whose `mode` its verb does not serve is refused
+ * (a destroy verb must never run for a stop).
+ *
+ * No re-approval rule: it adds no egress and no auto-run; it narrows what the
+ * run door lets through.
+ */
+export const SKILL_METADATA_COMPUTE = "compute";
+
+const computeSchema = z
+  .object({
+    /** provision_compute: the release_compute verb run at the TTL (destroy). */
+    releaseVerb: z.string().min(1).optional(),
+    /** release_compute: the modes this verb serves. */
+    modes: z
+      .array(z.enum(["stop", "destroy"]))
+      .min(1)
+      .optional(),
+  })
+  .refine((c) => c.releaseVerb !== undefined || c.modes !== undefined);
+
+export type DeclaredCompute = z.infer<typeof computeSchema>;
+
+export function declaredCompute(
+  metadata: Record<string, unknown> | null | undefined
+): DeclaredCompute | undefined {
+  const parsed = computeSchema.safeParse(
+    (metadata ?? {})[SKILL_METADATA_COMPUTE]
   );
   return parsed.success ? parsed.data : undefined;
 }
@@ -556,8 +614,8 @@ export function declaredBox(
  *
  * Contract, pinned by `capability-drift.projection-parity.tripwire.test.ts`:
  * every key of the live bag is preserved byte-identically and ONLY the
- * definition-owned keys (`allowedHosts`, `readOnly`, `writeBack`, `metering`, `box`)
- * are ever written. That is what lets `PROJECTED_SKILL_FIELDS` carry a `metadata` entry
+ * definition-owned keys (`allowedHosts`, `readOnly`, `writeBack`, `metering`,
+ * `box`, `proposeOnly`, `compute`) are ever written. That is what lets `PROJECTED_SKILL_FIELDS` carry a `metadata` entry
  * that reads just those keys without the stamp overclaiming: the marker asserts
  * exactly what the comparator checked.
  *
@@ -589,23 +647,31 @@ function declaredMetadataKeys(
   const writeBack = declaredWriteBack(metadata);
   const metering = declaredMetering(metadata);
   const box = declaredBox(metadata);
+  const proposeOnly = declaredProposeOnly(metadata);
+  const compute = declaredCompute(metadata);
   if (
     hosts === undefined &&
     readOnly === undefined &&
     writeBack === undefined &&
     metering === undefined &&
-    box === undefined
+    box === undefined &&
+    proposeOnly === undefined &&
+    compute === undefined
   ) {
     return undefined;
   }
   return {
     ...(hosts !== undefined ? { [SKILL_METADATA_ALLOWED_HOSTS]: hosts } : {}),
     ...(readOnly !== undefined ? { [SKILL_METADATA_READ_ONLY]: readOnly } : {}),
+    ...(proposeOnly !== undefined
+      ? { [SKILL_METADATA_PROPOSE_ONLY]: proposeOnly }
+      : {}),
     ...(writeBack !== undefined
       ? { [SKILL_METADATA_WRITE_BACK]: writeBack }
       : {}),
     ...(metering !== undefined ? { [SKILL_METADATA_METERING]: metering } : {}),
     ...(box !== undefined ? { [SKILL_METADATA_BOX]: box } : {}),
+    ...(compute !== undefined ? { [SKILL_METADATA_COMPUTE]: compute } : {}),
   };
 }
 

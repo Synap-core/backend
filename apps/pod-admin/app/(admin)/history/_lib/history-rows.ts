@@ -5,8 +5,8 @@
  * - The title says what HAPPENED (the vocabulary's past mood: "Created
  *   contact Léa", never the imperative a pending request reads).
  * - Who asked (the actor's name, the ONE requester derivation) and who
- *   decided: the approver the pod names, or a standing rule for an
- *   auto-approved write.
+ *   decided or ended it: the one who-line (`proposalWho`), shared with the
+ *   browser, so an expiry never reads "Decided by" anyone.
  * - Undo is offered only where the pod says the effect can still be undone
  *   (`revertable`, computed by the same planner `proposals.revert` runs) and
  *   the viewer may decide it; an applied change that cannot be undone says
@@ -22,6 +22,10 @@ import {
   resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
+import {
+  proposalWho,
+  type ProposalWho,
+} from "@synap-core/types/proposals/ended";
 import type { StatusKind } from "../../components/status-pill";
 import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
 import {
@@ -63,9 +67,6 @@ const APPLIED = new Set(["approved", "auto_approved"]);
  */
 export type HistoryUndo = "available" | "permanent" | "none";
 
-export type HistoryDecider =
-  { kind: "person"; name: string } | { kind: "rule" } | null;
-
 export interface HistoryRow {
   id: string;
   title: string;
@@ -77,7 +78,12 @@ export interface HistoryRow {
   targetType: string | null;
   /** The name of who asked (an agent, an app, a person); null when unknown. */
   askedBy: string | null;
-  decidedBy: HistoryDecider;
+  /**
+   * Who decided or ended it, as one sentence ("Decided by Alice", "Withdrawn
+   * by Scout"); null when it names nobody (an expiry) or would only repeat
+   * "Asked by" (a failed receipt nobody approved).
+   */
+  who: ProposalWho | null;
   decidedAt: Date | string | null;
   space: string | null;
   undo: HistoryUndo;
@@ -125,10 +131,10 @@ function pastTitle(p: HistoryProposal): string {
   });
 }
 
-function deciderOf(p: HistoryProposal): HistoryDecider {
-  if (p.approverName) return { kind: "person", name: p.approverName };
-  if (p.status === "auto_approved") return { kind: "rule" };
-  return null;
+function whoOf(p: HistoryProposal, askedBy: string | null): ProposalWho | null {
+  const who = proposalWho(p);
+  // "Asked by" already names the agent a failed receipt would name.
+  return who?.kind === "asked" && who.name === askedBy ? null : who;
 }
 
 function undoOf(p: HistoryProposal): HistoryUndo {
@@ -140,6 +146,7 @@ function undoOf(p: HistoryProposal): HistoryUndo {
 }
 
 export function historyRow(p: HistoryProposal): HistoryRow {
+  const askedBy = proposalRequesterParts(p).actor?.name ?? null;
   return {
     id: p.id,
     title: pastTitle(p),
@@ -148,8 +155,8 @@ export function historyRow(p: HistoryProposal): HistoryRow {
     tone: STATUS_TONE[p.status] ?? "unknown",
     kindLabel: resolveObjectNoun(p.targetType),
     targetType: p.targetType ?? null,
-    askedBy: proposalRequesterParts(p).actor?.name ?? null,
-    decidedBy: deciderOf(p),
+    askedBy,
+    who: whoOf(p, askedBy),
     decidedAt: p.reviewedAt ?? p.updatedAt ?? null,
     space: p.workspaceName ?? null,
     undo: undoOf(p),

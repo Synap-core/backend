@@ -47,6 +47,7 @@ import {
 } from "@synap/database";
 import { randomUUID } from "crypto";
 import {
+  humanizeToken,
   isKnownToolName,
   nounInSentence,
   resolveGovernanceRungLabel,
@@ -138,8 +139,10 @@ import {
   BUILTIN_VERBS,
   DE_ESCALATION_BUILTIN_VERBS,
   READ_ONLY_BUILTIN_VERBS,
+  recipeRunRefusalAtFiling,
 } from "./builtin-verbs.js";
 import { declaredReadOnly } from "./capability-drift.js";
+import { declaredProposeOnly } from "@synap-core/types/proposals";
 import { meterCapabilityRun } from "./capability-metering.js";
 import {
   checkVerbParameters,
@@ -171,6 +174,7 @@ import {
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import { isQueuedHostVerbResult } from "../host-jobs/hosted-verbs.js";
+import { RUN_RECIPE_VERB } from "../host-jobs/hosted-verb-rules.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 import {
@@ -182,6 +186,16 @@ import {
 } from "./file-parameters.js";
 import { refuseFlaggedCapabilityRecipient } from "./send-recipient-consent.js";
 import { isVerbRefusal } from "./verb-refusal.js";
+import {
+  describeComputeStart,
+  readComputeRun,
+} from "../compute/compute-contract.js";
+import {
+  closeComputeLeaseOnRelease,
+  openComputeLease,
+  resolveReleaseVerb,
+  settleComputeLease,
+} from "../compute/compute-leases.js";
 
 const logger = createLogger({ module: "execute-capability" });
 
@@ -215,6 +229,9 @@ export type ExecuteCapabilityResult =
        * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
        * person's stored "Never" on this capability for this agent (0381).
        * Such a refusal carries no `enable`: enabling would not fix it.
+       * A recipe run refused when filed carries its run's own code
+       * (`UNKNOWN_RECIPE`, `BAD_PARAMS`; `recipeRunRefusalAtFiling`), and the
+       * sentence names the fix.
        */
       reasonCode?: string;
       /**
@@ -718,6 +735,27 @@ export async function executeCapability(input: {
   );
   if (doNotContact) return doNotContact;
 
+  // THE COMPUTE CONTRACT (plan a640c5bb B3): a compute start without its time
+  // to live and spend maximum, or whose release verb could not end it, is
+  // refused BEFORE the gate, so nothing is filed for review.
+  const compute = readComputeRun(skillRow, parameters);
+  if (compute.kind === "refused") {
+    return { kind: "error", message: compute.message };
+  }
+  if (compute.kind === "start") {
+    const release = await resolveReleaseVerb(
+      userId,
+      workspaceId,
+      compute.releaseVerb
+    );
+    if (!release.ok) {
+      return {
+        kind: "error",
+        message: `${release.message} Nothing was started.`,
+      };
+    }
+  }
+
   const decision = await gateCapabilityExecution({
     capabilityKind: "skill",
     capabilityId: skillRow.id,
@@ -734,6 +772,8 @@ export async function executeCapability(input: {
     // asked (an app or an agent drafting for the person).
     intentRun: !!input.intentRequest,
     carriesPodFiles: podFiles.files.length > 0,
+    // A compute start's maximum, for the compute spend ceiling (0430).
+    computeSpendCents: compute.kind === "start" ? compute.maxSpendCents : null,
   });
 
   // A person's "Never" (0381) is not an approval problem: enabling would not
@@ -899,6 +939,35 @@ export async function executeCapability(input: {
         ...(enable ? { enable } : {}),
       };
     }
+    // CAN IT APPLY? A recipe run is planned here by the function its run
+    // calls on approval (`recipeRunRefusalAtFiling` → `planRecipeRun`, which
+    // `queueRecipeRun` runs): a recipe the computer's APPROVED version does
+    // not have, or a value that does not fill it, is refused to the caller
+    // with the run's own sentence and code, and nothing is filed. A read
+    // that FAILS here files as before: a fact not read never refuses.
+    if (skillRow.kind === "builtin" && skillRow.name === RUN_RECIPE_VERB) {
+      const refusal = await recipeRunRefusalAtFiling(parameters ?? {}, {
+        userId,
+        workspaceId,
+        agentUserId: input.agentUserId ?? null,
+        sessionId: input.sessionId ?? null,
+        verbId: skillRow.id,
+        verbName: skillRow.name,
+      }).catch((err: unknown) => {
+        logger.warn(
+          { err, skillId: skillRow.id },
+          "recipe run: the filing check could not read; filed as before"
+        );
+        return null;
+      });
+      if (refusal) {
+        return {
+          kind: "deny",
+          reason: refusal.message,
+          reasonCode: refusal.reasonCode,
+        };
+      }
+    }
     const proposal = await createPendingProposal({
       userId,
       workspaceId,
@@ -946,17 +1015,34 @@ export async function executeCapability(input: {
                 podFiles.files,
                 await verbToolLabel(skillRow.id)
               )
-            : input.intentRequest
-              ? describeIntentRun(input.intentRequest)
-              : describeCapabilityRun(
-                  verbId ?? null,
-                  parameters ?? {},
-                  await resolveEntityVerbRunSubject(
-                    entityVerbRunTarget(verbId ?? null, parameters ?? {}),
-                    userId
-                  )
-                ),
+            : compute.kind === "start"
+              ? describeComputeStart(
+                  (await verbToolLabel(skillRow.id)) ??
+                    humanizeToken(skillRow.name),
+                  compute
+                )
+              : input.intentRequest
+                ? describeIntentRun(input.intentRequest)
+                : describeCapabilityRun(
+                    verbId ?? null,
+                    parameters ?? {},
+                    await resolveEntityVerbRunSubject(
+                      entityVerbRunTarget(verbId ?? null, parameters ?? {}),
+                      userId
+                    )
+                  ),
         ...(podFiles.files.length > 0 ? { files: podFiles.files } : {}),
+        // A compute start's terms, for the review card: approving it
+        // approves the destroy at its time to live (founder, 18 Nov 2026).
+        ...(compute.kind === "start"
+          ? {
+              computeStart: {
+                ttlMinutes: compute.ttlMinutes,
+                maxSpendCents: compute.maxSpendCents,
+                releaseVerb: compute.releaseVerb,
+              },
+            }
+          : {}),
         // WHY — the run door has no top-level `reasoning`, so an agent's reason
         // rides in `parameters`; hoisted to where the review card reads it
         // (`request.reasoning`). `reasoning` is a volatile dedup key, so this
@@ -1116,6 +1202,12 @@ export async function executeCapability(input: {
  *   failed with "Needs setup", with no form to give the key (finding
  *   91a3bfd3, proposal 118d24bd).
  *
+ *   inbound_source.connect → `proposeInboundSourceConnect`: files a
+ *   `webhook/inbound_source.connect` proposal under EVERY verdict and acts on
+ *   nothing; its approval mints the source and hands the secret to the host.
+ *   A capability.run proposal would have stored the call's parameters and
+ *   its approval written the run result to recall (decision abaaa696).
+ *
  * Tighten-only: only a `propose` verdict is handed down (a deny stays a deny,
  * a dry-run a dry-run, an unattended run with no review surface is refused
  * as before), and the handler's grant check still runs before anything. A
@@ -1126,6 +1218,7 @@ export async function executeCapability(input: {
 export const SELF_GATED_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "messaging.send",
   "market.install",
+  "inbound_source.connect",
 ]);
 
 function isSelfGatedBuiltin(skill: { kind: string; name: string }): boolean {
@@ -1207,7 +1300,13 @@ export interface DeclaredReadOnlyBearing {
  * a comment saying so.
  */
 export function verbDeclaresReadOnly(skill: DeclaredReadOnlyBearing): boolean {
-  return declaredReadOnly(skill.metadata) === true;
+  // A verb that ALSO declares `proposeOnly` is not run as a read: the
+  // tighter declaration wins, so the gate's read-only short-circuit never
+  // skips the propose-only floor (`capabilityVerbAllowsRuleWiden`).
+  return (
+    declaredReadOnly(skill.metadata) === true &&
+    declaredProposeOnly(skill.metadata) !== true
+  );
 }
 
 /**
@@ -1818,7 +1917,84 @@ export async function runResolvedSkill(
   parameters: Record<string, unknown> | undefined,
   ctx: Parameters<typeof runResolvedSkillInner>[2]
 ): Promise<Awaited<ReturnType<typeof runResolvedSkillInner>>> {
-  const outcome = await runResolvedSkillInner(skill, parameters, ctx);
+  // THE COMPUTE CONTRACT (plan a640c5bb B3): every run reaches this runner (a
+  // direct run, an approved proposal), so a compute start is checked here
+  // again and its lease is written BEFORE the provider is called: no lease,
+  // no start, and the TTL sweeper releases what it records.
+  const compute = readComputeRun(skill, parameters);
+  if (compute.kind === "refused") {
+    return { kind: "error", message: compute.message };
+  }
+  let lease: { id: string; expiresAt: Date } | null = null;
+  if (compute.kind === "start") {
+    const release = await resolveReleaseVerb(
+      ctx.userId,
+      ctx.workspaceId,
+      compute.releaseVerb
+    );
+    if (!release.ok) {
+      return {
+        kind: "error",
+        message: `${release.message} Nothing was started.`,
+      };
+    }
+    try {
+      lease = await openComputeLease({
+        skill,
+        start: compute,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        agentUserId: ctx.agentUserId ?? ctx.provenance?.agentUserId ?? null,
+        proposalId: ctx.provenance?.proposalId ?? null,
+        sessionId: ctx.sessionId ?? null,
+        connectionSelector: ctx.connectionSelector ?? null,
+      });
+    } catch (err) {
+      logger.error({ err, skillId: skill.id }, "compute lease not written");
+      return {
+        kind: "error",
+        message:
+          "The pod could not record this compute start's time to live, so nothing was started. Try again.",
+      };
+    }
+  }
+
+  let outcome: Awaited<ReturnType<typeof runResolvedSkillInner>>;
+  try {
+    outcome = await runResolvedSkillInner(skill, parameters, ctx);
+  } catch (err) {
+    // Ambiguous: the provider may have started the machine. The lease says
+    // so (`unknown`) instead of claiming it never started.
+    if (lease) {
+      await settleComputeLease(lease, {
+        ran: true,
+        delivered: false,
+        result: null,
+      }).catch(() => undefined);
+    }
+    throw err;
+  }
+
+  const extras: Record<string, unknown> = {};
+  if (lease) {
+    extras.computeLease = await settleComputeLease(
+      lease,
+      outcome.kind === "run"
+        ? {
+            ran: true,
+            delivered: outcomeDidTheWork(outcome.result),
+            result: outcome.result,
+          }
+        : { ran: false }
+    ).catch((err: unknown) => {
+      logger.error(
+        { err, leaseId: lease!.id },
+        "compute lease not settled after the start"
+      );
+      return null;
+    });
+  }
+
   if (outcome.kind === "run" && outcomeDidTheWork(outcome.result)) {
     await markSkillProven(skill.id);
     // Same one place, same reason: both doors (direct run, approved proposal)
@@ -1839,9 +2015,30 @@ export async function runResolvedSkill(
         reason: err instanceof Error ? err.message : String(err),
       };
     });
-    if (writeBack && outcome.result && typeof outcome.result === "object") {
-      return { ...outcome, result: { ...outcome.result, writeBack } };
+    if (writeBack) extras.writeBack = writeBack;
+    // A destroy ends the lease of the machine it names, whoever ran it.
+    if (compute.kind === "release" && compute.mode === "destroy") {
+      await closeComputeLeaseOnRelease({
+        userId: ctx.userId,
+        releaseVerb: skill.name,
+        resourceId: compute.resourceId,
+        result: outcome.result,
+      }).catch((err: unknown) => {
+        logger.error(
+          { err, skillId: skill.id },
+          "compute lease not closed after a destroy"
+        );
+        return 0;
+      });
     }
+  }
+  if (
+    outcome.kind === "run" &&
+    Object.keys(extras).length > 0 &&
+    outcome.result &&
+    typeof outcome.result === "object"
+  ) {
+    return { ...outcome, result: { ...outcome.result, ...extras } };
   }
   return outcome;
 }

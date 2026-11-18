@@ -1267,7 +1267,9 @@ export function registerFocusSessionExecutors(): void {
   // An agent handing a session to ANOTHER agent (`agent-hand-off.ts`) lands here
   // once a person approves it: the named agent is appended through the ONE
   // roster door, floored on the session's OWN owner (the approver may be a
-  // different human). Idempotent — the door is, and an already-approved
+  // different human). A hand-off that carries a slot (`delegateExpectedOutput`)
+  // is then finished by that same door: the slot is delegated, the ask posted
+  // and the turn started. Idempotent — the doors are, and an already-approved
   // proposal returns before it.
   registerProposalExecutor({
     key: "focus_session/assign_agent",
@@ -1332,6 +1334,28 @@ export function registerFocusSessionExecutors(): void {
         });
       }
 
+      const refusals: string[] = [];
+      if (typeof innerData.expectedLabel === "string") {
+        const { delegateExpectedOutput } =
+          await import("../../../services/focus-sessions/delegate-output.js");
+        const delegated = await delegateExpectedOutput({
+          sessionId,
+          userId: session.userId,
+          expectedLabel: innerData.expectedLabel,
+          agentType:
+            typeof innerData.agentType === "string"
+              ? innerData.agentType
+              : null,
+          actingAgentUserId: proposal.agentUserId ?? null,
+          approvedHandOff: { proposalId: input.proposalId, agentId },
+        });
+        if (delegated.status !== "delegated") {
+          refusals.push(
+            `The agent is on the session, but "${innerData.expectedLabel}" was not handed to it (${delegated.status}).`
+          );
+        }
+      }
+
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(
         input.proposalId,
@@ -1339,7 +1363,11 @@ export function registerFocusSessionExecutors(): void {
         "approved",
         userId
       );
-      return { success: true, agentIds: attached.agentIds };
+      return {
+        success: true,
+        agentIds: attached.agentIds,
+        ...(refusals.length > 0 ? { refusals } : {}),
+      };
     },
   });
 }

@@ -188,8 +188,12 @@ function withRule(outcome: DecisionOutcome, body: string): Receipt {
 }
 
 /** Pod-admin's raw proposal-row fields, mapped into the shared context
- * both derivations ("always" and "never") read. */
-function grantContext(p: ProposalForRule): GovernanceGrantContext {
+ * both derivations ("always" and "never") read. `capabilityMayRunOnItsOwn`
+ * is the pod's answer for the tool (`governanceRules.actionModes`). */
+function grantContext(
+  p: ProposalForRule,
+  capabilityMayRunOnItsOwn?: boolean
+): GovernanceGrantContext {
   const actionKey =
     p.targetType && p.proposalType
       ? `${p.targetType}.${p.proposalType}`
@@ -204,6 +208,7 @@ function grantContext(p: ProposalForRule): GovernanceGrantContext {
     workspaceId: p.workspaceId,
     agentUserId: p.agentUserId,
     capabilityTarget: resolveCapabilityTarget(p.request?.data),
+    capabilityMayRunOnItsOwn,
     actionKey,
     profileSlug,
     governanceReason: p.governanceReason,
@@ -218,8 +223,15 @@ function grantContext(p: ProposalForRule): GovernanceGrantContext {
  * synap-app's `GovernanceMenu` calls, here with the operator (`"operator-any"`)
  * mode; this file only maps pod-admin's raw proposal-row fields into the shared
  * context and supplies operator label copy. */
-function deriveGrantOptions(p: ProposalForRule, t: T): Granularity[] {
-  const options = deriveGovernanceGrantOptions(grantContext(p), "operator-any");
+function deriveGrantOptions(
+  p: ProposalForRule,
+  t: T,
+  capabilityMayRunOnItsOwn: boolean
+): Granularity[] {
+  const options = deriveGovernanceGrantOptions(
+    grantContext(p, capabilityMayRunOnItsOwn),
+    "operator-any"
+  );
 
   return options.flatMap((o) => {
     const words = grantWords(t, o.id, p, o.value);
@@ -265,7 +277,18 @@ export function AlwaysApproveMenu({
   const setActionMode = useSetActionMode();
 
   const t = alwaysApproveT();
-  const granularities = deriveGrantOptions(proposal, t);
+  // May this tool run on its own at all (a public post never may)? The pod
+  // answers; until it has, "this tool" is not offered.
+  const tool = resolveCapabilityTarget(proposal.request?.data);
+  const toolMode = trpc.governanceRules.actionModes.useQuery(
+    { actions: tool ? [tool] : [] },
+    { enabled: !!tool }
+  );
+  const granularities = deriveGrantOptions(
+    proposal,
+    t,
+    toolMode.data?.modes[0]?.mayRunOnItsOwn ?? false
+  );
 
   async function approveAndAlways(g: Granularity) {
     setRunning(true);

@@ -100,6 +100,19 @@ describe("deriveGovernanceGrantOptions — the outward floor (finding c173cc51)"
     }
   });
 
+  it("a verb the pod says never runs on its own (a publish_post intent, a declared proposeOnly) offers no 'this tool'", () => {
+    for (const mode of ["agent-scoped", "operator-any"] as const) {
+      expect(
+        ids({ ...RUN, capabilityMayRunOnItsOwn: false }, mode),
+        mode
+      ).not.toContain("capability");
+      // CONTROL: the pod's yes, and no answer (a caller that reads none), keep it.
+      expect(ids({ ...RUN, capabilityMayRunOnItsOwn: true }, mode)).toContain(
+        "capability"
+      );
+    }
+  });
+
   it("a run under a floor no rule widens offers no 'this tool'", () => {
     expect(
       ids({ ...RUN, governanceReason: "ADMIN" }, "operator-any")

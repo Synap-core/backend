@@ -50,6 +50,22 @@ describe("search filter_by: caller strings cannot alter the filter", () => {
     ).toBe(`(userId:=\`${USER}\`)`);
   });
 
+  it("an updatedAt window is two numeric clauses after the floor; a non-integer is no clause", () => {
+    expect(
+      build({
+        userId: USER,
+        collection: "entities",
+        updatedSince: 1_763_251_200,
+        updatedUntil: 1_763_856_000,
+      })
+    ).toBe(
+      `(userId:=\`${USER}\`) && (updatedAt:>=1763251200) && (updatedAt:<1763856000)`
+    );
+    expect(
+      build({ userId: USER, collection: "entities", updatedSince: HOSTILE })
+    ).toBe(`(userId:=\`${USER}\`)`);
+  });
+
   it("libraryOnly narrows `documents` to Library items, after the floor, and only there", () => {
     expect(
       build({ userId: USER, collection: "documents", libraryOnly: true })

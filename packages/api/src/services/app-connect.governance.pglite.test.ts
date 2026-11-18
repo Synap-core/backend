@@ -481,8 +481,13 @@ describe("an app is governed like an agent (founder decision 2)", () => {
     }
     await revokeApp({ publicId: app.publicId, ownerUserId: OWNER });
     const rows = (
-      await q<{ id: string; status: string; reason: string | null }>(
-        `select id, status, data->>'withdrawReason' as reason from proposals where id = any($1)`,
+      await q<{
+        id: string;
+        status: string;
+        reason: string | null;
+        words: string | null;
+      }>(
+        `select id, status, data->'ended'->>'reason' as reason, data->>'withdrawReason' as words from proposals where id = any($1)`,
         [[pending, decided]]
       )
     ).rows;
@@ -490,7 +495,12 @@ describe("an app is governed like an agent (founder decision 2)", () => {
       [pending]: "withdrawn",
       [decided]: "rejected",
     });
-    expect(rows.find((r) => r.id === pending)!.reason).toBeTruthy();
+    // Why it ended is a reason the end line words; no English is stored as
+    // if the person had written it.
+    expect(rows.find((r) => r.id === pending)).toMatchObject({
+      reason: "app_revoked",
+      words: null,
+    });
     expect((await repo.getByPublicId(app.publicId))!.pendingRequest).toBeNull();
   });
   it("apps.list carries the app's agent and its keys (what 'Key expired' reads)", async () => {

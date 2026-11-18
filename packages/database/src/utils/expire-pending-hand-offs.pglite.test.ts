@@ -82,11 +82,30 @@ describe("expirePendingHandOffsOfAttachedAgent", () => {
     expect(expired).toEqual([handOff]);
     const r = await row(handOff);
     expect(r.status).toBe("expired");
-    expect(r.data).toMatchObject({ expiredBy: "agent_attached" });
+    expect(r.data).toMatchObject({
+      expiredBy: "agent_attached",
+      ended: { reason: "agent_attached" },
+    });
     expect((await row(otherAgent)).status).toBe("pending");
     expect((await row(otherSession)).status).toBe("pending");
     expect((await row(decided)).status).toBe("rejected");
     expect((await row(update)).status).toBe("pending");
+  });
+
+  // Plan 8032a127 D2: a failed hand-off is just as moot once the agent is on.
+  it("also expires a hand-off whose approval FAILED", async () => {
+    const failed = await file({
+      session: "session-4",
+      status: "approval_failed",
+    });
+    const approved = await file({ session: "session-4", status: "approved" });
+    const expired = await expirePendingHandOffsOfAttachedAgent(
+      { sessionId: "session-4", agentId: AGENT },
+      db
+    );
+    expect(expired).toEqual([failed]);
+    expect((await row(failed)).status).toBe("expired");
+    expect((await row(approved)).status).toBe("approved");
   });
 
   it("never expires the hand-off being approved, named by id", async () => {

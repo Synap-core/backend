@@ -14,6 +14,7 @@ import type {
   RequestStory,
   RequestStoryGroup,
 } from "@synap-core/types/needs-you";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { en as REQUEST_EN } from "./copy";
 import { RequestStoryView, type StoryRead } from "./request-story-view";
 
@@ -97,9 +98,13 @@ function items(html: string) {
     }));
 }
 
+/** The status word of a failed approval, from the vocabulary door. */
+const FAILED = resolveStatusLabel("approval_failed");
+
 const text = (html: string) =>
   html
     .replace(/<[^>]+>/g, " ")
+    .replace(/&#x27;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -166,7 +171,7 @@ describe("the story drawn flat", () => {
     folded: null,
     rail: false,
     status: {
-      ...group("f1", "Approval failed: Install", ago(8 * H)),
+      ...group("f1", `${FAILED}: Install`, ago(8 * H)),
       kind: "decision_answered",
       events: [{ kind: "decision_answered", decision: "approval_failed" }],
     },
@@ -187,14 +192,14 @@ describe("the story drawn flat", () => {
     );
   });
 
-  it('the status event folds into the status mark in the head: "Approval failed · 8h ago"', () => {
+  it("the status event folds into the status mark in the head: the status word · 8h ago", () => {
     const html = render(FLAT, { status: "ok" });
     const head = html.slice(
       html.indexOf("data-story-head"),
       html.indexOf("data-story-flat")
     );
-    expect(text(head)).toContain("Approval failed · 8h ago");
-    expect(text(html).split("Approval failed").length - 1).toBe(1);
+    expect(text(head)).toContain(`${FAILED} · 8h ago`);
+    expect(text(html).split(FAILED).length - 1).toBe(1);
   });
 });
 

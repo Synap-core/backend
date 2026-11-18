@@ -353,6 +353,16 @@ export const LINKEDIN_INVITATIONS_DAILY_LIMIT = 20;
 export const LINKEDIN_ACTIONS_DAILY_LIMIT = 50;
 
 /**
+ * The spend maximums (`maxSpendCents`) of the compute an agent may start in
+ * one UTC day, summed, before a start that would run is proposed instead
+ * (0430, `COMPUTE_SPEND_CEILING` in @synap/capability-gate). The default of
+ * the `compute_spend_daily_cents` axis: `null`, NO limit (founder, 18 Nov
+ * 2026: opt-in per pod, like the daily-write limit). Every start carries its
+ * own required maximum whatever this says.
+ */
+export const DEFAULT_COMPUTE_SPEND_DAILY_CEILING_CENTS: number | null = null;
+
+/**
  * THE CAPS FOLD (agent routing W1c, 0330): the fallback value of every
  * `governance_ceilings` axis, in ONE table. A stored row overrides it for its
  * (subject, principal, scope); `resolveCeiling` (@synap/database) is the one
@@ -372,6 +382,8 @@ export const CEILING_DEFAULTS = {
   worker_irreversible_sends_daily: WORKER_IRREVERSIBLE_DAILY_CEILING,
   linkedin_invitations_daily: LINKEDIN_INVITATIONS_DAILY_LIMIT,
   linkedin_actions_daily: LINKEDIN_ACTIONS_DAILY_LIMIT,
+  /** No ceiling by default: opt-in per pod (a stored row). */
+  compute_spend_daily_cents: DEFAULT_COMPUTE_SPEND_DAILY_CEILING_CENTS,
 } as const;
 
 /**
@@ -2981,9 +2993,20 @@ export const DIRECT_PROPOSAL_DOORS = {
   // kind every space may read — always a pending proposal, for anyone; the
   // approval half re-runs the preflight and calls `declareLifecycle`.
   "profile/declare_lifecycle": "direct",
+  // Relabelling, reordering or retiring a declared lifecycle's options
+  // (`services/lifecycle/change-lifecycle-options.ts`, ticket fd146324): the
+  // same policy — always a pending proposal; the approval half runs the
+  // lifecycle door (`changeLifecycleOptions`), which re-decides.
+  "property_def/change_lifecycle_options": "direct",
   "profile/merge": "direct",
   "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",
+  // Wiring a space's inbound webhook source into a host (decision abaaa696):
+  // the Synap Core verb `inbound_source.connect` ALWAYS files this, for anyone
+  // (`services/webhooks/connect-inbound-source.ts`). Approved by
+  // `routers/proposals/executors/webhook.ts` (pod admin, console only): it
+  // mints the source and hands its secret to the host, never to a person.
+  "webhook/inbound_source.connect": "direct",
   "workspace/join": "direct",
   // D7 — owner consent to a trusted issuer's wider scopes. Filed at boot by
   // `services/trusted-issuers/scope-request-proposal.ts`; approved by

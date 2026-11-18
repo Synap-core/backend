@@ -374,6 +374,15 @@ describe("activityActorName — one spelling", () => {
       "Agent"
     );
   });
+
+  it("names the pod acting on its own Synap, a named rule by its name", () => {
+    expect(activityActorName({ kind: "system", id: null, name: null })).toBe(
+      "Synap"
+    );
+    expect(
+      activityActorName({ kind: "system", id: "a1", name: "Nightly sync" })
+    ).toBe("Nightly sync");
+  });
 });
 
 describe("Happened span (session shows its whole history)", () => {

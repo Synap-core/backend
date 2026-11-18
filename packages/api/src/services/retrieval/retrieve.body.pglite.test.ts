@@ -146,3 +146,38 @@ describe("fetchOrdered — the entity body is the document's CURRENT body", () =
     expect(row).not.toHaveProperty("contentReadError");
   });
 });
+
+describe("fetchOrdered — a recall window is a filter on the row (ticket a9888512)", () => {
+  const DAY = 86_400_000;
+  async function seedAt(title: string, updatedAt: Date): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into entities (id, user_id, type, title, updated_at) values ($1, $2, 'report', $3, $4)`,
+      [id, USER, title, updatedAt.toISOString()]
+    );
+    return id;
+  }
+
+  it("keeps the rows updated inside [since, until) and drops the rest, in the given order", async () => {
+    const now = Date.now();
+    const old = await seedAt("Report 10 days ago", new Date(now - 10 * DAY));
+    const recent = await seedAt("Report yesterday", new Date(now - DAY));
+    const future = await seedAt("Report tomorrow", new Date(now + DAY));
+    const ids = [old, recent, future];
+
+    // Non-vacuity: with no window, every row comes back.
+    const all = await fetchOrdered(ids, USER, null, {} as never);
+    expect(all.map((r) => r.id)).toEqual(ids);
+
+    const week = await fetchOrdered(ids, USER, null, {} as never, {
+      since: new Date(now - 7 * DAY),
+      until: new Date(now),
+    });
+    expect(week.map((r) => r.id)).toEqual([recent]);
+
+    const sinceOnly = await fetchOrdered(ids, USER, null, {} as never, {
+      since: new Date(now - 7 * DAY),
+    });
+    expect(sinceOnly.map((r) => r.id)).toEqual([recent, future]);
+  });
+});

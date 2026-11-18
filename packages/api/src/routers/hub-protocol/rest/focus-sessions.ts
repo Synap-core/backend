@@ -178,6 +178,7 @@ import {
   expectedOutputWireSchema,
   outputRefWireSchema,
   mergeExpectedOutputs,
+  fileableExpectedOutputs,
   droppedAskWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
@@ -353,6 +354,7 @@ const WorkGraphWireSchema = z.object({
   ),
   sections: z.object({
     blockedBy: WorkGraphSectionWireSchema,
+    orchestration: WorkGraphSectionWireSchema,
     waitsOnOutputs: WorkGraphSectionWireSchema,
     interactions: WorkGraphSectionWireSchema,
     farEnds: WorkGraphSectionWireSchema,
@@ -940,8 +942,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "One read for a whole map (`services/focus-sessions/work-graph.ts`): " +
       "every OPEN session, plus every session settled in the last " +
       "`windowHours` (default 72), plus the far end of every edge of those, " +
-      "with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, " +
-      "`triggered`, `updated`), and the PRs, holds and goals its sessions " +
+      "with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, " +
+      "`waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions " +
       "point at. `trackId` narrows it to one goal's sessions, " +
       "`rootSessionId` to one wave (the root and every session spawned " +
       "under it); one or the other. `playbookId` narrows it to the sessions " +
@@ -2115,7 +2117,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // NO_CRITERIA). A person's key and the capture path (X-Capture: 1, a
         // person capturing through a key) are exempt.
         requireCriteria: !!ctxAgentUserId && c.req.header("x-capture") !== "1",
-        // An outcome with `verify` says what done means (F11's own words).
+        // An outcome with `verify` says what done means.
         declaredVerify: declaresVerify(body.outcomes),
         ...(body.outcomes && body.outcomes.length > 0
           ? mergeOutcomesForStart({
@@ -2329,6 +2331,20 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         !criteriaDiffer(existing.criteria, patch.criteria as SessionCriterion[])
       ) {
         delete patch.criteria;
+      }
+
+      // Step 2a: AUTHORITY FLOOR on the slots, before the membrane: the same
+      // `fileableExpectedOutputs` as `updateFocusSession`.
+      if (patch.expectedOutputs !== undefined) {
+        const fileable = fileableExpectedOutputs(
+          Array.isArray(existing.expectedOutputs)
+            ? (existing.expectedOutputs as ExpectedOutput[])
+            : [],
+          patch.expectedOutputs
+        );
+        if (!fileable.ok) return c.json({ error: fileable.reason }, 400);
+        patch.expectedOutputs =
+          fileable.expectedOutputs as typeof patch.expectedOutputs;
       }
 
       // Step 2b: VISIBILITY FLOOR on the subject anchor, before the membrane

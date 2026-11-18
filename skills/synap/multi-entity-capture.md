@@ -34,3 +34,7 @@ Everything lands as ONE reviewable proposal (or auto-applies when every op is sa
 { "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }
 ```
 
+**TABLE EXAMPLE — a register of many rows of one kind, each linked to an existing record by an exact value** (at most 500 rows per call, one proposal). Column `title` names each row; the other columns are properties. `linkBy` links a row to the existing entity of `profileSlug` whose `property` equals that cell exactly. Cells that match no entity, or several, are not linked and come back in the reply's `table` (`unmatched`, `ambiguous`), by row. Send it with `validate: true` first to see those before anything is written.
+```json
+{ "table": { "profileSlug": "expense", "columns": ["title", "amount", "currency", "receipt"], "rows": [ ["Train Paris to Lyon", 42, "EUR", "R-0012"], ["Hotel Lyon", 120, "EUR", "R-0013"] ], "linkBy": [ { "column": "receipt", "profileSlug": "document", "property": "receipt", "type": "references" } ] } }
+```

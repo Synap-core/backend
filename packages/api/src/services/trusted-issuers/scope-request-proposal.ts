@@ -174,6 +174,7 @@ export async function syncTrustedIssuerScopeRequest(
       const ids = stale.map((r) => r.id);
       const withdrawn = await transitionProposal(tx, {
         to: ProposalStatus.WITHDRAWN,
+        ended: { reason: "request_changed" },
         set: {
           updatedAt: new Date(),
           data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || '{"withdrawnReason":"scope_request_changed"}'::jsonb`,

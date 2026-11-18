@@ -40,15 +40,25 @@
 import {
   getDb,
   eq,
+  and,
+  gte,
+  ne,
+  drizzleSql,
   findCapabilityGrant,
   getRequestGrant,
 } from "@synap/database";
 import {
+  resolveCeiling,
   resolveGovernanceRule,
   resolveOriginTrust,
   type GovernanceRuleMatch,
 } from "@synap/database/agent-governance";
-import { tools, skills, capabilityIntents } from "@synap/database/schema";
+import {
+  tools,
+  skills,
+  capabilityIntents,
+  computeLeases,
+} from "@synap/database/schema";
 import {
   capabilityVerbAllowsRuleWiden,
   decideAgentPolicy,
@@ -105,6 +115,12 @@ export interface GateSkillRow {
    * that floor needs it, `null` = the verb declares none.
    */
   intent?: string | null;
+  /**
+   * The skill's `metadata` bag: its declared `proposeOnly` (no auto grant and
+   * no auto rule ever runs it) is read from here. Absent (not pre-loaded) →
+   * the gate reads it when a widening is decided, never assumes none.
+   */
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface GateCapabilityExecutionInput {
@@ -179,6 +195,15 @@ export interface GateCapabilityExecutionInput {
    * what the listed action promises (`governance: "propose"`). Tighten-only.
    */
   intentRun?: boolean;
+  /**
+   * The spend maximum (`maxSpendCents`) of a COMPUTE START (a
+   * `provision_compute` verb), set server-side by the run door from the
+   * checked parameters; absent for every other run. An agent's start that
+   * would run is proposed instead when it takes the day's started maximums
+   * past the `compute_spend_daily_cents` ceiling (0430; opt-in, no limit by
+   * default): COMPUTE_SPEND_CEILING. Tighten-only.
+   */
+  computeSpendCents?: number | null;
 }
 
 /** The proposal target/type a `propose` verdict materializes against. */
@@ -295,6 +320,68 @@ export function approvalRefusesRun(row: {
 export async function gateCapabilityExecution(
   input: GateCapabilityExecutionInput
 ): Promise<GateCapabilityDecision> {
+  const decision = await decideCapabilityExecution(input);
+  // ── COMPUTE SPEND CEILING (0430, founder 18 Nov 2026) — an agent's compute
+  //    start that would RUN (an auto grant, an auto rule) is proposed instead
+  //    when the day's started maximums plus this one pass the ceiling. Last,
+  //    so it only ever turns a `run` into a review: tighten-only, like every
+  //    axis. A person's own start is theirs to make.
+  if (
+    decision.decision === "run" &&
+    input.agentUserId &&
+    typeof input.computeSpendCents === "number" &&
+    (await computeSpendPassesCeiling(input, input.computeSpendCents))
+  ) {
+    return buildProposeDecision(input, COMPUTE_SPEND_CEILING);
+  }
+  return decision;
+}
+
+/** `proposals.governance_reason` of a start the compute spend ceiling proposed. */
+export const COMPUTE_SPEND_CEILING = "COMPUTE_SPEND_CEILING";
+
+/** Start of the current UTC day. */
+function startOfUtcDay(now: Date): Date {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  );
+}
+
+/**
+ * Would this start take the day's compute past the ceiling? The day's
+ * started maximums (`compute_leases.max_spend_cents`, every start since UTC
+ * midnight that did not fail to start) plus this one, against the resolved
+ * `compute_spend_daily_cents` (null = no limit: never).
+ */
+async function computeSpendPassesCeiling(
+  input: GateCapabilityExecutionInput,
+  spendCents: number
+): Promise<boolean> {
+  const db = await getDb();
+  const ceiling = await resolveCeiling({
+    db,
+    axis: "compute_spend_daily_cents",
+    agentUserId: input.agentUserId ?? null,
+    workspaceId: input.workspaceId ?? null,
+  });
+  if (ceiling.value === null) return false;
+  const [row] = await db
+    .select({
+      total: drizzleSql<number>`coalesce(sum(${computeLeases.maxSpendCents}), 0)::int`,
+    })
+    .from(computeLeases)
+    .where(
+      and(
+        gte(computeLeases.createdAt, startOfUtcDay(new Date())),
+        ne(computeLeases.state, "not_started")
+      )
+    );
+  return Number(row?.total ?? 0) + spendCents > ceiling.value;
+}
+
+async function decideCapabilityExecution(
+  input: GateCapabilityExecutionInput
+): Promise<GateCapabilityDecision> {
   // ── (a) load approval-state + owner ─────────────────────────────────────────
   let approved: boolean | null = null;
   let ownerId: string | null = null;
@@ -303,10 +390,11 @@ export async function gateCapabilityExecution(
   // of only the row id (reinstall-unstable). `null` for commands (no row) or a
   // pre-loaded row that omitted `name`.
   let verbName: string | null = null;
-  // The intent the verb serves (a skill only; `undefined` = not loaded yet):
-  // a propose-only intent (a public post) is never widened by a rule or an
-  // auto grant, whatever the verb is named (`capabilityVerbAllowsRuleWiden`).
-  let knownIntent: string | null | undefined = null;
+  // What the verb declares about widening (a skill only; a field left
+  // `undefined` = not loaded yet): a propose-only intent (a public post) or a
+  // declared `metadata.proposeOnly` is never widened by a rule or an auto
+  // grant, whatever the verb is named (`capabilityVerbAllowsRuleWiden`).
+  let knownPosture: Partial<VerbPosture> = { intent: null, metadata: null };
 
   if (input.capabilityKind === "tool") {
     let row = input.tool ?? null;
@@ -337,6 +425,7 @@ export async function gateCapabilityExecution(
           userId: skills.userId,
           name: skills.name,
           intent: skills.intent,
+          metadata: skills.metadata,
         })
         .from(skills)
         .where(eq(skills.id, input.capabilityId));
@@ -345,7 +434,9 @@ export async function gateCapabilityExecution(
     approved = row?.approved ?? null;
     ownerId = row?.userId ?? null;
     verbName = row?.name ?? null;
-    knownIntent = row ? row.intent : null;
+    knownPosture = row
+      ? { intent: row.intent, metadata: row.metadata }
+      : { intent: null, metadata: null };
   } else {
     // commands have no approved/owner column today → conservative defaults.
     approved = null;
@@ -370,10 +461,10 @@ export async function gateCapabilityExecution(
   }
 
   // Read only when a widening is about to be decided; a row pre-loaded
-  // without its intent is read, never assumed to have none.
-  let intentRead: Promise<string | null> | null = null;
-  const verbIntent = (): Promise<string | null> =>
-    (intentRead ??= readVerbIntent(input, knownIntent));
+  // without its intent or metadata is read, never assumed to have none.
+  let postureRead: Promise<VerbPosture> | null = null;
+  const verbPosture = (): Promise<VerbPosture> =>
+    (postureRead ??= readVerbPosture(input, knownPosture));
 
   // The capability rule for this agent run, read ONCE: the "Never" check
   // below and both widening checks further down derive their answer from it.
@@ -483,7 +574,7 @@ export async function gateCapabilityExecution(
   //       Tighten-only; a declared read returned above.
   //       An intent action asked for by any other caller (an agent's key)
   //       meets the same floor (`intentRun`, decision 790baeb5).
-  const outward = await outwardRunMustPropose(input);
+  const outward = await outwardRunMustPropose(input, verbPosture);
   if (outward) {
     return buildProposeDecision(input, outward);
   }
@@ -533,7 +624,7 @@ export async function gateCapabilityExecution(
       // 2.55 sits above rung 2.8) — skip the rule shortcut and propose.
       if (
         !originUntrusted &&
-        (await capabilityRuleAuthorizesRun(rule, verbName, verbIntent))
+        (await capabilityRuleAuthorizesRun(rule, verbName, verbPosture))
       ) {
         return { decision: "run" };
       }
@@ -580,7 +671,7 @@ export async function gateCapabilityExecution(
   if (verdict.verdict === "execute") {
     // An auto grant must not publish. The rule path is refused inside
     // capabilityRuleAuthorizesRun; this is the grant-execMode auto path.
-    if (!capabilityVerbAllowsRuleWiden(verbName, await verbIntent())) {
+    if (!verbAllowsWiden(verbName, await verbPosture())) {
       return buildProposeDecision(input, "CAPABILITY_PROPOSE");
     }
     return { decision: "run" };
@@ -593,7 +684,7 @@ export async function gateCapabilityExecution(
   // can NEVER be widened to run by a rule (rung 2.55 sits above rung 2.8).
   if (
     !originUntrusted &&
-    (await capabilityRuleAuthorizesRun(rule, verbName, verbIntent))
+    (await capabilityRuleAuthorizesRun(rule, verbName, verbPosture))
   ) {
     return { decision: "run" };
   }
@@ -621,7 +712,8 @@ export const INTENT_OUTWARD = "INTENT_OUTWARD";
  * (`intentRun`).
  */
 async function outwardRunMustPropose(
-  input: GateCapabilityExecutionInput
+  input: GateCapabilityExecutionInput,
+  verbPosture: () => Promise<VerbPosture>
 ): Promise<typeof APP_OUTWARD_INTENT | typeof INTENT_OUTWARD | null> {
   const reason = getRequestGrant()?.clientId
     ? APP_OUTWARD_INTENT
@@ -629,7 +721,7 @@ async function outwardRunMustPropose(
       ? INTENT_OUTWARD
       : null;
   if (!reason) return null;
-  return (await isOutward(input)) ? reason : null;
+  return (await isOutward(input, verbPosture)) ? reason : null;
 }
 
 /** `proposals.governance_reason` of a run the pod file floor proposed. */
@@ -639,22 +731,17 @@ export const POD_FILE_OUTWARD = "POD_FILE_OUTWARD";
  * Outward = the verb's intent has an effect other than `read` in
  * `capability_intents` (a write or an act changes, sends or spends something
  * the pod cannot call back). Fail closed: a verb with no intent, an intent
- * with no row, and a raw tool call (no verb, so no intent) are outward.
+ * with no row, and a raw tool call (no verb, so no intent) are outward. The
+ * intent is the run's one posture read (`verbPosture`).
  */
 async function isOutward(
-  input: GateCapabilityExecutionInput
+  input: GateCapabilityExecutionInput,
+  verbPosture: () => Promise<VerbPosture>
 ): Promise<boolean> {
   if (input.capabilityKind !== "skill") return true;
-  let intent = input.skill?.intent;
-  const db = await getDb();
-  if (intent === undefined) {
-    const [row] = await db
-      .select({ intent: skills.intent })
-      .from(skills)
-      .where(eq(skills.id, input.capabilityId));
-    intent = row?.intent ?? null;
-  }
+  const { intent } = await verbPosture();
   if (!intent) return true;
+  const db = await getDb();
   const [declared] = await db
     .select({ effect: capabilityIntents.effect })
     .from(capabilityIntents)
@@ -719,26 +806,42 @@ async function resolveCapabilityRule(
 async function capabilityRuleAuthorizesRun(
   rule: GovernanceRuleMatch | undefined,
   verbName: string | null,
-  verbIntent: () => Promise<string | null>
+  verbPosture: () => Promise<VerbPosture>
 ): Promise<boolean> {
   if (rule?.verdict !== "auto") return false;
-  // A public post stays a proposal even when a lane rule says auto.
-  return capabilityVerbAllowsRuleWiden(verbName, await verbIntent());
+  // A public post or a declared propose-only verb stays a proposal even when
+  // a lane rule says auto.
+  return verbAllowsWiden(verbName, await verbPosture());
 }
 
-/** The verb's intent: a skill's, read when its row came without it. */
-async function readVerbIntent(
+/** What a verb declares about widening: its intent and its metadata bag. */
+interface VerbPosture {
+  intent: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+function verbAllowsWiden(verbName: string | null, p: VerbPosture): boolean {
+  return capabilityVerbAllowsRuleWiden(verbName, p.intent, p.metadata);
+}
+
+/** A skill's intent and metadata, each read when its row came without it. */
+async function readVerbPosture(
   input: GateCapabilityExecutionInput,
-  known: string | null | undefined
-): Promise<string | null> {
-  if (input.capabilityKind !== "skill") return null;
-  if (known !== undefined) return known;
+  known: Partial<VerbPosture>
+): Promise<VerbPosture> {
+  if (input.capabilityKind !== "skill") return { intent: null, metadata: null };
+  if (known.intent !== undefined && known.metadata !== undefined)
+    return { intent: known.intent, metadata: known.metadata };
   const db = await getDb();
   const [row] = await db
-    .select({ intent: skills.intent })
+    .select({ intent: skills.intent, metadata: skills.metadata })
     .from(skills)
     .where(eq(skills.id, input.capabilityId));
-  return row?.intent ?? null;
+  return {
+    intent: known.intent !== undefined ? known.intent : (row?.intent ?? null),
+    metadata:
+      known.metadata !== undefined ? known.metadata : (row?.metadata ?? null),
+  };
 }
 
 /**

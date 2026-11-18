@@ -56,6 +56,7 @@ import { config, createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
 import type { StoredProposalData } from "@synap-core/types";
 import { isCompositeProposalData } from "@synap-core/types/proposals";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import {
   PROPOSAL_APPROVE_EXPIRE_SECONDS,
   PROPOSAL_APPROVE_QUEUE,
@@ -64,6 +65,7 @@ import {
 import type { Context } from "../../context.js";
 import type { MaterializeProgress } from "../../utils/materialize-composite.js";
 import { readWeakDedupWire } from "../../utils/weak-dedup-wire.js";
+import { notifyUnseenApprovalFailure } from "./unseen-approval-failure.js";
 import {
   classifyThrownFailure,
   safeFailureSentence,
@@ -544,10 +546,7 @@ export async function runApprovalJob(payload: {
         message: "This proposal no longer exists, so nothing was applied.",
       });
     }
-    if (
-      proposal.status !== "pending" &&
-      proposal.status !== "approval_failed"
-    ) {
+    if (!isProposalUndecided(proposal.status)) {
       throw new TRPCError({
         code: "CONFLICT",
         message:
@@ -638,6 +637,9 @@ export async function runApprovalJob(payload: {
       { err, runId: run.id, proposalId: run.proposalId },
       "background approval failed"
     );
+    // The request returned long ago: nobody saw this fail. Tell the owner
+    // while the proposal is still undecided (plan 8032a127 D6).
+    await notifyUnseenApprovalFailure(run.proposalId, { sentence });
     return { status: "failed" };
   }
 }

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  changedDrafts,
   reviewToolRun,
   toolRunArguments,
+  toolRunSplit,
   toolRunValue,
 } from "./tool-run-model";
 
@@ -82,5 +84,55 @@ describe("reviewToolRun", () => {
     expect(reviewToolRun({})).toBeNull();
     expect(reviewToolRun({ toolRun: { action: 1 } })).toBeNull();
     expect(reviewToolRun(undefined)).toBeNull();
+  });
+});
+
+describe("the card shows what the tool does", () => {
+  const post = {
+    action: "Publish post",
+    tool: "LinkedIn",
+    parameters: [
+      {
+        key: "accountId",
+        label: "Account",
+        value: "9b2d7a1c-3f4e-4c1a-8f00-2f6f6d1e0a11",
+      },
+      { key: "text", label: "Text", value: "Hello world" },
+      { key: "apiKey", label: "Api key", secret: true as const },
+      { key: "visibility", label: "Visibility", value: "public" },
+    ],
+  };
+
+  it("leads with the text; ids and credentials wait behind Details", () => {
+    const { shown, detail } = toolRunSplit(post);
+    expect(shown.map((a) => a.key)).toEqual(["text", "visibility"]);
+    expect(detail.map((a) => a.key).sort()).toEqual(["accountId", "apiKey"]);
+  });
+
+  it("only text can be edited: never an id, a credential or a link", () => {
+    const args = toolRunArguments({
+      ...post,
+      parameters: [
+        ...post.parameters,
+        { key: "url", label: "Link", value: "https://example.com/a" },
+      ],
+    });
+    expect(args.filter((a) => a.editable).map((a) => a.key)).toEqual([
+      "text",
+      "visibility",
+    ]);
+  });
+
+  it("sends only the drafts that differ from what was proposed", () => {
+    expect(
+      changedDrafts(post, {
+        text: "Hello, LinkedIn",
+        visibility: "public",
+        accountId: "other",
+        apiKey: "x",
+        nope: "y",
+      })
+    ).toEqual({ text: "Hello, LinkedIn" });
+    expect(changedDrafts(post, { text: "Hello world" })).toEqual({});
   });
 });

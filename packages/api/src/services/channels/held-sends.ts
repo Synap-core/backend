@@ -226,6 +226,7 @@ export async function withdrawDraftsSentOutside(args: {
   const rows = await transitionProposal(db, {
     to: ProposalStatus.WITHDRAWN,
     from: [ProposalStatus.PENDING],
+    ended: { reason: "sent_outside" },
     set: {
       updatedAt: new Date(),
       data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${reason}::text, 'closedByMessageId', ${args.messageId}::text)`,

@@ -26,10 +26,17 @@
  * unchanged. The sweeper delivers the transition (the old `proposal.approved` /
  * `.rejected` events stay, emitted by `emitProposalReviewed`, as dual emits).
  */
-import { and, inArray, sql, type SQL } from "drizzle-orm";
+import { and, inArray, is, sql, SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import { PROPOSAL_STATUS_DECLARATION } from "@synap-core/types/units";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
+import { UNDECIDED_PROPOSAL_STATUSES as UNDECIDED_STATUS_VALUES } from "@synap-core/types/proposals/attention";
+import {
+  PROPOSAL_ENDED_KEY,
+  type ProposalEndedBy,
+  type ProposalEndedInput,
+  type ProposalEndedStamp,
+} from "@synap-core/types/proposals/ended";
 import type { TransitionCause } from "@synap-core/types/lifecycle";
 // Type-only: the door runs on the executor it is handed, never on a pool it
 // opens itself (a PGlite test or a transaction passes its own).
@@ -91,8 +98,20 @@ export const PROPOSAL_TRANSITIONS: Readonly<
   ],
   // A failed approval stays in the actionable queue: retried (approved, or
   // failed again) or rejected; or its author revises it, which reopens it
-  // for review (`proposals-service.ts` revise, #512).
-  [APPROVAL_FAILED]: [APPROVED, APPROVAL_FAILED, REJECTED, PENDING],
+  // for review (`proposals-service.ts` revise, #512). It also ends with nobody
+  // deciding, like a pending one (decision D2, plan 8032a127, founder 17 Nov
+  // 2026: 44 failed rows could leave only through a person's reject, which
+  // scores against the agent): withdrawn by its author or replaced by a newer
+  // filing (`supersededBy`), expired when its moment passed or its record
+  // landed. Neither is scored.
+  [APPROVAL_FAILED]: [
+    APPROVED,
+    APPROVAL_FAILED,
+    REJECTED,
+    PENDING,
+    WITHDRAWN,
+    EXPIRED,
+  ],
   // Re-stamp; revert; revert-and-reopen (`proposals.revert {reopen}`); a
   // library organise claim given back after a later step threw.
   [APPROVED]: [APPROVED, REVERTED, PENDING, APPROVAL_FAILED],
@@ -125,6 +144,43 @@ export function proposalStatusesThatMayBecome(
     (from) => canTransitionProposal(from, to)
   );
 }
+
+/**
+ * The statuses nobody has decided yet: waiting for a review, or a review whose
+ * approval failed (it is retried, repaired or ended). The end helpers that
+ * retire a request whose moment passed (a record landed, a hand-off became
+ * moot, a lifetime ran out) take both, and re-assert them in their WHERE.
+ * THE list is `@synap-core/types/proposals/attention`'s, which every surface
+ * reads through `isProposalUndecided` (plan 8032a127 D6).
+ */
+export const UNDECIDED_PROPOSAL_STATUSES: readonly ProposalStatus[] =
+  UNDECIDED_STATUS_VALUES;
+
+/**
+ * The columns an end with NO person writes (decision F2, plan 8032a127): a
+ * FAILED row that a sweep or helper expires, or that its author or a newer
+ * filing withdraws, names no reviewer and claims no review time, exactly like
+ * a pending row that lapses (whose review columns are already empty). The
+ * caller writes `updatedAt`, and readers date the end by
+ * `coalesce(reviewedAt, updatedAt)` (tripwire history-lens-includes-expired:
+ * never stamp a review nobody made). Every end helper spreads this into its
+ * `set`, so "who ended it" has one rule.
+ */
+export function endedByNoPersonSet(): ProposalTransitionSet {
+  const failed = sql`${proposals.status} = ${APPROVAL_FAILED}`;
+  return {
+    reviewedBy: sql`CASE WHEN ${failed} THEN NULL ELSE ${proposals.reviewedBy} END`,
+    reviewedAt: sql`CASE WHEN ${failed} THEN NULL ELSE ${proposals.reviewedAt} END`,
+  };
+}
+
+/**
+ * Not a connected plan that PARTLY applied: a failed plan whose undo left
+ * steps in place (`planFailure.compensation.notCompensated`) stays failed, so
+ * a person sees what landed; no sweep, helper or newer filing ends it (plan
+ * 8032a127 Q6; the revise door refuses to reopen it the same way).
+ */
+export const NOT_PARTLY_APPLIED: SQL = sql`CASE WHEN jsonb_typeof(${proposals.data} #> '{planFailure,compensation,notCompensated}') = 'array' THEN jsonb_array_length(${proposals.data} #> '{planFailure,compensation,notCompensated}') = 0 ELSE true END`;
 
 /** The statuses that mean "the approval applied". */
 export const APPLIED_PROPOSAL_STATUSES: readonly ProposalStatus[] = [
@@ -213,6 +269,14 @@ export function transitionProposal(
     reason?: string | null;
     /** The move that caused this one (a reaction). */
     cause?: TransitionCause | null;
+    /**
+     * WHY a move to `withdrawn` or `expired` ends it (`data.ended`, plan
+     * 8032a127 D6). The door stamps every such move, adding who (`by`, from
+     * the actor) and when: a caller that names no reason gets its status's
+     * plain one (`author` for a withdrawal, `lapsed` for an expiry). Ignored
+     * for any other move.
+     */
+    ended?: ProposalEndedInput;
   }
 ) {
   const from = args.from ?? proposalStatusesThatMayBecome(args.to);
@@ -292,16 +356,57 @@ export function transitionProposal(
         RETURNING transition_id`
   );
 
+  const endedData = END_STATUSES.has(args.to)
+    ? endedDataSql(args.set?.data, {
+        ...(args.ended ?? {
+          reason: args.to === ProposalStatus.WITHDRAWN ? "author" : "lapsed",
+        }),
+        by: endedBy(actor.kind),
+        at: stamp.occurredAt,
+      })
+    : null;
+
   return ex
     .with(locked, owed)
     .update(proposals)
-    .set({ ...(args.set ?? {}), status: args.to })
+    .set({
+      ...(args.set ?? {}),
+      ...(endedData ? { data: endedData } : {}),
+      status: args.to,
+    })
     .where(
       and(
         guard,
         sql`${proposals.id} IN (SELECT id FROM ${sql.raw(LOCKED_CTE)})`
       )
     );
+}
+
+/** The moves that end a proposal with nobody deciding it: they carry `data.ended`. */
+const END_STATUSES: ReadonlySet<ProposalStatus> = new Set([WITHDRAWN, EXPIRED]);
+
+function endedBy(kind: WorkUnitActor["kind"]): ProposalEndedBy {
+  return kind === "human" ? "person" : kind === "agent" ? "agent" : "system";
+}
+
+/**
+ * The caller's `data` (its own keys: a SQL merge, a whole object, or none,
+ * which keeps the row's) with the one end stamp merged on top, as one jsonb
+ * expression.
+ */
+function endedDataSql(
+  data: ProposalTransitionSet["data"],
+  ended: ProposalEndedStamp
+): SQL {
+  const base =
+    data === undefined
+      ? sql`COALESCE(${proposals.data}, '{}'::jsonb)`
+      : is(data, SQL)
+        ? sql`COALESCE((${data}), '{}'::jsonb)`
+        : data === null
+          ? sql`'{}'::jsonb`
+          : sql`${JSON.stringify(data)}::jsonb`;
+  return sql`${base} || jsonb_build_object(${PROPOSAL_ENDED_KEY}::text, ${JSON.stringify(ended)}::jsonb)`;
 }
 
 /** Who made a move nobody named: the reviewer, the acting agent, the system. */

@@ -55,8 +55,9 @@ export function appendSessionStageHistory(move: SessionStageMove) {
 /**
  * The ledger as read back: the entries a stored `stage_history` holds, oldest
  * first, each with its stage and its time; anything else is left out. Pure.
- * Its readers: the session change feed (`stage_moved`) and `statusOf`'s
- * `include: ["history"]` (`stage_entered`).
+ * Its readers: the session change feed (`stage_moved`), the timeline
+ * (`stage_moved`) and `statusOf`'s `include: ["history"]` (`stage_entered`),
+ * each entry under one id (`stageLedgerEventId`, `@synap/api`).
  */
 export function readSessionStageHistory(
   raw: unknown

@@ -44,6 +44,8 @@ export interface RequestWriteContext {
   readonly delegatedTurnAgent?: DelegatedTurnAgent;
   /** A1 — the session id the MCP door derived (guessed, not named). */
   readonly derivedSessionId?: string;
+  /** The session the caller NAMED at the door (MCP `sessionId`, Hub `X-Session-Id`). */
+  readonly namedSessionId?: string;
   /**
    * B4 — set when that derived session is the client's AUTO-OPENED receipt:
    * its project. The gate re-keys a write whose project differs (a receipt is
@@ -70,6 +72,8 @@ export interface RequestWriteContext {
   readonly heldWritesApprovedBy?: string;
   /** 0364 — the usage middleware's slot, filled by the key-auth doors below. */
   readonly usage?: UsageSlot;
+  /** D3 — the failed proposal this request's filing replaces (see below). */
+  readonly supersedes?: SupersedesSlot;
 }
 
 /**
@@ -403,6 +407,25 @@ export function derivedReceiptProjectFor(
 /** The session id the MCP door derived for this request, if any. */
 export function getDerivedSessionId(): string | undefined {
   return storage.getStore()?.derivedSessionId;
+}
+
+// ═══ Concern: NAMED SESSION (plan a640c5bb) ═══════════════════════════════
+//
+// The session the caller NAMED (MCP `sessionId` arg, Hub `X-Session-Id`),
+// ownership-checked at the door and entered here ONCE. The governance gate reads
+// it when its own `sessionId` argument is absent: most write doors never forward
+// `ctx.sessionId` to the gate, which then filed the write into the client's
+// newest session, not the one named (ticket 4bc6b9f4). A door that files a
+// write elsewhere on purpose passes its own `sessionId`, which still wins.
+
+/** Run `fn` with `sessionId` recorded as the session the caller named. */
+export function runWithNamedSession<T>(sessionId: string, fn: () => T): T {
+  return runWithPatch({ namedSessionId: sessionId }, fn);
+}
+
+/** The session the caller named at the door for this request, if any. */
+export function getNamedSessionId(): string | undefined {
+  return storage.getStore()?.namedSessionId;
 }
 
 /**
@@ -820,6 +843,51 @@ export function recordWriteSessionFiling(
     return;
   }
   ledger.filings.push({ sessionId, projectId: project });
+}
+
+// ═══ Concern: A FILING THAT REPLACES A FAILED PROPOSAL (plan 8032a127 D3) ════
+//
+// An agent that cannot repair a failed proposal (it did not author it: Ask AI
+// wakes another agent) files the corrected request instead, and names the
+// failed one (`supersedes`) so the person's queue keeps ONE request: the
+// failed one ends `withdrawn` + `supersededBy` in the insert's transaction
+// (`insertPendingProposal`). The door that knows the name (the MCP adapter)
+// is far above the insert, and the request reaches it through any of ~10
+// filing doors, so it travels here. Mutable on purpose: the FIRST pending row
+// the request files claims it, and the door reads afterwards what happened:
+// replaced, refused (the row was another request: nothing filed), or filed
+// without ending it (`leftFailedNote` tells the two "not replaced" apart).
+
+/** The failed proposal a request's filing replaces, and the row that did. */
+export interface SupersedesSlot {
+  readonly proposalId: string;
+  /** The proposal that replaced it; null while the request filed none. */
+  replacedBy: string | null;
+  /** The first proposal the request filed under the slot, ended it or not. */
+  filed: string | null;
+  /** Why the insert door refused a filing under it (nothing was filed). */
+  refused: string | null;
+}
+
+/** Run `fn` with a filing that replaces `proposalId`; read the slot after. */
+export function runWithSupersedes<T>(
+  proposalId: string,
+  fn: () => T
+): { slot: SupersedesSlot; result: T } {
+  const slot: SupersedesSlot = {
+    proposalId,
+    replacedBy: null,
+    filed: null,
+    refused: null,
+  };
+  const result = runWithPatch({ supersedes: slot }, fn);
+  return { slot, result };
+}
+
+/** The open slot of this request, unless a filing already claimed it. */
+export function getOpenSupersedes(): SupersedesSlot | undefined {
+  const slot = storage.getStore()?.supersedes;
+  return slot && slot.replacedBy === null ? slot : undefined;
 }
 
 // ═══ Concern: HELD WRITES APPROVED (W-B1) ═════════════════════════════════════

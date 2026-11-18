@@ -2245,6 +2245,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0426_needs.sql",
   },
 
+  // Compute leases (0431): every compute start writes one before the provider
+  // is called, and the TTL sweeper reads them; absence means every start
+  // would be refused and nothing would be released (42P01).
+  {
+    table: "compute_leases",
+    column: "expires_at",
+    addedBy: "0431_compute_need_and_leases.sql",
+  },
+  {
+    table: "compute_leases",
+    column: "release_verb",
+    addedBy: "0431_compute_need_and_leases.sql",
+  },
+
   // Document passages (0358b) — a document body as recall-sized units, and
   // the per-document state the revision sweep reads. Absence means every
   // passage job and sweep tick would fail (42P01).

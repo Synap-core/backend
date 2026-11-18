@@ -1797,6 +1797,10 @@
           "expectedLabel": {
             "type": "string",
             "description": "The declared session-output slot this entity fulfils, exactly as declared on the session's expected outputs. Left unset when the create doesn't fulfil a specific declared slot."
+          },
+          "supersedes": {
+            "type": "string",
+            "description": "The id of a FAILED proposal (status approval_failed) filed for the same person that this request replaces, corrected. The proposal this call files for review ends it (withdrawn, supersededBy = the new one); refused with 409 SUPERSEDES_REFUSED (nothing filed) when it names no such proposal. The answer carries supersedes: { proposalId, replacedBy, note? }. Its author repairs a failed proposal with a revision instead."
           }
         },
         "required": ["title"]
@@ -1979,6 +1983,10 @@
             "type": ["string", "null"],
             "format": "uuid",
             "description": "File a POD-WIDE record for a space (its home): that space's members, and a key limited to it, then read it. Refused (400) on a record that lives in a space (move it instead); refused (403) unless you can write in that space, and under your key's grant. null clears it. An agent's home is always a proposal."
+          },
+          "supersedes": {
+            "type": "string",
+            "description": "The id of a FAILED proposal (status approval_failed) filed for the same person that this request replaces, corrected. The proposal this call files for review ends it (withdrawn, supersededBy = the new one); refused with 409 SUPERSEDES_REFUSED (nothing filed) when it names no such proposal. The answer carries supersedes: { proposalId, replacedBy, note? }. Its author repairs a failed proposal with a revision instead."
           }
         }
       },
@@ -3320,6 +3328,10 @@
           "sessionId": {
             "type": "string",
             "description": "The focus session this run belongs to. Persisted as the proposals.session_id column so a reviewer sees which operation the action was part of."
+          },
+          "supersedes": {
+            "type": "string",
+            "description": "The id of a FAILED proposal (status approval_failed) filed for the same person that this request replaces, corrected. The proposal this call files for review ends it (withdrawn, supersededBy = the new one); refused with 409 SUPERSEDES_REFUSED (nothing filed) when it names no such proposal. The answer carries supersedes: { proposalId, replacedBy, note? }. Its author repairs a failed proposal with a revision instead."
           }
         }
       },
@@ -3740,7 +3752,7 @@
             ]
           }
         },
-        "required": ["intent", "lens", "scoring", "coverage"]
+        "required": ["intent", "lens", "coverage"]
       },
       "FoundObject": {
         "type": "object",
@@ -19994,6 +20006,15 @@
                             "metadata": {
                               "type": "object",
                               "properties": {
+                                "triggers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "maxItems": 20
+                                },
                                 "lineage": {
                                   "type": "object",
                                   "properties": {
@@ -25289,6 +25310,15 @@
                             "metadata": {
                               "type": "object",
                               "properties": {
+                                "triggers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "maxItems": 20
+                                },
                                 "lineage": {
                                   "type": "object",
                                   "properties": {
@@ -44047,7 +44077,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "The work graph: open work, recently settled work, every edge",
-        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. `playbookId` narrows it to the sessions that follow a playbook: run from it, or filed in a goal whose method it is (each window node's `playbookMatch` says which: `session` or `goal`). `subjectEntityId` narrows it to the sessions on one thing (its subject, or a worker targeting it). Each goal carries its method (`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list. A pod app (a key holding `session.read` that does not read every subject of the graph) gets the sessions its grant covers and the edges between them; `window.omittedByGrant` counts the sessions it does not cover, and the parts that read past its grant (next move, interactions, waits on an output, PR facts, goals; holder without `agent.read`) are `unavailable` with a reason saying they were withheld.",
+        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. `playbookId` narrows it to the sessions that follow a playbook: run from it, or filed in a goal whose method it is (each window node's `playbookMatch` says which: `session` or `goal`). `subjectEntityId` narrows it to the sessions on one thing (its subject, or a worker targeting it). Each goal carries its method (`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list. A pod app (a key holding `session.read` that does not read every subject of the graph) gets the sessions its grant covers and the edges between them; `window.omittedByGrant` counts the sessions it does not cover, and the parts that read past its grant (next move, interactions, waits on an output, PR facts, goals; holder without `agent.read`) are `unavailable` with a reason saying they were withheld.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -44201,6 +44231,7 @@
                             "enum": [
                               "blocked_by",
                               "spawned_from",
+                              "orchestrated_by",
                               "waits_on_output",
                               "triggered",
                               "updated"
@@ -44320,6 +44351,17 @@
                           },
                           "required": ["status"]
                         },
+                        "orchestration": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
                         "waitsOnOutputs": {
                           "type": "object",
                           "properties": {
@@ -44389,6 +44431,7 @@
                       },
                       "required": [
                         "blockedBy",
+                        "orchestration",
                         "waitsOnOutputs",
                         "interactions",
                         "farEnds",
