@@ -19,22 +19,11 @@
 
 import { createLogger } from "@synap-core/core";
 import { db, eq, proposals } from "@synap/database";
-import { ProposalStatus } from "@synap/database/schema";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { resolveProposalHumanOwner } from "./scan-stale-proposals.js";
 
 const logger = createLogger({ module: "unseen-approval-failure" });
-
-/**
- * Undecided: waiting for a review, or a review whose approval failed. A job
- * whose apply threw outside a plan leaves the proposal pending (its run
- * records the failure). TODO(W5 follow-up): read `UNDECIDED_PROPOSAL_STATUSES`
- * once backend#1090 lands it in `proposal-transition.ts`.
- */
-const UNDECIDED: readonly string[] = [
-  ProposalStatus.PENDING,
-  ProposalStatus.APPROVAL_FAILED,
-];
 
 /**
  * @param opts.agentReceipt the caller is the receipt path: notify only when an
@@ -68,8 +57,10 @@ export async function notifyUnseenApprovalFailure(
       .from(proposals)
       .where(eq(proposals.id, proposalId))
       .limit(1);
-    // Decided meanwhile (a retry applied it, someone rejected it): no news.
-    if (!row || !UNDECIDED.includes(row.status)) return false;
+    // Decided or ended meanwhile (a retry applied it, someone rejected it):
+    // no news. Undecided also covers a job whose apply threw outside a plan
+    // and left the proposal pending (its run records the failure).
+    if (!row || !isProposalUndecided(row.status)) return false;
     const byAgent =
       Boolean(row.agentUserId) ||
       (row.data as { source?: unknown } | null)?.source === "agent";

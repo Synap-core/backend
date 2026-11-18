@@ -26,10 +26,17 @@
  * unchanged. The sweeper delivers the transition (the old `proposal.approved` /
  * `.rejected` events stay, emitted by `emitProposalReviewed`, as dual emits).
  */
-import { and, inArray, sql, type SQL } from "drizzle-orm";
+import { and, inArray, is, sql, SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import { PROPOSAL_STATUS_DECLARATION } from "@synap-core/types/units";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
+import { UNDECIDED_PROPOSAL_STATUSES as UNDECIDED_STATUS_VALUES } from "@synap-core/types/proposals/attention";
+import {
+  PROPOSAL_ENDED_KEY,
+  type ProposalEndedBy,
+  type ProposalEndedInput,
+  type ProposalEndedStamp,
+} from "@synap-core/types/proposals/ended";
 import type { TransitionCause } from "@synap-core/types/lifecycle";
 // Type-only: the door runs on the executor it is handed, never on a pool it
 // opens itself (a PGlite test or a transaction passes its own).
@@ -143,11 +150,11 @@ export function proposalStatusesThatMayBecome(
  * approval failed (it is retried, repaired or ended). The end helpers that
  * retire a request whose moment passed (a record landed, a hand-off became
  * moot, a lifetime ran out) take both, and re-assert them in their WHERE.
+ * THE list is `@synap-core/types/proposals/attention`'s, which every surface
+ * reads through `isProposalUndecided` (plan 8032a127 D6).
  */
-export const UNDECIDED_PROPOSAL_STATUSES: readonly ProposalStatus[] = [
-  PENDING,
-  APPROVAL_FAILED,
-];
+export const UNDECIDED_PROPOSAL_STATUSES: readonly ProposalStatus[] =
+  UNDECIDED_STATUS_VALUES;
 
 /**
  * The columns an end with NO person writes (decision F2, plan 8032a127): a
@@ -262,6 +269,14 @@ export function transitionProposal(
     reason?: string | null;
     /** The move that caused this one (a reaction). */
     cause?: TransitionCause | null;
+    /**
+     * WHY a move to `withdrawn` or `expired` ends it (`data.ended`, plan
+     * 8032a127 D6). The door stamps every such move, adding who (`by`, from
+     * the actor) and when: a caller that names no reason gets its status's
+     * plain one (`author` for a withdrawal, `lapsed` for an expiry). Ignored
+     * for any other move.
+     */
+    ended?: ProposalEndedInput;
   }
 ) {
   const from = args.from ?? proposalStatusesThatMayBecome(args.to);
@@ -341,16 +356,57 @@ export function transitionProposal(
         RETURNING transition_id`
   );
 
+  const endedData = END_STATUSES.has(args.to)
+    ? endedDataSql(args.set?.data, {
+        ...(args.ended ?? {
+          reason: args.to === ProposalStatus.WITHDRAWN ? "author" : "lapsed",
+        }),
+        by: endedBy(actor.kind),
+        at: stamp.occurredAt,
+      })
+    : null;
+
   return ex
     .with(locked, owed)
     .update(proposals)
-    .set({ ...(args.set ?? {}), status: args.to })
+    .set({
+      ...(args.set ?? {}),
+      ...(endedData ? { data: endedData } : {}),
+      status: args.to,
+    })
     .where(
       and(
         guard,
         sql`${proposals.id} IN (SELECT id FROM ${sql.raw(LOCKED_CTE)})`
       )
     );
+}
+
+/** The moves that end a proposal with nobody deciding it: they carry `data.ended`. */
+const END_STATUSES: ReadonlySet<ProposalStatus> = new Set([WITHDRAWN, EXPIRED]);
+
+function endedBy(kind: WorkUnitActor["kind"]): ProposalEndedBy {
+  return kind === "human" ? "person" : kind === "agent" ? "agent" : "system";
+}
+
+/**
+ * The caller's `data` (its own keys: a SQL merge, a whole object, or none,
+ * which keeps the row's) with the one end stamp merged on top, as one jsonb
+ * expression.
+ */
+function endedDataSql(
+  data: ProposalTransitionSet["data"],
+  ended: ProposalEndedStamp
+): SQL {
+  const base =
+    data === undefined
+      ? sql`COALESCE(${proposals.data}, '{}'::jsonb)`
+      : is(data, SQL)
+        ? sql`COALESCE((${data}), '{}'::jsonb)`
+        : data === null
+          ? sql`'{}'::jsonb`
+          : sql`${JSON.stringify(data)}::jsonb`;
+  return sql`${base} || jsonb_build_object(${PROPOSAL_ENDED_KEY}::text, ${JSON.stringify(ended)}::jsonb)`;
 }
 
 /** Who made a move nobody named: the reviewer, the acting agent, the system. */

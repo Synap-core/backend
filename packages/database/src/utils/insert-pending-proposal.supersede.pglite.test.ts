@@ -136,6 +136,10 @@ describe("supersede — an agent's newer version replaces its older pending one"
     expect(reviewed!.reviewed_at).not.toBeNull();
     expect(old.data[SUPERSEDED_BY_KEY]).toBe(v2.proposal.id);
     expect(old.data.withdrawReason).toBe(SUPERSEDED_REASON);
+    expect(old.data.ended).toMatchObject({
+      reason: "superseded",
+      supersededBy: v2.proposal.id,
+    });
     expect(old.data.title).toBe("v1");
     expect((await statusOf(v2.proposal.id)).status).toBe("pending");
     const [n] = await q<{ status: string }>(

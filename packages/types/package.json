@@ -229,6 +229,10 @@
       "types": "./dist/proposals/fate.d.ts",
       "import": "./dist/proposals/fate.js"
     },
+    "./proposals/ended": {
+      "types": "./dist/proposals/ended.d.ts",
+      "import": "./dist/proposals/ended.js"
+    },
     "./proposals/item-pack": {
       "types": "./dist/proposals/item-pack.d.ts",
       "import": "./dist/proposals/item-pack.js"

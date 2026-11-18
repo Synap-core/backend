@@ -132,6 +132,24 @@ describe("historyRow", () => {
     expect(row.decidedBy).toEqual({ kind: "rule" });
   });
 
+  it("names the agent, else Synap, when no person ended it", () => {
+    for (const status of ["approval_failed", "withdrawn", "expired"]) {
+      expect(
+        historyRow(proposal({ status, approverName: undefined })).decidedBy
+      ).toEqual({ kind: "actor", name: "Scout" });
+      expect(
+        historyRow(
+          proposal({ status, approverName: undefined, agentActorName: null })
+        ).decidedBy
+      ).toEqual({ kind: "actor", name: "Synap" });
+    }
+    // A person's own rejection with no name read stays unnamed, never a guess.
+    expect(
+      historyRow(proposal({ status: "rejected", approverName: undefined }))
+        .decidedBy
+    ).toBeNull();
+  });
+
   it("falls back to the last change when the pod has no review stamp", () => {
     expect(historyRow(proposal({ reviewedAt: null })).decidedAt).toBe(
       "2026-10-29T10:00:00.000Z"

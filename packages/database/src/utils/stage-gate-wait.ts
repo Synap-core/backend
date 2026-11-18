@@ -64,6 +64,7 @@ export async function expirePendingStageGatesOfEndedSessions(
   const rows = await transitionProposal(executor, {
     to: ProposalStatus.EXPIRED,
     from: [ProposalStatus.PENDING],
+    ended: { reason: "session_ended" },
     set: {
       updatedAt: drizzleSql`now()`,
       data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(

@@ -182,6 +182,7 @@ async function applyPackItem(
       const rows = await transitionProposal(db, {
         to: ProposalStatus.EXPIRED,
         from: UNDECIDED_PROPOSAL_STATUSES,
+        ended: { reason: "cleanup_pack" },
         set: {
           ...endedByNoPersonSet(),
           updatedAt: new Date(),

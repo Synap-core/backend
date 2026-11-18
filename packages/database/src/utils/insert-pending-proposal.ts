@@ -749,6 +749,7 @@ export async function endReplacedProposal(
   const ended = await transitionProposal(executor, {
     to: ProposalStatus.WITHDRAWN,
     from: args.from,
+    ended: { reason: "superseded", supersededBy: replacement.id },
     set: {
       ...endedByNoPersonSet(),
       updatedAt: at,
@@ -978,6 +979,7 @@ async function supersedeEarlierVersions(
   const at = new Date();
   const replaced = await transitionProposal(tx, {
     to: ProposalStatus.WITHDRAWN,
+    ended: { reason: "superseded", supersededBy: latest.id },
     set: {
       reviewedAt: at,
       updatedAt: at,

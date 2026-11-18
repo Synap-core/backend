@@ -437,6 +437,7 @@ export async function expireLapsedProposals(
           ...endedByNoPersonSet(),
           updatedAt: now,
         },
+        ended: { reason: "lapsed" },
         from: [from],
         where: and(inArray(proposals.id, batch), NOT_PARTLY_APPLIED),
       }).returning({ id: proposals.id });
@@ -512,6 +513,7 @@ export async function expireSessionEphemerals(
         ...endedByNoPersonSet(),
         updatedAt: now,
       },
+      ended: { reason: "session_ended" },
       from: UNDECIDED_PROPOSAL_STATUSES,
       where: and(inArray(proposals.id, ids), NOT_PARTLY_APPLIED),
     }).returning({ id: proposals.id });

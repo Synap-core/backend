@@ -752,6 +752,7 @@ export class AppRepository {
     const now = new Date();
     const rows = await transitionProposal(this.db, {
       to: ProposalStatus.WITHDRAWN,
+      ended: { reason: "request_changed", withdrawReason: reason },
       set: {
         reviewedBy: by,
         reviewedAt: now,

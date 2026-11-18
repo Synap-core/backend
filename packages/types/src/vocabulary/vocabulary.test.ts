@@ -1507,7 +1507,7 @@ describe("capture chip states", () => {
   it("falls back to the lifecycle word, never the raw token", () => {
     expect(resolveCaptureChipStateLabel("failed")).toBe("Failed");
     expect(resolveCaptureChipStateLabel("approval_failed")).toBe(
-      "Approval failed"
+      "Couldn't apply"
     );
   });
 

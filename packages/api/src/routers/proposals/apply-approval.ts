@@ -36,6 +36,7 @@ import {
   type GovernanceScope,
   type GovernanceTarget,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
   canTransitionProposal,
   APPLIED_PROPOSAL_STATUSES,
 } from "@synap/database";
@@ -861,7 +862,7 @@ export async function assertApprovalLanded(
   );
   const healed = await transitionProposal(db, {
     to: ProposalStatus.APPROVED,
-    from: [ProposalStatus.PENDING, ProposalStatus.APPROVAL_FAILED],
+    from: UNDECIDED_PROPOSAL_STATUSES,
     set: { reviewedBy: userId, reviewedAt: new Date(), updatedAt: new Date() },
     where: eq(proposals.id, proposal.id),
   }).returning({ id: proposals.id });

@@ -19,6 +19,7 @@ import { describeDevDeployProposal } from "@synap-core/types/proposals/dev-deplo
 import { describeVerbRunProposal } from "@synap-core/types/proposals/capability-run";
 import {
   buildObjectActionTitle,
+  POD_ACTOR_NAME,
   resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
@@ -64,7 +65,22 @@ const APPLIED = new Set(["approved", "auto_approved"]);
 export type HistoryUndo = "available" | "permanent" | "none";
 
 export type HistoryDecider =
-  { kind: "person"; name: string } | { kind: "rule" } | null;
+  | { kind: "person"; name: string }
+  | { kind: "rule" }
+  /** No person decided: its agent, else the pod itself ("Synap"). */
+  | { kind: "actor"; name: string }
+  | null;
+
+/**
+ * The statuses a row reaches with no person deciding: an agent's receipt that
+ * could not apply, a request withdrawn by its author or replaced, one that
+ * expired. With no reviewer they name the agent, else the pod, never nobody.
+ */
+const ENDED_WITHOUT_PERSON = new Set([
+  "approval_failed",
+  "withdrawn",
+  "expired",
+]);
 
 export interface HistoryRow {
   id: string;
@@ -128,6 +144,8 @@ function pastTitle(p: HistoryProposal): string {
 function deciderOf(p: HistoryProposal): HistoryDecider {
   if (p.approverName) return { kind: "person", name: p.approverName };
   if (p.status === "auto_approved") return { kind: "rule" };
+  if (ENDED_WITHOUT_PERSON.has(p.status))
+    return { kind: "actor", name: p.agentActorName || POD_ACTOR_NAME };
   return null;
 }
 

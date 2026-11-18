@@ -624,10 +624,7 @@ export const proposalsRouter = router({
         // can't see. Terminal states (approved/rejected/reverted/withdrawn) are
         // excluded as before.
         conditions.push(
-          inArray(proposals.status, [
-            ProposalStatus.PENDING,
-            ProposalStatus.APPROVAL_FAILED,
-          ])
+          inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES])
         );
       } else if (input.status === "validated") {
         // "Approved" tab = applied proposals: BOTH human-approved AND
@@ -976,10 +973,7 @@ export const proposalsRouter = router({
         // `status: "pending"` branch (PENDING keeps a user's Approve intent
         // visible even when execution later failed).
         conditions.push(
-          inArray(proposals.status, [
-            ProposalStatus.PENDING,
-            ProposalStatus.APPROVAL_FAILED,
-          ])
+          inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES])
         );
       }
       // NOTE: no expiry filter — see the matching note in `list` (C2 fix).
@@ -2820,6 +2814,10 @@ export const proposalsRouter = router({
         // The status it was read and authorized in: a proposal decided, or
         // retried into another status, meanwhile keeps that.
         from: [from],
+        ended: {
+          reason: "author",
+          ...(input.reason ? { withdrawReason: input.reason } : {}),
+        },
         set: {
           // Its author agent taking it back names no person (decision F2); a
           // person withdrawing, through any key, is named.
