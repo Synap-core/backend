@@ -23,6 +23,9 @@ import {
   drizzleSql,
   getActingAgentUserId,
   transitionProposal,
+  computeProposalDedupHash,
+  isUniqueViolation,
+  ne,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
 import { getRequestGrant } from "@synap/database";
@@ -1132,9 +1135,40 @@ export async function mergeProposalRevision(
       eq(proposals.status, existing.status)
     );
     if (reopening) {
+      // THE DEDUP INDEX. A pending agent row is unique on its `dedup_hash`
+      // (`proposals_agent_dedup_uq`, global across agents), and a failed row is
+      // outside that partial index.
+      const dedupHash = existing.agentUserId
+        ? computeProposalDedupHash({
+            workspaceId:
+              params.workspaceId !== undefined
+                ? params.workspaceId
+                : existing.workspaceId,
+            proposalType: existing.proposalType,
+            targetType: existing.targetType,
+            targetId: existing.targetId,
+            data: merged as Record<string, unknown>,
+          })
+        : null;
+      if (dedupHash) {
+        const [twin] = await tx
+          .select({ id: proposals.id })
+          .from(proposals)
+          .where(
+            and(
+              eq(proposals.status, ProposalStatus.PENDING),
+              eq(proposals.dedupHash, dedupHash),
+              ne(proposals.id, params.proposalId)
+            )
+          )
+          .limit(1);
+        if (twin) throw sameRequestWaiting(twin.id);
+      }
       // Reopened: the failure is history (kept on the revision entry above),
       // and the row waits for a review again: approval_failed → pending,
       // through the status door.
+      // The peek above and this write race a concurrent identical filing: the
+      // index answers it with the same refusal, never a raw unique violation.
       await transitionProposal(tx, {
         to: ProposalStatus.PENDING,
         from: [ProposalStatus.APPROVAL_FAILED],
@@ -1145,6 +1179,7 @@ export async function mergeProposalRevision(
           rejectionReason: null,
           reviewedBy: null,
           reviewedAt: null,
+          ...(dedupHash ? { dedupHash } : {}),
           ...(params.workspaceId !== undefined
             ? { workspaceId: params.workspaceId }
             : {}),
@@ -1153,6 +1188,8 @@ export async function mergeProposalRevision(
             : {}),
         },
         where: unchanged,
+      }).catch((err: unknown) => {
+        throw isUniqueViolation(err) ? sameRequestWaiting(null) : err;
       });
     } else {
       await tx
@@ -1190,6 +1227,14 @@ export async function mergeProposalRevision(
   return redecideOwnGraphRevision({
     proposalId: params.proposalId,
     ...redecide,
+  });
+}
+
+/** The reopen's refusal when the same request already waits as another row. */
+function sameRequestWaiting(twinId: string | null): TRPCError {
+  return new TRPCError({
+    code: "CONFLICT",
+    message: `The same request is already waiting for review${twinId ? ` as proposal ${twinId}` : ""}, so this one was left as it is. Revise that one instead, and withdraw this one (synap_reject_proposal, if it is yours).`,
   });
 }
 

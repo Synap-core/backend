@@ -21,7 +21,6 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
-  and,
   eq,
   drizzleSql,
   proposals,
@@ -29,6 +28,10 @@ import {
   focusSessions,
   ProposalStatus,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
+  endedByNoPersonSet,
+  NOT_PARTLY_APPLIED,
+  and,
 } from "@synap/database";
 import {
   readPackItems,
@@ -174,18 +177,23 @@ async function applyPackItem(
         .select({ data: proposals.data })
         .from(proposals)
         .where(eq(proposals.id, targetId));
+      // Pending, or failed on approval (plan 8032a127 D2), never as a reject
+      // that would score its agent. The pack row names who approved it.
       const rows = await transitionProposal(db, {
         to: ProposalStatus.EXPIRED,
+        from: UNDECIDED_PROPOSAL_STATUSES,
         set: {
+          ...endedByNoPersonSet(),
           updatedAt: new Date(),
           data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('expiredByCleanupPack', ${ctx.packId}::text)`,
         },
-        where: and(
-          eq(proposals.id, targetId),
-          eq(proposals.status, ProposalStatus.PENDING)
-        ),
+        where: and(eq(proposals.id, targetId), NOT_PARTLY_APPLIED),
       }).returning({ id: proposals.id });
-      if (rows.length === 0) throw new Error("Proposal is no longer pending");
+      if (rows.length === 0) {
+        throw new Error(
+          "Proposal was already decided, or part of it landed and it stays for a person"
+        );
+      }
       markProposalNotificationsActioned([targetId]);
       await discardProposalSourceBlob({
         database: db,

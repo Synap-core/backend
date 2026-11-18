@@ -44,7 +44,17 @@ import { getMessagingConnector } from "./index.js";
 import { resolveBroker } from "./index.js";
 import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
-import { resolveCapabilityGrant, getRequestGrant } from "@synap/database";
+import {
+  resolveCapabilityGrant,
+  getRequestGrant,
+  inArray,
+  proposals,
+  ProposalStatus,
+  UNDECIDED_PROPOSAL_STATUSES,
+  endReplacedProposal,
+  getOpenSupersedes,
+} from "@synap/database";
+import { settleSupersededProposals } from "../services/proposals/settle-superseded.js";
 import {
   validateExternalUrl,
   safePublicFetch,
@@ -1561,6 +1571,83 @@ async function sendOnChannel(args: {
 }
 
 /**
+ * ONE UNDECIDED SEND PER PERSON'S CHANNEL (plan 8032a127 D2; decision Q3, 17
+ * Nov 2026). The undecided send already on `channelId` for its owner
+ * (pending, or failed and never dispatched: `externalDispatchedAt` is the
+ * at-most-once claim), newest pending first; null when there is none.
+ *
+ * Its AUTHOR filing again revises it in place, through the normal author rung
+ * ({@link reviseOwnUndecidedSend}). Anyone else's send, or a revise that fails,
+ * is filed as a new row that ends this one (`endReplacedProposal`).
+ */
+export async function undecidedSendOn(input: {
+  ownerUserId: string;
+  channelId: string;
+}): Promise<{ id: string; agentUserId: string | null } | null> {
+  const [row] = await db
+    .select({ id: proposals.id, agentUserId: proposals.agentUserId })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.proposalType, "messaging.external.send"),
+        eq(proposals.targetType, "messaging"),
+        eq(proposals.targetId, input.channelId),
+        eq(proposals.subjectUserId, input.ownerUserId),
+        inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES]),
+        isNull(proposals.externalDispatchedAt)
+      )
+    )
+    .orderBy(
+      drizzleSql`CASE WHEN ${proposals.status} = ${ProposalStatus.PENDING} THEN 0 ELSE 1 END`,
+      desc(proposals.createdAt)
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * The author's new words on its own undecided send: the one revise door, its
+ * author rung (the acting agent is the row's author), only the words. A
+ * failed row reopens for review. True when it landed; false when the revise
+ * refused (decided meanwhile, a payload refusal): the caller files instead.
+ */
+async function reviseOwnUndecidedSend(input: {
+  proposalId: string;
+  ownerUserId: string;
+  authorAgentUserId: string;
+  body: string;
+  subject: string | null;
+}): Promise<boolean> {
+  const { mergeProposalRevision } =
+    await import("../services/proposals/proposals-service.js");
+  try {
+    await mergeProposalRevision({
+      proposalId: input.proposalId,
+      patch: {
+        kind: "envelope",
+        fields: {
+          body: input.body,
+          ...(input.subject !== null ? { subject: input.subject } : {}),
+        },
+      },
+      actorId: input.ownerUserId,
+      actingAgentUserId: input.authorAgentUserId,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, proposalId: input.proposalId },
+      "send refile: the author's revise refused, filing a new send instead"
+    );
+    return false;
+  }
+  // A `supersedes` naming this very row is answered: the row now carries the
+  // corrected request (the MCP door must not say it was left failed).
+  const slot = getOpenSupersedes();
+  if (slot?.proposalId === input.proposalId) slot.replacedBy = input.proposalId;
+  return true;
+}
+
+/**
  * Verdict of the messaging-send capability gate (W3b). Mirrors the four
  * `gateCapabilityExecution` outcomes, with `propose` carrying the created
  * proposal id so the caller can surface it.
@@ -1706,6 +1793,28 @@ async function gateMessagingSend(
     const accountId = channel
       ? input.accountId || (channelMeta(channel).accountId as string) || null
       : null;
+    // ONE UNDECIDED SEND PER PERSON'S CHANNEL (`undecidedSendOn`): never a
+    // second card for the same person, of which both could go out.
+    const undecided = channel
+      ? await undecidedSendOn({
+          ownerUserId: input.userId,
+          channelId: channel.id,
+        })
+      : null;
+    if (
+      undecided &&
+      input.agentUserId &&
+      undecided.agentUserId === input.agentUserId &&
+      (await reviseOwnUndecidedSend({
+        proposalId: undecided.id,
+        ownerUserId: input.userId,
+        authorAgentUserId: input.agentUserId,
+        body: input.body,
+        subject: input.subject ?? null,
+      }))
+    ) {
+      return { kind: "propose", proposalId: undecided.id };
+    }
     const proposal = await createPendingProposal({
       userId: input.userId,
       // ATTRIBUTION IS ADDITIVE (routers/capture.ts:2745). Without an explicit
@@ -1754,6 +1863,21 @@ async function gateMessagingSend(
         ? `Send a ${humanizeToken(provider)} message to ${channel.title ?? "them"}`
         : `Send message via ${provider}`,
     });
+    if (undecided && channel) {
+      // The new send replaces the one already there (another author's, or one
+      // its revise refused): it ends withdrawn, pointing here.
+      const ended = await endReplacedProposal(db, {
+        replacedId: undecided.id,
+        replacement: {
+          id: proposal.id,
+          proposalType: "messaging.external.send",
+          targetType: "messaging",
+          targetId: channel.id,
+        },
+        from: UNDECIDED_PROPOSAL_STATUSES,
+      });
+      await settleSupersededProposals(ended, input.userId);
+    }
     return { kind: "propose", proposalId: proposal.id };
   }
 

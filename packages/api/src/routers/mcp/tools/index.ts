@@ -81,6 +81,7 @@ import { FIND_CATALOGS } from "../../../services/capabilities/find-intent.js";
 // reason for a copy. Widening the union now widens what MCP advertises, in the
 // same commit, and `output-ref-kinds-parity` audits the mirrors this file
 // cannot import (the Hub REST client's duplicated literal).
+import { SUPERSEDES_TOOLS } from "../supersedes-tools.js";
 import {
   BLOCKED_REASONS,
   CRITERION_ABOUT,
@@ -709,6 +710,12 @@ const ATTRIBUTED_SESSION_ID_PARAM = {
     "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error.",
 } as const;
 
+/** `supersedes`, declared on {@link SUPERSEDES_TOOLS} only (see there). */
+const SUPERSEDES_PARAM = {
+  type: "string",
+  description: "Failed proposal id",
+} as const;
+
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
 export interface ToolsListContext {
   workspaceId?: string;
@@ -1170,7 +1177,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR the same proposal with synap_revise_proposal (never file a second one pointing at the first), or withdraw it with synap_reject_proposal. A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned.",
+          "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR it: yours with synap_revise_proposal; another's, file the fix with `supersedes` = this id (capture, create/update_entity, run_capability). Take back yours with synap_reject_proposal (unscored). A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4296,9 +4303,9 @@ export const tools = {
           "• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n" +
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
           "• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
-          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap, and re-sending a capped write through another door is how the same playbook lands in the pod twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person can see what is still owed instead of being told a percentage.\n" +
+          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap; re-sending a capped write through another door lands the same playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is still owed, not a percentage.\n" +
           "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
-          "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n" +
+          "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. A URL under any other key (e.g. `url`) is NOT a dedup signal: it duplicates the entity.\n" +
           "\n" +
           'EXAMPLES (text, one entity, a graph, a connected plan): synap_load_skill("system/synap/multi-entity-capture").\n' +
           'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\n' +
@@ -6475,8 +6482,8 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Reject a pending proposal so the queued change never lands — withdraw a write you now know is wrong (a duplicate, a superseded plan, a mistaken read) instead of leaving it in the user's review queue. Give a `reason`: it is recorded on the proposal and feeds your agent scorecard. " +
-          "There is deliberately NO approve tool: approval is the HUMAN step (an agent key that approved its own write would be self-approving) — point the user at the proposal's review link instead. Rejecting is safe by the same logic in reverse: it only PREVENTS a pending change from landing, so it carries no self-approval or undo risk. Only a still-pending proposal can be rejected.",
+          "Take a proposal out of the review queue so it never lands. YOUR OWN (pending or failed; matched on your agent identity, not the session) is WITHDRAWN, not scored: a write you now know is wrong (a duplicate, a superseded plan, a mistaken read). Another's is REJECTED: the `reason` is recorded and feeds that agent's scorecard. To replace a failed one with a corrected request, file that request with `supersedes` instead. The reply's `status` says which. " +
+          "There is deliberately NO approve tool: approval is the HUMAN step (an agent key that approved its own write would be self-approving) — point the user at the proposal's review link instead. Rejecting is safe by the same logic in reverse: it only PREVENTS a change from landing, so it carries no self-approval or undo risk.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6495,8 +6502,7 @@ export const tools = {
             },
             reason: {
               type: "string",
-              description:
-                "Why you are rejecting it (recorded on the proposal). Always give one.",
+              description: "Why (recorded on the proposal). Always give one.",
             },
             reasonCode: {
               type: "string",
@@ -7427,13 +7433,21 @@ export const tools = {
     // W-C1: every attributed tool declares `sessionId`, derived here so a new
     // write tool declares it the moment it is listed. A tool that declares its
     // own (`synap_update_session`'s target, …) keeps it.
+    // D3: `supersedes`, on the filing doors of SUPERSEDES_TOOLS only.
     for (const tool of toolDefs) {
       if (tool.annotations?.readOnlyHint === true) continue;
       const properties = tool.inputSchema.properties ?? {};
-      if ("sessionId" in properties) continue;
       tool.inputSchema = {
         ...tool.inputSchema,
-        properties: { ...properties, sessionId: ATTRIBUTED_SESSION_ID_PARAM },
+        properties: {
+          ...properties,
+          ...("sessionId" in properties
+            ? {}
+            : { sessionId: ATTRIBUTED_SESSION_ID_PARAM }),
+          ...(SUPERSEDES_TOOLS.includes(tool.name)
+            ? { supersedes: SUPERSEDES_PARAM }
+            : {}),
+        },
       };
     }
 
