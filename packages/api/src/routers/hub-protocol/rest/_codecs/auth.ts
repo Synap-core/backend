@@ -81,7 +81,9 @@ export const OwnGrantSchema = z
   .object({
     holder: z
       .enum(["app", "key"])
-      .describe("`app`: an app's token (its grant names the app); `key`: any other key."),
+      .describe(
+        "`app`: an app's token (its grant names the app); `key`: any other key."
+      ),
     clientId: z
       .string()
       .nullable()

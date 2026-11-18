@@ -397,7 +397,10 @@ describe("/auth/grant — the caller's own grant, by place", () => {
   });
 
   it("a write with no space is never `pod`: a key's own reach is `anywhere`, full access says so", async () => {
-    const own = await grantOf({ scopes: [{ permissions: ["*"] }], clientId: null });
+    const own = await grantOf({
+      scopes: [{ permissions: ["*"] }],
+      clientId: null,
+    });
     expect(own.body).toMatchObject({
       holder: "key",
       isFullAccess: true,

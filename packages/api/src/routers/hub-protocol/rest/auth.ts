@@ -60,6 +60,9 @@ import {
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function registerAuthRoutes(app: HubHono): void {
   const authStatusRoute = createRoute({
     method: "get",
@@ -235,9 +238,7 @@ export function registerAuthRoutes(app: HubHono): void {
     }
     try {
       // Ids as stored; only uuid-shaped ones are looked up (a name, never a row).
-      const ids = grantSpaceIds(grant).filter((id) =>
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-      );
+      const ids = grantSpaceIds(grant).filter((id) => UUID_RE.test(id));
       const named =
         ids.length > 0
           ? await db

@@ -1127,12 +1127,21 @@ describe("a document that changed since the pod cached it is read again by the c
       synap_requests: requests,
     });
   /** A copy cached 10 min ago, fresh for another hour, by its old document. */
-  async function cacheOlderCopy(clientId: string, callback: string, permissions: string[]) {
+  async function cacheOlderCopy(
+    clientId: string,
+    callback: string,
+    permissions: string[]
+  ) {
     await q(
       `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
          requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, metadata_sha256, created_at)
        values ($1, 'cimd', 'Pods', $2, '{}', $3, '{}', now() - interval '10 minutes', now() + interval '1 hour', $4, now())`,
-      [clientId, [callback], permissions, createHash("sha256").update(`${clientId}#old`).digest("hex")]
+      [
+        clientId,
+        [callback],
+        permissions,
+        createHash("sha256").update(`${clientId}#old`).digest("hex"),
+      ]
     );
   }
   const fetchesOf = (clientId: string) =>
@@ -1152,7 +1161,10 @@ describe("a document that changed since the pod cached it is read again by the c
   });
 
   it("the click alone reads nothing early: a pod-wide tick the screen never offered is refused, nothing filed", async () => {
-    const before = { proposals: await countProposals(), codes: await countCodes() };
+    const before = {
+      proposals: await countProposals(),
+      codes: await countCodes(),
+    };
     await expect(
       consent([{ permission: READ, workspaceId: null as never }], {
         clientId: PODWIDE,
@@ -1198,7 +1210,10 @@ describe("a document that changed since the pod cached it is read again by the c
     const grants = await liveGrantsOf(record.id);
     expect(grants).toHaveLength(2);
     expect(grants).toContainEqual({ permissions: [READ], workspaceIds: null });
-    expect(grants).toContainEqual({ permissions: [CREATE], workspaceIds: [BRAND] });
+    expect(grants).toContainEqual({
+      permissions: [CREATE],
+      workspaceIds: [BRAND],
+    });
     // The consent recorded the document it was shown (the current one).
     const row = await appRow(OWNER, PODWIDE);
     expect(row?.approved_requests).toEqual(
