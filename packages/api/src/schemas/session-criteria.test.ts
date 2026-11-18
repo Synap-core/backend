@@ -51,6 +51,21 @@ describe("sessionCriterionSchema", () => {
     ).toBe(false);
   });
 
+  // W1 (work model): a criterion may name the session output it checks.
+  it("accepts an outputKey in the output-key alphabet, refuses any other", () => {
+    const parsed = sessionCriterionSchema.safeParse({
+      ...ok,
+      outputKey: "pr-backend",
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.outputKey).toBe("pr-backend");
+    for (const outputKey of ["", "PR backend", "-lead", 3]) {
+      expect(
+        sessionCriterionSchema.safeParse({ ...ok, outputKey }).success
+      ).toBe(false);
+    }
+  });
+
   it("refuses an unknown kind and a non-slug key", () => {
     expect(
       sessionCriterionSchema.safeParse({ ...ok, check: { kind: "vibes" } })
@@ -89,6 +104,14 @@ describe("playbookStageSchema — criteria + check gate", () => {
         gate: { kind: "check" },
       }).success
     ).toBe(true);
+  });
+  it("a stage criterion carries its outputKey", () => {
+    const parsed = playbookStageSchema.safeParse({
+      ...base,
+      criteria: [{ ...ok, outputKey: "pr-backend" }],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.criteria?.[0]?.outputKey).toBe("pr-backend");
   });
   it("still refuses malformed stage criteria", () => {
     expect(

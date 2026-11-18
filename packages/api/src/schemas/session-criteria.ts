@@ -21,6 +21,7 @@ import {
   type CriterionCheckMeaning,
 } from "@synap/playbooks";
 import { checkCriterionMeaning } from "@synap-core/types/units";
+import { DECLARED_SLOT_KEY_RE } from "../services/focus-sessions/slot-keys.js";
 
 export const sessionCriterionSchema = z
   .strictObject({
@@ -57,6 +58,18 @@ export const sessionCriterionSchema = z
     /** R7 — about the result (default) or the method. */
     about: z
       .enum(CRITERION_ABOUT as readonly [CriterionAbout, ...CriterionAbout[]])
+      .optional(),
+    /**
+     * The key of the session output this criterion checks (work-model W1,
+     * additive: stored and read back, no reader pairs by it yet). The same
+     * alphabet as a declared slot key.
+     */
+    outputKey: z
+      .string()
+      .regex(DECLARED_SLOT_KEY_RE, {
+        message:
+          "outputKey must be an output key (a lowercase slug: a-z, 0-9, -)",
+      })
       .optional(),
   })
   .superRefine((c, ctx) => {
