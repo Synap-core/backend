@@ -340,11 +340,10 @@ export async function blockExpectedOutput(
         lockedAfter = current;
         return current;
       }
-      lockedAfter = stampAskProvenance(
-        current,
-        stampedSlots,
-        { askedBy: params.agentUserId, askCause: params.askCause }
-      );
+      lockedAfter = stampAskProvenance(current, stampedSlots, {
+        askedBy: params.agentUserId,
+        askCause: params.askCause,
+      });
       return lockedAfter;
     },
     {
