@@ -537,28 +537,20 @@ export async function withdrawOwnProposal(
   //     which DOES fire for the ordinary agent key.
   // The ordinary agent key withdraws its own proposal through the
   // author-agent rung below (plan 8032a127 D2), not through this one.
-  const isActingAgent =
-    !!proposal.agentUserId && proposal.createdBy === userId;
+  const isActingAgent = !!proposal.agentUserId && proposal.createdBy === userId;
   // The human CREATOR of an agent-less proposal: most capture/import doors
   // file through `createEventBackedProposal`, which stamps `createdBy` but
   // never `proposedByUserId`, so the creator failed both rungs above. With
   // no agent on the row, `createdBy === userId` is the same person as the
   // proposer — not a widening to other users or to session owners.
-  const isHumanCreator =
-    !proposal.agentUserId && proposal.createdBy === userId;
+  const isHumanCreator = !proposal.agentUserId && proposal.createdBy === userId;
   // THE AUTHOR AGENT (plan 8032a127 D2): the agent IDENTITY (the key's
   // agent), never the session, matched as the revise author rung matches.
-  const actingAgentUserId =
-    getActingAgentUserId() ?? ctx.agentUserId ?? null;
+  const actingAgentUserId = getActingAgentUserId() ?? ctx.agentUserId ?? null;
   const isAuthorAgent =
     !!actingAgentUserId && proposal.agentUserId === actingAgentUserId;
 
-  if (
-    !isHumanProposer &&
-    !isActingAgent &&
-    !isHumanCreator &&
-    !isAuthorAgent
-  ) {
+  if (!isHumanProposer && !isActingAgent && !isHumanCreator && !isAuthorAgent) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Only the proposer can withdraw this proposal.",
@@ -619,12 +611,7 @@ export async function withdrawOwnProposal(
 
   // Realtime + notification clear only (no approve/reject automation side
   // effects — see emitProposalReviewed): removes it from the pending queue.
-  emitProposalReviewed(
-    proposalId,
-    proposal.workspaceId,
-    "withdrawn",
-    userId
-  );
+  emitProposalReviewed(proposalId, proposal.workspaceId, "withdrawn", userId);
 
   return { success: true };
 }

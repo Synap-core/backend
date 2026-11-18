@@ -131,10 +131,7 @@ function nameText(name: ts.PropertyName): string | null {
 function enclosingNames(node: ts.Node): string[] {
   const names: string[] = [];
   for (let n = node.parent; n; n = n.parent) {
-    if (
-      (ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)) &&
-      n.name
-    ) {
+    if ((ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)) && n.name) {
       const t = nameText(n.name);
       if (t) names.push(t);
     } else if (ts.isPropertyAssignment(n)) {
