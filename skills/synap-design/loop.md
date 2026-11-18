@@ -33,8 +33,7 @@ frame (section 1b). This section is the rules of a frame's page, the Puck data e
       }
     }
   ],
-  "root": { "props": { "title": "Settings › Agents" } },
-  "zones": {}
+  "root": { "props": { "title": "Settings › Agents" } }
 }
 ```
 
@@ -44,14 +43,15 @@ frame (section 1b). This section is the rules of a frame's page, the Puck data e
   `canvas`). `props` are props it declares, with values of the declared type: an enum takes one of its
   literals. Function props, `className`, `style`, `as` and raw HTML are never accepted.
 - A `children` prop of type ReactNode is a slot that holds an array of blocks. Other ReactNode props
-  (`label`, `title`) are plain text. Keep `zones` as `{}`. `root.props` holds page settings only.
+  (`label`, `title`) are plain text. A frame's page is slots only: no `zones`. `root.props` holds page settings only.
 - No hex, rgb, px or font family in a prop; colour, spacing and type come from components and tokens.
 - Motion is not in the props. List it in the design's `motion` property as
   `[{ "trigger": "enter", "target": "SpatialPanel-1", "preset": "fade-rise" }]` with named presets only.
 - Lay out every state the screen has: empty, loading, failed, full, long content. Each empty state is
   OMIT, INVITE, EXPLAIN or REASSURE; a failed read is its own state with a retry.
 - The Map canvas (Design app, `#/map/canvas/<id>`) opens the design and validates on load: an unknown
-  `type` is dropped and named; an undeclared or wrong prop is stripped and listed. Open yours there.
+  `type`, an undeclared or wrong prop and a block a slot does not allow are dropped and named. Open yours
+  there.
 
 ## 1b. The canvas: one frame per screen
 
@@ -86,12 +86,15 @@ design on read (a page becomes one frame) and every save writes 3.
 - Each `page` follows every rule of section 1: real components only, `props.id` unique in its frame,
   no hex, rgb, px or font family. Layout is flow only: stack blocks with `Stack`, `Row`, `Grid`, `Box`;
   a component never gets its own x or y.
-- Layout blocks take token names, never pixels: `gap` and `padding` are spacing names (`space-100`,
-  `space-300`), `background`, `radius` and `border` are token names.
-- A label slot (a button's `children`) holds only inline blocks (`Text`, `Icon`), never another button
-  or a layout block.
-- An unknown `type`, at any depth, is dropped on read and named in `dropped`; check yours on the
-  Map canvas.
+- Layout blocks take exact values, never pixels: `gap`, `padding`, `paddingX`, `paddingY` take `none` or a
+  spacing name (`space-025`, `space-050`, `space-075`, `space-100`, `space-125`, `space-150`, `space-200`,
+  `space-250`, `space-300`, `space-400`, `space-500`, `space-600`, `space-800`, `space-1000`,
+  `space-1200`); a `Box` `background` takes `none`, `background`, `background-surface` or `paper`;
+  `radius` takes `none`, `radius-container` or `radius-floating`; `border` takes `none` or `hairline`.
+- A label slot (a button's `children`) holds only inline blocks: `Text` or a component whose name ends in
+  `Icon` or `Glyph`. Never another button or a layout block.
+- The canvas drops and names, at any depth: an unknown `type`, an undeclared or wrong prop, and a block
+  a slot does not allow. Check yours on the Map canvas.
 - `components-used` is the distinct `type` values across every frame, nested slot blocks included,
   sorted.
 
@@ -152,7 +155,8 @@ finding. Write the list into each variant's `critique`.
 - Build only those components, in the order of `content[]` and its slots (for a canvas, one screen per
   frame: each frame's `page` is that screen's design), with tokens only and the
   named motion presets. The design gives layout, not data wiring: data still flows through the layers.
-- Give the screen a story and record its id in `implemented-story-id`. Never edit `design-json` to
+- Give the design a story and record its id in `implemented-story-id` (the entity holds one). For a
+  multi-frame design, record each screen's story id in `design-notes`. Never edit `design-json` to
   match what you built; revise as a new draft instead.
 
 ## 6. Verify against the design
@@ -172,7 +176,8 @@ finding. Write the list into each variant's `critique`.
 
 - **Team devbox, always on, built from `main`:** an index at `http://devbox:3000`, Storybook, the
   Design app at `http://devbox:3007`: the Map (`#/`, every component Figma-style; tokens on its
-  Foundations page, also at `#/design-tokens`), the design canvas (`#/design`) and the Lab
+  Foundations page, also at `#/design-tokens`), a design on the Map canvas (`#/map/canvas/<id>`, one frame at
+  `#/map/canvas/<id>/frame/<frameId>`) and the Lab
   (`#/lab`, live full experiences), and the
   Storybook MCP at `http://devbox:3006/mcp`. These hosts are on the founder's private tailnet only:
   an agent or pod outside it cannot reach them.
