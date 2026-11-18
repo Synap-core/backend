@@ -119,7 +119,11 @@ describe("historyRow", () => {
   it("names who asked, who decided, when, and where", () => {
     const row = historyRow(proposal());
     expect(row.askedBy).toBe("Scout");
-    expect(row.decidedBy).toEqual({ kind: "person", name: "Alice" });
+    expect(row.who).toEqual({
+      kind: "decided",
+      name: "Alice",
+      text: "Decided by Alice",
+    });
     expect(row.decidedAt).toBe("2026-10-29T09:00:00.000Z");
     expect(row.space).toBe("CRM");
     expect(row.tone).toBe("healthy");
@@ -129,24 +133,31 @@ describe("historyRow", () => {
     const row = historyRow(
       proposal({ status: "auto_approved", approverName: undefined })
     );
-    expect(row.decidedBy).toEqual({ kind: "rule" });
+    expect(row.who?.text).toBe("Approved by a standing rule");
   });
 
-  it("names the agent, else Synap, when no person ended it", () => {
-    for (const status of ["approval_failed", "withdrawn", "expired"]) {
-      expect(
-        historyRow(proposal({ status, approverName: undefined })).decidedBy
-      ).toEqual({ kind: "actor", name: "Scout" });
-      expect(
-        historyRow(
-          proposal({ status, approverName: undefined, agentActorName: null })
-        ).decidedBy
-      ).toEqual({ kind: "actor", name: "Synap" });
-    }
+  it("never says 'Decided by' for a request nobody decided", () => {
+    const ended = (status: string, by: string) =>
+      historyRow(
+        proposal({
+          status,
+          approverName: undefined,
+          data: { ended: { reason: "lapsed", by, at: "2026-10-29T09:00:00Z" } },
+        })
+      ).who;
+    // An expiry names nobody: the chip says it.
+    expect(ended("expired", "system")).toBeNull();
+    // A withdrawal names who withdrew it, from the end stamp.
+    expect(ended("withdrawn", "agent")?.text).toBe("Withdrawn by Scout");
+    expect(ended("withdrawn", "system")?.text).toBe("Withdrawn by Synap");
+    // A failed receipt nobody approved: "Asked by Scout" already names the
+    // agent, so the who-line is not repeated.
+    expect(ended("approval_failed", "system")).toBeNull();
+    for (const status of ["approval_failed", "withdrawn", "expired"])
+      expect(ended(status, "agent")?.text ?? "").not.toMatch(/Decided/);
     // A person's own rejection with no name read stays unnamed, never a guess.
     expect(
-      historyRow(proposal({ status: "rejected", approverName: undefined }))
-        .decidedBy
+      historyRow(proposal({ status: "rejected", approverName: undefined })).who
     ).toBeNull();
   });
 

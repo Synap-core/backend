@@ -484,7 +484,7 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "status.auto_approved": "Approuvé automatiquement",
   "status.rejected": "Rejeté",
   "status.denied": "Rejeté",
-  "status.approval_failed": "N’a pas pu s’appliquer",
+  "status.approval_failed": "Échec de l’application",
   "status.reverted": "Retour arrière",
   "status.applied": "Appliqué",
   "status.unknown": "Inconnu",

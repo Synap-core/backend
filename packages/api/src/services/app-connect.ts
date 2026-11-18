@@ -1471,14 +1471,6 @@ export async function connectOAuthApp(args: {
     oauthClientId: args.oauthClientId,
     name: args.name,
   });
-  // A request left waiting by an interrupted consent is superseded by this one.
-  await repo.withdrawPendingRequests(
-    app.id,
-    args.ownerUserId,
-    "Superseded by a new consent.",
-    add ? "oauth-consent" : undefined
-  );
-
   const requests = approved.map((r) => ({
     ...withAppRequestScope(r),
     workspaceName: nameOf.get(r.workspaceId) ?? null,
@@ -1511,6 +1503,15 @@ export async function connectOAuthApp(args: {
       },
       tx as never
     )
+  );
+  // A request left waiting by an interrupted consent is superseded by this
+  // one: it ends as `superseded`, naming this request (its end line's door),
+  // never with an English sentence stored as if its author wrote it.
+  await repo.withdrawPendingRequests(
+    app.id,
+    args.ownerUserId,
+    { reason: "superseded", supersededBy: proposal.id },
+    add ? "oauth-consent" : undefined
   );
   await recordAppEvent(
     { app } as AppWithGrants,
@@ -2002,7 +2003,7 @@ export async function revokeApp(args: {
   const withdrawn = await repo.withdrawPendingRequests(
     found.app.id,
     args.ownerUserId,
-    "The app was revoked."
+    { reason: "app_revoked" }
   );
   if (withdrawn.length > 0) {
     const { emitProposalReviewed } =
