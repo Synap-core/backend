@@ -308,7 +308,8 @@ export function describeOwnGrant(
     });
   }
   return {
-    holder,
+    // `holderOfGrant` names only these two for a stored grant.
+    holder: holder === "app" ? "app" : "key",
     clientId: grant.clientId,
     isFullAccess: isFullAccessGrant(grant),
     summary: describeGrantLimit(grant),
