@@ -3880,7 +3880,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * a retry cannot mint two rooms.
    *
    * Ungoverned like `/used`: minting the room a session already implies is
-   * provenance plumbing, not a mutation of user data.
+   * provenance plumbing, not a mutation of user data. Bounded by the key's
+   * grant like every other session write: `session.update` where the session
+   * counts (its space, or its project's spaces: `answerGrantWrite`), so a
+   * person's app token passes only where it may take part in the session.
    */
   app.post("/focus-sessions/:id/channel", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -3890,6 +3893,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }
+    const denial = await grantWriteDenial(await answerGrantWrite(id));
+    if (denial) return c.json({ error: denial }, 403);
     try {
       // Load by id, bind to the row's workspace (membership check) — the same
       // two steps `/used` and PATCH take.

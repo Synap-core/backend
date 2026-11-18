@@ -225,6 +225,9 @@ const PROJECT_USES_FINANCE = randomUUID();
 const IN_CONTENT_PROJECT = { room: randomUUID(), session: randomUUID() };
 const IN_FINANCE_PROJECT = { room: randomUUID(), session: randomUUID() };
 const NO_PLACE = { room: randomUUID(), session: randomUUID() };
+/** Project-only sessions with NO room yet: `POST /focus-sessions/:id/channel` mints it. */
+const ROOMLESS_IN_CONTENT_PROJECT = randomUUID();
+const ROOMLESS_IN_FINANCE_PROJECT = randomUUID();
 /** A plain conversation in Content OS: no session's room. */
 const THREAD = randomUUID();
 /** An agent the pod runs (no key of its own, no dispatch binding). */
@@ -382,6 +385,16 @@ beforeAll(async () => {
     projectId: PROJECT_USES_FINANCE,
   });
   await seedRun(NO_PLACE.room, NO_PLACE.session, null);
+  for (const [session, project] of [
+    [ROOMLESS_IN_CONTENT_PROJECT, PROJECT_USES_CONTENT],
+    [ROOMLESS_IN_FINANCE_PROJECT, PROJECT_USES_FINANCE],
+  ] as const) {
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, goal, status, agent_ids, expected_outputs, metadata)
+       values ($1,$2,null,$3,'Plan the launch','active','{}','[]'::jsonb,'{}'::jsonb)`,
+      [session, OWNER, project]
+    );
+  }
   await q(
     `insert into users (id, email, name, user_type, agent_type) values ($1,'meta@x','Meta','agent','meta')`,
     [POD_AGENT]
@@ -506,6 +519,22 @@ async function patchSession(bearer: string, sessionId: string, body: unknown) {
   });
   return { status: res.status, body: (await res.json()) as any };
 }
+
+async function mintRoom(bearer: string, sessionId: string) {
+  const res = await hubApp().request(
+    `/api/hub/focus-sessions/${sessionId}/channel`,
+    { method: "POST", headers: { authorization: `Bearer ${bearer}` } }
+  );
+  return { status: res.status, body: (await res.json()) as any };
+}
+
+const roomOf = async (sessionId: string) =>
+  (
+    await q<{ channel_id: string | null }>(
+      `select channel_id from focus_sessions where id = $1`,
+      [sessionId]
+    )
+  ).rows[0]!.channel_id;
 
 const progressOf = async (sessionId: string) =>
   (
@@ -726,6 +755,25 @@ describe("a post in a room needs a write grant, not only a read", () => {
       /grant does not allow "session\.update"/
     );
     expect(await progressOf(IN_FINANCE_PROJECT.session)).toBeNull();
+  });
+
+  it("the official app mints the room of a project-only session its grant may update (no longer refused as an unclassified write), and not one whose project uses another space", async () => {
+    const res = await mintRoom(token[STUDIO]!, ROOMLESS_IN_CONTENT_PROJECT);
+    expect(res.status).toBe(200);
+    expect(res.body.channelId).toBeTruthy();
+    expect(await roomOf(ROOMLESS_IN_CONTENT_PROJECT)).toBe(res.body.channelId);
+    const refused = await mintRoom(token[STUDIO]!, ROOMLESS_IN_FINANCE_PROJECT);
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toMatch(
+      /grant does not allow "session\.update"/
+    );
+    expect(await roomOf(ROOMLESS_IN_FINANCE_PROJECT)).toBeNull();
+    // A key that only reads where the session counts is refused there too.
+    const readOnly = await mintRoom(token[CRM]!, ROOMLESS_IN_CONTENT_PROJECT);
+    expect(readOnly.status).toBe(403);
+    expect(readOnly.body.error).toMatch(
+      /grant does not allow "session\.update"/
+    );
   });
 
   it("a channel that is no session's room needs message.create on its space", async () => {
