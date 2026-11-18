@@ -45,6 +45,7 @@ import {
   sessionStageRuns,
   apiKeys,
 } from "@synap/database/schema";
+import { db, setSessionStatus } from "@synap/database";
 import { handleFocusSessionReaper } from "../focus-session-reaper.js";
 import { handleAutomationRunReaper } from "../automation-run-reaper.js";
 import { handlePlaybookRunReaper } from "../playbook-run-reaper.js";
@@ -346,6 +347,112 @@ describe("an OPEN agent question waits on the person (external agents ask and st
     expect(await statusOf("playbook_runs", asking.run)).toBe("waiting_on_you");
     expect(closed).not.toContain(asking.sess);
     expect(await statusOf("playbook_runs", answered.run)).toBe("failed");
+  });
+});
+
+// Operations r1: the sessions an orchestrator holds sit paused on
+// `answer:<orchestrator>/plan-approval` until the person answers. Quiet by
+// design, so the stale flip must leave them (and any session asleep on its own
+// ask, `answer:` or `proposal:`) alone while the wait is open — and only then.
+describe("a session paused on a wait hold (answer: / proposal:) waits, it is not idle", () => {
+  const APPROVAL = {
+    key: "plan-approval",
+    label: "Plan approval",
+    kind: "decision",
+    owner: "human",
+  };
+  /** A child held through the one session status write, then left quiet. */
+  async function heldOn(moves: string | null): Promise<string> {
+    const id = await session({ idleHours: 0 });
+    await setSessionStatus(db as never, {
+      sessionId: id,
+      from: "active",
+      to: "paused",
+      actor: { kind: "system" },
+      hold: moves
+        ? { on: "decision", until: { moves } }
+        : { on: "nobody", reason: "parked" },
+    });
+    await q(
+      `update focus_sessions set updated_at = now() - interval '30 hours' where id = $1`,
+      [id]
+    );
+    return id;
+  }
+  async function proposalUnder(sessionId: string, status: string) {
+    const id = randomUUID();
+    await q(
+      `insert into proposals (id, target_type, proposal_type, data, status, session_id, created_at, updated_at)
+       values ($1, 'entity', 'create', '{}'::jsonb, $2, $3, now(), now())`,
+      [id, status, sessionId]
+    );
+    return id;
+  }
+
+  it("never stales a child held on an orchestrator's unanswered plan-approval; the same pause with no wait stales", async () => {
+    const orch = await session({ idleHours: 0, outputs: [APPROVAL] });
+    const held = await heldOn(`answer:${orch}/plan-approval`);
+    // By label too, any case (`holdWaitSlotMatches`).
+    const byLabel = await heldOn(`answer:${orch}/plan approval`);
+    const parked = await heldOn(null);
+    await handleFocusSessionReaper();
+    expect(await statusOf("focus_sessions", held)).toBe("paused");
+    expect(await statusOf("focus_sessions", byLabel)).toBe("paused");
+    expect(await statusOf("focus_sessions", parked)).toBe("stale");
+  });
+
+  it("the exemption ends with the wait: an answered slot, or an orchestrator that ended, no longer keeps it", async () => {
+    const answeredOrch = await session({
+      idleHours: 0,
+      outputs: [
+        {
+          ...APPROVAL,
+          answer: { answeredBy: "u1", answeredAt: new Date().toISOString() },
+        },
+      ],
+    });
+    const endedOrch = await session({
+      idleHours: 0,
+      outputs: [APPROVAL],
+    });
+    const onAnswered = await heldOn(`answer:${answeredOrch}/plan-approval`);
+    const onEnded = await heldOn(`answer:${endedOrch}/plan-approval`);
+    await q(`update focus_sessions set status = 'cancelled' where id = $1`, [
+      endedOrch,
+    ]);
+    await handleFocusSessionReaper();
+    expect(await statusOf("focus_sessions", onAnswered)).toBe("stale");
+    expect(await statusOf("focus_sessions", onEnded)).toBe("stale");
+  });
+
+  it("a proposal wait keeps the session while the proposal is pending; the decided twin stales", async () => {
+    const owner = await session({ idleHours: 0 });
+    const pending = await heldOn(
+      `proposal:${await proposalUnder(owner, "pending")}`
+    );
+    const decided = await heldOn(
+      `proposal:${await proposalUnder(owner, "rejected")}`
+    );
+    await handleFocusSessionReaper();
+    expect(await statusOf("focus_sessions", pending)).toBe("paused");
+    expect(await statusOf("focus_sessions", decided)).toBe("stale");
+  });
+
+  it("only the CURRENT hold counts: a session resumed since its wait pause is reaped as usual", async () => {
+    const orch = await session({ idleHours: 0, outputs: [APPROVAL] });
+    const resumed = await heldOn(`answer:${orch}/plan-approval`);
+    await setSessionStatus(db as never, {
+      sessionId: resumed,
+      from: "paused",
+      to: "active",
+      actor: { kind: "system" },
+    });
+    await q(
+      `update focus_sessions set updated_at = now() - interval '30 hours' where id = $1`,
+      [resumed]
+    );
+    await handleFocusSessionReaper();
+    expect(await statusOf("focus_sessions", resumed)).toBe("stale");
   });
 });
 

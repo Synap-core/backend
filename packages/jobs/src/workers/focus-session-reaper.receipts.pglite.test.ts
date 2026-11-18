@@ -30,6 +30,7 @@ import {
   proposals,
   messages,
   sessionStageRuns,
+  lifecycleTransitionOutbox,
 } from "@synap/database/schema";
 import { closeIdleReceipts, SESSION_IS_STALE } from "./focus-session-reaper.js";
 import { db } from "@synap/database";
@@ -86,6 +87,11 @@ beforeAll(async () => {
   await h.client!.exec(ddlFor(messages as unknown as PgTable));
   // A step that waits keeps its session (0422): SESSION_IS_STALE reads it.
   await h.client!.exec(ddlFor(sessionStageRuns as unknown as PgTable));
+  // A session paused on a wait hold keeps itself (SESSION_IS_STALE reads
+  // the current hold off the transition log).
+  await h.client!.exec(
+    ddlFor(lifecycleTransitionOutbox as unknown as PgTable)
+  );
   registerSessionCloser(async ({ sessionId }) => {
     closed.push(sessionId);
     return {

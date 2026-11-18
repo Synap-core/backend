@@ -3544,8 +3544,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * agent key gets 202 `proposed`; a person 200 `started`. Same service and
    * input schema as tRPC `focusSessions.startOrchestrator` and MCP
    * `synap_start_orchestrator`. Refusals: 400 bad input, a session that is
-   * not running or paused, an agent that cannot take the work · 403 the gate
-   * or the key's grant · 404 a session that is not the caller's.
+   * not running or paused, an agent that cannot take the work · 403 the gate,
+   * a picked session outside the key's grant or its bound workspace · 404 a
+   * session that is not the caller's.
    */
   registerOpenApi(app, {
     method: "post",
@@ -3558,8 +3559,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "merged-plan deliverable, the person's plan-approval slot), one " +
       "`orchestrated_by` link per picked session, each running one paused " +
       "until the person answers plan-approval, and a handoff note in each " +
-      "room. Same service as tRPC focusSessions.startOrchestrator and MCP " +
-      "synap_start_orchestrator.",
+      "room. Until then a held session changes no stage. A yes resumes " +
+      "them; a no resumes them as they were and cancels the orchestrator " +
+      "('Plan declined'); an orchestrator that ends unanswered releases " +
+      "them. 403 when a picked session is outside the key's grant or bound " +
+      "workspace (nothing written). Same service as tRPC " +
+      "focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
     request: { body: startOrchestratorInputSchema },
     responses: {
       200: {
@@ -3590,6 +3595,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId: c.get("userId") as string,
         agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
         input: raw,
+        // A workspace-bound key picks only sessions in its workspace (403
+        // otherwise), as the other session doors confine it.
+        boundWorkspaceId: c.get("keyWorkspaceId") ?? null,
       });
       return jsonGoverned(c, result);
     } catch (err) {

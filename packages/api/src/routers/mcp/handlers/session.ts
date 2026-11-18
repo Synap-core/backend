@@ -1091,6 +1091,7 @@ export const sessionHandlers: McpHandlerMap = {
         userId,
         agentUserId: agentUserId ?? null,
         input: args,
+        boundWorkspaceId: ctx.keyWorkspaceId ?? null,
       })
     );
   },

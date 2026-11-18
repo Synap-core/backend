@@ -48,7 +48,10 @@ type PermArgs = Record<string, unknown> & {
   agentUserId?: string;
   data?: Record<string, unknown>;
 };
-const { permSpy, postSpy, resolveSpy } = vi.hoisted(() => ({
+const { permSpy, postSpy, resolveSpy, completeSpy } = vi.hoisted(() => ({
+  completeSpy: vi.fn(async (_args: Record<string, unknown>) => ({
+    session: {},
+  })),
   permSpy: vi.fn(async (_args: PermArgs) => ({}) as Record<string, unknown>),
   postSpy: vi.fn(async (_args: Record<string, unknown>) => ({
     success: true,
@@ -69,6 +72,11 @@ vi.mock("../../messaging/post-message.js", async (importOriginal) => ({
 vi.mock("../../messaging/session-post.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   resolveSessionPost: resolveSpy,
+}));
+// The one close door (its own suites): what the declined plan asked of it.
+vi.mock("../complete-session.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  completeFocusSession: completeSpy,
 }));
 vi.mock("../ensure-session-channel.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -92,8 +100,12 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import {
   startOrchestrator,
+  closeOrchestratorOnDeclinedPlan,
   ORCHESTRATOR_APPROVAL_SLOT,
 } from "../start-orchestrator.js";
+import { grantOfScope, runWithGrant } from "@synap/database";
+import { orchestratorHolding } from "@synap/jobs/utils/orchestrator-hold.js";
+import { refuseUndeclaredStage } from "@synap/jobs/utils/stage-declared.js";
 import { registerFocusSessionOrchestrateExecutor } from "../../../routers/proposals/executors/focus-session-orchestrate.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
 
@@ -114,13 +126,19 @@ function ddlFor(table: PgTable): string {
 }
 
 async function seedSession(
-  opts: { owner?: string; status?: string; title?: string } = {}
+  opts: {
+    owner?: string;
+    status?: string;
+    title?: string;
+    workspaceId?: string | null;
+    stage?: string | null;
+  } = {}
 ): Promise<string> {
   const id = randomUUID();
   await h.client!.query(
     `insert into focus_sessions
-       (id, user_id, title, goal, status, origin, expected_outputs, criteria, metadata, agent_ids, progress, started_at, updated_at)
-     values ($1, $2, $3, $4, $5, 'agent', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, $6, 0, now(), now())`,
+       (id, user_id, title, goal, status, origin, expected_outputs, criteria, metadata, agent_ids, progress, started_at, updated_at, workspace_id, current_stage)
+     values ($1, $2, $3, $4, $5, 'agent', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, $6, 0, now(), now(), $7, $8)`,
     [
       id,
       opts.owner ?? USER,
@@ -128,10 +146,20 @@ async function seedSession(
       `Ship lane ${id}`,
       opts.status ?? "active",
       [AGENT],
+      opts.workspaceId ?? null,
+      opts.stage ?? null,
     ]
   );
   return id;
 }
+
+const WS_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const WS_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+/** An app's key, granted to move sessions in space A only. */
+const GRANT_A = grantOfScope(
+  { permissions: ["session.update"], workspaceIds: [WS_A] },
+  "app-ops"
+);
 
 const statusOf = async (id: string) =>
   (
@@ -257,6 +285,7 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(() => {
+  completeSpy.mockClear();
   permSpy.mockReset();
   postSpy.mockClear();
   resolveSpy.mockClear();
@@ -417,6 +446,12 @@ describe("approving it — one orchestrator, N links, N holds, N notes", () => {
         on: "decision",
         until: { moves: `answer:${orch}/${ORCHESTRATOR_APPROVAL_SLOT}` },
       });
+      // Never open-ended: the hold door's default review date (14 days).
+      const reviewBy = Date.parse(
+        (x.hold as { reviewBy?: string } | undefined)?.reviewBy ?? ""
+      );
+      expect(reviewBy - Date.now()).toBeGreaterThan(13 * 86_400_000);
+      expect(reviewBy - Date.now()).toBeLessThan(15 * 86_400_000);
     }
     expect(
       (approved.children as Array<{ sessionId: string; held: string }>)
@@ -506,5 +541,243 @@ describe("a person's ask — granted, applied at once", () => {
     expect(resolveSpy).not.toHaveBeenCalled();
     expect(postSpy).toHaveBeenCalledTimes(2);
     expect(res.children.every((c) => c.noted)).toBe(true);
+  });
+});
+
+// Operations r1 (security): the gate checks the key's grant in ONE place (the
+// orchestrator's), but the write pauses a session in EVERY picked space.
+describe("the calling key must reach EVERY picked session", () => {
+  const nothingWritten = async (ids: string[]) => {
+    expect(orchestrateCalls()).toHaveLength(0);
+    expect(await linksFrom(ids)).toEqual([]);
+    expect(await holdsOf(ids)).toEqual([]);
+    for (const id of ids) expect(await statusOf(id)).toBe("active");
+    expect(postSpy).not.toHaveBeenCalled();
+  };
+
+  it("a key granted on space A that picks sessions in A and B is refused whole (403), naming nothing of B", async () => {
+    const a = await seedSession({ workspaceId: WS_A });
+    const b = await seedSession({ workspaceId: WS_B });
+    const err = await runWithGrant(GRANT_A, () =>
+      // A person's app acts as the person: without the fix it applies at once.
+      startOrchestrator({
+        userId: USER,
+        input: { sessionIds: [a, b], brief: "Reach into B" },
+      })
+    ).then(
+      () => null,
+      (e: unknown) => e as { code?: string; message?: string }
+    );
+    expect(err).toMatchObject({ code: "FORBIDDEN" });
+    expect(err!.message).not.toContain(WS_B);
+    await nothingWritten([a, b]);
+  });
+
+  it("the same key over sessions all in A goes on to the gate, and applies", async () => {
+    const a1 = await seedSession({ workspaceId: WS_A });
+    const a2 = await seedSession({ workspaceId: WS_A });
+    const res = await runWithGrant(GRANT_A, () =>
+      startOrchestrator({
+        userId: USER,
+        input: { sessionIds: [a1, a2], brief: "Both in A" },
+      })
+    );
+    expect(res.status).toBe("started");
+    expect(orchestrateCalls()).toHaveLength(1);
+    expect(await statusOf(a1)).toBe("paused");
+    expect(await statusOf(a2)).toBe("paused");
+  });
+
+  it("a key bound to workspace A picks only sessions in A: B, or a session in no space, is 403 and nothing is written", async () => {
+    const a = await seedSession({ workspaceId: WS_A });
+    const b = await seedSession({ workspaceId: WS_B });
+    const loose = await seedSession({ workspaceId: null });
+    for (const other of [b, loose]) {
+      await expect(
+        startOrchestrator({
+          userId: USER,
+          agentUserId: AGENT,
+          boundWorkspaceId: WS_A,
+          input: { sessionIds: [a, other], brief: "Out of my space" },
+        })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    await nothingWritten([a, b, loose]);
+    const a2 = await seedSession({ workspaceId: WS_A });
+    const res = await startOrchestrator({
+      userId: USER,
+      agentUserId: AGENT,
+      boundWorkspaceId: WS_A,
+      input: { sessionIds: [a, a2], brief: "Within A" },
+    });
+    expect(res.status).toBe("proposed");
+  });
+});
+
+// Founder decision D-O1: a session an orchestrator holds changes no stage
+// before the person answers its plan. The rule every stage door asks before
+// it writes or files anything (`refuseUndeclaredStage`).
+describe("a held session changes no stage until the plan is answered (D-O1)", () => {
+  const answerPlan = (orch: string, confirmed: boolean) =>
+    h.client!.query(
+      `update focus_sessions set expected_outputs = (
+         select jsonb_agg(case when o->>'key' = 'plan-approval'
+           then o || jsonb_build_object('answer', jsonb_build_object(
+             'answeredBy', user_id, 'answeredAt', now()::text,
+             'value', jsonb_build_object('type', 'confirm', 'confirmed', $2::boolean)))
+           else o end)
+         from jsonb_array_elements(expected_outputs) o)
+       where id = $1`,
+      [orch, confirmed]
+    );
+  const move = (id: string, toStage: string) =>
+    refuseUndeclaredStage({ id, playbookId: null, currentStage: null }, toStage);
+
+  it("refuses a move of a held session with the orchestrator's name; frees it once the plan is answered", async () => {
+    const a = await seedSession();
+    const b = await seedSession();
+    const res = await startOrchestrator({
+      userId: USER,
+      input: {
+        sessionIds: [a, b],
+        brief: "Hold the lanes",
+        title: "Wave plan",
+      },
+    });
+    if (res.status !== "started") throw new Error(`got ${res.status}`);
+    const refused = await move(a, "build");
+    expect(refused).toMatchObject({ code: "HELD_BY_ORCHESTRATOR" });
+    expect(refused!.reason).toContain(
+      "Waiting on the orchestrator's plan: Wave plan"
+    );
+    await answerPlan(res.orchestratorSessionId, true);
+    expect(await orchestratorHolding(a)).toBeNull();
+    expect(await move(a, "build")).toBeNull();
+  });
+
+  it("an orchestrator that ended unanswered frees them too; a session no orchestrator holds is never refused", async () => {
+    const a = await seedSession();
+    const b = await seedSession();
+    const free = await seedSession();
+    const res = await startOrchestrator({
+      userId: USER,
+      input: { sessionIds: [a, b], brief: "Ends early" },
+    });
+    if (res.status !== "started") throw new Error(`got ${res.status}`);
+    expect(await move(b, "build")).not.toBeNull();
+    expect(await move(free, "build")).toBeNull();
+    await h.client!.query(
+      `update focus_sessions set status = 'cancelled' where id = $1`,
+      [res.orchestratorSessionId]
+    );
+    expect(await move(b, "build")).toBeNull();
+  });
+
+  it("an orchestrated_by edge to someone else's session never freezes yours", async () => {
+    const mine = await seedSession();
+    const theirs = await seedSession({ owner: OTHER_PERSON });
+    await h.client!.query(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        theirs,
+        JSON.stringify([
+          { key: "plan-approval", label: "Plan approval", kind: "decision" },
+        ]),
+      ]
+    );
+    await h.client!.query(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_by)
+       values ($1, 'session', $2, 'session', $3, 'orchestrated_by', $4)`,
+      [randomUUID(), mine, theirs, OTHER_PERSON]
+    );
+    expect(await move(mine, "build")).toBeNull();
+  });
+});
+
+// Founder decision D-O2: a NO resumes the held sessions as they were (the
+// answer ends their wait) and closes the orchestrator; a yes leaves it going.
+describe("a no to the plan closes the orchestrator (D-O2)", () => {
+  const SLOT = { key: ORCHESTRATOR_APPROVAL_SLOT, label: "Plan approval", kind: "decision" };
+  const answer = (value: unknown) =>
+    ({
+      text: "no",
+      messageId: null,
+      answeredBy: USER,
+      answeredAt: new Date().toISOString(),
+      value,
+    }) as never;
+  async function started(): Promise<string> {
+    const a = await seedSession();
+    const b = await seedSession();
+    const res = await startOrchestrator({
+      userId: USER,
+      input: { sessionIds: [a, b], brief: "Plan" },
+    });
+    if (res.status !== "started") throw new Error(`got ${res.status}`);
+    return res.orchestratorSessionId;
+  }
+
+  it("a confirm 'no' or a refusal closes it, cancelled with 'Plan declined', through the one close door", async () => {
+    for (const value of [
+      { type: "confirm", confirmed: false },
+      { type: "declined" },
+    ]) {
+      completeSpy.mockClear();
+      const orch = await started();
+      expect(
+        await closeOrchestratorOnDeclinedPlan({
+          sessionId: orch,
+          userId: USER,
+          slot: SLOT as never,
+          answer: answer(value),
+        })
+      ).toEqual({ closed: true });
+      expect(completeSpy).toHaveBeenCalledTimes(1);
+      expect(completeSpy.mock.calls[0]![0]).toMatchObject({
+        sessionId: orch,
+        userId: USER,
+        terminalStatus: "cancelled",
+        cancelReason: "Plan declined",
+      });
+      // No agent on the close: it is the person's own act.
+      expect(completeSpy.mock.calls[0]![0]).not.toHaveProperty("agentUserId");
+    }
+  });
+
+  it("a yes, another slot, or a session no one is orchestrated by closes nothing", async () => {
+    const orch = await started();
+    const lone = await seedSession();
+    for (const call of [
+      { sessionId: orch, slot: SLOT, value: { type: "confirm", confirmed: true } },
+      {
+        sessionId: orch,
+        slot: { ...SLOT, key: "merged-plan" },
+        value: { type: "confirm", confirmed: false },
+      },
+      { sessionId: lone, slot: SLOT, value: { type: "confirm", confirmed: false } },
+    ]) {
+      expect(
+        await closeOrchestratorOnDeclinedPlan({
+          sessionId: call.sessionId,
+          userId: USER,
+          slot: call.slot as never,
+          answer: answer(call.value),
+        })
+      ).toBeNull();
+    }
+    expect(completeSpy).not.toHaveBeenCalled();
+  });
+
+  it("a failed close is said, never thrown: the answer already landed", async () => {
+    const orch = await started();
+    completeSpy.mockRejectedValueOnce(new Error("close door down"));
+    expect(
+      await closeOrchestratorOnDeclinedPlan({
+        sessionId: orch,
+        userId: USER,
+        slot: SLOT as never,
+        answer: answer({ type: "confirm", confirmed: false }),
+      })
+    ).toEqual({ closed: false, error: "close door down" });
   });
 });

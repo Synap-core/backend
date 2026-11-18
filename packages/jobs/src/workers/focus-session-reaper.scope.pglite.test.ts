@@ -40,6 +40,7 @@ import {
   proposals,
   messages,
   sessionStageRuns,
+  lifecycleTransitionOutbox,
 } from "@synap/database/schema";
 import {
   SESSION_IS_STALE,
@@ -98,6 +99,11 @@ beforeAll(async () => {
   await h.client!.exec(ddlFor(messages as unknown as PgTable));
   // A step that waits keeps its session (0422): SESSION_IS_STALE reads it.
   await h.client!.exec(ddlFor(sessionStageRuns as unknown as PgTable));
+  // A session paused on a wait hold keeps itself (SESSION_IS_STALE reads
+  // the current hold off the transition log).
+  await h.client!.exec(
+    ddlFor(lifecycleTransitionOutbox as unknown as PgTable)
+  );
 }, 120_000);
 
 beforeEach(async () => {

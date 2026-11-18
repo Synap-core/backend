@@ -549,6 +549,82 @@ describe("a wait on the person (until.moves = answer: / proposal:)", () => {
     expect(await statusOf("focus_sessions", waiter)).toBe("active");
   });
 
+  it("a wait on a slot whose session ENDED without the answer is over: the end asks for the check, the waiter resumes (an orchestrator never strands what it held)", async () => {
+    const asker = await withSlot();
+    const waiter = await session();
+    await pauseOn(waiter, `answer:${asker}/host`);
+    const waits = { sessionId: asker };
+    // Still open, still unanswered: the wait holds.
+    expect((await handleHoldResume({ waits })).resumed).toBe(0);
+    expect(await statusOf("focus_sessions", waiter)).toBe("paused");
+
+    await q(`update focus_sessions set status = 'cancelled' where id = $1`, [
+      asker,
+    ]);
+    // The asker's end is a session transition: the reactor sends the check
+    // for its slots' waits.
+    const sent: Array<{ queue: string; data: unknown; opts: unknown }> = [];
+    const boss = {
+      send: async (queue: string, data: unknown, opts: unknown) =>
+        void sent.push({ queue, data, opts }),
+    };
+    await holdResumeReactor.handler(
+      {
+        subjectType: "focus_session",
+        subjectId: asker,
+        action: "transition",
+        eventId: "e-end",
+        data: { from: "active", to: "cancelled", category: "lost", hold: null },
+      } as never,
+      { boss } as never
+    );
+    expect(sent).toContainEqual({
+      queue: HOLD_RESUME_QUEUE,
+      data: { waits: { sessionId: asker } },
+      opts: { singletonKey: "hold-resume:ended:e-end" },
+    });
+
+    expect((await handleHoldResume({ waits })).resumed).toBe(1);
+    expect(await statusOf("focus_sessions", waiter)).toBe("active");
+    expect(await lastOwed(waiter)).toMatchObject({
+      from: "paused",
+      to: "active",
+      actorKind: "system",
+      reason: `What it waited on (answer:${asker}/host) ended without an answer.`,
+    });
+  });
+
+  it("a session that ends sends no wait check on any other move, and a closed asker frees its waiters on the hourly sweep too", async () => {
+    const sent: Array<{ data: unknown }> = [];
+    const boss = {
+      send: async (_q: string, data: unknown) => void sent.push({ data }),
+    };
+    await holdResumeReactor.handler(
+      {
+        subjectType: "focus_session",
+        subjectId: "s-1",
+        action: "transition",
+        eventId: "e-act",
+        data: { from: "paused", to: "active", category: "active", hold: null },
+      } as never,
+      { boss } as never
+    );
+    expect(
+      sent.filter((s) => (s.data as { waits?: unknown }).waits)
+    ).toEqual([]);
+
+    const asker = await withSlot();
+    const waiter = await session();
+    await pauseOn(waiter, `answer:${asker}/host`);
+    await q(`update focus_sessions set status = 'closed' where id = $1`, [
+      asker,
+    ]);
+    expect((await handleHoldResume({}, AFTER)).resumed).toBeGreaterThanOrEqual(
+      1
+    );
+    expect(await statusOf("focus_sessions", waiter)).toBe("active");
+  });
+
   it("a proposal wait resumes once the proposal is no longer pending; the hourly sweep finds it too", async () => {
     const waiter = await session();
     const pid = await proposal(waiter);

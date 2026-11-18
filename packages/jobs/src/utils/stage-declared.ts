@@ -1,6 +1,7 @@
 /**
  * THE RULE that a session's stage is one its process declares (finding
- * 8c08b138). A run with stages moves only between the keys its definition
+ * 8c08b138), and that a session an orchestrator holds changes no stage
+ * before the person answers its plan (decision D-O1). A run with stages moves only between the keys its definition
  * names; a key it does not name is refused, by every door, with the keys it
  * does name. A session with no stages (ad-hoc work, a playbook without
  * stages) keeps its free stage label, as before.
@@ -22,9 +23,18 @@
 
 import type { PlaybookStage } from "@synap/playbooks";
 import { loadSessionProcess } from "./session-process.js";
+import {
+  heldByOrchestratorReason,
+  orchestratorHolding,
+} from "./orchestrator-hold.js";
 
 export interface UndeclaredStageRefusal {
-  code: "UNDECLARED_STAGE";
+  /**
+   * `UNDECLARED_STAGE`: the key is not one the process declares.
+   * `HELD_BY_ORCHESTRATOR`: the session waits on an orchestrator's plan
+   * (decision D-O1, `orchestrator-hold.ts`); `stages` is then empty.
+   */
+  code: "UNDECLARED_STAGE" | "HELD_BY_ORCHESTRATOR";
   /** One sentence for the caller: what was refused and the keys it may use. */
   reason: string;
   /** The stage keys the session's process declares, in order. */
@@ -60,8 +70,11 @@ export function undeclaredStage(
 
 /**
  * The refusal for moving this session into `toStage`, or `null` when the move
- * may go on: the stage it already holds, a session with no stages, or a key
- * its process declares.
+ * may go on: the stage it already holds, or a key its process declares (any
+ * key for a session with no stages) — and, whatever the key, never while an
+ * orchestrator holds the session for the person's answer to its plan
+ * (decision D-O1, `orchestrator-hold.ts`). Every door asks this before it
+ * writes or files anything, so a held move is refused, never proposed.
  */
 export async function refuseUndeclaredStage(
   session: {
@@ -72,6 +85,14 @@ export async function refuseUndeclaredStage(
   toStage: string
 ): Promise<UndeclaredStageRefusal | null> {
   if (toStage === (session.currentStage ?? null)) return null;
+  const holding = await orchestratorHolding(session.id);
+  if (holding) {
+    return {
+      code: "HELD_BY_ORCHESTRATOR",
+      reason: heldByOrchestratorReason(holding),
+      stages: [],
+    };
+  }
   const proc = await loadSessionProcess({
     sessionId: session.id,
     playbookId: session.playbookId,

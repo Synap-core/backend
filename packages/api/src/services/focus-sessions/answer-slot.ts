@@ -80,6 +80,7 @@ import { findSlotIndex } from "./slot-keys.js";
 import { stampUnblocked } from "./block-output.js";
 import { acceptDraftOnEngagement } from "./accept-on-engagement.js";
 import { sendWaitHoldCheck } from "../lifecycle/wait-hold-check.js";
+import { ORCHESTRATOR_APPROVAL_SLOT } from "@synap/jobs/utils/orchestrator-hold.js";
 import { paramValueFromAnswer } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import {
@@ -183,6 +184,13 @@ export type AnswerExpectedOutputResult =
        * recorded, the decision is not. Absent for asks that file no decision.
        */
       decision?: DecisionFilingOutcome;
+      /**
+       * A NO to an orchestrator's `plan-approval` (decision D-O2): the
+       * orchestrator was closed (`cancelled`, "Plan declined") through the
+       * one close door, or why not. The held sessions resume either way (the
+       * answer ends their wait). Absent for every other answer.
+       */
+      planDeclined?: { closed: true } | { closed: false; error: string };
     };
 
 /**
@@ -448,6 +456,20 @@ export async function answerExpectedOutput(
       { sessionId: result.session.id },
       `answer:${result.session.id}:${result.answer.answeredAt}`
     );
+    // A NO to an orchestrator's plan (D-O2): the sessions it held resume as
+    // they were (the wake above), and the orchestrator closes — its plan will
+    // not be carried out. After commit; a failed close never loses the answer.
+    if (result.before.key === ORCHESTRATOR_APPROVAL_SLOT) {
+      const { closeOrchestratorOnDeclinedPlan } =
+        await import("./start-orchestrator.js");
+      const planDeclined = await closeOrchestratorOnDeclinedPlan({
+        sessionId: result.session.id,
+        userId: params.userId,
+        slot: result.before,
+        answer: result.answer,
+      });
+      if (planDeclined) result.planDeclined = planDeclined;
+    }
     // Every answered confirm/choose IS a decision — filed (or, for a slot
     // opened for one, updated) as the person's own act. After commit, never
     // inside it: a failed filing must not lose the answer, and it is
