@@ -140,6 +140,7 @@ import {
   READ_ONLY_BUILTIN_VERBS,
 } from "./builtin-verbs.js";
 import { declaredReadOnly } from "./capability-drift.js";
+import { declaredProposeOnly } from "@synap-core/types/proposals";
 import { meterCapabilityRun } from "./capability-metering.js";
 import {
   checkVerbParameters,
@@ -1207,7 +1208,13 @@ export interface DeclaredReadOnlyBearing {
  * a comment saying so.
  */
 export function verbDeclaresReadOnly(skill: DeclaredReadOnlyBearing): boolean {
-  return declaredReadOnly(skill.metadata) === true;
+  // A verb that ALSO declares `proposeOnly` is not run as a read: the
+  // tighter declaration wins, so the gate's read-only short-circuit never
+  // skips the propose-only floor (`capabilityVerbAllowsRuleWiden`).
+  return (
+    declaredReadOnly(skill.metadata) === true &&
+    declaredProposeOnly(skill.metadata) !== true
+  );
 }
 
 /**
