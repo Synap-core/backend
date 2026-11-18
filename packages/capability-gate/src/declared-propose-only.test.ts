@@ -116,7 +116,7 @@ describe("a verb declaring metadata.proposeOnly never runs on its own", () => {
     });
   });
 
-  it("only a real boolean declares it: false and \"true\" run", async () => {
+  it('only a real boolean declares it: false and "true" run', async () => {
     findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
     expect(
       await gateCapabilityExecution(agentRun({ proposeOnly: false }))
@@ -135,9 +135,9 @@ describe("capabilityVerbAllowsRuleWiden reads the declaration", () => {
     expect(
       capabilityVerbAllowsRuleWiden("gmail_send", "send_email", DECLARED)
     ).toBe(false);
-    expect(capabilityVerbAllowsRuleWiden("hcloud_delete_server", null, {})).toBe(
-      true
-    );
+    expect(
+      capabilityVerbAllowsRuleWiden("hcloud_delete_server", null, {})
+    ).toBe(true);
     expect(capabilityVerbAllowsRuleWiden("hcloud_delete_server")).toBe(true);
   });
 });

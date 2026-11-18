@@ -111,10 +111,7 @@ export function interpolateTyped<T>(
   return (out === OMIT ? undefined : out) as T;
 }
 
-function typedValue(
-  value: unknown,
-  params: Record<string, unknown>
-): unknown {
+function typedValue(value: unknown, params: Record<string, unknown>): unknown {
   if (typeof value === "string") {
     const whole = WHOLE_VALUE_PARAM_RE.exec(value);
     if (!whole) return interpolateString(value, params);
@@ -122,9 +119,7 @@ function typedValue(
     return v === undefined ? OMIT : v;
   }
   if (Array.isArray(value)) {
-    return value
-      .map((v) => typedValue(v, params))
-      .filter((v) => v !== OMIT);
+    return value.map((v) => typedValue(v, params)).filter((v) => v !== OMIT);
   }
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};

@@ -85,19 +85,17 @@ describe("buildProviderRequest — a whole-value token keeps its type", () => {
   });
 
   it("GraphQL variables follow the same rule", () => {
-    const { body } = buildProviderRequest(
-      {
-        tool: "t",
-        method: "POST",
-        pathTemplate: "/graphql",
-        transport: "graphql",
-        graphql: {
-          query: "mutation M($ids: [ID!], $limit: Int) { m(ids: $ids) }",
-          variables: { ids: "{{ids}}", limit: "{{limit}}" },
-        },
+    const spec: ProviderVerbSpec = {
+      tool: "t",
+      method: "POST",
+      pathTemplate: "/graphql",
+      transport: "graphql",
+      graphql: {
+        query: "mutation M($ids: [ID!], $limit: Int) { m(ids: $ids) }",
+        variables: { ids: "{{ids}}", limit: "{{limit}}" },
       },
-      { ids: ["a", "b"] }
-    );
+    };
+    const { body } = buildProviderRequest(spec, { ids: ["a", "b"] });
     expect((body as { variables: unknown }).variables).toEqual({
       ids: ["a", "b"],
     });

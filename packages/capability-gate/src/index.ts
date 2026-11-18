@@ -763,9 +763,7 @@ async function readVerbPosture(
   return {
     intent: known.intent !== undefined ? known.intent : (row?.intent ?? null),
     metadata:
-      known.metadata !== undefined
-        ? known.metadata
-        : (row?.metadata ?? null),
+      known.metadata !== undefined ? known.metadata : (row?.metadata ?? null),
   };
 }
 

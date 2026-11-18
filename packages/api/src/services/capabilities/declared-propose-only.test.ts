@@ -33,9 +33,9 @@ describe("metadata.proposeOnly reaches installed pods", () => {
   const live = { name: "hcloud_delete_server", metadata: { runCount: 2 } };
 
   it("a proposeOnly-only difference is drift", () => {
-    expect(capabilityDefinitionDrift([live], { skills: [def] }).drifted).toEqual(
-      ["hcloud_delete_server"]
-    );
+    expect(
+      capabilityDefinitionDrift([live], { skills: [def] }).drifted
+    ).toEqual(["hcloud_delete_server"]);
   });
 
   it("the applier writes it, keeps DB-owned keys, and one apply converges", () => {
@@ -71,9 +71,9 @@ describe("proposeOnlyLoosened — approval demotion, one direction, by value", (
     expect(
       proposeOnlyLoosened({ proposeOnly: true }, { proposeOnly: true })
     ).toBe(false);
-    expect(proposeOnlyLoosened({ readOnly: false }, { proposeOnly: true })).toBe(
-      false
-    );
+    expect(
+      proposeOnlyLoosened({ readOnly: false }, { proposeOnly: true })
+    ).toBe(false);
     expect(proposeOnlyLoosened(undefined, { proposeOnly: true })).toBe(false);
   });
 });
