@@ -9598,7 +9598,8 @@ declare const GOVERNANCE_CEILING_AXES: [
 	"worker_pending_approvals",
 	"worker_irreversible_sends_daily",
 	"linkedin_invitations_daily",
-	"linkedin_actions_daily"
+	"linkedin_actions_daily",
+	"compute_spend_daily_cents"
 ];
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];
 declare const CONFIG_SCOPE_KINDS: [
@@ -23495,10 +23496,11 @@ export type ExecuteCapabilityResult = {
  * template field, nothing stored (the retired `settings.taskIntents`).
  *
  * ── WHY A MIRROR AND NOT AN IMPORT ─────────────────────────────────────────
- * THE SSOT IS THE POD's `needs` TABLE, seeded by migration `0426_needs.sql`.
+ * THE SSOT IS THE POD's `needs` TABLE, seeded by migrations `0426_needs.sql`
+ * and `0431_compute_need_and_leases.sql` (`compute`).
  * This list is a hand mirror with a parity guard (`parity.test.ts`) that
  * re-derives the seed SQL. ⚠️ MIRRORED IN LOCKSTEP with:
- *   - the `INSERT INTO "needs"` rows — migration `0426`
+ *   - the `INSERT INTO "needs"` rows — migrations `0426`, `0431`
  *   - `NEEDS` — synap-control-plane-api `src/seeds/need-vocabulary.ts`
  * A slug added in a NEW migration must be added to both guards' filename
  * lists: extending the list is part of adding the slug.
@@ -43497,7 +43499,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		set: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId?: string | null | undefined;
-				axis?: "daily_write_count" | "pending_proposal_cap" | undefined;
+				axis?: "compute_spend_daily_cents" | "daily_write_count" | "pending_proposal_cap" | undefined;
 				capabilityId?: string | null | undefined;
 				configScopeKind?: string | undefined;
 				limitValue?: number | undefined;
@@ -43592,7 +43594,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ceiling: {
 					agentUserId: string | null;
-					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
+					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "compute_spend_daily_cents" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
 					createdAt: Date;
 					createdBy: string;
 					expiresAt: Date | null;
@@ -43618,7 +43620,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				ceilings: {
 					agentLabel: string | null;
 					agentUserId: string | null;
-					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
+					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "compute_spend_daily_cents" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
 					createdAt: Date;
 					createdBy: string;
 					expiresAt: Date | null;
@@ -43640,7 +43642,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ceiling: {
 					agentUserId: string | null;
-					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
+					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "compute_spend_daily_cents" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
 					createdAt: Date;
 					createdBy: string;
 					expiresAt: Date | null;
