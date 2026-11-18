@@ -264,7 +264,11 @@ describe("toolRunEdits: what a person changed before approving", () => {
     const edits = toolRunEdits(
       [
         entry(proposed, second),
-        entry(second, { ...proposed, text: "Third" }, "2026-11-17T11:00:00.000Z"),
+        entry(
+          second,
+          { ...proposed, text: "Third" },
+          "2026-11-17T11:00:00.000Z"
+        ),
       ],
       { isSecretName }
     );
@@ -294,7 +298,12 @@ describe("toolRunEdits: what a person changed before approving", () => {
     expect(
       toolRunEdits(
         [
-          { at: "t", by: "u", before: { _summary: "a" }, patch: { _summary: "b" } },
+          {
+            at: "t",
+            by: "u",
+            before: { _summary: "a" },
+            patch: { _summary: "b" },
+          },
           entry({ n: 1 }, { n: 2 }),
         ],
         { isSecretName }
