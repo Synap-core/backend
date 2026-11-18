@@ -81,8 +81,8 @@ export function RefuseTrigger({
   return (
     <Button
       variant="bordered"
-      className="rq-refuse min-h-11"
-      startContent={<X aria-hidden size={16} />}
+      className="rq-refuse min-h-11 px-3 sm:px-4"
+      startContent={<X aria-hidden size={16} className="hidden sm:block" />}
       isDisabled={isDisabled}
       onPress={onPress}
       data-refuse-trigger=""

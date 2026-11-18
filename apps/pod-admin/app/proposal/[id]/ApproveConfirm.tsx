@@ -46,8 +46,10 @@ export function ApproveConfirm({
       <div className="flex flex-wrap items-center gap-2">
         <Button
           color="success"
-          className="min-h-11"
-          startContent={<TriangleAlert aria-hidden size={16} />}
+          className="min-h-11 px-3 sm:px-4"
+          startContent={
+            <TriangleAlert aria-hidden size={16} className="hidden sm:block" />
+          }
           isLoading={loading}
           isDisabled={disabled}
           onPress={onConfirm}
@@ -56,7 +58,7 @@ export function ApproveConfirm({
         </Button>
         <Button
           variant="bordered"
-          className="min-h-11"
+          className="min-h-11 px-3 sm:px-4"
           // Cancel holds the focus: Enter never confirms by accident.
           autoFocus
           isDisabled={loading}

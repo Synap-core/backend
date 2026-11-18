@@ -662,15 +662,17 @@ function DecisionButtons({
 
   /* ONE row at every width (founder, 17 Nov 2026, on a phone): Approve and
      Reject as split buttons; each chevron opens its rule menu. Without a
-     menu the verb is a plain button. */
+     menu the verb is a plain button. On a phone the verbs drop their glyph
+     and take a narrower padding, or the two groups (two 44 px chevrons)
+     wrap onto two lines at 390 px; the words carry the meaning. */
   return (
     <div className="flex flex-col gap-1.5">
       <div data-decision-verbs="" className="flex flex-wrap items-center gap-2">
         <ButtonGroup>
           <Button
             color="success"
-            className="min-h-11"
-            startContent={<Check size={16} />}
+            className="min-h-11 px-3 sm:px-4"
+            startContent={<Check size={16} className="hidden sm:block" />}
             isLoading={decision.approving}
             isDisabled={busy || waiting || setupBlock !== null}
             aria-describedby={setupBlock ? "review-setup-block" : undefined}
