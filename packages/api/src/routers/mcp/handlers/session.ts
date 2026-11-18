@@ -1327,6 +1327,24 @@ export const sessionHandlers: McpHandlerMap = {
     const rows = attachSessionKind(
       attachTriage(await attachParentSessionIds(sessions))
     );
+    // `fields`: columns the caller names, added WHOLE to each lean row, so a
+    // read across many sessions (e.g. one playbook's runs: stages, outcomes)
+    // costs what it needs, not the 62 KB `full` page. A name no row carries is
+    // said in `unknownFields`, never silently dropped.
+    const named = Array.isArray(args.fields)
+      ? [
+          ...new Set(
+            (args.fields as unknown[]).filter(
+              (f): f is string => typeof f === "string" && f !== ""
+            )
+          ),
+        ]
+      : [];
+    const known = new Set(rows.flatMap((r) => Object.keys(r)));
+    const extra = rows.length ? named.filter((f) => known.has(f)) : named;
+    const unknownFields = rows.length
+      ? named.filter((f) => !known.has(f))
+      : [];
     return ok({
       // `lean` (default): the row an agent scans to pick a session — a full
       // row carries goal, criteria, stages and metadata, 62 KB for one page.
@@ -1343,7 +1361,11 @@ export const sessionHandlers: McpHandlerMap = {
               projectId: r.projectId,
               workspaceId: r.workspaceId,
               updatedAt: r.updatedAt,
+              ...Object.fromEntries(
+                extra.map((f) => [f, (r as Record<string, unknown>)[f]])
+              ),
             })),
+      ...(unknownFields.length ? { unknownFields } : {}),
       count: sessions.length,
       offset,
       ...(hasMore ? { nextOffset: offset + limit } : {}),

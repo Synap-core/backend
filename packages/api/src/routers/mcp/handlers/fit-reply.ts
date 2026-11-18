@@ -1,8 +1,9 @@
 /**
  * Fit a machine-read reply under the MCP reply cap WITHOUT cutting it.
  *
- * WHY: the reply cap (`reply-cap.ts`) turns any reply over 16,000 characters
- * into `{truncated, head}`: honest, but a program cannot parse a head. On
+ * WHY: the reply cap (`reply-cap.ts`) turned any reply over 16,000 characters
+ * into `{truncated, head}`: honest, but a program cannot parse a head (since
+ * 2026-11-18 the cap fits every JSON object reply with this same helper). On
  * 2026-11-09 the founder's Mac worker could not read a lean session (18,987
  * characters) nor a room (22,886) and stalled (finding 69fdd2e6). A read a
  * program depends on (`synap_get_session` lean, `synap_get_thread_context`)
@@ -14,7 +15,7 @@
  * needs), else the largest long string keeps its first half. Each step shrinks the reply, so it ends; `fit.omitted`
  * names each list and how many items it lost, `fit.clipped` each string.
  */
-import { REPLY_CAP_CHARS } from "../reply-cap.js";
+import { REPLY_CAP_CHARS } from "../reply-cap-budget.js";
 import { replyJson, UntrustedText } from "./shared.js";
 
 /**

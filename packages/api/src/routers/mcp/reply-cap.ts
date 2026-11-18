@@ -4,16 +4,26 @@
  * WHY: no tool reply had a ceiling, so one read could cost tens of thousands
  * of tokens (`synap_get_session` measured 120,612 chars, finding 3a849acf), and
  * Claude Code silently drops the end of anything over its own limit. A reply
- * over the budget now comes back as a valid JSON envelope that SAYS what was
- * left out and how to narrow the call, never silently cut.
+ * over the budget now comes back as valid JSON that SAYS what was left out and
+ * how to narrow the call, never silently cut.
+ *
+ * HOW (finding 18becda0, 2026-11-18): a JSON object reply is FITTED
+ * (`fitReply`): whole rows dropped from the end of its largest lists, long
+ * strings clipped, with a `fit` notice naming each. A paged list reply whose
+ * own rows were cut gets `nextOffset` at the first row left out, so the next
+ * call reads on and nothing is lost. The old cut (the first characters of the
+ * text as a string in `head`) left broken JSON with no way on, and agents
+ * went around the MCP to raw Hub calls to get the data. That cut stays only
+ * for a reply that is not a JSON object.
  *
  * A reply within budget is returned untouched (the same object). Errors are
  * never capped: an error text must reach the caller whole.
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { fitReply } from "./handlers/fit-reply.js";
+import { REPLY_CAP_CHARS } from "./reply-cap-budget.js";
 
-/** Characters (not tokens) one text block may carry, ~4K tokens. */
-export const REPLY_CAP_CHARS = 16_000;
+export { REPLY_CAP_CHARS };
 
 /**
  * Tools whose reply IS a body the caller asked to read whole (a skill's text
@@ -91,6 +101,117 @@ function envelope(
   });
 }
 
+/** Room the fitted reply keeps for its `fit` notice and `nextOffset`. */
+const FIT_NOTICE_ROOM = 1_200;
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * Where a paged reply keeps its offset: top-level `offset` / `nextOffset`
+ * (the DB-paged doors) or `paging.offset` (`pageSlice`). `null` = not paged.
+ */
+function pagingOf(
+  reply: Record<string, unknown>
+): { offset: number; holder: "top" | "paging" } | null {
+  if (typeof reply.offset === "number") {
+    return { offset: reply.offset, holder: "top" };
+  }
+  if (isPlainObject(reply.paging) && typeof reply.paging.offset === "number") {
+    return { offset: reply.paging.offset, holder: "paging" };
+  }
+  return null;
+}
+
+/**
+ * `key` when it is the list `offset` walks: a top-level list, the largest
+ * one, whose length agrees with every page fact the handler wrote (`count`,
+ * `nextOffset - offset`, a last page's `total - offset`). A side list (e.g.
+ * `warnings`) fails one of them, and a wrong `nextOffset` would skip or repeat
+ * rows, so when in doubt there is none: the `fit` notice still says what was
+ * left out.
+ */
+function pageList(
+  reply: Record<string, unknown>,
+  key: string | undefined,
+  paging: { offset: number; holder: "top" | "paging" }
+): string | null {
+  if (key === undefined || !Array.isArray(reply[key])) return null;
+  const size = (k: string) => JSON.stringify(reply[k]).length;
+  const largest = Object.keys(reply)
+    .filter((k) => Array.isArray(reply[k]))
+    .reduce((a, b) => (size(b) > size(a) ? b : a));
+  if (largest !== key) return null;
+  const len = (reply[key] as unknown[]).length;
+  const facts =
+    paging.holder === "paging"
+      ? (reply.paging as Record<string, unknown>)
+      : reply;
+  const agrees = (fact: unknown, expected: number) =>
+    typeof fact !== "number" || fact === expected;
+  const ok =
+    agrees(facts.count, len) &&
+    agrees(facts.nextOffset, paging.offset + len) &&
+    (typeof facts.nextOffset === "number" ||
+      agrees(facts.total, paging.offset + len));
+  return ok ? key : null;
+}
+
+/**
+ * The reply fitted under `budget`, or `null` when it is not a JSON object or
+ * cannot be fitted. A paged reply whose ONE page list was cut reads on from
+ * the first row left out: `nextOffset` replaces the handler's (which would
+ * skip the rows dropped here), and `count` follows the rows shown.
+ */
+function fitted(
+  text: string,
+  budget: number,
+  toolName: string
+): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  const how = HOW_TO_NARROW[toolName] ?? GENERIC_HOW;
+  const out: Record<string, unknown> = fitReply(parsed, {
+    budget: budget - FIT_NOTICE_ROOM,
+    how: `Lists in \`fit.omitted\` kept their first items; strings in \`fit.clipped\` their start. ${how}`,
+  });
+  const fit = out.fit as
+    | { omitted: Record<string, number>; how: string }
+    | undefined;
+  if (!fit) {
+    // Fitted with nothing left out (the handler's JSON was only spaced out).
+    const json = JSON.stringify(out);
+    return json.length <= budget ? json : null;
+  }
+  const cut = Object.keys(fit.omitted);
+  const paging = pagingOf(parsed);
+  const page =
+    paging && cut.length === 1 ? pageList(parsed, cut[0], paging) : null;
+  if (paging && page && Array.isArray(out[page])) {
+    const shown = (out[page] as unknown[]).length;
+    const nextOffset = paging.offset + shown;
+    if (paging.holder === "paging") {
+      out.paging = { ...(out.paging as Record<string, unknown>), nextOffset };
+    } else {
+      out.nextOffset = nextOffset;
+    }
+    if (
+      typeof parsed.count === "number" &&
+      parsed.count === (parsed[page] as unknown[]).length
+    ) {
+      out.count = shown;
+    }
+    fit.how = `The rows left out are on the next page: call again with offset: ${nextOffset}. ${how}`;
+  }
+  const json = JSON.stringify(out);
+  return json.length <= budget ? json : null;
+}
+
 export function capReply(
   toolName: string,
   result: CallToolResult,
@@ -102,6 +223,8 @@ export function capReply(
   const content = result.content.map((block) => {
     if (block.type !== "text" || block.text.length <= budget) return block;
     changed = true;
+    const fit = fitted(block.text, budget, toolName);
+    if (fit !== null) return { ...block, text: fit };
     // The envelope (notice + JSON escaping of the head) must itself fit.
     let head = Math.max(0, budget - 700);
     let out = envelope(block.text, head, budget, toolName);

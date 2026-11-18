@@ -8,6 +8,7 @@
  * Scopes: mcp.read (reads), mcp.write (writes)
  */
 
+import { REPLY_CAP_CHARS } from "../reply-cap-budget.js";
 import type { Tool, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import {
@@ -752,9 +753,10 @@ async function withYourTools(
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
     return result;
-  // A reply the cap already cut (`reply-cap.ts`) keeps its envelope's shape and
-  // budget: adding a block to it made `{yourTools, truncated, head}`, over the
-  // cap and no longer the envelope a caller recognises.
+  // A reply the cap cut to a head (`reply-cap.ts`, a reply that is not a JSON
+  // object) keeps its envelope's shape and budget: adding a block to it made
+  // `{yourTools, truncated, head}`, over the cap and no longer the envelope a
+  // caller recognises.
   if ("truncated" in parsed && "head" in parsed) return result;
   let yourTools: Record<string, unknown>;
   try {
@@ -777,7 +779,11 @@ async function withYourTools(
     yourTools,
     ...rest,
   };
-  return { ...result, content: [{ type: "text", text: JSON.stringify(out) }] };
+  const text = JSON.stringify(out);
+  // A reply the cap FITTED (`fit`, `reply-cap.ts`) gets the block only when
+  // it still fits: the cap ran before this block was added.
+  if ("fit" in parsed && text.length > REPLY_CAP_CHARS) return result;
+  return { ...result, content: [{ type: "text", text }] };
 }
 
 /**
@@ -3526,6 +3532,13 @@ export const tools = {
               default: "lean",
               description:
                 "'lean' (default) = id, title, status, kind, trackId, projectId, workspaceId, updatedAt per row. 'full' = every column (goal, criteria, stages, metadata…): large, use `synap_get_session` for one session instead.",
+            },
+            fields: {
+              type: "array",
+              items: { type: "string" },
+              maxItems: 20,
+              description:
+                "Lean only: extra columns to add WHOLE to every row (e.g. ['currentStage','stages','expectedOutputs','closedAt'] to compare a playbook's runs) — far smaller than detail:'full'. A name no row carries is listed in `unknownFields`.",
             },
             playbookId: {
               type: "string",

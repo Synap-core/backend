@@ -293,6 +293,23 @@ describe("synap_list_sessions — pages past 50", () => {
     expect(full.sessions[0]).toHaveProperty("kind");
   });
 
+  it("fields adds the named columns WHOLE to the lean row, and names an unknown one", async () => {
+    const out = json(
+      (await sessionHandlers.synap_list_sessions!(
+        ctx("synap_list_sessions", {
+          status: "all",
+          limit: 2,
+          fields: ["goal", "nope"],
+        })
+      )) as { content: Array<{ text?: string }> }
+    );
+    expect(out.sessions).toHaveLength(2);
+    for (const r of out.sessions) expect(r.goal).toMatch(/^Goal /);
+    expect(out.sessions[0]).not.toHaveProperty("metadata");
+    expect(out.sessions[0]).not.toHaveProperty("nope");
+    expect(out.unknownFields).toEqual(["nope"]);
+  });
+
   it("an unknown detail is named, not silently lean", async () => {
     const out = json(
       (await sessionHandlers.synap_list_sessions!(
