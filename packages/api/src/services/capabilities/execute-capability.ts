@@ -138,6 +138,7 @@ import {
   BUILTIN_VERBS,
   DE_ESCALATION_BUILTIN_VERBS,
   READ_ONLY_BUILTIN_VERBS,
+  recipeRunRefusalAtFiling,
 } from "./builtin-verbs.js";
 import { declaredReadOnly } from "./capability-drift.js";
 import { declaredProposeOnly } from "@synap-core/types/proposals";
@@ -172,6 +173,7 @@ import {
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import { isQueuedHostVerbResult } from "../host-jobs/hosted-verbs.js";
+import { RUN_RECIPE_VERB } from "../host-jobs/hosted-verb-rules.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 import {
@@ -216,6 +218,9 @@ export type ExecuteCapabilityResult =
        * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
        * person's stored "Never" on this capability for this agent (0381).
        * Such a refusal carries no `enable`: enabling would not fix it.
+       * A recipe run refused when filed carries its run's own code
+       * (`UNKNOWN_RECIPE`, `BAD_PARAMS`; `recipeRunRefusalAtFiling`), and the
+       * sentence names the fix.
        */
       reasonCode?: string;
       /**
@@ -899,6 +904,35 @@ export async function executeCapability(input: {
         reason,
         ...(enable ? { enable } : {}),
       };
+    }
+    // CAN IT APPLY? A recipe run is planned here by the function its run
+    // calls on approval (`recipeRunRefusalAtFiling` → `planRecipeRun`, which
+    // `queueRecipeRun` runs): a recipe the computer's APPROVED version does
+    // not have, or a value that does not fill it, is refused to the caller
+    // with the run's own sentence and code, and nothing is filed. A read
+    // that FAILS here files as before: a fact not read never refuses.
+    if (skillRow.kind === "builtin" && skillRow.name === RUN_RECIPE_VERB) {
+      const refusal = await recipeRunRefusalAtFiling(parameters ?? {}, {
+        userId,
+        workspaceId,
+        agentUserId: input.agentUserId ?? null,
+        sessionId: input.sessionId ?? null,
+        verbId: skillRow.id,
+        verbName: skillRow.name,
+      }).catch((err: unknown) => {
+        logger.warn(
+          { err, skillId: skillRow.id },
+          "recipe run: the filing check could not read; filed as before"
+        );
+        return null;
+      });
+      if (refusal) {
+        return {
+          kind: "deny",
+          reason: refusal.message,
+          reasonCode: refusal.reasonCode,
+        };
+      }
     }
     const proposal = await createPendingProposal({
       userId,
