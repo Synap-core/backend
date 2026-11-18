@@ -37,6 +37,7 @@ import {
   inArray,
 } from "@synap/database";
 import { workspaces } from "@synap/database/schema";
+import { isUuid } from "@synap-core/types/property-render";
 
 import { authErrorResponse, shortenKeyId } from "../../../utils/auth-error.js";
 import { describeKeyForHolder } from "../../../services/key-holder-state.js";
@@ -59,9 +60,6 @@ import {
 } from "./_codecs/auth.js";
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function registerAuthRoutes(app: HubHono): void {
   const authStatusRoute = createRoute({
@@ -238,7 +236,7 @@ export function registerAuthRoutes(app: HubHono): void {
     }
     try {
       // Ids as stored; only uuid-shaped ones are looked up (a name, never a row).
-      const ids = grantSpaceIds(grant).filter((id) => UUID_RE.test(id));
+      const ids = grantSpaceIds(grant).filter((id) => isUuid(id));
       const named =
         ids.length > 0
           ? await db

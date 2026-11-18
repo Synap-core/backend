@@ -317,15 +317,22 @@ export function describeOwnGrant(
   };
 }
 
-/** Every space a grant names, deduplicated (to name them for `describeOwnGrant`). */
+/**
+ * Every space a grant names, deduplicated (to name them for
+ * `describeOwnGrant`), read through the one place parse (`parsePlace`).
+ */
 export function grantSpaceIds(grant: KeyGrant): string[] {
-  return [
-    ...new Set(
-      grant.scopes.flatMap((s) =>
-        (s.workspaceIds ?? []).filter((id) => typeof id === "string" && id)
-      )
-    ),
-  ];
+  const holder = holderOfGrant(grant);
+  const ids = new Set<string>();
+  for (const scope of grant.scopes) {
+    try {
+      const place = parsePlace(scope, holder);
+      if (place.kind === "spaces") for (const id of place.ids) ids.add(id);
+    } catch (err) {
+      if (!(err instanceof PlaceError)) throw err;
+    }
+  }
+  return [...ids];
 }
 
 /**
