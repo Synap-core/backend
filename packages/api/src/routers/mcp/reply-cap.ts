@@ -163,11 +163,7 @@ function pageList(
  * the first row left out: `nextOffset` replaces the handler's (which would
  * skip the rows dropped here), and `count` follows the rows shown.
  */
-function fitted(
-  text: string,
-  budget: number,
-  toolName: string
-): string | null {
+function fitted(text: string, budget: number, toolName: string): string | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -181,8 +177,7 @@ function fitted(
     how: `Lists in \`fit.omitted\` kept their first items; strings in \`fit.clipped\` their start. ${how}`,
   });
   const fit = out.fit as
-    | { omitted: Record<string, number>; how: string }
-    | undefined;
+    { omitted: Record<string, number>; how: string } | undefined;
   if (!fit) {
     // Fitted with nothing left out (the handler's JSON was only spaced out).
     const json = JSON.stringify(out);

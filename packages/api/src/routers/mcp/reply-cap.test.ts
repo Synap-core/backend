@@ -145,7 +145,9 @@ describe("capReply", () => {
         capReply(
           "synap_list_tracks",
           reply(
-            rowsReply(100, { paging: { total: 150, offset: 50, nextOffset: 150 } })
+            rowsReply(100, {
+              paging: { total: 150, offset: 50, nextOffset: 150 },
+            })
           )
         )
       )

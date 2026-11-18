@@ -1342,9 +1342,7 @@ export const sessionHandlers: McpHandlerMap = {
       : [];
     const known = new Set(rows.flatMap((r) => Object.keys(r)));
     const extra = rows.length ? named.filter((f) => known.has(f)) : named;
-    const unknownFields = rows.length
-      ? named.filter((f) => !known.has(f))
-      : [];
+    const unknownFields = rows.length ? named.filter((f) => !known.has(f)) : [];
     return ok({
       // `lean` (default): the row an agent scans to pick a session — a full
       // row carries goal, criteria, stages and metadata, 62 KB for one page.
