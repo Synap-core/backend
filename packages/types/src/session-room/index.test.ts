@@ -170,6 +170,7 @@ describe("roomTimeline", () => {
   it("an answered question is drawn too, folded by its state", () => {
     const slot = open({
       owner: undefined,
+      owedSince: null,
       answer: { text: "Disqualified", answeredAt: "2026-11-18T11:25:43Z" },
     });
     const [item] = roomTimeline([], [slot]);

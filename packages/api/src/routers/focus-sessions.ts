@@ -2423,8 +2423,9 @@ export const focusSessionsRouter = router({
       // (`dedupeOpenQuestions`): an agent driving this door does not hand the
       // person a second card for a question an open one already asks. This
       // door's reply is the row (the person's door), so the twin left out is
-      // seen there: no card was added.
-      if (ctx.agentUserId && patch.expectedOutputs !== undefined) {
+      // seen there: no card was added. Not a gate (nothing is refused or
+      // proposed here): the write and its governance below are unchanged.
+      if (patch.expectedOutputs !== undefined && ctx.agentUserId) {
         patch.expectedOutputs = dedupeOpenQuestions(
           (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
           patch.expectedOutputs
