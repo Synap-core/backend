@@ -631,7 +631,10 @@ describe("a held session changes no stage until the plan is answered (D-O1)", ()
       [orch, confirmed]
     );
   const move = (id: string, toStage: string) =>
-    refuseUndeclaredStage({ id, playbookId: null, currentStage: null }, toStage);
+    refuseUndeclaredStage(
+      { id, playbookId: null, currentStage: null },
+      toStage
+    );
 
   it("refuses a move of a held session with the orchestrator's name; frees it once the plan is answered", async () => {
     const a = await seedSession();
@@ -697,7 +700,11 @@ describe("a held session changes no stage until the plan is answered (D-O1)", ()
 // Founder decision D-O2: a NO resumes the held sessions as they were (the
 // answer ends their wait) and closes the orchestrator; a yes leaves it going.
 describe("a no to the plan closes the orchestrator (D-O2)", () => {
-  const SLOT = { key: ORCHESTRATOR_APPROVAL_SLOT, label: "Plan approval", kind: "decision" };
+  const SLOT = {
+    key: ORCHESTRATOR_APPROVAL_SLOT,
+    label: "Plan approval",
+    kind: "decision",
+  };
   const answer = (value: unknown) =>
     ({
       text: "no",
@@ -748,13 +755,21 @@ describe("a no to the plan closes the orchestrator (D-O2)", () => {
     const orch = await started();
     const lone = await seedSession();
     for (const call of [
-      { sessionId: orch, slot: SLOT, value: { type: "confirm", confirmed: true } },
+      {
+        sessionId: orch,
+        slot: SLOT,
+        value: { type: "confirm", confirmed: true },
+      },
       {
         sessionId: orch,
         slot: { ...SLOT, key: "merged-plan" },
         value: { type: "confirm", confirmed: false },
       },
-      { sessionId: lone, slot: SLOT, value: { type: "confirm", confirmed: false } },
+      {
+        sessionId: lone,
+        slot: SLOT,
+        value: { type: "confirm", confirmed: false },
+      },
     ]) {
       expect(
         await closeOrchestratorOnDeclinedPlan({

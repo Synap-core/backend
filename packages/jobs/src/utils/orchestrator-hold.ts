@@ -17,14 +17,7 @@
  * Owner floor: only an orchestrator the held session's own owner owns counts,
  * so an edge someone else wrote never freezes another person's work.
  */
-import {
-  db,
-  and,
-  eq,
-  inArray,
-  focusSessions,
-  links,
-} from "@synap/database";
+import { db, and, eq, inArray, focusSessions, links } from "@synap/database";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import { holdWaitSlotMatches } from "@synap-core/types/lifecycle";
 
@@ -37,8 +30,7 @@ export interface HoldingOrchestrator {
   name: string;
 }
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type SlotLike = {
   key?: unknown;
@@ -84,10 +76,7 @@ export async function orchestratorHolding(
     })
     .from(focusSessions)
     .where(
-      and(
-        inArray(focusSessions.id, ids),
-        eq(focusSessions.userId, held.userId)
-      )
+      and(inArray(focusSessions.id, ids), eq(focusSessions.userId, held.userId))
     );
   for (const o of orchestrators) {
     if (isTerminalSessionStatus(o.status)) continue;

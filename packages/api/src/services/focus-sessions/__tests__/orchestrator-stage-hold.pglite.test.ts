@@ -307,14 +307,17 @@ describe("a held session changes no stage on any door (D-O1)", () => {
     const two = await held();
     const three = await held();
     for (const x of [one, two, three]) await answerPlan(x.orchestrator);
-    const res = await mcpUpdate({ sessionId: one.child, currentStage: "build" });
+    const res = await mcpUpdate({
+      sessionId: one.child,
+      currentStage: "build",
+    });
     expect(res.error).toBeUndefined();
     expect(await stageOf(one.child)).toBe("build");
     await trpc().update({ id: two.child, currentStage: "build" } as never);
     expect(await stageOf(two.child)).toBe("build");
-    expect((await hubPatch(three.child, { currentStage: "build" })).status).toBe(
-      200
-    );
+    expect(
+      (await hubPatch(three.child, { currentStage: "build" })).status
+    ).toBe(200);
     expect(await stageOf(three.child)).toBe("build");
   });
 

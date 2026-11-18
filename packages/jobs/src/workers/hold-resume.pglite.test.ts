@@ -609,9 +609,9 @@ describe("a wait on the person (until.moves = answer: / proposal:)", () => {
       } as never,
       { boss } as never
     );
-    expect(
-      sent.filter((s) => (s.data as { waits?: unknown }).waits)
-    ).toEqual([]);
+    expect(sent.filter((s) => (s.data as { waits?: unknown }).waits)).toEqual(
+      []
+    );
 
     const asker = await withSlot();
     const waiter = await session();

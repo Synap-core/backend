@@ -89,9 +89,7 @@ beforeAll(async () => {
   await h.client!.exec(ddlFor(sessionStageRuns as unknown as PgTable));
   // A session paused on a wait hold keeps itself (SESSION_IS_STALE reads
   // the current hold off the transition log).
-  await h.client!.exec(
-    ddlFor(lifecycleTransitionOutbox as unknown as PgTable)
-  );
+  await h.client!.exec(ddlFor(lifecycleTransitionOutbox as unknown as PgTable));
   registerSessionCloser(async ({ sessionId }) => {
     closed.push(sessionId);
     return {
