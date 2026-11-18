@@ -111,6 +111,10 @@ import {
   spaceEntityBodyInSpacesWhere,
   roleInSpacesWhere,
 } from "../utils/project-scope.js";
+import {
+  sessionCountsInSpacesWhere,
+  sessionRoomCountsInSpacesWhere,
+} from "./session-counted-spaces.js";
 
 export interface GrantReadSpec {
   /** The grant subject (governance spelling): `entity`, `document`, … */
@@ -218,7 +222,15 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     proposalSnoozes,
     spec("proposal", {}, { idColumn: proposalSnoozes.proposalId }),
   ],
-  [focusSessions, spec("session", focusSessions)],
+  // A project-only session (no space of its own) counts in its project's
+  // spaces (founder, 18 Nov 2026: `session-counted-spaces.ts`, the one rule
+  // the write doors also check).
+  [
+    focusSessions,
+    spec("session", focusSessions, {
+      spaceReach: (spaces) => sessionCountsInSpacesWhere(spaces),
+    }),
+  ],
   [sessionEvaluations, spec("session", sessionEvaluations)],
   // No id column (PK session × client key): a grant on the SESSION reads its
   // runners — who is attached to it — and nothing else.
@@ -231,7 +243,13 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
       // space reads the channel of every record that SAME scope reads there,
       // as a document follows its entity. The channel's own stamp is not
       // enough: a person's external channel is pod-wide (no space).
-      spaceReach: (_spaces, scope) => channelFollowsEntityWhere(scope),
+      // A project-only session's own room follows its session the same way
+      // (`session-counted-spaces.ts`).
+      spaceReach: (spaces, scope) =>
+        or(
+          channelFollowsEntityWhere(scope),
+          sessionRoomCountsInSpacesWhere(spaces)
+        )!,
     }),
   ],
   [events, spec("event", events)],
