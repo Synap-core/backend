@@ -40,7 +40,8 @@ export type ConversionOp =
   | FillFacetInitialStatusOp
   | DropStaleLifecycleListsOp
   | FoldBookingDealIntoLeadOp
-  | RekindByStatusOp;
+  | RekindByStatusOp
+  | RetireProjectTwinsOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -714,6 +715,30 @@ export interface FillFacetInitialStatusOp extends BaseOp {
  */
 export interface DropStaleLifecycleListsOp extends BaseOp {
   op: "dropStaleLifecycleLists";
+}
+
+/**
+ * Retire the project TWINS (ticket 8e2c7018, founder-approved repair
+ * d95793d1). Projects live in the `projects` table since migration 0151,
+ * which left each project's entity row behind under the SAME id; a reserved
+ * `project` kind kept being written by templates the catalog now refuses.
+ * Recall answered from those rows. Per pod, once (ledgered):
+ *   (a) every live twin (`selectProjectTwins`: id is a `projects.id`, or its
+ *       profile is on a reserved slug) is SOFT-deleted, with a
+ *       `system_data.retiredByConversion` breadcrumb (op key + reasons) so a
+ *       person can bring one back (`deleted_at = NULL`). Its RELATIONS are
+ *       never touched: a `belongs_to_project` edge targets the project's id,
+ *       so it is the project's membership, not the twin's;
+ *   (b) their `entity_vectors` rows are dropped, and the pod's entities
+ *       search stamp is cleared so the jobs boot runs the full reindex, the
+ *       indexer's existing prune of rows that are no longer live (Typesense);
+ *   (c) the reserved profile rows still active are deactivated. After (a) no
+ *       live entity is on them (each was a `reserved_kind` twin).
+ * Idempotent: a retired twin is no longer live. No destructive tail: a soft
+ * delete is reversible and the founder asked for it at boot on every pod.
+ */
+export interface RetireProjectTwinsOp extends BaseOp {
+  op: "retireProjectTwins";
 }
 
 /** A versioned manifest — the ordered list the engine walks. */
@@ -2388,6 +2413,14 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       targetKey: "nextAction",
       onConflict: "keepTarget",
     },
+    // ─── Project twins (ticket 8e2c7018, founder approval d95793d1) ───────────
+    // The entity rows migration 0151 left behind under each project's id, and
+    // entities of the reserved `project` kind: retired once per pod, their
+    // relations kept (see RetireProjectTwinsOp).
+    {
+      op: "retireProjectTwins",
+      opKey: "pt1.projects.retire-project-twins",
+    },
   ],
 };
 
@@ -2417,6 +2450,7 @@ export const CONVERSION_OP_TYPES = [
   "dropStaleLifecycleLists",
   "foldBookingDealIntoLead",
   "rekindByStatus",
+  "retireProjectTwins",
 ] as const satisfies ReadonlyArray<ConversionOp["op"]>;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
@@ -2709,6 +2743,8 @@ export function validateManifest(manifest: ConversionManifest): void {
       case "fillFacetInitialStatus":
       case "dropStaleLifecycleLists":
         break; // no parameters: every declared lifecycle
+      case "retireProjectTwins":
+        break; // no parameters: the one twin predicate
       case "renameProfile":
         requireSlug(op.opKey, op.slug);
         requireSlug(op.opKey, op.toSlug, "toSlug");

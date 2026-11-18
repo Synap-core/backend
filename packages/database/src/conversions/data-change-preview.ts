@@ -120,6 +120,7 @@ export function opTerms(op: ConversionOp): DataChangeTerms {
     case "projectLifecycleColumns":
     case "fillFacetInitialStatus":
     case "dropStaleLifecycleLists":
+    case "retireProjectTwins":
       return { kinds: [], fields: [] };
     case "reconcileEntityScope":
     case "reconcileFacetScope":

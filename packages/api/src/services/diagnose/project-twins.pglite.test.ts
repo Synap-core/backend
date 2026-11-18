@@ -6,7 +6,8 @@
  * template. Both shapes are reported, each with its reason; a soft-deleted
  * entity, an ordinary one and another user's are not.
  *
- * Real: the query, on PGlite tables generated from the Drizzle schema.
+ * Real: the query (`selectProjectTwins`, the one the retire conversion uses),
+ * on PGlite tables generated from the Drizzle schema.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -25,7 +26,16 @@ vi.mock("@synap/database", async (importOriginal) => {
   const { drizzle } = await import("drizzle-orm/pglite");
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
-  return { ...actual, db: drizzle(client) };
+  // The predicate runs on the raw postgres.js client (`selectProjectTwins`,
+  // shared with the conversion engine): a tagged template over PGlite.
+  const sql = async (strings: TemplateStringsArray, ...values: unknown[]) =>
+    (
+      await client.query(
+        strings.reduce((t, s, i) => t + "$" + i + s),
+        values
+      )
+    ).rows;
+  return { ...actual, db: drizzle(client), sql };
 });
 
 const schema = await import("@synap/database/schema");
