@@ -5296,8 +5296,9 @@ VALUES
    ARRAY['list_records', 'fetch_record'], ARRAY[]::text[])
 ON CONFLICT ("slug") DO NOTHING;
 
--- Compute leases (0431): one row per compute start; the TTL sweeper
--- destroys each active lease past `expires_at`. Mirrors 0431.
+-- Compute leases (0431, 0432): one row per compute start; the TTL sweeper
+-- destroys each active lease past `expires_at`, except a new pod's server
+-- that registered (`kept`, 0432). Mirrors 0431 and 0432.
 CREATE TABLE IF NOT EXISTS "compute_leases" (
   "id"                   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"              text        NOT NULL,
@@ -5310,6 +5311,7 @@ CREATE TABLE IF NOT EXISTS "compute_leases" (
   "release_verb"         text        NOT NULL,
   "connection_selector"  jsonb,
   "resource_id"          text,
+  "registration_code_hash" text,
   "ttl_minutes"          integer     NOT NULL,
   "max_spend_cents"      integer     NOT NULL,
   "state"                text        NOT NULL DEFAULT 'starting',
@@ -5321,7 +5323,7 @@ CREATE TABLE IF NOT EXISTS "compute_leases" (
   "created_at"           timestamptz NOT NULL DEFAULT now(),
   "updated_at"           timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT "compute_leases_state_check"
-    CHECK ("state" IN ('starting', 'active', 'released', 'not_started', 'unknown')),
+    CHECK ("state" IN ('starting', 'active', 'released', 'not_started', 'unknown', 'kept')),
   CONSTRAINT "compute_leases_ttl_check" CHECK ("ttl_minutes" > 0),
   CONSTRAINT "compute_leases_spend_check" CHECK ("max_spend_cents" > 0)
 );

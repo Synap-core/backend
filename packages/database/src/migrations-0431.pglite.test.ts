@@ -1,5 +1,5 @@
 /**
- * REAL-POSTGRES (PGlite) test for migrations 0429-0431 — compute lifecycle
+ * REAL-POSTGRES (PGlite) test for migrations 0429-0432 — compute lifecycle
  * (plan a640c5bb B3, founder decisions of 18 Nov 2026):
  *   - 0429 seeds provision_compute and release_compute, both `act`;
  *   - 0430 adds the `compute_spend_daily_cents` ceiling axis, inside a
@@ -7,6 +7,8 @@
  *   - 0431 seeds the `compute` need (its four intents) and creates
  *     `compute_leases` with the drizzle schema's columns, refusing a lease
  *     with no TTL, no spend maximum or an unknown state;
+ *   - 0432 adds the lease's registration code digest and the `kept` end (a
+ *     new pod's server that registered, plan a640c5bb B1);
  *   - every file runs twice (idempotent);
  *   - the baseline carries the axis and the table; the boot coherence list
  *     names the table.
@@ -30,6 +32,7 @@ const M0426 = read("0426_needs.sql");
 const M0429 = read("0429_compute_intents.sql");
 const M0430 = read("0430_compute_spend_ceiling.sql");
 const M0431 = read("0431_compute_need_and_leases.sql");
+const M0432 = read("0432_compute_lease_kept.sql");
 const BASELINE = read("0000_baseline_schema.sql");
 
 let pg: PGlite;
@@ -48,6 +51,7 @@ beforeAll(async () => {
     await pg.exec(M0429);
     await pg.exec(`BEGIN; ${M0430} COMMIT;`);
     await pg.exec(M0431);
+    await pg.exec(M0432);
   }
 }, 60_000);
 afterAll(async () => {
@@ -106,7 +110,7 @@ describe("migrations 0429-0431 — compute lifecycle", () => {
     ]);
   });
 
-  it("0431 creates compute_leases with the drizzle columns", async () => {
+  it("0431 + 0432 create compute_leases with the drizzle columns", async () => {
     const cols = await pg.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'compute_leases'`
     );
@@ -129,6 +133,21 @@ describe("migrations 0429-0431 — compute lifecycle", () => {
     ["an unknown state", { state: "paused" }, /compute_leases_state_check/],
   ])("refuses a lease with %s", async (_label, over, why) => {
     await expect(lease(over)).rejects.toThrow(why);
+  });
+
+  it("0432 lets a lease record its registration code digest and end kept", async () => {
+    await lease({ state: "kept", registration_code_hash: "ab".repeat(32) });
+    const { rows } = await pg.query<{ state: string; h: string }>(
+      `SELECT state, registration_code_hash AS h FROM compute_leases WHERE state = 'kept'`
+    );
+    expect(rows).toEqual([{ state: "kept", h: "ab".repeat(32) }]);
+    expect(BASELINE).toContain('"registration_code_hash" text');
+    expect(BASELINE).toContain("'unknown', 'kept')");
+    expect(
+      REQUIRED_COLUMNS.filter((c) => c.table === "compute_leases").map(
+        (c) => c.addedBy
+      )
+    ).toContain("0432_compute_lease_kept.sql");
   });
 
   it("the baseline carries the axis and the table; boot coherence names it", () => {

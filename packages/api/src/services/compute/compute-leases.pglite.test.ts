@@ -14,7 +14,11 @@
  *    and on the start's proposal; a lease not yet due is left alone;
  *  - a failed release stays active with its error, and is retried;
  *  - a manual destroy closes the lease of the machine it names; a stop does
- *    not.
+ *    not;
+ *  - a new pod's server (its start carried a pod registration code, plan
+ *    a640c5bb B1) records the code's digest, is KEPT once the Control Plane
+ *    says the code registered, and at its TTL is destroyed only on the
+ *    Control Plane's "not registered" (an unread answer is not a no).
  */
 import {
   describe,
@@ -45,7 +49,12 @@ const runSkillMock = vi.hoisted(() => vi.fn());
 vi.mock("../skills/run-skill.js", () => ({
   runSkill: runSkillMock,
 }));
+const registrationStatus = vi.hoisted(() => vi.fn());
+vi.mock("./pod-registration-status.js", () => ({
+  readPodRegistrationStatus: registrationStatus,
+}));
 
+import { createHash } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
@@ -132,6 +141,8 @@ async function leases() {
     proposal_id: string | null;
     release_verb: string;
     agent_user_id: string | null;
+    registration_code_hash: string | null;
+    release_result: Record<string, unknown> | null;
   }>(`select * from compute_leases order by created_at`);
   return r.rows;
 }
@@ -172,6 +183,8 @@ afterAll(async () => pg?.close());
 beforeEach(async () => {
   await pg.exec(`delete from compute_leases; delete from proposals;`);
   runSkillMock.mockReset();
+  registrationStatus.mockReset();
+  registrationStatus.mockResolvedValue({ state: "not_registered" });
   runSkillMock.mockImplementation(
     async (args: { skillId: string; parameters: unknown }) =>
       holder.sandbox(args)
@@ -269,7 +282,7 @@ describe("the TTL sweeper", () => {
     const result = await releaseExpiredComputeLeases({
       now: new Date(Date.now() + 61 * 60_000),
     });
-    expect(result).toEqual({ due: 1, released: 1, failed: 0 });
+    expect(result).toEqual({ due: 1, released: 1, failed: 0, kept: 0 });
     expect(runSkillMock).toHaveBeenCalledTimes(1);
     expect(runSkillMock.mock.calls[0]![0]).toMatchObject({
       skillId: RELEASE_ID,
@@ -295,7 +308,7 @@ describe("the TTL sweeper", () => {
       await releaseExpiredComputeLeases({
         now: new Date(Date.now() + 61 * 60_000),
       })
-    ).toEqual({ due: 0, released: 0, failed: 0 });
+    ).toEqual({ due: 0, released: 0, failed: 0, kept: 0 });
   });
 
   it("a failed release stays active with its error, and is tried again", async () => {
@@ -306,6 +319,7 @@ describe("the TTL sweeper", () => {
       due: 1,
       released: 0,
       failed: 1,
+      kept: 0,
     });
     let [lease] = await leases();
     expect(lease).toMatchObject({
@@ -318,6 +332,7 @@ describe("the TTL sweeper", () => {
       due: 1,
       released: 1,
       failed: 0,
+      kept: 0,
     });
     [lease] = await leases();
     expect(lease).toMatchObject({ state: "released", release_attempts: 2 });
@@ -347,5 +362,114 @@ describe("a manual release", () => {
     expect(out.kind).toBe("error");
     expect(runSkillMock).not.toHaveBeenCalled();
     expect((await leases())[0]!.state).toBe("active");
+  });
+});
+
+describe("a new pod's server (plan a640c5bb B1)", () => {
+  const code = "spr_" + "a2".repeat(20);
+  const digest = createHash("sha256").update(code).digest("hex");
+  const podStart = (proposalId?: string) =>
+    start(
+      {
+        ttlMinutes: 120,
+        maxSpendCents: 50,
+        options: { user_data: `#cloud-config\nSYNAP_REGISTER_TOKEN='${code}'` },
+      },
+      proposalId
+    );
+  const later = () => new Date(Date.now() + 121 * 60_000);
+
+  it("records the code's digest on its lease, never the code", async () => {
+    await podStart();
+    const [lease] = await leases();
+    expect(lease!.registration_code_hash).toBe(digest);
+    expect(JSON.stringify(lease)).not.toContain(code);
+  });
+
+  it("is kept once its code registered, and never destroyed", async () => {
+    await pg.query(
+      `insert into proposals (id, target_type, target_id, proposal_type, status, data)
+       values ($1, 'capability', $2, 'capability.run', 'approved', '{"summary":"Start"}'::jsonb)`,
+      [PROPOSAL_ID, PROVISION_ID]
+    );
+    await podStart(PROPOSAL_ID);
+    registrationStatus.mockResolvedValue({ state: "registered", podId: "pod-9" });
+    runSkillMock.mockClear();
+
+    // Before its TTL: the tick keeps it.
+    expect(await releaseExpiredComputeLeases()).toEqual({
+      due: 0,
+      released: 0,
+      failed: 0,
+      kept: 1,
+    });
+    expect(registrationStatus).toHaveBeenCalledWith(digest);
+    const [lease] = await leases();
+    expect(lease).toMatchObject({ state: "kept" });
+    expect(lease!.release_result).toMatchObject({
+      kept: { reason: "pod_registered", podId: "pod-9" },
+    });
+    const proposal = await pg.query<{ data: Record<string, any> }>(
+      `select data from proposals where id = $1`,
+      [PROPOSAL_ID]
+    );
+    expect(proposal.rows[0]!.data.computeRelease).toMatchObject({
+      status: "kept",
+      reason: "pod_registered",
+      podId: "pod-9",
+    });
+
+    // Past its TTL: nothing to destroy.
+    expect(await releaseExpiredComputeLeases({ now: later() })).toEqual({
+      due: 0,
+      released: 0,
+      failed: 0,
+      kept: 0,
+    });
+    expect(runSkillMock).not.toHaveBeenCalled();
+  });
+
+  it("at its TTL, an unread answer is not a no: it is not destroyed", async () => {
+    await podStart();
+    registrationStatus.mockResolvedValue({
+      state: "unread",
+      reason: "the Control Plane did not answer",
+    });
+    runSkillMock.mockClear();
+    expect(await releaseExpiredComputeLeases({ now: later() })).toEqual({
+      due: 1,
+      released: 0,
+      failed: 1,
+      kept: 0,
+    });
+    expect(runSkillMock).not.toHaveBeenCalled();
+    const [lease] = await leases();
+    expect(lease).toMatchObject({ state: "active" });
+    expect(lease!.last_release_error).toMatch(/registered as a pod/);
+  });
+
+  it("at its TTL, a code that never registered is destroyed as any start", async () => {
+    await podStart();
+    runSkillMock.mockClear();
+    expect(await releaseExpiredComputeLeases({ now: later() })).toEqual({
+      due: 1,
+      released: 1,
+      failed: 0,
+      kept: 0,
+    });
+    expect(runSkillMock.mock.calls[0]![0]).toMatchObject({
+      skillId: RELEASE_ID,
+      parameters: { resourceId: "4711", mode: "destroy" },
+    });
+    expect((await leases())[0]!.state).toBe("released");
+  });
+
+  it("a start with no code never asks the Control Plane", async () => {
+    await start({ ttlMinutes: 60, maxSpendCents: 300 });
+    await releaseExpiredComputeLeases({
+      now: new Date(Date.now() + 61 * 60_000),
+    });
+    expect(registrationStatus).not.toHaveBeenCalled();
+    expect((await leases())[0]!.state).toBe("released");
   });
 });

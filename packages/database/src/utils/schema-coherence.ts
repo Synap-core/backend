@@ -2258,6 +2258,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "release_verb",
     addedBy: "0431_compute_need_and_leases.sql",
   },
+  {
+    table: "compute_leases",
+    column: "registration_code_hash",
+    addedBy: "0432_compute_lease_kept.sql",
+  },
 
   // Document passages (0358b) — a document body as recall-sized units, and
   // the per-document state the revision sweep reads. Absence means every

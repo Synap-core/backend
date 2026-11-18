@@ -236,6 +236,24 @@ describe("the edit scope is text arguments only", () => {
       /credential/
     );
   });
+  it("refuses an argument carrying a pod registration code (plan a640c5bb B1)", () => {
+    const code = "spr_" + "a2".repeat(20);
+    expect(() =>
+      computeRevisedEnvelope({
+        proposalType: "capability.run",
+        envelope: {
+          ...ORIGINAL,
+          parameters: { userData: `#cloud-config\nT='${code}'`, name: "a" },
+        },
+        patch: {
+          kind: "envelope",
+          fields: { parameterEdits: { userData: "#cloud-config\n" } },
+        },
+        actorId: "user-1",
+        isSecretName,
+      })
+    ).toThrow(/pod registration code/);
+  });
   it("refuses an argument that is not text, or not there", () => {
     expect(() => edit({ parameterEdits: { limit: "9" } })).toThrow(
       /not a text argument/
