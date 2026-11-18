@@ -156,7 +156,8 @@ describe("synap_capture table: 57 expense lines linked to receipts by number", (
     const out = await call({ table: register() });
 
     expect(submitCaptureGraph).toHaveBeenCalledTimes(1);
-    const input = vi.mocked(submitCaptureGraph).mock.calls[0]![0] as {
+    const [submitted] = vi.mocked(submitCaptureGraph).mock.calls[0]!;
+    const input = submitted as unknown as {
       entities: Array<Record<string, unknown>>;
       relations: Array<{ sourceRef: string; targetRef: string; type: string }>;
       summary?: string;
@@ -230,7 +231,8 @@ describe("synap_capture table: 57 expense lines linked to receipts by number", (
     const out = await call({ table: register(), validate: true });
     expect(submitCaptureGraph).not.toHaveBeenCalled();
     expect(dryRunCaptureGraph).toHaveBeenCalledTimes(1);
-    const input = vi.mocked(dryRunCaptureGraph).mock.calls[0]![1] as {
+    const [, checked] = vi.mocked(dryRunCaptureGraph).mock.calls[0]!;
+    const input = checked as unknown as {
       entities: unknown[];
       relations: unknown[];
     };
