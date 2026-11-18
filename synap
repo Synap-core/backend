@@ -2066,6 +2066,17 @@ _reg_nonce() { _reg_sha256_hex "synap-registration:$1"; }
 _reg_valid_name()  { [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; }
 # The CP mints spr_ + lowercase base32 (≥160 bits); same pattern the CP validates.
 _reg_valid_token() { [[ "$1" =~ ^spr_[a-z2-7]{32,80}$ ]]; }
+# Is <domain> a Synap address (a tenant zone, current or legacy, or under one)?
+# Its DNS is the Control Plane's to create, at registration only.
+_reg_in_synap_zone() {
+    local d z
+    d="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"; d="${d%.}"
+    while read -r z; do
+        [ "$d" = "$z" ] && return 0
+        [[ "$d" == *."$z" ]] && return 0
+    done < <(synap_tenant_zones; synap_legacy_tenant_zones)
+    return 1
+}
 # https only; plain http is accepted for a loopback CP (local dev / tests).
 _reg_valid_cp_url() {
     [[ "$1" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$ ]] \
@@ -2869,6 +2880,89 @@ EOF
     if [ "$INTERACTIVE" = false ]; then
         export SYNAP_NON_INTERACTIVE=1
     fi
+    # A pod already installed here (a re-run) keeps its .env answers: no onboarding,
+    # and a Synap-zone address it already holds is not re-checked for a code.
+    local EXISTING_DEPLOY_DIR="" EXISTING_INSTALL=false
+    EXISTING_DEPLOY_DIR="$(get_deploy_dir)"
+    if [ -n "$EXISTING_DEPLOY_DIR" ] && { [ -f "$EXISTING_DEPLOY_DIR/.env" ] || [ -f "$EXISTING_DEPLOY_DIR/state/registration.json" ]; }; then
+        EXISTING_INSTALL=true
+    fi
+    # ── Onboarding: a person at a terminal with nothing decided yet (no code, no
+    # name, no domain) chooses how the pod runs. Linked = a registration code from
+    # their Synap account (sign-in with that account, the plan's AI, the catalog,
+    # the pod listed in the account, its <name>.pod.synap.live address); standalone
+    # = a domain they own and nothing shared with Synap. The answers fill the same
+    # variables the flags fill, so every check below applies to them unchanged.
+    # The work questions (what to run first, access, defaults) are pod admin's
+    # /start, never asked here.
+    if [ "$INTERACTIVE" = true ] && [ "$EXISTING_INSTALL" = false ] \
+        && [ -z "$REGISTER_TOKEN" ] && [ -z "$POD_NAME" ] && [ -z "$DOMAIN" ]; then
+        local ONBOARD_CHOICE="" ONBOARD_TRIES=0 ONBOARD_DOMAIN=""
+        echo ""
+        echo -e "${BLUE}🔗 How should this pod run?${NC}"
+        echo "  1) Linked to your Synap account (recommended)"
+        echo "     You sign in with your Synap account; the AI in your plan, the catalog"
+        echo "     and your pod's place in your account come with it. Needs a code from"
+        echo "     https://synap.live/account/pod/connect (valid 2 hours)."
+        echo "  2) Standalone, on a domain you own"
+        echo "     Nothing is shared with Synap. You create the owner account below."
+        echo "     You can link it later only by reinstalling with a code."
+        echo ""
+        _synap_prompt_read -r -p "Choice [1/2] (1): " ONBOARD_CHOICE
+        case "${ONBOARD_CHOICE:-1}" in
+            1)
+                while [ -z "$REGISTER_TOKEN" ]; do
+                    _synap_prompt_read -r -s -p "Registration code (spr_…, hidden): " REGISTER_TOKEN
+                    echo ""
+                    REGISTER_TOKEN="$(printf '%s' "$REGISTER_TOKEN" | tr -d '[:space:]')"
+                    if ! _reg_valid_token "$REGISTER_TOKEN"; then
+                        REGISTER_TOKEN=""
+                        ONBOARD_TRIES=$((ONBOARD_TRIES + 1))
+                        [ "$ONBOARD_TRIES" -lt 3 ] || { echo -e "${RED}Error: that is not a registration code (spr_…). Mint one at https://synap.live/account/pod/connect${NC}"; exit 1; }
+                        echo -e "${YELLOW}  That is not a registration code: it starts with spr_. Paste it again.${NC}"
+                    fi
+                done
+                ONBOARD_TRIES=0
+                while [ -z "$POD_NAME" ]; do
+                    _synap_prompt_read -r -p "Pod name the code was minted for: " POD_NAME
+                    POD_NAME="$(printf '%s' "$POD_NAME" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+                    if ! _reg_valid_name "$POD_NAME"; then
+                        POD_NAME=""
+                        ONBOARD_TRIES=$((ONBOARD_TRIES + 1))
+                        [ "$ONBOARD_TRIES" -lt 3 ] || { echo -e "${RED}Error: a pod name is a-z, 0-9 and -, as shown on the page that gave you the code.${NC}"; exit 1; }
+                        echo -e "${YELLOW}  A pod name is a-z, 0-9 and - (as on the page that gave you the code).${NC}"
+                    fi
+                done
+                echo "  Address: ${POD_NAME}.${SYNAP_POD_ZONE} (Synap creates its DNS when the pod registers)."
+                _synap_prompt_read -r -p "  Press Enter to keep it, or type a domain you own (its DNS must point here first): " ONBOARD_DOMAIN
+                ONBOARD_DOMAIN="$(printf '%s' "$ONBOARD_DOMAIN" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+                if [ -n "$ONBOARD_DOMAIN" ]; then
+                    DOMAIN="$ONBOARD_DOMAIN"
+                else
+                    # Let's Encrypt needs a contact; a Synap-zone pod uses Synap's (as unattended).
+                    EMAIL="${EMAIL:-$SYNAP_ACME_EMAIL_DEFAULT}"
+                fi
+                ;;
+            2)
+                while [ -z "$DOMAIN" ]; do
+                    _synap_prompt_read -r -p "Domain you own for this pod (its DNS must already point at this server; 'localhost' to try it): " DOMAIN
+                    DOMAIN="$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+                    if [ -n "$DOMAIN" ] && _reg_in_synap_zone "$DOMAIN"; then
+                        echo -e "${YELLOW}  ${DOMAIN} is a Synap address: it exists only for a linked pod. Use a domain you own, or re-run and choose 1.${NC}"
+                        DOMAIN=""
+                    fi
+                    if [ -z "$DOMAIN" ]; then
+                        ONBOARD_TRIES=$((ONBOARD_TRIES + 1))
+                        [ "$ONBOARD_TRIES" -lt 3 ] || { echo -e "${RED}Error: a standalone pod needs a domain you own (--domain).${NC}"; exit 1; }
+                    fi
+                done
+                ;;
+            *)
+                echo -e "${RED}Error: choose 1 (linked) or 2 (standalone).${NC}"
+                exit 1
+                ;;
+        esac
+    fi
     if [ -n "$POD_NAME" ] && ! _reg_valid_name "$POD_NAME"; then
         echo -e "${RED}Error: --name must be a DNS label (a-z, 0-9, -; 1-63 chars, no leading/trailing -): '${POD_NAME}'${NC}"
         exit 1
@@ -2923,6 +3017,18 @@ EOF
     fi
     if [ -n "$WITH_POD_AGENT" ] && { [ -z "$POD_AGENT_ISSUER" ] || [ -z "$POD_AGENT_AUDIENCE_ARG" ]; }; then
         echo -e "${RED}Error: --with-pod-agent needs --pod-agent-issuer-url and --pod-agent-audience${NC}"
+        exit 1
+    fi
+
+    # A Synap-zone address has DNS only once the Control Plane registers the pod
+    # (register-pod.ts step 2 creates <name>.pod + *.<name>.pod): installed without
+    # a code it resolves nowhere, Caddy gets no certificate, and the pod is
+    # unreachable. Refused before anything changes; a pod already installed here
+    # keeps the address it holds.
+    if [ -z "$REGISTER_TOKEN" ] && [ "$EXISTING_INSTALL" = false ] && [ -n "$DOMAIN" ] && _reg_in_synap_zone "$DOMAIN"; then
+        echo -e "${RED}Error: ${DOMAIN} exists only for a pod linked to a Synap account: Synap creates its DNS when the pod registers.${NC}"
+        echo "  Linked:     add --register-token spr_… (mint one at https://synap.live/account/pod/connect)"
+        echo "  Standalone: use --domain <a domain you own> instead of --name"
         exit 1
     fi
 
@@ -3095,7 +3201,12 @@ EOF
             fi
         fi
         
-        # Intelligence Service Configuration (optional)
+        # Intelligence Service Configuration (optional). A linked pod gets its AI
+        # service from the registration (the plan's), so nothing is asked.
+        if [ -n "$REGISTER_TOKEN" ]; then
+            echo ""
+            echo -e "${BLUE}🧠 AI${NC}: comes with your Synap plan when the pod registers."
+        else
         echo ""
         echo -e "${BLUE}🧠 Intelligence Service Configuration${NC}"
         echo "The Intelligence Service powers AI features (chat, search, analysis)."
@@ -3149,6 +3260,7 @@ EOF
         echo -e "${BLUE}🤖 Intelligence Service${NC}"
         echo "Provider API keys (OpenAI/Anthropic/Google) are not prompted here."
         echo "Configure AI routing through Intelligence Service now or later."
+        fi
     fi
 
     # Non-interactive: every value a prompt would have asked for gets an explicit
