@@ -18,7 +18,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const USER_ID = "e418d146-0000-4000-8000-000000000001";
+const USER_ID = "00000000-0000-4000-8000-0000000000a1";
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 const HEADER_SESSION = "aaaaaaaa-0000-4000-8000-00000000000a";
 const OWNED_SESSION = "bbbbbbbb-0000-4000-8000-00000000000b";

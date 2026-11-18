@@ -14,7 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const USER_ID = "e418d146-0000-4000-8000-000000000001";
+const USER_ID = "00000000-0000-4000-8000-0000000000a1";
 const PROJECT_ID = "44444444-4444-4444-8444-444444444444";
 
 const checkPermissionOrProposeMock = vi.fn();

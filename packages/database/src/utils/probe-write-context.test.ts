@@ -190,7 +190,7 @@ describe("ProfileRepository floors — D8 + origin stamp", () => {
     ]);
     const repo = new ProfileRepository(db);
     const listed = await repo.getAccessibleProfiles(
-      "e418d146-e495-4b8a-8e8b-985f9f885431",
+      "00000000-0000-4000-8000-0000000000a1",
       "808939d1-86b3-4c52-a153-ae06ece2c54e"
     );
     expect(listed.map((p) => p.slug)).toEqual(["person"]);
@@ -211,7 +211,7 @@ describe("ProfileRepository floors — D8 + origin stamp", () => {
       row("dogfood-probe-x", "probe"),
     ];
     const repo = new ProfileRepository(fakeDb(rows).db);
-    const U = "e418d146-e495-4b8a-8e8b-985f9f885431";
+    const U = "00000000-0000-4000-8000-0000000000a1";
     const WS = "808939d1-86b3-4c52-a153-ae06ece2c54e";
     expect(
       (await repo.getAccessibleProfiles(U, WS)).map((p) => p.slug)

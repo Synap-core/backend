@@ -18,7 +18,7 @@ import {
 } from "./governance-rule-provenance.js";
 
 /** The acting human — the id BOTH `syncAutoApproveRules` callers pass today. */
-const HUMAN = "e418d146-e495-4b8a-8e8b-985f9f885431";
+const HUMAN = "00000000-0000-4000-8000-0000000000a1";
 
 interface InsertedRow {
   targetPattern: string;
