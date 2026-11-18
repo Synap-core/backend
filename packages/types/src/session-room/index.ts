@@ -244,11 +244,11 @@ function holderOf(holder: unknown): Obj | null {
 
 /** The runner items, from a bare list or an `{status:'ok', items}` section; `null` = unread. */
 function runnerItems(runners: unknown): Obj[] | null {
-  if (Array.isArray(runners)) return runners.flatMap((r) => obj(r) ?? []);
+  const objs = (list: unknown[]): Obj[] =>
+    list.map(obj).filter((o): o is Obj => o !== null);
+  if (Array.isArray(runners)) return objs(runners);
   const r = obj(runners);
-  if (r && r.status === "ok" && Array.isArray(r.items)) {
-    return r.items.flatMap((i) => obj(i) ?? []);
-  }
+  if (r && r.status === "ok" && Array.isArray(r.items)) return objs(r.items);
   return null;
 }
 
