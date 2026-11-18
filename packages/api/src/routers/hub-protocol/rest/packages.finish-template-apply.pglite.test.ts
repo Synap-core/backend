@@ -310,9 +310,7 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
       proposals: [h.filedProposalId],
     });
     // The pod's one sentence, returned by the apply door itself.
-    expect(body.templateApplyWarning).toBe(
-      waitingOn(h.filedProposalId, SLUG)
-    );
+    expect(body.templateApplyWarning).toBe(waitingOn(h.filedProposalId, SLUG));
     version = body.templateApply.version;
     expect(version).toMatch(/^h-/);
     // The catalog's latest IS this version: only the record can make it drift.
