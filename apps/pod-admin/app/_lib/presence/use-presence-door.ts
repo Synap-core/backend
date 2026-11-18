@@ -110,8 +110,15 @@ export function usePresenceDoor<M extends DoorMutation<never, unknown>>(
       input: DoorInput<M>,
       handlers: DoorHandlers<OutputOf<M>, DoorInput<M>> = {}
     ) => {
-      const { mutation, subjectOf, defaults, prove, choice, secondsLeft, utils } =
-        latest.current;
+      const {
+        mutation,
+        subjectOf,
+        defaults,
+        prove,
+        choice,
+        secondsLeft,
+        utils,
+      } = latest.current;
       const send = (presence?: PresenceProof) =>
         mutation.mutateAsync(
           (presence ? { ...input, presence } : input) as never
@@ -126,7 +133,8 @@ export function usePresenceDoor<M extends DoorMutation<never, unknown>>(
               subject,
               prove,
               upFront:
-                asksUpFront(subject, choice) && !graceCovers(subject, secondsLeft),
+                asksUpFront(subject, choice) &&
+                !graceCovers(subject, secondsLeft),
               attempt: send,
             })
           : await send();

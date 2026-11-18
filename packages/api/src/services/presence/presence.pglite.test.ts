@@ -1826,7 +1826,10 @@ describe("proof of presence: the grace window and the batch door (18 Nov 2026)",
     for (const key of ["apiKey/create", "apiKey/update", "vault/grant"]) {
       expect(never).toContainEqual({ kind: "approval", key });
     }
-    expect(never).toContainEqual({ kind: "action", key: "secretsVault.reveal" });
+    expect(never).toContainEqual({
+      kind: "action",
+      key: "secretsVault.reveal",
+    });
     const asked: string[] = [];
     for (const t of never) {
       if (t.kind === "request") {

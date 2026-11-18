@@ -159,10 +159,7 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
  * derivation of `callerSessionKey`), or null for a session that names none.
  */
 function browserSessionKey(session: unknown): string | null {
-  const s = session as
-    | { id?: unknown; device?: unknown }
-    | null
-    | undefined;
+  const s = session as { id?: unknown; device?: unknown } | null | undefined;
   if (!s || s.device) return null;
   return presenceSessionKey("kratos", typeof s.id === "string" ? s.id : null);
 }
@@ -175,10 +172,7 @@ function browserSessionKey(session: unknown): string | null {
  */
 const browserPersonMiddleware = t.middleware((opts) =>
   opts.ctx.authenticated && opts.ctx.sessionKind === "kratos"
-    ? runAsBrowserPerson(
-        () => opts.next(),
-        browserSessionKey(opts.ctx.session)
-      )
+    ? runAsBrowserPerson(() => opts.next(), browserSessionKey(opts.ctx.session))
     : opts.next()
 );
 

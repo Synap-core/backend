@@ -215,7 +215,12 @@ export function useEnableMany(
     trpc.capabilities.enableMany.useMutation(),
     async (input: { skillIds?: string[]; toolIds?: string[] }) =>
       labelled(
-        { request: { kind: "capability_batch", id: await presenceBatchId(input) } },
+        {
+          request: {
+            kind: "capability_batch",
+            id: await presenceBatchId(input),
+          },
+        },
         label,
         input
       ),

@@ -924,7 +924,10 @@ export const capabilitiesRouter = router({
   enableMany: protectedProcedure
     .input(
       z.object({
-        skillIds: z.array(z.string().uuid()).max(PRESENCE_BATCH_MAX).default([]),
+        skillIds: z
+          .array(z.string().uuid())
+          .max(PRESENCE_BATCH_MAX)
+          .default([]),
         toolIds: z.array(z.string().uuid()).max(PRESENCE_BATCH_MAX).default([]),
         presence: presenceProofSchema.optional(),
       })

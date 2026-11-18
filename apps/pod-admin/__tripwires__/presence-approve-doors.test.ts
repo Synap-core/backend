@@ -159,10 +159,7 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
   },
   "capabilities.ts": {
     inputs: 2,
-    doors: [
-      "tRPC capabilities.enableMany",
-      "tRPC capabilities.setToolEnabled",
-    ],
+    doors: ["tRPC capabilities.enableMany", "tRPC capabilities.setToolEnabled"],
   },
   "hub-protocol/rest/skills-crud.ts": {
     inputs: 1,

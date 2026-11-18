@@ -9,7 +9,10 @@
 import { TRPCError } from "@trpc/server";
 import { db, eq, tools } from "@synap/database";
 import type { Tool } from "@synap/database/schema";
-import { getWorkspaceRole, requirePodAdmin } from "../../utils/workspace-role.js";
+import {
+  getWorkspaceRole,
+  requirePodAdmin,
+} from "../../utils/workspace-role.js";
 import { isFormToolMetadata } from "../forms/form-definition.js";
 
 /**

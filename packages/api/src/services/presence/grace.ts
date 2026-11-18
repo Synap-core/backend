@@ -39,7 +39,10 @@ import {
 const GRACE_METHODS: readonly PresenceProofKind[] = ["passkey", "device_key"];
 
 /** The challenge subject a `passkey_change` grant uses: it owns `grant_session`. */
-const notPasskeyChange = notLike(presenceChallenges.subject, "passkey_change:%");
+const notPasskeyChange = notLike(
+  presenceChallenges.subject,
+  "passkey_change:%"
+);
 
 export interface PresenceGrace {
   /** Whole seconds left, at least 1. */
@@ -113,7 +116,9 @@ export async function readGrace(args: {
     .orderBy(desc(presenceChallenges.consumedAt))
     .limit(1);
   if (!row?.consumedAt) return null;
-  const until = new Date(row.consumedAt.getTime() + PRESENCE_GRACE_SECONDS * 1000);
+  const until = new Date(
+    row.consumedAt.getTime() + PRESENCE_GRACE_SECONDS * 1000
+  );
   const remaining = Math.ceil((until.getTime() - now.getTime()) / 1000);
   if (remaining <= 0) return null;
   return {
