@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { TRPCError } from "@trpc/server";
+import { fenceImportGraphOperations } from "./capture-agent/fenced-capture-graph.js";
 import {
   db,
   resolveGraphWorkspaceFromSlugs,
@@ -756,6 +757,14 @@ export class ImportOrchestrator {
         }
       }
     }
+
+    // A key limited to spaces files only what its grant allows, op by op, in
+    // the import's space, before anything durable (session, intake, proposal)
+    // is written: approving the import applies it as the person (c54ff30e).
+    await fenceImportGraphOperations(ops, {
+      workspaceId: workspaceId ?? null,
+      projectId: this.ctx.projectId ?? null,
+    });
 
     const corpusMapMeta =
       stats && typeof stats === "object" && "corpusMap" in stats

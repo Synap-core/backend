@@ -89,7 +89,6 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /forms",
   "POST /forms/:id/enabled",
   "POST /forms/:id/rotate-token",
-  "POST /import/analyze",
   "POST /import/apply",
   "POST /import/enqueue-corpus",
   "POST /keys/requests",
@@ -158,4 +157,4 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
 ];
 
 /** Lower it when the list shrinks; never raise it. */
-export const UNCLASSIFIED_WRITE_ROUTES_CAP = 132;
+export const UNCLASSIFIED_WRITE_ROUTES_CAP = 131;

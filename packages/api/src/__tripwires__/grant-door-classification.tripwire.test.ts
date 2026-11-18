@@ -650,14 +650,15 @@ const SRC = join(__dirname, "..");
 
 /**
  * The definition of `name` in `file` (relative to src), read from the source:
- * a function, a `const`, or a tRPC procedure (`name: …Procedure`), from its
- * first line to the next line at its own indentation that does not close it.
+ * a function, a `const`, an async class method, or a tRPC procedure (`name:
+ * …Procedure`), from its first line to the next line at its own indentation
+ * that does not close it.
  * `null` when the file defines no such name.
  */
 export function definitionOf(file: string, name: string): string | null {
   const src = readFileSync(join(SRC, file), "utf8");
   const start = new RegExp(
-    `^([ \\t]*)(?:export\\s+)?(?:async\\s+)?(?:function\\s+${name}\\b|const\\s+${name}\\s*=|${name}:\\s*\\w*[pP]rocedure\\b)`,
+    `^([ \\t]*)(?:export\\s+)?(?:async\\s+)?(?:function\\s+${name}\\b|const\\s+${name}\\s*=|async\\s+${name}\\s*\\(|${name}:\\s*\\w*[pP]rocedure\\b)`,
     "m"
   ).exec(src);
   if (!start) return null;
@@ -736,6 +737,16 @@ const GRANT_CHECKED_DEEPER: Readonly<
       },
     ],
     why: "the one close door: focus_session.update through checkPermissionOrPropose in the session's space, before anything is stopped (the app SDK's cancelRun)",
+  },
+  "POST /import/analyze": {
+    chain: [
+      { name: "analyze", file: "services/import-orchestrator.ts" },
+      {
+        name: "fenceImportGraphOperations",
+        file: "services/capture-agent/fenced-capture-graph.ts",
+      },
+    ],
+    why: "a key limited to spaces files an import only when its grant allows each operation in the import's space (grantWriteDenial: entity.<kind>.create, facet.create, relation.create, entity.<kind>.update for a linked record), before any session, intake or proposal is written (finding c54ff30e)",
   },
   "POST /playbooks/:id/run": {
     chain: [

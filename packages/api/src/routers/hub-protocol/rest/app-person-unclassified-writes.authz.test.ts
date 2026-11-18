@@ -87,7 +87,7 @@ const UNCLASSIFIED: Array<[Method, string]> = [
   ["POST", "/projects/p-1/purge"],
   ["PATCH", "/workspaces/ws-1"],
   ["DELETE", "/apps/app-1"],
-  ["POST", "/import/analyze"],
+  ["POST", "/import/enqueue-corpus"],
   // The approve tier's one route that reads no key grant.
   ["POST", "/tracks/t-1/criteria/c-1/acceptance"],
 ];
@@ -99,6 +99,8 @@ const CLASSIFIED: Array<[Method, string]> = [
   ["POST", "/focus-sessions/s-1/revert"],
   ["POST", "/playbooks/pb-1/run"],
   ["POST", "/tracks/t-1/participants/pt-1/answer"],
+  // The CRM's CSV import: bounded op by op inside the door (c54ff30e).
+  ["POST", "/import/analyze"],
   ["POST", "/entities"],
   ["GET", "/entities"],
 ];
@@ -184,10 +186,10 @@ describe("a person's app token on an unclassified write", () => {
     asKey("app_person", FULL);
     const hub: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
     hub.use("/*", hubAuthMiddleware as never);
-    hub.get("/import/analyze", (c) => c.json({ ok: true }));
+    hub.get("/import/enqueue-corpus", (c) => c.json({ ok: true }));
     const root = new Hono();
     root.route("/api/hub", hub);
-    const res = await root.request("/api/hub/import/analyze", {
+    const res = await root.request("/api/hub/import/enqueue-corpus", {
       headers: { authorization: "Bearer synap_test" },
     });
     expect(res.status).toBe(200);
