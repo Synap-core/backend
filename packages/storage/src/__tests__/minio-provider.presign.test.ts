@@ -67,13 +67,17 @@ describe("MinIO presigned URLs — client reachability", () => {
 
   it("signs download URLs against the public origin when configured", async () => {
     const url = new URL(
-      await provider("https://pod.example.com").getSignedUrl("a/b.png", 60)
+      await provider("https://pod.example.com").getSignedUrl("a/b.png", 60, {
+        contentType: "image/png",
+      })
     );
     expect(url.host).toBe("pod.example.com");
   });
 
   it("keeps the historical internal-host download URL when no public URL is set", async () => {
-    const url = new URL(await provider().getSignedUrl("a/b.png", 60));
+    const url = new URL(
+      await provider().getSignedUrl("a/b.png", 60, { contentType: "image/png" })
+    );
     expect(url.host).toBe("minio:9000");
   });
 });
