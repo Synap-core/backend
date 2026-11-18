@@ -30,6 +30,7 @@ import {
   eq,
   gt,
   inArray,
+  UNDECIDED_PROPOSAL_STATUSES,
   isNull,
   drizzleSql,
 } from "@synap/database";
@@ -122,7 +123,7 @@ function proposedOnChannelWhere(
   return and(
     eq(proposals.proposalType, PROPOSED_MESSAGE_TYPE),
     withFailed
-      ? inArray(proposals.status, ["pending", "approval_failed"])
+      ? inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES])
       : eq(proposals.status, "pending"),
     drizzleSql`(${proposals.data} ->> 'channelId') = ${channelId}`,
     proposalUserFloor(userId)

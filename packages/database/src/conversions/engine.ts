@@ -47,7 +47,11 @@ import {
   buildPropertyMappingJson,
   buildValueMapJson,
 } from "./manifest.js";
-import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
+import {
+  assertProfileSlugNotReserved,
+  reservedProfileSlugs,
+} from "../utils/reserved-profile-slugs.js";
+import { selectProjectTwins } from "../utils/project-twins.js";
 import {
   lifecycleProjectionQueries,
   type LifecycleProjectionScope,
@@ -197,6 +201,10 @@ export interface OpCounts {
   propertyDefRelationsRepointed?: number;
   /** dedupeRelationDefs (tail): drained copies deleted. */
   relationDefsDeleted?: number;
+  /** retireProjectTwins: live project twins soft-deleted (relations kept). */
+  projectTwinsRetired?: number;
+  /** retireProjectTwins: their `entity_vectors` (semantic search) rows dropped. */
+  entityVectorsDropped?: number;
 }
 
 export type OpStatus =
@@ -323,6 +331,8 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   renameProfile: "fatal",
   foldBookingDealIntoLead: "fatal",
   rekindByStatus: "fatal",
+  // One transaction; until it lands the twins stay as readable as today.
+  retireProjectTwins: "advisory",
   // Derivation only: an unfilled column reads as "no status yet"; the declare
   // door and the next boot fill it.
   projectLifecycleColumns: "advisory",
@@ -713,6 +723,8 @@ async function applyOp(
       return applyHeal(tx, "facetsInitialStatusFilled", fillFacetInitialStatus);
     case "dropStaleLifecycleLists":
       return applyHeal(tx, "lifecycleListsHealed", dropStaleLifecycleLists);
+    case "retireProjectTwins":
+      return applyRetireProjectTwins(tx, op.opKey);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -3235,7 +3247,8 @@ export async function computeCounts(
       return {};
     }
     case "fillFacetInitialStatus":
-    case "dropStaleLifecycleLists": {
+    case "dropStaleLifecycleLists":
+    case "retireProjectTwins": {
       // Dry run DERIVED from the apply: the same statements, rolled back.
       try {
         await sql.begin(async (tx) => {
@@ -3256,6 +3269,54 @@ export async function computeCounts(
     case "extractNonEntity":
       return {};
   }
+}
+
+/**
+ * retireProjectTwins (see RetireProjectTwinsOp). The twins are read by the one
+ * predicate `selectProjectTwins`; nothing here reads or writes `relations`.
+ */
+async function applyRetireProjectTwins(
+  tx: Sql,
+  opKey: string
+): Promise<OpCounts> {
+  const counts: OpCounts = {};
+  const twins = await selectProjectTwins(tx);
+  let retired = 0;
+  for (const t of twins) {
+    const breadcrumb = JSON.stringify({
+      retiredByConversion: { conversion: opKey, reasons: t.reasons },
+    });
+    const r = await tx`
+      UPDATE entities
+      SET deleted_at = now(), updated_at = now(),
+          system_data = COALESCE(system_data, '{}'::jsonb) || ${breadcrumb}::jsonb
+      WHERE id = ${t.entityId}::uuid AND deleted_at IS NULL
+    `;
+    retired += r.count ?? 0;
+  }
+  if (retired) counts.projectTwinsRetired = retired;
+  if (twins.length > 0) {
+    const ids = twins.map((t) => t.entityId);
+    const v = await tx`
+      DELETE FROM entity_vectors WHERE entity_id = ANY(${ids}::uuid[])
+    `;
+    if (v.count) counts.entityVectorsDropped = v.count;
+    // Typesense: forget the entities stamp, so the jobs boot queues the full
+    // reindex (`enqueueSearchReindexIfBehind`), whose prune drops every
+    // document whose row is no longer live.
+    await tx`
+      UPDATE pod_settings
+      SET settings = settings #- '{searchIndexVersions,entities}', updated_at = now()
+      WHERE settings->'searchIndexVersions' ? 'entities'
+    `;
+  }
+  const off = await tx`
+    UPDATE profiles SET is_active = false, updated_at = now()
+    WHERE lower(trim(slug)) = ANY(${[...reservedProfileSlugs()]}::text[])
+      AND is_active = true
+  `;
+  if (off.count) counts.profilesDeactivated = off.count;
+  return counts;
 }
 
 /** Run one lifecycle heal and report its row count under `key`. */

@@ -1017,7 +1017,18 @@ export async function applyPackagePostWorkspace(
             : p.metadata,
           status: p.status as PlaybookCreateInput["status"],
           agentUserId,
-          source: "intelligence",
+          // AI provenance only when an agent acts. With no agent the write is
+          // the person's: a person applying on pod admin, or the approver of
+          // an agent's update (`enrollAgentUserId`, no `agentUserId`). Branded
+          // "intelligence" anyway, `playbooks.create` took it for an
+          // unattributed AI write, and the gate's anonymous path floored it
+          // (2.09 AGENT_STRUCTURE_WRITE): the template's NEW playbook was
+          // re-filed as a proposal, the apply held at awaiting-approval and
+          // the version never stamped (perso pod, 18 Nov 2026: Operations'
+          // "Onboard a client"). The playbook and automation updates here
+          // carry no source, and the automations door gates on the acting
+          // agent, never on `source`.
+          ...(agentUserId ? { source: "intelligence" } : {}),
         });
         // `playbooksRouter.create` does not accept/materialize grants — they
         // become `playbook --grants--> {tool|skill}` link edges via
@@ -1357,8 +1368,10 @@ export async function applyPackagePostWorkspace(
               message:
                 !uses.linked && uses.reason === "workspace_not_found"
                   ? `Workspace ${workspaceId} does not exist — the project was not indexed to it.`
-                  : `Project ${body.projectId} is not visible or no longer exists — ` +
-                    `no entity was filed into it.`,
+                  : !uses.linked && uses.reason === "app_grant"
+                    ? `An app cannot add a space to a project: the person files project ${body.projectId} into this space.`
+                    : `Project ${body.projectId} is not visible or no longer exists — ` +
+                      `no entity was filed into it.`,
             };
     } catch (e) {
       result.projectLink = { status: "error", message: (e as Error).message };

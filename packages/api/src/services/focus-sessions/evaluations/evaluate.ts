@@ -484,7 +484,9 @@ export async function evaluateSession(
  * its run's (`loadSessionProcess`: the frozen snapshot, then the playbook). A
  * criterion with no stage, or a stage the order does not list, is graded as
  * before; so is an evidence criterion whose evidence this call posts (the
- * caller named it). A session in no stage has reached none.
+ * caller named it). A session in no stage has reached none; a session at a
+ * stage the order does not list (renamed, another snapshot) is at an unknown
+ * place, so everything is graded, as before.
  */
 async function criteriaNotReached(
   session: {
@@ -521,6 +523,7 @@ async function criteriaNotReached(
   }
   const keys = stages.map((s) => (s as { key?: unknown } | null)?.key);
   const at = session.currentStage ? keys.indexOf(session.currentStage) : -1;
+  if (session.currentStage && at === -1) return out;
   for (const c of staged) {
     const index = keys.indexOf(c.stageKey);
     if (index === -1 || index <= at) continue;

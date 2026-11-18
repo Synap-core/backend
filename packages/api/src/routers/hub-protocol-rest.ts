@@ -19,6 +19,8 @@ import { hubAuthMiddleware } from "./hub-protocol/_middleware/auth.js";
 import { grantDenialCodeMiddleware } from "./hub-protocol/_middleware/grant-denial-code.js";
 import { idempotencyMiddleware } from "./hub-protocol/_middleware/idempotency.js";
 import { sessionMiddleware } from "./hub-protocol/_middleware/session.js";
+import { supersedesMiddleware } from "./hub-protocol/_middleware/supersedes.js";
+import { SUPERSEDES_DOORS } from "../services/proposals/supersedes-door.js";
 import { hubRequestGuardMiddleware } from "../middleware/hub-request-guard.js";
 import { AuthErrorEnvelopeSchema } from "./hub-protocol/rest/_codecs/auth.js";
 import { registerOpenApiStubs } from "./hub-protocol/rest/_openapi-stubs.js";
@@ -301,6 +303,17 @@ app.use(
     // secretBodyPattern uses the default — see middleware source.
   })
 );
+
+// ── `supersedes` on the filing doors (plan 8032a127 D3) ────────────────────
+//
+// The routes that file the same requests as the MCP tools taking
+// `supersedes` (`SUPERSEDES_DOORS`, one table for both doors) accept it too,
+// through the one function MCP calls (`./hub-protocol/_middleware/
+// supersedes.ts`). AFTER idempotency, so a replay serves the answer that
+// already says what became of the failed proposal; before the routes.
+for (const door of SUPERSEDES_DOORS) {
+  app.use(door.route, supersedesMiddleware(door.method));
+}
 
 // ── Mount route slices in EXACTLY the original order ───────────────────────
 //

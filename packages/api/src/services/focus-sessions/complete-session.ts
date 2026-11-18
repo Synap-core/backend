@@ -127,6 +127,7 @@ import {
   shouldDropPin,
 } from "../playbooks/pinned-subject.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
 
 const logger = createLogger({ module: "complete-focus-session" });
 
@@ -632,6 +633,13 @@ export async function completeFocusSession(
     userId: params.userId,
     agentUserId: params.agentUserId,
     workspaceId: session.workspaceId,
+    // The key's grant: a project-only session counts in its project's spaces
+    // (`session-counted-spaces.ts`); governance stays at its home.
+    grantWorkspaceId: await sessionGrantWorkspaceId(session, {
+      subjectType: "focus_session",
+      action: "update",
+      data: { id: sessionId },
+    }),
     // Attribute + honor pack-mode escape: stamp would force-propose without
     // ignoreSessionForcePropose; both must be set for lifecycle complete.
     sessionId,

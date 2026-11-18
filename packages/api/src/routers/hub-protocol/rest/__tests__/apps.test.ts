@@ -148,7 +148,7 @@ class FakeAppRepository {
   async revoke(_id: string) {
     return state.app;
   }
-  async withdrawPendingRequests(appId: string, _by: string, _reason: string) {
+  async withdrawPendingRequests(appId: string, _by: string, _end: unknown) {
     state.withdrawCalls.push(appId);
     return state.pendingIds;
   }

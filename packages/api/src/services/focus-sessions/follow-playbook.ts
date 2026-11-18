@@ -447,6 +447,9 @@ export async function followPlaybook(
       // STAGE SLOTS (db6a5e17): the work is IN a stage (named now, or one of
       // this playbook's it already held), so it owes what every stage up to it
       // declares, as a session that advanced there would (`stage-slots.ts`).
+      // `playbook.stages` IS the run's frozen definition: this call pins the
+      // same row as the new run's snapshot below, the newest live run that
+      // `loadSessionProcess` reads from now on.
       const inStage =
         stageKey ??
         (locked?.currentStage && validKeys.includes(locked.currentStage)

@@ -114,6 +114,69 @@ export function capabilityRunReasoning(
   return typeof r === "string" && r.trim() ? r.trim() : undefined;
 }
 
+// ── A pod registration code is never shown ─────────────────────────────────
+//
+// An agent starts a person's new pod server through any `provision_compute`
+// verb (plan a640c5bb B1, founder 18 Nov 2026), and the server's startup
+// script carries the single-use code the pod registers with (`spr_…`, minted
+// by the Control Plane, `pod-registration-tokens.ts`). It may sit anywhere in
+// the run's arguments (a provider's `options.user_data`), so the review reads
+// every argument through `maskPodRegistrationCodes`: the person sees that a
+// code is there, never the code.
+
+/** A code in any text: `spr_` + 32–80 base32 letters, standing alone. */
+const POD_REGISTRATION_CODE_RE =
+  /(^|[^a-z0-9_])(spr_[a-z2-7]{32,80})(?![a-z2-7])/g;
+
+/** What the review shows in place of a code. */
+export const POD_REGISTRATION_CODE_MASK = "[pod registration code]";
+
+const MAX_SCAN_DEPTH = 8;
+
+/** The first pod registration code anywhere in `value` (strings, arrays, objects), or null. */
+export function findPodRegistrationCode(
+  value: unknown,
+  depth = 0
+): string | null {
+  if (typeof value === "string") {
+    POD_REGISTRATION_CODE_RE.lastIndex = 0;
+    const m = POD_REGISTRATION_CODE_RE.exec(value);
+    return m ? m[2]! : null;
+  }
+  if (depth >= MAX_SCAN_DEPTH || !value || typeof value !== "object") {
+    return null;
+  }
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
+    const found = findPodRegistrationCode(item, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** `value` with every pod registration code in it replaced by the mask (a copy). */
+export function maskPodRegistrationCodes<T>(value: T, depth = 0): T {
+  if (typeof value === "string") {
+    return value.replace(
+      POD_REGISTRATION_CODE_RE,
+      `$1${POD_REGISTRATION_CODE_MASK}`
+    ) as unknown as T;
+  }
+  if (depth >= MAX_SCAN_DEPTH || !value || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      maskPodRegistrationCodes(item, depth + 1)
+    ) as unknown as T;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+      k,
+      maskPodRegistrationCodes(v, depth + 1),
+    ])
+  ) as unknown as T;
+}
+
 // ── What a tool run SENDS ───────────────────────────────────────────────────
 //
 // Founder dogfood (2026-10-30, proposal 4b5e040e, `hcloud_create_server`): the
@@ -131,7 +194,7 @@ export interface ProposalToolRunParameter {
   label: string;
   /** What the verb's schema says the argument is, when it says. */
   description?: string;
-  /** The value the agent passed, whole. Absent when `secret`. */
+  /** The value the agent passed, whole (a pod registration code in it masked). Absent when `secret`. */
   value?: unknown;
   /** The argument names a credential: its value never leaves the pod. */
   secret?: true;
@@ -254,7 +317,9 @@ export function describeToolRun(input: ToolRunInput): ProposalToolRun | null {
       key,
       label: d?.title ?? formatFieldLabel(key),
       ...(d?.description ? { description: d.description } : {}),
-      ...(secret ? { secret: true as const } : { value: passed[key] }),
+      ...(secret
+        ? { secret: true as const }
+        : { value: maskPodRegistrationCodes(passed[key]) }),
     };
   });
   const tools = [...new Set((input.toolNames ?? []).filter(Boolean))];
@@ -330,8 +395,10 @@ export function toolRunEdits(
       const first = byKey.get(key);
       byKey.set(key, {
         key,
-        before: first ? first.before : was.slice(0, MAX_EDIT_CHARS),
-        after: now.slice(0, MAX_EDIT_CHARS),
+        before: first
+          ? first.before
+          : maskPodRegistrationCodes(was).slice(0, MAX_EDIT_CHARS),
+        after: maskPodRegistrationCodes(now).slice(0, MAX_EDIT_CHARS),
         at: typeof entry.at === "string" ? entry.at : "",
         by: typeof entry.by === "string" ? entry.by : null,
       });

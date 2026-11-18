@@ -89,6 +89,12 @@ export const CIMD_STALE_GRACE_MS = 24 * 60 * 60 * 1000;
  */
 export const CIMD_FETCH_MAX = 120;
 export const CIMD_FETCH_WINDOW_MS = 10 * 60 * 1000;
+/**
+ * A copy fetched this recently is never read again EARLY (`CimdReadOptions.
+ * rereadIf`): an early re-read costs at most one fetch per app a minute,
+ * whatever asks for it, on top of the pod-wide budget.
+ */
+export const CIMD_REREAD_FLOOR_MS = 60 * 1000;
 
 const CIMD_MAX_REDIRECT_URIS = 8;
 const CIMD_MAX_CLIENT_NAME_LENGTH = 100;
@@ -575,6 +581,37 @@ const defaultStore: ClientMetadataStore = {
   upsert: upsertCimdClient,
 };
 
+/**
+ * When a caller needs the app's CURRENT document rather than any copy still
+ * fresh by its Cache-Control (founder dogfood 18 Nov 2026: an app that newly
+ * declared pod-wide reads was offered them per space, from a copy cached
+ * before it declared them).
+ */
+export interface CimdReadOptions {
+  /**
+   * Read the document again, before its copy expires, when this says the
+   * cached copy cannot answer the request (it lacks what the request asks
+   * for, or a person is about to decide on it). Never sooner than
+   * `CIMD_REREAD_FLOOR_MS` after the copy was fetched; the same SSRF-safe
+   * fetch, budget and one-in-flight rule apply, and a re-read that FAILS to
+   * fetch keeps the cached copy (it is still fresh by its own TTL).
+   */
+  rereadIf?: (cached: StoredClient) => boolean;
+}
+
+/** May a copy still fresh by its TTL be read again now (`rereadIf`)? */
+function rereadEarly(
+  cached: StoredClient,
+  now: number,
+  options: CimdReadOptions
+): boolean {
+  if (!options.rereadIf) return false;
+  const fetchedAt = cached.metadataFetchedAt?.getTime();
+  if (fetchedAt !== undefined && now - fetchedAt < CIMD_REREAD_FLOOR_MS)
+    return false;
+  return options.rereadIf(cached);
+}
+
 /** One fetch in flight per client_id, process-wide (T11). */
 const inflight = new Map<string, Promise<StoredClient>>();
 
@@ -603,23 +640,28 @@ async function refresh(
 }
 
 /**
- * The client a CIMD client_id names: the cached copy while fresh, else a new
- * fetch. A FETCH failure falls back to a copy fetched within the last 24 h; an
- * INVALID document never does (the app changed it, and the pod must not keep
+ * The client a CIMD client_id names: the cached copy while fresh (and while
+ * `options.rereadIf` does not ask for the current one), else a new fetch. A
+ * FETCH failure falls back to a copy fetched within the last 24 h; an INVALID
+ * document never does (the app changed it, and the pod must not keep
  * honouring the version it replaced). Throws `ClientMetadataError`.
  */
 export async function resolveCimdClient(
   clientId: string,
   issuer: string | null,
   store: ClientMetadataStore = defaultStore,
-  deps: ClientMetadataDeps = {}
+  deps: ClientMetadataDeps = {},
+  options: CimdReadOptions = {}
 ): Promise<StoredClient> {
   const url = assertClientMetadataUrl(clientId, issuer);
   const now = deps.now?.() ?? Date.now();
 
   const cachedRow = await store.find(clientId);
   const cached = cachedRow?.clientKind === "cimd" ? cachedRow : null;
-  if (cached?.metadataExpiresAt && cached.metadataExpiresAt.getTime() > now) {
+  const fresh = Boolean(
+    cached?.metadataExpiresAt && cached.metadataExpiresAt.getTime() > now
+  );
+  if (cached && fresh && !rereadEarly(cached, now, options)) {
     return cached;
   }
 
@@ -643,8 +685,12 @@ export async function resolveCimdClient(
   } catch (err) {
     if (
       err instanceof ClientMetadataFetchError &&
-      cached?.metadataFetchedAt &&
-      now - cached.metadataFetchedAt.getTime() < CIMD_STALE_GRACE_MS
+      cached &&
+      // An early re-read (`rereadIf`) of a copy still fresh by its own TTL,
+      // or a copy fetched within the grace window.
+      (fresh ||
+        (cached.metadataFetchedAt &&
+          now - cached.metadataFetchedAt.getTime() < CIMD_STALE_GRACE_MS))
     ) {
       logger.warn(
         { clientId, reason: err.message },

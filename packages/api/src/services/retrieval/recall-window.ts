@@ -1,15 +1,9 @@
 /**
  * THE time window of a recall (`synap_ask` `since` / `until`, ticket a9888512).
  *
- * Recency used to be a nudge inside the ranker only (`temporal-signal.ts`, a
- * 7-day half-life, "never a partition"), applied AFTER the candidate pool was
- * drawn by words and meaning. So "what did my routines find this week" missed
- * every report of the week whose words matched weakly: it never entered the
- * pool, and the nudge cannot rank what is not there. A window is a FILTER on
- * the candidate fetch instead (both recall halves and the structured lane, on
- * `entities.updated_at`), so the pool is drawn from inside it, and the reply
- * echoes the window it applied, so "nothing in the window" reads differently
- * from "the ranker missed it".
+ * A window FILTERS the candidate fetch (both recall halves and the structured
+ * lane, on `updated_at`); recency ranking (`temporal-signal.ts`) is separate.
+ * The reply echoes the window.
  *
  * Only the entity lanes have it (`appliesTo`): runbooks, remembered facts, the
  * Library and the catalog are read as before.

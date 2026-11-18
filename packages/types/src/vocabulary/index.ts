@@ -1687,6 +1687,14 @@ export function resolveProposalKindLabel(
 }
 
 /**
+ * The name of the pod acting on its own, with no person and no agent behind
+ * the act (a sweep that expired a request, the failure of a receipt no agent
+ * recorded): "Synap", never "Automation", which is the user's own rules
+ * (`automation` kind). A product name: the same in every locale.
+ */
+export const POD_ACTOR_NAME = "Synap";
+
+/**
  * Lifecycle STATUS labels — the state a thing is in, as a human word.
  *
  * SCOPE. These are the CANONICAL lifecycle states of Synap's own objects
@@ -1711,7 +1719,11 @@ const STATUS_LABEL_ROWS = {
   // `PROPOSAL_REJECTION_REASONS` taxonomy, and the DB enum value.
   rejected: "Rejected",
   denied: "Rejected",
-  approval_failed: "Approval failed",
+  // DEFAULT word (plan 8032a127 D6, the founder has not decided; override it
+  // here and in `catalog.fr.ts`): the approval happened, applying it did not.
+  // "Couldn't apply" says what the person sees; "Approval failed" read as if
+  // the approving had failed.
+  approval_failed: "Couldn't apply",
   // The proposal's effect was taken back after approval. One word for the row's
   // status chip on every surface (the workbench and the phone both name it).
   reverted: "Reverted",

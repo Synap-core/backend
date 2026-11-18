@@ -56,6 +56,7 @@ import { config, createLogger } from "@synap-core/core";
 import { getBoss } from "@synap/events";
 import type { StoredProposalData } from "@synap-core/types";
 import { isCompositeProposalData } from "@synap-core/types/proposals";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import {
   PROPOSAL_APPROVE_EXPIRE_SECONDS,
   PROPOSAL_APPROVE_QUEUE,
@@ -545,10 +546,7 @@ export async function runApprovalJob(payload: {
         message: "This proposal no longer exists, so nothing was applied.",
       });
     }
-    if (
-      proposal.status !== "pending" &&
-      proposal.status !== "approval_failed"
-    ) {
+    if (!isProposalUndecided(proposal.status)) {
       throw new TRPCError({
         code: "CONFLICT",
         message:

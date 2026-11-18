@@ -393,6 +393,35 @@ describe("deriveSessionHolder — where the agent runs (runner)", () => {
     expect(h.runner).toBeNull();
   });
 
+  it("a subagent's runner (shared agent user) is never the holder's runner nor its word", () => {
+    // synap-bridge#2: a `claude-code-subagent` row carries its lead's
+    // agentUserId; its urgent state must not stand in for the lead's.
+    const h = deriveSessionHolder(
+      facts({
+        runners: [
+          at(A, "needs_permission", true, "claude-code-subagent", "haiku"),
+          at(A, "busy", true, "claude-code", "claude-opus-4"),
+        ],
+      })
+    );
+    expect(h.source).toEqual({ from: "runner", state: "busy" });
+    expect(h.runner).toMatchObject({
+      harness: "claude-code",
+      state: "busy",
+    });
+  });
+
+  it("only a subagent's runner: no runner, the roster's live rule decides", () => {
+    const h = deriveSessionHolder(
+      facts({
+        runners: [at(A, "busy", true, "claude-code-subagent", "haiku")],
+      })
+    );
+    expect(h.agentUserId).toBe(A);
+    expect(h.source).toEqual({ from: "live", working: false });
+    expect(h.runner).toBeNull();
+  });
+
   it("a runner whose client named no harness or model reads unknown, never a default", () => {
     const h = deriveSessionHolder(facts({ runners: [runner(A, "busy")] }));
     expect(h.runner).toMatchObject({

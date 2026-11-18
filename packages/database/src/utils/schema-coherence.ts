@@ -2258,6 +2258,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "release_verb",
     addedBy: "0431_compute_need_and_leases.sql",
   },
+  {
+    table: "compute_leases",
+    column: "registration_code_hash",
+    addedBy: "0432_compute_lease_kept.sql",
+  },
 
   // Realtime room tickets (0432): every pod app's room ticket is written and
   // claimed here; absence means no app could open a live room (42P01).

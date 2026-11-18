@@ -14,7 +14,7 @@
  *    the read-only short-circuit at the gate would otherwise skip the floor.
  *
  * NOT COVERED here: the gate itself (`capability-gate`'s
- * `declared-propose-only.test.ts`) and the reconcile hold
+ * `never-widen-floor.test.ts`) and the reconcile hold
  * (`create-from-definition.reapply-keeps-approval.pglite.test.ts`).
  */
 import { describe, expect, it } from "vitest";

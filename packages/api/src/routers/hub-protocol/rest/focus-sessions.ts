@@ -23,6 +23,7 @@
  */
 
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
+import { sessionGrantWorkspaceId } from "../../../access/session-counted-spaces.js";
 import {
   mergeOutcomesForStart,
   declaresVerify,
@@ -354,6 +355,7 @@ const WorkGraphWireSchema = z.object({
   ),
   sections: z.object({
     blockedBy: WorkGraphSectionWireSchema,
+    orchestration: WorkGraphSectionWireSchema,
     waitsOnOutputs: WorkGraphSectionWireSchema,
     interactions: WorkGraphSectionWireSchema,
     farEnds: WorkGraphSectionWireSchema,
@@ -941,8 +943,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "One read for a whole map (`services/focus-sessions/work-graph.ts`): " +
       "every OPEN session, plus every session settled in the last " +
       "`windowHours` (default 72), plus the far end of every edge of those, " +
-      "with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, " +
-      "`triggered`, `updated`), and the PRs, holds and goals its sessions " +
+      "with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, " +
+      "`waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions " +
       "point at. `trackId` narrows it to one goal's sessions, " +
       "`rootSessionId` to one wave (the root and every session spawned " +
       "under it); one or the other. `playbookId` narrows it to the sessions " +
@@ -2116,7 +2118,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // NO_CRITERIA). A person's key and the capture path (X-Capture: 1, a
         // person capturing through a key) are exempt.
         requireCriteria: !!ctxAgentUserId && c.req.header("x-capture") !== "1",
-        // An outcome with `verify` says what done means (F11's own words).
+        // An outcome with `verify` says what done means.
         declaredVerify: declaresVerify(body.outcomes),
         ...(body.outcomes && body.outcomes.length > 0
           ? mergeOutcomesForStart({
@@ -2587,6 +2589,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId,
         agentUserId,
         workspaceId,
+        // The key's grant: a project-only session counts in its project's
+        // spaces (`session-counted-spaces.ts`); governance stays at its home.
+        grantWorkspaceId: await sessionGrantWorkspaceId(existing, {
+          subjectType: "focus_session",
+          action: "update",
+          data: { id },
+        }),
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",
@@ -3872,7 +3881,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * a retry cannot mint two rooms.
    *
    * Ungoverned like `/used`: minting the room a session already implies is
-   * provenance plumbing, not a mutation of user data.
+   * provenance plumbing, not a mutation of user data. Bounded by the key's
+   * grant like every other session write: `session.update` where the session
+   * counts (its space, or its project's spaces: `answerGrantWrite`), so a
+   * person's app token passes only where it may take part in the session.
    */
   app.post("/focus-sessions/:id/channel", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -3882,6 +3894,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }
+    const denial = await grantWriteDenial(await answerGrantWrite(id));
+    if (denial) return c.json({ error: denial }, 403);
     try {
       // Load by id, bind to the row's workspace (membership check) — the same
       // two steps `/used` and PATCH take.

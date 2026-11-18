@@ -82,7 +82,10 @@ describe("expirePendingHandOffsOfAttachedAgent", () => {
     expect(expired).toEqual([handOff]);
     const r = await row(handOff);
     expect(r.status).toBe("expired");
-    expect(r.data).toMatchObject({ expiredBy: "agent_attached" });
+    expect(r.data).toMatchObject({
+      expiredBy: "agent_attached",
+      ended: { reason: "agent_attached" },
+    });
     expect((await row(otherAgent)).status).toBe("pending");
     expect((await row(otherSession)).status).toBe("pending");
     expect((await row(decided)).status).toBe("rejected");

@@ -1630,6 +1630,9 @@ export async function matchPlaybooks(
       // (`compactPlaybookMatches`), a UI strip may show it whole.
       description: candidate.row.description ?? null,
       goalTemplate: candidate.row.goalTemplate,
+      // The phrases it is for, so a second ranking (the capture follow-up,
+      // `load-route-suggestions.ts`) admits a trigger-only match too.
+      triggers: candidate.triggers ?? [],
       subjectProfileSlug: candidate.subjectProfileSlug,
       // The workers it declares ("How often?" offers these; [] when none or
       // unreadable), read through the ONE process reader, and whether it

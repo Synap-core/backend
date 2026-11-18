@@ -13,8 +13,8 @@
  *  - another agent's failed proposal, same person → ended, pointing at the
  *    new row, its bell entry actioned, naming no person and dated now
  *    (rules out "author only", and keeping the failure's reviewer);
- *  - the same kind of request to ANOTHER target → left failed (rules out
- *    "same type is enough");
+ *  - the same kind of request to ANOTHER target → refused, nothing filed
+ *    (rules out "same type is enough");
  *  - a plan that partly applied → refused, kept failed (Q6);
  *  - a PENDING one → refused, nothing filed (a person may be about to
  *    approve it: rules out "any undecided");
@@ -22,9 +22,13 @@
  *    "any failed row");
  *  - an id that names nothing → refused with the same words (no oracle);
  *  - a request that files TWO rows → only the first replaces it;
- *  - a row of another KIND of request (other proposal type) → leaves it
- *    open, and the matching row the same call files next replaces it
- *    (rules out "whatever the call files first");
+ *  - a row of another KIND of request (other proposal type) → REFUSED, nothing
+ *    filed, the failed one stays failed (wave-2 code review 1: it used to be
+ *    filed while the failed one stayed open, and the door said "filed
+ *    nothing"; rules out "check the person only, end by the request");
+ *  - the same kind of request to ANOTHER record → refused alike;
+ *  - a create (a type that mints its target) for a new record id → replaces
+ *    it (rules out "the same target id, always");
  *  - no `supersedes` → nothing ends.
  */
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
@@ -40,7 +44,6 @@ import {
   insertPendingProposal,
   SupersedesRefusedError,
   SUPERSEDED_BY_KEY,
-  SUPERSEDED_REASON,
   type InsertPendingProposalInput,
 } from "./insert-pending-proposal.js";
 import { runWithSupersedes } from "./request-write-context.js";
@@ -162,7 +165,9 @@ describe("supersedes: a filing that replaces a failed proposal", () => {
     const old = await rowOf(failed);
     expect(old.status).toBe("withdrawn");
     expect(old.data[SUPERSEDED_BY_KEY]).toBe(filed.proposal.id);
-    expect(old.data.withdrawReason).toBe(SUPERSEDED_REASON);
+    // Why it ended is `ended.reason`; no sentence stored as if its author
+    // wrote it (finding 156068a6).
+    expect(old.data).not.toHaveProperty("withdrawReason");
     // An end with no person names none and claims no review time (decision
     // F2): readers date it by its updatedAt, which is now.
     expect(old.reviewed_by).toBeNull();
@@ -219,10 +224,10 @@ describe("supersedes: a filing that replaces a failed proposal", () => {
     );
   });
 
-  it("a row of another kind of request leaves it open for the matching one", async () => {
+  it("a row of another kind of request is refused: nothing filed, the failed one stays failed", async () => {
     const failed = await existing("approval_failed");
-    const { slot, result } = runWithSupersedes(failed, async () => {
-      const other = await insertPendingProposal(
+    const { slot, result } = runWithSupersedes(failed, () =>
+      insertPendingProposal(
         filing({
           proposalType: "update",
           targetType: "entity",
@@ -230,26 +235,56 @@ describe("supersedes: a filing that replaces a failed proposal", () => {
           data: { title: "x" },
         }),
         db as never
-      );
-      const send = await insertPendingProposal(filing(), db as never);
-      return { other, send };
-    });
-    const { other, send } = await result;
-    expect(other.superseded).toEqual([]);
-    expect(slot.replacedBy).toBe(send.proposal.id);
-    expect((await rowOf(failed)).data[SUPERSEDED_BY_KEY]).toBe(
-      send.proposal.id
+      )
     );
+    await expect(result).rejects.toBeInstanceOf(SupersedesRefusedError);
+    await expect(result).rejects.toThrow(
+      /another kind of request \(messaging\.external\.send on messaging\) than this call files \(update on entity\)/
+    );
+    // The door reads the refusal off the slot, whatever the route made of it.
+    expect(slot.refused).toMatch(/Nothing was filed\./);
+    expect(slot.replacedBy).toBeNull();
+    expect(slot.filed).toBeNull();
+    expect((await rowOf(failed)).status).toBe("approval_failed");
+    expect(await count()).toBe(1);
   });
 
-  it("the same kind of request to another target leaves it failed", async () => {
+  it("the same kind of request to another record is refused: nothing filed", async () => {
     const failed = await existing("approval_failed");
     const { slot, result } = runWithSupersedes(failed, () =>
       insertPendingProposal(filing({ targetId: "ch-2" }), db as never)
     );
-    await result;
+    await expect(result).rejects.toThrow(
+      /same kind of request on another record/
+    );
     expect(slot.replacedBy).toBeNull();
     expect((await rowOf(failed)).status).toBe("approval_failed");
+    expect(await count()).toBe(1);
+  });
+
+  it("a create mints its own target: a new record id still replaces the failed create", async () => {
+    const failed = randomUUID();
+    await q(
+      `insert into proposals (id, status, proposal_type, target_type, target_id, data,
+         created_by, agent_user_id, subject_user_id)
+       values ($1, 'approval_failed', 'entity.create', 'entity', $2, '{}'::jsonb, $3, $3, $4)`,
+      [failed, randomUUID(), AUTHOR, OWNER]
+    );
+    const { slot, result } = runWithSupersedes(failed, () =>
+      insertPendingProposal(
+        filing({
+          proposalType: "entity.create",
+          targetType: "entity",
+          targetId: randomUUID(),
+          data: { title: "x" },
+        }),
+        db as never
+      )
+    );
+    const filed = await result;
+    expect(slot.replacedBy).toBe(filed.proposal.id);
+    expect(slot.filed).toBe(filed.proposal.id);
+    expect((await rowOf(failed)).status).toBe("withdrawn");
   });
 
   it("a plan that partly applied is refused and stays failed", async () => {

@@ -574,7 +574,7 @@ async function decideCapabilityExecution(
   //       Tighten-only; a declared read returned above.
   //       An intent action asked for by any other caller (an agent's key)
   //       meets the same floor (`intentRun`, decision 790baeb5).
-  const outward = await outwardRunMustPropose(input);
+  const outward = await outwardRunMustPropose(input, verbPosture);
   if (outward) {
     return buildProposeDecision(input, outward);
   }
@@ -712,7 +712,8 @@ export const INTENT_OUTWARD = "INTENT_OUTWARD";
  * (`intentRun`).
  */
 async function outwardRunMustPropose(
-  input: GateCapabilityExecutionInput
+  input: GateCapabilityExecutionInput,
+  verbPosture: () => Promise<VerbPosture>
 ): Promise<typeof APP_OUTWARD_INTENT | typeof INTENT_OUTWARD | null> {
   const reason = getRequestGrant()?.clientId
     ? APP_OUTWARD_INTENT
@@ -720,7 +721,7 @@ async function outwardRunMustPropose(
       ? INTENT_OUTWARD
       : null;
   if (!reason) return null;
-  return (await isOutward(input)) ? reason : null;
+  return (await isOutward(input, verbPosture)) ? reason : null;
 }
 
 /** `proposals.governance_reason` of a run the pod file floor proposed. */
@@ -730,22 +731,17 @@ export const POD_FILE_OUTWARD = "POD_FILE_OUTWARD";
  * Outward = the verb's intent has an effect other than `read` in
  * `capability_intents` (a write or an act changes, sends or spends something
  * the pod cannot call back). Fail closed: a verb with no intent, an intent
- * with no row, and a raw tool call (no verb, so no intent) are outward.
+ * with no row, and a raw tool call (no verb, so no intent) are outward. The
+ * intent is the run's one posture read (`verbPosture`).
  */
 async function isOutward(
-  input: GateCapabilityExecutionInput
+  input: GateCapabilityExecutionInput,
+  verbPosture: () => Promise<VerbPosture>
 ): Promise<boolean> {
   if (input.capabilityKind !== "skill") return true;
-  let intent = input.skill?.intent;
-  const db = await getDb();
-  if (intent === undefined) {
-    const [row] = await db
-      .select({ intent: skills.intent })
-      .from(skills)
-      .where(eq(skills.id, input.capabilityId));
-    intent = row?.intent ?? null;
-  }
+  const { intent } = await verbPosture();
   if (!intent) return true;
+  const db = await getDb();
   const [declared] = await db
     .select({ effect: capabilityIntents.effect })
     .from(capabilityIntents)

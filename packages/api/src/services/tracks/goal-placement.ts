@@ -33,7 +33,6 @@ import {
   and,
   asc,
   db,
-  drizzleSql,
   eq,
   inArray,
   links,
@@ -52,6 +51,7 @@ import { listWorkspacesUsedByProject } from "../../utils/project-workspace.js";
 import { checkLinkEndpointVisible } from "../../routers/hub-protocol/rest/link-endpoint-visibility.js";
 import {
   deleteDependencyEdge,
+  pillarStillUsedSql,
   readGoalPrimary,
   validateDependencyEdge,
   writeDependencyLink,
@@ -293,7 +293,7 @@ export async function readGoalPlacements(
           and(
             eq(links.linkType, "advances"),
             eq(links.toType, "workspace"),
-            drizzleSql`EXISTS (SELECT 1 FROM links u JOIN ${projectTracks} t ON t.project_id::text = u.from_id WHERE t.id::text = ${links.fromId} AND u.link_type = 'uses' AND u.from_type = 'project' AND u.to_type = 'workspace' AND u.to_id = ${links.toId})`
+            pillarStillUsedSql()
           )
         )
       )

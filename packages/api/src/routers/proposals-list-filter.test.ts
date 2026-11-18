@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { UNDECIDED_PROPOSAL_STATUSES } from "@synap-core/types/proposals/attention";
 import {
   PROPOSAL_IDS_FILTER_MAX,
   proposalIdsFilterSchema,
@@ -73,6 +74,10 @@ describe("proposals.list proposalIds filter", () => {
   });
 
   it("preserves approval failures in the pending queue", () => {
-    expect(listBlock).toContain("ProposalStatus.APPROVAL_FAILED");
+    // The pending bucket reads the one undecided list, which holds them.
+    expect(listBlock).toContain(
+      "inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES])"
+    );
+    expect([...UNDECIDED_PROPOSAL_STATUSES]).toContain("approval_failed");
   });
 });

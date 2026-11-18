@@ -10163,7 +10163,7 @@ export interface ProposalToolRunParameter {
 	label: string;
 	/** What the verb's schema says the argument is, when it says. */
 	description?: string;
-	/** The value the agent passed, whole. Absent when `secret`. */
+	/** The value the agent passed, whole (a pod registration code in it masked). Absent when `secret`. */
 	value?: unknown;
 	/** The argument names a credential: its value never leaves the pod. */
 	secret?: true;
@@ -14693,40 +14693,24 @@ export interface KnownSourceHash {
  * matched no word at all and rode back as "Runs for anything new" at 0.5.
  *
  * ── THE NAME IS THE EVIDENCE (tickets b2ba4b6b, 84d2add0, 9753144a) ───────
- * A candidate's body (description, a ~5,000-char goal template, stage names)
- * holds so many words that common ones always hit somewhere: "write and send
- * this week's newsletter issue" ranked "Derive outputs" (whose description
- * mentions "optionally a newsletter issue") above the playbook NAMED
- * "Newsletter issue", and a Postgres restore drill was offered "Build a
- * website (Website Factory)" on "prove, backend, pod, new, apply". So:
+ * A candidate's body (description, goal template, stage names) holds so many
+ * words that common ones always hit somewhere, so:
  *   - a word that is also in the candidate's NAME counts twice
  *     (`WEIGHT.nameTerm` on top of `WEIGHT.intentTerm`);
  *   - RELEVANCE FLOOR (`FLOOR`): a candidate whose only evidence is words (no
  *     subject, kind or facet signal) is returned only when its NAME holds one
- *     of the request's words per five words asked, or its DESCRIPTION (its
- *     own "when to use me") holds half of them. Matches in the rest of the
- *     body (goal template, stage names) still score, but never admit a
- *     candidate alone: they made one long playbook the magnet of every
- *     request (plan 2026-11-05, document 7fbd45a7, step 5). The name share is
- *     PROPORTIONAL because one name word is a coincidence in a long request:
- *     "Design and build a feature: space brief … then fix MCP discovery gaps"
- *     (10 words) otherwise offered "Lead → qualified (discovery)" on
- *     "discovery" alone. With nothing better, nothing is offered: an empty
- *     list is a fact, a wrong first candidate teaches agents to skip the
- *     list. Measured on the live pool of 84 active playbooks, 2026-11-17.
+ *     of the request's words per five words asked, or its DESCRIPTION holds
+ *     half of them. Body matches score but never admit a candidate alone.
+ *     With nothing better, nothing is offered.
  * A structural signal (subject, kind, facet) is evidence about the ENTITY, so
  * a candidate carrying one is never cut by the floor.
  *
- * ── DECLARED TRIGGERS (plan a640c5bb D3, founder 2026-11-18) ───────────────
- * The floor left a playbook whose only words sit in its body unreachable
- * ("AI Dev Session" for the space-brief request: "build" is in its goal
- * template only). The answer is configuration, not a looser ranker: a playbook
- * DECLARES `triggers`, phrases it is for (`metadata.triggers`). A trigger
- * MATCHES when the request holds every one of its words (the same stems,
- * stopwords and generic work words as the request); a match ADMITS the
- * candidate, and its words score like name words (`WEIGHT.nameTerm`). A
- * trigger the request holds only part of is body text: it scores, never
- * admits.
+ * ── DECLARED TRIGGERS (plan a640c5bb) ───────────────────────────────────────
+ * A playbook DECLARES `triggers`, phrases it is for (`metadata.triggers`). A
+ * trigger the request holds whole (every word, with the request's stems,
+ * stopwords and generic work words) ADMITS the candidate, and its words score
+ * like name words (`WEIGHT.nameTerm`). A trigger held only in part is body
+ * text: it scores, never admits.
  *
  * ── TIES ────────────────────────────────────────────────────────────────────
  * Broken by relevance, never by recency: more distinct intent words, then the
@@ -20934,6 +20918,17 @@ export interface ContinuationPacket {
 	 * the inbound twin of `blockedBy`: closing this session releases them.
 	 */
 	unblocks: PacketSection<PacketChildItem>;
+	/**
+	 * The orchestrator coordinating this session
+	 * (`this --orchestrated_by--> orchestrator`, `start-orchestrator.ts`): it
+	 * holds this session until the person approves its merged plan.
+	 */
+	orchestratedBy: PacketSection<PacketChildItem>;
+	/**
+	 * The sessions this orchestrator coordinates
+	 * (`other --orchestrated_by--> this`), open first: the inbound twin.
+	 */
+	orchestrates: PacketSection<PacketChildItem>;
 	/** Capture clarification questions still open in this session's room, oldest first. */
 	openQuestions: PacketSection<PacketQuestionItem>;
 	/**
@@ -23118,6 +23113,16 @@ export interface AutomationCard {
 		kind: "add" | "none" | "run";
 	};
 }
+export type EnableManyItemResult = {
+	id: string;
+	kind: "skill" | "tool";
+	ok: true;
+} | {
+	error: string;
+	id: string;
+	kind: "skill" | "tool";
+	ok: false;
+};
 export interface CreateCapabilityResult {
 	capabilityKey: string;
 	created: {
@@ -26187,6 +26192,7 @@ export interface WorkGraphGoal {
 declare const WORK_GRAPH_EDGE_KINDS: readonly [
 	"blocked_by",
 	"spawned_from",
+	"orchestrated_by",
 	"waits_on_output",
 	"triggered",
 	"updated"
@@ -26213,6 +26219,8 @@ export type WorkGraphSection = {
 export interface WorkGraphSections {
 	/** Declared `blocked_by` edges. */
 	blockedBy: WorkGraphSection;
+	/** Declared `orchestrated_by` edges (who coordinates whom). */
+	orchestration: WorkGraphSection;
 	/** Derived waits on another open session's output. */
 	waitsOnOutputs: WorkGraphSection;
 	/** Derived `triggered` / `updated` interactions. */
@@ -33348,6 +33356,46 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message?: undefined;
 				result: {} | null;
 				skillId: string;
+			};
+		}>;
+		enableMany: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+				skillIds?: string[] | undefined;
+				toolIds?: string[] | undefined;
+			};
+			meta: object;
+			output: {
+				results: EnableManyItemResult[];
 			};
 		}>;
 		enrichEntity: import("@trpc/server").TRPCMutationProcedure<{
@@ -40816,7 +40864,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | string[] | null | undefined;
 				q?: string | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
+				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -42112,7 +42160,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
+				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -51112,6 +51160,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					subjectFilter: {} | null;
 					subjectProfileSlug: string | null;
 					templateKind: string;
+					triggers: string[];
 					workspaceId: string | null;
 				}[];
 				workspaceId: string;
@@ -51145,6 +51194,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subjectFilter: {} | null;
 				subjectProfileSlug: string | null;
 				templateKind: string;
+				triggers: string[];
 				workspaceId: string | null;
 			}[];
 		}>;
@@ -52775,7 +52825,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				request: {
 					id: string;
-					kind: "app_connection_request" | "device_enroll" | "device_link" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "recovery_codes" | "skill" | "tool" | "totp_enroll" | "trusted_issuer";
+					kind: "app_connection_request" | "capability_batch" | "device_enroll" | "device_link" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "recovery_codes" | "skill" | "tool" | "totp_enroll" | "trusted_issuer";
 				};
 			} | {
 				action: {
@@ -53143,6 +53193,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				approvalsOff: readonly string[];
 				changedAt: string | null;
 				changedBy: string | null;
+				graceSecondsLeft: number | null;
 				mode: PresenceMode;
 			};
 		}>;
@@ -60427,7 +60478,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
-				tool: Tool;
+				tool: {
+					approved: boolean;
+					authBinding: ToolAuthBinding;
+					capabilities: ToolVerbCatalogEntry[];
+					config: unknown;
+					createdAt: Date;
+					createdBy: string;
+					credentialRef: string | null;
+					description: string | null;
+					executor: ToolExecutorRef;
+					id: string;
+					inputSchema: unknown;
+					kind: ToolKind;
+					metadata: unknown;
+					name: string;
+					status: "active" | "error" | "inactive";
+					updatedAt: Date;
+					workspaceId: string | null;
+				};
 			};
 		}>;
 		setAuthBinding: import("@trpc/server").TRPCMutationProcedure<{

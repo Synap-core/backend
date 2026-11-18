@@ -1,5 +1,5 @@
 /**
- * An agent declares the phrases a playbook is FOR over MCP (plan a640c5bb D3):
+ * An agent declares the phrases a playbook is FOR over MCP (plan a640c5bb):
  * `synap_create_playbook` and `synap_update_playbook` carry `triggers` to the
  * procedures as `metadata.triggers`, whose REAL input schemas
  * (`createInputSchema`, `updateInputSchema`: `playbookTriggersSchema`) keep a

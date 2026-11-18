@@ -12,7 +12,7 @@
  * It is read ONCE here and lands on `c.set("sessionId", …)` → `getCaller`'s
  * default → `ctx.sessionId` → the proposal row, and in the request write
  * context (`runWithNamedSession`), which the governance gate reads when a
- * route's call passes no `sessionId` (A2).
+ * route's call passes no `sessionId` (plan a640c5bb).
  *
  * ── SECURITY ────────────────────────────────────────────────────────────────
  * `X-Session-Id` is CLIENT-SUPPLIED and must never be trusted as-is: honoured
@@ -119,7 +119,7 @@ export async function sessionMiddleware(
     const resolved = await resolveHubSessionHeader(raw, userId);
     if (resolved) {
       c.set("sessionId", resolved);
-      // A2: the governance gate files into it too when a route's own call
+      // The governance gate files into it too when a route's own call
       // passes no session (most do not forward `ctx.sessionId`).
       await runWithNamedSession(resolved, next);
       return;

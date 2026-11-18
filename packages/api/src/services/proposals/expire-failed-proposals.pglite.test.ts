@@ -18,7 +18,12 @@
  *    nobody decided it, now, and the display names no approver (rules out
  *    keeping the person who clicked the approve that failed);
  *  - a plan that partly applied stays failed for every helper (Q6);
- *  - `conflict` stays off the lapse clock (decision F3).
+ *  - `conflict` stays off the lapse clock (decision F3);
+ *  - a session that ENDED before its close ended anything (census bcef4627,
+ *    group E and 514a35f2): the 6-hourly catch-up ends its failed RUNS (a
+ *    playbook run, a run of a durable verb), never its failed create (rules
+ *    out "failed + session ended"), never a retryable failure, never a failed
+ *    run of a live session; the close itself ends a failed run the same way.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -126,6 +131,46 @@ async function run(opts: {
       // The person who clicked the approve that failed.
       opts.status === "approval_failed" ? OWNER : null,
     ]
+  );
+  return id;
+}
+
+/** A failed request of any type (the census rows that are not outward calls). */
+async function failedRequest(opts: {
+  proposalType: string;
+  targetType: string;
+  sessionId: string;
+  errorClass: string;
+  data?: Record<string, unknown>;
+}): Promise<string> {
+  const id = randomUUID();
+  await q(
+    `insert into proposals (id, status, proposal_type, target_type, target_id, data,
+       created_by, agent_user_id, subject_user_id, session_id, reviewed_at, created_at, reviewed_by)
+     values ($1, 'approval_failed', $2, $3, 'target-1', $4::jsonb, $5, $5, $6, $7, $8, $9, $6)`,
+    [
+      id,
+      opts.proposalType,
+      opts.targetType,
+      JSON.stringify({
+        ...opts.data,
+        failure: { errorClass: opts.errorClass },
+      }),
+      AGENT,
+      OWNER,
+      opts.sessionId,
+      hoursAgo(24 * 40),
+      hoursAgo(24 * 44),
+    ]
+  );
+  return id;
+}
+
+async function session(status: string): Promise<string> {
+  const id = randomUUID();
+  await q(
+    `insert into focus_sessions (id, user_id, goal, status) values ($1, $2, 'A run', $3)`,
+    [id, OWNER, status]
   );
   return id;
 }
@@ -295,5 +340,91 @@ describe("a failed proposal ends through the helpers that end a pending one", ()
     expect(await statusOf(lapsing)).toBe("approval_failed");
     expect(await statusOf(closing)).toBe("approval_failed");
     expect(await statusOf(unclear)).toBe("approval_failed");
+  });
+
+  it("a session that ended before: the catch-up ends its failed runs, never its failed record", async () => {
+    const closed = await session("closed");
+    const live = await session("active");
+    // Group E: a playbook run of a session closed on 5 Oct.
+    const playbookRun = await failedRequest({
+      proposalType: "run",
+      targetType: "playbook",
+      sessionId: closed,
+      errorClass: "unknown",
+    });
+    // 514a35f2: a run of a verb that acts on a durable object (objectWork,
+    // so no lapse clock), of a session closed on 7 Oct.
+    const durableRun = await failedRequest({
+      proposalType: "capability.run",
+      targetType: "capability",
+      sessionId: closed,
+      errorClass: "validation",
+      data: { verbId: "playbook.update" },
+    });
+    // 8fbd9a58: a create of the same kind of session. A record outlives it.
+    const create = await failedRequest({
+      proposalType: "create",
+      targetType: "skill",
+      sessionId: closed,
+      errorClass: "unknown",
+    });
+    const retryable = await failedRequest({
+      proposalType: "run",
+      targetType: "playbook",
+      sessionId: closed,
+      errorClass: "transient",
+    });
+    // B 2c03fe39 / 7d21b308: an outward send waiting on a person's fix (no
+    // profile on file). Its class is kept off the lapse clock, so the
+    // catch-up keeps it, though an outward call otherwise dies with its
+    // session.
+    const sendToFix = await failedRequest({
+      proposalType: "capability.run",
+      targetType: "capability",
+      sessionId: closed,
+      errorClass: "missing_field",
+    });
+    const liveRun = await failedRequest({
+      proposalType: "run",
+      targetType: "playbook",
+      sessionId: live,
+      errorClass: "unknown",
+    });
+
+    const res = await expireLapsedProposals(NOW);
+
+    expect(await statusOf(playbookRun)).toBe("expired");
+    expect(await statusOf(durableRun)).toBe("expired");
+    expect(await statusOf(create)).toBe("approval_failed");
+    expect(await statusOf(retryable)).toBe("approval_failed");
+    expect(await statusOf(sendToFix)).toBe("approval_failed");
+    expect(await statusOf(liveRun)).toBe("approval_failed");
+    expect(res.expired).toBe(2);
+    const [row] = await db
+      .select()
+      .from(proposals)
+      .where(eq(proposals.id, playbookRun));
+    expect(row!.data).toMatchObject({ ended: { reason: "session_ended" } });
+    expect(row!.reviewedBy).toBeNull();
+    expect(row!.reviewedAt).toBeNull();
+  });
+
+  it("a closing session ends its failed playbook run, and keeps its failed create", async () => {
+    const closing = await session("active");
+    const playbookRun = await failedRequest({
+      proposalType: "run",
+      targetType: "playbook",
+      sessionId: closing,
+      errorClass: "unknown",
+    });
+    const create = await failedRequest({
+      proposalType: "create",
+      targetType: "entity",
+      sessionId: closing,
+      errorClass: "conflict",
+    });
+    expect(await expireSessionEphemerals(closing, NOW)).toBe(1);
+    expect(await statusOf(playbookRun)).toBe("expired");
+    expect(await statusOf(create)).toBe("approval_failed");
   });
 });

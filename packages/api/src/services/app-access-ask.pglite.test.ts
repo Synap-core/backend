@@ -435,6 +435,46 @@ describe("MERGE — an approval only adds", () => {
   });
 });
 
+describe("SUPERSEDED — a new consent replaces the one it interrupted", () => {
+  it("ends the interrupted request as superseded by the new one, with no stored English", async () => {
+    await connect([{ permission: READ, workspaceId: BRAND }]);
+    const appId = (
+      await q<{ id: string }>(
+        `select id from apps where owner_user_id = $1 and oauth_client_id = $2`,
+        [OWNER, STUDIO]
+      )
+    )[0]!.id;
+    // A consent the person left half-way: its request still waits.
+    const interrupted = randomUUID();
+    await q(
+      `insert into proposals (id, target_type, target_id, proposal_type, status, data, created_by)
+       values ($1, 'app', $2, 'connect', 'pending', '{"via":"oauth-consent"}'::jsonb, $3)`,
+      [interrupted, appId, OWNER]
+    );
+
+    await connect([{ permission: READ, workspaceId: BRAND }]);
+
+    const [newer] = await q<{ id: string }>(
+      `select id from proposals where target_id = $1 and id <> $2 and status = 'approved'
+       order by created_at desc limit 1`,
+      [appId, interrupted]
+    );
+    const [row] = await q<{
+      status: string;
+      ended: Record<string, unknown> | null;
+      words: string | null;
+    }>(
+      `select status, data->'ended' as ended, data->>'withdrawReason' as words from proposals where id = $1`,
+      [interrupted]
+    );
+    expect(row).toMatchObject({ status: "withdrawn", words: null });
+    expect(row!.ended).toMatchObject({
+      reason: "superseded",
+      supersededBy: newer!.id,
+    });
+  });
+});
+
 describe("UNDECLARED — an app asks only for what its document declares", () => {
   it("the Hub door refuses an undeclared permission and files nothing", async () => {
     const token = await connect([{ permission: READ, workspaceId: BRAND }]);

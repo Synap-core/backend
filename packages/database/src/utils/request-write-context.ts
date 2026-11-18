@@ -44,7 +44,7 @@ export interface RequestWriteContext {
   readonly delegatedTurnAgent?: DelegatedTurnAgent;
   /** A1 — the session id the MCP door derived (guessed, not named). */
   readonly derivedSessionId?: string;
-  /** A2 — the session the caller NAMED at the door (MCP `sessionId`, Hub `X-Session-Id`). */
+  /** The session the caller NAMED at the door (MCP `sessionId`, Hub `X-Session-Id`). */
   readonly namedSessionId?: string;
   /**
    * B4 — set when that derived session is the client's AUTO-OPENED receipt:
@@ -409,7 +409,7 @@ export function getDerivedSessionId(): string | undefined {
   return storage.getStore()?.derivedSessionId;
 }
 
-// ═══ Concern: NAMED SESSION (A2, plan a640c5bb) ═══════════════════════════════
+// ═══ Concern: NAMED SESSION (plan a640c5bb) ═══════════════════════════════
 //
 // The session the caller NAMED (MCP `sessionId` arg, Hub `X-Session-Id`),
 // ownership-checked at the door and entered here ONCE. The governance gate reads
@@ -854,13 +854,19 @@ export function recordWriteSessionFiling(
 // (`insertPendingProposal`). The door that knows the name (the MCP adapter)
 // is far above the insert, and the request reaches it through any of ~10
 // filing doors, so it travels here. Mutable on purpose: the FIRST pending row
-// the request files claims it, and the door reads afterwards whether one did.
+// the request files claims it, and the door reads afterwards what happened:
+// replaced, refused (the row was another request: nothing filed), or filed
+// without ending it (`leftFailedNote` tells the two "not replaced" apart).
 
 /** The failed proposal a request's filing replaces, and the row that did. */
 export interface SupersedesSlot {
   readonly proposalId: string;
   /** The proposal that replaced it; null while the request filed none. */
   replacedBy: string | null;
+  /** The first proposal the request filed under the slot, ended it or not. */
+  filed: string | null;
+  /** Why the insert door refused a filing under it (nothing was filed). */
+  refused: string | null;
 }
 
 /** Run `fn` with a filing that replaces `proposalId`; read the slot after. */
@@ -868,7 +874,12 @@ export function runWithSupersedes<T>(
   proposalId: string,
   fn: () => T
 ): { slot: SupersedesSlot; result: T } {
-  const slot: SupersedesSlot = { proposalId, replacedBy: null };
+  const slot: SupersedesSlot = {
+    proposalId,
+    replacedBy: null,
+    filed: null,
+    refused: null,
+  };
   const result = runWithPatch({ supersedes: slot }, fn);
   return { slot, result };
 }

@@ -23,7 +23,11 @@
  * never a sentence.
  */
 
-import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
+import {
+  POD_ACTOR_NAME,
+  resolveActionLabel,
+  resolveObjectNoun,
+} from "../vocabulary/index.js";
 
 export * from "./heat.js";
 export * from "./speaker.js";
@@ -167,13 +171,16 @@ export type ActivityActor =
 /**
  * Who acted, as a short name — the ONE spelling every "what happened" line
  * uses (web kit `ActivityRow`, relay `activity-row-model`). An agent the pod
- * could not name is "Agent", never a guess.
+ * could not name is "Agent", never a guess; the pod acting on its own is
+ * `POD_ACTOR_NAME` ("Synap").
  */
 export function activityActorName(actor: ActivityActor): string {
   if (actor.kind === "human")
     return actor.isViewer ? "You" : (actor.name ?? resolveObjectNoun("user"));
   if (actor.kind === "agent") return actor.name ?? resolveObjectNoun("agent");
-  return actor.name ?? resolveObjectNoun("automation");
+  // A nameless system actor is the pod itself (a sweep, a receipt's failure
+  // with no agent recorded); a rule that acted is named by the reader.
+  return actor.name ?? POD_ACTOR_NAME;
 }
 
 /**

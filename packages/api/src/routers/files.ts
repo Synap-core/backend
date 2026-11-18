@@ -168,7 +168,7 @@ export const filesRouter = router({
     .query(async ({ input }) => {
       try {
         // A raw path carries no recorded type: read the object's own, so a
-        // script or style blob is still served as plain text (plan D1).
+        // script or style blob is still served as plain text.
         const { contentType } = await storage.getMetadata(input.path);
         const url = await storage.getSignedUrl(input.path, input.expiresIn, {
           contentType,

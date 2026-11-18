@@ -26,13 +26,15 @@ import { getAgentFocusWorkspaceId } from "../../services/agent-identity-service.
 import {
   runWithDerivedSession,
   runWithNamedSession,
-  runWithSupersedes,
   runWithWriteSessionLedger,
-  supersedesProblem,
-  type SupersedesSlot,
 } from "@synap/database";
 import { toolError } from "./tool-errors.js";
 import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
+import {
+  fileSuperseding,
+  leftFailedNote,
+  readSupersedes,
+} from "../../services/proposals/supersedes-door.js";
 import {
   describeWriteSessions,
   firstTopicHint,
@@ -251,7 +253,7 @@ export async function executeMCPToolViaHubProtocol(
   // derived RECEIPT carries its project so the gate can re-key a write of
   // another project to that project's receipt.
   //
-  // A2: a session the caller NAMED is entered too, so the gate files into it
+  // Plan a640c5bb: a session the caller NAMED is entered too, so the gate files into it
   // at every door, not only the doors that forward `ctx.sessionId` (4bc6b9f4).
   const routed = () =>
     session?.attribution === "derived"
@@ -261,43 +263,30 @@ export async function executeMCPToolViaHubProtocol(
         : invokeHandler();
   // D3 (plan 8032a127): a write that REPLACES a failed proposal names it
   // (`supersedes`, on SUPERSEDES_TOOLS only: any other tool refuses it).
-  // Refused here, before the handler, when the name cannot be replaced (the
-  // insert door checks it again, and the request kind, against the row it
-  // files); otherwise the proposal this call files for it ends it.
-  const supersedes =
-    typeof args.supersedes === "string" && args.supersedes.trim() !== ""
-      ? args.supersedes.trim()
-      : undefined;
+  // The ONE door `fileSuperseding` (also Hub REST's) refuses it before the
+  // handler when the name cannot be replaced (the insert door checks it
+  // again, and the request kind, against the row it files); otherwise the
+  // proposal this call files for it ends it.
   if (args.supersedes !== undefined && !SUPERSEDES_TOOLS.includes(toolName)) {
     return toolError(
       `${toolName} does not take \`supersedes\` — NOTHING WAS CHANGED. Only ${SUPERSEDES_TOOLS.join(", ")} file a request that replaces a failed one.`
     );
   }
-  if (supersedes) {
-    const problem = await supersedesProblem(supersedes, userId);
-    if (problem) {
-      return toolError(
-        `supersedes ${supersedes}: ${problem} Nothing was filed.`
-      );
-    }
-  }
-  let replacing: SupersedesSlot | undefined;
-  const { ledger, result: pending } = runWithWriteSessionLedger(() => {
-    if (!supersedes) return routed();
-    const run = runWithSupersedes(supersedes, routed);
-    replacing = run.slot;
-    return run.result;
-  });
-  const handled = await pending;
+  const named = readSupersedes(args.supersedes);
+  if (!named.ok) return toolError(named.problem);
+  const supersedes = named.id;
+  const { ledger, result: pending } = runWithWriteSessionLedger(() =>
+    fileSuperseding(supersedes, userId, routed)
+  );
+  const run = await pending;
+  if (run.refused !== null) return toolError(run.refused);
+  const handled = run.result;
   // Said when nothing this call filed went to review (a refusal, a write that
   // applied at once): the failed proposal is still there, and the agent must
   // not believe it ended.
   const result =
-    replacing && !replacing.replacedBy && !handled.isError
-      ? withNote(
-          handled,
-          `supersedes: this call filed nothing for review, so proposal ${replacing.proposalId} was left as it is (still failed).`
-        )
+    run.slot && !run.slot.replacedBy && !handled.isError
+      ? withNote(handled, leftFailedNote(run.slot))
       : handled;
   const filed = resolution
     ? await describeWriteSessions(ledger.filings, { userId, agentUserId })
@@ -451,7 +440,7 @@ function withSessionDisclosure(
 ): CallToolResult {
   // `openCount` = unclaimed work sessions touched in the last 24 hours, counted
   // exactly (`resolveWorkSession`) — it used to stop at 10 and read as exact.
-  // With `candidates` (A2) it is the sessions THIS conversation started.
+  // With `candidates` it is the sessions THIS conversation started.
   const openCount = attribution.openCount ?? 0;
   const note = attribution.candidates
     ? `Note: this conversation has ${openCount} open sessions, so this write ` +

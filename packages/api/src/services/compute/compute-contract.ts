@@ -25,6 +25,8 @@
  * `runResolvedSkill` (so an approved proposal is checked again). PURE: no
  * database, no clock.
  */
+import { createHash } from "node:crypto";
+import { findPodRegistrationCode } from "@synap-core/types/proposals/capability-run";
 import { declaredCompute } from "../capabilities/capability-drift.js";
 
 export const PROVISION_COMPUTE_INTENT = "provision_compute";
@@ -43,6 +45,13 @@ export interface ComputeStart {
   maxSpendCents: number;
   /** The release_compute verb run in mode destroy at the TTL. */
   releaseVerb: string;
+  /**
+   * The sha256 (hex) of the pod registration code the start's arguments
+   * carry, when it starts a person's new pod server (plan a640c5bb B1): the
+   * Control Plane stores the same digest, and the lease is KEPT once that code
+   * registered (the sweeper's keep pass). Null for any other start.
+   */
+  podRegistrationCodeHash: string | null;
 }
 
 export interface ComputeRelease {
@@ -117,11 +126,15 @@ export function readComputeRun(
         message: `Every compute start needs a time to live and a spend maximum. Send ${missing.join(" and ")} with "${verb.name}". Nothing was started.`,
       };
     }
+    const code = findPodRegistrationCode(params);
     return {
       kind: "start",
       ttlMinutes: ttlMinutes!,
       maxSpendCents: maxSpendCents!,
       releaseVerb,
+      podRegistrationCodeHash: code
+        ? createHash("sha256").update(code, "utf8").digest("hex")
+        : null,
     };
   }
   if (verb.intent === RELEASE_COMPUTE_INTENT) {
@@ -177,10 +190,18 @@ export function describeComputeDuration(minutes: number): string {
  */
 export function describeComputeStart(
   verbLabel: string,
-  start: Pick<ComputeStart, "ttlMinutes" | "maxSpendCents">
+  start: Pick<
+    ComputeStart,
+    "ttlMinutes" | "maxSpendCents" | "podRegistrationCodeHash"
+  >
 ): string {
   const duration = describeComputeDuration(start.ttlMinutes);
   const amount = (start.maxSpendCents / 100).toFixed(2);
+  // A new pod's server is KEPT once it registers (founder, 18 Nov 2026):
+  // the card says so, and that the provider then bills it until it is deleted.
+  if (start.podRegistrationCodeHash) {
+    return `Start a server for a new pod (${verbLabel}), spending at most ${amount} in the provider's currency until it registers. Once it registers as your pod it is kept, and the provider bills it until you delete it; if it has not registered after ${duration}, it is destroyed automatically.`;
+  }
   return `Start a cloud machine (${verbLabel}) for ${duration}, spending at most ${amount} in the provider's currency. It is destroyed automatically after ${duration}.`;
 }
 

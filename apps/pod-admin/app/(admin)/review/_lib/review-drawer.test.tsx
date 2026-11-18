@@ -393,6 +393,7 @@ vi.mock("../../../../lib/trpc", async () => ({
     profiles: { get: { useQuery: () => ({ data: undefined }) } },
     entities: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
+      actionModes: { useQuery: () => ({ data: undefined }) },
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
   },

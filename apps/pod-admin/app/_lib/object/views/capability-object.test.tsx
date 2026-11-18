@@ -58,6 +58,10 @@ vi.mock("../../../../lib/trpc", async () => {
         setToolEnabled: {
           useMutation: () => ({ mutate: vi.fn(), isPending: false }),
         },
+        // "Turn all on", reached through the presence door (`useEnableMany`).
+        enableMany: {
+          useMutation: () => ({ mutate: vi.fn(), isPending: false }),
+        },
       },
       tools: {
         setApproved: {
