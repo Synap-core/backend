@@ -479,35 +479,7 @@ function Outcome({
  * session or goal that ended.
  */
 function EndLine({ ended }: { ended: ProposalEndLine }) {
-  const t = proposalPageT();
-  const door = ended.landedEntityId
-    ? {
-        exit: openIn({
-          kind: "object",
-          objectKind: "entity",
-          id: ended.landedEntityId,
-        }),
-        label: t("outcome.openRecord"),
-      }
-    : ended.sessionId
-      ? {
-          exit: openIn({
-            kind: "object",
-            objectKind: "session",
-            id: ended.sessionId,
-          }),
-          label: t("outcome.openSession"),
-        }
-      : ended.goalId
-        ? {
-            exit: openIn({
-              kind: "object",
-              objectKind: "track",
-              id: ended.goalId,
-            }),
-            label: t("outcome.openGoal"),
-          }
-        : null;
+  const door = ended.door;
   return (
     <span
       data-end-reason={ended.reason}
@@ -519,20 +491,22 @@ function EndLine({ ended }: { ended: ProposalEndLine }) {
           {ended.withdrawReason}
         </q>
       )}
-      {ended.supersededBy && (
+      {door?.kind === "proposal" ? (
         <Link
-          href={`/proposal/${encodeURIComponent(ended.supersededBy)}`}
-          data-superseded-by={ended.supersededBy}
+          href={`/proposal/${encodeURIComponent(door.id)}`}
+          data-superseded-by={door.id}
           className="self-start font-medium rq-ink underline underline-offset-2"
         >
-          {t("outcome.newerVersion")}
+          {door.label}
         </Link>
-      )}
-      {door && (
-        <span className="self-start" data-end-door={ended.reason}>
-          <ExitLink exit={door.exit} label={door.label} />
+      ) : door ? (
+        <span className="self-start" data-end-door={door.kind}>
+          <ExitLink
+            exit={openIn({ kind: "object", objectKind: door.kind, id: door.id })}
+            label={door.label}
+          />
         </span>
-      )}
+      ) : null}
     </span>
   );
 }

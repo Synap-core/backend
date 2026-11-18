@@ -38,6 +38,11 @@ export const en = {
   "proposals.ended.sent_outside": "The message was sent directly",
   "proposals.ended.request_changed": "No longer asked for",
   "proposals.ended.app_revoked": "The app that asked was revoked",
+  // The one door beside the end line (`ProposalEndLine.door`).
+  "proposals.ended.door.proposal": "Open the newer version",
+  "proposals.ended.door.entity": "Open the record",
+  "proposals.ended.door.session": "Open the session",
+  "proposals.ended.door.track": "Open the goal",
   // WHO (`proposalWho`, `./ended.ts`): who decided or ended a request, beside
   // its status chip. An expiry names nobody.
   "proposals.who.decided": "Decided by {who}",
@@ -74,6 +79,10 @@ export const fr: Catalog<typeof en> = {
   "proposals.ended.sent_outside": "Le message a été envoyé directement",
   "proposals.ended.request_changed": "N’est plus demandé",
   "proposals.ended.app_revoked": "L’application qui le demandait a été révoquée",
+  "proposals.ended.door.proposal": "Ouvrir la version plus récente",
+  "proposals.ended.door.entity": "Ouvrir l’élément",
+  "proposals.ended.door.session": "Ouvrir la session",
+  "proposals.ended.door.track": "Ouvrir l’objectif",
   "proposals.who.decided": "Décidé par {who}",
   "proposals.who.rule": "Approuvé par une règle permanente",
   "proposals.who.withdrawn": "Retiré par {who}",

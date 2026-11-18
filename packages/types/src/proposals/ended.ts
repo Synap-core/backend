@@ -262,6 +262,16 @@ function endedByName(row: ProposalWhoRow, ended: ProposalEnded): string | null {
   return POD_ACTOR_NAME;
 }
 
+/** The kinds an end line opens: the object routes every host already has. */
+export type ProposalEndDoorKind = "proposal" | "entity" | "session" | "track";
+
+/** The one door an end line names, with its words ("Open the newer version"). */
+export interface ProposalEndDoor {
+  kind: ProposalEndDoorKind;
+  id: string;
+  label: string;
+}
+
 /** The end as a surface draws it: the sentence, and the doors it names. */
 export interface ProposalEndLine {
   reason: ProposalEndReason;
@@ -277,6 +287,11 @@ export interface ProposalEndLine {
   sessionId?: string;
   /** Open the goal that ended (`goal_ended`). */
   goalId?: string;
+  /**
+   * THE door a surface draws beside the line, when the row has its id: the
+   * newer version, the record that already exists, the session, the goal.
+   */
+  door?: ProposalEndDoor;
 }
 
 /** The session a session-bound end names: the one it was filed in, else its target. */
@@ -316,9 +331,24 @@ export function proposalEndLine(
     ended.reason === "goal_ended"
       ? text(record(record(row.data)?.data)?.goalLoopOf)
       : undefined;
+  const target: [ProposalEndDoorKind, string | undefined] = ended.supersededBy
+    ? ["proposal", ended.supersededBy]
+    : ended.landedEntityId
+      ? ["entity", ended.landedEntityId]
+      : sessionId
+        ? ["session", sessionId]
+        : ["track", goalId];
+  const door = target[1]
+    ? {
+        kind: target[0],
+        id: target[1],
+        label: t(`proposals.ended.door.${target[0]}`),
+      }
+    : undefined;
   return {
     reason: ended.reason,
     text: words,
+    ...(door ? { door } : {}),
     ...(ended.supersededBy ? { supersededBy: ended.supersededBy } : {}),
     ...(ended.withdrawReason ? { withdrawReason: ended.withdrawReason } : {}),
     ...(ended.landedEntityId ? { landedEntityId: ended.landedEntityId } : {}),

@@ -160,6 +160,7 @@ describe("proposalEndLine — one sentence per reason, in each locale", () => {
     ).toEqual({
       reason: "superseded",
       text: "Replaced by a newer version",
+      door: { kind: "proposal", id: "p-new", label: "Open the newer version" },
       supersededBy: "p-new",
       withdrawReason: "A newer version replaces it",
     });
@@ -217,7 +218,11 @@ describe("proposalEndLine — one sentence per reason, in each locale", () => {
         } as ProposalWhoRow,
         "en"
       );
-    expect(end("session_ended", { sessionId: "s1" })?.sessionId).toBe("s1");
+    expect(end("session_ended", { sessionId: "s1" })?.door).toEqual({
+      kind: "session",
+      id: "s1",
+      label: "Open the session",
+    });
     // A stage gate or a hand-off targets its session.
     expect(
       end("agent_attached", {
@@ -227,6 +232,7 @@ describe("proposalEndLine — one sentence per reason, in each locale", () => {
       })?.sessionId
     ).toBe("s2");
     expect(end("lapsed", { sessionId: "s1" })?.sessionId).toBeUndefined();
+    expect(end("lapsed", { sessionId: "s1" })?.door).toBeUndefined();
     expect(
       proposalEndLine(
         {
@@ -236,9 +242,9 @@ describe("proposalEndLine — one sentence per reason, in each locale", () => {
             data: { goalLoopOf: "g1" },
           },
         },
-        "en"
-      )?.goalId
-    ).toBe("g1");
+        "fr"
+      )?.door
+    ).toEqual({ kind: "track", id: "g1", label: "Ouvrir l’objectif" });
     expect(
       proposalEndLine(
         {
@@ -246,8 +252,8 @@ describe("proposalEndLine — one sentence per reason, in each locale", () => {
           data: { expiredBy: "record_landed", supersededByEntityId: "e1" },
         },
         "en"
-      )?.landedEntityId
-    ).toBe("e1");
+      )?.door
+    ).toEqual({ kind: "entity", id: "e1", label: "Open the record" });
   });
 
   it("gives a lapsed request its next step", () => {

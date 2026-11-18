@@ -70,11 +70,6 @@ export const en = {
   // A failed plan whose undo left items in place (`proposalItemsLeft`).
   "outcome.partlyLeft":
     "Not applied; {n, plural, one {# item} other {# items}} could not be rolled back",
-  // The doors of the end line: what replaced it, what it named.
-  "outcome.newerVersion": "Open the newer version",
-  "outcome.openRecord": "Open the record",
-  "outcome.openSession": "Open the session",
-  "outcome.openGoal": "Open the goal",
   // One word with the chip: "Couldn’t apply".
   "repair.label": "Why it couldn’t apply",
   "repair.default": "No reason was recorded.",
@@ -185,10 +180,6 @@ export const fr: Catalog<typeof en> = {
   "outcome.withdrawn": "Rien n’a été appliqué.",
   "outcome.partlyLeft":
     "Non appliqué\u00a0; {n, plural, one {# élément n’a pas pu être annulé} other {# éléments n’ont pas pu être annulés}}",
-  "outcome.newerVersion": "Ouvrir la version plus récente",
-  "outcome.openRecord": "Ouvrir l’élément",
-  "outcome.openSession": "Ouvrir la session",
-  "outcome.openGoal": "Ouvrir l’objectif",
   "repair.label": "Pourquoi elle n’a pas été appliquée",
   "repair.default": "Aucune raison n’a été enregistrée.",
   "repair.loadFailed": "Impossible de charger ce qui peut être corrigé.",
