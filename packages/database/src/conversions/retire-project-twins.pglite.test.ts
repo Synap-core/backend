@@ -271,7 +271,10 @@ describe("pt1.projects.retire-project-twins (retireProjectTwins)", () => {
     }
 
     // Not a twin: untouched.
-    expect(await entityRow(f.n1)).toEqual({ deleted_at: null, system_data: {} });
+    expect(await entityRow(f.n1)).toEqual({
+      deleted_at: null,
+      system_data: {},
+    });
     // Already deleted: its own deletion kept.
     const x4 = await entityRow(f.x4);
     expect(new Date(x4.deleted_at).toISOString()).toBe(OLD_DELETE);
