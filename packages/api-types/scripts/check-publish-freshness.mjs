@@ -38,11 +38,12 @@
  */
 
 import { execSync } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 import { readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { satisfiesRange } from "./semver-range.mjs";
+import { behindVerdict, satisfiesRange } from "./semver-range.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = resolve(__dirname, "..");
@@ -53,6 +54,13 @@ const MAX_PATCH_DRIFT = Number(process.env.API_TYPES_MAX_PATCH_DRIFT ?? 1);
 const SYNAP_APP_REPO = process.env.SYNAP_APP_REPO ?? "Synap-core/first-app";
 const SYNAP_APP_BRANCH = process.env.SYNAP_APP_BRANCH ?? "main";
 const SYNAP_APP_TOKEN = process.env.CROSS_REPO_TOKEN;
+// A checkout BEHIND npm: how long to wait for publish-types.yml's bump commit
+// to reach main before calling it drift (it publishes, then pushes the bump).
+const MAIN_BRANCH = process.env.BACKEND_MAIN_BRANCH ?? "main";
+const MAIN_WAIT_ATTEMPTS = Number(
+  process.env.API_TYPES_MAIN_WAIT_ATTEMPTS ?? 6
+);
+const MAIN_WAIT_MS = 20_000;
 
 let hadFailure = false;
 
@@ -91,6 +99,65 @@ function publishedVersion() {
         `check (${err.message}).`
     );
     return null;
+  }
+}
+
+/**
+ * This package's version at main's head, read fresh: a `git fetch` of main,
+ * never a raw-content URL (its CDN caches for minutes, longer than the race
+ * this reads). null when it cannot be read.
+ */
+function mainHeadVersion() {
+  try {
+    execSync(`git fetch --quiet --depth=1 origin ${MAIN_BRANCH}`, {
+      cwd: PKG_DIR,
+      stdio: "ignore",
+      timeout: 60_000,
+    });
+    const body = execSync(
+      "git show FETCH_HEAD:packages/api-types/package.json",
+      { cwd: PKG_DIR, encoding: "utf-8" }
+    );
+    return JSON.parse(body).version;
+  } catch (err) {
+    warn(
+      `could not read ${PKG_NAME}'s version at main's head (${err.message}).`
+    );
+    return null;
+  }
+}
+
+/**
+ * Local is behind npm. Drift only when MAIN is behind npm too (behindVerdict):
+ * a run on an earlier main commit that overlaps a publish sees this with
+ * nothing wrong. Waits up to MAIN_WAIT_ATTEMPTS reads for the publish's bump
+ * commit; an unreadable main head stays a failure, as before this read.
+ */
+async function checkBehindPublished(local, published) {
+  for (let attempt = 1; ; attempt++) {
+    const head = mainHeadVersion();
+    const verdict = behindVerdict(published, head);
+    if (verdict === "main-moved-on") {
+      log(
+        `ℹ️  local ${local} is behind published ${published}, but main's head is at ${head}: ` +
+          `this run predates the publish's bump commit. Not drift.`
+      );
+      return;
+    }
+    if (verdict === null || attempt >= MAIN_WAIT_ATTEMPTS) {
+      fail(
+        `local ${PKG_NAME} version ${local} is BEHIND the published ${published}, and main's ` +
+          `head is at ${head ?? "(unread)"}.\n` +
+          `   npm is ahead of main: check for an out-of-band publish.`
+      );
+      return;
+    }
+    log(
+      `main's head is at ${head}, behind published ${published}: the publish may be about ` +
+        `to push its bump; reading main again in ${MAIN_WAIT_MS / 1000} s ` +
+        `(${attempt}/${MAIN_WAIT_ATTEMPTS}).`
+    );
+    await sleep(MAIN_WAIT_MS);
   }
 }
 
@@ -166,10 +233,7 @@ async function main() {
         (l.major === p.major && l.minor < p.minor) ||
         (l.major === p.major && l.minor === p.minor && l.patch < p.patch)
       ) {
-        fail(
-          `local ${PKG_NAME} version ${local} is BEHIND the published ${published}.\n` +
-            `   This should never happen — pull main, or check for an out-of-band publish.`
-        );
+        await checkBehindPublished(local, published);
       } else if (l.major !== p.major || l.minor !== p.minor) {
         fail(
           `${PKG_NAME} has an un-published MAJOR/MINOR bump: local ${local} vs published ` +
