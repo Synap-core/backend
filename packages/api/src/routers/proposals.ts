@@ -2150,6 +2150,13 @@ export const proposalsRouter = router({
          */
         workspaceId: z.string().nullable().optional(),
         projectId: z.string().nullable().optional(),
+        /**
+         * The revision the reviewer's edit was made against (the length of
+         * `revisionHistory` the page rendered). A change made on top of a
+         * version someone else has since revised is refused (CONFLICT), so
+         * "Approve with your changes" never overwrites an unseen edit.
+         */
+        expectedRevision: z.number().int().nonnegative().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2224,6 +2231,7 @@ export const proposalsRouter = router({
         patch: { kind: "envelope", fields: input.data },
         workspaceId: input.workspaceId,
         projectId: input.projectId,
+        expectedRevision: input.expectedRevision,
         roster: rosterReadFor(ctx),
       });
 

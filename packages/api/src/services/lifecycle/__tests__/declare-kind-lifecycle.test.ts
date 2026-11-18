@@ -90,7 +90,7 @@ describe("decideKindLifecycleDeclaration", () => {
     expect(d.verdict).toBe("refused");
     if (d.verdict !== "refused") return;
     expect(d.reasons[0]).toMatch(/already declares "status"/);
-    expect(d.reasons[0]).toMatch(/changeLifecycleOptions/);
+    expect(d.reasons[0]).toMatch(/synap_change_lifecycle_options/);
   });
 
   it("refuses a GLOBAL field other kinds share", () => {

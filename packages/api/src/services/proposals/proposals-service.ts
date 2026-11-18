@@ -515,6 +515,50 @@ export interface ComputeRevisedEnvelopeParams {
    * one — recorded as `actingAgentUserId` on the entry. Attribution only.
    */
   actingAgentUserId?: string | null;
+  /**
+   * The pod's one "does this name read as a credential" rule
+   * (`isSecretParamName`), needed only to apply `parameterEdits`. The locked
+   * revise passes it; a caller without it cannot edit tool-run arguments.
+   */
+  isSecretName?: (key: string) => boolean;
+}
+
+/**
+ * The ONE field a person's edit of a tool run's text arguments travels in
+ * (`proposals.revise` `data.parameterEdits`: `{ <argument>: <new text> }`).
+ * Applied KEY BY KEY onto `parameters`, never as a wholesale replace: the
+ * card cannot see a credential's value (the pod never sends it), so a whole
+ * `parameters` object from it would erase it; and the revision entry then
+ * records only the keys that changed, so no credential rides the chain.
+ * TEXT ONLY in v1: an existing, non-credential argument whose stored value is
+ * text, replaced by text.
+ */
+export const PARAMETER_EDITS_FIELD = "parameterEdits";
+
+function takeParameterEdits(fields: Record<string, unknown>): {
+  rest: Record<string, unknown>;
+  edits: Record<string, string> | null;
+} {
+  if (!(PARAMETER_EDITS_FIELD in fields)) return { rest: fields, edits: null };
+  const { [PARAMETER_EDITS_FIELD]: raw, ...rest } = fields;
+  const bad = (message: string) =>
+    new TRPCError({ code: "BAD_REQUEST", message });
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw bad("`parameterEdits` must be an object of argument -> new text.");
+  }
+  if ("parameters" in rest) {
+    throw bad(
+      "Send either `parameters` (whole) or `parameterEdits` (the changed text), not both."
+    );
+  }
+  const edits: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== "string") {
+      throw bad(`\`${key}\` can only be changed to text.`);
+    }
+    edits[key] = value;
+  }
+  return { rest, edits };
 }
 
 /** A nested `cell/define` envelope whose payload carries the content to stamp. */
@@ -543,7 +587,13 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   merged: Record<string, unknown>;
   revision: ProposalRevision;
 } {
-  const { envelope, patch, summary, reasoning, actorId } = params;
+  const { envelope, summary, reasoning, actorId } = params;
+  const taken = params.patch
+    ? takeParameterEdits(params.patch.fields)
+    : { rest: undefined, edits: null };
+  const patch: ProposalRevisionPatch | undefined = params.patch
+    ? { ...params.patch, fields: taken.rest ?? params.patch.fields }
+    : undefined;
 
   // ── System-authored provenance is not reviewer-editable ─────────────────
   // `data.sourceFile` is written ONLY by `stageSourceBlob`'s callers and names
@@ -628,6 +678,55 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
       }
       merged = { ...merged, ...patch.fields };
     }
+  }
+
+  if (taken.edits) {
+    if (
+      params.proposalType !== "capability.run" ||
+      isNestedEnvelope(envelope)
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Only a tool run's arguments can be edited this way.",
+      });
+    }
+    const current = envelope.parameters;
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "This tool run has no arguments to change.",
+      });
+    }
+    const currentParams = current as Record<string, unknown>;
+    if (!params.isSecretName) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Tool-run arguments cannot be edited from here.",
+      });
+    }
+    const was: Record<string, unknown> = {};
+    for (const key of Object.keys(taken.edits)) {
+      if (!(key in currentParams) || typeof currentParams[key] !== "string") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `\`${key}\` is not a text argument of this run; only the text it was proposed with can be changed.`,
+        });
+      }
+      if (params.isSecretName(key)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `\`${key}\` is a credential; it cannot be changed from the review.`,
+        });
+      }
+      was[key] = currentParams[key];
+    }
+    // Only the changed keys on the chain: `before` is what was proposed.
+    before.parameters = was;
+    historyPatch.parameters = { ...taken.edits };
+    merged = {
+      ...merged,
+      parameters: { ...currentParams, ...taken.edits },
+    };
   }
 
   if (summary !== undefined) {
@@ -984,6 +1083,8 @@ export async function mergeProposalRevision(
       actorId: params.actorId,
       actingAgentUserId:
         params.attributionAgentUserId ?? actingAgentUserId ?? null,
+      isSecretName: (await import("../capabilities/capability-catalog.js"))
+        .isSecretParamName,
     });
     // The stamp `computeRevisedEnvelope` derived knows no row; stamped again
     // here against the row this approval writes, at the scope it now targets

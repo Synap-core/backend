@@ -522,6 +522,59 @@ describe("a catalog update never switches off an approved capability on its own"
     expect((await skillRows())[0]!.approved).toBe(false);
   });
 
+  // 231020d4: a pack marks a verb propose-only. Adding the flag only
+  // tightens (no auto grant or rule runs the verb any more), so the update
+  // lands on its own and the approval stays; turning it off widens, so it is
+  // held for the owner like any execution change.
+  const withProposeOnly = (value: boolean) => {
+    const def = falDefinition();
+    return {
+      ...def,
+      skills: def.skills.map((sk) => ({
+        ...sk,
+        metadata: { proposeOnly: value },
+      })),
+    };
+  };
+  const skillMetadata = async () =>
+    (
+      await h.client!.query<{ metadata: Record<string, unknown> | null }>(
+        `select metadata from skills where name = 'fal_generate_image'`
+      )
+    ).rows[0]!.metadata;
+
+  it("a catalog update adding metadata.proposeOnly applies on its own: the flag lands, approval kept", async () => {
+    await installAsContainer();
+    await ownerTurnsItOn();
+    catalogPublishes(withProposeOnly(true));
+
+    const report = await reconcileCapabilitiesToTemplates();
+
+    expect(report.applied.map((a) => a.containerId)).toEqual([CONTAINER]);
+    expect(report.updatesAvailable).toEqual([]);
+    expect(await skillMetadata()).toMatchObject({ proposeOnly: true });
+    expect((await skillRows())[0]!.approved).toBe(true);
+  });
+
+  it("a catalog update turning metadata.proposeOnly off is held for the owner, named", async () => {
+    await installAsContainer();
+    await ownerTurnsItOn();
+    await h.client!.query(
+      `update skills set metadata = '{"proposeOnly": true}'::jsonb where name = 'fal_generate_image'`
+    );
+    catalogPublishes(withProposeOnly(false));
+
+    const report = await reconcileCapabilitiesToTemplates();
+
+    expect(report.applied).toEqual([]);
+    expect(report.updatesAvailable[0]!.held).toBe("changes_execution");
+    expect(report.updatesAvailable[0]!.changedExecFields).toEqual({
+      fal_generate_image: ["metadata.proposeOnly"],
+    });
+    expect(await skillMetadata()).toMatchObject({ proposeOnly: true });
+    expect((await skillRows())[0]!.approved).toBe(true);
+  });
+
   it("an update that leaves what the skill runs alone still applies on its own, approval kept", async () => {
     await installAsContainer();
     await ownerTurnsItOn();
