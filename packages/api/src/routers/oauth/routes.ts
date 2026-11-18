@@ -369,6 +369,11 @@ oauthApp.get("/authorize", async (c) => {
     codeChallenge: q.code_challenge,
     codeChallengeMethod: q.code_challenge_method,
     resource: resources[0],
+    // Read by phase 1 only, to know when a pod app's cached document must
+    // be read again (`consentRereadIf`): `prompt=consent`, or a `scope` /
+    // `synap_ask` naming what the copy does not declare.
+    prompt: q.prompt,
+    synapAsk: q.synap_ask,
   };
 
   // ── Phase 1: client + redirect_uri. RFC 6749 §4.1.2.1 — errors here are shown

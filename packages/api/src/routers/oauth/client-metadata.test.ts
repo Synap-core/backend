@@ -21,6 +21,7 @@ vi.mock("./store.js", () => ({
 import {
   CIMD_MAX_TTL_MS,
   CIMD_MIN_TTL_MS,
+  CIMD_REREAD_FLOOR_MS,
   ClientMetadataError,
   assertClientMetadataUrl,
   cimdCacheTtlMs,
@@ -755,6 +756,121 @@ describe("CIMD — cache freshness", () => {
     });
     expect(m.httpsRequest).toHaveBeenCalledTimes(1);
     expect(client.redirectUris).toEqual([CALLBACK]);
+  });
+});
+
+/**
+ * An early re-read (`rereadIf`, founder dogfood 18 Nov 2026): an app newly
+ * declared pod-wide reads while the pod held a copy still fresh by its TTL,
+ * and the consent offered them per space from that copy.
+ */
+describe("CIMD — an early re-read of a copy still fresh (rereadIf)", () => {
+  const podWideDoc = JSON.stringify(
+    doc({
+      synap_requests: [
+        { permission: "entity.post.read", scope: "pod" },
+        { permission: "entity.post.create" },
+      ],
+    })
+  );
+  /** A copy of the old document (nothing pod-wide), fresh for an hour. */
+  async function cachedOldCopy(now: number) {
+    serve({ headers: { "cache-control": "max-age=3600" } });
+    const store = memoryStore();
+    await resolveCimdClient(CLIENT_ID, ISSUER, store, {
+      lookup: publicDns,
+      now: () => now,
+    });
+    expect(store.rows.get(CLIENT_ID)!.requestedPodWide).toEqual([]);
+    m.httpsRequest.mockReset();
+    return store;
+  }
+
+  it("reads the current document when asked, and the newly declared pod-wide read arrives", async () => {
+    const t0 = Date.UTC(2026, 10, 18, 12);
+    const store = await cachedOldCopy(t0);
+    serve({ body: podWideDoc });
+    const client = await resolveCimdClient(
+      CLIENT_ID,
+      ISSUER,
+      store,
+      { lookup: publicDns, now: () => t0 + CIMD_REREAD_FLOOR_MS },
+      { rereadIf: () => true }
+    );
+    expect(m.httpsRequest).toHaveBeenCalledTimes(1);
+    expect(client.requestedPodWide).toEqual(["entity.post.read"]);
+    expect(store.rows.get(CLIENT_ID)!.requestedPodWide).toEqual([
+      "entity.post.read",
+    ]);
+  });
+
+  it("without the ask, or when the predicate says no, the fresh copy answers and nothing is fetched", async () => {
+    const t0 = Date.UTC(2026, 10, 18, 12);
+    const store = await cachedOldCopy(t0);
+    serve({ body: podWideDoc });
+    const deps = { lookup: publicDns, now: () => t0 + 10 * 60 * 1000 };
+    const plain = await resolveCimdClient(CLIENT_ID, ISSUER, store, deps);
+    const declined = await resolveCimdClient(CLIENT_ID, ISSUER, store, deps, {
+      rereadIf: () => false,
+    });
+    expect(m.httpsRequest).not.toHaveBeenCalled();
+    expect(plain.requestedPodWide).toEqual([]);
+    expect(declined.requestedPodWide).toEqual([]);
+  });
+
+  it("never sooner than the floor after the last read, whatever asks", async () => {
+    const t0 = Date.UTC(2026, 10, 18, 12);
+    const store = await cachedOldCopy(t0);
+    serve({ body: podWideDoc });
+    const rereadIf = vi.fn(() => true);
+    await resolveCimdClient(
+      CLIENT_ID,
+      ISSUER,
+      store,
+      { lookup: publicDns, now: () => t0 + CIMD_REREAD_FLOOR_MS - 1 },
+      { rereadIf }
+    );
+    expect(m.httpsRequest).not.toHaveBeenCalled();
+    expect(rereadIf).not.toHaveBeenCalled();
+  });
+
+  it("a re-read that FAILS to fetch keeps the fresh copy", async () => {
+    const t0 = Date.UTC(2026, 10, 18, 12);
+    const store = await cachedOldCopy(t0);
+    serve({ status: 503 });
+    const client = await resolveCimdClient(
+      CLIENT_ID,
+      ISSUER,
+      store,
+      { lookup: publicDns, now: () => t0 + 10 * 60 * 1000 },
+      { rereadIf: () => true }
+    );
+    expect(m.httpsRequest).toHaveBeenCalledTimes(1);
+    expect(client.redirectUris).toEqual([CALLBACK]);
+  });
+
+  it("a re-read that finds an INVALID document refuses: the copy it replaces is not honoured", async () => {
+    const t0 = Date.UTC(2026, 10, 18, 12);
+    const store = await cachedOldCopy(t0);
+    serve({
+      body: JSON.stringify(
+        doc({
+          // A write can never be asked pod-wide.
+          synap_requests: [{ permission: "entity.post.create", scope: "pod" }],
+        })
+      ),
+    });
+    expect(
+      await refusal(
+        resolveCimdClient(
+          CLIENT_ID,
+          ISSUER,
+          store,
+          { lookup: publicDns, now: () => t0 + 10 * 60 * 1000 },
+          { rereadIf: () => true }
+        )
+      )
+    ).toMatch(/cannot be asked pod-wide/);
   });
 });
 

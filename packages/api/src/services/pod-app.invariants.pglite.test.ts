@@ -36,6 +36,48 @@ const h = vi.hoisted(() => ({
   db: null as unknown,
   events: [] as unknown[],
   audits: [] as unknown[],
+  /** Documents served by URL (an early re-read of a cached copy); none else. */
+  served: new Map<string, string>(),
+  fetched: [] as string[],
+}));
+
+// The network, for a document the pod reads again (`consentRereadIf`): the
+// URL rules and the cache run for real; the address check and the pinned GET
+// answer from `h.served`, and any other URL is unreachable, so the copy the
+// pod already holds is kept (it is fresh by its own TTL).
+vi.mock("../utils/issuer-url-safety.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    resolvePublicIssuerEndpoint: async (url: string) => {
+      const u = new URL(url);
+      return {
+        issuerUrl: url,
+        hostname: u.hostname,
+        hostHeader: u.host,
+        address: "93.184.216.34",
+        family: 4,
+        port: 443,
+        jwksPath: u.pathname,
+      };
+    },
+  };
+});
+vi.mock("../utils/pinned-https-get.js", () => ({
+  pinnedHttpsGet: async (target: { hostname: string }, path: string) => {
+    const url = `https://${target.hostname}${path}`;
+    h.fetched.push(url);
+    const body = h.served.get(url);
+    if (body === undefined) throw new Error("unreachable in this test");
+    return {
+      statusCode: 200,
+      headers: {
+        "content-type": "application/json",
+        "cache-control": "max-age=300",
+      },
+      body,
+    };
+  },
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -1057,5 +1099,150 @@ describe("an app may ASK for the review verbs and `*`; only a Synap app is offer
         )
       ).rows[0]!.status
     ).toBe("pending");
+  });
+});
+
+/**
+ * Founder dogfood, 18 Nov 2026: an app (Synap AI Chat) newly declared reads
+ * POD-WIDE in its document, the person connected it again, and was offered
+ * them per space: the consent built its offer from the copy the pod had
+ * cached before the app declared them (`requestedPodWide`). The consent now
+ * reads the current document (`consentRereadIf`); the click still gives
+ * pod-wide only what the screen offered pod-wide and the person ticked.
+ */
+describe("a document that changed since the pod cached it is read again by the consent (18 Nov 2026)", () => {
+  const PODWIDE = "https://pods.example.com/.well-known/synap-client.json";
+  const PODWIDE_CB = "https://pods.example.com/cb";
+  const NEWER = "https://newer.example.com/.well-known/synap-client.json";
+  const NEWER_CB = "https://newer.example.com/cb";
+  const document = (
+    clientId: string,
+    callback: string,
+    requests: Array<Record<string, unknown>>
+  ) =>
+    JSON.stringify({
+      client_id: clientId,
+      client_name: "Pods",
+      redirect_uris: [callback],
+      synap_requests: requests,
+    });
+  /** A copy cached 10 min ago, fresh for another hour, by its old document. */
+  async function cacheOlderCopy(clientId: string, callback: string, permissions: string[]) {
+    await q(
+      `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
+         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, metadata_sha256, created_at)
+       values ($1, 'cimd', 'Pods', $2, '{}', $3, '{}', now() - interval '10 minutes', now() + interval '1 hour', $4, now())`,
+      [clientId, [callback], permissions, createHash("sha256").update(`${clientId}#old`).digest("hex")]
+    );
+  }
+  const fetchesOf = (clientId: string) =>
+    h.fetched.filter((u) => u === clientId).length;
+
+  beforeAll(async () => {
+    // The old document: both permissions per space, nothing pod-wide.
+    await cacheOlderCopy(PODWIDE, PODWIDE_CB, [READ, CREATE]);
+    // The document the app serves now: the read pod-wide, the write per space.
+    h.served.set(
+      PODWIDE,
+      document(PODWIDE, PODWIDE_CB, [
+        { permission: READ, scope: "pod" },
+        { permission: CREATE },
+      ])
+    );
+  });
+
+  it("the click alone reads nothing early: a pod-wide tick the screen never offered is refused, nothing filed", async () => {
+    const before = { proposals: await countProposals(), codes: await countCodes() };
+    await expect(
+      consent([{ permission: READ, workspaceId: null as never }], {
+        clientId: PODWIDE,
+        callback: PODWIDE_CB,
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(fetchesOf(PODWIDE)).toBe(0);
+    expect(await countProposals()).toBe(before.proposals);
+    expect(await countCodes()).toBe(before.codes);
+  });
+
+  it("the screen reads the current document: the newly declared read is offered pod-wide, the write stays per space", async () => {
+    const ctx = await getOAuthConsentContext(
+      params(PODWIDE, PODWIDE_CB, `${READ} ${CREATE}`),
+      OWNER
+    );
+    expect(fetchesOf(PODWIDE)).toBe(1);
+    expect(ctx.app!.podWide.map((p) => p.permission)).toEqual([READ]);
+    expect(
+      ctx.app!.permissions.map((p) => [
+        p.permission,
+        p.workspaces.map((w) => w.workspaceName),
+      ])
+    ).toEqual([[CREATE, ["Brand", "Shared"]]]);
+  });
+
+  it("a copy read under a minute ago is not read again", async () => {
+    await getOAuthConsentContext(
+      params(PODWIDE, PODWIDE_CB, `${READ} ${CREATE}`),
+      OWNER
+    );
+    expect(fetchesOf(PODWIDE)).toBe(1);
+  });
+
+  it("the click then gives the read pod-wide and the write in the ticked space only", async () => {
+    const { record } = await connect(
+      [
+        { permission: READ, workspaceId: null as never },
+        { permission: CREATE, workspaceId: BRAND },
+      ],
+      { clientId: PODWIDE, callback: PODWIDE_CB }
+    );
+    const grants = await liveGrantsOf(record.id);
+    expect(grants).toHaveLength(2);
+    expect(grants).toContainEqual({ permissions: [READ], workspaceIds: null });
+    expect(grants).toContainEqual({ permissions: [CREATE], workspaceIds: [BRAND] });
+    // The consent recorded the document it was shown (the current one).
+    const row = await appRow(OWNER, PODWIDE);
+    expect(row?.approved_requests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ permission: READ, workspaceId: null }),
+      ])
+    );
+  });
+
+  it("/authorize reads the current document when the scope names a permission the copy does not declare", async () => {
+    await cacheOlderCopy(NEWER, NEWER_CB, [READ]);
+    h.served.set(
+      NEWER,
+      document(NEWER, NEWER_CB, [{ permission: READ }, { permission: CREATE }])
+    );
+    const previous = process.env.POD_ADMIN_URL;
+    process.env.POD_ADMIN_URL = "https://admin.pod.test.synap.live";
+    try {
+      const authorize = (scope: string) =>
+        oauthApp.request(
+          `/authorize?${new URLSearchParams({
+            client_id: NEWER,
+            redirect_uri: NEWER_CB,
+            response_type: "code",
+            scope,
+            code_challenge: CHALLENGE,
+            code_challenge_method: "S256",
+            state: "st",
+          })}`
+        );
+      // Asking only what the copy declares reads nothing early.
+      const within = await authorize(READ);
+      expect(within.status).toBe(302);
+      expect(fetchesOf(NEWER)).toBe(0);
+      const res = await authorize(`${READ} ${CREATE}`);
+      expect(res.status).toBe(302);
+      expect(fetchesOf(NEWER)).toBe(1);
+      const forwarded = new URL(res.headers.get("location")!);
+      expect(forwarded.searchParams.get("scope")!.split(" ").sort()).toEqual(
+        [CREATE, READ].sort()
+      );
+    } finally {
+      if (previous === undefined) delete process.env.POD_ADMIN_URL;
+      else process.env.POD_ADMIN_URL = previous;
+    }
   });
 });
