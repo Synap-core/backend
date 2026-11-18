@@ -1223,7 +1223,9 @@ export function dedupeOpenQuestions(
     });
     if (twin) kept.push(twin);
   }
-  return deduped.length > 0 ? { incoming: kept, deduped } : { incoming, deduped };
+  return deduped.length > 0
+    ? { incoming: kept, deduped }
+    : { incoming, deduped };
 }
 
 /** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
