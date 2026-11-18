@@ -72,7 +72,11 @@ describe("readPodRegistrationStatus", () => {
   });
 
   it.each([
-    ["a bare 404 (a Control Plane without the route)", 404, { error: "Not Found" }],
+    [
+      "a bare 404 (a Control Plane without the route)",
+      404,
+      { error: "Not Found" },
+    ],
     ["a refusal", 403, { code: "POD_LEGACY_AUTH_REFUSED" }],
     ["a failure", 500, { error: "boom" }],
     ["an answer with no verdict", 200, { ok: true }],

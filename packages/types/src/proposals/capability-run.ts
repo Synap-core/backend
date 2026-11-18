@@ -134,7 +134,10 @@ export const POD_REGISTRATION_CODE_MASK = "[pod registration code]";
 const MAX_SCAN_DEPTH = 8;
 
 /** The first pod registration code anywhere in `value` (strings, arrays, objects), or null. */
-export function findPodRegistrationCode(value: unknown, depth = 0): string | null {
+export function findPodRegistrationCode(
+  value: unknown,
+  depth = 0
+): string | null {
   if (typeof value === "string") {
     POD_REGISTRATION_CODE_RE.lastIndex = 0;
     const m = POD_REGISTRATION_CODE_RE.exec(value);

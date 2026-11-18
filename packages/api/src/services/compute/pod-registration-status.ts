@@ -51,7 +51,10 @@ export async function readPodRegistrationStatus(
     };
   }
   if (!auth) {
-    return { state: "unread", reason: "this pod has no Control Plane credential" };
+    return {
+      state: "unread",
+      reason: "this pod has no Control Plane credential",
+    };
   }
   let res: Response;
   try {

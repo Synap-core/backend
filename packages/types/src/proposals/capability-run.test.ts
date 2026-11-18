@@ -158,7 +158,9 @@ describe("describeToolRun", () => {
         name: "alpha",
         options: {
           user_data: `#cloud-config\nSYNAP_REGISTER_TOKEN='${code}'\n`,
-          labels: [`fetch https://api.synap.live/installer/user-data?token=${code}`],
+          labels: [
+            `fetch https://api.synap.live/installer/user-data?token=${code}`,
+          ],
         },
       },
       isSecretName,
@@ -347,7 +349,9 @@ describe("pod registration codes (plan a640c5bb B1)", () => {
   });
 
   it("masks every code and leaves the rest as it was", () => {
-    expect(maskPodRegistrationCodes({ s: `A='${code}' B='${code}'`, n: 2 })).toEqual({
+    expect(
+      maskPodRegistrationCodes({ s: `A='${code}' B='${code}'`, n: 2 })
+    ).toEqual({
       s: `A='${POD_REGISTRATION_CODE_MASK}' B='${POD_REGISTRATION_CODE_MASK}'`,
       n: 2,
     });

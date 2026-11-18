@@ -393,7 +393,10 @@ describe("a new pod's server (plan a640c5bb B1)", () => {
       [PROPOSAL_ID, PROVISION_ID]
     );
     await podStart(PROPOSAL_ID);
-    registrationStatus.mockResolvedValue({ state: "registered", podId: "pod-9" });
+    registrationStatus.mockResolvedValue({
+      state: "registered",
+      podId: "pod-9",
+    });
     runSkillMock.mockClear();
 
     // Before its TTL: the tick keeps it.
