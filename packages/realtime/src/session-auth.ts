@@ -14,7 +14,7 @@
  * have their own socket door (`api-key-auth.ts`, service accounts only).
  *
  * On `/yjs` only (`{ roomTicket: true }`), `token` may be a pod app's ROOM
- * TICKET (`synap_rt_…`, 0432, minted by `POST /api/hub/realtime/room-ticket`):
+ * TICKET (`synap_rt_…`, 0433, minted by `POST /api/hub/realtime/room-ticket`):
  * its person is read here WITHOUT consuming it, because the handshake does
  * not know the room; the room gate then claims it, once, for its one document
  * (`yjs-server.ts`). Everywhere else (`/presence`, its sweep) a ticket is

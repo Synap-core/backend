@@ -1,5 +1,5 @@
 /**
- * Hub Protocol REST — realtime room tickets (0432, board lane wb-room).
+ * Hub Protocol REST — realtime room tickets (0433, board lane wb-room).
  *
  *   POST /realtime/room-ticket {documentId, access?}
  *

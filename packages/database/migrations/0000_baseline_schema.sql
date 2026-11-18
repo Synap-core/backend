@@ -5338,8 +5338,8 @@ CREATE INDEX IF NOT EXISTS "compute_leases_created_idx"
 CREATE INDEX IF NOT EXISTS "compute_leases_resource_idx"
   ON "compute_leases" ("user_id", "resource_id") WHERE "state" = 'active';
 
--- Realtime room tickets (0432): a pod app's single-use, 60 s ticket for ONE
--- document's live Yjs room (sha256 only). Mirrors 0432.
+-- Realtime room tickets (0433): a pod app's single-use, 60 s ticket for ONE
+-- document's live Yjs room (sha256 only). Mirrors 0433.
 CREATE TABLE IF NOT EXISTS "realtime_room_tickets" (
   "ticket_hash"  text        PRIMARY KEY,
   "user_id"      text        NOT NULL,

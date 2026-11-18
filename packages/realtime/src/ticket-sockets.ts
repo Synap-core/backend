@@ -1,6 +1,6 @@
 /**
  * Sockets opened with a pod app's ROOM TICKET live only as long as the app's
- * connection does (0432, board lane wb-room).
+ * connection does (0433, board lane wb-room).
  *
  * A ticket is claimed once at the `/yjs` room gate; the socket then stays
  * open for hours. Each such socket is tracked by the connection key that

@@ -272,7 +272,7 @@ export * from "./renderer-bindings.js";
 // to governance_rules' verdicts). First axis: daily_write_count → rung 2.56.
 export * from "./governance-ceilings.js";
 export * from "./compute-leases.js";
-// Realtime room tickets (0432): a pod app opens a live Yjs room.
+// Realtime room tickets (0433): a pod app opens a live Yjs room.
 export * from "./realtime-room-tickets.js";
 
 // Config Settings (0235) — a general, layered per-granularity config store that

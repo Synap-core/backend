@@ -1,5 +1,5 @@
 /**
- * The room ticket door's ACCESS decision (`issueRoomTicket`, 0432).
+ * The room ticket door's ACCESS decision (`issueRoomTicket`, 0433).
  *
  * Real: the grant check (`grantDeniedKey`, governance-policy `permits`) on
  * real grants, the room naming. Mocked as tables: the document floor

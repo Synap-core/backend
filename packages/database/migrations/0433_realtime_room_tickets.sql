@@ -1,4 +1,4 @@
--- 0432 — realtime room tickets: a pod app opens a live Yjs room (board lane
+-- 0433 — realtime room tickets: a pod app opens a live Yjs room (board lane
 -- wb-room; founder decisions of 18 Nov 2026, session 52ce3ee9: "Apps open
 -- live rooms: Yes").
 --

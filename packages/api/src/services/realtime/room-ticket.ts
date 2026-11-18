@@ -1,5 +1,5 @@
 /**
- * The room ticket door (0432, board lane wb-room; founder decisions of 18 Nov
+ * The room ticket door (0433, board lane wb-room; founder decisions of 18 Nov
  * 2026, session 52ce3ee9: "Apps open live rooms: Yes").
  *
  * A pod app holds its person's connection token on its own server. To open a

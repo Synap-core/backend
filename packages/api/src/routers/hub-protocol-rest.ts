@@ -382,7 +382,7 @@ registerWidgetDefinitionsRoutes(app); // /widget-definitions
 registerCellsRoutes(app); // /cells, /cells/install, /cells/:typeKey
 registerCellInstancesRoutes(app); // /cell-instances, /cell-instances/html, /cell-instances/:id*
 registerWhiteboardsRoutes(app); // /whiteboards/:viewId/placements/propose
-registerRealtimeRoutes(app); // POST /realtime/room-ticket — a pod app opens a live room (0432)
+registerRealtimeRoutes(app); // POST /realtime/room-ticket — a pod app opens a live room (0433)
 registerMcpServersRoutes(app); // /mcp-servers
 registerAutomationsRoutes(app); // /automations*
 registerVaultRoutes(app); // /vault/request

@@ -1,8 +1,8 @@
 /**
- * REAL-POSTGRES (PGlite) test for migration 0432 and the room ticket store
+ * REAL-POSTGRES (PGlite) test for migration 0433 and the room ticket store
  * (`utils/realtime-room-tickets.ts`), the rows behind how a pod app opens a
  * live Yjs room:
- *   - 0432 creates `realtime_room_tickets` with the drizzle schema's columns,
+ *   - 0433 creates `realtime_room_tickets` with the drizzle schema's columns,
  *     refuses an access other than read | edit, and runs twice (idempotent);
  *     the baseline carries the table and the boot coherence list names it;
  *   - a ticket is stored as its sha256 only;
@@ -38,7 +38,7 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const read = (f: string) =>
   readFileSync(resolve(HERE, "../migrations", f), "utf8");
-const M0432 = read("0432_realtime_room_tickets.sql");
+const M0433 = read("0433_realtime_room_tickets.sql");
 const BASELINE = read("0000_baseline_schema.sql");
 
 const DOC = randomUUID();
@@ -61,15 +61,15 @@ beforeAll(async () => {
       expires_at timestamptz
     );
   `);
-  await pg.exec(M0432);
-  await pg.exec(M0432);
+  await pg.exec(M0433);
+  await pg.exec(M0433);
   db = drizzle(pg, { schema });
 }, 60_000);
 afterAll(async () => {
   await pg.close();
 });
 
-describe("0432 realtime_room_tickets", () => {
+describe("0433 realtime_room_tickets", () => {
   it("has exactly the drizzle schema's columns", async () => {
     const { rows } = await pg.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns

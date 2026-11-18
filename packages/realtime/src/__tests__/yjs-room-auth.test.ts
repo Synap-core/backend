@@ -25,7 +25,7 @@
  *     leaves `nsp` null; without `initialize()` every `/yjs|{room}` connection
  *     is answered "Invalid namespace", silently.
  *
- *  5. ROOM TICKETS (0432) — a pod app's `synap_rt_…` ticket opens ONE room
+ *  5. ROOM TICKETS (0433) — a pod app's `synap_rt_…` ticket opens ONE room
  *     ONCE: another document, expired, reused, or another person's are
  *     refused; a read ticket never writes (driven through the real hooks);
  *     the socket gets the lesser of ticket and floor and ends with the app's
@@ -413,7 +413,7 @@ describe("the /yjs handshake: identity is server-proven", () => {
   });
 });
 
-// ─── Room tickets (0432) ─────────────────────────────────────────────────────
+// ─── Room tickets (0433) ─────────────────────────────────────────────────────
 
 let ticketSeq = 0;
 /** A ticket in the store; returns the raw ticket. */
