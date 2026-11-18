@@ -55,9 +55,10 @@ export const en = {
   // One verb with the bar, its sheet and its consequence: reject.
   "outcome.rejected": "You rejected this: the AI was told why.",
   "outcome.reverted": "This change was undone after it was applied.",
-  "outcome.expired":
-    "Its moment passed before anyone decided: nothing was applied.",
-  "outcome.withdrawn": "The AI withdrew this request: nothing was applied.",
+  // Expired and withdrawn also end a FAILED approval (and a send replaced by a
+  // newer one), so these lines say only what holds in every case.
+  "outcome.expired": "This request expired: nothing was applied.",
+  "outcome.withdrawn": "This request was withdrawn: nothing was applied.",
   "repair.label": "Why approving failed",
   "repair.default": "Approving this failed.",
   "repair.loadFailed": "Couldn’t load what can be fixed.",
@@ -154,10 +155,9 @@ export const fr: Catalog<typeof en> = {
   "outcome.rejected":
     "Vous avez rejeté cette demande\u00a0: l’IA a été prévenue du motif.",
   "outcome.reverted": "Ce changement a été annulé après son application.",
-  "outcome.expired":
-    "Le délai est passé avant toute décision\u00a0: rien n’a été appliqué.",
+  "outcome.expired": "Cette demande a expiré\u00a0: rien n’a été appliqué.",
   "outcome.withdrawn":
-    "L’IA a retiré cette demande\u00a0: rien n’a été appliqué.",
+    "Cette demande a été retirée\u00a0: rien n’a été appliqué.",
   "repair.label": "Pourquoi l’approbation a échoué",
   "repair.default": "L’approbation a échoué.",
   "repair.loadFailed": "Impossible de charger ce qui peut être corrigé.",

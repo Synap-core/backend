@@ -199,8 +199,8 @@ const ENGLISH_OUTCOMES = [
   "matched an auto-approve rule",
   "You rejected this",
   "was undone after it was applied",
-  "Its moment passed",
-  "withdrew this",
+  "This request expired",
+  "This request was withdrawn",
 ];
 
 describe("in French", () => {
@@ -218,7 +218,7 @@ describe("in French", () => {
     for (const sentence of ENGLISH_OUTCOMES)
       expect(seen).not.toContain(sentence);
     expect(seen).toMatch(
-      /Vous avez|règle d’approbation|prévenue|annulé|délai|retiré/
+      /Vous avez|règle d’approbation|prévenue|annulé|expiré|retirée/
     );
   });
 
