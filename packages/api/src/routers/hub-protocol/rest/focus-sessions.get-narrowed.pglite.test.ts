@@ -131,11 +131,12 @@ const APP_GRANT = {
   clientId: null,
 };
 
-function get(id: string, grant?: unknown) {
+function get(id: string, grant?: unknown, agentUserId?: string) {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   app.use("*", async (c, next) => {
     c.set("userId", OWNER);
     c.set("scopes", ["hub-protocol.read"]);
+    if (agentUserId) c.set("agentUserId" as never, agentUserId as never);
     await next();
   });
   registerFocusSessionsRoutes(app);
@@ -203,8 +204,24 @@ describe("GET /focus-sessions/:id — a narrowed key reads the session's shape u
     expect(body.workUnits).toMatchObject({ status: "ok", total: 1 });
     expect(body.workUnits.items[0]).toMatchObject({ url: PR_URL });
     expect(body.workUnits.items[0].prState).toBeUndefined();
-    // No `agent.read`: who works it is withheld, said so.
+    // No `agent.read`, but the key is the session OWNER's (a person's app
+    // key): who works it is theirs to read (the room's agent line, plan
+    // efb315a5) — the runners without the local details, and the holder.
+    expect(body.runners).toMatchObject({ status: "ok", total: 1 });
+    // The holder section rides (its own derivation is session-holder's suite).
+    expect(["ok", "unavailable"]).toContain(body.holder?.status);
+    expect(JSON.stringify(body)).not.toContain("conv-secret");
+  });
+
+  it("an AGENT's key with the same grant keeps the grant rule: who works it is withheld", async () => {
+    const id = await seedSession(WS_CRM);
+    await runner(id);
+    const body = (await (
+      await get(id, APP_GRANT, randomUUID())
+    ).json()) as Record<string, any>;
+    expect(body.packet).toMatchObject({ status: "withheld" });
     expect(body.runners).toMatchObject({ status: "withheld" });
+    expect(body.holder).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain("conv-secret");
   });
 

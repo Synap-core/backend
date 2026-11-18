@@ -181,7 +181,12 @@ import {
   fileableExpectedOutputs,
   droppedAskWarnings,
   criteriaDiffer,
+  dedupeOpenQuestions,
 } from "../../../services/focus-sessions/update-session.js";
+import {
+  dedupedQuestionWarning,
+  type DedupedQuestion,
+} from "../../../services/focus-sessions/same-question.js";
 import { restatedAskHints } from "../../../services/focus-sessions/ask-text.js";
 import { ErrorSchema, uuidParam, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -1909,7 +1914,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           await import("../../../services/focus-sessions/session-holder.js");
         const { projectSessionShape } =
           await import("../../../services/focus-sessions/continuation-packet.js");
-        const readsAgents = sessionHolderReadable(getRequestGrant());
+        // Who works the session is also the session OWNER's to read, on any
+        // key of theirs that is not an agent's (an app's person key: the room
+        // shows "Pod agent · working" / "nobody runs it", plan efb315a5).
+        // Every other key keeps the grant rule.
+        const ownerPersonKey =
+          row.userId === acting.userId && !c.get("agentUserId");
+        const readsAgents =
+          ownerPersonKey || sessionHolderReadable(getRequestGrant());
         const [holder, shape] = await Promise.all([
           readsAgents
             ? readSessionHolder(row, { userId: acting.userId })
@@ -2445,6 +2457,30 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       );
       if (moveRefusal) return c.json({ error: moveRefusal }, 400);
 
+      // ONE CARD PER QUESTION (`dedupeOpenQuestions`, the MCP door's rule in
+      // `applyOutputMutations`): an AGENT handing the person a slot that asks
+      // what an open card of this session already asks makes no second card;
+      // the reply names the card they have. Before the membrane, so a
+      // proposal never carries the twin either. A pod-run agent's turn calls
+      // with the AI service's internal key, which names no acting agent here
+      // (`keyAgentUserId` above): it is an agent's write all the same — the
+      // live twin (session cf60123c) was filed exactly that way (`update_run`).
+      let deduped: DedupedQuestion[] = [];
+      if (
+        (agentUserId || c.get("keyType") === "is_internal") &&
+        patch.expectedOutputs !== undefined
+      ) {
+        const d = dedupeOpenQuestions(
+          Array.isArray(existing.expectedOutputs)
+            ? (existing.expectedOutputs as ExpectedOutput[])
+            : [],
+          patch.expectedOutputs as ExpectedOutput[]
+        );
+        patch.expectedOutputs = d.incoming as typeof patch.expectedOutputs;
+        deduped = d.deduped;
+        outcomeWarnings.push(...deduped.map(dedupedQuestionWarning));
+      }
+
       // Step 3a: STAGE GATE FLOOR — the MCP door's (`updateFocusSession`). An
       // agent cannot resume a gate-held session, advance it while held, or
       // jump over a gated stage; the gate's approval is the door. 409: the
@@ -2676,6 +2712,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           reviewUrl: perm.reviewUrl,
           ...(filing ? { filing } : {}),
           ...(outcomeWarnings.length > 0 ? { warnings: outcomeWarnings } : {}),
+          ...(deduped.length > 0 ? { deduped } : {}),
           session: null,
         });
       }
@@ -2985,6 +3022,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({
         ...updated,
         ...(warnings.length > 0 ? { warnings } : {}),
+        ...(deduped.length > 0 ? { deduped } : {}),
         // Which hand-offs to other agents this patch asked for, and which are
         // waiting on a person (not on the roster yet).
         ...(handOffs.length > 0 ? { handOffs } : {}),
@@ -4168,6 +4206,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               ...("hint" in result && result.hint ? { hint: result.hint } : {}),
               ...("warnings" in result && result.warnings?.length
                 ? { warnings: result.warnings }
+                : {}),
+              // ONE CARD PER QUESTION: the open card it was filed on instead.
+              ...("deduped" in result && result.deduped
+                ? { deduped: result.deduped }
                 : {}),
             });
         }

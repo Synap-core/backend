@@ -93,6 +93,12 @@ import {
   type ReaskSlotLite,
 } from "./declined-reask.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
+import {
+  dedupedQuestionWarning,
+  isOpenQuestionSlot,
+  openTwinQuestion,
+  type DedupedQuestion,
+} from "./same-question.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { sessionGoalPayload } from "./session-update-goal.js";
 import {
@@ -353,6 +359,13 @@ export type UpdateFocusSessionResult =
       completeOutput?: CompleteOutputOutcome;
       /** What the patch's `retireOutput` did — present only when it carried one. */
       retireOutput?: RetireOutputOutcome;
+      /**
+       * ONE CARD PER QUESTION: the hand-overs this patch did not make because
+       * an open question of the session already asks the same
+       * (`dedupeOpenQuestions`) — each names the card the person has. Absent
+       * when there was none.
+       */
+      deduped?: DedupedQuestion[];
       /**
        * Standing guidelines for any slot this patch newly handed to the human
        * (`block-guidelines.ts`). Absent when nothing was blocked or nothing
@@ -1164,6 +1177,55 @@ export function declinedReaskLabels(
     .map((item) => item.label);
 }
 
+/**
+ * ONE CARD PER QUESTION (`same-question.ts`): an AGENT's list that hands the
+ * person a slot (a new `owner: 'human'` one, or a stored slot of its own
+ * turned into the person's) asking what an OPEN question of the same session
+ * already asks makes no second card. The new slot is left out; a stored slot
+ * the item would have handed over stays as stored. Each is reported, so the
+ * reply names the card the person already has (`deduped`). Judged on the
+ * slot as the patch would leave it (the stored twin with the item over it),
+ * against the stored slots. An update of the open question itself (its own
+ * twin) is never a duplicate. Pure; returns `incoming` itself when nothing
+ * was deduped.
+ */
+export function dedupeOpenQuestions(
+  current: readonly OutputItem[],
+  incoming: OutputItem[]
+): { incoming: OutputItem[]; deduped: DedupedQuestion[] } {
+  const stored = current as OutputItem[];
+  const { twinOf, keyOf } = storedTwins(stored);
+  const deduped: DedupedQuestion[] = [];
+  const kept: OutputItem[] = [];
+  for (const item of incoming) {
+    if (!item || item.owner !== "human") {
+      kept.push(item);
+      continue;
+    }
+    const twin = twinOf(item);
+    if (twin && isOpenQuestionSlot(twin)) {
+      kept.push(item);
+      continue;
+    }
+    const open = openTwinQuestion(
+      stored,
+      { ...(twin ?? {}), ...item } as OutputItem,
+      twin
+    );
+    if (!open) {
+      kept.push(item);
+      continue;
+    }
+    deduped.push({
+      key: keyOf.get(open) ?? null,
+      label: open.label,
+      asked: item.label,
+    });
+    if (twin) kept.push(twin);
+  }
+  return deduped.length > 0 ? { incoming: kept, deduped } : { incoming, deduped };
+}
+
 /** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
 function personsSlotHandBackError(labels: string[]): TRPCError {
   const named = labels
@@ -1686,6 +1748,12 @@ export interface OutputMutationResult {
   completeOutput?: CompleteOutputOutcome;
   /** Present only when the patch carried a `retireOutput`. */
   retireOutput?: RetireOutputOutcome;
+  /**
+   * The hand-overs an AGENT's patch did not make because an open question of
+   * the session already asks the same (`dedupeOpenQuestions`). Present only
+   * when there was one.
+   */
+  deduped?: DedupedQuestion[];
 }
 
 /**
@@ -1778,12 +1846,34 @@ export function applyOutputMutations(
   // Wholesale replace goes through the ONE merge, so a client that sends back
   // the four fields it knows about cannot erase a delegation, a return note or
   // an approval's lineage.
-  let next: OutputItem[] = patch.expectedOutputs
-    ? mergeExpectedOutputs(current, patch.expectedOutputs, opts)
+  // An AGENT's hand-over that asks again what an open card asks makes no
+  // second card (`dedupeOpenQuestions`), judged on the row it applies to.
+  const deduped: DedupedQuestion[] = [];
+  let incomingOutputs = patch.expectedOutputs;
+  if (opts.keepUnlisted && incomingOutputs) {
+    const d = dedupeOpenQuestions(current, incomingOutputs);
+    incomingOutputs = d.incoming;
+    deduped.push(...d.deduped);
+  }
+  let addOutput = patch.addOutput;
+  if (opts.keepUnlisted && addOutput) {
+    const d = dedupeOpenQuestions(current, [
+      { ...addOutput, status: "pending" } as OutputItem,
+    ]);
+    if (d.deduped.length > 0) {
+      deduped.push(...d.deduped);
+      // A NEW slot is dropped; a stored one stays as it is (`addOutput` of an
+      // existing label appends, so the stored twin is never touched here).
+      addOutput = undefined;
+    }
+  }
+
+  let next: OutputItem[] = incomingOutputs
+    ? mergeExpectedOutputs(current, incomingOutputs, opts)
     : current;
 
-  if (patch.addOutput) {
-    const add = patch.addOutput;
+  if (addOutput) {
+    const add = addOutput;
     // Built from EVERY declarable field, picked by the list the wire schema
     // picks — never re-listed by hand. A hand list here once carried six
     // fields and silently dropped `blocks`/`blockerKey`/`clearedBy` (finding
@@ -1878,6 +1968,7 @@ export function applyOutputMutations(
     ),
     ...(completeOutput ? { completeOutput } : {}),
     ...(retireOutput ? { retireOutput } : {}),
+    ...(deduped.length > 0 ? { deduped } : {}),
   };
 }
 
@@ -2810,6 +2901,7 @@ export async function updateFocusSession(
   // `completeOutput` field on UpdateFocusSessionResult.
   let completeOutputOutcome: CompleteOutputOutcome | undefined;
   let retireOutputOutcome: RetireOutputOutcome | undefined;
+  let dedupedQuestions: DedupedQuestion[] = [];
   // Diffed against the LOCKED base, so only blocks this patch declared count.
   let blockedByThisPatch: BlockedSlotRef[] = [];
   // The same locked base + result, for the needs-you notification below.
@@ -2859,6 +2951,7 @@ export async function updateFocusSession(
         set.expectedOutputs = applied.outputs;
         completeOutputOutcome = applied.completeOutput;
         retireOutputOutcome = applied.retireOutput;
+        dedupedQuestions = applied.deduped ?? [];
         blockedByThisPatch = newlyBlockedSlots(current, applied.outputs);
         outputsBefore = current;
         outputsAfter = applied.outputs;
@@ -3142,15 +3235,21 @@ export async function updateFocusSession(
 
   // An ask declared on a slot that is not the person's is dropped by the
   // reconciler — said back to the caller, never silent.
+  // A deduped hand-over made no card: its ask was not "dropped", it is
+  // answered on the open card (`deduped`), said once below.
+  const dedupedLabels = new Set(
+    dedupedQuestions.map((d) => normalizeExpectedLabel(d.asked))
+  );
   const declaredOutputs = [
     ...(params.expectedOutputs ?? []),
     ...(params.addOutput ? [params.addOutput] : []),
-  ];
+  ].filter((o) => !dedupedLabels.has(normalizeExpectedLabel(o?.label)));
   const warnings = mutatesOutputs
     ? [
         ...droppedAskWarnings(declaredOutputs, outputsAfter),
         ...restatedAskHints(declaredOutputs),
         ...(unblocksAdvice ? [unblocksAdvice] : []),
+        ...dedupedQuestions.map(dedupedQuestionWarning),
       ]
     : [];
 
@@ -3185,6 +3284,7 @@ export async function updateFocusSession(
       : finalSession,
     ...(completeOutputOutcome ? { completeOutput: completeOutputOutcome } : {}),
     ...(retireOutputOutcome ? { retireOutput: retireOutputOutcome } : {}),
+    ...(dedupedQuestions.length > 0 ? { deduped: dedupedQuestions } : {}),
     ...(blockGuidelines ? { blockGuidelines } : {}),
     ...(followOutcome ? { follow: followOutcome } : {}),
     ...(followRefusal ? { followRefusal } : {}),

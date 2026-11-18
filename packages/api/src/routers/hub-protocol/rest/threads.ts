@@ -1510,7 +1510,13 @@ export function registerThreadsRoutes(app: HubHono): void {
       // the same service the MCP post door reaches (`post-message.ts`). The
       // slot was checked before the insert; a filing that still lands nothing
       // (already delivered, a race) leaves the question standing, and says so.
-      let slot: { status: string; warnings?: string[] } | undefined;
+      let slot:
+        | {
+            status: string;
+            warnings?: string[];
+            deduped?: { key: string | null; label: string; asked: string };
+          }
+        | undefined;
       if (
         ctxAgentUserId &&
         body.kind === "question" &&
@@ -1524,9 +1530,13 @@ export function registerThreadsRoutes(app: HubHono): void {
             ...(body.ask ? { ask: body.ask as SlotAsk } : {}),
             agentUserId: ctxAgentUserId,
             userId,
+            messageId: msgId,
           });
           slot = {
             status: filed.status,
+            ...("deduped" in filed && filed.deduped
+              ? { deduped: filed.deduped }
+              : {}),
             ...("warnings" in filed && filed.warnings?.length
               ? { warnings: filed.warnings }
               : {}),

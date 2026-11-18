@@ -30,7 +30,15 @@
  * reports why (`already_done`): the slot exists, the question is about it.
  */
 
-import { db, focusSessions, and, eq } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  messages,
+  and,
+  eq,
+  drizzleSql,
+  ROOM_POST_META_KEY,
+} from "@synap/database";
 import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
 import { resolveRoomSession } from "../messaging/room-session.js";
 import { deriveSlotKeys, findSlotIndex } from "./slot-keys.js";
@@ -68,6 +76,13 @@ export async function fileRoomQuestionOnSlot(p: {
    * same owner floor every slot door applies; anyone else files nothing.
    */
   userId: string;
+  /**
+   * The question message just posted. When the filing is DEDUPED (the slot
+   * asks what an open card already asks, `same-question.ts`), its
+   * `roomPost.slotLabel` is re-pointed at that open card, so the room draws
+   * the question on the card the person answers and a reply answers it.
+   */
+  messageId?: string;
 }): Promise<RoomQuestionSlotResult> {
   const session = await resolveRoomSession(p.channelId);
   if (!session) return { status: "no_session" };
@@ -91,13 +106,28 @@ export async function fileRoomQuestionOnSlot(p: {
     : [];
   const existing = slots[findSlotIndex(slots, p.slotLabel)];
 
-  return blockExpectedOutput({
+  const filed = await blockExpectedOutput({
     sessionId: session.id,
     userId: session.userId,
     expectedLabel: p.slotLabel,
     ...questionHandOver(existing, p),
     agentUserId: p.agentUserId,
   });
+  if (filed.status === "blocked" && filed.deduped && p.messageId) {
+    await db
+      .update(messages)
+      .set({
+        metadata: drizzleSql`jsonb_set(${messages.metadata}, ${`{${ROOM_POST_META_KEY},slotLabel}`}::text[], to_jsonb(${filed.deduped.label}::text), true)`,
+      })
+      .where(
+        and(
+          eq(messages.id, p.messageId),
+          eq(messages.channelId, p.channelId),
+          drizzleSql`${messages.metadata}->${ROOM_POST_META_KEY}->>'kind' = 'question'`
+        )
+      );
+  }
+  return filed;
 }
 
 /**

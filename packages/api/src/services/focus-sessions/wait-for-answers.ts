@@ -64,6 +64,7 @@ import {
   type ConversationChangesPage,
 } from "./conversation-changes.js";
 import { stampSessionMessagesRead } from "./session-inbox.js";
+import { stampOwnerMessagesSeen } from "./owner-message-seen.js";
 
 const logger = createLogger({ module: "wait-for-answers" });
 
@@ -100,6 +101,8 @@ export interface WaitForAnswersDeps {
   stamp?: typeof stampAnswersPickedUp;
   /** Presence of the calling conversation (`session-runners.ts`). */
   stampRunner?: typeof stampSessionRunner;
+  /** The "Seen by the agent" mark on the owner messages it read (`owner-message-seen.ts`). */
+  stampSeen?: typeof stampOwnerMessagesSeen;
   pollMs?: number;
   now?: () => number;
 }
@@ -115,6 +118,35 @@ export interface WaitForChangesDeps extends Omit<WaitForAnswersDeps, "list"> {
   list?: typeof listSessionChanges;
   /** The coordination posts' read receipt (`session-inbox.ts`). */
   stampRead?: typeof stampSessionMessagesRead;
+}
+
+/** The room messages that carried these answers (an answer posts one). */
+function answerMessageIds(
+  answers: ReadonlyArray<{ messageId?: string | null }>
+): string[] {
+  return answers.flatMap((a) => (a.messageId ? [a.messageId] : []));
+}
+
+/** Stamp the "Seen by the agent" mark; a failure is logged, never thrown. */
+async function markSeen(
+  stampSeen: typeof stampOwnerMessagesSeen,
+  p: { sessionId: string; userId: string; agentUserId?: string | null },
+  messageIds: string[]
+): Promise<void> {
+  if (messageIds.length === 0) return;
+  try {
+    await stampSeen({
+      sessionId: p.sessionId,
+      userId: p.userId,
+      agentUserId: p.agentUserId ?? null,
+      messageIds,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: p.sessionId },
+      "wait_for_answer: seen-by-agent mark failed"
+    );
+  }
 }
 
 export function clampWaitSeconds(timeoutSeconds: number | undefined): number {
@@ -262,6 +294,7 @@ export async function waitForSessionAnswers(
 ): Promise<WaitForAnswersResult | null> {
   const list = deps.list ?? listSessionAnswers;
   const stamp = deps.stamp ?? stampAnswersPickedUp;
+  const stampSeen = deps.stampSeen ?? stampOwnerMessagesSeen;
 
   const out = await waitLoop<SessionAnswersPage>(
     p,
@@ -290,6 +323,7 @@ export async function waitForSessionAnswers(
             "wait_for_answer: picked-up receipt failed"
           );
         }
+        await markSeen(stampSeen, p, answerMessageIds(page.answers));
       }
     }
   );
@@ -330,6 +364,7 @@ export async function waitForSessionChanges(
   const list = deps.list ?? listSessionChanges;
   const stamp = deps.stamp ?? stampAnswersPickedUp;
   const stampRead = deps.stampRead ?? stampSessionMessagesRead;
+  const stampSeen = deps.stampSeen ?? stampOwnerMessagesSeen;
   let knownStage = p.knownStage;
 
   const out = await waitLoop<SessionChangesPage>(
@@ -373,6 +408,16 @@ export async function waitForSessionChanges(
             "wait_for_answer: picked-up receipt failed"
           );
         }
+      }
+      // The owner's messages it READ — what it typed, and its answers — get
+      // the "Seen by the agent" mark: same moment, same rule (not a peek).
+      if (p.stampReceipt && !p.signal?.aborted) {
+        await markSeen(stampSeen, p, [
+          ...page.events.flatMap((e) =>
+            e.kind === "owner_message" ? [e.message.id] : []
+          ),
+          ...answerMessageIds(answers),
+        ]);
       }
       // The coordination posts' READ RECEIPT — same moment, same rule: an
       // agent's read that is not a peek. A failed receipt never fails the read.
