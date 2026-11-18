@@ -12,7 +12,12 @@
  *  - a route that applies at once (files nothing for review) → the answer
  *    says the failed one was left failed (rules out a silent "done");
  *  - a route that files the same request for review → the failed one ends
- *    withdrawn, pointing at it, and the answer names the replacement.
+ *    withdrawn, pointing at it, and the answer names the replacement;
+ *  - a route that files ANOTHER request (wave-2 code review 1 and 2) → 409
+ *    SUPERSEDES_REFUSED, nothing filed, the failed one stays failed, whether
+ *    the route lets the insert door's throw out (an app with `onError`, as the
+ *    pod's, or none) or answers it as its own 500 (rules out "a 500", and
+ *    "filed beside a failure that never ends").
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -90,36 +95,60 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 const OWNER = randomUUID();
 
-/** What the stand-in route does: file the request, or apply it at once. */
-let mode: "files" | "applies" = "files";
+/**
+ * What the stand-in route does: file the request, apply it at once, or file
+ * ANOTHER request (an entity update) and let the insert door's refusal out
+ * (`other`) or answer it as its own 500 (`other-caught`).
+ */
+let mode: "files" | "applies" | "other" | "other-caught" = "files";
 let handled = 0;
 
-const app = new Hono();
-app.use("/*", async (c, next) => {
-  c.set("userId" as never, OWNER as never);
-  await next();
-});
-app.use("/file", supersedesMiddleware("POST"));
-app.post("/file", async (c) => {
-  handled += 1;
-  // The route reads the body the wrapper already read (Hono caches it).
-  const body = (await c.req.json()) as { text: string };
-  if (mode === "applies") return c.json({ status: "applied" });
-  const { proposal } = await insertPendingProposal({
-    workspaceId: null,
-    targetType: "messaging",
-    targetId: "ch-1",
-    proposalType: "messaging.external.send",
-    data: { body: body.text },
-    createdBy: OWNER,
-    agentUserId: "agent-orchestrator",
-    subjectUserId: OWNER,
+/** The pod's app has an `onError`; one without is covered by `bare`. */
+function build(withOnError: boolean): Hono {
+  const app = new Hono();
+  if (withOnError) {
+    app.onError((err, c) => c.json({ error: String(err) }, 500));
+  }
+  app.use("/*", async (c, next) => {
+    c.set("userId" as never, OWNER as never);
+    await next();
   });
-  return c.json({ status: "proposed", proposalId: proposal.id }, 202);
-});
+  app.use("/file", supersedesMiddleware("POST"));
+  app.post("/file", async (c) => {
+    handled += 1;
+    // The route reads the body the wrapper already read (Hono caches it).
+    const body = (await c.req.json()) as { text: string };
+    if (mode === "applies") return c.json({ status: "applied" });
+    const other = mode === "other" || mode === "other-caught";
+    const filing = () =>
+      insertPendingProposal({
+        workspaceId: null,
+        targetType: other ? "entity" : "messaging",
+        targetId: other ? "e-1" : "ch-1",
+        proposalType: other ? "update" : "messaging.external.send",
+        data: { body: body.text },
+        createdBy: OWNER,
+        agentUserId: "agent-orchestrator",
+        subjectUserId: OWNER,
+      });
+    let proposal: { id: string };
+    try {
+      ({ proposal } = await filing());
+    } catch (err) {
+      if (mode === "other-caught") {
+        return c.json({ error: "Internal error" }, 500);
+      }
+      throw err;
+    }
+    return c.json({ status: "proposed", proposalId: proposal.id }, 202);
+  });
+  return app;
+}
+const app = build(true);
+const bare = build(false);
 
-const file = (body: Record<string, unknown>) =>
-  app.request("/file", {
+const file = (body: Record<string, unknown>, on: Hono = app) =>
+  on.request("/file", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ text: `Corrected ${randomUUID()}`, ...body }),
@@ -205,6 +234,39 @@ describe("supersedes at the Hub REST door", () => {
     const old = await statusOf(failed);
     expect(old.status).toBe("withdrawn");
     expect(old.data.supersededBy).toBe(body.proposalId);
+  });
+
+  for (const [label, run] of [
+    ["lets the refusal out to the app's onError", () => (mode = "other")],
+    ["answers the refusal as its own 500", () => (mode = "other-caught")],
+  ] as const) {
+    it(`a route that files another request and ${label} answers 409, nothing filed`, async () => {
+      const failed = await failedSend();
+      run();
+      const res = await file({ supersedes: failed });
+      const body = (await res.json()) as { error: string; code: string };
+      expect(res.status, JSON.stringify(body)).toBe(409);
+      expect(body.code).toBe(SUPERSEDES_REFUSED);
+      expect(body.error).toMatch(
+        /another kind of request \(messaging\.external\.send on messaging\).*Nothing was filed\./
+      );
+      expect(handled).toBe(1);
+      expect((await statusOf(failed)).status).toBe("approval_failed");
+      const { rows } = await q<{ n: number }>(
+        `select count(*)::int as n from proposals`
+      );
+      expect(rows[0]!.n).toBe(1);
+    });
+  }
+
+  it("an app with no onError: the refusal the route lets out is a 409 too", async () => {
+    const failed = await failedSend();
+    mode = "other";
+    const res = await file({ supersedes: failed }, bare);
+    const body = (await res.json()) as { code: string };
+    expect(res.status).toBe(409);
+    expect(body.code).toBe(SUPERSEDES_REFUSED);
+    expect((await statusOf(failed)).status).toBe("approval_failed");
   });
 
   it("without `supersedes` the route runs untouched", async () => {

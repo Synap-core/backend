@@ -2809,25 +2809,27 @@ export const proposalsRouter = router({
       }
 
       const now = new Date();
+      // WHO withdraws, named to the door (wave-2 code review 6): an agent
+      // key's call is the agent's act, whichever rung let it in. Its
+      // `ctx.userId` is the key's HUMAN, so the human-proposer rung matches an
+      // agent row a person was stamped proposer of (`permission-check`), and
+      // the door's default (the reviewer, else the request's acting agent)
+      // then stamped `ended.by: person` for an agent's withdrawal.
+      const actor = workUnitActorOf(userId, actingAgentUserId);
       const withdrawn = await transitionProposal(db, {
         to: ProposalStatus.WITHDRAWN,
         // The status it was read and authorized in: a proposal decided, or
         // retried into another status, meanwhile keeps that.
         from: [from],
+        actor,
         ended: {
           reason: "author",
           ...(input.reason ? { withdrawReason: input.reason } : {}),
         },
         set: {
-          // Its author agent taking it back names no person (decision F2); a
-          // person withdrawing, through any key, is named.
-          reviewedBy:
-            isAuthorAgent &&
-            !isHumanProposer &&
-            !isActingAgent &&
-            !isHumanCreator
-              ? null
-              : userId,
+          // An agent taking it back names no person (decision F2); a person
+          // withdrawing is named.
+          reviewedBy: actor.kind === "agent" ? null : userId,
           reviewedAt: now,
           updatedAt: now,
           // On `data.withdrawReason` (the `data.revertReason` precedent), NEVER
