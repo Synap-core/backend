@@ -355,6 +355,10 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // (the CLI's agent installers do, right after a device-flow approval).
   /^\/users\/me\/?$/,
   /^\/auth\/status\/?$/,
+  // What the calling credential holds, by place (`describeOwnGrant`): the
+  // grant entered for this request and the names of the spaces it already
+  // names — an app reads it to say what it can see.
+  /^\/auth\/grant\/?$/,
   // `userId` is the caller's own id or `me` (rest/entities.ts).
   new RegExp(`^/users/(?:me|${ID})/entities/?$`),
   // The list door. Every branch reads through `entities.getEntities` (the
