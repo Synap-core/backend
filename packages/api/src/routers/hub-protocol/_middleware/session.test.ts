@@ -48,9 +48,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-const { resolveHubSessionHeader, sessionMiddleware } = await import(
-  "./session.js"
-);
+const { resolveHubSessionHeader, sessionMiddleware } =
+  await import("./session.js");
 const { getNamedSessionId } = await import("@synap/database");
 
 const OWNED = "11111111-1111-4111-8111-111111111111";
