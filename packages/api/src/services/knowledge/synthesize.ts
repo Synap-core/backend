@@ -939,7 +939,7 @@ export async function synthesizeAnswer(
   /**
    * `AskResult.queue` — set only for a queue-type question. The IS composes
    * from retrieved items and never sees the queue, so its sentence is written
-   * here and LEADS the answer.
+   * here and IS the answer (no IS call; ticket aac8143e).
    */
   queue?: AskQueueBlock
 ): Promise<SynthesisResult> {
@@ -961,6 +961,25 @@ export async function synthesizeAnswer(
       routedTo,
       // Not budget-dependent like `truncated`: a replaced match is left out of
       // `sources` on this path too, so its replacement must be named here.
+      ...(superseded ? { superseded } : {}),
+    };
+  }
+
+  // A QUEUE question is answered from the live queue ALONE (ticket aac8143e).
+  // The IS composes from retrieved items, and for "what is waiting on me"
+  // those are past reports whose counts ("56 pending proposals, oldest 19
+  // days") then followed the live sentence and contradicted it. The live
+  // read is the answer; the retrieved items stay in `sources`. No model call.
+  if (queue) {
+    return {
+      answer: prependDegradedNotice(
+        prependPendingNotice(describeQueue(queue), pendingCount),
+        degraded
+      ),
+      detail,
+      sources,
+      routedTo,
+      ...(truncated ? { truncated } : {}),
       ...(superseded ? { superseded } : {}),
     };
   }
@@ -1026,10 +1045,7 @@ export async function synthesizeAnswer(
     const answer =
       typeof data.answer === "string"
         ? prependDegradedNotice(
-            prependPendingNotice(
-              queue ? `${describeQueue(queue)}\n\n${data.answer}` : data.answer,
-              pendingCount
-            ),
+            prependPendingNotice(data.answer, pendingCount),
             degraded
           )
         : null;

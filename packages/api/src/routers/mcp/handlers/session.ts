@@ -10,6 +10,7 @@
 
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { projectSessionRecall } from "@synap-core/types/focus-sessions";
+import { readTrackStage } from "@synap-core/types/units";
 import { readRunCost } from "../../../services/runs/run-cost.js";
 import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
@@ -628,10 +629,10 @@ export const sessionHandlers: McpHandlerMap = {
     // call (the aliases first: they were said first).
     const outcomes = await parseOutcomesArg(args.outcomes);
     if ("error" in outcomes) return ok(outcomes);
+    const { mergeOutcomesForStart, declaresVerify } =
+      await import("../../../services/focus-sessions/outcome-declarations.js");
     const declared = outcomes.list
-      ? (
-          await import("../../../services/focus-sessions/outcome-declarations.js")
-        ).mergeOutcomesForStart({
+      ? mergeOutcomesForStart({
           outcomes: outcomes.list,
           expectedOutputs: slots.expectedOutputs,
           criteria: args.criteria as SessionCriterion[] | undefined,
@@ -695,6 +696,8 @@ export const sessionHandlers: McpHandlerMap = {
         }),
         // An agent's NEW session declares what done means (F11, NO_CRITERIA).
         requireCriteria: !!agentUserId,
+        // An outcome with `verify` says what done means (F11's own words).
+        declaredVerify: declaresVerify(outcomes.list),
         // Validated by the service with the shared criteria schema.
         criteria: declared.criteria,
         // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
@@ -1072,6 +1075,25 @@ export const sessionHandlers: McpHandlerMap = {
       })
     );
   },
+  /**
+   * START AN ORCHESTRATOR (D5) — the same service and input schema as tRPC
+   * `focusSessions.startOrchestrator` and Hub `POST /focus-sessions/orchestrate`.
+   */
+  synap_start_orchestrator: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const { startOrchestrator } =
+      await import("../../../services/focus-sessions/start-orchestrator.js");
+    return ok(
+      await startOrchestrator({
+        userId,
+        agentUserId: agentUserId ?? null,
+        input: args,
+      })
+    );
+  },
   synap_get_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
@@ -1369,9 +1391,15 @@ export const sessionHandlers: McpHandlerMap = {
     if (trackIdArg && rootArg) {
       return ok({ error: "Pass trackId or rootSessionId, not both." });
     }
+    const playbookIdArg =
+      typeof args.playbookId === "string" ? args.playbookId : "";
+    const subjectEntityIdArg =
+      typeof args.subjectEntityId === "string" ? args.subjectEntityId : "";
     for (const [name, value] of [
       ["trackId", trackIdArg],
       ["rootSessionId", rootArg],
+      ["playbookId", playbookIdArg],
+      ["subjectEntityId", subjectEntityIdArg],
     ] as const) {
       if (value && !isUuid(value)) {
         return ok({ error: `${name} is not a valid id: ${value}` });
@@ -1411,6 +1439,8 @@ export const sessionHandlers: McpHandlerMap = {
         : rootArg
           ? { rootSessionId: rootArg }
           : undefined,
+      playbookId: playbookIdArg || undefined,
+      subjectEntityId: subjectEntityIdArg || undefined,
     });
     return ok({
       // `lean` (default): enough to draw and to choose — a full node carries
@@ -1425,6 +1455,15 @@ export const sessionHandlers: McpHandlerMap = {
               kind: n.kind,
               parentSessionId: n.parentSessionId,
               trackId: n.trackId,
+              trackStage: n.trackStage,
+              playbookId: n.playbookId,
+              currentStage: n.currentStage,
+              // The stage's own name, from the session's stage snapshot (the
+              // stage reader every track surface uses); null = no stage.
+              currentStageName: n.currentStage
+                ? (readTrackStage(n.stages, n.currentStage)?.name ?? null)
+                : null,
+              playbookMatch: n.playbookMatch ?? null,
               projectId: n.projectId,
               workspaceId: n.workspaceId,
               updatedAt: n.updatedAt,
@@ -1685,6 +1724,10 @@ export const sessionHandlers: McpHandlerMap = {
     // `expectedOutputs` / `criteria` fields — one merge, one governance path.
     const outcomes = await parseOutcomesArg(args.outcomes);
     if ("error" in outcomes) return reply(outcomes);
+    // A fact outcome's owner/ask/blocker is not kept: said, never silent.
+    const outcomeWarnings = (
+      await import("../../../services/focus-sessions/outcome-declarations.js")
+    ).factOutcomeWarnings(outcomes.list);
     let outcomeLists:
       | { expectedOutputs: ExpectedOutput[]; criteria: SessionCriterion[] }
       | undefined;
@@ -1878,6 +1921,7 @@ export const sessionHandlers: McpHandlerMap = {
           reviewUrl: result.reviewUrl,
           // The filing was proposed on its own beside this proposal.
           ...(result.filing ? { filing: result.filing } : {}),
+          ...(outcomeWarnings.length > 0 ? { warnings: outcomeWarnings } : {}),
           session: null,
         });
       case "updated": {
@@ -1951,7 +1995,9 @@ export const sessionHandlers: McpHandlerMap = {
           ...(result.stageRun ? { stageRun: result.stageRun } : {}),
           // Same reason as `completeOutput`: part of the patch the pod did not
           // keep as sent (an ask on a slot that is not the person's).
-          ...(result.warnings ? { warnings: result.warnings } : {}),
+          ...(result.warnings || outcomeWarnings.length > 0
+            ? { warnings: [...(result.warnings ?? []), ...outcomeWarnings] }
+            : {}),
           // Same reason as `completeOutput`: a hand-off to another agent that
           // is WAITING on a person is not on the roster yet, and the session
           // alone reads as if it were never asked for.

@@ -236,6 +236,7 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
 // the "always" menus' derivation in @synap-core/types, which cannot import
 // this engine, so both read ONE list.
 export {
+  PROPOSE_ONLY_CAPABILITY_INTENTS,
   PROPOSE_ONLY_CAPABILITY_VERBS,
   capabilityVerbAllowsRuleWiden,
 } from "@synap-core/types/proposals";
@@ -976,6 +977,9 @@ export type KnownGovernanceAction =
   | "grant_capability"
   // An agent handing a session to ANOTHER agent (roster add ≠ itself).
   | "assign_agent"
+  // One orchestrator started over several running sessions (D5, plan
+  // b38bc224): creates it, links and holds each picked session.
+  | "orchestrate"
   | "register"
   | "arrange"
   | "invite"
@@ -1045,6 +1049,7 @@ export function requiredPermissionFor(
     action === "set_run_choice" ||
     action === "grant_capability" ||
     action === "assign_agent" ||
+    action === "orchestrate" ||
     action === "register" ||
     action === "arrange" ||
     action === "invite" ||
@@ -1181,6 +1186,9 @@ const GRANT_SUBJECT_FOLDS: Readonly<Record<string, string>> = {
  */
 const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   "focus_session/assign_agent": "update",
+  // Starting an orchestrator creates a session and pauses the picked ones: a
+  // key that may update sessions may ASK for it; the door proposes.
+  "focus_session/orchestrate": "update",
   // The same hand-off, of a GOAL (W3): a key that may update a track may ask
   // to hand it to another agent as a delegate.
   "track/assign_agent": "update",
@@ -2416,6 +2424,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "facet/detach": "reversible", // soft-delete; re-attach recovers it
   "facet/update": "reversible",
   "focus_session/assign_agent": "disruptive", // effect: another agent starts work
+  "focus_session/orchestrate": "disruptive", // effect: pauses other running work, wakes its agents
   "focus_session/create": "reversible",
   "focus_session/grant_capability": "disruptive", // egress
   "focus_session/update": "reversible", // a criteria change is floored (2.1)
@@ -2732,6 +2741,12 @@ export const GATE_WRITE_DOORS = {
   // it. A person staffing their own session, and an agent adding ITSELF, never
   // reach this door (`services/focus-sessions/agent-hand-off.ts`).
   "focus_session/assign_agent": "gate",
+  // Starting an orchestrator over N running sessions (D5): it pauses each one
+  // on the person's yes and posts into their rooms, waking their agents —
+  // work other agents were doing stops, which approving cannot undo. Its own
+  // door, NOT in DEFAULT_AUTO_APPROVE: an agent (the Operations view, a
+  // pod-app) proposes; a person in a signed-in client applies it at once.
+  "focus_session/orchestrate": "gate",
   "focus_session/create": "gate",
   "focus_session/grant_capability": "gate",
   "focus_session/update": "gate+automation",

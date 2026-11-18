@@ -401,6 +401,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_set_workspace_focus",
     "cp-connector": "pod__set_workspace_focus",
   },
+  synap_start_orchestrator: {
+    "pod-mcp": "synap_start_orchestrator",
+    "cp-connector": null,
+  },
   synap_start_session: {
     "pod-mcp": "synap_start_session",
     "cp-connector": "pod__start_session",

@@ -530,6 +530,13 @@ export interface TransitionBase {
 	/** A person moved it from a value they had not seen ("moved meanwhile"). */
 	staleExpected: boolean;
 	proposalId: string | null;
+	/**
+	 * The person whose approval of a proposal applied this move (the
+	 * proposal's `reviewedBy`); absent when no one approved it. What the move
+	 * sets off acts as them (founder, 17 Nov 2026: the approver acts), while
+	 * `agentUserId` keeps the agent that proposed it.
+	 */
+	approvedBy?: string | null;
 	/** The lens the move happened in. */
 	workspaceId: string | null;
 	/**
@@ -2073,6 +2080,12 @@ export interface DevTimelineRefs {
 	url?: string;
 	/** The session slot an ask event is about (its label): a door to the ask. */
 	slotLabel?: string;
+	/** A room post: the message (open the room at it). */
+	messageId?: string;
+	/** A room post: the room it sits in. */
+	channelId?: string;
+	/** A runner: `<harness>:<conversation id>`, the conversation it is. */
+	runnerId?: string;
 }
 export interface DevTimelineEventBase {
 	/** Stable across reads — a client may key rows by it. */
@@ -2174,7 +2187,73 @@ export type DevTimelineEvent = DevTimelineEventBase & ({
 	/** The person said "Not mine" about a slot an agent handed them: it is the agent's again, unanswered. */
 	kind: "slot_handed_back";
 	slot: string;
+} | {
+	/** The stage key it left; null = it had none. */
+	from: string | null;
+	/** The session entered a stage (`focus_sessions.stage_history`). */
+	kind: "stage_moved";
+	to: string;
+	/** The stage door (`advance`) or a re-applied approval. */
+	via: string;
+} | {
+	child: {
+		id: string;
+		status: string;
+		title: string;
+	};
+	/** The session spawned a child (its `spawned_from` link). */
+	kind: "child_started";
+} | {
+	/**
+	 * A runner (one process of a client conversation) first held this
+	 * session (`session_runners.first_seen_at`). Its state now, not a
+	 * history of states.
+	 */
+	kind: "runner_seen";
+	runner: {
+		/** The computer: its pod name, else the host the process named; null = unknown. */
+		computer: string | null;
+		conversationId: string;
+		/** `claude-code`, `codex`… */
+		harness: string;
+		lastSeenAt: string;
+		/** As its client names it; null = unknown. */
+		model: string | null;
+		provider: string | null;
+		/** What it last said it is doing (`busy`, `idle`…); null = it names none. */
+		state: string | null;
+	};
+} | {
+	/**
+	 * A post in the session's room, or one it sent to another session's
+	 * room: ONE line, never the body (decision D3). `refs.messageId` and
+	 * `refs.channelId` open the room at it.
+	 */
+	kind: "room_post";
+	post: {
+		/** A session_message: received (`in`) or sent (`out`); else null. */
+		direction: "in" | "out" | null;
+		/**
+		 * `person`: a person typed it. `question` / `update`: an agent's
+		 * post (a question notifies the person). `session_message`: a
+		 * coordination post between sessions (`direction`, `intent`).
+		 */
+		form: "person" | "question" | "session_message" | "update";
+		/** A session_message's intent (`handoff`, `fyi`…); else null. */
+		intent: string | null;
+		/** {@link timelinePostLine}: at most 120 characters. */
+		line: string;
+		/** The post holds more than its line. */
+		truncated: boolean;
+	};
 });
+declare const TIMELINE_WITHHELD_SOURCES: readonly [
+	"dev_facts",
+	"decisions",
+	"runners",
+	"room_posts"
+];
+export type TimelineWithheldSource = (typeof TIMELINE_WITHHELD_SOURCES)[number];
 /** The `GET /timeline` read. Newest first. */
 export type TimelineWire = {
 	events: TrackHistoryEvent[];
@@ -2192,6 +2271,15 @@ export type TimelineWire = {
 		title: string;
 	};
 	truncated: boolean;
+	/**
+	 * The sources this reader's key may not read (a pod app narrowed by its
+	 * grant), so their events are absent, never "nothing happened":
+	 * `dev_facts` (PR and CI facts, devbox jobs), `decisions` (proposals
+	 * filed in the session), `runners` (who worked it, on which computer),
+	 * `room_posts` (its room's posts and the ones it sent). Absent when
+	 * every source was read.
+	 */
+	withheld?: TimelineWithheldSource[];
 } | {
 	events: DevTimelineEvent[];
 	subject: {
@@ -9175,7 +9263,19 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * the others it is listed and changes nothing (`services/projects/
  * pillar-health.ts`).
  */
- | "advances";
+ | "advances"
+/**
+ * session --orchestrated_by--> session. The FROM session is coordinated by
+ * the TO session, an orchestrator (founder decision D5, plan b38bc224; design
+ * doc 5fccda9b). Deliberately NOT a second `spawned_from`: every lineage
+ * reader assumes ONE parent per child (`getParentSessionId`, the packet's
+ * parent row, `parentOfGraph`), and the picked sessions already belong to
+ * their wave. Not a dependency either: what the child waits on is its HOLD
+ * (`until: answer:<orchestrator>/plan-approval`), which the person's yes
+ * clears. ONE producer: `services/focus-sessions/start-orchestrator.ts`
+ * (same owner at both ends). The Hub REST links door lists and refuses it.
+ */
+ | "orchestrated_by";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /** The normalized state of an external agent's task (the `status` verb). */
@@ -14591,6 +14691,31 @@ export interface KnownSourceHash {
  * returned at all. On the same live call, 9 of the 20 candidates returned
  * matched no word at all and rode back as "Runs for anything new" at 0.5.
  *
+ * ── THE NAME IS THE EVIDENCE (tickets b2ba4b6b, 84d2add0, 9753144a) ───────
+ * A candidate's body (description, a ~5,000-char goal template, stage names)
+ * holds so many words that common ones always hit somewhere: "write and send
+ * this week's newsletter issue" ranked "Derive outputs" (whose description
+ * mentions "optionally a newsletter issue") above the playbook NAMED
+ * "Newsletter issue", and a Postgres restore drill was offered "Build a
+ * website (Website Factory)" on "prove, backend, pod, new, apply". So:
+ *   - a word that is also in the candidate's NAME counts twice
+ *     (`WEIGHT.nameTerm` on top of `WEIGHT.intentTerm`);
+ *   - RELEVANCE FLOOR (`FLOOR`): a candidate whose only evidence is words (no
+ *     subject, kind or facet signal) is returned only when its NAME holds one
+ *     of the request's words per five words asked, or its DESCRIPTION (its
+ *     own "when to use me") holds half of them. Matches in the rest of the
+ *     body (goal template, stage names) still score, but never admit a
+ *     candidate alone: they made one long playbook the magnet of every
+ *     request (plan 2026-11-05, document 7fbd45a7, step 5). The name share is
+ *     PROPORTIONAL because one name word is a coincidence in a long request:
+ *     "Design and build a feature: space brief … then fix MCP discovery gaps"
+ *     (10 words) otherwise offered "Lead → qualified (discovery)" on
+ *     "discovery" alone. With nothing better, nothing is offered: an empty
+ *     list is a fact, a wrong first candidate teaches agents to skip the
+ *     list. Measured on the live pool of 84 active playbooks, 2026-11-17.
+ * A structural signal (subject, kind, facet) is evidence about the ENTITY, so
+ * a candidate carrying one is never cut by the floor.
+ *
  * ── TIES ────────────────────────────────────────────────────────────────────
  * Broken by relevance, never by recency: more distinct intent words, then the
  * rarest word matched, then the structural signal (kind > facet), then the
@@ -14612,6 +14737,11 @@ export interface RouteCandidate {
 	name: string;
 	/** Other searchable text: description, goal template… */
 	text?: ReadonlyArray<string | null | undefined>;
+	/**
+	 * The candidate's own "when to use me". Searched like `text`, and the one
+	 * body field that can admit a word-only candidate (the relevance floor).
+	 */
+	description?: string | null;
 	/** The kind the candidate is built for; `null` = fires for any kind. */
 	subjectProfileSlug: string | null;
 	/**
@@ -20166,6 +20296,25 @@ export type HolderSource = {
 } | {
 	from: "roster";
 };
+/**
+ * The process the holder's agent runs in (`session_runners`, see the header):
+ * which harness, which model, which computer, in what state. Each `null` =
+ * its client named none (unknown), never a default.
+ */
+export interface HolderRunner {
+	harness: string | null;
+	model: string | null;
+	provider: SessionRunner["provider"];
+	/** The computer hosting the agent (a `machine` agent user); its name is `agent.computer`. */
+	machineUserId: string | null;
+	/** The host the process named itself on. */
+	processHost: string | null;
+	state: SessionRunner["state"];
+	stateSince: string | null;
+	lastSeenAt: string | null;
+	/** Stamped recently and not ended: it is running now. */
+	live: boolean;
+}
 export interface SessionHolder {
 	/** Whose move: the ball of `waitKind` (`agent` → agent, `me` → person); nobody when none. */
 	kind: "agent" | "nobody" | "person";
@@ -20175,6 +20324,8 @@ export interface SessionHolder {
 	since: string | null;
 	/** The agent on it — for a person, the one that handed it back; `null` = none. */
 	agent: HolderAgent | null;
+	/** Where that agent runs (see the header); `null` = no runner of it was ever seen. */
+	runner: HolderRunner | null;
 	source: HolderSource;
 	/** Nobody only: the session ended, or no agent is on it. */
 	reason?: "ended" | "no_agent";
@@ -25978,12 +26129,25 @@ export interface WorkGraphHold {
 	/** `reviewBy` has passed. */
 	reviewDue: boolean;
 }
+/**
+ * One stage of a goal's method, as `deriveTrackStages` places it against the
+ * goal's `currentStage` — the rule every track surface uses. Only what a map
+ * draws: the stage's brief, tasks, outputs and criteria stay on the goal's
+ * own read (`getTrack`).
+ */
+export type WorkGraphGoalStage = Pick<TrackStage, "category" | "key" | "name" | "position">;
 /** A goal (track) a node is filed into, as the track floor lets the caller see it. */
 export interface WorkGraphGoal {
 	id: string;
 	name: string;
 	status: string;
 	projectId: string;
+	/** The goal's METHOD (`project_tracks.playbook_id`); `null` = it follows none. */
+	playbookId: string | null;
+	/** The stage key the goal is at; `null` = stageless, or not started. */
+	currentStage: string | null;
+	/** The method's stages in order, each placed against `currentStage`; `[]` = stageless. */
+	stages: WorkGraphGoalStage[];
 }
 declare const WORK_GRAPH_EDGE_KINDS: readonly [
 	"blocked_by",
@@ -26036,6 +26200,12 @@ export interface WorkGraphWindow {
 	truncated: boolean;
 	/** Sessions the window (or an edge) selected that this read did not return. */
 	omitted: number;
+	/**
+	 * Of `omitted`, the sessions the PERSON could see here that the calling
+	 * key's grant does not cover (`workGraphReach`): never returned, only
+	 * counted. 0 for a person and for a key that reads the graph whole.
+	 */
+	omittedByGrant: number;
 }
 /** One node: the list row (`focusSessions.list({ nextMove: true })`), plus whether it is IN the window or only the far end of an edge. */
 export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[number] & {
@@ -26047,9 +26217,18 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 	inWindow: boolean;
 	live: SessionActivityLive | null;
 	nextMove: ContinuationNextMove;
+	/**
+	 * With the `playbookId` narrow, how this window node follows it: `session`
+	 * = its own `playbookId` is the playbook, `goal` = only through the method
+	 * of the goal it is filed in; `null` on a far end (far ends are not
+	 * narrowed). ABSENT without the narrow: there is nothing to match.
+	 */
+	playbookMatch?: WorkGraphPlaybookMatch | null;
 	unitFacts: SessionUnitCounts;
 	viewerRole: SessionViewerRole;
 };
+/** How a node follows the graph's `playbookId` narrow (see {@link WorkGraphNode.playbookMatch}). */
+export type WorkGraphPlaybookMatch = "goal" | "session";
 export interface WorkGraph {
 	nodes: WorkGraphNode[];
 	edges: WorkGraphEdge[];
@@ -26257,6 +26436,30 @@ export type ContinueRunResult = {
 	message: string;
 	ok: false;
 	reason: "already_running" | "conflict" | "denied" | "not_found" | "nothing_to_continue" | "person_only";
+};
+export type OrchestratedChildOutcome = {
+	/** `paused`: held on the yes. `already_paused`: keeps its own hold. `moved`: it changed status meanwhile, not held. `ended`: closed since; neither linked nor held. */
+	held: "already_paused" | "ended" | "moved" | "paused";
+	linked: boolean;
+	noteError?: string;
+	/** The note in its room; a failed post is said, never hidden. */
+	noted: boolean;
+	sessionId: string;
+};
+export type StartOrchestratorResult = {
+	channelId: string | null;
+	children: OrchestratedChildOutcome[];
+	orchestratorSessionId: string;
+	status: "started";
+} | {
+	message: string;
+	orchestratorSessionId: string;
+	proposalId: string;
+	proposalType?: string;
+	reviewPath?: string;
+	reviewUrl?: string;
+	status: "proposed";
+	summary?: string;
 };
 export type SessionRecallOutcome = {
 	posted: boolean;
@@ -41738,8 +41941,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				kind?: "all" | "receipt" | "run" | "work" | undefined;
 				lens?: "all" | "default" | "triage" | undefined;
+				playbookId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				rootSessionId?: string | undefined;
+				subjectEntityId?: string | undefined;
 				trackId?: string | undefined;
 				windowHours?: number | undefined;
 				workspaceId?: string | string[] | null | undefined;
@@ -42075,6 +42280,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "spawned";
 				subjectBound?: boolean | undefined;
 			};
+		}>;
+		startOrchestrator: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentId?: string | undefined;
+				brief: string;
+				reasoning?: string | undefined;
+				sessionIds: string[];
+				title?: string | undefined;
+			};
+			meta: object;
+			output: StartOrchestratorResult;
 		}>;
 		structureAgain: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

@@ -28,3 +28,14 @@ auditConfig:
     # Not reachable: ai@4 uses it only in `ai/rsc` (streamable UI diffs), which
     # nothing in this repo imports. Follow-up: upgrade ai to v5. 2026-10-19.
     - GHSA-j4fx-xxwh-2485
+    # picomatch <=4.0.7, ReDoS through single-branch repeated extglobs
+    # (GHSA-fc5q-39xc-vjpf). No patched version exists (4.0.7 is the latest).
+    # Path: apps/pod-admin > @heroui/react > @heroui/theme > tailwindcss@3 >
+    # micromatch@4.0.8 > picomatch. It is the only production importer that
+    # reaches picomatch; every other copy (fdir, vite, vitest, tinyglobby...)
+    # is dev/build tooling.
+    # Not reachable: tailwind matches our own `content` globs (tailwind.config.ts)
+    # at build time; no request or user input ever becomes a pattern, and no
+    # repo code imports micromatch/picomatch directly. 2026-11-17.
+    # Follow-up: drop this entry when a patched picomatch ships.
+    - GHSA-fc5q-39xc-vjpf

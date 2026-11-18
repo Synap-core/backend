@@ -29,6 +29,7 @@ import { registerEntityExecutors } from "./executors/entity.js";
 import { registerEntityTransitionExecutors } from "./executors/entity-transition.js";
 import { registerPropertyDefExecutors } from "./executors/property-def.js";
 import { registerFocusSessionExecutors } from "./executors/focus-session.js";
+import { registerFocusSessionOrchestrateExecutor } from "./executors/focus-session-orchestrate.js";
 import { registerDevApprovalExecutors } from "./executors/dev-approval.js";
 import { registerProjectExecutors } from "./executors/project.js";
 import { registerViewExecutors } from "./executors/view.js";
@@ -83,6 +84,7 @@ export function registerApproveExecutors(): void {
   registerEntityTransitionExecutors();
   registerPropertyDefExecutors();
   registerFocusSessionExecutors();
+  registerFocusSessionOrchestrateExecutor();
   registerDevApprovalExecutors();
   registerProjectExecutors();
   registerViewExecutors();

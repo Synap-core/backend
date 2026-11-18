@@ -300,6 +300,14 @@ interface TriggerMatchPayload {
    * in — {@link AUTOMATION_ORIGIN_OPT_INS}.
    */
   origin?: "sync" | "merge";
+  /**
+   * The subject is pod-wide although `workspaceId` names a space: a shared
+   * role (a facet with no workspace) attached from inside that space
+   * (`SideEffectPayload.podWideSubject`). Matched in `workspaceId` (the lens,
+   * as before) AND across the actor's accessible floor, like a pod-wide event;
+   * each match runs in its own space (the lens for a pod-wide automation).
+   */
+  podWideSubject?: boolean;
 }
 
 /**
@@ -1414,13 +1422,26 @@ export async function handleAutomationTriggerMatch(job: {
   const eventActorIds = await actorsOfSamePerson(db, userId);
   const podWideMatch = podWideAutomationAnswersTo(eventActorIds);
 
+  // A POD-WIDE SUBJECT announced from a space (`podWideSubject`: a shared role
+  // such as `client`, attached from the CRM) is matched in that space AND
+  // across the actor's floor, as a pod-wide event is. The lens stays in the set
+  // even when the actor is no member of it (an agent's write), so every rule
+  // that fired before still fires; the floor adds the other spaces that react
+  // to the role (Operations' « Onboard a client »). Each match runs in its own
+  // space (`fireAutomation`), so no space's rule reads another space.
+  const podWideSubject = job.data.podWideSubject === true;
   const workspaceMatch =
-    workspaceId != null
+    workspaceId != null && !podWideSubject
       ? or(eq(automations.workspaceId, workspaceId), podWideMatch)
       : or(
           inArray(
             automations.workspaceId,
-            await getAccessibleWorkspaceFloor(userId)
+            Array.from(
+              new Set([
+                ...(workspaceId != null ? [workspaceId] : []),
+                ...(await getAccessibleWorkspaceFloor(userId)),
+              ])
+            )
           ),
           podWideMatch
         );
@@ -1684,7 +1705,11 @@ export async function handleAutomationTriggerMatch(job: {
   ): Promise<void> {
     // Pod-wide events (null event workspace) run each matched automation IN ITS
     // OWN workspace; for the non-null path this equals `workspaceId`, unchanged.
-    const runWorkspaceId = workspaceId ?? automationWorkspaceId;
+    // A pod-wide SUBJECT announced from a space runs each match in its own
+    // space too, and a pod-wide automation in that lens (as before).
+    const runWorkspaceId = podWideSubject
+      ? (automationWorkspaceId ?? workspaceId)
+      : (workspaceId ?? automationWorkspaceId);
 
     // BOTH nulls = a pod-wide EVENT matching a pod-wide AUTOMATION. Neither side
     // names a workspace, so there is no honest one to derive: the executor's

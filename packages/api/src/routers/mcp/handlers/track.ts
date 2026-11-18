@@ -30,6 +30,7 @@ import {
   startTrack,
   type SetTrackStatusResult,
   type TrackActor,
+  type TrackView,
 } from "../../../services/tracks/tracks-service.js";
 import { pickTrackGoalInput } from "../../../services/tracks/goal-content.js";
 import { pickGoalPlacementInput } from "../../../services/tracks/goal-placement.js";
@@ -78,6 +79,20 @@ function isParams(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+/** The list row an agent scans to pick a goal (`detail: 'lean'`). */
+function leanTrackRow(view: TrackView) {
+  return {
+    id: view.id,
+    name: view.name,
+    status: view.status,
+    pausedBy: view.pausedBy,
+    verdict: view.verdict,
+    direction: view.direction,
+    kpi: view.kpi,
+    updatedAt: view.updatedAt,
+  };
+}
+
 async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {
   try {
     return ok(await fn());
@@ -117,6 +132,18 @@ export const trackHandlers: McpHandlerMap = {
           "projectId (uuid) is required — find it with synap_list_projects. Or pass trackId to read one goal.",
       });
     }
+    // `detail` (tickets c3d00d79, 9753144a): a full row carries criteria,
+    // stages, participants and the loop, so one default page of a busy
+    // project was ~80k chars, cut by the reply cap before the goal a caller
+    // looked for. `lean` (default) is the row an agent scans to pick a goal,
+    // as synap_list_sessions does; `full` (or `trackId`) reads it whole.
+    const detail = ctx.args.detail ?? "lean";
+    if (detail !== "lean" && detail !== "full") {
+      return ok({
+        error: `Unknown detail '${String(detail)}'. Valid values: lean (default), full.`,
+      });
+    }
+    const name = str(ctx.args.name)?.toLowerCase();
     return run(async () => {
       const rows = await listTracks({
         projectId,
@@ -124,13 +151,21 @@ export const trackHandlers: McpHandlerMap = {
         includeArchived: ctx.args.includeArchived === true,
       });
       if (!rows) return { error: "Project not found" };
+      // `name`: a routine finds its own goal by name, before the page is cut.
+      const named = name
+        ? rows.filter((r) => r.name.toLowerCase().includes(name))
+        : rows;
       const { page, paging } = pageSlice(
-        rows,
+        named,
         ctx.args,
         LIST_PAGE_DEFAULT,
         LIST_PAGE_MAX
       );
-      return { items: await loadTrackViews(page, ctx), ...paging };
+      const views = await loadTrackViews(page, ctx);
+      return {
+        items: detail === "full" ? views : views.map(leanTrackRow),
+        ...paging,
+      };
     });
   },
 

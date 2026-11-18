@@ -320,8 +320,88 @@ describe("deriveSessionHolder", () => {
       waitKind: null,
       since: null,
       agentUserId: null,
+      runner: null,
       source: { from: "roster" },
       reason: "no_agent",
+    });
+  });
+});
+
+describe("deriveSessionHolder — where the agent runs (runner)", () => {
+  const at = (
+    agentUserId: string,
+    state: RunnerState | null,
+    live: boolean,
+    harness: string,
+    model: string
+  ) => ({
+    ...runner(agentUserId, state, live),
+    harness,
+    model,
+    provider: null,
+    machineUserId: "machine-1",
+    processHost: "devbox",
+  });
+
+  it("names the live runner the word came from, not the agent's other one", () => {
+    // Most urgent first: needs_permission outranks busy, so THAT runner is it.
+    const h = deriveSessionHolder(
+      facts({
+        runners: [
+          at(A, "busy", true, "codex", "gpt-5"),
+          at(A, "needs_permission", true, "claude-code", "claude-opus-4"),
+        ],
+      })
+    );
+    expect(h.source).toEqual({ from: "runner", state: "needs_permission" });
+    expect(h.runner).toEqual({
+      harness: "claude-code",
+      model: "claude-opus-4",
+      provider: null,
+      machineUserId: "machine-1",
+      processHost: "devbox",
+      state: "needs_permission",
+      stateSince: ago(30_000),
+      lastSeenAt: ago(10_000),
+      live: true,
+    });
+  });
+
+  it("no live runner: the agent's most recently seen one, marked not live", () => {
+    const h = deriveSessionHolder(
+      facts({
+        runners: [
+          at(B, "ended", false, "codex", "gpt-5"),
+          at(A, "ended", false, "claude-code", "claude-sonnet-4"),
+          at(A, "ended", false, "claude-code", "claude-opus-4"),
+        ],
+      })
+    );
+    expect(h.agentUserId).toBe(A);
+    expect(h.runner).toMatchObject({
+      harness: "claude-code",
+      model: "claude-sonnet-4",
+      live: false,
+    });
+  });
+
+  it("no runner of that agent ever: none, never another agent's", () => {
+    const h = deriveSessionHolder(
+      facts({ runners: [at(B, "ended", false, "codex", "gpt-5")] })
+    );
+    expect(h.agentUserId).toBe(A);
+    expect(h.runner).toBeNull();
+  });
+
+  it("a runner whose client named no harness or model reads unknown, never a default", () => {
+    const h = deriveSessionHolder(facts({ runners: [runner(A, "busy")] }));
+    expect(h.runner).toMatchObject({
+      harness: null,
+      model: null,
+      machineUserId: null,
+      processHost: null,
+      state: "busy",
+      live: true,
     });
   });
 });

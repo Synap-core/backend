@@ -49,6 +49,31 @@
  * returned at all. On the same live call, 9 of the 20 candidates returned
  * matched no word at all and rode back as "Runs for anything new" at 0.5.
  *
+ * ── THE NAME IS THE EVIDENCE (tickets b2ba4b6b, 84d2add0, 9753144a) ───────
+ * A candidate's body (description, a ~5,000-char goal template, stage names)
+ * holds so many words that common ones always hit somewhere: "write and send
+ * this week's newsletter issue" ranked "Derive outputs" (whose description
+ * mentions "optionally a newsletter issue") above the playbook NAMED
+ * "Newsletter issue", and a Postgres restore drill was offered "Build a
+ * website (Website Factory)" on "prove, backend, pod, new, apply". So:
+ *   - a word that is also in the candidate's NAME counts twice
+ *     (`WEIGHT.nameTerm` on top of `WEIGHT.intentTerm`);
+ *   - RELEVANCE FLOOR (`FLOOR`): a candidate whose only evidence is words (no
+ *     subject, kind or facet signal) is returned only when its NAME holds one
+ *     of the request's words per five words asked, or its DESCRIPTION (its
+ *     own "when to use me") holds half of them. Matches in the rest of the
+ *     body (goal template, stage names) still score, but never admit a
+ *     candidate alone: they made one long playbook the magnet of every
+ *     request (plan 2026-11-05, document 7fbd45a7, step 5). The name share is
+ *     PROPORTIONAL because one name word is a coincidence in a long request:
+ *     "Design and build a feature: space brief … then fix MCP discovery gaps"
+ *     (10 words) otherwise offered "Lead → qualified (discovery)" on
+ *     "discovery" alone. With nothing better, nothing is offered: an empty
+ *     list is a fact, a wrong first candidate teaches agents to skip the
+ *     list. Measured on the live pool of 84 active playbooks, 2026-11-17.
+ * A structural signal (subject, kind, facet) is evidence about the ENTITY, so
+ * a candidate carrying one is never cut by the floor.
+ *
  * ── TIES ────────────────────────────────────────────────────────────────────
  * Broken by relevance, never by recency: more distinct intent words, then the
  * rarest word matched, then the structural signal (kind > facet), then the
@@ -76,6 +101,11 @@ export interface RouteCandidate {
   name: string;
   /** Other searchable text: description, goal template… */
   text?: ReadonlyArray<string | null | undefined>;
+  /**
+   * The candidate's own "when to use me". Searched like `text`, and the one
+   * body field that can admit a word-only candidate (the relevance floor).
+   */
+  description?: string | null;
   /** The kind the candidate is built for; `null` = fires for any kind. */
   subjectProfileSlug: string | null;
   /**
@@ -123,8 +153,18 @@ export interface RankedRoute<C extends RouteCandidate = RouteCandidate> {
   signals: RouteSignal[];
 }
 
+/** The relevance floor (header): what admits a candidate on words alone. */
+const FLOOR = {
+  /** One name word per this many words of the request. */
+  requestWordsPerNameWord: 5,
+  /** Or this share of the request's words in the description. */
+  descriptionShare: 0.5,
+} as const;
+
 const WEIGHT = {
   intentTerm: 3,
+  /** Added to `intentTerm` when the word is also in the candidate's name. */
+  nameTerm: 3,
   subject: 4,
   kind: 2,
   facet: 1.5,
@@ -241,8 +281,19 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
   const own =
     intent.size > 0
       ? input.candidates.map((c) =>
-          tokenize([c.name, ...(c.text ?? [])].join(" "), GENERIC_WORK_WORDS)
+          tokenize(
+            [c.name, c.description, ...(c.text ?? [])].join(" "),
+            GENERIC_WORK_WORDS
+          )
         )
+      : [];
+  const named =
+    intent.size > 0
+      ? input.candidates.map((c) => tokenize(c.name, GENERIC_WORK_WORDS))
+      : [];
+  const described =
+    intent.size > 0
+      ? input.candidates.map((c) => tokenize(c.description, GENERIC_WORK_WORDS))
       : [];
   // Rarity of each intent stem over THIS pool (the ONE IDF formula).
   const weightOf = new Map<string, number>();
@@ -255,6 +306,8 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
     const signals: RouteSignal[] = [];
     let score = 0;
     let termCount = 0;
+    let nameHits = 0;
+    let descriptionHits = 0;
     let rarest = 0;
 
     if (intent.size > 0) {
@@ -265,6 +318,11 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
         for (const [s] of hits) {
           const w = weightOf.get(s) ?? 0;
           score += WEIGHT.intentTerm * w;
+          if (named[index]!.has(s)) {
+            score += WEIGHT.nameTerm * w;
+            nameHits += 1;
+          }
+          if (described[index]!.has(s)) descriptionHits += 1;
           rarest = Math.max(rarest, w);
         }
       }
@@ -301,6 +359,12 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
 
     return {
       termCount,
+      // The relevance floor (header, `FLOOR`).
+      admitted:
+        (nameHits > 0 &&
+          nameHits * FLOOR.requestWordsPerNameWord >= intent.size) ||
+        (descriptionHits > 0 &&
+          descriptionHits >= FLOOR.descriptionShare * intent.size),
       rarest,
       structural: structuralRank(signals),
       route: {
@@ -313,7 +377,9 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
   });
 
   return ranked
-    .filter((r) => r.route.signals.length > 0)
+    .filter(
+      (r) => r.route.signals.length > 0 && (r.structural > 0 || r.admitted)
+    )
     .sort(
       (a, b) =>
         b.route.score - a.route.score ||

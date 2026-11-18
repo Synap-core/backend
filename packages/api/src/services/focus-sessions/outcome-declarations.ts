@@ -92,6 +92,18 @@ export function outcomeKeyOf(o: OutcomeDeclaration): string {
   return o.key ?? slotKeyBase(o.label);
 }
 
+/**
+ * Did the caller say how done is checked? Any outcome carrying a `verify` —
+ * a deliverable checked by its evidence included — is the "outcome with
+ * `verify`" that satisfies an agent's start (F11, `NO_CRITERIA`), whether or
+ * not it also becomes a criterion ({@link needsCriterion}).
+ */
+export function declaresVerify(
+  outcomes: readonly OutcomeDeclaration[] | undefined
+): boolean {
+  return (outcomes ?? []).some((o) => o.verify !== undefined);
+}
+
 /** Does a deliverable's `verify` name a check beyond its own evidence? */
 function needsCriterion(o: OutcomeDeclaration): boolean {
   if (!o.verify) return false;
@@ -140,6 +152,40 @@ function slotOf(o: OutcomeDeclaration): ExpectedOutput {
 function withDecisionAsk(slot: ExpectedOutput): ExpectedOutput {
   const ask = deriveDecisionAsk(slot);
   return ask ? { ...slot, ask } : slot;
+}
+
+/** Fields a `kind: "fact"` outcome cannot keep: they belong to a slot. */
+const SLOT_ONLY_FIELDS = [
+  "owner",
+  "blockedReason",
+  "why",
+  "unblocks",
+  "ask",
+  "ref",
+  "blocks",
+  "blockerKey",
+  "clearedBy",
+] as const satisfies ReadonlyArray<keyof OutcomeDeclaration>;
+
+/**
+ * A `kind: "fact"` outcome is stored as a CRITERION (`criterionOf`), which has
+ * no owner, ask or blocker: those fields are not kept. Said back to the
+ * caller (the update door's `warnings[]`), never dropped in silence (ticket
+ * c590b571). One sentence per outcome that sent any. Pure.
+ */
+export function factOutcomeWarnings(
+  outcomes: readonly OutcomeDeclaration[] | undefined
+): string[] {
+  const warnings: string[] = [];
+  for (const o of outcomes ?? []) {
+    if ((o.kind ?? "").toLowerCase() !== FACT_OUTCOME_KIND) continue;
+    const dropped = SLOT_ONLY_FIELDS.filter((f) => o[f] !== undefined);
+    if (dropped.length === 0) continue;
+    warnings.push(
+      `"${o.label}": ${dropped.map((f) => `\`${f}\``).join(", ")} not kept — a kind: "fact" outcome is a checked statement, so it has no owner, ask or blocker. For the person to grade it, use verify: { kind: "human" }; to hand them something to do or answer, declare a deliverable (any other kind) with owner: "human" + blockedReason + ask.`
+    );
+  }
+  return warnings;
 }
 
 /** Outcomes → the two stores they live in. Pure. */

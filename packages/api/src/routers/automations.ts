@@ -2378,6 +2378,7 @@ export const automationsRouter = router({
           id: m.id,
           name: m.name,
           text: [m.description],
+          description: m.description,
           subjectProfileSlug: m.filterProfileSlug,
           proposes: true as const,
           row: m,
