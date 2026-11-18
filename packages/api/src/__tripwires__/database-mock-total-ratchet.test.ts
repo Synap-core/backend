@@ -116,7 +116,9 @@ import { dirname, join, relative } from "node:path";
 // 42 → 40 on 2026-11-18 (backend#1135): `routers/__tests__/file-url-doors.test.ts`
 // and `store-document-provenance.test.ts` take `importOriginal` (file-upload.ts
 // gained `getRequestGrant` / `runWithoutGrant`).
-const BASELINE = 40;
+// 40 → 39 on 2026-11-18 (backend#1130): `hub-protocol/_middleware/session.test.ts`
+// converted — the session middleware now imports `runWithNamedSession`.
+const BASELINE = 39;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

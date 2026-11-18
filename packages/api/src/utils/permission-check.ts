@@ -43,6 +43,7 @@ import {
   getRequestGrant,
   recordWriteSessionFiling,
   derivedReceiptProjectFor,
+  getNamedSessionId,
   callingKeyAttribution,
   computeProposalDedupHash,
   type InsertPendingProposalResult,
@@ -1122,7 +1123,11 @@ export interface PermissionCheckBaseOpts {
   commandRunId?: string;
   /** Provenance: which specific message triggered this proposal */
   sourceMessageId?: string;
-  /** Session ID to link proposals to the active focus session */
+  /**
+   * Session ID to link proposals to the active focus session. Absent ⇒ the
+   * session the caller NAMED at the MCP or Hub door, if any
+   * (`withNamedSession`); a door that files elsewhere on purpose passes it.
+   */
   sessionId?: string;
   /**
    * The declared output slot this write fulfils, as the CALLER named it
@@ -1320,8 +1325,9 @@ export type PermissionCheckOpts = PermissionCheckBaseOpts & GovernedWritePair;
  * 7. Otherwise → return { granted: true }
  */
 export async function checkPermissionOrPropose(
-  opts: PermissionCheckOpts
+  callerOpts: PermissionCheckOpts
 ): Promise<PermissionResult> {
+  const opts = withNamedSession(callerOpts);
   const result = await evaluatePermission(opts, false);
   if ("__dryRunPropose" in result) {
     // Unreachable: the sentinel is only ever returned in dry-run mode. Treated
@@ -1368,13 +1374,33 @@ export async function checkPermissionOrPropose(
 export async function previewPermissionDecision(
   opts: PermissionCheckOpts
 ): Promise<PermissionDecisionPreview> {
-  const result = await evaluatePermission(opts, true);
+  const result = await evaluatePermission(withNamedSession(opts), true);
   if ("__dryRunPropose" in result) return { decision: "propose" };
   if ("denied" in result) return { decision: "deny", reason: result.reason };
   if (result.granted === true) return { decision: "execute" };
   // Defensive: no propose path reaches createProposal in dry-run mode, so a
   // granted:false result should be impossible here.
   return { decision: "propose" };
+}
+
+/**
+ * A2 (plan a640c5bb, ticket 4bc6b9f4): the session the caller NAMED at the MCP
+ * or Hub door (`runWithNamedSession`) fills the gate's `sessionId` when the
+ * door passed none. Most write doors never forward `ctx.sessionId`, so the gate
+ * used to run the client ladder and file the write into the client's newest
+ * session (live: a child session's `define_kind` and `update_playbook` writes
+ * filed into its parent). One read here, not one per call site.
+ *
+ * A door's own `sessionId` always wins. A `focus_session` subject is never
+ * filled: those doors name the session they write about (`data.id`), and a
+ * session's update belongs to that session, not to the one the caller is in.
+ */
+function withNamedSession(opts: PermissionCheckOpts): PermissionCheckOpts {
+  if (opts.sessionId !== undefined) return opts;
+  if (opts.subjectType.startsWith("focus_session")) return opts;
+  const named = getNamedSessionId();
+  if (!named) return opts;
+  return { ...opts, sessionId: named, sessionSource: "explicit" as const };
 }
 
 /**

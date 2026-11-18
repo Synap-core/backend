@@ -10,7 +10,9 @@
  * intent that produced them.
  *
  * It is read ONCE here and lands on `c.set("sessionId", …)` → `getCaller`'s
- * default → `ctx.sessionId` → the proposal row.
+ * default → `ctx.sessionId` → the proposal row, and in the request write
+ * context (`runWithNamedSession`), which the governance gate reads when a
+ * route's call passes no `sessionId` (A2).
  *
  * ── SECURITY ────────────────────────────────────────────────────────────────
  * `X-Session-Id` is CLIENT-SUPPLIED and must never be trusted as-is: honoured
@@ -30,7 +32,13 @@
 
 import type { Context, Next } from "hono";
 import { createLogger } from "@synap-core/core";
-import { db, focusSessions, and, eq } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  and,
+  eq,
+  runWithNamedSession,
+} from "@synap/database";
 import { PG_UUID_RE } from "../rest/_codecs/_openapi.js";
 
 const logger = createLogger({ module: "hub-protocol-session" });
@@ -109,7 +117,13 @@ export async function sessionMiddleware(
   if (raw) {
     const userId = c.get("userId") as string | undefined;
     const resolved = await resolveHubSessionHeader(raw, userId);
-    if (resolved) c.set("sessionId", resolved);
+    if (resolved) {
+      c.set("sessionId", resolved);
+      // A2: the governance gate files into it too when a route's own call
+      // passes no session (most do not forward `ctx.sessionId`).
+      await runWithNamedSession(resolved, next);
+      return;
+    }
   }
   await next();
 }

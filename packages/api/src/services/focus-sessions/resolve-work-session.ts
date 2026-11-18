@@ -11,6 +11,8 @@
  *      it started itself, else the one the governance gate auto-opened for it
  *      while that is still in its window. A KEY-scoped client (option A: the
  *      door knows no conversation) only ever gets the key's auto-opened one.
+ *      SEVERAL started and open ⇒ NO guess (A2): `none`, with them listed in
+ *      `clientSessions`, and the gate files into the client's receipt.
  *   3. UNCLAIMED — exactly ONE open WORK session that no client has claimed (a
  *      session the person opened) and that was TOUCHED in the last
  *      {@link UNCLAIMED_TOUCHED_WITHIN_HOURS} hours. More than one ⇒ NO guess,
@@ -75,6 +77,14 @@ export interface WorkSessionResolution {
   ignoredSession?: {
     sessionId: string;
     reason: "not-owned" | "ownership-check-failed";
+  };
+  /**
+   * Rung 2 found SEVERAL open sessions this client started (A2): none is
+   * guessed, and these are the ones the caller may name (`sessionId`).
+   */
+  clientSessions?: {
+    count: number;
+    sessions: Array<{ id: string; title: string; startedAt: string | null }>;
   };
 }
 
@@ -205,6 +215,28 @@ export async function resolveWorkSession(
   if (clientKey) {
     try {
       const bound = await findClientSession(input.userId, clientKey);
+      // A2: a STARTED session answers only when it is the only one open; the
+      // newest of several is never guessed (one conversation's sub-agents
+      // share this key). The gate then files into the client's receipt.
+      if (bound && !bound.autoOpened) {
+        const started = await resolveClientOpenSession({
+          userId: input.userId,
+          clientKey,
+        });
+        if (started.status === "several") {
+          return {
+            source: "none",
+            unclaimedOpenCount: null,
+            clientSessions: {
+              count: started.count,
+              sessions: started.sessions,
+            },
+          };
+        }
+        if (started.status === "unavailable") {
+          return { source: "none", unclaimedOpenCount: null };
+        }
+      }
       if (bound) {
         return {
           sessionId: bound.id,
