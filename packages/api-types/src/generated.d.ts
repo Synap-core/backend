@@ -10163,7 +10163,7 @@ export interface ProposalToolRunParameter {
 	label: string;
 	/** What the verb's schema says the argument is, when it says. */
 	description?: string;
-	/** The value the agent passed, whole. Absent when `secret`. */
+	/** The value the agent passed, whole (a pod registration code in it masked). Absent when `secret`. */
 	value?: unknown;
 	/** The argument names a credential: its value never leaves the pod. */
 	secret?: true;
