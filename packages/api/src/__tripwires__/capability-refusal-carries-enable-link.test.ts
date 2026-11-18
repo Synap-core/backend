@@ -148,9 +148,7 @@ function recipeFilingExemption(): { ok: boolean; problems: string[] } {
     /const RECIPE_REFUSED_AT_FILING: ReadonlySet<string> = new Set\(\[([^\]]*)\]\)/.exec(
       src
     );
-  const codes = [...(set?.[1] ?? "").matchAll(/"([A-Z_]+)"/g)].map(
-    (m) => m[1]
-  );
+  const codes = [...(set?.[1] ?? "").matchAll(/"([A-Z_]+)"/g)].map((m) => m[1]);
   if (codes.length === 0)
     problems.push("RECIPE_REFUSED_AT_FILING not found or empty");
   const map =
@@ -159,10 +157,7 @@ function recipeFilingExemption(): { ok: boolean; problems: string[] } {
     );
   if (!map) problems.push("RECIPE_REFUSAL_CLASS not found");
   const classOf = new Map(
-    [...(map?.[1] ?? "").matchAll(/(\w+):\s*"(\w+)"/g)].map((m) => [
-      m[1],
-      m[2],
-    ])
+    [...(map?.[1] ?? "").matchAll(/(\w+):\s*"(\w+)"/g)].map((m) => [m[1], m[2]])
   );
   for (const code of codes) {
     if (APPROVAL_CLASS.test(code.replace(/_/g, " ")))
