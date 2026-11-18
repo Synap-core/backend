@@ -23,7 +23,9 @@ start itself on every new `ui-design`, because sibling variants are `ui-design`s
       "type": "SpatialButton",
       "props": {
         "id": "SpatialButton-1",
-        "children": "Add agent",
+        "children": [
+          { "type": "Text", "props": { "id": "Text-1", "text": "Add agent" } }
+        ],
         "size": "md"
       }
     }
@@ -94,7 +96,7 @@ Never write `schema-version` `2` (an older board is migrated on read; the next s
 Find before you create: `synap_find` for an existing `ui-design` on the same `target-surface`.
 
 - Create with `synap_create_entity`, `profileSlug: "ui-design"`, a title, and properties:
-  `target-surface` (app and screen), `design-scope` (`component` or `page`), `design-goal` (the job the
+  `target-surface` (app and screen), `design-scope` (`component` or `page`; a canvas is `page`), `design-goal` (the job the
   screen does; the critique judges against it), `design-json`, `components-used` (the distinct `type`
   values, derived from the JSON, recursive across every frame of a canvas, never typed by hand),
   `schema-version` (`1` for a page, `3` for a canvas), `motion`,
