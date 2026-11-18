@@ -14,8 +14,8 @@ import { stripComments } from "../../../scripts/strip-comments.mjs";
  *
  * The scanned set is DERIVED, not listed: every file under `app/` that reads
  * the audit log (`listAuditLogs`) or defines Historique's list
- * (`export function HistoryList`). A new page that reads the audit log joins
- * the set by doing so.
+ * (`export function HistoryList`), minus the command palette's lookup
+ * (`LOOKUPS`). A new page that reads the audit log joins the set by doing so.
  */
 
 const APP = join(fileURLToPath(new URL(".", import.meta.url)), "..", "app");
@@ -31,7 +31,10 @@ function walk(dir: string, out: string[] = []): string[] {
 
 const src = (p: string) => stripComments(readFileSync(p, "utf8"), "ts");
 const files = walk(APP);
+/** Reads the audit log for a lookup, not to draw a chain of events. */
+const LOOKUPS = ["(admin)/components/search-modal.tsx"];
 const TIMELINE_PAGES = files.filter((f) => {
+  if (LOOKUPS.some((l) => f.endsWith(l))) return false;
   const s = src(f);
   return (
     /listAuditLogs\.use/.test(s) || /export function HistoryList\b/.test(s)
