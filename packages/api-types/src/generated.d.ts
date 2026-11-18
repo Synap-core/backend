@@ -19580,7 +19580,7 @@ export interface RankComparison {
  * `playbooks`). It runs only for a how-to or which-tool question (see
  * `CATALOG_CUES`).
  */
-export type SubstrateKind = "catalog" | "episodic" | "library" | "procedural" | "semantic" | "structured";
+export type SubstrateKind = "catalog" | "episodic" | "library" | "procedural" | "project" | "semantic" | "structured";
 /** One owed deliverable, with just enough of its session to be actionable. */
 export interface OwedSlot {
 	sessionId: string;
@@ -21409,14 +21409,21 @@ export interface StartHere {
 		items: Array<{
 			/** How many criteria it declares (0 = a lasting goal). */
 			criteria: number;
-			/** What "done" looks like — `null` when unsaid. */
+			/**
+			 * What "done" looks like — `null` when unsaid. Light cuts it at
+			 * {@link LIGHT_ROW_PROSE_MAX} chars (`truncated`, `more`).
+			 */
 			endState: string | null;
 			id: string;
+			/** With `truncated`: the read that returns it whole. */
+			more?: string;
 			name: string;
 			projectId: string;
 			/** Where it stands: since when, its work per category, moves, waits. */
 			rollup: GoalRollup | StartHereUnavailable;
 			status: string;
+			/** Light only, and only when `endState` was cut. */
+			truncated?: true;
 		}>;
 		lens: "pod" | "project";
 		/** The window `rollup.moved` counts over. */
@@ -22127,7 +22134,11 @@ export type FindCatalog = (typeof FIND_CATALOGS)[number];
  * matched and what it takes.
  */
 export interface CapabilityIntentMatch {
-	/** The launchable action, straight off `projectRunnableActions`. */
+	/**
+	 * The launchable action, straight off `projectRunnableActions`, WITHOUT its
+	 * `description`: that string is `whenToUse` below, sent once (ticket
+	 * dfa6003e: the same prose twice per match).
+	 */
 	action: RunnableCapabilityAction;
 	/**
 	 * The verb's DECLARED arg schema (`ToolVerbCatalogEntry.argsSchema`) — carried
@@ -22290,7 +22301,8 @@ export interface FindByIntentResult extends Partial<Record<ObjectCatalog, FindOb
 	marketplace?: FindMarketplace;
 	/** Member spaces to route the work to. ABSENT when not searched. */
 	spaces?: FindSpaces;
-	scoring: FindScoring;
+	/** What each catalog's numbers mean. Present only with `explain`. */
+	scoring?: FindScoring;
 	coverage: FindCoverage;
 	/** Present only when no catalog produced a single match. */
 	noConfidentMatch?: NoConfidentMatch;
