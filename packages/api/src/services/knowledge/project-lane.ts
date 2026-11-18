@@ -1,9 +1,7 @@
 /**
- * `ask`'s PROJECT source (ticket 8e2c7018): a project's current facts live in
- * the `projects` TABLE (migration 0151), and recall read entities only. So a
- * project entity left behind by that migration (same id, the reserved
- * `project` kind) answered "what is X" with July's description while the
- * table held November's.
+ * `ask`'s PROJECT source (ticket 8e2c7018): the `projects` row is the truth;
+ * a twin entity (same id, the reserved `project` kind, left by migration
+ * 0151) is dropped.
  *
  * Read when the question is about a project: the caller's project lens, or a
  * semantic hit that IS a project (a `project`-kind entity, whose id is its

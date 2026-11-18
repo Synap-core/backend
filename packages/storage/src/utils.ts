@@ -67,7 +67,7 @@ export function attachmentDisposition(key: string): string {
  * subresource ignores the disposition, and a blob served on the pod origin
  * passes a `script-src 'self'` policy. So a signed GET serves these as plain
  * text; with `nosniff` (Caddy's `security_headers`, on every site block) the
- * browser then refuses to run or apply them (ticket 15bc541d, plan D1).
+ * browser then refuses to run or apply them (ticket 15bc541d).
  */
 const SCRIPT_OR_STYLE_MIME_TYPES: ReadonlySet<string> = new Set([
   "application/ecmascript",
@@ -90,7 +90,7 @@ const SCRIPT_OR_STYLE_MIME_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /** What a script or style blob is served as. */
-export const INERT_TEXT_CONTENT_TYPE = "text/plain; charset=utf-8";
+const INERT_TEXT_CONTENT_TYPE = "text/plain; charset=utf-8";
 
 /**
  * The `Content-Type` a signed GET serves instead of the stored one, or

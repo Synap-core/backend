@@ -408,11 +408,9 @@ export async function ask(params: AskParams): Promise<AskResult> {
     semanticStatus = "error";
   }
 
-  // PROJECT source (ticket 8e2c7018): the `projects` table is where a
-  // project's current facts live. Read for the project lens and for every
-  // semantic hit that IS a project (the entity migration 0151 left behind,
-  // same id). A twin answered by its row leaves the semantic block: the table
-  // is the truth, the entity is July's copy.
+  // PROJECT source (ticket 8e2c7018): the `projects` row is the truth; a twin
+  // entity (same id, left by migration 0151) is dropped. Read for the project
+  // lens and for every semantic hit that IS a project.
   const askedProjects = projectIdsForAsk(projectId, semantic.entities);
   const project: Settled | null =
     askedProjects.length > 0

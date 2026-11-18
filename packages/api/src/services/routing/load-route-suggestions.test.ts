@@ -82,6 +82,29 @@ describe("loadRouteSuggestions", () => {
     expect(entity!.suggestions[0]!.reason).toContain("“review”");
   });
 
+  it("a playbook reachable only by a declared trigger is suggested (its triggers reach the ranking)", async () => {
+    const m = matchers();
+    m.playbooks.mockResolvedValueOnce([
+      {
+        id: "pb-dev",
+        name: "AI Dev Session",
+        goalTemplate: "Work a change end to end",
+        subjectProfileSlug: null,
+        triggers: ["build a feature"],
+      },
+    ]);
+    const res = await loadRouteSuggestions({
+      ctx: {},
+      workspaceId: WS,
+      entities: [{ entityId: "e1", profileSlug: "note" }],
+      intentText:
+        "Design and build a feature: space brief so an agent knows what each space is for",
+      matchers: m,
+    });
+    const [entity] = (res as Extract<typeof res, { status: "ok" }>).entities;
+    expect(entity!.suggestions.map((s) => s.candidate.id)).toEqual(["pb-dev"]);
+  });
+
   it("says why it could not suggest, instead of an empty list", async () => {
     const m = matchers();
     expect(

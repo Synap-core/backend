@@ -12,7 +12,7 @@
  * So: if `isAllowedMimeType` admits any active type, every S3 signer in
  * `@synap/storage` must set that disposition on its signed GET.
  *
- * A SCRIPT or STYLE type (JavaScript, CSS — plan D1, ticket 15bc541d) is not
+ * A SCRIPT or STYLE type (JavaScript, CSS — ticket 15bc541d) is not
  * made safe by `attachment`: `<script src>` / `<link rel=stylesheet>` ignore
  * the disposition, and a blob on the pod origin passes `script-src 'self'`.
  * So if `isAllowedMimeType` admits one, every signer must ALSO serve it as

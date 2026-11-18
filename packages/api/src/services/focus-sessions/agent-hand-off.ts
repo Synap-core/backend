@@ -128,6 +128,12 @@ export async function gateAgentHandOff(p: {
   };
   agentId: string;
   reasoning?: string;
+  /**
+   * A declared deliverable handed on with the session (`delegateExpectedOutput`):
+   * carried on the proposal so approving it finishes the delegation (the
+   * `focus_session/assign_agent` executor).
+   */
+  slot?: { expectedLabel: string; agentType: string };
 }): Promise<AgentHandOffDecision> {
   // The reviewer approves a hand-off to a NAMED agent, never to a bare id.
   const [agent] = await db
@@ -178,6 +184,7 @@ export async function gateAgentHandOff(p: {
           ...sessionNameField({ title: p.title, goal: p.goal }),
           addAgentId: p.agentId,
           agentName: agent?.name ?? null,
+          ...(p.slot ?? {}),
         },
       });
   if ("denied" in perm && perm.denied) {

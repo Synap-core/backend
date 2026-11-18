@@ -720,7 +720,7 @@ export const sessionHandlers: McpHandlerMap = {
         }),
         // An agent's NEW session declares what done means (F11, NO_CRITERIA).
         requireCriteria: !!agentUserId,
-        // An outcome with `verify` says what done means (F11's own words).
+        // An outcome with `verify` says what done means.
         declaredVerify: declaresVerify(outcomes.list),
         // Validated by the service with the shared criteria schema.
         criteria: declared.criteria,
@@ -1133,7 +1133,7 @@ export const sessionHandlers: McpHandlerMap = {
       : await resolveAmbientSession(userId, agentUserId);
     const wantedId = explicitId ?? ambient?.sessionId;
     if (!wantedId) {
-      // A2: this conversation started several open sessions — none is guessed.
+      // This conversation started several open sessions — none is guessed.
       if (ambient?.clientSessions) {
         return ok({
           session: null,

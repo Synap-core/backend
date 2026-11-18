@@ -138,6 +138,7 @@ vi.mock("../../../lib/trpc", async () => ({
     },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
+      actionModes: { useQuery: () => ({ data: undefined }) },
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
       setActionMode: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },

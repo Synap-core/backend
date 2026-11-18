@@ -19,6 +19,7 @@ import {
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { placeBeyondPodWideReads } from "@synap-core/types/grants";
 import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
 import {
@@ -1384,12 +1385,11 @@ export async function previewPermissionDecision(
 }
 
 /**
- * A2 (plan a640c5bb, ticket 4bc6b9f4): the session the caller NAMED at the MCP
+ * Plan a640c5bb (ticket 4bc6b9f4): the session the caller NAMED at the MCP
  * or Hub door (`runWithNamedSession`) fills the gate's `sessionId` when the
  * door passed none. Most write doors never forward `ctx.sessionId`, so the gate
  * used to run the client ladder and file the write into the client's newest
- * session (live: a child session's `define_kind` and `update_playbook` writes
- * filed into its parent). One read here, not one per call site.
+ * session. One read here, not one per call site.
  *
  * A door's own `sessionId` always wins. A `focus_session` subject is never
  * filled: those doors name the session they write about (`data.id`), and a
@@ -5097,6 +5097,11 @@ export async function parkWriteOnWorkspaceJoin(opts: {
   return null;
 }
 
+/** Why an agent cannot join (or write in) an archived space. */
+function archivedSpaceRefusal(name: string): string {
+  return `The space "${name}" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.`;
+}
+
 /** What {@link requestWorkspaceJoin} answers. */
 export type WorkspaceJoinRequestResult =
   | {
@@ -5118,7 +5123,7 @@ export type WorkspaceJoinRequestResult =
   | { status: "refused"; workspaceId: string; reason: string };
 
 /** Said with a filed (or reused) join request. */
-export const WORKSPACE_JOIN_REQUESTED_MESSAGE =
+const WORKSPACE_JOIN_REQUESTED_MESSAGE =
   "A workspace JOIN request is pending the person's review (a pending one for " +
   "this space is reused, never doubled). Until it is approved, a write into " +
   "this space is kept on the join and replayed for you on approval: do not " +
@@ -5133,9 +5138,11 @@ export const WORKSPACE_JOIN_REQUESTED_MESSAGE =
  * this request is kept on that join and replayed with the rest.
  *
  * Refused before anything is filed when the key's grant does not reach the
- * space: the gate's rung 0 would deny every write there whatever the
- * membership, so a join would only put a card in front of the person that
- * changes nothing.
+ * space for anything beyond pod-wide reads (THE reach parse,
+ * `placeBeyondPodWideReads`; a grant of pod-wide reads only reaches none): the
+ * gate's rung 0 would deny every write there whatever the membership, so a
+ * join would only put a card in front of the person that changes nothing.
+ * An archived space is refused, a member's included: no agent writes there.
  */
 export async function requestWorkspaceJoin(opts: {
   userId: string;
@@ -5147,9 +5154,13 @@ export async function requestWorkspaceJoin(opts: {
   const grant = getRequestGrant();
   if (
     grant &&
-    !grant.scopes.some(
-      (scope) => !scope.workspaceIds || scope.workspaceIds.includes(workspaceId)
-    )
+    !grant.scopes.some((scope) => {
+      const place = placeBeyondPodWideReads(scope);
+      return (
+        place !== null &&
+        (place.kind === "unbounded" || place.ids.includes(workspaceId))
+      );
+    })
   ) {
     return {
       status: "refused",
@@ -5159,7 +5170,7 @@ export async function requestWorkspaceJoin(opts: {
     };
   }
   const [ws] = await db
-    .select({ id: workspaces.id })
+    .select({ name: workspaces.name, archivedAt: workspaces.archivedAt })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
@@ -5168,6 +5179,13 @@ export async function requestWorkspaceJoin(opts: {
       status: "refused",
       workspaceId,
       reason: "No space has this id: find it with synap_list_workspaces.",
+    };
+  }
+  if (ws.archivedAt) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason: archivedSpaceRefusal(ws.name),
     };
   }
   const agentUserId = getActingAgentUserId() ?? opts.agentUserId ?? undefined;
@@ -5200,7 +5218,7 @@ export async function requestWorkspaceJoin(opts: {
         sessionId: opts.sessionId,
       })
     : null;
-  if (!join || "__dryRunPropose" in join) {
+  if (!join) {
     return {
       status: "refused",
       workspaceId,
@@ -5211,6 +5229,7 @@ export async function requestWorkspaceJoin(opts: {
   if ("denied" in join && join.denied) {
     return { status: "refused", workspaceId, reason: join.reason };
   }
+  // Not filed (this call is never a dry run, so never the dry-run sentinel).
   if (!("proposalId" in join)) {
     return {
       status: "refused",
@@ -5308,10 +5327,7 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
   // approved into a retired space (ticket 86b6faae). Refused in words, in
   // dry-run too, since it is the verdict.
   if (ws?.archivedAt) {
-    return {
-      denied: true,
-      reason: `The space "${ws.name}" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.`,
-    };
+    return { denied: true, reason: archivedSpaceRefusal(ws.name) };
   }
 
   // Verdict resolved (agent → join proposal). In dry-run stop here: everything

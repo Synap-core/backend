@@ -197,6 +197,30 @@ describe("evaluateSession is bounded to the stages the session has reached", () 
     expect(later?.reason).toContain("not reached");
   });
 
+  it("a session at a stage its process no longer lists grades everything (an unknown place skips nothing)", async () => {
+    const renamed = randomUUID();
+    await h.client!.query(
+      `insert into focus_sessions (id, user_id, goal, status, current_stage, stages, expected_outputs, criteria, agent_ids, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'Renamed', 'active', 'gone', $3::jsonb, '[]'::jsonb, $4::jsonb, '{}', '{}'::jsonb, now(), now(), now())`,
+      [
+        renamed,
+        USER,
+        JSON.stringify([
+          { key: "open", name: "Open" },
+          { key: "act3", name: "Act 3" },
+        ]),
+        JSON.stringify([cap("on-subject", "open"), cap("act3-theme", "act3")]),
+      ]
+    );
+    const r = await evaluateSession({ sessionId: renamed, userId: USER });
+    expect(h.recorded.map((x) => x.criterionKey).sort()).toEqual([
+      "act3-theme",
+      "on-subject",
+    ]);
+    if (r.status !== "evaluated") throw new Error(r.status);
+    expect(r.results.some((x) => x.status === "skipped")).toBe(false);
+  });
+
   it("an explicit stageKey still grades that stage (the check gate, unchanged)", async () => {
     await evaluateSession({
       sessionId: staged,

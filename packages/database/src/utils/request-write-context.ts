@@ -44,7 +44,7 @@ export interface RequestWriteContext {
   readonly delegatedTurnAgent?: DelegatedTurnAgent;
   /** A1 — the session id the MCP door derived (guessed, not named). */
   readonly derivedSessionId?: string;
-  /** A2 — the session the caller NAMED at the door (MCP `sessionId`, Hub `X-Session-Id`). */
+  /** The session the caller NAMED at the door (MCP `sessionId`, Hub `X-Session-Id`). */
   readonly namedSessionId?: string;
   /**
    * B4 — set when that derived session is the client's AUTO-OPENED receipt:
@@ -409,7 +409,7 @@ export function getDerivedSessionId(): string | undefined {
   return storage.getStore()?.derivedSessionId;
 }
 
-// ═══ Concern: NAMED SESSION (A2, plan a640c5bb) ═══════════════════════════════
+// ═══ Concern: NAMED SESSION (plan a640c5bb) ═══════════════════════════════
 //
 // The session the caller NAMED (MCP `sessionId` arg, Hub `X-Session-Id`),
 // ownership-checked at the door and entered here ONCE. The governance gate reads

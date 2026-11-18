@@ -644,7 +644,7 @@ export interface SessionAttributionReport {
    */
   openCount: number | null;
   /**
-   * A2: the open sessions THIS client started when there were several (newest
+   * The open sessions THIS client started when there were several (newest
    * first, at most `CLIENT_OPEN_SESSIONS_LISTED`) — pass one as `sessionId`.
    */
   candidates?: Array<{ id: string; title: string; startedAt: string | null }>;

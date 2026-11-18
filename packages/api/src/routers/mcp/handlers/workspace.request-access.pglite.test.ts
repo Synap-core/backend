@@ -10,8 +10,10 @@
  *
  * Rows rule out: a second join stacked for the same space (the gate's reuse),
  * a join filed for an agent that is already a member, a join filed when the
- * key's grant cannot reach the space (it would change nothing), a join into
- * an archived space, and a join filed for a space that does not exist.
+ * key's grant cannot reach the space (it would change nothing; a grant of
+ * pod-wide reads only reaches none), a join into an archived space, a member
+ * of an archived space told it is a member, and a join filed for a space that
+ * does not exist.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -77,6 +79,7 @@ const AGENT = randomUUID();
 const WS = randomUUID(); // the agent is not a member
 const WS_MEMBER = randomUUID(); // the agent is an editor
 const WS_ARCHIVED = randomUUID();
+const WS_ARCHIVED_MEMBER = randomUUID(); // archived; the agent is an editor
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
@@ -90,18 +93,19 @@ beforeAll(async () => {
     `insert into workspaces (id, name, owner_id, workspace_type, settings, archived_at) values
       ($1, 'Sales', $4, 'team', '{}'::jsonb, null),
       ($2, 'Builder', $4, 'team', '{}'::jsonb, null),
-      ($3, 'Old', $4, 'team', '{}'::jsonb, now())`,
-    [WS, WS_MEMBER, WS_ARCHIVED, HUMAN]
+      ($3, 'Old', $4, 'team', '{}'::jsonb, now()),
+      ($5, 'Older', $4, 'team', '{}'::jsonb, now())`,
+    [WS, WS_MEMBER, WS_ARCHIVED, HUMAN, WS_ARCHIVED_MEMBER]
   );
-  for (const ws of [WS, WS_MEMBER, WS_ARCHIVED]) {
+  for (const ws of [WS, WS_MEMBER, WS_ARCHIVED, WS_ARCHIVED_MEMBER]) {
     await q(
       `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
       [randomUUID(), ws, HUMAN]
     );
   }
   await q(
-    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor')`,
-    [randomUUID(), WS_MEMBER, AGENT]
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor'), ($4, $5, $3, 'editor')`,
+    [randomUUID(), WS_MEMBER, AGENT, randomUUID(), WS_ARCHIVED_MEMBER]
   );
 }, 120_000);
 
@@ -181,6 +185,32 @@ describe("synap_request_workspace_access — the gate's own join, asked for on p
     expect(res.status).toBe("refused");
     expect(String(res.reason)).toMatch(/archived/);
     expect(await joins()).toEqual([]);
+  });
+
+  it("a member of an archived space ⇒ refused as archived, never told 'member'", async () => {
+    const res = await requestAccess(WS_ARCHIVED_MEMBER);
+    expect(res.status).toBe("refused");
+    expect(String(res.reason)).toMatch(/archived/);
+    expect(await joins()).toEqual([]);
+  });
+
+  it("a grant of pod-wide reads only reaches no space to write in ⇒ refused, nothing filed", async () => {
+    const res = await requestAccess(WS, {
+      scopes: [{ permissions: ["entity.read"], workspaceIds: null }],
+      clientId: null,
+    });
+    expect(res.status).toBe("refused");
+    expect(String(res.reason)).toMatch(/grant does not reach this space/);
+    expect(await joins()).toEqual([]);
+  });
+
+  it("control: a grant on every space (no list) files the join", async () => {
+    const res = await requestAccess(WS, {
+      scopes: [{ permissions: ["*"], workspaceIds: null }],
+      clientId: null,
+    });
+    expect(res.status).toBe("proposed");
+    expect(await joins()).toHaveLength(1);
   });
 
   it("a space that does not exist ⇒ refused, nothing filed", async () => {

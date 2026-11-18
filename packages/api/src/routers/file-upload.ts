@@ -886,7 +886,7 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
 export type FileReadRefusal = "key_grant" | "person";
 
 /** The 403's words, by the floor that refused (ticket 66e66dce). */
-export const FILE_READ_REFUSED: Readonly<Record<FileReadRefusal, string>> = {
+const FILE_READ_REFUSED: Readonly<Record<FileReadRefusal, string>> = {
   key_grant:
     "Forbidden: this file is outside what this key's grant reaches (its spaces, projects or objects). The person can widen the key's grant, or share the file into a space the key reaches. Nothing was signed.",
   person:
@@ -970,7 +970,7 @@ export type FileEntityUrlResult =
  *
  * Returns the URL only. The signer (`storage.getSignedUrl`) forces an
  * `attachment` disposition — an active blob (HTML, SVG) can never render from
- * this URL (D10) — and serves a script or style blob as `text/plain` (plan D1),
+ * this URL (D10) — and serves a script or style blob as `text/plain`,
  * every other type as stored (tripwire
  * `active-mime-needs-attachment-disposition`). `mimeType` is the stored type;
  * it differs from the served one only for script and style, which no client

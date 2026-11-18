@@ -178,7 +178,7 @@ export function parseCaptureTable(raw: unknown): ParsedCaptureTable {
 }
 
 /** A cell as the text an exact match compares, or null for an empty cell. */
-export function cellText(cell: unknown): string | null {
+function cellText(cell: unknown): string | null {
   if (typeof cell === "number" && Number.isFinite(cell)) return String(cell);
   if (typeof cell === "string" && cell.trim() !== "") return cell.trim();
   return null;
@@ -189,7 +189,7 @@ export function cellText(cell: unknown): string | null {
  * exactly as sent (never trimmed or case-folded: exact match only), or null
  * for an empty cell, which links nothing.
  */
-export function linkValue(cell: unknown): string | null {
+function linkValue(cell: unknown): string | null {
   if (typeof cell === "number" && Number.isFinite(cell)) return String(cell);
   if (typeof cell === "string" && cell.trim() !== "") return cell;
   return null;

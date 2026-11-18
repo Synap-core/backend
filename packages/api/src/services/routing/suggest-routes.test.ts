@@ -235,13 +235,13 @@ describe("rankRouteCandidates — the live CRM Hygiene case", () => {
     expect(ranked).toEqual([]);
   });
 
-  // Plan a640c5bb D3 (founder, 2026-11-18): the floor left AI Dev Session
+  // Plan a640c5bb (founder, 2026-11-18): the floor left AI Dev Session
   // unreachable for this request ("build" sits only in its goal template).
   // The answer is a DECLARED trigger, not a looser ranker.
   const withTriggers = (triggers: string[]): RouteCandidate[] =>
     pool.map((p) => (p.name === "AI Dev Session" ? { ...p, triggers } : p));
 
-  it("D3: a trigger the request holds whole offers AI Dev Session, first, its words scored like name words", () => {
+  it("a trigger the request holds whole offers AI Dev Session, first, its words scored like name words", () => {
     const ranked = rankRouteCandidates({
       entity: {},
       intentText: INTENT,
@@ -266,7 +266,7 @@ describe("rankRouteCandidates — the live CRM Hygiene case", () => {
     expect(bodyOnly).toEqual([]);
   });
 
-  it("D3: a trigger like 'workspace hygiene' offers it for a hygiene request, never for part of the phrase", () => {
+  it("a trigger like 'workspace hygiene' offers it for a hygiene request, never for part of the phrase", () => {
     const candidates = withTriggers(["workspace hygiene"]);
     const hygiene = rankRouteCandidates({
       entity: {},
