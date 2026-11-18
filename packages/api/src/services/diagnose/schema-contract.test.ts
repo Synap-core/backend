@@ -229,9 +229,7 @@ describe("summarizeSchemaContract", () => {
       ],
     });
     expect(section.status).toBe("attention");
-    expect(section.headline).toContain(
-      "1 live entit(ies) twinning a project"
-    );
+    expect(section.headline).toContain("1 live entit(ies) twinning a project");
     expect(section.detail).toMatchObject({
       projectTwinsTotal: 1,
       projectTwins: [{ entityId: "d4b84ad8" }],

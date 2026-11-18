@@ -60,9 +60,7 @@ function readEnd(
 export function parseRecallWindow(args: {
   since?: unknown;
   until?: unknown;
-}):
-  | { ok: true; window: RecallWindow | null }
-  | { ok: false; error: string } {
+}): { ok: true; window: RecallWindow | null } | { ok: false; error: string } {
   const since = readEnd("since", args.since);
   if (!since.ok) return since;
   const until = readEnd("until", args.until);
@@ -97,9 +95,10 @@ export function recallWindowWhere(
 }
 
 /** The window in the search index's unit (epoch SECONDS, `toTimestamp`). */
-export function recallWindowSeconds(
-  window: RecallWindow | null | undefined
-): { updatedSince?: number; updatedUntil?: number } {
+export function recallWindowSeconds(window: RecallWindow | null | undefined): {
+  updatedSince?: number;
+  updatedUntil?: number;
+} {
   if (!window) return {};
   return {
     ...(window.since
