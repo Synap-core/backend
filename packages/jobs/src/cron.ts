@@ -114,6 +114,10 @@ import {
   EXTERNAL_AGENT_POLL_QUEUE,
   EXTERNAL_AGENT_POLL_CRON,
 } from "./workers/external-agent-poll.js";
+import {
+  COMPUTE_LEASE_SWEEPER_QUEUE,
+  COMPUTE_LEASE_SWEEPER_CRON,
+} from "./workers/compute-lease-sweeper.js";
 import { FEDERATION_RECEIPT_CLEANUP_QUEUE } from "./workers/federation-receipt-cleanup.js";
 import {
   API_USAGE_RETENTION_CRON,
@@ -635,6 +639,17 @@ export async function registerCronSchedules(): Promise<void> {
     { singletonKey: "external-agent-poll", singletonSeconds: 120 }
   );
   logger.info("Registered cron: external-agent-poll (every 2min)");
+
+  // Compute lease sweeper (every 5 min, one at a time) — the api-side sweeper
+  // destroys each compute machine past its time to live (plan a640c5bb B3).
+  await scheduleSafe(
+    boss,
+    COMPUTE_LEASE_SWEEPER_QUEUE,
+    COMPUTE_LEASE_SWEEPER_CRON,
+    {},
+    { singletonKey: "compute-lease-sweeper", singletonSeconds: 300 }
+  );
+  logger.info("Registered cron: compute-lease-sweeper (every 5min)");
 
   // Memory decay (daily at 03:30 UTC — applies Ebbinghaus decay to knowledge_facts)
   await scheduleSafe(boss, "memory-decay", "30 3 * * *", {});

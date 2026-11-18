@@ -2573,6 +2573,7 @@ export const NEED_LABELS = {
   "social-publishing": "Social publishing",
   "linkedin-reach": "LinkedIn reach",
   analytics: "Analytics",
+  compute: "Compute",
 } as const;
 
 /** The need rows, exactly typed: the keys of the `need.*` catalog. */
@@ -2605,6 +2606,8 @@ export const INTENT_LABELS = {
   edit_video: "Edit a video",
   transcribe_media: "Transcribe media",
   download_media: "Download media",
+  provision_compute: "Start a cloud machine",
+  release_compute: "Stop a cloud machine",
 } as const;
 
 /** The intent rows, exactly typed: the keys of the `intent.*` catalog. */

@@ -614,6 +614,7 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "need.social-publishing": "Publication sur les réseaux",
   "need.linkedin-reach": "Prospection LinkedIn",
   "need.analytics": "Statistiques",
+  "need.compute": "Calcul",
   // ── Intents: `intent.<slug>` (an intent's short name, never the consent sentence) ──
   "intent.search_external": "Chercher dans des sources externes",
   "intent.find_people": "Trouver des personnes",
@@ -635,6 +636,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "intent.edit_video": "Monter une vidéo",
   "intent.transcribe_media": "Transcrire un média",
   "intent.download_media": "Télécharger un média",
+  "intent.provision_compute": "Démarrer une machine cloud",
+  "intent.release_compute": "Arrêter une machine cloud",
   // ── Needs-you counts: `needsYou.count.<kind>` (French counts 0 and 1 as
   // singular; `many` is a whole number of millions: "1000000 de décisions") ──
   "needsYou.count.decision":

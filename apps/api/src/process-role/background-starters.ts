@@ -707,6 +707,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/webhook-worker.js");
         const { registerExternalAgentPoller } =
           await import("@synap/jobs/workers/external-agent-poll.js");
+        const { registerComputeLeaseSweeper } =
+          await import("@synap/jobs/workers/compute-lease-sweeper.js");
         const { registerTightenRecommender } =
           await import("@synap/jobs/workers/governance-tighten-cron.js");
         const { registerPromptVersionRegressionScanner } =
@@ -883,6 +885,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         // Unfilled, the fan-out sends key-bound subscriptions nothing.
         registerKeyGrantAudience((s) => api.keyGrantReadsSubject(s));
         registerExternalAgentPoller(() => api.pollExternalAgentRuns());
+        // Compute leases: destroy each machine at its time to live.
+        registerComputeLeaseSweeper(() => api.releaseExpiredComputeLeases());
         // Learning loop: the tighten recommender (was verb-only) and the
         // prompt-version regression scan run on daily crons. Both slots
         // are fail-closed — unregistered, the job throws.

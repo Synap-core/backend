@@ -584,6 +584,9 @@ export {
 // The external-agent status poll (services/agent-dispatch) — apps/api fills
 // the @synap/jobs `registerExternalAgentPoller` slot with it at boot.
 export { pollExternalAgentRuns } from "./services/agent-dispatch/poll-external-agents.js";
+// The compute lease sweeper (services/compute) — apps/api fills the @synap/jobs
+// `registerComputeLeaseSweeper` slot with it at boot.
+export { releaseExpiredComputeLeases } from "./services/compute/release-expired-leases.js";
 export {
   runSessionRecap,
   type RunSessionRecapInput,

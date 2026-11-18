@@ -138,8 +138,8 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-      // 15: the container's computer blocks (capabilityComputerDrift).
-    ).toBe(15);
+      // 16: a compute verb's declared lifecycle (`metadata.compute`).
+    ).toBe(16);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -408,6 +408,33 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
           metering: { provider: "exa", unit: "search", costUsd: -1 },
         })
       ).toBeUndefined();
+    });
+
+    it("a compute-declaration-only difference is drift, and the projection installs it", () => {
+      // The sixth definition-owned key (v16). Without it in the projection a
+      // provision verb would install with no release verb and every start
+      // would be refused; without it in the comparator no installed pod would
+      // ever receive a declaration added to its template.
+      const compute = { releaseVerb: "hetzner_delete_server" };
+      const def = { name: "hetzner_create_server", metadata: { compute } };
+      const live = { name: "hetzner_create_server", metadata: {} };
+      expect(
+        capabilityDefinitionDrift([live], { skills: [def] }).drifted,
+        "a compute-only difference must be drift — if it is not, no installed pod ever receives the declaration"
+      ).toEqual(["hetzner_create_server"]);
+      expect(projectSkillMetadata(null, def.metadata)).toEqual({ compute });
+      const converged = projectSkillMetadata({ runCount: 3 }, def.metadata);
+      expect(
+        capabilityDefinitionDrift([{ ...live, metadata: converged }], {
+          skills: [def],
+        }).drifted,
+        "one apply converges it — no re-apply loop"
+      ).toEqual([]);
+      // A malformed declaration (an unknown mode, an empty one) is never persisted.
+      expect(
+        projectSkillMetadata(null, { compute: { modes: ["pause"] } })
+      ).toBeUndefined();
+      expect(projectSkillMetadata(null, { compute: {} })).toBeUndefined();
     });
 
     it("a box-declaration-only difference is drift, installed NORMALISED, and converges", () => {

@@ -77,6 +77,12 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v16 = v15 + `metadata.compute` (a compute verb's DECLARED lifecycle: the
+ *      release verb a `provision_compute` verb names, the modes a
+ *      `release_compute` verb serves — see `declaredCompute`). The run door
+ *      refuses a start whose verb declares no release verb, so a v15 stamp
+ *      over a container whose declaration never landed would leave its starts
+ *      refused forever; retiring v15 stamps makes each container re-diff once.
  * v15 = v14 + the container's COMPUTER BLOCKS (`metadata.computer`: placement,
  *      install, verify, uninstall, permissions, licence, services, recipes —
  *      see `capabilityComputerDrift`). Before it a catalog edit that only
@@ -156,7 +162,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 15;
+export const DRIFT_COMPARATOR_VERSION = 16;
 
 /**
  * Do the computer blocks a definition declares differ from the ones stored on
@@ -483,6 +489,44 @@ export function declaredMetering(
 }
 
 /**
+ * The compute lifecycle a verb DECLARES (plan a640c5bb B3; read by the run
+ * door, `services/compute/compute-contract.ts`), or `undefined` when it
+ * declares none or the declaration is malformed, the same contract as
+ * `declaredWriteBack`:
+ *
+ *   metadata.compute = { releaseVerb: "hetzner_delete_server" }   // provision_compute
+ *   metadata.compute = { modes: ["destroy"] }                     // release_compute
+ *
+ * A start whose verb names no release verb is refused (nothing could release
+ * it at its TTL); a release whose `mode` its verb does not serve is refused
+ * (a destroy verb must never run for a stop).
+ *
+ * No re-approval rule: it adds no egress and no auto-run; it narrows what the
+ * run door lets through.
+ */
+export const SKILL_METADATA_COMPUTE = "compute";
+
+const computeSchema = z
+  .object({
+    /** provision_compute: the release_compute verb run at the TTL (destroy). */
+    releaseVerb: z.string().min(1).optional(),
+    /** release_compute: the modes this verb serves. */
+    modes: z.array(z.enum(["stop", "destroy"])).min(1).optional(),
+  })
+  .refine((c) => c.releaseVerb !== undefined || c.modes !== undefined);
+
+export type DeclaredCompute = z.infer<typeof computeSchema>;
+
+export function declaredCompute(
+  metadata: Record<string, unknown> | null | undefined
+): DeclaredCompute | undefined {
+  const parsed = computeSchema.safeParse(
+    (metadata ?? {})[SKILL_METADATA_COMPUTE]
+  );
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
  * The egress allowlist a definition DECLARES, or `undefined` when it declares
  * none.
  *
@@ -556,7 +600,7 @@ export function declaredBox(
  *
  * Contract, pinned by `capability-drift.projection-parity.tripwire.test.ts`:
  * every key of the live bag is preserved byte-identically and ONLY the
- * definition-owned keys (`allowedHosts`, `readOnly`, `writeBack`, `metering`, `box`)
+ * definition-owned keys (`allowedHosts`, `readOnly`, `writeBack`, `metering`, `box`, `compute`)
  * are ever written. That is what lets `PROJECTED_SKILL_FIELDS` carry a `metadata` entry
  * that reads just those keys without the stamp overclaiming: the marker asserts
  * exactly what the comparator checked.
@@ -589,12 +633,14 @@ function declaredMetadataKeys(
   const writeBack = declaredWriteBack(metadata);
   const metering = declaredMetering(metadata);
   const box = declaredBox(metadata);
+  const compute = declaredCompute(metadata);
   if (
     hosts === undefined &&
     readOnly === undefined &&
     writeBack === undefined &&
     metering === undefined &&
-    box === undefined
+    box === undefined &&
+    compute === undefined
   ) {
     return undefined;
   }
@@ -606,6 +652,7 @@ function declaredMetadataKeys(
       : {}),
     ...(metering !== undefined ? { [SKILL_METADATA_METERING]: metering } : {}),
     ...(box !== undefined ? { [SKILL_METADATA_BOX]: box } : {}),
+    ...(compute !== undefined ? { [SKILL_METADATA_COMPUTE]: compute } : {}),
   };
 }
 

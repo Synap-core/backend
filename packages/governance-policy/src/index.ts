@@ -353,6 +353,16 @@ export const LINKEDIN_INVITATIONS_DAILY_LIMIT = 20;
 export const LINKEDIN_ACTIONS_DAILY_LIMIT = 50;
 
 /**
+ * The spend maximums (`maxSpendCents`) of the compute an agent may start in
+ * one UTC day, summed, before a start that would run is proposed instead
+ * (0430, `COMPUTE_SPEND_CEILING` in @synap/capability-gate). The default of
+ * the `compute_spend_daily_cents` axis: `null`, NO limit (founder, 18 Nov
+ * 2026: opt-in per pod, like the daily-write limit). Every start carries its
+ * own required maximum whatever this says.
+ */
+export const DEFAULT_COMPUTE_SPEND_DAILY_CEILING_CENTS: number | null = null;
+
+/**
  * THE CAPS FOLD (agent routing W1c, 0330): the fallback value of every
  * `governance_ceilings` axis, in ONE table. A stored row overrides it for its
  * (subject, principal, scope); `resolveCeiling` (@synap/database) is the one
@@ -372,6 +382,8 @@ export const CEILING_DEFAULTS = {
   worker_irreversible_sends_daily: WORKER_IRREVERSIBLE_DAILY_CEILING,
   linkedin_invitations_daily: LINKEDIN_INVITATIONS_DAILY_LIMIT,
   linkedin_actions_daily: LINKEDIN_ACTIONS_DAILY_LIMIT,
+  /** No ceiling by default: opt-in per pod (a stored row). */
+  compute_spend_daily_cents: DEFAULT_COMPUTE_SPEND_DAILY_CEILING_CENTS,
 } as const;
 
 /**

@@ -34,7 +34,10 @@ import { isKnownIntent } from "../capability-intents/index.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 // src/needs → src → types → packages → synap-backend
 const MIGRATIONS_DIR = join(HERE, "../../../../packages/database/migrations");
-const MIGRATIONS = [join(MIGRATIONS_DIR, "0426_needs.sql")];
+const MIGRATIONS = [
+  join(MIGRATIONS_DIR, "0426_needs.sql"),
+  join(MIGRATIONS_DIR, "0431_compute_need_and_leases.sql"),
+];
 const haveMigrations = MIGRATIONS.every((m) => existsSync(m));
 
 interface SeededNeed {

@@ -40,15 +40,25 @@
 import {
   getDb,
   eq,
+  and,
+  gte,
+  ne,
+  drizzleSql,
   findCapabilityGrant,
   getRequestGrant,
 } from "@synap/database";
 import {
+  resolveCeiling,
   resolveGovernanceRule,
   resolveOriginTrust,
   type GovernanceRuleMatch,
 } from "@synap/database/agent-governance";
-import { tools, skills, capabilityIntents } from "@synap/database/schema";
+import {
+  tools,
+  skills,
+  capabilityIntents,
+  computeLeases,
+} from "@synap/database/schema";
 import {
   capabilityVerbAllowsRuleWiden,
   decideAgentPolicy,
@@ -179,6 +189,15 @@ export interface GateCapabilityExecutionInput {
    * what the listed action promises (`governance: "propose"`). Tighten-only.
    */
   intentRun?: boolean;
+  /**
+   * The spend maximum (`maxSpendCents`) of a COMPUTE START (a
+   * `provision_compute` verb), set server-side by the run door from the
+   * checked parameters; absent for every other run. An agent's start that
+   * would run is proposed instead when it takes the day's started maximums
+   * past the `compute_spend_daily_cents` ceiling (0430; opt-in, no limit by
+   * default): COMPUTE_SPEND_CEILING. Tighten-only.
+   */
+  computeSpendCents?: number | null;
 }
 
 /** The proposal target/type a `propose` verdict materializes against. */
@@ -293,6 +312,68 @@ export function approvalRefusesRun(row: {
 }
 
 export async function gateCapabilityExecution(
+  input: GateCapabilityExecutionInput
+): Promise<GateCapabilityDecision> {
+  const decision = await decideCapabilityExecution(input);
+  // ── COMPUTE SPEND CEILING (0430, founder 18 Nov 2026) — an agent's compute
+  //    start that would RUN (an auto grant, an auto rule) is proposed instead
+  //    when the day's started maximums plus this one pass the ceiling. Last,
+  //    so it only ever turns a `run` into a review: tighten-only, like every
+  //    axis. A person's own start is theirs to make.
+  if (
+    decision.decision === "run" &&
+    input.agentUserId &&
+    typeof input.computeSpendCents === "number" &&
+    (await computeSpendPassesCeiling(input, input.computeSpendCents))
+  ) {
+    return buildProposeDecision(input, COMPUTE_SPEND_CEILING);
+  }
+  return decision;
+}
+
+/** `proposals.governance_reason` of a start the compute spend ceiling proposed. */
+export const COMPUTE_SPEND_CEILING = "COMPUTE_SPEND_CEILING";
+
+/** Start of the current UTC day. */
+function startOfUtcDay(now: Date): Date {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  );
+}
+
+/**
+ * Would this start take the day's compute past the ceiling? The day's
+ * started maximums (`compute_leases.max_spend_cents`, every start since UTC
+ * midnight that did not fail to start) plus this one, against the resolved
+ * `compute_spend_daily_cents` (null = no limit: never).
+ */
+async function computeSpendPassesCeiling(
+  input: GateCapabilityExecutionInput,
+  spendCents: number
+): Promise<boolean> {
+  const db = await getDb();
+  const ceiling = await resolveCeiling({
+    db,
+    axis: "compute_spend_daily_cents",
+    agentUserId: input.agentUserId ?? null,
+    workspaceId: input.workspaceId ?? null,
+  });
+  if (ceiling.value === null) return false;
+  const [row] = await db
+    .select({
+      total: drizzleSql<number>`coalesce(sum(${computeLeases.maxSpendCents}), 0)::int`,
+    })
+    .from(computeLeases)
+    .where(
+      and(
+        gte(computeLeases.createdAt, startOfUtcDay(new Date())),
+        ne(computeLeases.state, "not_started")
+      )
+    );
+  return Number(row?.total ?? 0) + spendCents > ceiling.value;
+}
+
+async function decideCapabilityExecution(
   input: GateCapabilityExecutionInput
 ): Promise<GateCapabilityDecision> {
   // ── (a) load approval-state + owner ─────────────────────────────────────────

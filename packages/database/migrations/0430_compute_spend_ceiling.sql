@@ -1,0 +1,16 @@
+-- 0430 — the compute spend ceiling (plan a640c5bb B3, founder decision of
+-- 18 Nov 2026: opt-in per pod, like the daily-write limit).
+--
+-- One new `governance_ceilings` axis, read through `resolveCeiling`:
+--   compute_spend_daily_cents  the spend maximums of the compute started in
+--                              one UTC day, summed (`compute_leases`, 0431).
+-- Its default is NULL in `CEILING_DEFAULTS` (@synap/governance-policy): no
+-- limit until a row sets one. Over it, an agent's start that would run (an
+-- auto grant or an auto rule) files a proposal instead (`COMPUTE_SPEND_CEILING`,
+-- @synap/capability-gate): tighten-only, like every axis. The per-start
+-- maximum (`maxSpendCents`) is required whatever this axis says.
+--
+-- TRANSACTION NOTE: as 0330 and 0427 — `ALTER TYPE … ADD VALUE` is legal
+-- inside the migration transaction on Postgres 12+ when the value is not used
+-- in it.
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'compute_spend_daily_cents';

@@ -2114,6 +2114,18 @@ export const skillsRouter = router({
         });
       }
 
+      // COMPUTE (plan a640c5bb B3): a compute start leaves a lease and a
+      // release closes one, in the capability runner only; this door runs
+      // the skill's code alone, so it would start a machine nothing releases.
+      const { readComputeRun } =
+        await import("../services/compute/compute-contract.js");
+      if (readComputeRun(skill, input.input).kind !== "none") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `"${skill.name}" starts or releases compute: run it as a capability (run_capability), which records its time to live.`,
+        });
+      }
+
       // POD FILES (plan e7c3c98e): the files this run names must be ones the
       // person can read, before anything is proposed or run.
       const podFiles = await checkPodFilesAtAsk(skill, input.input, userId);

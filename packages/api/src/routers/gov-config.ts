@@ -36,7 +36,14 @@ const setInput = z.object({
   targetPattern: z.string().optional(),
   targetProfile: z.string().nullish(),
   verdict: z.enum(["auto", "propose"]).optional(),
-  axis: z.enum(["daily_write_count", "pending_proposal_cap"]).optional(),
+  axis: z
+    .enum([
+      "daily_write_count",
+      "pending_proposal_cap",
+      // 0430: the day's compute spend maximums (opt-in per pod).
+      "compute_spend_daily_cents",
+    ])
+    .optional(),
   limitValue: z.number().optional(),
   configScopeKind: z.string().optional(),
   scopeRef: z.string().nullish(),
