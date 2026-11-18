@@ -134,6 +134,7 @@ const REFUSE_TRIGGER = new RegExp(
   `${resolveActionLabel("reject", "imperative")}…`
 );
 const NEVER = new RegExp(alwaysEn["never.trigger"].replace("…", ""));
+const ALWAYS = new RegExp(alwaysEn["always.trigger"].replace("…", ""));
 
 const AGENT = "55555555-5555-4555-8555-555555555555";
 const ID = "11111111-1111-4111-8111-111111111111";
@@ -242,7 +243,7 @@ describe("in French", () => {
     state.proposal = request("pending");
     const html = render();
     // The rule menu is Approve's chevron, named in French.
-    expect(html).toContain('aria-label="Approuver et toujours autoriser…"');
+    expect(html).toContain('aria-label="Toujours approuver…"');
     expect(text(html)).not.toMatch(/\bApprove\b|\bReject\b|\bRefuse\b/);
     for (const [, name] of html.matchAll(/aria-label="([^"]*)"/g))
       expect(name).not.toMatch(/\bApprove\b|\bReject\b|\bRefuse\b/);
@@ -261,12 +262,7 @@ describe("one pending state for the whole bar", () => {
   it("nothing is held while nothing is deciding", () => {
     state.proposal = request("pending");
     const html = render();
-    for (const label of [
-      /Approve$/,
-      REFUSE_TRIGGER,
-      /Approve and always allow/,
-      NEVER,
-    ]) {
+    for (const label of [/Approve$/, REFUSE_TRIGGER, ALWAYS, NEVER]) {
       expect(held(html, label), String(label)).toBe(false);
     }
   });
@@ -277,12 +273,7 @@ describe("one pending state for the whole bar", () => {
       state[which] = true;
       state.proposal = request("pending");
       const html = render();
-      for (const label of [
-        /Approve/,
-        REFUSE_TRIGGER,
-        /Approve and always allow/,
-        NEVER,
-      ]) {
+      for (const label of [/Approve/, REFUSE_TRIGGER, ALWAYS, NEVER]) {
         expect(held(html, label), String(label)).toBe(true);
       }
     }

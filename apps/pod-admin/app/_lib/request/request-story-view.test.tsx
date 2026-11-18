@@ -2,10 +2,11 @@
  * The story's FRAME, rendered (react-dom/server; pod-admin's vitest runs in
  * node): one item per line, [when | rail mark | what]. Past lines sit on a
  * solid rail into Now; from Now on the rail is dashed (`rq-rail-next`). A
- * time is printed only when it changes from the line above. While the
- * context is read, its rows wait (`rq-mark-wait`); a failed read is its own
- * row (`rq-mark-unread`) with Try again; older steps fold into one first
- * row, a door to the whole story.
+ * time is printed only when it changes from the line above; older steps fold
+ * into one first row, a door to the whole story. The rail is drawn only once
+ * the read answered and the story has one (`story.rail`): flat by default
+ * (founder, 18 Nov 2026), so a read in flight draws the card alone, and a
+ * failed read is one quiet line with Try again under Now.
  */
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -134,31 +135,6 @@ describe("the story's frame", () => {
     expect(list[0]!.html).not.toContain("data-story-event");
   });
 
-  it("while the context is read, its rows wait (the wait mark), said to a screen reader", () => {
-    const html = render(null, { status: "loading" });
-    const list = items(html);
-    const loading = list.filter((i) => i.node === "past");
-    expect(loading).toHaveLength(2);
-    expect(loading.every((i) => i.mark === "wait")).toBe(true);
-    expect(html).toContain(REQUEST_EN["story.loading"]);
-    // Never the failed read's mark while it is only in flight.
-    expect(html).not.toContain("rq-mark-unread");
-  });
-
-  it("a failed read is its own row (the unread mark) with Try again; Now and the bar stay", () => {
-    const html = render(null, { status: "error", retry: () => {} });
-    const failed = items(html).find((i) =>
-      i.html.includes('data-story-unreadable="all"')
-    );
-    expect(failed?.mark).toBe("unread");
-    expect(text(failed!.html)).toContain(REQUEST_EN["story.failed"]);
-    expect(failed!.html).toMatch(/<button[^>]*>[\s\S]*Try again<\/button>/);
-    expect(html).toContain("data-decided");
-    expect(html).toContain("data-footer");
-    // A failed read is never told as "nothing else waits".
-    expect(html).not.toContain(REQUEST_EN["story.nothingAfter"]);
-  });
-
   it("the head is ONE row of chips before the timeline: agent, session, age; the bar after it", () => {
     const html = render(STORY, { status: "ok" });
     const head = html.indexOf("data-story-head");
@@ -220,9 +196,68 @@ describe("the story drawn flat", () => {
     expect(text(head)).toContain("Approval failed · 8h ago");
     expect(text(html).split("Approval failed").length - 1).toBe(1);
   });
+});
 
-  it("while the read is in flight the rail holds its place (never flat on a guess)", () => {
-    const html = render(FLAT, { status: "loading" });
+// Founder, 18 Nov 2026: "instead of by default showing the timeline we show
+// the card only, then it shows the timeline when it finds some".
+describe("flat by default: the rail only once the read found one", () => {
+  const flatCard = (html: string) => {
+    expect(html).toContain("data-story-flat");
+    expect(html).not.toContain("<ol");
+    expect(html).not.toContain("data-request-story");
+    expect(html).not.toMatch(/rq-rail-|rq-mark-/);
+    expect(html).toContain("data-decided");
+    expect(html).toContain("data-footer");
+  };
+
+  it("while the read is in flight: the card alone, no placeholder rail, no loading line", () => {
+    for (const story of [null, STORY]) {
+      const html = render(story, { status: "loading" });
+      flatCard(html);
+      expect(html).not.toContain("animate-pulse");
+      expect(text(html)).not.toMatch(/Reading what led here/);
+      expect(html).not.toContain('data-story-unreadable="all"');
+    }
+  });
+
+  it("a failed read: flat, one quiet line with Try again under Now, never a rail", () => {
+    const html = render(null, { status: "error", retry: () => {} });
+    flatCard(html);
+    const now = html.slice(html.indexOf("data-story-flat"));
+    const line = now.slice(now.indexOf('data-story-unreadable="all"'));
+    expect(now).toContain('data-story-unreadable="all"');
+    expect(text(line)).toContain(REQUEST_EN["story.failed"]);
+    expect(line).toMatch(/<button[^>]*>[\s\S]*Try again<\/button>/);
+    // Under the decision, before the bar; said once.
+    expect(html.indexOf("data-decided")).toBeLessThan(
+      html.indexOf('data-story-unreadable="all"')
+    );
+    expect(html.indexOf('data-story-unreadable="all"')).toBeLessThan(
+      html.indexOf("data-footer")
+    );
+    expect(text(html).split(REQUEST_EN["story.failed"]).length - 1).toBe(1);
+    // A failed read is never told as "nothing else waits".
+    expect(html).not.toContain(REQUEST_EN["story.nothingAfter"]);
+  });
+
+  it("nothing to read, or a read with no rail: flat", () => {
+    flatCard(render(null, { status: "off" }));
+    flatCard(render(null, { status: "ok" }));
+    flatCard(
+      render({ ...STORY, rail: false } as RequestStory, { status: "off" })
+    );
+    flatCard(
+      render({ ...STORY, rail: false } as RequestStory, { status: "ok" })
+    );
+  });
+
+  it("the rail only when the read answered AND the story has one", () => {
+    const html = render(STORY, { status: "ok" });
     expect(html).toContain("<ol");
+    expect(html).toContain("data-request-story");
+    expect(html).not.toContain("data-story-flat");
+    // The same story while still read, or under a dead read, stays flat.
+    flatCard(render(STORY, { status: "off" }));
+    flatCard(render(STORY, { status: "error", retry: () => {} }));
   });
 });

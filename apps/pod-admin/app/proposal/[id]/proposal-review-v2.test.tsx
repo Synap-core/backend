@@ -18,6 +18,7 @@
  * `routers/proposals/changes.ts` built it BEFORE it stripped
  * `resolvedWorkspaceId`, so an older pod's row is covered too), invented names.
  */
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -152,6 +153,7 @@ import { en as REQUEST_EN } from "../../_lib/request/copy";
 /** A proposal's one trigger, reject (the vocabulary door's verb), and the rule menu's. */
 const REFUSE = `${resolveActionLabel("reject", "imperative")}…`;
 const NEVER = alwaysEn["never.trigger"];
+const ALWAYS = alwaysEn["always.trigger"];
 
 const TWIN = {
   ref: "record",
@@ -404,7 +406,7 @@ describe("Refuse and never allow", () => {
   it("stays beside a change that acts on its own: never narrows", () => {
     state.proposal = skillUpdate();
     const seen = named(render());
-    expect(seen).not.toContain("Approve and always allow");
+    expect(seen).not.toContain(ALWAYS);
     expect(seen).toContain(NEVER);
   });
 
@@ -414,7 +416,7 @@ describe("Refuse and never allow", () => {
     const seen = named(render());
     expect(seen).toContain(REFUSE);
     expect(seen).not.toContain(NEVER);
-    expect(seen).not.toContain("Approve and always allow");
+    expect(seen).not.toContain(ALWAYS);
   });
 });
 
@@ -600,14 +602,14 @@ describe("a skill rewrite (acts on its own)", () => {
     expect(seen).toMatch(/\bcaption\b/);
   });
 
-  it("offers Approve, never 'Approve and always allow…' beside it", () => {
+  it("offers Approve, never 'Always approve…' beside it", () => {
     state.proposal = skillUpdate();
     const seen = named(render());
     expect(presses.has("Approve")).toBe(true);
-    expect(seen).not.toContain("Approve and always allow");
+    expect(seen).not.toContain(ALWAYS);
     // A plain change keeps the split.
     state.proposal = personCreate(null);
-    expect(named(render())).toContain("Approve and always allow");
+    expect(named(render())).toContain(ALWAYS);
   });
 });
 
@@ -617,7 +619,7 @@ describe("a proposal whose moment passed", () => {
     const seen = named(render());
     expect(seen).toContain("Expired");
     expect(presses.has("Approve")).toBe(false);
-    expect(seen).not.toContain("Approve and always allow");
+    expect(seen).not.toContain(ALWAYS);
   });
 
   it("inside its lifetime it is still a decision", () => {
@@ -906,6 +908,64 @@ describe("the decision bar on a phone: one row of verbs, nothing else", () => {
     expect(row).toContain(">Approve<");
     expect(row).toContain(REFUSE);
     expect(row).not.toContain("data-rule-menu");
+  });
+
+  it("a wide bar keeps the full row: the labelled 'always' and 'never' follow the verbs, and the bar's width picks the form", () => {
+    state.proposal = personCreate(null);
+    const html = render();
+    const row = rowOf(html);
+    const buttons = row.split("<button").slice(1);
+    const labelled = buttons.filter((b) =>
+      b.includes('data-rule-trigger="labelled"')
+    );
+    const chevrons = buttons.filter((b) =>
+      b.includes('data-rule-trigger="chevron"')
+    );
+    // Desktop (founder, 18 Nov 2026): [Approve] [Reject…] [always ▾] [never ▾],
+    // each rule trigger named by its own words, after the two verbs.
+    expect(labelled).toHaveLength(2);
+    expect(labelled[0]).toContain(`>${alwaysEn["always.trigger"]}<`);
+    expect(labelled[1]).toContain(`>${NEVER}<`);
+    expect(row.indexOf('data-rule-trigger="labelled"')).toBeGreaterThan(
+      row.indexOf(REFUSE)
+    );
+    for (const b of labelled) expect(b).toContain("rq-full-only");
+    // The phone's chevrons are the same two menus, shown in the other form.
+    expect(chevrons).toHaveLength(2);
+    for (const b of chevrons) expect(b).toContain("rq-split-only");
+    // The row sits in the container whose width decides, and that width is a
+    // real rule: below it the chevrons, from it the labelled four.
+    expect(html).toContain('<div class="rq-verbs"><div data-decision-verbs=""');
+    const css = readFileSync(
+      new URL("../../globals.css", import.meta.url),
+      "utf8"
+    );
+    expect(css).toMatch(/\.rq-verbs \{\s*container-type: inline-size;/);
+    expect(css).toMatch(
+      /\.rq-verbs \.rq-full-only,\s*\.rq-verbs svg\.rq-lead \{\s*display: none;/
+    );
+    const wide = [
+      ...css.matchAll(/@container \(min-width: (\d+)px\) \{([\s\S]*?)\n\}/g),
+    ].filter((m) => m[2].includes(".rq-verbs"));
+    expect(wide, "one width rule for the verbs").toHaveLength(1);
+    // The four measured 600 px in one row (Geist, en): the rule starts where
+    // they fit, and at or under the /proposal card's 616 px bar, so the
+    // desktop page shows them (founder, 18 Nov 2026).
+    expect(Number(wide[0][1])).toBeGreaterThanOrEqual(600);
+    expect(Number(wide[0][1])).toBeLessThanOrEqual(616);
+    expect(wide[0][2]).toMatch(
+      /\.rq-verbs \.rq-split-only \{\s*display: none;/
+    );
+    expect(wide[0][2]).toMatch(
+      /\.rq-verbs \.rq-full-only \{\s*display: inline-flex;/
+    );
+  });
+
+  it("a change that acts on its own: no 'always' in either form, 'never' in both", () => {
+    state.proposal = skillUpdate();
+    const row = rowOf(render());
+    expect(row).not.toContain('data-rule-menu="always"');
+    expect(row.match(/data-rule-menu="never"/g)).toHaveLength(2);
   });
 
   it("the bar says no sentence: no consequence line, no 'You decide as', no audit line", () => {

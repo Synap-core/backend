@@ -660,50 +660,70 @@ function DecisionButtons({
   // "Never" narrows, so it stays beside a change that acts on its own.
   const mayNever = mayRule && mode.kind === "plain";
 
-  /* ONE row at every width (founder, 17 Nov 2026, on a phone): Approve and
-     Reject as split buttons; each chevron opens its rule menu. Without a
-     menu the verb is a plain button. On a phone the verbs drop their glyph
-     and take a narrower padding, or the two groups (two 44 px chevrons)
-     wrap onto two lines at 390 px; the words carry the meaning. */
+  /* ONE row at every width. In a narrow bar (a phone, founder 17 Nov 2026)
+     Approve and Reject are split buttons, each chevron opening its rule
+     menu, and the verbs drop their glyph or the two groups wrap at 390 px.
+     In a wide bar (desktop, founder 18 Nov 2026: "keep the full row with
+     approve always & reject always") the four are labelled buttons, as
+     before. Both forms are rendered; the BAR's width picks one (`.rq-verbs`
+     in globals.css: a container query, so the docked panel follows its own
+     width, not the window's). Without a menu the verb is a plain button. */
+  const ruleProps = {
+    proposal: p,
+    disabled: busy,
+    onRunningChange: setRuleRunning,
+    onDone: onDecided,
+  };
   return (
     <div className="flex flex-col gap-1.5">
-      <div data-decision-verbs="" className="flex flex-wrap items-center gap-2">
-        <ButtonGroup>
-          <Button
-            color="success"
-            className="min-h-11 px-3 sm:px-4"
-            startContent={<Check size={16} className="hidden sm:block" />}
-            isLoading={decision.approving}
-            isDisabled={busy || waiting || setupBlock !== null}
-            aria-describedby={setupBlock ? "review-setup-block" : undefined}
-            onPress={() =>
-              approvePressAct(undo) === "confirm"
-                ? setConfirming(true)
-                : decision.approve(choice)
-            }
-          >
-            {verb}
-          </Button>
+      <div className="rq-verbs">
+        <div
+          data-decision-verbs=""
+          className="flex flex-wrap items-center gap-2"
+        >
+          <ButtonGroup>
+            <Button
+              color="success"
+              className="min-h-11 px-3 sm:px-4"
+              startContent={
+                <Check size={16} className="rq-lead hidden sm:block" />
+              }
+              isLoading={decision.approving}
+              isDisabled={busy || waiting || setupBlock !== null}
+              aria-describedby={setupBlock ? "review-setup-block" : undefined}
+              onPress={() =>
+                approvePressAct(undo) === "confirm"
+                  ? setConfirming(true)
+                  : decision.approve(choice)
+              }
+            >
+              {verb}
+            </Button>
+            {mayAlways ? (
+              <AlwaysApproveMenu {...ruleProps} className="rq-split-only" />
+            ) : null}
+          </ButtonGroup>
+          <ButtonGroup>
+            {rejectButton}
+            {mayNever ? (
+              <RejectNeverMenu {...ruleProps} className="rq-split-only" />
+            ) : null}
+          </ButtonGroup>
           {mayAlways ? (
             <AlwaysApproveMenu
-              proposal={p}
-              disabled={busy}
-              onRunningChange={setRuleRunning}
-              onDone={onDecided}
+              {...ruleProps}
+              trigger="labelled"
+              className="rq-full-only"
             />
           ) : null}
-        </ButtonGroup>
-        <ButtonGroup>
-          {rejectButton}
           {mayNever ? (
             <RejectNeverMenu
-              proposal={p}
-              disabled={busy}
-              onRunningChange={setRuleRunning}
-              onDone={onDecided}
+              {...ruleProps}
+              trigger="labelled"
+              className="rq-full-only"
             />
           ) : null}
-        </ButtonGroup>
+        </div>
       </div>
       {waiting && (
         <span className="text-[12px] text-foreground/70">
