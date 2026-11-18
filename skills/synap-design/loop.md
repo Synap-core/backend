@@ -107,7 +107,8 @@ Find before you create: `synap_find` for an existing `ui-design` on the same `ta
   screen does; the critique judges against it), `design-json`, `components-used` (the distinct `type`
   values, derived from the JSON, recursive across every frame of a canvas, never typed by hand),
   `schema-version` (`3`), `motion`,
-  `current-story-id` (the story of the screen as it is today, when it exists), `design-notes`.
+  `current-story-id` (the story of the screen as it is today, when it exists), `frame-stories` (the
+  built stories per frame of a multi-frame design, see section 5), `design-notes`.
 - **Three variants by default.** One request is three designs: the request plus two siblings, sharing
   one `variant-group`, `target-surface`, `design-scope` and `design-goal`. Make them genuinely
   different answers (structure, density, order), not three colourings. Link each sibling to the
@@ -155,16 +156,21 @@ finding. Write the list into each variant's `critique`.
 - Build only those components, in the order of `content[]` and its slots (for a canvas, one screen per
   frame: each frame's `page` is that screen's design), with tokens only and the
   named motion presets. The design gives layout, not data wiring: data still flows through the layers.
-- Give the design a story and record its id in `implemented-story-id` (the entity holds one). For a
-  multi-frame design, record each screen's story id in `design-notes`. Never edit `design-json` to
-  match what you built; revise as a new draft instead.
+- Record the built stories on the design. A single-frame design records its story id in
+  `implemented-story-id`. A design with several frames records a map in `frame-stories`,
+  `{ "<frameId>": ["<storyId>", ...] }`: every frame id of `design-json` is a key, and one frame may
+  serve several stories (its states), so a story is never guessed from a frame's name. Leave
+  `implemented-story-id` empty for a multi-frame design; existing designs are not migrated, so a
+  reader uses `implemented-story-id` when the map is empty. Never edit `design-json` to match what
+  you built; revise as a new draft instead.
 
 ## 6. Verify against the design
 
 - Run the gates yourself and quote them: type-check, story tests (render, interaction, axe), visual
   regression when a primitive changed (a moved pixel is a finding first, never a baseline update),
   the token, hex and motion guards.
-- **Compare Today, Design and Built.** Capture the built story and, when set, the `current-story-id`
+- **Compare Today, Design and Built.** Capture each built story (`implemented-story-id`, or every
+  story in `frame-stories`, compared frame by frame) and, when set, the `current-story-id`
   (today) with `pnpm --filter @synap-core/storybook capture`, the one capture door; render the design on
   the canvas; list every difference. Then run the Checked tier on the built story.
 - Walk the screen in the running app with screenshots: WORKS, BROKEN or CANNOT-TELL.
