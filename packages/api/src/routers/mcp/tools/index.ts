@@ -3569,14 +3569,13 @@ export const tools = {
               enum: ["lean", "full"],
               default: "lean",
               description:
-                "'lean' (default) = id, title, status, kind, trackId, projectId, workspaceId, updatedAt per row. 'full' = every column (goal, criteria, stages, metadata…): large, use `synap_get_session` for one session instead.",
+                "'lean' (default) = id, title, status, kind, trackId, projectId, workspaceId, updatedAt per row. 'full' = every column (large): prefer `fields`, or `synap_get_session` for one session.",
             },
             fields: {
               type: "array",
               items: { type: "string" },
-              maxItems: 20,
               description:
-                "Lean only: extra columns to add WHOLE to every row (e.g. ['currentStage','stages','expectedOutputs','closedAt'] to compare a playbook's runs) — far smaller than detail:'full'. A name no row carries is listed in `unknownFields`.",
+                "Lean only: columns added whole to each row, e.g. ['currentStage','stages']. Names no row has: `unknownFields`.",
             },
             playbookId: {
               type: "string",
