@@ -819,6 +819,17 @@ export interface ContinuationPacket {
    * the inbound twin of `blockedBy`: closing this session releases them.
    */
   unblocks: PacketSection<PacketChildItem>;
+  /**
+   * The orchestrator coordinating this session
+   * (`this --orchestrated_by--> orchestrator`, `start-orchestrator.ts`): it
+   * holds this session until the person approves its merged plan.
+   */
+  orchestratedBy: PacketSection<PacketChildItem>;
+  /**
+   * The sessions this orchestrator coordinates
+   * (`other --orchestrated_by--> this`), open first: the inbound twin.
+   */
+  orchestrates: PacketSection<PacketChildItem>;
   /** Capture clarification questions still open in this session's room, oldest first. */
   openQuestions: PacketSection<PacketQuestionItem>;
   /**
@@ -1320,7 +1331,7 @@ async function readInboundSessions(
   database: typeof db,
   reader: SessionReader,
   sessionId: string,
-  linkType: "spawned_from" | "blocked_by"
+  linkType: "spawned_from" | "blocked_by" | "orchestrated_by"
 ): Promise<PacketSection<PacketChildItem>> {
   const join = eq(drizzleSql`${focusSessions.id}::text`, links.fromId);
   const where = and(
@@ -1380,7 +1391,7 @@ async function readOutboundSessions(
   database: typeof db,
   reader: SessionReader,
   sessionId: string,
-  linkType: "spawned_from" | "blocked_by"
+  linkType: "spawned_from" | "blocked_by" | "orchestrated_by"
 ): Promise<PacketSection<PacketChildItem>> {
   const join = eq(drizzleSql`${focusSessions.id}::text`, links.toId);
   const where = and(
@@ -3123,6 +3134,8 @@ export async function projectContinuationPacket(
     parentRow,
     blockedBy,
     unblocks,
+    orchestratedBy,
+    orchestrates,
     openQuestions,
     openRoomQuestions,
     alreadyDone,
@@ -3200,6 +3213,20 @@ export async function projectContinuationPacket(
         row.id,
         "unblocks",
         "The sessions waiting on this one could not be read."
+      )
+    ),
+    readOutboundSessions(database, reader, row.id, "orchestrated_by").catch(
+      unavailable(
+        row.id,
+        "orchestratedBy",
+        "The orchestrator coordinating this session could not be read."
+      )
+    ),
+    readInboundSessions(database, reader, row.id, "orchestrated_by").catch(
+      unavailable(
+        row.id,
+        "orchestrates",
+        "The sessions this orchestrator coordinates could not be read."
       )
     ),
     readOpenQuestions(database, row).catch(
@@ -3510,6 +3537,8 @@ export async function projectContinuationPacket(
     resume,
     blockedBy,
     unblocks,
+    orchestratedBy,
+    orchestrates,
     openQuestions,
     openRoomQuestions,
     priorStages,

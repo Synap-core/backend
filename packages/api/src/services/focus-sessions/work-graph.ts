@@ -18,7 +18,8 @@
  *     `attachSessionHolder` + `withViewerRole` — exactly what
  *     `focusSessions.list({ nextMove })` returns for the same row.
  *   - WHICH edges: the list's attach helpers — `attachSessionEdges`
- *     (declared `blocked_by`), `attachSessionOutputDependencies` (derived
+ *     (declared `blocked_by`), `attachSessionOrchestration` (declared
+ *     `orchestrated_by`), `attachSessionOutputDependencies` (derived
  *     waits on an output), `attachSessionInteractions` (derived `triggered` /
  *     `updated`) — plus lineage (`spawned_from`) from `projectSessionRows`.
  *     Flattened to one list; nothing is derived here.
@@ -50,7 +51,11 @@
  * parts that read past the grant (next move, interactions, waits on an
  * output, PR facts, goals; holder and liveness without `agent.read`) are
  * withheld: a section `unavailable` with `WORK_GRAPH_WITHHELD_REASON`, a node
- * move `unknown`, never an empty answer.
+ * move `unknown`, never an empty answer. An edge is drawn only when the key
+ * reads BOTH ends (`orchestrated_by` included), and a node's
+ * `parentSessionId` is kept only when that parent is a node too: a parent
+ * the key does not hold reads `null`, so its id never leaks (a far end's
+ * parent is never fetched, one hop, so it reads `null` as well).
  *
  * ── ONE GOAL OR ONE WAVE ────────────────────────────────────────────────────
  * `focus` narrows the WINDOW (design rule 8: graph one goal or wave, list the
@@ -109,6 +114,7 @@ import {
   queryUserSessions,
 } from "./session-list-rows.js";
 import { attachSessionEdges } from "./session-blocked-by.js";
+import { attachSessionOrchestration } from "./session-orchestration.js";
 import { attachSessionOutputDependencies } from "./session-output-edges.js";
 import {
   attachSessionInteractions,
@@ -156,6 +162,9 @@ export type { WorkGraphGoal, WorkGraphHold, WorkGraphPullRequest };
  *                       same edge IS the blocker's "unblocks": one edge, read
  *                       from either end, never listed twice.
  *   - `spawned_from`    from = the child, to = the parent.
+ *   - `orchestrated_by` from = the coordinated session, to = its orchestrator
+ *                       (`start-orchestrator.ts`): the orchestrator holds it
+ *                       until the person approves the merged plan.
  *   - `waits_on_output` from = the session taking the output as input, to = the
  *                       open session producing it; `entityId` = the output.
  *   - `triggered`       from = the session whose write fired the run, to = the run.
@@ -165,11 +174,16 @@ export type { WorkGraphGoal, WorkGraphHold, WorkGraphPullRequest };
 export const WORK_GRAPH_EDGE_KINDS = [
   "blocked_by",
   "spawned_from",
+  "orchestrated_by",
   "waits_on_output",
   "triggered",
   "updated",
 ] as const satisfies ReadonlyArray<
-  "blocked_by" | "spawned_from" | "waits_on_output" | SessionInteractionType
+  | "blocked_by"
+  | "spawned_from"
+  | "orchestrated_by"
+  | "waits_on_output"
+  | SessionInteractionType
 >;
 export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 // A new interaction type the graph does not list stops the build: it would
@@ -201,6 +215,8 @@ export type WorkGraphSection =
 export interface WorkGraphSections {
   /** Declared `blocked_by` edges. */
   blockedBy: WorkGraphSection;
+  /** Declared `orchestrated_by` edges (who coordinates whom). */
+  orchestration: WorkGraphSection;
   /** Derived waits on another open session's output. */
   waitsOnOutputs: WorkGraphSection;
   /** Derived `triggered` / `updated` interactions. */
@@ -388,12 +404,20 @@ export async function buildWorkGraph(
 
   // ── The edges of the window, each read settled on its own.
   const ids = windowRows.map((r) => ({ id: r.id }));
-  const [declared, outputs] = await Promise.all([
+  const [declared, orchestration, outputs] = await Promise.all([
     settle(
       LOG,
       "blockedBy",
       "Which sessions wait on which could not be read.",
       () => attachSessionEdges(ids)
+    ),
+    // Session to session only: drawn for a narrowed key between two
+    // sessions it reads, like `blocked_by`.
+    settle(
+      LOG,
+      "orchestration",
+      "Which sessions an orchestrator coordinates could not be read.",
+      () => attachSessionOrchestration(ids)
     ),
     // Names the output entity: withheld from a narrowed key.
     narrowed
@@ -425,6 +449,14 @@ export async function buildWorkGraph(
         push({ kind: "blocked_by", from: r.id, to: b });
       for (const w of r.unblocks)
         push({ kind: "blocked_by", from: w, to: r.id });
+    }
+  }
+  if (orchestration.status === "ok") {
+    for (const r of orchestration.value) {
+      for (const o of r.orchestratedBy)
+        push({ kind: "orchestrated_by", from: r.id, to: o });
+      for (const c of r.orchestrates)
+        push({ kind: "orchestrated_by", from: c, to: r.id });
     }
   }
   if (outputs.status === "ok") {
@@ -555,7 +587,7 @@ export async function buildWorkGraph(
   // the other: its own playbook first, else its goal's method. Without the
   // narrow there is nothing to match, and the field is left out.
   const playbookId = input.playbookId;
-  const nodes: WorkGraphNode[] = withHolder.map((n) => ({
+  const projected: WorkGraphNode[] = withHolder.map((n) => ({
     ...withViewerRole(n, userId),
     ...(playbookId
       ? {
@@ -567,6 +599,17 @@ export async function buildWorkGraph(
         }
       : {}),
   }));
+
+  // A narrowed key keeps a node's parent only when it holds that parent: a
+  // parent it does not read is never named (its edge is not drawn either).
+  const projectedIds = new Set(projected.map((n) => n.id));
+  const nodes: WorkGraphNode[] = narrowed
+    ? projected.map((n) =>
+        n.parentSessionId && !projectedIds.has(n.parentSessionId)
+          ? { ...n, parentSessionId: null }
+          : n
+      )
+    : projected;
 
   // Interactions are derived among the nodes (both ends on the read), from
   // events and automation runs: withheld from a narrowed key.
@@ -630,6 +673,7 @@ export async function buildWorkGraph(
     goals: goals.status === "ok" ? goals.value : [],
     sections: {
       blockedBy: sectionOf(declared),
+      orchestration: sectionOf(orchestration),
       waitsOnOutputs: sectionOf(outputs),
       interactions,
       farEnds,

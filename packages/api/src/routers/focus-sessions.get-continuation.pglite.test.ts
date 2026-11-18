@@ -647,6 +647,16 @@ describe("focusSessions.get returns the continuation packet", () => {
         status: "unavailable",
         reason: "The sessions waiting on this one could not be read.",
       });
+      expect(c.orchestratedBy).toEqual({
+        status: "unavailable",
+        reason:
+          "The orchestrator coordinating this session could not be read.",
+      });
+      expect(c.orchestrates).toEqual({
+        status: "unavailable",
+        reason:
+          "The sessions this orchestrator coordinates could not be read.",
+      });
     } finally {
       await h.client!.exec(ddlFor(links as unknown as PgTable));
     }
@@ -724,6 +734,65 @@ describe("focusSessions.get returns the continuation packet", () => {
     });
     const mcp = await mcpGet(session);
     expectSamePacket(mcp.continuation, trpc);
+  });
+
+  it("orchestratedBy names the orchestrator, orchestrates its sessions, owner-floored — the same on both doors", async () => {
+    await h.client!.exec("delete from links;");
+    const orchestrator = randomUUID();
+    const coordinatedOpen = randomUUID();
+    const coordinatedClosed = randomUUID();
+    const strangers = randomUUID();
+    await insertSession(orchestrator, USER, "Orchestrate the launch", "active");
+    await insertSession(coordinatedClosed, USER, "Old copy", "closed", {
+      minsAgo: 60,
+    });
+    await insertSession(coordinatedOpen, USER, "Pricing page", "paused");
+    await insertSession(strangers, "user-2", "Not yours", "active");
+    await edge(coordinatedClosed, orchestrator, "orchestrated_by");
+    await edge(coordinatedOpen, orchestrator, "orchestrated_by");
+    await edge(strangers, orchestrator, "orchestrated_by");
+
+    const o = (await get(orchestrator)).continuation;
+    expect(o.orchestrates).toEqual({
+      status: "ok",
+      total: 2,
+      items: [
+        {
+          id: coordinatedOpen,
+          title: "Pricing page",
+          status: "paused",
+          statusLabel: expect.any(String),
+        },
+        {
+          id: coordinatedClosed,
+          title: "Old copy",
+          status: "closed",
+          statusLabel: expect.any(String),
+        },
+      ],
+    });
+    expect(o.orchestratedBy).toEqual({ status: "ok", total: 0, items: [] });
+    // Neither is a blocker nor a child: orchestration is its own edge.
+    expect(o.unblocks).toMatchObject({ total: 0 });
+    expect(o.children).toMatchObject({ total: 0 });
+
+    const k = (await get(coordinatedOpen)).continuation;
+    expect(k.orchestratedBy).toEqual({
+      status: "ok",
+      total: 1,
+      items: [
+        {
+          id: orchestrator,
+          title: "Orchestrate the launch",
+          status: "active",
+          statusLabel: expect.any(String),
+        },
+      ],
+    });
+    expect(k.orchestrates).toEqual({ status: "ok", total: 0, items: [] });
+    expect(k.blockedBy).toMatchObject({ total: 0 });
+    const mcp = await mcpGet(orchestrator);
+    expectSamePacket(mcp.continuation, o);
   });
 
   const questionPart = (sessionId: string, status: string, question: string) =>

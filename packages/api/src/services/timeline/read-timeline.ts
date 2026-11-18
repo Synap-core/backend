@@ -135,6 +135,7 @@ import { readTrackHistory } from "../tracks/track-history.js";
 import { readThingRoles } from "../status/status-roles.js";
 import type { TrackActor } from "../tracks/tracks-service.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { stageLedgerEventId } from "../focus-sessions/stage-ledger-event.js";
 
 /** Rows read per source. Hitting it sets `truncated` — older rows exist. */
 export const TIMELINE_SOURCE_CAP = 500;
@@ -1086,7 +1087,7 @@ export async function readSessionTimelines(
       const entry = stages[index]!;
       push(s.id, {
         event: {
-          id: `stage:${s.id}:${index}`,
+          id: stageLedgerEventId(s.id, entry),
           kind: "stage_moved",
           at: iso(entry.enteredAt),
           refs: { sessionId: s.id },

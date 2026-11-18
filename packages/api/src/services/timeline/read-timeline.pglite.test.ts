@@ -790,6 +790,12 @@ describe("the session chain (decision D3): stage moves, spawns, runners, room po
       to: "plan",
       actor: { kind: "agent", id: AGENT },
     });
+    // One entry, one id in every ledger reader (change feed, statusOf):
+    // from when it was entered and which stage, never its position.
+    expect(stages.map((e) => e.id)).toEqual([
+      `stage:${C.parent}:${at(-45).toISOString()}:build`,
+      `stage:${C.parent}:${at(-50).toISOString()}:plan`,
+    ]);
     expect(events.find((e) => e.kind === "child_started")).toMatchObject({
       at: at(-44).toISOString(),
       child: { id: C.child, title: "Ship the feed", status: "active" },

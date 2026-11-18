@@ -84,6 +84,17 @@ const WS_A = randomUUID(); // the space the app was given
 const WS_B = randomUUID(); // a space it was not
 const PR_URL = "https://github.com/Synap-core/backend/pull/9";
 
+const OPS2 = "user-ops-2";
+const O = {
+  orchA: randomUUID(), // in A: an orchestrator
+  kidA: randomUUID(), // in A, orchestrated by orchA: drawn for the app
+  kidB: randomUUID(), // in B, orchestrated by orchA: not drawn for the app
+  orchB: randomUUID(), // in B: an orchestrator the app does not read
+  kidOfB: randomUUID(), // in A, orchestrated by orchB: not drawn for the app
+  parentB: randomUUID(), // in B: a parent the app does not read
+  childOfB: randomUUID(), // in A, spawned from parentB
+};
+
 const S = {
   root: randomUUID(), // in A; records PR #9
   child: randomUUID(), // in A; spawned from root, blocked by hidden
@@ -94,14 +105,14 @@ const S = {
 async function session(
   id: string,
   workspaceId: string,
-  opts: { outputs?: unknown[]; title?: string } = {}
+  opts: { outputs?: unknown[]; title?: string; userId?: string } = {}
 ) {
   await q(
     `insert into focus_sessions (id, user_id, goal, title, status, workspace_id, expected_outputs, agent_ids, metadata, started_at, created_at, updated_at)
      values ($1, $2, 'g', $3, 'active', $4, $5::jsonb, '{}', '{}'::jsonb, now(), now(), now())`,
     [
       id,
-      USER,
+      opts.userId ?? USER,
       opts.title ?? "s",
       workspaceId,
       JSON.stringify(opts.outputs ?? []),
@@ -123,10 +134,10 @@ const APP = (...extra: string[]) =>
     clientId: null,
   }) as never;
 
-const graph = (grant?: never) => {
+const graph = (grant?: never, userId: string = USER) => {
   const build = () =>
     buildWorkGraph({
-      userId: USER,
+      userId,
       scope: { workspaceLens: undefined, projectLens: undefined },
       windowHours: 72,
       kind: "all",
@@ -159,6 +170,23 @@ beforeAll(async () => {
   await session(S.hiddenToo, WS_B, { title: "Also hidden" });
   await link(S.child, S.root, "spawned_from");
   await link(S.child, S.hidden, "blocked_by");
+  // Another person's map (so the counts above stay theirs): orchestration
+  // and lineage that cross the grant.
+  for (const [id, ws] of [
+    [O.orchA, WS_A],
+    [O.kidA, WS_A],
+    [O.kidB, WS_B],
+    [O.orchB, WS_B],
+    [O.kidOfB, WS_A],
+    [O.parentB, WS_B],
+    [O.childOfB, WS_A],
+  ] as const) {
+    await session(id, ws, { userId: OPS2, title: "Ops two" });
+  }
+  await link(O.kidA, O.orchA, "orchestrated_by");
+  await link(O.kidB, O.orchA, "orchestrated_by");
+  await link(O.kidOfB, O.orchB, "orchestrated_by");
+  await link(O.childOfB, O.parentB, "spawned_from");
 });
 
 describe("the work graph for a key narrowed by its grant (a pod app, D1)", () => {
@@ -223,5 +251,40 @@ describe("the work graph for a key narrowed by its grant (a pod app, D1)", () =>
     );
     expect(g.sections.interactions).toEqual({ status: "ok" });
     expect(g.sections.pullRequests).toEqual({ status: "ok" });
+  });
+});
+
+describe("orchestration and lineage across a grant (ops-r2)", () => {
+  it("draws `orchestrated_by` (coordinated → orchestrator) only between two sessions the key reads", async () => {
+    const g = await graph(APP(), OPS2);
+    const orch = g.edges.filter((e) => e.kind === "orchestrated_by");
+    expect(orch).toEqual([
+      { kind: "orchestrated_by", from: O.kidA, to: O.orchA },
+    ]);
+    expect(g.sections.orchestration).toEqual({ status: "ok" });
+    expect(JSON.stringify(g)).not.toContain(O.orchB);
+    expect(JSON.stringify(g)).not.toContain(O.kidB);
+  });
+
+  it("a parent the key does not read is never named: the node's parentSessionId is null", async () => {
+    const g = await graph(APP(), OPS2);
+    const child = g.nodes.find((n) => n.id === O.childOfB);
+    expect(child).toBeDefined();
+    expect(child!.parentSessionId).toBeNull();
+    expect(JSON.stringify(g)).not.toContain(O.parentB);
+  });
+
+  it("CONTROL: the person reads every orchestration edge and the parent", async () => {
+    const g = await graph(undefined, OPS2);
+    expect(g.edges.filter((e) => e.kind === "orchestrated_by")).toEqual(
+      expect.arrayContaining([
+        { kind: "orchestrated_by", from: O.kidA, to: O.orchA },
+        { kind: "orchestrated_by", from: O.kidB, to: O.orchA },
+        { kind: "orchestrated_by", from: O.kidOfB, to: O.orchB },
+      ])
+    );
+    expect(
+      g.nodes.find((n) => n.id === O.childOfB)!.parentSessionId
+    ).toBe(O.parentB);
   });
 });

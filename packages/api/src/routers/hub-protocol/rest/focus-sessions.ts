@@ -353,6 +353,7 @@ const WorkGraphWireSchema = z.object({
   ),
   sections: z.object({
     blockedBy: WorkGraphSectionWireSchema,
+    orchestration: WorkGraphSectionWireSchema,
     waitsOnOutputs: WorkGraphSectionWireSchema,
     interactions: WorkGraphSectionWireSchema,
     farEnds: WorkGraphSectionWireSchema,
@@ -940,8 +941,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "One read for a whole map (`services/focus-sessions/work-graph.ts`): " +
       "every OPEN session, plus every session settled in the last " +
       "`windowHours` (default 72), plus the far end of every edge of those, " +
-      "with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, " +
-      "`triggered`, `updated`), and the PRs, holds and goals its sessions " +
+      "with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, " +
+      "`waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions " +
       "point at. `trackId` narrows it to one goal's sessions, " +
       "`rootSessionId` to one wave (the root and every session spawned " +
       "under it); one or the other. `playbookId` narrows it to the sessions " +

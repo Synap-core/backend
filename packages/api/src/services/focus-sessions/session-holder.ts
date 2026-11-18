@@ -35,6 +35,8 @@
  * the runners the derivation already read (no query of its own): the live
  * runner its word came from, else that agent's most recently seen runner
  * (`live: false`), else none. "Claude Code on devbox, opus, busy" on a card.
+ * A subagent's runner (`*-subagent` harness) is never read here: it shares
+ * its lead's agent user and runs inside its process (`isSubagentHarness`).
  *
  * EMPTY vs FAILED: any read the holder needs that failed makes the whole
  * answer `unavailable`, never "nobody".
@@ -197,6 +199,17 @@ function holderRunnerOf(r: HolderFactRunner): HolderRunner {
   };
 }
 
+/**
+ * A subagent's runner row (`<harness>-subagent`, e.g. `claude-code-subagent`,
+ * synap-bridge#2): it runs inside its lead's process under the lead's agent
+ * user, so it never says who holds the session nor where it runs.
+ */
+export function isSubagentHarness(
+  harness: string | null | undefined
+): boolean {
+  return typeof harness === "string" && harness.endsWith("-subagent");
+}
+
 /** The holder before its agent is named: the agent is an id. */
 export type SessionHolderVerdict = Omit<SessionHolder, "agent"> & {
   agentUserId: string | null;
@@ -235,13 +248,16 @@ function owedSince(expectedOutputs: unknown): string | null {
 export function deriveSessionHolder(
   f: SessionHolderFacts
 ): SessionHolderVerdict {
-  const { runner: from, ...verdict } = deriveHolderWord(f);
+  // A subagent's process runs INSIDE its lead's and shares its agent user:
+  // never the holder's word or its runner (it stays a runner elsewhere).
+  const runners = f.runners.filter((r) => !isSubagentHarness(r.harness));
+  const { runner: from, ...verdict } = deriveHolderWord({ ...f, runners });
   // Where it runs: the runner the word came from, else the agent's newest
   // (the runners are read most recently seen first).
   const runner =
     from ??
     (verdict.agentUserId
-      ? f.runners.find((r) => r.agentUserId === verdict.agentUserId)
+      ? runners.find((r) => r.agentUserId === verdict.agentUserId)
       : undefined);
   return { ...verdict, runner: runner ? holderRunnerOf(runner) : null };
 }

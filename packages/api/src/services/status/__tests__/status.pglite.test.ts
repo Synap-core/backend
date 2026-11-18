@@ -988,6 +988,9 @@ describe('include: ["history"] — a session\'s stage ledger (0382)', () => {
       events: [
         {
           kind: "stage_entered",
+          // The id every ledger reader gives this entry (the timeline's and
+          // the change feed's `stage_moved` too).
+          id: `stage:${S_STAGED}:${REVIEW_AT}:review`,
           at: REVIEW_AT,
           stageKey: "review",
           fromStage: "draft",
@@ -1012,6 +1015,29 @@ describe('include: ["history"] — a session\'s stage ledger (0382)', () => {
     }
     // Asked without history, the ledger is not carried.
     expect(await statusOf(S_STAGED)).not.toHaveProperty("history");
+  });
+
+  it("the timeline sources history never keeps are not read: their failure leaves it readable", async () => {
+    // Runners, room posts, dev facts and decisions never reach the history
+    // (`STATUS_HISTORY_TIMELINE_WITHHELD`); a fault only they meet must not
+    // make it unavailable.
+    await client.exec(
+      `alter table session_runners rename to session_runners_away;
+       alter table messages rename column message_category to message_category_away`
+    );
+    try {
+      const a = await statusOf(S_STAGED, { include: ["history"] });
+      expect(a.history).toMatchObject({
+        events: expect.arrayContaining([
+          expect.objectContaining({ kind: "status_moved" }),
+        ]),
+      });
+    } finally {
+      await client.exec(
+        `alter table session_runners_away rename to session_runners;
+         alter table messages rename column message_category_away to message_category`
+      );
+    }
   });
 
   it("a thing without a ledger is unchanged; a hidden session's stays hidden", async () => {

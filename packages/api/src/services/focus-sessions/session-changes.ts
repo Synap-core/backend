@@ -167,6 +167,7 @@ import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { eventVisibleWhere } from "../../access/event-visibility.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 import { fenceUntrustedData } from "../agent-dispatch/binding-call.js";
+import { stageLedgerEventId } from "./stage-ledger-event.js";
 import type {
   SessionPostIntent,
   SessionPostMeta,
@@ -555,7 +556,7 @@ export async function listSessionChanges(p: {
       ledgerStageMoves++;
       cursored.push({
         kind: "stage_moved",
-        id: `stage:${session.id}:${e.enteredAt}:${e.stageKey}`,
+        id: stageLedgerEventId(session.id, e),
         at: e.enteredAt,
         from: typeof e.fromStage === "string" ? e.fromStage : null,
         to: e.stageKey,
