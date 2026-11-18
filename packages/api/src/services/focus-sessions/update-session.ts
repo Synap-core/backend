@@ -1224,8 +1224,7 @@ export function dedupeOpenQuestions(
       continue;
     }
     deduped.push({
-      key:
-        keyOf.get(open) ?? (typeof open.key === "string" ? open.key : null),
+      key: keyOf.get(open) ?? (typeof open.key === "string" ? open.key : null),
       label: open.label,
       asked: item.label,
     });

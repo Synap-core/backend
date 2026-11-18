@@ -70,7 +70,10 @@ describe("isOpenQuestion agrees with the pod's owed rule", () => {
     ["retired, empty stamp", open({ retiredAt: "" })],
     ["retired", open({ retiredAt: "2026-11-18T00:00:00Z" })],
     ["optional true", open({ optional: true })],
-    ["optional 'true' string", open({ optional: "true" as unknown as boolean })],
+    [
+      "optional 'true' string",
+      open({ optional: "true" as unknown as boolean }),
+    ],
     ["done", open({ status: "done" })],
     ["answered, decision filed", open(DECIDED)],
     [
@@ -88,11 +91,11 @@ describe("isOpenQuestion agrees with the pod's owed rule", () => {
         },
       }),
     ],
+    ["a criterion's grade slot", open({ ...DECIDED, kind: "criterion" })],
     [
-      "a criterion's grade slot",
-      open({ ...DECIDED, kind: "criterion" }),
+      "a form answer",
+      open({ ...DECIDED, answer: { askSnapshot: { mode: "form" } } }),
     ],
-    ["a form answer", open({ ...DECIDED, answer: { askSnapshot: { mode: "form" } } })],
     ["the agent's", open({ owner: "agent" })],
   ];
   for (const [name, slot] of rows) {
