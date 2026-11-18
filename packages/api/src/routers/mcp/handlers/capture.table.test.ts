@@ -48,7 +48,10 @@ vi.mock("../../../services/capture-agent/capture-table-links.js", () => ({
 vi.mock("../../../services/capture-agent/submit-capture-graph.js", () => ({
   submitCaptureGraph: vi.fn(async () => h.submitResult),
   dryRunCaptureGraph: vi.fn(
-    async (_db: unknown, input: { entities: unknown[]; relations: unknown[] }) => ({
+    async (
+      _db: unknown,
+      input: { entities: unknown[]; relations: unknown[] }
+    ) => ({
       entityCount: input.entities.length,
       relationCount: input.relations.length,
       relationsFailed: [],

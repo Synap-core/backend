@@ -28,7 +28,9 @@ export async function findLinkByMatches(
 ): Promise<LinkByMatches> {
   const matches: LinkByMatches = new Map();
   if (input.values.length === 0) return matches;
-  const valueOf = drizzleSql<string | null>`${entities.properties} ->> ${input.linkBy.property}`;
+  const valueOf = drizzleSql<
+    string | null
+  >`${entities.properties} ->> ${input.linkBy.property}`;
   const rows = await database
     .select({ id: entities.id, value: valueOf })
     .from(entities)
