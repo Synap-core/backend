@@ -15,7 +15,8 @@ const h = vi.hoisted(() => ({
 vi.mock("@synap-core/core/control-plane-url", () => ({
   controlPlaneBaseUrl: () => h.base,
 }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   podCpAuthHeaders: vi.fn(async () => h.auth),
 }));
 
