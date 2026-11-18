@@ -433,11 +433,11 @@ export async function expireLapsedProposals(
       const batch = ids.slice(i, i + CHUNK);
       const rows = await transitionProposal(db, {
         to: ProposalStatus.EXPIRED,
-        ended: { reason: "lapsed" },
         set: {
           ...endedByNoPersonSet(),
           updatedAt: now,
         },
+        ended: { reason: "lapsed" },
         from: [from],
         where: and(inArray(proposals.id, batch), NOT_PARTLY_APPLIED),
       }).returning({ id: proposals.id });
@@ -509,11 +509,11 @@ export async function expireSessionEphemerals(
 
     const rows = await transitionProposal(db, {
       to: ProposalStatus.EXPIRED,
-      ended: { reason: "session_ended" },
       set: {
         ...endedByNoPersonSet(),
         updatedAt: now,
       },
+      ended: { reason: "session_ended" },
       from: UNDECIDED_PROPOSAL_STATUSES,
       where: and(inArray(proposals.id, ids), NOT_PARTLY_APPLIED),
     }).returning({ id: proposals.id });
