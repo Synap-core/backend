@@ -530,6 +530,13 @@ export interface TransitionBase {
 	/** A person moved it from a value they had not seen ("moved meanwhile"). */
 	staleExpected: boolean;
 	proposalId: string | null;
+	/**
+	 * The person whose approval of a proposal applied this move (the
+	 * proposal's `reviewedBy`); absent when no one approved it. What the move
+	 * sets off acts as them (founder, 17 Nov 2026: the approver acts), while
+	 * `agentUserId` keeps the agent that proposed it.
+	 */
+	approvedBy?: string | null;
 	/** The lens the move happened in. */
 	workspaceId: string | null;
 	/**
@@ -2240,6 +2247,13 @@ export type DevTimelineEvent = DevTimelineEventBase & ({
 		truncated: boolean;
 	};
 });
+declare const TIMELINE_WITHHELD_SOURCES: readonly [
+	"dev_facts",
+	"decisions",
+	"runners",
+	"room_posts"
+];
+export type TimelineWithheldSource = (typeof TIMELINE_WITHHELD_SOURCES)[number];
 /** The `GET /timeline` read. Newest first. */
 export type TimelineWire = {
 	events: TrackHistoryEvent[];
@@ -2257,6 +2271,15 @@ export type TimelineWire = {
 		title: string;
 	};
 	truncated: boolean;
+	/**
+	 * The sources this reader's key may not read (a pod app narrowed by its
+	 * grant), so their events are absent, never "nothing happened":
+	 * `dev_facts` (PR and CI facts, devbox jobs), `decisions` (proposals
+	 * filed in the session), `runners` (who worked it, on which computer),
+	 * `room_posts` (its room's posts and the ones it sent). Absent when
+	 * every source was read.
+	 */
+	withheld?: TimelineWithheldSource[];
 } | {
 	events: DevTimelineEvent[];
 	subject: {
@@ -26177,6 +26200,12 @@ export interface WorkGraphWindow {
 	truncated: boolean;
 	/** Sessions the window (or an edge) selected that this read did not return. */
 	omitted: number;
+	/**
+	 * Of `omitted`, the sessions the PERSON could see here that the calling
+	 * key's grant does not cover (`workGraphReach`): never returned, only
+	 * counted. 0 for a person and for a key that reads the graph whole.
+	 */
+	omittedByGrant: number;
 }
 /** One node: the list row (`focusSessions.list({ nextMove: true })`), plus whether it is IN the window or only the far end of an edge. */
 export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[number] & {

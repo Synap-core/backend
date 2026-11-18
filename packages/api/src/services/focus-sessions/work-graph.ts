@@ -42,6 +42,16 @@
  * (`inWindow: false`) and is still counted in `omitted`: `omitted` counts the
  * window's sessions not returned AS window sessions.
  *
+ * ── A KEY NARROWED BY ITS GRANT ─────────────────────────────────────────────
+ * A pod app reads the graph through its grant (`workGraphReach`, founder
+ * decision D1, 17 Nov 2026): the WHERE's floor already ANDs the grant, so its
+ * nodes are the sessions it reads; `window.omittedByGrant` counts the ones the
+ * person sees in the same window that it does not (also in `omitted`). The
+ * parts that read past the grant (next move, interactions, waits on an
+ * output, PR facts, goals; holder and liveness without `agent.read`) are
+ * withheld: a section `unavailable` with `WORK_GRAPH_WITHHELD_REASON`, a node
+ * move `unknown`, never an empty answer.
+ *
  * ── ONE GOAL OR ONE WAVE ────────────────────────────────────────────────────
  * `focus` narrows the WINDOW (design rule 8: graph one goal or wave, list the
  * fleet): `{ trackId }` keeps the sessions filed in that goal (the list's own
@@ -83,6 +93,7 @@
  */
 
 import type { FocusSession } from "@synap/database/schema";
+import type { WorkGraphReach } from "../../access/grant-door-fence.js";
 import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import type {
@@ -93,6 +104,7 @@ import type {
 import {
   attachSessionLiveness,
   countUserSessions,
+  countUserSessionsForPerson,
   projectSessionRows,
   queryUserSessions,
 } from "./session-list-rows.js";
@@ -117,6 +129,7 @@ import {
   type WorkGraphPullRequest,
 } from "./work-graph-nodes.js";
 import { withViewerRole, type SessionViewerRole } from "./viewer-role.js";
+import { projectTriage } from "./triage.js";
 import {
   attachSessionHolder,
   type SessionHolderSection,
@@ -211,6 +224,12 @@ export interface WorkGraphWindow {
   truncated: boolean;
   /** Sessions the window (or an edge) selected that this read did not return. */
   omitted: number;
+  /**
+   * Of `omitted`, the sessions the PERSON could see here that the calling
+   * key's grant does not cover (`workGraphReach`): never returned, only
+   * counted. 0 for a person and for a key that reads the graph whole.
+   */
+  omittedByGrant: number;
 }
 
 /** One node: the list row (`focusSessions.list({ nextMove: true })`), plus whether it is IN the window or only the far end of an edge. */
@@ -281,7 +300,18 @@ export interface BuildWorkGraphInput {
   playbookId?: string;
   /** Narrow the window to the sessions on this thing (see the header). */
   subjectEntityId?: string;
+  /**
+   * What the calling key's grant lets the graph draw (`workGraphReach`).
+   * Absent = whole (a person, or a key that reads every subject). Narrowed:
+   * the nodes are the sessions the grant reads, and the parts that read past
+   * it are withheld, each said so (see `workGraphReach`).
+   */
+  reach?: WorkGraphReach;
 }
+
+/** The reason every part withheld from a narrowed key carries. */
+export const WORK_GRAPH_WITHHELD_REASON =
+  "Withheld: this key's grant does not read everything this part needs.";
 
 const LOG = { door: "focusSessions.graph" };
 
@@ -298,6 +328,11 @@ export async function buildWorkGraph(
   input: BuildWorkGraphInput
 ): Promise<WorkGraph> {
   const { userId, scope, kind, lens, roster } = input;
+  const narrowed = input.reach && !input.reach.whole ? input.reach : null;
+  const withheld = {
+    status: "unavailable" as const,
+    reason: WORK_GRAPH_WITHHELD_REASON,
+  };
   const hours = Math.min(
     Math.max(
       Math.floor(input.windowHours ?? WORK_GRAPH_DEFAULT_WINDOW_HOURS),
@@ -341,6 +376,15 @@ export async function buildWorkGraph(
       ? windowRows.length
       : await countUserSessions(windowQuery);
   const windowNodes = await projectSessionRows(windowRows, userId);
+  // A narrowed key: how many sessions the PERSON sees in this window that the
+  // grant does not, counted with the same WHERE without the grant. A count,
+  // never a row (`countUserSessionsForPerson`). Counted over
+  // the WINDOW, the map's population: a far end the grant does not read is
+  // a window session (counted here) or settled before the window (not part
+  // of the map); either way the edge to it is not drawn.
+  const omittedByGrant = narrowed
+    ? Math.max(0, (await countUserSessionsForPerson(windowQuery)) - windowTotal)
+    : 0;
 
   // ── The edges of the window, each read settled on its own.
   const ids = windowRows.map((r) => ({ id: r.id }));
@@ -351,12 +395,15 @@ export async function buildWorkGraph(
       "Which sessions wait on which could not be read.",
       () => attachSessionEdges(ids)
     ),
-    settle(
-      LOG,
-      "waitsOnOutputs",
-      "Which sessions wait on another's output could not be read.",
-      () => attachSessionOutputDependencies(ids, userId)
-    ),
+    // Names the output entity: withheld from a narrowed key.
+    narrowed
+      ? Promise.resolve(withheld)
+      : settle(
+          LOG,
+          "waitsOnOutputs",
+          "Which sessions wait on another's output could not be read.",
+          () => attachSessionOutputDependencies(ids, userId)
+        ),
   ]);
 
   const edges: WorkGraphEdge[] = [];
@@ -461,22 +508,49 @@ export async function buildWorkGraph(
     ...windowNodes.map((n) => ({ ...n, inWindow: true })),
     ...farNodes.map((n) => ({ ...n, inWindow: false })),
   ];
-  const withMove = await attachNextMove(all, {
-    userId,
-    roster,
-    lens: input.boundWorkspaceId,
-    logContext: LOG,
-  });
-  const withLive = await attachSessionLiveness<
-    (typeof withMove)[number] & { live?: SessionActivityLive | null }
-  >(withMove, { userId, roster });
+  // The next move reads proposals, room inboxes and cross-kind blockers:
+  // withheld from a narrowed key (`unknown`, counts `null` = not read).
+  const withMove = narrowed
+    ? all.map((n) => ({
+        ...n,
+        nextMove: {
+          kind: "unknown" as const,
+          actor: "none" as const,
+          label: "Not shown to this app",
+          reason: WORK_GRAPH_WITHHELD_REASON,
+        },
+        unitFacts: {
+          owedFromYou: null,
+          pendingDecisions: null,
+          awaitingReview: false,
+          draft: projectTriage(n).pending,
+        } satisfies SessionUnitCounts,
+      }))
+    : await attachNextMove(all, {
+        userId,
+        roster,
+        lens: input.boundWorkspaceId,
+        logContext: LOG,
+      });
   // Who has it, through the session read's own derivation; the liveness just
-  // attached is reused, never read twice.
-  const withHolder = await attachSessionHolder(
-    withLive.map((n) => ({ ...n, live: n.live ?? null })),
-    // A bound key's PR facts stay in its workspace, as the PR nodes' do.
-    { userId, roster, lens: input.boundWorkspaceId }
-  );
+  // attached is reused, never read twice. A narrowed key reads both only when
+  // it reads the person's agents (`sessionHolderReadable`).
+  const withHolder =
+    narrowed && !narrowed.holder
+      ? withMove.map((n) => ({
+          ...n,
+          live: null,
+          holder: withheld as SessionHolderSection,
+        }))
+      : await attachSessionHolder(
+          (
+            await attachSessionLiveness<
+              (typeof withMove)[number] & { live?: SessionActivityLive | null }
+            >(withMove, { userId, roster })
+          ).map((n) => ({ ...n, live: n.live ?? null })),
+          // A bound key's PR facts stay in its workspace, as the PR nodes' do.
+          { userId, roster, lens: input.boundWorkspaceId }
+        );
   // A window node passed the WHERE, so it follows the playbook one way or
   // the other: its own playbook first, else its goal's method. Without the
   // narrow there is nothing to match, and the field is left out.
@@ -494,14 +568,15 @@ export async function buildWorkGraph(
       : {}),
   }));
 
-  // Interactions are derived among the nodes (both ends on the read).
-  const withInteractions = await attachSessionInteractions(
-    nodes.map((n) => ({ id: n.id }))
-  );
+  // Interactions are derived among the nodes (both ends on the read), from
+  // events and automation runs: withheld from a narrowed key.
+  const withInteractions = narrowed
+    ? []
+    : await attachSessionInteractions(nodes.map((n) => ({ id: n.id })));
   // One read for every row: a failure marks every row, so the first says it.
-  const interactions = sectionOf(
-    withInteractions[0]?.interactions ?? { status: "ok" }
-  );
+  const interactions: WorkGraphSection = narrowed
+    ? withheld
+    : sectionOf(withInteractions[0]?.interactions ?? { status: "ok" });
   for (const r of withInteractions) {
     if (r.interactions.status !== "ok") continue;
     for (const i of r.interactions.items) {
@@ -526,23 +601,25 @@ export async function buildWorkGraph(
   const [prs, holds, goals] = await Promise.all([
     // The PR facts are events: a workspace-bound key reads them under its own
     // workspace floor, the one the far ends already use.
-    readGraphPullRequests(nodes, {
-      userId,
-      roster,
-      lens: input.boundWorkspaceId,
-    }),
+    readGraphPullRequests(
+      nodes,
+      { userId, roster, lens: input.boundWorkspaceId },
+      narrowed ? WORK_GRAPH_WITHHELD_REASON : undefined
+    ),
     settle(
       LOG,
       "holds",
       "What the paused sessions wait on could not be read.",
       () => readGraphHolds(nodes.map((n) => n.id))
     ),
-    settle(
-      LOG,
-      "goals",
-      "The goals these sessions serve could not be read.",
-      () => readGraphGoals(trackIds, userId)
-    ),
+    narrowed && !narrowed.goals
+      ? Promise.resolve(withheld)
+      : settle(
+          LOG,
+          "goals",
+          "The goals these sessions serve could not be read.",
+          () => readGraphGoals(trackIds, userId)
+        ),
   ]);
 
   return {
@@ -564,8 +641,9 @@ export async function buildWorkGraph(
       since,
       hours,
       ceiling: WORK_GRAPH_CEILING,
-      truncated: omitted > 0,
-      omitted,
+      truncated: omitted + omittedByGrant > 0,
+      omitted: omitted + omittedByGrant,
+      omittedByGrant,
     },
   };
 }

@@ -10,7 +10,15 @@
  * router, so the shared body lives here.
  */
 
-import { and, count, db, desc, focusSessions, inArray } from "@synap/database";
+import {
+  and,
+  count,
+  db,
+  desc,
+  focusSessions,
+  inArray,
+  runWithoutGrant,
+} from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
 import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import { attachParentSessionIds } from "./parent-lineage.js";
@@ -138,6 +146,18 @@ export async function attachSessionLiveness<
  * conditions, so a capped door can say exactly how many rows it left out
  * instead of guessing from a full page.
  */
+/**
+ * How many sessions the PERSON reads under `query`, with no key grant in
+ * force: what a key narrowed by its grant is told it does NOT read (the work
+ * graph's `window.omittedByGrant`). A count, never a row: `runWithoutGrant`
+ * serves the key nothing it could not see.
+ */
+export function countUserSessionsForPerson(
+  query: SessionListQuery
+): Promise<number> {
+  return runWithoutGrant(() => countUserSessions(query));
+}
+
 export async function countUserSessions(
   query: SessionListQuery
 ): Promise<number> {
