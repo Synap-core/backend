@@ -317,6 +317,10 @@ beforeAll(async () => {
   await h.client!.exec(
     `create unique index on links (from_type, from_id, to_type, to_id, link_type)`
   );
+  // The arbiter the room mint's roster insert conflicts on (`enrollRoomMember`).
+  await h.client!.exec(
+    `create unique index on channel_members (channel_id, member_id)`
+  );
   // Not a proof-of-presence suite: this pod CHOSE `report`, so the consent
   // applies without a proof (presence.pglite.test.ts owns the gate).
   await h.client!.exec(
