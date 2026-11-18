@@ -4967,6 +4967,7 @@ ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_pending_appro
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_irreversible_sends_daily';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'linkedin_invitations_daily';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'linkedin_actions_daily';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'compute_spend_daily_cents';
 CREATE TABLE IF NOT EXISTS "governance_ceilings" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "axis"                governance_ceiling_axis NOT NULL,
@@ -5294,6 +5295,46 @@ VALUES
   ('analytics', 'Analytics', 'Where usage and traffic are measured.',
    ARRAY['list_records', 'fetch_record'], ARRAY[]::text[])
 ON CONFLICT ("slug") DO NOTHING;
+
+-- Compute leases (0431): one row per compute start; the TTL sweeper
+-- destroys each active lease past `expires_at`. Mirrors 0431.
+CREATE TABLE IF NOT EXISTS "compute_leases" (
+  "id"                   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"              text        NOT NULL,
+  "workspace_id"         uuid,
+  "agent_user_id"        text,
+  "proposal_id"          uuid,
+  "session_id"           uuid,
+  "provision_skill_id"   uuid,
+  "provision_verb"       text        NOT NULL,
+  "release_verb"         text        NOT NULL,
+  "connection_selector"  jsonb,
+  "resource_id"          text,
+  "ttl_minutes"          integer     NOT NULL,
+  "max_spend_cents"      integer     NOT NULL,
+  "state"                text        NOT NULL DEFAULT 'starting',
+  "expires_at"           timestamptz NOT NULL,
+  "release_attempts"     integer     NOT NULL DEFAULT 0,
+  "last_release_error"   text,
+  "release_result"       jsonb,
+  "released_at"          timestamptz,
+  "created_at"           timestamptz NOT NULL DEFAULT now(),
+  "updated_at"           timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "compute_leases_state_check"
+    CHECK ("state" IN ('starting', 'active', 'released', 'not_started', 'unknown')),
+  CONSTRAINT "compute_leases_ttl_check" CHECK ("ttl_minutes" > 0),
+  CONSTRAINT "compute_leases_spend_check" CHECK ("max_spend_cents" > 0)
+);
+
+-- The sweeper's read: active leases past their TTL.
+CREATE INDEX IF NOT EXISTS "compute_leases_due_idx"
+  ON "compute_leases" ("expires_at") WHERE "state" = 'active';
+-- The ceiling's read: the day's starts.
+CREATE INDEX IF NOT EXISTS "compute_leases_created_idx"
+  ON "compute_leases" ("created_at");
+-- A manual destroy closes the lease of the machine it names.
+CREATE INDEX IF NOT EXISTS "compute_leases_resource_idx"
+  ON "compute_leases" ("user_id", "resource_id") WHERE "state" = 'active';
 
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.

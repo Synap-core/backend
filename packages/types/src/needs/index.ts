@@ -32,10 +32,11 @@
  * template field, nothing stored (the retired `settings.taskIntents`).
  *
  * ── WHY A MIRROR AND NOT AN IMPORT ─────────────────────────────────────────
- * THE SSOT IS THE POD's `needs` TABLE, seeded by migration `0426_needs.sql`.
+ * THE SSOT IS THE POD's `needs` TABLE, seeded by migrations `0426_needs.sql`
+ * and `0431_compute_need_and_leases.sql` (`compute`).
  * This list is a hand mirror with a parity guard (`parity.test.ts`) that
  * re-derives the seed SQL. ⚠️ MIRRORED IN LOCKSTEP with:
- *   - the `INSERT INTO "needs"` rows — migration `0426`
+ *   - the `INSERT INTO "needs"` rows — migrations `0426`, `0431`
  *   - `NEEDS` — synap-control-plane-api `src/seeds/need-vocabulary.ts`
  * A slug added in a NEW migration must be added to both guards' filename
  * lists: extending the list is part of adding the slug.
@@ -60,7 +61,7 @@ export const NEED_SLUG_RE = /^[a-z][a-z0-9-]{0,63}$/;
 /** The prefix of a need ref in `tools`, `requires`, a check or a node. */
 export const NEED_REF_PREFIX = "need:";
 
-/** The seed rows of migration 0426, in order. */
+/** The seed rows of migrations 0426 and 0431, in order. */
 export const NEEDS: readonly NeedDefinition[] = [
   {
     slug: "code-host",
@@ -150,6 +151,19 @@ export const NEEDS: readonly NeedDefinition[] = [
     description: "Where usage and traffic are measured.",
     intents: ["list_records", "fetch_record"],
     aliases: [],
+  },
+  {
+    slug: "compute",
+    label: "Compute",
+    description:
+      "Where temporary machines are started, run jobs and are released.",
+    intents: [
+      "provision_compute",
+      "run_external_job",
+      "fetch_record",
+      "release_compute",
+    ],
+    aliases: ["cloud-compute", "gpu"],
   },
 ];
 
