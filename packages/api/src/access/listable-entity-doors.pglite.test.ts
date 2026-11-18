@@ -728,6 +728,8 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/capabilities/verb-write-back.ts": "write target",
   "services/capture-agent/submit-capture-graph.ts":
     "capture duplicate door scope + strong-match write gate (dedup)",
+  "services/capture-agent/capture-table-links.ts":
+    "capture table linkBy: an exact property value → the existing record it names (a link target, not a listing)",
   "services/capture-agent/degraded-capture-identity.ts":
     "degraded capture: strong-match recheck by id + duplicate door scope (dedup)",
   "services/channels/linkedin-reach-read.ts":

@@ -7,20 +7,22 @@ import {
   and,
   drizzleSql,
   entities,
-  eq,
   inArray,
   isNull,
+  profileSlugScopeCondition,
   type db as Database,
 } from "@synap/database";
 import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import { grantMayLinkRecord } from "./fenced-capture-graph.js";
 import type { CaptureTableLinkBy, LinkByMatches } from "./capture-table.js";
 
 /**
- * One read per `linkBy`: the entities of its kind whose property equals one of
- * the table's values, among the records the caller may link (the write floor
- * and, for a key limited to spaces, its grant: the same two checks the capture
- * core applies before it links an identity match).
+ * One read per `linkBy`: the entities of its kind (the kind-aware scope door,
+ * so a record wearing that kind as a role is found too) whose property equals
+ * one of the table's values, among the records the caller may link (the write
+ * floor and, for a key limited to spaces, its grant: the same two checks the
+ * capture core applies before it links an identity match).
  */
 export async function findLinkByMatches(
   database: typeof Database,
@@ -36,7 +38,11 @@ export async function findLinkByMatches(
     .from(entities)
     .where(
       and(
-        eq(entities.type, input.linkBy.profileSlug),
+        await profileSlugScopeCondition(
+          database,
+          input.linkBy.profileSlug,
+          await resolveFacetVisibilityScope(input.userId, undefined)
+        ),
         isNull(entities.deletedAt),
         inArray(valueOf, input.values),
         entityWriteVisibleWhere(input.userId)
