@@ -65,6 +65,7 @@ import {
   grantDeniedKey,
   recordGrantDenial,
 } from "../../utils/grant-write-check.js";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
 
 const logger = createLogger({ module: "start-orchestrator" });
 
@@ -202,8 +203,10 @@ export function orchestratorPlacement(rows: readonly ChildRow[]): {
  * EACH picked session, since the write pauses every one of them: a key bound
  * to a workspace reaches only the sessions in it (`resolveConfinedWorkspace`'s
  * contract; a session in no space is outside it too, as a bound key never
- * lists one), and a key's grant must allow the move on each one's space and
- * project, the request the gate would derive (`focus_session/orchestrate`
+ * lists one), and a key's grant must allow the move where each one COUNTS
+ * (`sessionGrantWorkspaceId`, `access/session-counted-spaces.ts`: its own
+ * space, or for a project-only session one of its project's spaces) and on
+ * its project, the request the gate would derive (`focus_session/orchestrate`
  * folds to `session.update`). The refusal names only the key's own binding or
  * the id the caller sent, never the space it was refused in.
  */
@@ -220,16 +223,17 @@ async function pickedOutOfReach(
   const grant = getRequestGrant();
   if (!grant) return null;
   for (const r of rows) {
-    const denied = await grantDeniedKey(
-      {
-        subjectType: "focus_session",
-        action: "orchestrate",
-        workspaceId: r.workspaceId,
-        projectId: r.projectId,
-        data: { id: r.id },
-      },
-      grant
-    );
+    const write = {
+      subjectType: "focus_session",
+      action: "orchestrate",
+      projectId: r.projectId,
+      data: { id: r.id },
+    };
+    // Where the session COUNTS for a grant: its own space, or for a
+    // project-only session the first of its project's spaces the grant
+    // permits this write in (the one rule every write door reads).
+    const workspaceId = await sessionGrantWorkspaceId(r, write, grant);
+    const denied = await grantDeniedKey({ ...write, workspaceId }, grant);
     if (!denied) continue;
     const message = `This key's grant does not allow "${denied.key}" on session ${r.id}, so it cannot orchestrate it.`;
     recordGrantDenial(message, denied.key, { clientId: grant.clientId });

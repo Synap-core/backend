@@ -131,14 +131,15 @@ async function seedSession(
     status?: string;
     title?: string;
     workspaceId?: string | null;
+    projectId?: string | null;
     stage?: string | null;
   } = {}
 ): Promise<string> {
   const id = randomUUID();
   await h.client!.query(
     `insert into focus_sessions
-       (id, user_id, title, goal, status, origin, expected_outputs, criteria, metadata, agent_ids, progress, started_at, updated_at, workspace_id, current_stage)
-     values ($1, $2, $3, $4, $5, 'agent', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, $6, 0, now(), now(), $7, $8)`,
+       (id, user_id, title, goal, status, origin, expected_outputs, criteria, metadata, agent_ids, progress, started_at, updated_at, workspace_id, current_stage, project_id)
+     values ($1, $2, $3, $4, $5, 'agent', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, $6, 0, now(), now(), $7, $8, $9)`,
     [
       id,
       opts.owner ?? USER,
@@ -148,6 +149,7 @@ async function seedSession(
       [AGENT],
       opts.workspaceId ?? null,
       opts.stage ?? null,
+      opts.projectId ?? null,
     ]
   );
   return id;
@@ -586,6 +588,40 @@ describe("the calling key must reach EVERY picked session", () => {
     expect(orchestrateCalls()).toHaveLength(1);
     expect(await statusOf(a1)).toBe("paused");
     expect(await statusOf(a2)).toBe("paused");
+  });
+
+  it("a project-only session counts in its project's spaces: home in A goes on, home in B is 403", async () => {
+    const project = async (home: string) => {
+      const id = randomUUID();
+      await h.client!.query(
+        `insert into projects (id, user_id, name, workspace_id, created_at, updated_at)
+         values ($1, $2, 'P', $3, now(), now())`,
+        [id, USER, home]
+      );
+      return id;
+    };
+    const a = await seedSession({ workspaceId: WS_A });
+    const inA = await seedSession({ projectId: await project(WS_A) });
+    const ok = await runWithGrant(GRANT_A, () =>
+      startOrchestrator({
+        userId: USER,
+        input: { sessionIds: [a, inA], brief: "A and A's project" },
+      })
+    );
+    expect(ok.status).toBe("started");
+
+    const a2 = await seedSession({ workspaceId: WS_A });
+    const inB = await seedSession({ projectId: await project(WS_B) });
+    await expect(
+      runWithGrant(GRANT_A, () =>
+        startOrchestrator({
+          userId: USER,
+          input: { sessionIds: [a2, inB], brief: "B's project" },
+        })
+      )
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await statusOf(a2)).toBe("active");
+    expect(await statusOf(inB)).toBe("active");
   });
 
   it("a key bound to workspace A picks only sessions in A: B, or a session in no space, is 403 and nothing is written", async () => {
