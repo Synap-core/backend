@@ -102,6 +102,7 @@ export async function expirePendingCreatesOfLandedRecord(
   const expired = await transitionProposal(executor, {
     to: ProposalStatus.EXPIRED,
     from: UNDECIDED_PROPOSAL_STATUSES,
+    ended: { reason: "record_landed", landedEntityId: input.entityId },
     set: {
       ...endedByNoPersonSet(),
       updatedAt: new Date(),

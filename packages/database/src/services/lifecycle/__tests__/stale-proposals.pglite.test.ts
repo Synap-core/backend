@@ -95,6 +95,7 @@ describe("expireProposalsStaleAfterMove", () => {
     expect(s.data).toMatchObject({
       expiredBy: "lifecycle_move",
       supersededByTransitionId: "00000000-0000-4000-8000-00000000aaaa",
+      ended: { reason: "lifecycle_move" },
     });
     for (const id of [human, facet, sameTo, other])
       expect((await statusOf(id)).status).toBe("pending");

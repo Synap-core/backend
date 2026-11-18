@@ -44,6 +44,7 @@ import {
   assertGrantScoped,
   getActingAgentUserId,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
 } from "@synap/database";
 import {
   proposals,
@@ -1132,7 +1133,7 @@ export const secretsVaultRouter = router({
         //    and no status guard.
         const approved = await transitionProposal(tx, {
           to: ProposalStatus.APPROVED,
-          from: [ProposalStatus.PENDING, ProposalStatus.APPROVAL_FAILED],
+          from: UNDECIDED_PROPOSAL_STATUSES,
           set: {
             reviewedBy: ctx.userId,
             reviewedAt: new Date(),

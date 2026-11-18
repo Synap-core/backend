@@ -655,6 +655,9 @@ async function supersedePack(
     : "Nothing in it is left to tidy.";
   const rows = await transitionProposal(db, {
     to: ProposalStatus.WITHDRAWN,
+    ended: supersededBy
+      ? { reason: "superseded", supersededBy }
+      : { reason: "request_changed" },
     set: {
       updatedAt: now,
       data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('supersededBy', ${supersededBy}::text, 'withdrawReason', ${reason}::text)`,

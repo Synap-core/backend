@@ -44,6 +44,7 @@ export async function expirePendingHandOffsOfAttachedAgent(
   const expired = await transitionProposal(executor, {
     to: ProposalStatus.EXPIRED,
     from: UNDECIDED_PROPOSAL_STATUSES,
+    ended: { reason: "agent_attached" },
     set: {
       ...endedByNoPersonSet(),
       updatedAt: new Date(),

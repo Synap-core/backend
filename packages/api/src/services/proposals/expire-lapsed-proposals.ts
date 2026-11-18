@@ -433,6 +433,7 @@ export async function expireLapsedProposals(
       const batch = ids.slice(i, i + CHUNK);
       const rows = await transitionProposal(db, {
         to: ProposalStatus.EXPIRED,
+        ended: { reason: "lapsed" },
         set: {
           ...endedByNoPersonSet(),
           updatedAt: now,
@@ -508,6 +509,7 @@ export async function expireSessionEphemerals(
 
     const rows = await transitionProposal(db, {
       to: ProposalStatus.EXPIRED,
+      ended: { reason: "session_ended" },
       set: {
         ...endedByNoPersonSet(),
         updatedAt: now,

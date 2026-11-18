@@ -67,6 +67,8 @@ export const en = {
   // newer one), so these lines say only what holds in every case.
   "outcome.expired": "This request expired: nothing was applied.",
   "outcome.withdrawn": "This request was withdrawn: nothing was applied.",
+  // The door to the request that replaced it (its end line, `proposalEndLine`).
+  "outcome.newerVersion": "Open the newer version",
   "repair.label": "Why approving failed",
   "repair.default": "Approving this failed.",
   "repair.loadFailed": "Couldn’t load what can be fixed.",
@@ -175,6 +177,7 @@ export const fr: Catalog<typeof en> = {
   "outcome.expired": "Cette demande a expiré\u00a0: rien n’a été appliqué.",
   "outcome.withdrawn":
     "Cette demande a été retirée\u00a0: rien n’a été appliqué.",
+  "outcome.newerVersion": "Ouvrir la version plus récente",
   "repair.label": "Pourquoi l’approbation a échoué",
   "repair.default": "L’approbation a échoué.",
   "repair.loadFailed": "Impossible de charger ce qui peut être corrigé.",

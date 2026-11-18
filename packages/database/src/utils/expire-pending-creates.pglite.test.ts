@@ -115,6 +115,7 @@ describe("expirePendingCreatesOfLandedRecord", () => {
     expect(c.data).toMatchObject({
       expiredBy: "record_landed",
       supersededByEntityId: "entity-landed",
+      ended: { reason: "record_landed", landedEntityId: "entity-landed" },
     });
     // The record itself is kept: approving it later is still traceable.
     expect((c.data.data as { title: string }).title).toBe(

@@ -127,7 +127,7 @@ function HistoryRowView({
   const secondary = [
     row.kindLabel,
     row.askedBy ? t("row.askedBy", { who: row.askedBy }) : null,
-    row.decidedBy?.kind === "person"
+    row.decidedBy?.kind === "person" || row.decidedBy?.kind === "actor"
       ? t("row.decidedBy", { who: row.decidedBy.name })
       : row.decidedBy?.kind === "rule"
         ? t("row.decidedByRule")

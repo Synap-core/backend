@@ -175,13 +175,18 @@ import {
   toolRunArguments,
 } from "./tool-run-model";
 import { toolRunEdits } from "@synap-core/types/proposals/capability-run";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
+import {
+  proposalEndLine,
+  type ProposalEndLine,
+} from "@synap-core/types/proposals/ended";
 
 /**
- * `pending` and `approval_failed` are the two states a reviewer can still decide;
- * everything else is terminal (already approved / rejected / reverted / withdrawn).
+ * Can a reviewer still decide it? The one predicate (`isProposalUndecided`:
+ * pending, or an approval that failed); everything else is terminal.
  */
 export function isActionable(status: string): boolean {
-  return status === "pending" || status === "approval_failed";
+  return isProposalUndecided(status);
 }
 
 /**
@@ -424,9 +429,12 @@ const OUTCOME_TONE: Record<
 function Outcome({
   status,
   created,
+  ended,
 }: {
   status: string;
   created?: CreatedObject | null;
+  /** Why a withdrawn or expired request ended (`proposalEndLine`). */
+  ended?: ProposalEndLine | null;
 }) {
   const o = terminalOutcome(status);
   const tone = OUTCOME_TONE[o.tone];
@@ -446,9 +454,40 @@ function Outcome({
         <span className="text-[13px] leading-relaxed text-foreground/70">
           {t(o.messageKey)}
         </span>
+        {ended && <EndLine ended={ended} />}
         {created && <CreatedDoor created={created} />}
       </div>
     </div>
+  );
+}
+
+/**
+ * Why it ended with nobody deciding it: the one end line, the words its author
+ * gave (theirs, quoted), and the door to the request that replaced it.
+ */
+function EndLine({ ended }: { ended: ProposalEndLine }) {
+  const t = proposalPageT();
+  return (
+    <span
+      data-end-reason={ended.reason}
+      className="mt-1 flex min-w-0 flex-col gap-1 text-[13px] text-foreground/80"
+    >
+      <span>{ended.text}</span>
+      {ended.withdrawReason && (
+        <q className="min-w-0 break-words text-foreground/70">
+          {ended.withdrawReason}
+        </q>
+      )}
+      {ended.supersededBy && (
+        <Link
+          href={`/proposal/${encodeURIComponent(ended.supersededBy)}`}
+          data-superseded-by={ended.supersededBy}
+          className="self-start font-medium rq-ink underline underline-offset-2"
+        >
+          {t("outcome.newerVersion")}
+        </Link>
+      )}
+    </span>
   );
 }
 
@@ -1163,6 +1202,12 @@ export function ProposalReviewBody({
                 <>
                   <Outcome
                     status={status}
+                    ended={proposalEndLine({
+                      status,
+                      data: p.data,
+                      reviewedBy: (p as { reviewedBy?: string | null })
+                        .reviewedBy,
+                    })}
                     created={createdObject({
                       status,
                       action,
