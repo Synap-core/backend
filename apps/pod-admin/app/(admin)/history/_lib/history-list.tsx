@@ -16,17 +16,16 @@
 import { Button } from "@heroui/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { formatDateTime } from "@synap-core/types/value-format";
+import type { TFunction } from "@synap-core/types/i18n";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
-import { useConsoleLocale, useT } from "../../../../lib/i18n/locale-provider";
+import { useT } from "../../../../lib/i18n/locale-provider";
 import { trpc } from "../../../../lib/trpc";
 import {
-  ResourceRow,
   ResourceRowEmpty,
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../components/resource-row";
-import { kindIcon } from "../../../_lib/object/kind-icon";
+import { TimelineList } from "../../../_lib/timeline/timeline-list";
 import { en, fr } from "./copy";
 import { historyRows, type HistoryRow } from "./history-rows";
 import { UndoDecisionButton } from "../../../_lib/receipt/decision-receipt-toast";
@@ -63,6 +62,7 @@ export function HistoryList({
     () => historyRows((list.data?.pages ?? []).flatMap((p) => p.items)),
     [list.data]
   );
+  const entries = useMemo(() => rows.map((r) => r.entry), [rows]);
 
   if (list.isLoading) return <ResourceRowSkeleton count={4} />;
   // A failed FIRST read: nothing to show, so the failure is the state.
@@ -76,20 +76,29 @@ export function HistoryList({
   if (rows.length === 0 && !list.hasNextPage)
     return <ResourceRowEmpty message={t("empty")} />;
 
-  const shown = showAll ? rows : rows.slice(0, FIRST_ROWS);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const router = useRouter();
+  const open = (id: string) => {
+    const row = byId.get(id);
+    if (!row) return;
+    if (onOpen) onOpen(row.id, row.title);
+    else router.push(row.href);
+  };
   return (
     <div>
-      <div className="-mx-2 divide-y divide-foreground/[0.05]">
-        {shown.map((row) => (
-          <HistoryRowView key={row.id} row={row} onOpen={onOpen} />
-        ))}
+      <div className="-mx-2">
+        <TimelineList
+          entries={entries}
+          cap={FIRST_ROWS}
+          expanded={showAll}
+          onExpand={() => setShowAll(true)}
+          showAllLabel={t("showAll", { n: rows.length })}
+          onSelect={(e) => open(e.key)}
+          detail={(e) => detailOf(byId.get(e.key), t)}
+          actions={(e) => actionsOf(byId.get(e.key), t)}
+        />
       </div>
       <div className="flex flex-col items-center gap-2 pt-3">
-        {!showAll && rows.length > FIRST_ROWS && (
-          <Button size="sm" variant="flat" onPress={() => setShowAll(true)}>
-            {t("showAll", { n: rows.length })}
-          </Button>
-        )}
         {(showAll || rows.length <= FIRST_ROWS) &&
           list.hasNextPage &&
           (list.isFetchNextPageError ? (
@@ -115,47 +124,35 @@ export function HistoryList({
   );
 }
 
-function HistoryRowView({
-  row,
-  onOpen,
-}: {
-  row: HistoryRow;
-  onOpen?: (proposalId: string, title: string) => void;
-}) {
-  const t = useT(CATALOGS);
-  const locale = useConsoleLocale();
-  const secondary = [
-    row.kindLabel,
-    row.askedBy ? t("row.askedBy", { who: row.askedBy }) : null,
-    row.who?.text ?? null,
-    row.space,
-    formatDateTime(row.decidedAt, Date.now(), { locale }),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  const actions =
-    row.undo === "available" ? (
-      // Offered on an applied change only (`undoOf`): Undo takes it back.
-      <UndoDecisionButton proposalId={row.id} verb="approve" />
-    ) : row.undo === "permanent" ? (
-      <span className="text-[12px] text-foreground/65">{t("row.noUndo")}</span>
-    ) : null;
-
-  const router = useRouter();
+/** What the page adds to the row's own line: kind, who asked, who decided, space. */
+function detailOf(
+  row: HistoryRow | undefined,
+  t: TFunction<typeof en>
+): string | null {
+  if (!row) return null;
   return (
-    <div data-row-id={row.id}>
-      <ResourceRow
-        Icon={kindIcon(row.targetType ?? "")}
-        primary={row.title}
-        secondary={secondary}
-        status={{ kind: row.tone, label: row.statusLabel }}
-        actions={actions}
-        wrap
-        onSelect={() =>
-          onOpen ? onOpen(row.id, row.title) : router.push(row.href)
-        }
-      />
-    </div>
+    [
+      row.kindLabel,
+      row.askedBy ? t("row.askedBy", { who: row.askedBy }) : null,
+      row.who?.text ?? null,
+      row.space,
+    ]
+      .filter(Boolean)
+      .join(" · ") || null
   );
+}
+
+function actionsOf(
+  row: HistoryRow | undefined,
+  t: TFunction<typeof en>
+) {
+  if (!row) return null;
+  // Offered on an applied change only (`undoOf`): Undo takes it back.
+  if (row.undo === "available")
+    return <UndoDecisionButton proposalId={row.id} verb="approve" />;
+  if (row.undo === "permanent")
+    return (
+      <span className="text-[12px] text-foreground/65">{t("row.noUndo")}</span>
+    );
+  return null;
 }

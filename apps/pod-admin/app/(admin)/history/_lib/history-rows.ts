@@ -27,6 +27,8 @@ import {
   type ProposalWho,
 } from "@synap-core/types/proposals/ended";
 import type { StatusKind } from "../../components/status-pill";
+import type { WorkEntry } from "@synap-core/types/work-view";
+import { decisionEntry } from "../../../_lib/timeline/timeline-model";
 import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
 import {
   proposalRequesterParts,
@@ -89,6 +91,8 @@ export interface HistoryRow {
   undo: HistoryUndo;
   /** The decision's own page: what it changed and its receipt. */
   href: string;
+  /** The row as the ONE timeline entry (`entryOf`): what the list draws. */
+  entry: WorkEntry;
 }
 
 function pastTitle(p: HistoryProposal): string {
@@ -147,20 +151,33 @@ function undoOf(p: HistoryProposal): HistoryUndo {
 
 export function historyRow(p: HistoryProposal): HistoryRow {
   const askedBy = proposalRequesterParts(p).actor?.name ?? null;
+  const title = pastTitle(p);
+  const who = whoOf(p, askedBy);
+  const decidedAt = p.reviewedAt ?? p.updatedAt ?? null;
   return {
     id: p.id,
-    title: pastTitle(p),
+    title,
     status: p.status,
     statusLabel: resolveStatusLabel(p.status),
     tone: STATUS_TONE[p.status] ?? "unknown",
     kindLabel: resolveObjectNoun(p.targetType),
     targetType: p.targetType ?? null,
     askedBy,
-    who: whoOf(p, askedBy),
-    decidedAt: p.reviewedAt ?? p.updatedAt ?? null,
+    who,
+    decidedAt,
     space: p.workspaceName ?? null,
     undo: undoOf(p),
     href: `/proposal/${encodeURIComponent(p.id)}`,
+    entry: decisionEntry({
+      id: p.id,
+      status: p.status,
+      proposalType: p.proposalType ?? null,
+      targetType: p.targetType ?? null,
+      title,
+      decidedAt,
+      decidedBy: who?.kind === "decided" ? who.name : null,
+      askedBy,
+    }),
   };
 }
 
