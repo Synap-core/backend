@@ -2,13 +2,14 @@
 
 # MCP tools
 
-The pod's MCP server lists 123 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 126 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
 | [`synap_ask`](#synap_ask)                                                 | Ask the pod                       | entry        | yes       |
 | [`synap_get_entities`](#synap_get_entities)                               | List entities                     | read         | yes       |
 | [`synap_get_document`](#synap_get_document)                               | Get document                      | read         | yes       |
+| [`synap_get_file`](#synap_get_file)                                       | Get a stored file                 | read         | yes       |
 | [`synap_get_thread_context`](#synap_get_thread_context)                   | Get thread context                | read         | yes       |
 | [`synap_list_proposals`](#synap_list_proposals)                           | List proposals                    | governance   | yes       |
 | [`synap_get_proposal`](#synap_get_proposal)                               | Get proposal                      | governance   | yes       |
@@ -91,6 +92,7 @@ The pod's MCP server lists 123 tools. A new agent key lists the `entry` tools; t
 | [`synap_add_track_stage`](#synap_add_track_stage)                         | Add goal step                     | tracks       | no        |
 | [`synap_update_project`](#synap_update_project)                           | Update project                    | spaces       | no        |
 | [`synap_project_use_workspace`](#synap_project_use_workspace)             | Project uses space                | spaces       | no        |
+| [`synap_request_workspace_access`](#synap_request_workspace_access)       | Request space access              | spaces       | no        |
 | [`synap_file_into_project`](#synap_file_into_project)                     | File into project                 | spaces       | no        |
 | [`synap_archive_workspace`](#synap_archive_workspace)                     | Archive space                     | spaces       | no        |
 | [`synap_retire_workspace`](#synap_retire_workspace)                       | Move space off a retired template | spaces       | no        |
@@ -99,6 +101,7 @@ The pod's MCP server lists 123 tools. A new agent key lists the `entry` tools; t
 | [`synap_update_space_brief`](#synap_update_space_brief)                   | Edit space brief                  | spaces       | no        |
 | [`synap_move_entities`](#synap_move_entities)                             | Move entities to space            | data         | no        |
 | [`synap_retire_field`](#synap_retire_field)                               | Retire field                      | schema       | no        |
+| [`synap_change_lifecycle_options`](#synap_change_lifecycle_options)       | Change a kind's lifecycle options | schema       | no        |
 | [`synap_declare_lifecycle`](#synap_declare_lifecycle)                     | Declare a kind's lifecycle        | schema       | no        |
 | [`synap_grant_profile_access`](#synap_grant_profile_access)               | Share kind with space             | schema       | no        |
 | [`synap_change_kind_scope`](#synap_change_kind_scope)                     | Change kind scope                 | schema       | no        |
@@ -182,6 +185,17 @@ Get a document by ID: its markdown `content`, the `revision` to pass back as `ba
 | `format`     | enum   | no       | raw (default) = the stored markdown, embeds as directives (what you edit). readable = embeds replaced by their fallback text (what you quote or summarise). One of: `raw`, `readable`. |
 | `limit`      | number | no       | Max content chars (slice)                                                                                                                                                              |
 | `offset`     | number | no       | Chars to skip (nextOffset)                                                                                                                                                             |
+
+## synap_get_file
+
+**Get a stored file** · Group: `read` · readOnlyHint: true · openWorldHint: false
+
+Look at a stored file (a `file` entity: an upload, an image, a PDF). Returns `url`, a signed download link that expires in 15 minutes (`expiresAt`), with `title`, `mimeType` and `size`. A PNG, JPEG, GIF or WebP image up to 3 MB also comes back as an image you can see (`inline.sent`); pass inline:false to get only the link. Refused when the file is outside this key's grant or the person cannot read it: the error says which (`refusedBy`).
+
+| Parameter  | Type    | Required | Description                                                    |
+| ---------- | ------- | -------- | -------------------------------------------------------------- |
+| `entityId` | string  | yes      | The file entity's UUID.                                        |
+| `inline`   | boolean | no       | Default true: send a small image inline. false: the link only. |
 
 ## synap_get_thread_context
 
@@ -1499,6 +1513,17 @@ Stamp the INDEX edge project --uses--> workspace: this engagement runs through t
 | `reasoning`   | string         | no       | Why this project uses this domain, in the person's words. One line.                                                                                                                                                                                                                                                                                       |
 | `sessionId`   | string         | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
 
+## synap_request_workspace_access
+
+**Request space access** · Group: `spaces` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+
+Ask to join a space BEFORE you work in it, instead of finding out on your first write. Already a member: `status: member` with your `role`, nothing filed. Not a member: files ONE join request for the person to approve (`proposed` is success; a pending one is reused); writes you make there meanwhile are kept on it and replayed when it is approved. Refused, nothing filed, when this key's grant does not reach the space or the space is archived.
+
+| Parameter     | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                               |
+| ------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspaceId` | string | yes      | The space's UUID (synap_list_workspaces).                                                                                                                                                                                                                                                                                                                 |
+| `sessionId`   | string | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
+
 ## synap_file_into_project
 
 **File into project** · Group: `spaces` · readOnlyHint: false · destructiveHint: true · openWorldHint: false
@@ -1606,6 +1631,20 @@ Propose RETIRING a field (a property definition) — including a kind's base fie
 | `propertyDefId` | string | yes      | Property definition UUID.                                                                                                                                                                                                                                                                                                                                 |
 | `reasoning`     | string | no       | Why this field should go — shown to the reviewer. One line.                                                                                                                                                                                                                                                                                               |
 | `sessionId`     | string | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
+
+## synap_change_lifecycle_options
+
+**Change a kind's lifecycle options** · Group: `schema` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+
+Propose adding, relabelling, reordering, recategorising or retiring the options of a kind that already has a lifecycle (a kind with none: synap_declare_lifecycle). `options` is the complete new list, in order: an option you keep needs only its `key` plus what changes (a field you leave out keeps its stored value). A key left out is retired: `remap` names where its records move. Always a proposal, for anyone: `proposed` is success; on approval records at a retired key move and no status-change events are sent. REFUSED, nothing filed, with the reason: a retired key with no `remap`, a new key with no category, a kind with no lifecycle. Keys stay stable: rename what people read with `label`.
+
+| Parameter   | Type          | Required | Description                                                                                                                                                                                                                                                                                                                                               |
+| ----------- | ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `profileId` | string        | yes      | The kind's profile UUID (synap_list_profiles).                                                                                                                                                                                                                                                                                                            |
+| `options`   | array<object> | yes      | The complete new option list, in order. Each: `key`, and for a new key its `category`.                                                                                                                                                                                                                                                                    |
+| `remap`     | object        | no       | Retired key → the kept key its records move to, e.g. { "dropped": "lost" }.                                                                                                                                                                                                                                                                               |
+| `reasoning` | string        | no       | Why — shown to the reviewer. One line.                                                                                                                                                                                                                                                                                                                    |
+| `sessionId` | string        | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
 
 ## synap_declare_lifecycle
 
@@ -1855,12 +1894,13 @@ Discover what the user can actually DO. Returns a SECTIONED view: `integrations`
 
 **List installations** · Group: `capabilities` · readOnlyHint: true · openWorldHint: false
 
-What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, ask with synap_request_installation.
+What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Filter with `computerId` or `capabilityKey`. `installationId` reads ONE row with its approved snapshot (`manifest`, `digests`), the pod's `current` definition and `drift` (same: an update is a repair; changed: an update asks again). Read-only; to install, update, check or remove, ask with synap_request_installation.
 
-| Parameter       | Type   | Required | Description                                                                  |
-| --------------- | ------ | -------- | ---------------------------------------------------------------------------- |
-| `computerId`    | string | no       | One computer's id (its users id).                                            |
-| `capabilityKey` | string | no       | A capability's catalog slug, e.g. media-transcribe: which computers have it. |
+| Parameter        | Type   | Required | Description                                                                  |
+| ---------------- | ------ | -------- | ---------------------------------------------------------------------------- |
+| `computerId`     | string | no       | One computer's id (synap_list_agents).                                       |
+| `capabilityKey`  | string | no       | A capability's catalog slug, e.g. media-transcribe: which computers have it. |
+| `installationId` | string | no       | One installation: its snapshot and drift.                                    |
 
 ## synap_request_installation
 

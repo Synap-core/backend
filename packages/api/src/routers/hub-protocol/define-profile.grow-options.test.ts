@@ -167,7 +167,7 @@ describe("defineProfile — a re-declared field grows its allowed values", () =>
     expect(calls.update).toEqual([]);
     expect(calls.create).toEqual([]);
     expect(field).toMatchObject({ status: "unchanged" });
-    expect(String(field.message)).toContain("changeLifecycleOptions");
+    expect(String(field.message)).toContain("synap_change_lifecycle_options");
   });
 
   it("CONTROL — a re-declared link setting (required) still rides the create batch, which re-links it", async () => {

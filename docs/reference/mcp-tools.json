@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 123,
+  "toolCount": 126,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -31,6 +31,7 @@
       "synap_get_entities",
       "synap_get_entity",
       "synap_get_document",
+      "synap_get_file",
       "synap_get_thread_context",
       "synap_get_relations",
       "synap_get_graph",
@@ -90,7 +91,8 @@
       "synap_grant_profile_access",
       "synap_change_kind_scope",
       "synap_retire_field",
-      "synap_declare_lifecycle"
+      "synap_declare_lifecycle",
+      "synap_change_lifecycle_options"
     ],
     "spaces": [
       "synap_set_workspace_focus",
@@ -107,6 +109,7 @@
       "synap_create_project",
       "synap_update_project",
       "synap_project_use_workspace",
+      "synap_request_workspace_access",
       "synap_file_into_project",
       "synap_export_project_pack"
     ],
@@ -481,6 +484,45 @@
           }
         },
         "required": ["documentId"]
+      }
+    },
+    {
+      "name": "synap_get_file",
+      "title": "Get a stored file",
+      "group": "read",
+      "annotations": {
+        "title": "Get a stored file",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Look at a stored file (a `file` entity: an upload, an image, a PDF). Returns `url`, a signed download link that expires in 15 minutes (`expiresAt`), with `title`, `mimeType` and `size`. A PNG, JPEG, GIF or WebP image up to 3 MB also comes back as an image you can see (`inline.sent`); pass inline:false to get only the link. Refused when the file is outside this key's grant or the person cannot read it: the error says which (`refusedBy`).",
+      "parameters": [
+        {
+          "name": "entityId",
+          "type": "string",
+          "required": true,
+          "description": "The file entity's UUID."
+        },
+        {
+          "name": "inline",
+          "type": "boolean",
+          "required": false,
+          "description": "Default true: send a small image inline. false: the link only."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entityId": {
+            "type": "string",
+            "description": "The file entity's UUID."
+          },
+          "inline": {
+            "type": "boolean",
+            "description": "Default true: send a small image inline. false: the link only."
+          }
+        },
+        "required": ["entityId"]
       }
     },
     {
@@ -10052,6 +10094,46 @@
       }
     },
     {
+      "name": "synap_request_workspace_access",
+      "title": "Request space access",
+      "group": "spaces",
+      "annotations": {
+        "title": "Request space access",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Ask to join a space BEFORE you work in it, instead of finding out on your first write. Already a member: `status: member` with your `role`, nothing filed. Not a member: files ONE join request for the person to approve (`proposed` is success; a pending one is reused); writes you make there meanwhile are kept on it and replayed when it is approved. Refused, nothing filed, when this key's grant does not reach the space or the space is archived.",
+      "parameters": [
+        {
+          "name": "workspaceId",
+          "type": "string",
+          "required": true,
+          "description": "The space's UUID (synap_list_workspaces)."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "description": "The space's UUID (synap_list_workspaces)."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
+        },
+        "required": ["workspaceId"]
+      }
+    },
+    {
       "name": "synap_file_into_project",
       "title": "File into project",
       "group": "spaces",
@@ -10554,6 +10636,92 @@
           }
         },
         "required": ["propertyDefId"]
+      }
+    },
+    {
+      "name": "synap_change_lifecycle_options",
+      "title": "Change a kind's lifecycle options",
+      "group": "schema",
+      "annotations": {
+        "title": "Change a kind's lifecycle options",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Propose adding, relabelling, reordering, recategorising or retiring the options of a kind that already has a lifecycle (a kind with none: synap_declare_lifecycle). `options` is the complete new list, in order: an option you keep needs only its `key` plus what changes (a field you leave out keeps its stored value). A key left out is retired: `remap` names where its records move. Always a proposal, for anyone: `proposed` is success; on approval records at a retired key move and no status-change events are sent. REFUSED, nothing filed, with the reason: a retired key with no `remap`, a new key with no category, a kind with no lifecycle. Keys stay stable: rename what people read with `label`.",
+      "parameters": [
+        {
+          "name": "profileId",
+          "type": "string",
+          "required": true,
+          "description": "The kind's profile UUID (synap_list_profiles)."
+        },
+        {
+          "name": "options",
+          "type": "array<object>",
+          "required": true,
+          "description": "The complete new option list, in order. Each: `key`, and for a new key its `category`."
+        },
+        {
+          "name": "remap",
+          "type": "object",
+          "required": false,
+          "description": "Retired key → the kept key its records move to, e.g. { \"dropped\": \"lost\" }."
+        },
+        {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "profileId": {
+            "type": "string",
+            "description": "The kind's profile UUID (synap_list_profiles)."
+          },
+          "options": {
+            "type": "array",
+            "description": "The complete new option list, in order. Each: `key`, and for a new key its `category`.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": { "type": "string", "description": "The stored value." },
+                "category": {
+                  "type": "string",
+                  "enum": ["open", "active", "paused", "done", "lost"]
+                },
+                "label": {
+                  "type": "string",
+                  "description": "The words people read."
+                }
+              },
+              "required": ["key"]
+            }
+          },
+          "remap": {
+            "type": "object",
+            "description": "Retired key → the kept key its records move to, e.g. { \"dropped\": \"lost\" }.",
+            "additionalProperties": { "type": "string" }
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
+        },
+        "required": ["profileId", "options"]
       }
     },
     {
@@ -12064,19 +12232,25 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, ask with synap_request_installation.",
+      "description": "What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Filter with `computerId` or `capabilityKey`. `installationId` reads ONE row with its approved snapshot (`manifest`, `digests`), the pod's `current` definition and `drift` (same: an update is a repair; changed: an update asks again). Read-only; to install, update, check or remove, ask with synap_request_installation.",
       "parameters": [
         {
           "name": "computerId",
           "type": "string",
           "required": false,
-          "description": "One computer's id (its users id)."
+          "description": "One computer's id (synap_list_agents)."
         },
         {
           "name": "capabilityKey",
           "type": "string",
           "required": false,
           "description": "A capability's catalog slug, e.g. media-transcribe: which computers have it."
+        },
+        {
+          "name": "installationId",
+          "type": "string",
+          "required": false,
+          "description": "One installation: its snapshot and drift."
         }
       ],
       "inputSchema": {
@@ -12084,11 +12258,15 @@
         "properties": {
           "computerId": {
             "type": "string",
-            "description": "One computer's id (its users id)."
+            "description": "One computer's id (synap_list_agents)."
           },
           "capabilityKey": {
             "type": "string",
             "description": "A capability's catalog slug, e.g. media-transcribe: which computers have it."
+          },
+          "installationId": {
+            "type": "string",
+            "description": "One installation: its snapshot and drift."
           }
         },
         "required": []

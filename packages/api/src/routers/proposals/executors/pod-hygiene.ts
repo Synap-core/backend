@@ -7,6 +7,10 @@
  *                            re-running its preflight (the same always-pending
  *                            schema policy as property_def/retire, so it
  *                            shares this file's approval bookkeeping)
+ *   property_def/change_lifecycle_options
+ *                            relabel, reorder or retire a lifecycle's options
+ *                            through the lifecycle door (same always-pending
+ *                            schema policy)
  *   profile/merge            the retire refusal's merge suggestion, applied by
  *                            the conversions engine (pod admin only)
  *   pod_hygiene/cleanup_pack apply the APPROVED items of a pack through the
@@ -48,6 +52,10 @@ import {
   applyKindLifecycle,
   kindLifecycleInputFromProposal,
 } from "../../../services/lifecycle/declare-kind-lifecycle.js";
+import {
+  applyLifecycleOptionsChange,
+  lifecycleOptionsChangeInputFromProposal,
+} from "../../../services/lifecycle/change-lifecycle-options.js";
 import {
   registerProposalExecutor,
   type ProposalExecutorArgs,
@@ -403,6 +411,38 @@ export function registerPodHygieneExecutors(): void {
           ids: [result.propertyDefId],
           subject: "property_defs",
         },
+      };
+    },
+  });
+
+  registerProposalExecutor({
+    key: "property_def/change_lifecycle_options",
+    async execute(args): Promise<ProposalExecutorResult> {
+      if (await alreadyApproved(args.input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      const result = await applyLifecycleOptionsChange({
+        approverUserId: args.userId,
+        sourceProposalId: args.input.proposalId,
+        input: lifecycleOptionsChangeInputFromProposal(args.proposal),
+      });
+      await markApproved(args, { lifecycleChange: result });
+      return {
+        success: true,
+        primaryId: args.proposal.targetId,
+        effect:
+          result.status === "changed"
+            ? {
+                applied: "verified",
+                rows: 1,
+                ids: [args.proposal.targetId],
+                subject: "property_defs",
+              }
+            : {
+                applied: "none",
+                reason:
+                  "The lifecycle already had these options when it was approved.",
+              },
       };
     },
   });
