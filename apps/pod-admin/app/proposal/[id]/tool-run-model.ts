@@ -13,6 +13,7 @@
  *   - a secret as a mark: the pod never sent its value.
  */
 
+import { isUuid } from "@synap-core/types/property-render";
 import type {
   ProposalToolRun,
   ProposalToolRunParameter,
@@ -94,12 +95,10 @@ function isWide(value: ToolRunValue): boolean {
   );
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** An identifier: said once behind Details, never as the card's content. */
 function isIdLike(key: string, text: string): boolean {
   const t = text.trim();
-  if (UUID.test(t)) return true;
+  if (isUuid(t)) return true;
   return /(^|[_\s-])ids?$|[a-z]Ids?$/.test(key) && !/\s/.test(t);
 }
 
