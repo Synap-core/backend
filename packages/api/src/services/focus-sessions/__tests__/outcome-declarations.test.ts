@@ -6,6 +6,8 @@ import {
   splitOutcomes,
   upsertOutcomes,
   mergeOutcomesForStart,
+  declaresVerify,
+  factOutcomeWarnings,
 } from "../outcome-declarations.js";
 import { mergeExpectedOutputs } from "../update-session.js";
 
@@ -132,6 +134,65 @@ describe("update: outcomes UPSERT by key", () => {
     expect(
       outcomeDeclarationsSchema.safeParse([{ label: "X", status: "done" }])
         .success
+    ).toBe(false);
+  });
+});
+
+describe("a fact outcome's slot-only fields (ticket c590b571)", () => {
+  it("names each field a fact outcome cannot keep, instead of dropping it in silence", () => {
+    const outcomes = outcomeDeclarationsSchema.parse([
+      {
+        key: "spec-approved",
+        kind: "fact",
+        label: "The founder approved the spec",
+        owner: "human",
+        blockedReason: "decision",
+        ask: { mode: "confirm", prompt: "Approve the spec?" },
+      },
+      { key: "deck", kind: "document", label: "Deck", owner: "human" },
+      { key: "tests", kind: "fact", label: "Tests pass" },
+    ]);
+    // The criterion really has no owner or ask: what the warning says.
+    const { criteria } = splitOutcomes(outcomes);
+    expect(criteria[0]).not.toHaveProperty("owner");
+    expect(criteria[0]).not.toHaveProperty("ask");
+    const warnings = factOutcomeWarnings(outcomes);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('"The founder approved the spec"');
+    for (const f of ["owner", "blockedReason", "ask"]) {
+      expect(warnings[0]).toContain(`\`${f}\``);
+    }
+    expect(warnings[0]).toContain('verify: { kind: "human" }');
+  });
+
+  it("says nothing for a plain fact or any deliverable", () => {
+    expect(factOutcomeWarnings(undefined)).toEqual([]);
+    expect(
+      factOutcomeWarnings(
+        outcomeDeclarationsSchema.parse([
+          { kind: "fact", label: "Tests pass", verify: { kind: "evidence" } },
+          { kind: "decision", label: "Pick", owner: "human" },
+        ])
+      )
+    ).toEqual([]);
+  });
+});
+
+describe("declaresVerify — an outcome with `verify` says what done means (ticket d24c5897)", () => {
+  it("counts a deliverable checked by its own evidence, which makes no criterion", () => {
+    const outcomes = outcomeDeclarationsSchema.parse([
+      { kind: "pull_request", label: "The PR", verify: { kind: "evidence" } },
+    ]);
+    expect(splitOutcomes(outcomes).criteria).toEqual([]);
+    expect(declaresVerify(outcomes)).toBe(true);
+  });
+
+  it("does not count an outcome with no verify", () => {
+    expect(declaresVerify(undefined)).toBe(false);
+    expect(
+      declaresVerify(
+        outcomeDeclarationsSchema.parse([{ kind: "document", label: "Deck" }])
+      )
     ).toBe(false);
   });
 });

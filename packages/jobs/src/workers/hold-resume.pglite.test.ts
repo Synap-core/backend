@@ -567,6 +567,38 @@ describe("a wait on the person (until.moves = answer: / proposal:)", () => {
     );
   });
 
+  it("a proposal's transition is the ONE trigger of its waits: one check per move, keyed by the move", async () => {
+    const sent: Array<{ queue: string; data: unknown; opts: unknown }> = [];
+    const boss = {
+      send: async (queue: string, data: unknown, opts: unknown) =>
+        void sent.push({ queue, data, opts }),
+    };
+    const moved = (eventId: string, to: string) =>
+      holdResumeReactor.handler(
+        {
+          subjectType: "proposal",
+          subjectId: "p-1",
+          action: "transition",
+          eventId,
+          data: { from: "pending", to, category: "done", hold: null },
+        } as never,
+        { boss } as never
+      );
+    await moved("e-approve", "approved");
+    const waits = sent.filter(
+      (s) =>
+        (s.data as { waits?: { proposalId?: string } }).waits?.proposalId ===
+        "p-1"
+    );
+    expect(waits).toEqual([
+      {
+        queue: HOLD_RESUME_QUEUE,
+        data: { waits: { proposalId: "p-1" } },
+        opts: { singletonKey: "hold-resume:proposal:e-approve" },
+      },
+    ]);
+  });
+
   it("a wait on someone else's session, an undeclared slot or someone else's proposal is refused when it is set", async () => {
     const waiter = await session();
     const theirs = await withSlot("u2");

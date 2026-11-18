@@ -303,6 +303,10 @@ export async function gateCapabilityExecution(
   // of only the row id (reinstall-unstable). `null` for commands (no row) or a
   // pre-loaded row that omitted `name`.
   let verbName: string | null = null;
+  // The intent the verb serves (a skill only; `undefined` = not loaded yet):
+  // a propose-only intent (a public post) is never widened by a rule or an
+  // auto grant, whatever the verb is named (`capabilityVerbAllowsRuleWiden`).
+  let knownIntent: string | null | undefined = null;
 
   if (input.capabilityKind === "tool") {
     let row = input.tool ?? null;
@@ -332,6 +336,7 @@ export async function gateCapabilityExecution(
           approved: skills.approved,
           userId: skills.userId,
           name: skills.name,
+          intent: skills.intent,
         })
         .from(skills)
         .where(eq(skills.id, input.capabilityId));
@@ -340,6 +345,7 @@ export async function gateCapabilityExecution(
     approved = row?.approved ?? null;
     ownerId = row?.userId ?? null;
     verbName = row?.name ?? null;
+    knownIntent = row ? row.intent : null;
   } else {
     // commands have no approved/owner column today → conservative defaults.
     approved = null;
@@ -362,6 +368,12 @@ export async function gateCapabilityExecution(
         "This capability is installed but not yet enabled. Ask the user to enable it (Tools), or run with dryRun to preview.",
     };
   }
+
+  // Read only when a widening is about to be decided; a row pre-loaded
+  // without its intent is read, never assumed to have none.
+  let intentRead: Promise<string | null> | null = null;
+  const verbIntent = (): Promise<string | null> =>
+    (intentRead ??= readVerbIntent(input, knownIntent));
 
   // The capability rule for this agent run, read ONCE: the "Never" check
   // below and both widening checks further down derive their answer from it.
@@ -519,7 +531,10 @@ export async function gateCapabilityExecution(
       // proposal (a human can approve the run); do NOT hard-deny.
       // #4: an untrusted origin can NEVER be widened to run by a rule (rung
       // 2.55 sits above rung 2.8) — skip the rule shortcut and propose.
-      if (!originUntrusted && capabilityRuleAuthorizesRun(rule, verbName)) {
+      if (
+        !originUntrusted &&
+        (await capabilityRuleAuthorizesRun(rule, verbName, verbIntent))
+      ) {
         return { decision: "run" };
       }
       // The policy has NOT run on this path — it short-circuits above the
@@ -565,7 +580,7 @@ export async function gateCapabilityExecution(
   if (verdict.verdict === "execute") {
     // An auto grant must not publish. The rule path is refused inside
     // capabilityRuleAuthorizesRun; this is the grant-execMode auto path.
-    if (!capabilityVerbAllowsRuleWiden(verbName)) {
+    if (!capabilityVerbAllowsRuleWiden(verbName, await verbIntent())) {
       return buildProposeDecision(input, "CAPABILITY_PROPOSE");
     }
     return { decision: "run" };
@@ -576,7 +591,10 @@ export async function gateCapabilityExecution(
   // propose — consult a stored capability rule (Option B) before falling
   // through to a reviewable `capability/run` proposal. #4: an untrusted origin
   // can NEVER be widened to run by a rule (rung 2.55 sits above rung 2.8).
-  if (!originUntrusted && capabilityRuleAuthorizesRun(rule, verbName)) {
+  if (
+    !originUntrusted &&
+    (await capabilityRuleAuthorizesRun(rule, verbName, verbIntent))
+  ) {
     return { decision: "run" };
   }
   // The verdict already carries the structured cause (the policy emits
@@ -698,13 +716,29 @@ async function resolveCapabilityRule(
  * action) for a capability run (`NAMED_RULE_ONLY_EVENT_KEYS`, the outward
  * floor), so "Everything, always" never sends a message on its own.
  */
-function capabilityRuleAuthorizesRun(
+async function capabilityRuleAuthorizesRun(
   rule: GovernanceRuleMatch | undefined,
-  verbName: string | null
-): boolean {
+  verbName: string | null,
+  verbIntent: () => Promise<string | null>
+): Promise<boolean> {
+  if (rule?.verdict !== "auto") return false;
   // A public post stays a proposal even when a lane rule says auto.
-  if (!capabilityVerbAllowsRuleWiden(verbName)) return false;
-  return rule?.verdict === "auto";
+  return capabilityVerbAllowsRuleWiden(verbName, await verbIntent());
+}
+
+/** The verb's intent: a skill's, read when its row came without it. */
+async function readVerbIntent(
+  input: GateCapabilityExecutionInput,
+  known: string | null | undefined
+): Promise<string | null> {
+  if (input.capabilityKind !== "skill") return null;
+  if (known !== undefined) return known;
+  const db = await getDb();
+  const [row] = await db
+    .select({ intent: skills.intent })
+    .from(skills)
+    .where(eq(skills.id, input.capabilityId));
+  return row?.intent ?? null;
 }
 
 /**

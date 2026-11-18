@@ -287,10 +287,10 @@ describe("proposals.status has one writer: transitionProposal", () => {
       "These write proposals.status outside the status door. Use transitionProposal (@synap/database): it adds the transition table's guard to your WHERE, so a decided proposal is never overwritten. A data-only update stays a plain update(proposals)."
     ).toEqual([]);
   });
-  // Reactions W1: the door OWES each move's transition, in the same
-  // transaction as its compare-and-set — so every caller owes, whatever it
-  // passes. A refactor that writes without owing (or outside the lock) goes
-  // red here before any reaction misses a move.
+  // The door OWES each move's transition, in the same transaction as its
+  // compare-and-set — so every caller owes, whatever it passes. A refactor that
+  // writes without owing (or outside the lock) goes red here before any
+  // reaction misses a move.
   it("the door locks, owes and writes in ONE statement", () => {
     const src = readFileSync(join(REPO, DOOR), "utf8");
     const door = src.slice(src.indexOf("export function transitionProposal("));

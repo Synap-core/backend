@@ -5,7 +5,7 @@
  * same body `/open/automation/:id` draws in the receiver card; this route only
  * supplies the console frame (crumb back to Rules) and the run drawer its run
  * rows open, as a template's do. A rule the POD applies (`builtin:…`,
- * `declared:…`, plan 7d71ddcc) is no automation: it draws `PodRuleObject`.
+ * `declared:…`) is no automation: it draws `PodRuleObject`.
  */
 
 import { useParams } from "next/navigation";

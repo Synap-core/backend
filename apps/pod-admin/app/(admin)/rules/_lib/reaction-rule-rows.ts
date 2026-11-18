@@ -1,8 +1,8 @@
 /**
- * The pure half of the rules the POD applies (plan 7d71ddcc, decision D8:
- * the person sees one "Rules" list): the built-in rules and the roll-ups a
- * relation declares, read by `skills.listReactionRules`, drawn in the SAME
- * list as the automations, with the same filters, pill and one act.
+ * The pure half of the rules the POD applies (decision D8: the person sees one
+ * "Rules" list): the built-in rules and the roll-ups a relation declares, read
+ * by `skills.listReactionRules`, drawn in the SAME list as the automations,
+ * with the same filters, pill and one act.
  *
  * A pod rule is shaped as a rule row (`RuleFacts` + `RuleHealth`) so the
  * list's one set of predicates (`rule-rows.ts`) decides it like any other:

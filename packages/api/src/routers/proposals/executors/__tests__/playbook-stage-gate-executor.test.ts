@@ -57,7 +57,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       return { rows: updateReturns, transitions: [] };
     },
     db: {
-      // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+      // The proposal door's one statement (`WITH … UPDATE`).
       $with: () => ({ as: () => ({}) }),
       with() {
         return this;

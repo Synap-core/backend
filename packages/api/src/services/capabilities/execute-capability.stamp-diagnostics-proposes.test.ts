@@ -46,6 +46,9 @@ const builtin = (name: string) => ({
   kind: "builtin",
   providerSpec: null,
   metadata: {},
+  // The execute door always loads the verb's intent (the gate reads it before
+  // any widening, and reads the row again when it is missing).
+  intent: null,
 });
 
 vi.mock("@synap/database", async (importOriginal) => {

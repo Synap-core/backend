@@ -27,6 +27,13 @@
  * their pod. Every other own field of a pod-wide record stays refused (403).
  * No grant on the request (a signed-in session, an approval the person
  * replays) = no exception needed: null.
+ *
+ * The same reach (role in a key space, `entity.person.update` there) carries
+ * ONE more patch: a person's do-not-contact opt-out (`isDoNotContactSetWrite`,
+ * `services/channels/do-not-contact-fields.ts`). That one is checked in the
+ * role's space and APPLIED, not proposed: it only restricts sending
+ * (`routers/entities/mutate.ts`, the gate's de-escalation escape). Clearing
+ * it is not a reach patch: refused here like any other own field.
  */
 
 import {

@@ -911,6 +911,14 @@ export const readHandlers: McpHandlerMap = {
   synap_get_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    // Named HERE, by the tool's own input name: past this point it is the
+    // router's `id`, and a call without it failed on a field called `id`,
+    // which read as "you passed nothing" (ticket 2d61ff7c).
+    if (typeof args.entityId !== "string" || args.entityId.trim() === "") {
+      return toolError(
+        `${toolName} needs \`entityId\`: the entity's id (synap_ask or synap_get_entities find one).`
+      );
+    }
     // Hub protocol doesn't expose a single-entity get; use regular entities router
     const entityCallerCtx = await createHubProtocolCallerContext(
       userId,

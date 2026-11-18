@@ -34,6 +34,7 @@ import {
   or,
   focusSessions,
   links,
+  projectTracks,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
@@ -69,6 +70,17 @@ export interface SessionListQuery {
   lens?: SessionLens;
   kind?: SessionKindFilter;
   flow?: { playbookId?: string; automationId?: string };
+  /**
+   * Only the sessions that FOLLOW this playbook, either way a session can
+   * (`sessionFollowsPlaybookWhere`): run from it (its own `playbookId`), OR
+   * filed in a goal (track) whose METHOD it is (`project_tracks.playbook_id`).
+   * Founder decision D2 (2026-11-17, the Operations view's "by playbook"
+   * lane): most dev work is placed through its goal, not on the session.
+   * Deliberately NOT `flow.playbookId`, which keeps its narrower meaning (a
+   * playbook's own runs) for the doors that already read it. Goal-filed
+   * sessions are often `run`-kind: pair with `kind: "all"` to see them.
+   */
+  followsPlaybookId?: string;
   statusSince?: StatusSinceWindows;
   /**
    * NARROW to rows settled at or after this ISO instant (`settledSinceWhere`:
@@ -163,6 +175,31 @@ export function workAndTrackedRunsWhere(): SQL {
   ) as SQL;
 }
 
+/**
+ * "This session follows playbook X" — THE predicate, ONE place, so the list's
+ * flow filter and the work graph's playbook lane cannot drift.
+ *   - `viaGoal: false`: run FROM the playbook, `focus_sessions.playbook_id`.
+ *     (`template_id` is not read: a session that RELEASED its playbook keeps
+ *     its `template_id` and has `playbook_id` set to NULL,
+ *     `follow-playbook.ts`; matching it would list a session that no longer
+ *     follows the playbook.)
+ *   - `viaGoal: true`: that, OR filed in a goal whose method is the playbook
+ *     (`track_id` IN the tracks with that `playbook_id`). The predicate only
+ *     narrows sessions the floor already admits and returns no track data,
+ *     so the track floor is not re-applied.
+ */
+export function sessionFollowsPlaybookWhere(
+  playbookId: string,
+  opts: { viaGoal: boolean }
+): SQL {
+  const own = eq(focusSessions.playbookId, playbookId);
+  if (!opts.viaGoal) return own;
+  return or(
+    own,
+    drizzleSql`${focusSessions.trackId} IN (SELECT pt.id FROM ${projectTracks} pt WHERE pt.playbook_id = ${playbookId}::uuid)`
+  ) as SQL;
+}
+
 export function sessionListConditions({
   userId,
   scope: { workspaceLens, projectLens },
@@ -170,6 +207,7 @@ export function sessionListConditions({
   lens = "default",
   kind = "work",
   flow = {},
+  followsPlaybookId,
   statusSince,
   settledSince,
   openOrSettledSince,
@@ -260,7 +298,14 @@ export function sessionListConditions({
   // under-reports once the flow has run more than `limit` times. Both name a
   // DEFINITION, never one execution.
   if (flow.playbookId) {
-    conditions.push(eq(focusSessions.playbookId, flow.playbookId));
+    conditions.push(
+      sessionFollowsPlaybookWhere(flow.playbookId, { viaGoal: false })
+    );
+  }
+  if (followsPlaybookId) {
+    conditions.push(
+      sessionFollowsPlaybookWhere(followsPlaybookId, { viaGoal: true })
+    );
   }
   if (flow.automationId) {
     conditions.push(sessionAutomationWhere(flow.automationId));

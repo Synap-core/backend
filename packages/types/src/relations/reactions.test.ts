@@ -1,7 +1,7 @@
 /**
- * The roll-up a link declares (plan 7d71ddcc W3): its closed declaration, the
- * decision D5 (lost parts are ignored, at least one part must be done) and
- * the parent's target status. Pure.
+ * The roll-up a link declares: its closed declaration, the decision D5 (lost
+ * parts are ignored, at least one part must be done) and the parent's target
+ * status. Pure.
  *
  * NEGATIVE CONTROL: the `-negctl` branch counts a lost part as open; "a lost
  * part is ignored" then fails (the parent never rolls up).

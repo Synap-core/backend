@@ -329,6 +329,24 @@ describe("what never runs on its own", () => {
     expect(read.modes[0]).toMatchObject({ mayRunOnItsOwn: false });
   });
 
+  it("a public post under ANOTHER name (its intent is publish_post) always asks too (c7feaa6e)", async () => {
+    const OTHER_POST = "unipile_publish_post";
+    await q(
+      `insert into skills (id, name, approved, user_id, intent) values ($1, $2, true, $3, 'publish_post')`,
+      [randomUUID(), OTHER_POST, ALICE]
+    );
+    const err = await errorOf(
+      caller(ALICE).setActionMode({ action: OTHER_POST, mode: "auto" })
+    );
+    expect(err.code).toBe("PRECONDITION_FAILED");
+    expect(err.cause?.reasonCode).toBe("ACTION_ALWAYS_ASKS");
+    expect(await activeRules(OTHER_POST)).toEqual([]);
+    const read = await caller(ALICE).actionModes({
+      actions: [OTHER_POST, ACTION],
+    });
+    expect(read.modes.map((m) => m.mayRunOnItsOwn)).toEqual([false, true]);
+  });
+
   it("a name that is no action on this pod is refused (a rule that never fires)", async () => {
     const err = await errorOf(
       caller(ALICE).setActionMode({ action: "no_such_action", mode: "auto" })

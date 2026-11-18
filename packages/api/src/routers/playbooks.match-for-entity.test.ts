@@ -305,8 +305,9 @@ describe("playbooks.matchForEntity", () => {
 
     expect(result.map((r) => r.id)).toEqual(["pb-review", "pb-archive"]);
     // Each word is in 1 of the 2 candidates: rarity ln(1 + 2/1) per word
-    // (suggest-routes.ts, RARITY), × 3 per word, + 2 for the kind.
-    expect(result[0]!.score).toBeCloseTo(3 * 2 * Math.log(3) + 2, 10);
+    // (suggest-routes.ts, RARITY), × 3 per word and × 3 again for a word in
+    // the NAME (both are), + 2 for the kind.
+    expect(result[0]!.score).toBeCloseTo((3 + 3) * 2 * Math.log(3) + 2, 10);
     expect(result[0]).toMatchObject({
       reason: "You mentioned “review”, “weekly” · Made for post items",
       signals: [
@@ -385,6 +386,9 @@ describe("playbooks.matchForEntity", () => {
         name: "Legacy playbook",
         scope: "session",
         templateKind: "Process",
+        // The words must reach the name or the description (the relevance
+        // floor, suggest-routes.ts): a goal-template-only match is not offered.
+        description: "Do the thing",
         goalTemplate: "Do the thing",
         params: [],
         executor: "is-agent",
@@ -482,6 +486,9 @@ describe("playbooks.matchForEntity", () => {
       {
         id: "pb-plan",
         name: "Plan Next Content",
+        // The relevance floor reads the name or the description, never the
+        // goal template alone (suggest-routes.ts).
+        description: "Decide what to publish next",
         goalTemplate: "Decide what to publish next",
         params: [],
         executor: "is-agent",

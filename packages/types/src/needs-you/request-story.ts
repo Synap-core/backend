@@ -29,11 +29,12 @@ import type {
   LensVerb,
 } from "../lens/rows.js";
 import { FATE_COPY, type ProposalWaitReason } from "../proposals/fate.js";
-import type {
-  DevTimelineEvent,
-  DevTimelineEventKind,
+import {
+  SESSION_CHAIN_EVENT_KINDS,
+  type DevTimelineEvent,
+  type DevTimelineEventKind,
 } from "../units/timeline.js";
-import { resolveStatusLabel } from "../vocabulary/index.js";
+import { humanizeToken, resolveStatusLabel } from "../vocabulary/index.js";
 import type { NeedsYouBlocks } from "./context.js";
 import { needsYouT } from "./copy.js";
 import type {
@@ -309,7 +310,24 @@ export function requestStoryLine(e: DevTimelineEvent, locale?: Locale): string {
       });
     case "slot_handed_back":
       return t("needsYou.story.slotHandedBack", { slot: e.slot });
+    // The session chain's kinds never reach a story (`isStoryEvent`).
+    case "stage_moved":
+    case "child_started":
+    case "runner_seen":
+    case "room_post":
+      return humanizeToken(e.kind);
   }
+}
+
+const CHAIN_KINDS: ReadonlySet<string> = new Set(SESSION_CHAIN_EVENT_KINDS);
+
+/**
+ * The story tells a request's own past (asks, decisions, dev facts, moves);
+ * the session chain's kinds (stage moves, spawns, runners, room posts) are the
+ * Operations session lens's, and would crowd the capped Before.
+ */
+function isStoryEvent(e: DevTimelineEvent): boolean {
+  return !CHAIN_KINDS.has(e.kind);
 }
 
 /** A subject and where it opens: an in-pod object's door, else its link. */
@@ -424,6 +442,7 @@ export function requestStory(
     if (sessionCtx.timeline.status === "ok") {
       const read = sessionCtx.timeline.value.events; // newest first
       const past = read
+        .filter(isStoryEvent)
         .filter((e) => isAboutTheRequest(e, row, rowCtx))
         .filter((e) => !isTheRequest(e, rowCtx))
         .reverse();

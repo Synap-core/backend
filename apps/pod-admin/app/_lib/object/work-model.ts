@@ -112,6 +112,33 @@ export function offersContinue(read: WorkRead): boolean {
   return workItems(read).some((i) => continueButton(i) !== null);
 }
 
+/**
+ * Where the session page's restart sits: `none` while the work read loads (so
+ * Run again never flashes in the header and then moves), `more` when the read
+ * offers Continue, else `header`. A failed read keeps Run again in the header.
+ */
+export function restartPlace(input: {
+  canRerun: boolean;
+  loading: boolean;
+  read: WorkRead;
+}): "header" | "more" | "none" {
+  if (!input.canRerun || input.loading) return "none";
+  return offersContinue(input.read) ? "more" : "header";
+}
+
+/**
+ * The proposals Proposed changes leaves out because the work section draws
+ * them: `pending` while the work read loads (the list waits, so a gate never
+ * flashes there first); the drawn gate ids once it lands; none when it failed
+ * (the gate stays reachable in the list).
+ */
+export function gatesDrawnAbove(input: {
+  loading: boolean;
+  read: WorkRead;
+}): ReadonlySet<string> | "pending" {
+  return input.loading ? "pending" : gateProposalIds(input.read);
+}
+
 /** The gate proposals the work section draws as cards (pending, waiting on a person). */
 export function gateProposalIds(read: WorkRead): Set<string> {
   return new Set(

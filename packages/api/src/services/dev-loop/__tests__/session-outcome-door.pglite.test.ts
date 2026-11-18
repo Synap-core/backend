@@ -139,7 +139,7 @@ const prSlot = (n: number, extra: Record<string, unknown> = {}) => ({
 
 beforeAll(async () => {
   await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
-  // The slot doors owe their transition (reactions W1).
+  // The slot doors owe their transition.
   await h.client!.exec(ddlFor(lifecycleTransitionOutbox as unknown as PgTable));
 }, 120_000);
 afterAll(async () => {

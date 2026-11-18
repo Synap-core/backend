@@ -82,7 +82,7 @@ export function findLifecycleOption(
  * a playbook run through `setRunStatus`; a proposal through
  * `transitionProposal`; an owed slot (a session's declared output, whose
  * status is DERIVED, `slotStatusOf`) through the slot doors, which owe a move
- * when its derived status changes (reactions W1). All six write the SAME shape
+ * when its derived status changes. All six write the SAME shape
  * below, through the same outbox.
  */
 export const TRANSITION_SUBJECT_TYPES = [
@@ -96,11 +96,11 @@ export const TRANSITION_SUBJECT_TYPES = [
 export type TransitionSubjectType = (typeof TRANSITION_SUBJECT_TYPES)[number];
 
 /**
- * WHY a move happened when another move caused it (reactions W2): the
- * reaction that fired, the transition that fired it, the chain it belongs to
- * and how deep in that chain it is. Absent on a move nobody's move caused.
- * Carried only: nothing in W1 writes or reads it, and it is never part of
- * what makes a move a move.
+ * WHY a move happened when another move caused it: the reaction that fired, the
+ * transition that fired it, the chain it belongs to and how deep in that chain
+ * it is. Absent on a move nobody's move caused. It says why, never whether: the
+ * reactions guards read its chain and depth, the history shows it, and it is
+ * never part of what makes a move a move.
  */
 export interface TransitionCause {
   reactionId?: string;
@@ -143,6 +143,13 @@ export interface TransitionBase {
   /** A person moved it from a value they had not seen ("moved meanwhile"). */
   staleExpected: boolean;
   proposalId: string | null;
+  /**
+   * The person whose approval of a proposal applied this move (the
+   * proposal's `reviewedBy`); absent when no one approved it. What the move
+   * sets off acts as them (founder, 17 Nov 2026: the approver acts), while
+   * `agentUserId` keeps the agent that proposed it.
+   */
+  approvedBy?: string | null;
   /** The lens the move happened in. */
   workspaceId: string | null;
   /**
@@ -165,7 +172,7 @@ export interface TransitionBase {
    * moves, whose statuses declare no waits).
    */
   wait?: TransitionWait;
-  /** The move that caused this one (reactions W2); absent otherwise. */
+  /** The move that caused this one; absent otherwise. */
   cause?: TransitionCause;
 }
 

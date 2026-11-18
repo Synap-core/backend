@@ -246,6 +246,11 @@ export interface ApplyStatusMoveInput {
   reason?: string | null;
   proposalId?: string | null;
   /**
+   * The person whose approval of `proposalId` applies this move
+   * (`TransitionBase.approvedBy`): what the move sets off acts as them.
+   */
+  approvedBy?: string | null;
+  /**
    * Strict compare-and-set even for a human actor (an approval replay).
    * Agents and the system are always strict.
    */
@@ -271,7 +276,7 @@ export interface ApplyStatusMoveInput {
    * move between two paused statuses keeps the hold it had).
    */
   hold?: Hold | null;
-  /** The move that caused this one (a reaction, reactions W2). */
+  /** The move that caused this one (a reaction). */
   cause?: TransitionCause | null;
 }
 
@@ -493,6 +498,10 @@ export async function applyStatusMove(
       reason: input.reason ?? null,
       staleExpected: human && expressed && expected !== current,
       proposalId: input.proposalId ?? null,
+      // Only a move that names its proposal can say who approved it.
+      ...(input.approvedBy && input.proposalId
+        ? { approvedBy: input.approvedBy }
+        : {}),
       workspaceId: target.workspaceId ?? input.lensWorkspaceId ?? null,
       ...stamp,
       hold: held.hold,

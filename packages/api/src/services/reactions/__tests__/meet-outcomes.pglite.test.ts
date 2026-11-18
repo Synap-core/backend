@@ -1,9 +1,9 @@
 /**
- * POD DEFAULT 3 — "an outcome is met wherever it was filed" (plan 7d71ddcc
- * W2), on PGlite. The live defect (incident 4a741e36): four recipe proposals
- * were filed under an ambient session, approved, and the WORK session's
- * outcomes — whose `ref` named those very playbooks — stayed Pending for 7
- * days. The approval met nothing outside the session it was filed under.
+ * POD DEFAULT 3 — "an outcome is met wherever it was filed", on PGlite. The
+ * live defect (incident 4a741e36): four recipe proposals were filed under an
+ * ambient session, approved, and the WORK session's outcomes — whose `ref`
+ * named those very playbooks — stayed Pending for 7 days. The approval met
+ * nothing outside the session it was filed under.
  *
  * Real: the proposal door (`transitionProposal`, which owes the approval's
  * transition), the rule's match and guards (`@synap/jobs` reactions), the

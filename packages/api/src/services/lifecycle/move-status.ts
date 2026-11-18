@@ -93,6 +93,12 @@ export interface MoveStatusInput {
   /** An approved proposal replaying this move — governance already decided. */
   approvedProposalId?: string | null;
   /**
+   * The person who approved `approvedProposalId`. What the move sets off
+   * (its automations, its fan-out) acts as them; the agent stays the
+   * proposer (`actor.agentUserId`). Ignored without `approvedProposalId`.
+   */
+  approvedBy?: string | null;
+  /**
    * What a move into a paused status waits on (W4). An agent's pause without
    * one is refused (`HOLD_REQUIRED`) before anything is filed; a person's or
    * the system's is recorded `unspecified`.
@@ -120,9 +126,9 @@ export interface MoveStatusInput {
    */
   atSessionBirth?: boolean;
   /**
-   * The move that caused this one (reactions W2): a reaction's move, or the
-   * approval replay of a move a reaction proposed. Stamped on the transition
-   * so its history says "moved because X moved".
+   * The move that caused this one: a reaction's move, or the approval replay of
+   * a move a reaction proposed. Stamped on the transition so its history says
+   * "moved because X moved".
    */
   cause?: TransitionCause | null;
   /**
@@ -560,6 +566,7 @@ export async function moveStatus(
     sessionId: input.sessionId,
     reason: input.reason,
     proposalId: input.approvedProposalId ?? receiptId ?? null,
+    approvedBy: input.approvedProposalId ? (input.approvedBy ?? null) : null,
     lensWorkspaceId: input.workspaceId,
     hold,
     occurredAt,

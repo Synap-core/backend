@@ -1,8 +1,7 @@
 /**
- * REACTIONS → RULES (plan 7d71ddcc W3, decision D1), on PGlite: every rule
- * the reactor applies — built-in and declared — gets ONE row in the pod's
- * rule list, through the rule door, and the person's pause of that row is
- * what the reactor reads.
+ * REACTIONS → RULES (decision D1), on PGlite: every rule the reactor applies —
+ * built-in and declared — gets ONE row in the pod's rule list, through the rule
+ * door, and the person's pause of that row is what the reactor reads.
  *
  *  - the first pass seeds one row per rule (prose, `metadata.rule.reaction`,
  *    the seed stamp, no automation), owned by the pod owner — or by the

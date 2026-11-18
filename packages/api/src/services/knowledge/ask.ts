@@ -61,6 +61,7 @@ import type { AskDetail } from "./synthesize.js";
 import { searchLibraryForAsk } from "../library/ask-lane.js";
 import type { AskSpacesHint } from "../discover/space-catalog.js";
 import { isQueueQuestion, type AskQueueBlock } from "./queue-question.js";
+import { withoutEpisodicNoise } from "./episodic-noise.js";
 import {
   describeAppliedLens,
   type AppliedLens,
@@ -504,7 +505,8 @@ export async function ask(params: AskParams): Promise<AskResult> {
   if (episodic) {
     answers.push({
       substrate: "episodic",
-      items: episodic.items,
+      // Repeated lines and empty tool runs are not sources (episodic-noise).
+      items: withoutEpisodicNoise(episodic.items),
       status: episodic.status,
     });
     if (episodic.status === "error") degraded.push("episodic");
