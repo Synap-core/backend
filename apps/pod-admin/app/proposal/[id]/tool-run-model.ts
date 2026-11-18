@@ -13,6 +13,7 @@
  *   - a secret as a mark: the pod never sent its value.
  */
 
+import { isUuid } from "@synap-core/types/property-render";
 import type {
   ProposalToolRun,
   ProposalToolRunParameter,
@@ -32,6 +33,19 @@ export interface ToolRunArgument {
   value: ToolRunValue;
   /** Takes the section's whole width (code, long text). */
   wide: boolean;
+  /**
+   * What the card shows by default is what the tool DOES: the text, the
+   * account in words. An id, a credential or an empty value is `detail`, said
+   * once behind "Details".
+   */
+  detail: boolean;
+  /**
+   * The person may change it before approving (text only in v1): the stored
+   * value is text, not a credential, not an id, not a link.
+   */
+  editable: boolean;
+  /** The text as the agent proposed it, when `editable`. */
+  raw: string | null;
 }
 
 /** A single-line text past this many characters takes the whole width. */
@@ -81,18 +95,66 @@ function isWide(value: ToolRunValue): boolean {
   );
 }
 
-/** Every argument of the call, in the pod's order, each with its reading. */
+/** An identifier: said once behind Details, never as the card's content. */
+function isIdLike(key: string, text: string): boolean {
+  const t = text.trim();
+  if (isUuid(t)) return true;
+  return /(^|[_\s-])ids?$|[a-z]Ids?$/.test(key) && !/\s/.test(t);
+}
+
+/** Every argument of the call: text first, then the rest, each with its reading. */
 export function toolRunArguments(run: ProposalToolRun): ToolRunArgument[] {
-  return run.parameters.map((param) => {
+  const all = run.parameters.map((param): ToolRunArgument => {
     const value = toolRunValue(param);
+    const text = typeof param.value === "string" ? param.value : null;
+    const idLike = text !== null && isIdLike(param.key, text);
+    const detail = value.kind === "secret" || value.kind === "empty" || idLike;
     return {
       key: param.key,
       label: param.label,
       description: param.description ?? null,
       value,
       wide: isWide(value),
+      detail,
+      editable:
+        text !== null && !param.secret && !idLike && value.kind !== "link",
+      raw: text !== null && !param.secret ? text : null,
     };
   });
+  // The text the tool will send leads; the order within a group is the pod's.
+  const lead = all.filter((a) => a.editable);
+  return [...lead, ...all.filter((a) => !a.editable)];
+}
+
+/** The arguments the card shows, and those it keeps behind Details. */
+export function toolRunSplit(run: ProposalToolRun): {
+  shown: ToolRunArgument[];
+  detail: ToolRunArgument[];
+} {
+  const all = toolRunArguments(run);
+  return {
+    shown: all.filter((a) => !a.detail),
+    detail: all.filter((a) => a.detail),
+  };
+}
+
+/**
+ * The drafts that actually differ from what was proposed: the ONLY thing an
+ * "Approve with your changes" sends. An untouched or restored text is no
+ * change, and an argument that is not editable text is never sent.
+ */
+export function changedDrafts(
+  run: ProposalToolRun,
+  drafts: Readonly<Record<string, string>>
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const arg of toolRunArguments(run)) {
+    const draft = drafts[arg.key];
+    if (arg.editable && draft !== undefined && draft !== arg.raw) {
+      out[arg.key] = draft;
+    }
+  }
+  return out;
 }
 
 /** The call in the review's own read (`review.toolRun`), or `null`. */

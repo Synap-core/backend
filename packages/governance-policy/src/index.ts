@@ -2981,6 +2981,11 @@ export const DIRECT_PROPOSAL_DOORS = {
   // kind every space may read — always a pending proposal, for anyone; the
   // approval half re-runs the preflight and calls `declareLifecycle`.
   "profile/declare_lifecycle": "direct",
+  // Relabelling, reordering or retiring a declared lifecycle's options
+  // (`services/lifecycle/change-lifecycle-options.ts`, ticket fd146324): the
+  // same policy — always a pending proposal; the approval half runs the
+  // lifecycle door (`changeLifecycleOptions`), which re-decides.
+  "property_def/change_lifecycle_options": "direct",
   "profile/merge": "direct",
   "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",
