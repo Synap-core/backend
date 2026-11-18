@@ -354,6 +354,7 @@ vi.mock("../../../../lib/trpc", async () => ({
       },
       approve: { useMutation: () => ({ mutate() {}, isPending: false }) },
       reject: { useMutation: () => ({ mutate() {}, isPending: false }) },
+      revise: { useMutation: () => ({ mutate() {}, isPending: false }) },
       // The failed-approval card (`FailedApproval.tsx`): nothing to fix here.
       repairOptions: {
         useQuery: () => ({

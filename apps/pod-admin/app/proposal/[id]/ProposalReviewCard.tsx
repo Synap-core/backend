@@ -169,7 +169,12 @@ import {
 } from "./use-proposal-decision";
 import { useRecordDefinitions } from "./use-record-definitions";
 import { ToolRunArguments } from "./ToolRunArguments";
-import { reviewToolRun, toolRunArguments } from "./tool-run-model";
+import {
+  changedDrafts,
+  reviewToolRun,
+  toolRunArguments,
+} from "./tool-run-model";
+import { toolRunEdits } from "@synap-core/types/proposals/capability-run";
 
 /**
  * `pending` and `approval_failed` are the two states a reviewer can still decide;
@@ -500,8 +505,15 @@ function DecisionButtons({
   resume = false,
   stopTwins = null,
   setupBlock = null,
+  toolEdits = null,
 }: {
   proposal: ProposalReviewData;
+  /**
+   * The text changes made on a tool run's card, not yet sent: Approve then
+   * says "Approve with your changes" and sends them with the approval, in one
+   * press (`decision.approveWithChanges`).
+   */
+  toolEdits?: Readonly<Record<string, string>> | null;
   /**
    * What must be handed over before it can apply (founder default B5): the
    * label of the first required setup row still empty. Approve waits, with
@@ -617,6 +629,23 @@ function DecisionButtons({
     waiting = missing.length > 0;
   }
 
+  const withEdits =
+    toolEdits !== null && Object.keys(toolEdits).length > 0 && !resume;
+  // A tool run's policy menus are the advanced part: behind Details.
+  const policyMenus =
+    reviewToolRun(p.review) !== null
+      ? (menus: ReactNode) => (
+          <details data-tool-run-policy="" className="text-[12.5px]">
+            <summary className="min-h-11 cursor-pointer select-none py-2.5 font-medium text-foreground/70">
+              {t("toolRun.details")}
+            </summary>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              {menus}
+            </div>
+          </details>
+        )
+      : (menus: ReactNode) => <>{menus}</>;
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button
@@ -627,32 +656,42 @@ function DecisionButtons({
         isDisabled={busy || waiting || setupBlock !== null}
         // The primary verb, at the same size as Refuse beside it (S8).
         aria-describedby={setupBlock ? "review-setup-block" : undefined}
-        onPress={() => decision.approve(choice)}
+        onPress={() =>
+          withEdits
+            ? decision.approveWithChanges({ ...toolEdits }, choice)
+            : decision.approve(choice)
+        }
       >
-        {resolveActionLabel(resume ? "resume" : "approve")}
+        {withEdits
+          ? t("toolRun.approveWithChanges")
+          : resolveActionLabel(resume ? "resume" : "approve")}
       </Button>
       {rejectButton}
-      {/* Never widen autonomy beside the approval of something that acts on
-          its own: that moment is for reading it, not for "always". */}
       {mayRule &&
         mode.kind === "plain" &&
-        !pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
-          <AlwaysApproveMenu
-            proposal={p}
-            disabled={busy}
-            onRunningChange={setRuleRunning}
-            onDone={onDecided}
-          />
+        policyMenus(
+          <>
+            {/* Never widen autonomy beside the approval of something that
+                acts on its own: that moment is for reading it, not for
+                "always". */}
+            {!pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
+              <AlwaysApproveMenu
+                proposal={p}
+                disabled={busy}
+                onRunningChange={setRuleRunning}
+                onDone={onDecided}
+              />
+            )}
+            {/* "Never" narrows, so it stays beside a change that acts on its
+                own. */}
+            <RejectNeverMenu
+              proposal={p}
+              disabled={busy}
+              onRunningChange={setRuleRunning}
+              onDone={onDecided}
+            />
+          </>
         )}
-      {/* "Never" narrows, so it stays beside a change that acts on its own. */}
-      {mayRule && mode.kind === "plain" && (
-        <RejectNeverMenu
-          proposal={p}
-          disabled={busy}
-          onRunningChange={setRuleRunning}
-          onDone={onDecided}
-        />
-      )}
       {undoChip}
       {waiting && (
         <span className="text-[12px] text-foreground/70">
@@ -847,6 +886,9 @@ export function ProposalReviewBody({
     !graph && !appConnect && !docChanges && !deferredWrites && !turnsOn
       ? reviewToolRun(p.review)
       : null;
+  // The text changes made on a tool run's card, not yet sent.
+  const [toolDrafts, setToolDrafts] = useState<Record<string, string>>({});
+  const toolEdits = toolRun ? changedDrafts(toolRun, toolDrafts) : null;
   const edges = graphItems.flatMap((item) =>
     item.shape === "edge" ? [item.edge] : []
   );
@@ -1114,6 +1156,7 @@ export function ProposalReviewBody({
                     resume={stopped}
                     stopTwins={stoppedOnTwins(run) ? run.twins : null}
                     setupBlock={status === "pending" ? setupBlock : null}
+                    toolEdits={status === "pending" ? toolEdits : null}
                   />
                 </>
               ) : (
@@ -1200,7 +1243,30 @@ export function ProposalReviewBody({
             />
           </Section>
         ) : toolRun ? (
-          <ToolRunArguments run={toolRun} />
+          <ToolRunArguments
+            run={toolRun}
+            drafts={toolDrafts}
+            onDraft={
+              actionable && status === "pending"
+                ? (key, text) =>
+                    setToolDrafts((d) => {
+                      const { [key]: _gone, ...rest } = d;
+                      return text === undefined
+                        ? rest
+                        : { ...rest, [key]: text };
+                    })
+                : null
+            }
+            recorded={toolRunEdits(p.revisionHistory, {
+              isSecretName: () => false,
+              secretKeys: new Set(
+                toolRun.parameters.filter((x) => x.secret).map((x) => x.key)
+              ),
+            })}
+          >
+            {/* The reason it needed approval: said once, in Details. */}
+            {reason && <DisclosedMark mark={reason} icon={ShieldCheck} />}
+          </ToolRunArguments>
         ) : records.length > 0 ? (
           <div className="flex flex-col gap-3">
             {groups.map((group) => (
@@ -1295,22 +1361,23 @@ export function ProposalReviewBody({
         {/* Why: ONE mark (its sentence on press), then the requester's own
           words, as theirs. Worded for every status: an approved proposal
           still needed approval. */}
-        {(reason ||
+        {((reason && !toolRun) ||
           why.proposer ||
           duplicate?.check.status === "unchecked") && (
           <section
             aria-label={pt("review.why")}
             className="flex flex-col gap-3"
           >
-            {(reason || duplicate?.check.status === "unchecked") && (
+            {((reason && !toolRun) ||
+              duplicate?.check.status === "unchecked") && (
               <div className="flex flex-wrap items-center gap-2">
-                {reason && (
+                {reason && !toolRun && (
                   <DisclosedMark
                     mark={reason}
                     icon={reason.tone === "warning" ? ShieldAlert : ShieldCheck}
                   />
                 )}
-                {reason && reasonComputer && (
+                {reason && !toolRun && reasonComputer && (
                   <Link
                     href={computerHref(reasonComputer.id)}
                     className="text-[12.5px] font-medium rq-ink underline underline-offset-2"

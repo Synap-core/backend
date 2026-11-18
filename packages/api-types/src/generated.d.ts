@@ -55870,6 +55870,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		revise: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				data: Record<string, unknown>;
+				expectedRevision?: number | undefined;
 				projectId?: string | null | undefined;
 				proposalId: string;
 				workspaceId?: string | null | undefined;

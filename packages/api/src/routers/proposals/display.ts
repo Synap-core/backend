@@ -80,6 +80,10 @@ import {
 } from "../../services/proposals/part-reach.js";
 import { readEnableTurnsOn } from "../../services/proposals/enable-turns-on.js";
 import { readToolRuns } from "../../services/proposals/tool-run.js";
+import {
+  redactRevisionHistory,
+  redactToolRunData,
+} from "../../services/proposals/redact-tool-run-parameters.js";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalRemoval,
@@ -1845,6 +1849,16 @@ export async function enrichProposalsForDisplay(
     // beside the unmasked key it marks is the severance this prevents. Applied
     // LAST so the `{...payload}` re-spread above cannot reinstate the value.
     if (rowSetup) enrichedData = redactSecretParams(enrichedData, rowSetup);
+    // A tool run's credential arguments (`data.parameters`) the same way, and
+    // wherever the revision chain repeats them: the verb's own `secret` marks
+    // plus the name rule. Applied before the request and the review are built
+    // from `enrichedData`, so neither can carry a value the card masks.
+    const toolRunSecretKeys = new Set(
+      (toolRunById.get(row.id)?.parameters ?? [])
+        .filter((x) => x.secret)
+        .map((x) => x.key)
+    );
+    enrichedData = redactToolRunData(enrichedData, toolRunSecretKeys);
     // A pending AGENT session update's outputs list, as it would land NOW
     // (stored as sent; `session-before.ts`), so the slots it keeps never read
     // as deletions.
@@ -1935,6 +1949,10 @@ export async function enrichProposalsForDisplay(
       // `proposals.get`, the Hub REST `GET /proposals/:id` answer).
       // See `failure-projection.ts`.
       ...projectProposalRowForViewer(row),
+      revisionHistory: redactRevisionHistory(
+        row.revisionHistory,
+        toolRunSecretKeys
+      ),
       // Decision CLASS + its lifetime, derived (never stored) from
       // proposalType × targetType. Serialized here so `proposals.list` and
       // `proposals.get` — and every surface over them — can render the

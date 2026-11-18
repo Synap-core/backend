@@ -267,6 +267,79 @@ export function describeToolRun(input: ToolRunInput): ProposalToolRun | null {
   };
 }
 
+// ── What a human changed before approving ──────────────────────────────────
+//
+// Decision "A human in the loop can change what they approve, and the change is
+// on the record": the card's edit sends ONE revise (`parameters`, whole) onto
+// the proposal's revision chain (`mergeProposalRevision`), whose entry carries
+// `{at, by, before, patch}` with `before.parameters` / `patch.parameters`.
+// This reads that chain back as per-argument before/after, for every later
+// reader (the card, the agent's prompt). ONE reading, never a second store.
+
+/** One argument a person changed, as the proposal's chain recorded it. */
+export interface ToolRunEdit {
+  key: string;
+  /** What the agent proposed (the first value this argument ever had). */
+  before: string;
+  /** What the person approved. */
+  after: string;
+  /** ISO time of the latest change to it. */
+  at: string;
+  /** The person (user id) who made it. */
+  by: string | null;
+}
+
+/** Text only in v1: a change to anything else is not read as an edit. */
+const MAX_EDIT_CHARS = 4000;
+
+function parametersOf(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * The text arguments a person changed, from `proposals.revisionHistory`,
+ * oldest entry first. `before` is the value the argument had BEFORE the first
+ * change (what the agent proposed), `after` the latest; an argument changed
+ * back to its proposed value is not an edit. A credential-like argument
+ * (`isSecretName`, or a key in `secretKeys`) is NEVER read: neither value
+ * leaves the chain through here.
+ */
+export function toolRunEdits(
+  history: unknown,
+  options: {
+    isSecretName: (key: string) => boolean;
+    secretKeys?: ReadonlySet<string>;
+  }
+): ToolRunEdit[] {
+  if (!Array.isArray(history)) return [];
+  const byKey = new Map<string, ToolRunEdit>();
+  for (const raw of history) {
+    const entry = parametersOf(raw);
+    if (!entry) continue;
+    const before = parametersOf(parametersOf(entry.before)?.parameters);
+    const after = parametersOf(parametersOf(entry.patch)?.parameters);
+    if (!before || !after) continue;
+    for (const key of Object.keys(after)) {
+      if (options.isSecretName(key) || options.secretKeys?.has(key)) continue;
+      const was = before[key];
+      const now = after[key];
+      if (typeof was !== "string" || typeof now !== "string") continue;
+      if (was === now) continue;
+      const first = byKey.get(key);
+      byKey.set(key, {
+        key,
+        before: first ? first.before : was.slice(0, MAX_EDIT_CHARS),
+        after: now.slice(0, MAX_EDIT_CHARS),
+        at: typeof entry.at === "string" ? entry.at : "",
+        by: typeof entry.by === "string" ? entry.by : null,
+      });
+    }
+  }
+  return [...byKey.values()].filter((e) => e.before !== e.after);
+}
+
 // ── A ship verb's heading ───────────────────────────────────────────────────
 //
 // Decision 4d6d7922 (founder, 2026-11-01, D2 A): an approval to ship is a
