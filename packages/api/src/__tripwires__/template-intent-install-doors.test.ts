@@ -137,7 +137,10 @@ describe("template intent — every install door carries it", () => {
     const body = PackageApplySchema.parse(pkg) as { intent?: unknown };
     expect(projectTemplateIntent(body.intent)).toEqual({
       label: "Sales",
-      produces: ["lead", "client", "deal", "campaign", "outreach-touch"],
+      // No `client`: a lead that signs becomes a client handed off to
+      // Operations, whose output it is (founder, 17 Nov 2026, design 05ed390c;
+      // app-bases c2bd5df66).
+      produces: ["lead", "deal", "campaign", "outreach-touch"],
       // The catalog's primary output (One model, decision 3) arrives too.
       primary: "deal",
       source: "template",
