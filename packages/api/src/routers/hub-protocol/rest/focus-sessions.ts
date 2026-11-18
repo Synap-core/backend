@@ -1978,14 +1978,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           await import("../../../services/focus-sessions/session-holder.js");
         const { projectSessionShape } =
           await import("../../../services/focus-sessions/continuation-packet.js");
-        // Who works the session is also the session OWNER's to read, on any
-        // key of theirs that is not an agent's (an app's person key: the room
-        // shows "Pod agent · working" / "nobody runs it", plan efb315a5).
-        // Every other key keeps the grant rule.
-        const ownerPersonKey =
-          row.userId === acting.userId && !c.get("agentUserId");
-        const readsAgents =
-          ownerPersonKey || sessionHolderReadable(getRequestGrant());
+        const readsAgents = sessionHolderReadable(getRequestGrant());
         const [holder, shape] = await Promise.all([
           readsAgents
             ? readSessionHolder(row, { userId: acting.userId })

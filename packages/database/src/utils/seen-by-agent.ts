@@ -31,13 +31,6 @@ export const SEEN_BY_AGENT_AT_META_KEY = "seenByAgentAt" as const;
 /** `messages.metadata` key of the agent that consumed it, when known. */
 export const SEEN_BY_AGENT_ID_META_KEY = "seenByAgentId" as const;
 
-/** Read the mark back. `null` when absent or not a string. Pure. */
-export function readSeenByAgentAt(metadata: unknown): string | null {
-  if (!metadata || typeof metadata !== "object") return null;
-  const v = (metadata as Record<string, unknown>)[SEEN_BY_AGENT_AT_META_KEY];
-  return typeof v === "string" && v ? v : null;
-}
-
 /**
  * Stamp the mark on these person messages of `channelId` that do not carry
  * it yet. Returns how many were stamped. Throws on a failed write: callers

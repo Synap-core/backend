@@ -348,6 +348,9 @@ export async function updateExpectedOutputsLocked(
       : [];
     const mutated = mutate(current);
     if (!mutated) return false;
+    // The mutator kept the row as it is (a deduped hand-over): nothing to
+    // write, no `updatedAt` bump, no transition.
+    if (mutated === current) return true;
     // Every slot keyed — carried from `current`, minted for a new one
     // (`slot-keys.ts`), so each door that writes through this lock (a criterion
     // escalation, a block, a delegation, a return) keeps slot identity.

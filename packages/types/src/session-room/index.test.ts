@@ -4,6 +4,7 @@
  * reverted in turn, see the PR).
  */
 import { describe, expect, it } from "vitest";
+import { deliverableOwedBy } from "../units/index.js";
 import {
   agentLineOf,
   deliveryOf,
@@ -15,6 +16,16 @@ import {
   type RoomMessageLike,
   type RoomSlot,
 } from "./index.js";
+
+/** The person answered a choose and the pod filed its decision. */
+const DECIDED: Partial<RoomSlot> = {
+  decisionId: "d-1",
+  answer: {
+    text: "Nurturing",
+    answeredAt: "2026-11-18T11:26:02.183Z",
+    askSnapshot: { mode: "choose" },
+  },
+};
 
 const open = (over: Partial<RoomSlot> = {}): RoomSlot => ({
   label: "Disposition Esteban Arias",
@@ -35,18 +46,62 @@ describe("isOpenQuestion", () => {
     expect(isOpenQuestion(open({ retiredAt: "2026-11-18T00:00:00Z" }))).toBe(
       false
     );
-    expect(isOpenQuestion(open({ required: false }))).toBe(false);
+    // Stamped but empty is retired too (the pod's SQL mirror reads IS NULL).
+    expect(isOpenQuestion(open({ retiredAt: "" }))).toBe(false);
     expect(isOpenQuestion(open({ optional: true }))).toBe(false);
     expect(isOpenQuestion(open({ label: "   " }))).toBe(false);
+    // Answered, and the answer filed its decision: delivered.
+    expect(isOpenQuestion(open(DECIDED))).toBe(false);
+  });
+  it("only a real `true` makes it optional", () => {
     expect(
-      isOpenQuestion(
-        open({ answer: { text: "Nurturing", answeredAt: "2026-11-18T11:26Z" } })
-      )
-    ).toBe(false);
+      isOpenQuestion(open({ optional: "true" as unknown as boolean }))
+    ).toBe(true);
   });
   it("an answer with no answeredAt (a relay waiting for the tap) leaves it open", () => {
     expect(isOpenQuestion(open({ answer: { text: "x" } }))).toBe(true);
   });
+});
+
+describe("isOpenQuestion agrees with the pod's owed rule", () => {
+  // Rows where a hand-written rule tends to drift from `deliverableOwedBy`.
+  const rows: Array<[string, RoomSlot]> = [
+    ["owed", open()],
+    ["retired, empty stamp", open({ retiredAt: "" })],
+    ["retired", open({ retiredAt: "2026-11-18T00:00:00Z" })],
+    ["optional true", open({ optional: true })],
+    ["optional 'true' string", open({ optional: "true" as unknown as boolean })],
+    ["done", open({ status: "done" })],
+    ["answered, decision filed", open(DECIDED)],
+    [
+      "answered, no decision filed",
+      open({ answer: { text: "x", answeredAt: "2026-11-18T11:00Z" } }),
+    ],
+    [
+      "answered with a refusal",
+      open({
+        decisionId: "d-1",
+        answer: {
+          value: { type: "declined" },
+          answeredAt: "2026-11-18T11:00Z",
+          askSnapshot: { mode: "choose" },
+        },
+      }),
+    ],
+    [
+      "a criterion's grade slot",
+      open({ ...DECIDED, kind: "criterion" }),
+    ],
+    ["a form answer", open({ ...DECIDED, answer: { askSnapshot: { mode: "form" } } })],
+    ["the agent's", open({ owner: "agent" })],
+  ];
+  for (const [name, slot] of rows) {
+    it(name, () => {
+      expect(isOpenQuestion(slot)).toBe(
+        deliverableOwedBy(slot as never) === "you"
+      );
+    });
+  }
 });
 
 describe("roomQuestions", () => {
@@ -64,7 +119,7 @@ describe("roomQuestions", () => {
       open({ label: "Optional", optional: true }),
       {
         label: "Optional answered",
-        required: false,
+        optional: true,
         answer: { answeredAt: "2026-11-18T11:00Z" },
       },
     ];

@@ -128,7 +128,7 @@ describe("sameQuestion — the cf60123c twin and the rows that rule each rule in
     ).toBe(true);
   });
 
-  it("a label that names MORE is a different question: 'Send the email' and 'Send the email to Bob' stay apart (lead review)", () => {
+  it("a label that names MORE is a different question: 'Send the email' and 'Send the email to Bob' stay apart", () => {
     const send = {
       label: "Send the email",
       ask: { mode: "confirm", prompt: "Send it?" },
@@ -144,6 +144,22 @@ describe("sameQuestion — the cf60123c twin and the rows that rule each rule in
       [{ ...toBob, kind: "decision", owner: "human" } as ExpectedOutput]
     );
     expect(d.deduped).toEqual([]);
+  });
+
+  it("another number is another question: 'Approve invoice 12' and 'Approve invoice 13' stay apart", () => {
+    const ask = { mode: "confirm", prompt: "Approve it?" };
+    expect(
+      sameQuestion(
+        { label: "Approve invoice 12", ask } as ExpectedOutput,
+        { label: "Approve invoice 13", ask } as ExpectedOutput
+      )
+    ).toBe(false);
+    expect(
+      sameQuestion(
+        { label: "Approve invoice 12", ask } as ExpectedOutput,
+        { label: "Approve the invoice 12", ask } as ExpectedOutput
+      )
+    ).toBe(true);
   });
 
   it("a confirm: same prompt AND same subject; a generic prompt alone is not enough", () => {
@@ -211,6 +227,37 @@ describe("dedupeOpenQuestions — an agent's list", () => {
     const d = dedupeOpenQuestions([FIRST, agentsOwn], [SECOND]);
     expect(d.incoming).toEqual([agentsOwn]);
     expect(d.deduped).toHaveLength(1);
+  });
+});
+
+describe("dedupeOpenQuestions — what the comparison set holds", () => {
+  it("two twins in ONE call make one card: the second is compared with the first", () => {
+    const first = { ...FIRST, owedSince: undefined, status: undefined };
+    const d = dedupeOpenQuestions([WORK], [WORK, first, SECOND]);
+    expect(d.incoming.map((o) => o.label)).toEqual([WORK.label, FIRST.label]);
+    expect(d.deduped).toEqual([
+      {
+        key: "validation-esteban-arias",
+        label: FIRST.label,
+        asked: SECOND.label,
+      },
+    ]);
+  });
+
+  it("a WHOLESALE list that drops the open card: the new card is no twin of a card the same write deletes", () => {
+    const d = dedupeOpenQuestions([WORK, FIRST], [WORK, SECOND], {
+      wholesale: true,
+    });
+    expect(d.deduped).toEqual([]);
+    expect(d.incoming.map((o) => o.label)).toEqual([WORK.label, SECOND.label]);
+    // The same list kept the open card: the twin is left out.
+    const kept = dedupeOpenQuestions([WORK, FIRST], [WORK, FIRST, SECOND], {
+      wholesale: true,
+    });
+    expect(kept.incoming.map((o) => o.label)).toEqual([
+      WORK.label,
+      FIRST.label,
+    ]);
   });
 });
 

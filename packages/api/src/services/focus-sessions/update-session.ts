@@ -1282,17 +1282,26 @@ export function declinedReaskLabels(
  * already asks makes no second card. The new slot is left out; a stored slot
  * the item would have handed over stays as stored. Each is reported, so the
  * reply names the card the person already has (`deduped`). Judged on the
- * slot as the patch would leave it (the stored twin with the item over it),
- * against the stored slots. An update of the open question itself (its own
- * twin) is never a duplicate. Pure; returns `incoming` itself when nothing
- * was deduped.
+ * slot as the patch would leave it (the stored twin with the item over it).
+ * An update of the open question itself (its own twin) is never a duplicate.
+ *
+ * Compared with: the stored slots that SURVIVE this write — all of them for
+ * an add-or-update list, only those the list names for a `wholesale` one
+ * (a card the same write deletes cannot be the twin) — and every card this
+ * list itself hands over before the item (two twins in ONE call make one
+ * card). Pure; returns `incoming` itself when nothing was deduped.
  */
 export function dedupeOpenQuestions(
   current: readonly OutputItem[],
-  incoming: OutputItem[]
+  incoming: OutputItem[],
+  opts: { wholesale?: boolean } = {}
 ): { incoming: OutputItem[]; deduped: DedupedQuestion[] } {
   const stored = current as OutputItem[];
   const { twinOf, keyOf } = storedTwins(stored);
+  const listed = new Set(incoming.map((item) => twinOf(item)));
+  const pool: OutputItem[] = opts.wholesale
+    ? stored.filter((s) => listed.has(s))
+    : [...stored];
   const deduped: DedupedQuestion[] = [];
   const kept: OutputItem[] = [];
   for (const item of incoming) {
@@ -1305,17 +1314,16 @@ export function dedupeOpenQuestions(
       kept.push(item);
       continue;
     }
-    const open = openTwinQuestion(
-      stored,
-      { ...(twin ?? {}), ...item } as OutputItem,
-      twin
-    );
+    const asked = { ...(twin ?? {}), ...item } as OutputItem;
+    const open = openTwinQuestion(pool, asked, twin);
     if (!open) {
       kept.push(item);
+      pool.push(asked);
       continue;
     }
     deduped.push({
-      key: keyOf.get(open) ?? null,
+      key:
+        keyOf.get(open) ?? (typeof open.key === "string" ? open.key : null),
       label: open.label,
       asked: item.label,
     });

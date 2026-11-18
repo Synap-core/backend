@@ -319,20 +319,21 @@ export async function blockExpectedOutput(
     (current) => {
       lockedBefore = current;
       found.twin = undefined;
+      const stampedSlots = stampBlocked(
+        current,
+        slot.label,
+        params.blockedReason,
+        params.why,
+        undefined,
+        params.ref,
+        params.ask,
+        params.unblocks
+      );
       if (params.agentUserId) {
-        const self = current[findSlotIndex(current, slot.label)];
+        const at = findSlotIndex(current, slot.label);
+        const self = current[at];
         if (self && !isOpenQuestionSlot(self)) {
-          const asStamped = stampBlocked(
-            [self],
-            self.label,
-            params.blockedReason,
-            params.why,
-            undefined,
-            params.ref,
-            params.ask,
-            params.unblocks
-          )[0]!;
-          found.twin = openTwinQuestion(current, asStamped, self);
+          found.twin = openTwinQuestion(current, stampedSlots[at]!, self);
         }
       }
       if (found.twin) {
@@ -341,16 +342,7 @@ export async function blockExpectedOutput(
       }
       lockedAfter = stampAskProvenance(
         current,
-        stampBlocked(
-          current,
-          slot.label,
-          params.blockedReason,
-          params.why,
-          undefined,
-          params.ref,
-          params.ask,
-          params.unblocks
-        ),
+        stampedSlots,
         { askedBy: params.agentUserId, askCause: params.askCause }
       );
       return lockedAfter;

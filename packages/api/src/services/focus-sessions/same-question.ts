@@ -17,8 +17,9 @@
  *        `confirm` with the same prompt —
  *      AND their labels name the same subject: once text in parentheses or
  *      brackets is dropped, their word SETS (letters and digits, accents
- *      folded, 3+ characters, minus the option labels' own words and a few
- *      filler words) are EQUAL, with at least two words;
+ *      folded, every token kept — a number or a short code names the
+ *      subject — minus the option labels' own words and a short list of
+ *      connecting words) are EQUAL, with at least MIN_SUBJECT_WORDS words;
  *   3. never when both slots point at different objects (`ref.id`).
  *
  * What it does NOT see, said: two questions with different options about the
@@ -26,10 +27,10 @@
  * different subject words ("Disposition Arias" vs "What to do with Esteban":
  * both stand), and a `form` / `act` / `provide` ask (only rule 1 applies).
  * A label that names MORE than another ("Send the email" vs "Send the email
- * to Bob", same Yes/No prompt) is a different question: both stand (lead
- * review of backend#1162 — a subset rule would drop a real question). A
- * parenthesised aside is not the subject ("Disposition d'Esteban Arias
- * (Prometheus)" names Esteban Arias).
+ * to Bob", same Yes/No prompt) is a different question: both stand. So is
+ * one that names another number ("Approve invoice 12" vs "Approve invoice
+ * 13"). A parenthesised aside is not the subject ("Disposition d'Esteban
+ * Arias (Prometheus)" names Esteban Arias).
  *
  * Pure. "Open" is THE rule of the room model (`isOpenQuestion`,
  * `@synap-core/types/session-room`).
@@ -54,15 +55,46 @@ export function isOpenQuestionSlot(slot: ExpectedOutput | undefined): boolean {
   return !!slot && isOpenQuestion(slot as unknown as RoomSlot);
 }
 
-const FILLER = new Set([
+/** A subject is named by at least this many words (one word names too little). */
+export const MIN_SUBJECT_WORDS = 2;
+/** A choice is the same choice only with at least this many options. */
+export const MIN_CHOICE_OPTIONS = 2;
+
+/**
+ * Connecting words that name no subject (English, French). Every other token
+ * is kept, whatever its length: "12", "Q3" or "EU" can be the whole
+ * difference between two questions.
+ */
+const CONNECTORS = new Set([
+  "a",
+  "an",
   "the",
   "and",
+  "or",
+  "of",
+  "to",
+  "in",
+  "on",
+  "at",
+  "by",
   "for",
   "with",
   "about",
+  "d",
+  "l",
+  "de",
+  "du",
+  "la",
+  "le",
   "les",
   "des",
+  "un",
   "une",
+  "et",
+  "ou",
+  "en",
+  "au",
+  "aux",
   "pour",
   "avec",
   "sur",
@@ -76,7 +108,7 @@ function words(text: unknown): string[] {
     .replace(/\p{M}/gu, "")
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
-    .filter((w) => w.length >= 3 && !FILLER.has(w));
+    .filter((w) => w !== "" && !CONNECTORS.has(w));
 }
 
 type AskLike = {
@@ -107,7 +139,7 @@ function sameChoice(a: AskLike, b: AskLike): boolean {
   if (a.mode === "choose") {
     const la = new Set(optionLabels(a));
     const lb = new Set(optionLabels(b));
-    if (la.size < 2 || la.size !== lb.size) return false;
+    if (la.size < MIN_CHOICE_OPTIONS || la.size !== lb.size) return false;
     for (const l of la) if (!lb.has(l)) return false;
     return true;
   }
@@ -133,7 +165,7 @@ function sameSubject(
     );
   const wa = subject(a.label);
   const wb = subject(b.label);
-  if (wa.size < 2 || wa.size !== wb.size) return false;
+  if (wa.size < MIN_SUBJECT_WORDS || wa.size !== wb.size) return false;
   for (const w of wa) if (!wb.has(w)) return false;
   return true;
 }

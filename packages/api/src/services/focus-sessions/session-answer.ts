@@ -770,12 +770,15 @@ async function answerWakeTarget(p: {
 }): Promise<WakeTarget | null> {
   const target = await resolveWakeTarget(p);
   if (target || p.askingAgentUserId) return target;
+  // No asker and nobody on the roster the pod can wake: the answer wakes the
+  // session's live pod run, while the session is active (as a free message).
   const [row] = await db
-    .select({ metadata: focusSessions.metadata })
+    .select({ status: focusSessions.status, metadata: focusSessions.metadata })
     .from(focusSessions)
     .where(eq(focusSessions.id, p.session.id))
     .limit(1);
-  return liveRunWakeTarget(p.session.id, row?.metadata);
+  if (row?.status !== "active") return null;
+  return liveRunWakeTarget(p.session.id, row.metadata);
 }
 
 /** An answer's wake opens the window too: the messages right after it are read by that turn. */

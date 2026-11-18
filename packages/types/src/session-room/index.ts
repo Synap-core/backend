@@ -16,13 +16,18 @@ export interface RoomSlot {
   key?: string;
   label: string;
   /** 'human' = the person owes it. */
-  owner?: string;
+  owner?: string | null;
   /** 'done' = met. */
-  status?: string;
+  status?: string | null;
+  /** Set (any value, `""` included) = retired. */
   retiredAt?: string | null;
-  /** false = optional. */
-  required?: boolean;
-  optional?: boolean;
+  /** Only a real `true` makes it optional. */
+  optional?: boolean | null;
+  /** The slot's kind (`criterion` = a grade slot, never decided by an answer). */
+  kind?: string | null;
+  criterionKey?: string | null;
+  /** The decision the person's answer filed. */
+  decisionId?: string | null;
   why?: string | null;
   ask?:
     | ({
@@ -37,13 +42,16 @@ export interface RoomSlot {
     | null;
   /** ISO. */
   owedSince?: string | null;
-  answer?: {
-    value?: unknown;
-    text?: string | null;
-    answeredAt?: string | null;
-    answeredBy?: string | null;
-    messageId?: string | null;
-  } | null;
+  answer?:
+    | ({
+        value?: unknown;
+        text?: string | null;
+        answeredAt?: string | null;
+        answeredBy?: string | null;
+        messageId?: string | null;
+        askSnapshot?: { mode?: string } | null;
+      } & Record<string, unknown>)
+    | null;
 }
 
 /** A room message, as the app already has it, plus what the pod stamps. */
@@ -59,32 +67,61 @@ export interface RoomMessageLike {
   seenByAgentAt?: string | null;
 }
 
+/** The ask modes whose answer files a decision (`DECIDING_ASK_MODES`). */
+const DECIDING_MODES: readonly string[] = ["confirm", "choose"];
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+
 /**
- * THE rule for "this question is still open for the person" (room, run page,
- * needs-you bar all use it): the person owes it, it is not met, not retired,
- * not optional, it has a label, and nobody answered it yet.
+ * Decided by the person's answer: a copy of `isDecidedByAnswer`
+ * (`@synap-core/types/units`), kept here so this file imports nothing.
  */
-export function isOpenQuestion(slot: RoomSlot): boolean {
+function decidedByAnswer(slot: RoomSlot): boolean {
+  if (typeof slot.decisionId !== "string" || slot.decisionId === "") {
+    return false;
+  }
+  if (slot.kind === "criterion") return false;
+  if (typeof slot.criterionKey === "string" && slot.criterionKey !== "") {
+    return false;
+  }
+  const answer = slot.answer;
+  if (!isRecord(answer)) return false;
+  if (isRecord(answer.value) && answer.value.type === "declined") return false;
+  const snapshot = answer.askSnapshot;
+  return isRecord(snapshot) && DECIDING_MODES.includes(snapshot.mode as string);
+}
+
+/** Still owed at all: a copy of `isDeliverableOutstanding`. */
+function outstanding(slot: RoomSlot): boolean {
   return (
-    slot.owner === "human" &&
     slot.status !== "done" &&
-    !slot.retiredAt &&
-    slot.required !== false &&
-    slot.optional !== true &&
-    typeof slot.label === "string" &&
-    slot.label.trim() !== "" &&
-    !(slot.answer && slot.answer.answeredAt)
+    !decidedByAnswer(slot) &&
+    slot.retiredAt == null &&
+    slot.optional !== true
   );
 }
 
-/** A slot the person answered (its answer stamp), whoever holds it now. */
+const labelled = (slot: RoomSlot): boolean =>
+  typeof slot.label === "string" && slot.label.trim() !== "";
+
+/**
+ * "This question is still open for the person": the pod's owed rule,
+ * `deliverableOwedBy(slot) === "you"` (`@synap-core/types/units`), on a slot
+ * with a label. Copied rather than imported (the kit vendors this file); the
+ * parity test in `index.test.ts` holds the copy to the original.
+ */
+export function isOpenQuestion(slot: RoomSlot): boolean {
+  return slot.owner === "human" && outstanding(slot) && labelled(slot);
+}
+
+/** A slot the person answered (its answer stamp), not open any more. */
 function isAnsweredQuestion(slot: RoomSlot): boolean {
   return (
-    !slot.retiredAt &&
-    slot.required !== false &&
+    !isOpenQuestion(slot) &&
+    slot.retiredAt == null &&
     slot.optional !== true &&
-    typeof slot.label === "string" &&
-    slot.label.trim() !== "" &&
+    labelled(slot) &&
     !!(slot.answer && slot.answer.answeredAt)
   );
 }

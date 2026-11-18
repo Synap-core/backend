@@ -35,8 +35,10 @@ export async function stampOwnerMessagesSeen(p: {
     messageIds: p.messageIds,
     agentUserId: p.agentUserId ?? null,
     ...(p.now ? { now: p.now } : {}),
-    // This package's `db` (the one the request runs on), not the database
-    // package's own default.
+    // This package's `db`, passed rather than the database package's own
+    // default: it is the handle a test replaces (the PGlite suite
+    // `owner-message-seen.pglite.test.ts` mocks `@synap/database`'s `db`,
+    // which the helper's internal import would not see).
     database: db,
   });
 }
