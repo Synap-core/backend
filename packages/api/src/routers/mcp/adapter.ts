@@ -251,7 +251,7 @@ export async function executeMCPToolViaHubProtocol(
   // derived RECEIPT carries its project so the gate can re-key a write of
   // another project to that project's receipt.
   //
-  // A2: a session the caller NAMED is entered too, so the gate files into it
+  // Plan a640c5bb: a session the caller NAMED is entered too, so the gate files into it
   // at every door, not only the doors that forward `ctx.sessionId` (4bc6b9f4).
   const routed = () =>
     session?.attribution === "derived"
@@ -451,7 +451,7 @@ function withSessionDisclosure(
 ): CallToolResult {
   // `openCount` = unclaimed work sessions touched in the last 24 hours, counted
   // exactly (`resolveWorkSession`) — it used to stop at 10 and read as exact.
-  // With `candidates` (A2) it is the sessions THIS conversation started.
+  // With `candidates` it is the sessions THIS conversation started.
   const openCount = attribution.openCount ?? 0;
   const note = attribution.candidates
     ? `Note: this conversation has ${openCount} open sessions, so this write ` +

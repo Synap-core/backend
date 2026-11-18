@@ -45,8 +45,9 @@
  * AN AGENT HANDING IT ON goes through the ONE hand-off gate
  * (`agent-hand-off.ts`, `gateAgentHandOff`) before anything is written: a
  * paused agent or one that does not act for the owner is refused, and handing
- * the slot to ANOTHER agent proposes by default (`focus_session/assign_agent`;
- * approving it attaches that agent). The agent's post and slot move are
+ * the slot to ANOTHER agent proposes by default (`focus_session/assign_agent`,
+ * carrying the slot). Approving it attaches that agent and finishes the
+ * delegation through this same door (`approvedHandOff`). The agent's post and slot move are
  * recorded as the agent's. A person delegating is applied directly, as
  * before. Not gated: a type with no agent user on this pod (its turn is
  * routed by type, with no principal to hand the session to).
@@ -101,6 +102,12 @@ export interface DelegateExpectedOutputParams {
    * Absent ⇒ the acting agent every key door enters, else a person.
    */
   actingAgentUserId?: string | null;
+  /**
+   * The hand-off proposal a person approved for this slot (its executor calls
+   * back here): the gate is not asked again for the agent it names, and the
+   * roster append lands under that proposal.
+   */
+  approvedHandOff?: { proposalId: string; agentId: string } | null;
 }
 
 export type DelegateExpectedOutputResult =
@@ -178,7 +185,11 @@ export async function delegateExpectedOutput(
   // AN AGENT HANDING IT ON: the one hand-off gate, before anything is written.
   const actingAgent =
     params.actingAgentUserId ?? getActingAgentUserId() ?? null;
-  if (actingAgent && delegateId && delegateId !== actingAgent) {
+  const approved =
+    delegateId && params.approvedHandOff?.agentId === delegateId
+      ? params.approvedHandOff
+      : null;
+  if (actingAgent && delegateId && delegateId !== actingAgent && !approved) {
     const handOff = await gateAgentHandOff({
       userId: session.userId,
       agentUserId: actingAgent,
@@ -187,6 +198,7 @@ export async function delegateExpectedOutput(
       goal: session.goal,
       title: session.title,
       agentId: delegateId,
+      slot: { expectedLabel: slot.label, agentType },
     });
     if (handOff.status === "denied") {
       return { status: "refused", reason: handOff.reason };
@@ -223,6 +235,7 @@ export async function delegateExpectedOutput(
     ownerId: session.userId,
     agentType,
     agentId: delegateId,
+    viaProposalId: approved?.proposalId,
   });
 
   // The ask itself. `resolveObjectNoun` (never a local label map) turns the
@@ -387,6 +400,7 @@ async function attachDelegateToRoster(args: {
   ownerId: string;
   agentType: string;
   agentId: string | null;
+  viaProposalId?: string;
 }): Promise<boolean> {
   try {
     if (!args.agentId) return false;
@@ -394,6 +408,7 @@ async function attachDelegateToRoster(args: {
       sessionId: args.sessionId,
       agentId: args.agentId,
       userId: args.ownerId,
+      ...(args.viaProposalId ? { viaProposalId: args.viaProposalId } : {}),
     });
     return result.status === "attached";
   } catch (err) {

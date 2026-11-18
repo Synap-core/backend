@@ -91,7 +91,8 @@ const FindResultSchema = z
   .object({
     intent: z.string(),
     lens: z.object({ workspaceId: z.string().nullable() }),
-    scoring: z.record(z.string(), z.unknown()),
+    // Only with `explain` (`find-intent.ts`), which this door never sets.
+    scoring: z.record(z.string(), z.unknown()).optional(),
     coverage: z.record(z.string(), z.unknown()),
     capabilities: z.record(z.string(), z.unknown()).optional(),
     intents: z.record(z.string(), z.unknown()).optional(),

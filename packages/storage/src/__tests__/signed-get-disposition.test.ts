@@ -1,6 +1,6 @@
 /**
  * Every signed GET carries `Content-Disposition: attachment` (decision D10),
- * and serves a script or style blob as `text/plain` (plan D1, ticket
+ * and serves a script or style blob as `text/plain` (ticket
  * 15bc541d).
  *
  * Blobs are served on the pod origin and active types (HTML, SVG, XML) are

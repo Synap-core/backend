@@ -9,7 +9,7 @@
  *     (start_session stamps `metadata.clientKey`), else the one this door
  *     auto-opened for it FOR THIS WRITE'S PROJECT while it is still in its
  *     activity window. Several started and open ⇒ none of them is guessed
- *     (A2): only the receipt answers, else step 3 opens one.
+ *     (plan a640c5bb): only the receipt answers, else step 3 opens one.
  *  3. Auto-open one via openRunSession — a RECEIPT (`metadata.kind =
  *     'agent-proposal-package'`), marked `autoOpened` + `clientKey`, named by the
  *     caller (`buildDerivedSessionTitle`, titleSource "derived"). Minted under a
@@ -139,7 +139,7 @@ export function sessionLastActivitySql() {
  * session is unaffected. Omitted ⇒ any project (the attribution read and the
  * MCP door, which do not know the write's project yet).
  *
- * `refuseSeveralStarted` (A2, plan a640c5bb): when the client STARTED two or
+ * `refuseSeveralStarted`: when the client STARTED two or
  * more sessions that are still open, none of them is picked (the newest used
  * to win, so one conversation's sub-agents filed into each other's work); only
  * the client's receipt can answer. The write gate asks for it; the MCP door

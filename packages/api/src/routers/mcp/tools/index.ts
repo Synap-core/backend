@@ -567,7 +567,7 @@ const PLAYBOOK_PARAMS_PROPERTY = {
 };
 
 /**
- * `metadata.triggers` (plan a640c5bb D3), parsed by `playbookTriggersSchema`:
+ * `metadata.triggers` (plan a640c5bb), parsed by `playbookTriggersSchema`:
  * the suggestion ranker offers the playbook when a request holds every word
  * of one phrase.
  */
@@ -4376,7 +4376,7 @@ export const tools = {
                     type: "boolean",
                     // Refused by the handler, by name (it would discard the
                     // properties): the composite graph can create or link,
-                    // never patch. The text was trimmed to pay for `table`.
+                    // never patch.
                     description:
                       "REFUSED here: this lane only creates or links. To patch, send `text` or call synap_update_entity.",
                   },
@@ -4432,9 +4432,7 @@ export const tools = {
                 required: ["sourceRef", "targetRef", "type"],
               },
             },
-            // Ticket a8884743 (plan B2): a register of ONE kind as columns,
-            // expanded server-side into entities[] + relations[] (one
-            // proposal). `services/capture-agent/capture-table.ts`.
+            // A register of one kind as columns, expanded server-side (capture-table.ts).
             table: {
               type: "object",
               description: `Rows of ONE kind (max ${CAPTURE_TABLE_MAX_ROWS}, one proposal). Column \`title\` is the title, \`description\`/\`content\` those fields, others properties. \`linkBy\`: link each row by relation \`type\` to the \`profileSlug\` entity whose \`property\` equals its \`column\` cell exactly; misses come back in the reply's \`table\`.`,

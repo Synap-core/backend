@@ -18,7 +18,7 @@
  * Postgres as a 500, and a missing read scope passing.
  *
  * Also: the door hands the signer the file's STORED type, which is what makes
- * a stored `.js` / `.css` serve as `text/plain` (plan D1, ticket 15bc541d).
+ * a stored `.js` / `.css` serve as `text/plain` (ticket 15bc541d).
  *
  * Cannot see: production Postgres, a real signer (the attachment disposition
  * and the text/plain override are the `active-mime-needs-attachment-disposition`
@@ -287,7 +287,7 @@ describe("GET /files/{entityId}/url — a signed URL bounded by the key's grant"
   });
 });
 
-describe("GET /files/{entityId}/url — the signer is told the stored type (plan D1)", () => {
+describe("GET /files/{entityId}/url — the signer is told the stored type", () => {
   it("a stored script ⇒ the signed GET is asked for text/javascript (served as text/plain)", async () => {
     const res = await get("pinned", FILE_JS);
     const body = (await res.json()) as Body;

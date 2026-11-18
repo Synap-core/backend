@@ -28,6 +28,7 @@ import {
   eq,
   inArray,
   isNull,
+  or,
   authoredCreatedBy,
   getRequestGrant,
   isFullAccessGrant,
@@ -38,6 +39,7 @@ import {
   actionRunModeOf,
   type ActionRunMode,
 } from "@synap-core/types/governance-rules";
+import { isUuid } from "@synap-core/types/property-render";
 import { activeRulePredicate } from "../../utils/governance-rule-reads.js";
 import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 import { isAgentCaller } from "../library/agent-door.js";
@@ -92,28 +94,35 @@ function decidingRow(rows: readonly ModeRuleRow[]): ModeRuleRow | undefined {
 /**
  * May each action run on its own? The ONE derivation the gate reads
  * (`capabilityVerbAllowsRuleWiden`), with the intent and metadata of the
- * skills named after it: one serving a public post, or declaring
- * `metadata.proposeOnly`, never may, whatever its name.
+ * skills it names, by name or by row id (a capability rule matches either):
+ * one serving a public post, or declaring `metadata.proposeOnly`, never may,
+ * whatever its name. Also the refusal of `governanceRules.create`.
  */
-async function actionsMayRunOnTheirOwn(
+export async function actionsMayRunOnTheirOwn(
   actions: readonly string[]
 ): Promise<Map<string, boolean>> {
+  const ids = actions.filter((a) => isUuid(a));
   const rows = await db
     .select({
+      id: skills.id,
       name: skills.name,
       intent: skills.intent,
       metadata: skills.metadata,
     })
     .from(skills)
-    .where(inArray(skills.name, [...actions]));
+    .where(
+      ids.length > 0
+        ? or(inArray(skills.name, [...actions]), inArray(skills.id, ids))
+        : inArray(skills.name, [...actions])
+    );
   return new Map(
     actions.map((action) => [
       action,
       capabilityVerbAllowsRuleWiden(action) &&
         rows
-          .filter((r) => r.name === action)
+          .filter((r) => r.name === action || r.id === action)
           .every((r) =>
-            capabilityVerbAllowsRuleWiden(action, r.intent, r.metadata)
+            capabilityVerbAllowsRuleWiden(r.name, r.intent, r.metadata)
           ),
     ])
   );

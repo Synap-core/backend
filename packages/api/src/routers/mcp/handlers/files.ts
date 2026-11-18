@@ -22,10 +22,10 @@ import { ok, requireScope, type McpHandlerMap } from "./shared.js";
 const logger = createLogger({ module: "mcp-get-file" });
 
 /** How long the URL lives: the sync verb lifetime (`file-parameters.ts`). */
-export const GET_FILE_URL_SECONDS = 15 * 60;
+const GET_FILE_URL_SECONDS = 15 * 60;
 
 /** Raster types a model client draws from an `image` block. SVG is never one (active content). */
-export const INLINE_IMAGE_TYPES: ReadonlySet<string> = new Set([
+const INLINE_IMAGE_TYPES: ReadonlySet<string> = new Set([
   "image/png",
   "image/jpeg",
   "image/gif",

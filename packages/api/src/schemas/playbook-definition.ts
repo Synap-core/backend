@@ -153,14 +153,14 @@ export const playbookExpectedOutputSchema = z.looseObject({
 });
 
 /** Most trigger phrases one playbook declares. */
-export const PLAYBOOK_TRIGGERS_MAX = 20;
+const PLAYBOOK_TRIGGERS_MAX = 20;
 /** Longest trigger phrase, in characters. */
-export const PLAYBOOK_TRIGGER_MAX_CHARS = 120;
+const PLAYBOOK_TRIGGER_MAX_CHARS = 120;
 
 /**
  * `metadata.triggers` — phrases the playbook is FOR. The suggestion ranker
  * (`rankRouteCandidates`) admits the playbook when a request holds every word
- * of one, and scores those words like name words (plan a640c5bb D3). A phrase
+ * of one, and scores those words like name words (plan a640c5bb). A phrase
  * with no word the ranker reads (stop words only) could never match, so it is
  * refused here rather than stored and silently ignored.
  */

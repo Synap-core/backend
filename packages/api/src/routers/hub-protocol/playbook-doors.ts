@@ -143,7 +143,7 @@ export async function createPlaybookDoor(
     /** What a run may use, "only these" (`playbookToolsSchema`, validated by `playbooks.create`). */
     tools?: PlaybookDefinition["tools"];
     /**
-     * The phrases that offer it (`metadata.triggers`, plan D3), validated by
+     * The phrases that offer it (`metadata.triggers`), validated by
      * `playbooks.create` (`playbookTriggersSchema`).
      */
     triggers?: string[];

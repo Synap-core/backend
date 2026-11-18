@@ -45,9 +45,11 @@ export interface GovernanceGrantContext {
   /** `data.verbId ?? data.skillId ?? data.capabilityId` — whichever field a
    * `capability.run` proposal actually carries (gate paths vary). */
   capabilityTarget?: string | null;
-  /** The intent the target verb serves, when the caller knows it: a verb
-   * whose intent is propose-only (a public post) is never offered "always". */
-  capabilityIntent?: string | null;
+  /** The pod's answer for the target verb (`governanceRules.actionModes`
+   * `mayRunOnItsOwn`, the gate's `capabilityVerbAllowsRuleWiden` over the
+   * verb's intent and metadata): `false` (a public post, a verb declaring
+   * `metadata.proposeOnly`) is never offered "always". */
+  capabilityMayRunOnItsOwn?: boolean | null;
   /** `"<subjectType>.<action>"` off the proposal's requested event. */
   actionKey?: string | null;
   /** The entity/facet profile slug this proposal targets. */
@@ -242,7 +244,8 @@ export function deriveGovernanceGrantOptions(
   // that rule would never fire.
   if (
     ctx.capabilityTarget &&
-    capabilityVerbAllowsRuleWiden(ctx.capabilityTarget, ctx.capabilityIntent) &&
+    capabilityVerbAllowsRuleWiden(ctx.capabilityTarget) &&
+    ctx.capabilityMayRunOnItsOwn !== false &&
     !isNonWidenableGovernanceReason(ctx.governanceReason)
   ) {
     opts.push({

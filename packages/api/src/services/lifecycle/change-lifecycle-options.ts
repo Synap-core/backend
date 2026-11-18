@@ -53,7 +53,7 @@ import { auditLog } from "../../utils/audit-log.js";
 
 const logger = createLogger({ module: "change-lifecycle-options" });
 
-export const CHANGE_LIFECYCLE_OPTIONS_PROPOSAL_TYPE =
+const CHANGE_LIFECYCLE_OPTIONS_PROPOSAL_TYPE =
   "change_lifecycle_options" as const;
 
 export type ProposeLifecycleOptionsChangeResult =
@@ -92,7 +92,7 @@ async function kindsOf(
 }
 
 /** PURE: the rows the review card renders — before, after, and where things move. */
-export function lifecycleOptionsChangeReviewRows(
+function lifecycleOptionsChangeReviewRows(
   kinds: readonly string[],
   plan: LifecycleOptionsPlan
 ): Record<string, string> {

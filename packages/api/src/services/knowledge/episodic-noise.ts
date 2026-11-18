@@ -1,9 +1,6 @@
 /**
  * The episodic lane's noise, removed before its items become `sources`
- * (ticket d1fe02c8). Live, 2026-11-17: "What did I decide about how failed
- * proposals should be handled?" came back with four identical "Ran capability
- * \"market.search\" → {\"entries\":[],…}" lines as its first four sources,
- * while the relevant record was cut by the source cap.
+ * (ticket d1fe02c8).
  *
  * Two rules, nothing tuned:
  *   - the SAME fact text twice is one source (the first, the best ranked);

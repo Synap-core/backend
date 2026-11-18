@@ -155,6 +155,7 @@ describe("playbooks.matchForEntity", () => {
         // No description on the row: the key is there, null (never absent).
         description: null,
         goalTemplate: "Produce content for {{platform}} from {{subject}}",
+        triggers: [],
         subjectProfileSlug: "post",
         activators: [],
         runsWithoutSubject: false,
@@ -235,6 +236,7 @@ describe("playbooks.matchForEntity", () => {
         templateKind: "Process",
         description: null,
         goalTemplate: "Enrich {{subject}}",
+        triggers: [],
         subjectProfileSlug: "lead",
         activators: [],
         runsWithoutSubject: false,
