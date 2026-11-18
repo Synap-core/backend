@@ -59,6 +59,7 @@ import {
 } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
+import { grantWriteDenial } from "../../utils/grant-write-check.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { generateShareToken, hashToken } from "../../utils/share-token.js";
 import { sharePageUrl } from "../../utils/deep-links.js";
@@ -471,6 +472,14 @@ export async function unpublishResource(
     workspaceId: record.workspaceId,
     ownerId: record.ownerId,
   });
+  // A key narrows only inside its grant (no grant = a person): taking a
+  // record off the public web is a `share.update` in the record's space.
+  const denied = await grantWriteDenial({
+    subjectType: "share",
+    action: "update",
+    workspaceId: record.workspaceId,
+  });
+  if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const updated = await database
     .update(resourceShares)
     .set({ state: "draft", updatedAt: new Date() })
@@ -529,6 +538,14 @@ export async function revokePublication(
     workspaceId: record.workspaceId,
     ownerId: record.ownerId,
   });
+  // A key revokes only inside its grant (no grant = a person): killing a
+  // public url for good is a `share.delete` in the record's space.
+  const denied = await grantWriteDenial({
+    subjectType: "share",
+    action: "delete",
+    workspaceId: record.workspaceId,
+  });
+  if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const now = new Date();
   const revoked = await database
     .update(resourceShares)

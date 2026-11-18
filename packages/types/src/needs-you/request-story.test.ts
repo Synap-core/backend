@@ -226,6 +226,76 @@ describe("requestStory — before", () => {
   });
 });
 
+describe("requestStory — the session chain stays in the session lens", () => {
+  // The timeline's chain kinds (stage moves, spawns, runners, room posts:
+  // decision D3) belong to the Operations session lens; a request's capped
+  // Before tells its own acts.
+  it("a session's story leaves out stage moves, spawns, runners and room posts", () => {
+    const row: LensRow = { ...owedRow(), key: `session:${S}` };
+    const chain: DevTimelineEvent[] = [
+      {
+        id: "stage",
+        kind: "stage_moved",
+        at: at(),
+        actor: AGENT,
+        refs,
+        from: null,
+        to: "build",
+        via: "advance",
+      },
+      {
+        id: "child",
+        kind: "child_started",
+        at: at(),
+        actor: AGENT,
+        refs,
+        child: { id: "c", title: "Lane", status: "active" },
+      },
+      {
+        id: "runner",
+        kind: "runner_seen",
+        at: at(),
+        actor: AGENT,
+        refs: { ...refs, runnerId: "claude-code:x" },
+        runner: {
+          harness: "claude-code",
+          conversationId: "x",
+          computer: "devbox",
+          model: null,
+          provider: null,
+          state: "busy",
+          lastSeenAt: at(),
+        },
+      },
+      {
+        id: "post",
+        kind: "room_post",
+        at: at(),
+        actor: AGENT,
+        refs: { ...refs, messageId: "m", channelId: "ch" },
+        post: {
+          form: "update",
+          direction: null,
+          intent: null,
+          line: "checkpoint",
+          truncated: false,
+        },
+      },
+    ];
+    const events = [started(), ...chain, checks("c1", "passed")].reverse();
+    const story = requestStory(row, {
+      ...contextOf(row, {
+        timeline: { status: "ok", value: { events, olderExist: false } },
+      }),
+    });
+    expect(story.before.map((g) => g.kind)).toEqual([
+      "session_started",
+      "checks_finished",
+    ]);
+    expect(story.folded).toBeNull();
+  });
+});
+
 // Review a089b624: one history, one word for each act (S1 a refusal, S2 a
 // decision through the vocabulary door, S3 "Not mine").
 describe("requestStory — the past says each act as it was", () => {

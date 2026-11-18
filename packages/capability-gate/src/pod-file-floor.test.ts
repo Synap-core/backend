@@ -25,6 +25,7 @@ const findCapabilityGrantMock = vi.fn();
 const resolveGovernanceRuleMock = vi.fn();
 const intentRows = new Map<string, { effect: string }>([
   ["publish_post", { effect: "write" }],
+  ["edit_video", { effect: "write" }],
   ["list_records", { effect: "read" }],
 ]);
 
@@ -66,7 +67,11 @@ vi.mock("@synap/database/schema", () => T);
 const { gateCapabilityExecution, POD_FILE_OUTWARD } =
   await import("./index.js");
 
-/** An agent running the person's approved fal edit verb (a widenable name). */
+/**
+ * An agent running the person's approved fal edit verb: a widenable name AND a
+ * widenable intent (a `publish_post` verb is never widened, whatever its name:
+ * `capabilityVerbAllowsRuleWiden`).
+ */
 const agentRun = (over: object = {}) => ({
   capabilityKind: "skill" as const,
   capabilityId: "skill-1",
@@ -75,7 +80,7 @@ const agentRun = (over: object = {}) => ({
     approved: true,
     userId: "person-1",
     name: "fal_edit_reference_image",
-    intent: "publish_post",
+    intent: "edit_video",
   },
   actorUserId: "person-1",
   agentUserId: "agent-1",

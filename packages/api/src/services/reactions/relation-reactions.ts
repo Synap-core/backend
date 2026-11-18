@@ -1,13 +1,12 @@
 /**
- * DECLARED RULES (plan 7d71ddcc W3): the reactions a relation between two
- * kinds declares (`profile_relations.metadata.reactions`, the closed union
- * read by `readRelationReactions`, `@synap-core/types/relations`), turned
- * into the reactor's declarations so they join THE one list beside the
- * built-in rules (`registerReactionSource`, `@synap/jobs` reactions): same
- * order, same guards, same log. Nothing else holds a rule (no reactions
- * table), and nothing here runs one: the reactor applies it, the compile
- * pass (`reaction-rules-compile.ts`) gives each one its visible, pausable
- * rule row.
+ * DECLARED RULES: the reactions a relation between two kinds declares
+ * (`profile_relations.metadata.reactions`, the closed union read by
+ * `readRelationReactions`, `@synap-core/types/relations`), turned into the
+ * reactor's declarations so they join THE one list beside the built-in rules
+ * (`registerReactionSource`, `@synap/jobs` reactions): same order, same guards,
+ * same log. Nothing else holds a rule (no reactions table), and nothing here
+ * runs one: the reactor applies it, the compile pass
+ * (`reaction-rules-compile.ts`) gives each one its visible, pausable rule row.
  *
  * Roll-up only (decision D7). A pair whose kind at the child end is a ROLE is
  * reported, not compiled: a role's status lives on its facet, and the parts

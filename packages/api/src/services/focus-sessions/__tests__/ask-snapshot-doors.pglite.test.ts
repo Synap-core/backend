@@ -123,7 +123,7 @@ const slotOf = async (id: string) =>
 describe("the ask is kept when answered (W1)", () => {
   beforeAll(async () => {
     await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
-    // The slot and proposal doors owe their transition (reactions W1).
+    // The slot and proposal doors owe their transition.
     await h.client!.exec(
       ddlFor(lifecycleTransitionOutbox as unknown as PgTable)
     );

@@ -38,6 +38,7 @@
     "focusSessions.attachAgent",
     "focusSessions.blockOutput",
     "focusSessions.grantCapability",
+    "focusSessions.startOrchestrator",
     "forms.update",
     "govConfig.revoke",
     "graph.addDependency",

@@ -1,8 +1,8 @@
 /**
- * The `meet_outcomes` effect of the reactions reactor (plan 7d71ddcc W2, pod
- * default 3, "an outcome is met wherever it was filed"): a proposal moved to
- * approved or auto_approved → every outcome, in ANY session of the proposal's
- * owner, whose own `ref` names what it approved → met through THE done door
+ * The `meet_outcomes` effect of the reactions reactor (pod default 3, "an
+ * outcome is met wherever it was filed"): a proposal moved to approved or
+ * auto_approved → every outcome, in ANY session of the proposal's owner, whose
+ * own `ref` names what it approved → met through THE done door
  * (`satisfyOutputsByRef`, `satisfy-expected-output.ts`), with the reaction's
  * `cause` on each slot's transition.
  *

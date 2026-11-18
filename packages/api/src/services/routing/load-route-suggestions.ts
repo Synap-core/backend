@@ -64,6 +64,7 @@ type PlaybookMatch = {
   id: string;
   name: string;
   goalTemplate: string | null;
+  description?: string | null;
   subjectProfileSlug: string | null;
   signals?: ReadonlyArray<{ type: string; profileSlug?: string }>;
 };
@@ -213,6 +214,7 @@ export async function loadRouteSuggestions(input: {
             id: p.id,
             name: p.name,
             text: [p.goalTemplate],
+            description: p.description,
             subjectProfileSlug: p.subjectProfileSlug,
             // Built for a kind, and no standing propose rule asks for it yet.
             ...(p.subjectProfileSlug && !rules.proposedPlaybookIds.has(p.id)
@@ -224,6 +226,7 @@ export async function loadRouteSuggestions(input: {
             id: r.id,
             name: r.name,
             text: [r.description],
+            description: r.description,
             // The rule's own kind filter is the evidence; a rule with none
             // fires for anything new (`anyKind`) and needs an intent word.
             subjectProfileSlug: r.filterProfileSlug,

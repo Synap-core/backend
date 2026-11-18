@@ -1594,6 +1594,7 @@ export async function matchPlaybooks(
       name: p.name,
       // The SAME words synap_find's playbook arm ranks (one definition).
       text: playbookSearchText(p),
+      description: p.description,
       subjectProfileSlug:
         (p.subjectProfile as { profileSlug?: string } | null)?.profileSlug ??
         null,

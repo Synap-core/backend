@@ -1,19 +1,18 @@
 /**
- * REACTIONS (plan 7d71ddcc §2, wave 2) — "when X moves, move Y": the ONE
- * registry of the rules the `reactions` reactor applies, and the pure guards
- * it decides with. The person calls them "Rules" (decision D8); "reaction" is
- * an internal word.
+ * REACTIONS — "when X moves, move Y": the ONE registry of the rules the
+ * `reactions` reactor applies, and the pure guards it decides with. The person
+ * calls them "Rules" (decision D8); "reaction" is an internal word.
  *
  * A reaction is WHEN (a subject type, statuses or categories it lands on) →
  * VIA (one existing link from what moved to what it moves) → DO (one effect,
  * applied through the TARGET's own door, as the `system`, with a `cause`).
  *
  * WHO DECLARES THEM. Built-in reactions are declared in code below
- * (`BUILT_IN_REACTIONS`, the pod defaults 3 and 4 in this wave). Declarations
- * compiled elsewhere (lane E: relation-level roll-ups, stage outputs) join the
- * SAME list through {@link registerReactionSource}; the person's pause of any
- * of them through {@link registerReactionStateSource}. Nothing else holds
- * rules: there is no reactions table (a rules table was rejected, api
+ * (`BUILT_IN_REACTIONS`: the pod defaults 3 and 4). Declarations compiled
+ * elsewhere (a relation's roll-up, api `relation-reactions.ts`) join the SAME
+ * list through {@link registerReactionSource}; the person's pause of any of
+ * them through {@link registerReactionStateSource}. Nothing else holds rules:
+ * there is no reactions table (a rules table was rejected, api
  * `services/rules/index.ts`).
  *
  * THE GUARDS ({@link decideReactionWrites}, pure), from the prior art:
@@ -60,7 +59,7 @@ export interface ReactionWhen {
 /**
  * VIA: the ONE existing link a reaction walks from what moved to what it
  * moves. A closed union: a declaration names a link, never an expression.
- * The relation arm carries the roll-ups a link declares (wave 3).
+ * The relation arm carries the roll-ups a link declares.
  */
 export type ReactionVia =
   /** An approved proposal → every outcome (slot) whose own `ref` names its target. */
@@ -70,7 +69,7 @@ export type ReactionVia =
   /** A slot → the stage of its session that declares it, and that session's subject. */
   | { link: "slot_stage" }
   /**
-   * A thing → the thing(s) a declared relation links it to (wave 3, a
+   * A thing → the thing(s) a declared relation links it to (a
    * relation's `reactions`, `@synap-core/types/relations`). `parent` names
    * the end that moves: `target` for `part_of` (child → parent), `source`
    * for `parent_of`. The profile ids pin the declaring pair.
@@ -140,8 +139,9 @@ export interface ReactionDeclaration {
 }
 
 /**
- * The pod's built-in rules (plan §2 "The four defaults"; 3 and 4 in this
- * wave, 1 and 2 are lane E's declarations).
+ * The pod's built-in rules: defaults 3 (an outcome is met wherever it was
+ * filed) and 4 (a run that stops early goes to Needs you). A roll-up (default
+ * 1) is declared on a link, not built in.
  */
 export const BUILT_IN_REACTIONS: readonly ReactionDeclaration[] = [
   {
@@ -194,8 +194,7 @@ export const OUTCOME_MET_REACTION_ID = "builtin:outcome-met-where-filed";
 // ── The registry: built-ins + what other declarers register ───────────────
 
 /**
- * A source of compiled declarations (lane E: relation roll-ups, stage
- * outputs). `subjectTypes` is what its declarations listen to, so the
+ * A source of compiled declarations (a relation's roll-ups). `subjectTypes` is what its declarations listen to, so the
  * reactor queues a job only for a move some rule can match.
  */
 export interface ReactionSource {
@@ -204,7 +203,7 @@ export interface ReactionSource {
   list(): Promise<readonly ReactionDeclaration[]>;
 }
 
-/** Who paused which rule (lane E backs it with the rule list's own pause). */
+/** Who paused which rule (backed by the rule list's own pause, api). */
 export type ReactionStateSource = () => Promise<ReadonlyMap<string, boolean>>;
 
 const sources: ReactionSource[] = [];
@@ -233,18 +232,10 @@ export function declaredSubjectTypes(): ReadonlySet<TransitionSubjectType> {
   return new Set(sources.flatMap((s) => s.subjectTypes));
 }
 
-/** The subject types any rule listens to. */
-export function reactionSubjectTypes(): ReadonlySet<TransitionSubjectType> {
-  return new Set([
-    ...BUILT_IN_REACTIONS.map((r) => r.when.subjectType),
-    ...sources.flatMap((s) => s.subjectTypes),
-  ]);
-}
-
 /**
  * THE ONE READ of every rule the reactor applies, in its fixed order:
  * built-in and declared, each with its enabled flag. The person's Rules list
- * (lane E) renders this; the reactor decides from it.
+ * renders this; the reactor decides from it.
  */
 export async function listReactions(): Promise<ReactionDeclaration[]> {
   const declared = (await Promise.all(sources.map((s) => s.list()))).flat();
@@ -265,7 +256,7 @@ export async function isReactionEnabled(id: string): Promise<boolean> {
   return r?.enabled ?? false;
 }
 
-export function byReactionOrder(
+function byReactionOrder(
   a: Pick<ReactionDeclaration, "order" | "id">,
   b: Pick<ReactionDeclaration, "order" | "id">
 ): number {

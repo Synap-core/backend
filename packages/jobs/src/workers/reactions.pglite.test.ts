@@ -1,7 +1,7 @@
 /**
- * THE REACTIONS REACTOR on PGlite (plan 7d71ddcc W2): one deduped job per
- * move, the matching rules applied through their targets' doors with a
- * `cause`, and every outcome logged — applied, proposed, or skipped with why.
+ * THE REACTIONS REACTOR on PGlite: one deduped job per move, the matching rules
+ * applied through their targets' doors with a `cause`, and every outcome logged
+ * — applied, proposed, or skipped with why.
  *
  * Real: `setRunStatus`, `setSessionStatus` (the doors and their outbox),
  * the hold's wait-ref check, the reaction log (`events`). Stubbed: the event
@@ -122,7 +122,7 @@ async function run(sessionId: string, status = "running"): Promise<string> {
   return id;
 }
 
-/** The run stops early and asks the person (wave 0's park): its transition. */
+/** The run stops early and asks the person (it parks): its transition. */
 async function park(runId: string, cause?: Record<string, unknown>) {
   const { transitions } = await setRunStatus(db, {
     runId,

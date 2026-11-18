@@ -177,6 +177,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "kind.review.other": "Revues",
   "kind.test_run.one": "Série de tests",
   "kind.test_run.other": "Séries de tests",
+  "kind.orchestrator.one": "Orchestrateur",
+  "kind.orchestrator.other": "Orchestrateurs",
   // ── Verbs: `action.<token>.imperative` (infinitive) / `.past` (masculine
   // participle, D4) / `.progressive` / `.present` ──
   "action.create.imperative": "Créer",
@@ -311,6 +313,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.session.wait_on.past": "Mis en attente de",
   "action.session.release.imperative": "Ne plus attendre",
   "action.session.release.past": "N’attend plus",
+  "action.orchestrate.imperative": "Orchestrer",
+  "action.orchestrate.past": "Orchestré",
   "action.track.take_offer.imperative": "Accepter leur offre",
   "action.track.take_offer.past": "Offre acceptée",
   "action.track.keep_ask.imperative": "Garder ma demande",
@@ -878,4 +882,5 @@ export const vocabularyFrNouns: Readonly<Record<NounSlug, FrenchNounGrammar>> =
     room: { gender: "m", elides: false },
     review: { gender: "f", elides: false },
     test_run: { gender: "f", elides: false },
+    orchestrator: { gender: "m", elides: true },
   };

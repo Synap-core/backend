@@ -1,5 +1,5 @@
 /**
- * THE SLOT TRANSITION (reactions W1) — an owed slot (one declared output or ask
+ * THE SLOT TRANSITION — an owed slot (one declared output or ask
  * of a session, `focus_sessions.expected_outputs`) has no status column and
  * gets none: its status is DERIVED (`slotStatusOf`, from the owed rule
  * `deliverableOwedBy`). So the doors that change a slot owe its transition
@@ -69,7 +69,7 @@ export function slotTransitionsOf(input: {
   reason?: string | null;
   proposalId?: string | null;
   occurredAt?: Date | null;
-  /** The move that caused this one (a reaction, reactions W2). */
+  /** The move that caused this one (a reaction). */
   cause?: TransitionCause | null;
 }): SlotTransitionPayload[] {
   const prior = new Map<string, SlotForTransition>();
@@ -133,7 +133,7 @@ export async function oweSlotTransitions(
     reason?: string | null;
     proposalId?: string | null;
     occurredAt?: Date | null;
-    /** The move that caused this one (a reaction, reactions W2). */
+    /** The move that caused this one (a reaction). */
     cause?: TransitionCause | null;
   }
 ): Promise<SlotTransitionPayload[]> {

@@ -2228,7 +2228,10 @@ export type LinkType =
   | "serves"
   // track --advances--> workspace: the goal moves that space of its project
   // forward (a "pillar"; `metadata.primary` on at most one per goal).
-  | "advances";
+  | "advances"
+  // session --orchestrated_by--> session: coordinated by that orchestrator
+  // (not lineage, not a dependency; the wait is the child's hold).
+  | "orchestrated_by";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {

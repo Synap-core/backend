@@ -28,11 +28,10 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * hand-listed copy missed `stale` (D6, 2026-10-11) and read the reaper's
  * non-terminal stale sweep as an unsettled terminal write.
  *
- * Since reactions W1 every status write goes through the ONE run door,
- * `setRunStatus(db, { …, to: X, … })` (tripwire `run-status-one-writer`): a
- * call whose `to:` is a terminal literal or any non-literal is a terminal
- * stamp too. The door itself lives in @synap/database, which cannot reach the
- * helper, so its CALLERS settle.
+ * Every status write goes through the ONE run door, `setRunStatus(db, { …, to:
+ * X, … })` (tripwire `run-status-one-writer`): a call whose `to:` is a terminal
+ * literal or any non-literal is a terminal stamp too. The door itself lives in
+ * @synap/database, which cannot reach the helper, so its CALLERS settle.
  *
  * A file passes when it calls the helper at least as many times as it stamps.
  *
@@ -169,7 +168,7 @@ describe("tripwire: a playbook_runs terminal writer settles the parent automatio
       await db.update(playbookRuns).set({ status: "stale" }).where(x);
       await db.update(playbookRuns).set({ summary: "x" }).where(x);`;
     expect(terminalStamps(LIVE)).toEqual([]);
-    // The run door (reactions W1): its `to:` is read, a nested `set:` is not.
+    // The run door: its `to:` is read, a nested `set:` is not.
     const DOOR = `
       await setRunStatus(db, { runId, from: LIVE_RUN_STATUSES, to: "failed",
         set: { completedAt: new Date(), error: fn(a, b) } });

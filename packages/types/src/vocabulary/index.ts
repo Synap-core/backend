@@ -473,6 +473,9 @@ const ACTION_VERB_ROWS = {
     past: "Took their offer",
   },
   "track.keep_ask": { imperative: "Keep my ask", past: "Kept my ask" },
+  // `focus_session/orchestrate`: start ONE orchestrator over several running
+  // sessions (links them, holds each on the person's yes). The proposal's verb.
+  orchestrate: { imperative: "Orchestrate", past: "Orchestrated" },
   // The pod's one "Make them goals" card (founder decision D-3, 2026-10-26):
   // the retired goal / objective / OKR entities the person reviews and makes
   // goals, each through the one convert door. Plural on purpose — the single
@@ -923,6 +926,8 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   // participant(agent) --assigned_to--> playbook|profile|project|workspace:
   // the agent that takes that work by default.
   assigned_to: { outgoing: "Assigned to", incoming: "Assigned agent" },
+  // session --orchestrated_by--> session: coordinated by that orchestrator.
+  orchestrated_by: { outgoing: "Orchestrated by", incoming: "Orchestrates" },
 };
 
 export function resolveLineageEdgeLabel(
@@ -1024,6 +1029,11 @@ const OBJECT_NOUN_ROWS = {
   // backend#637): what a person reads as "its test runs", never a job's name
   // (D-R4). Humanized it read "Test run" in every locale.
   test_run: "Test run",
+  // A session that coordinates several running sessions (founder decision D5,
+  // plan b38bc224): it reads their rooms, posts one merged plan, and holds
+  // each until the person's yes. A session by kind, but the person names it
+  // by its role ("Start an orchestrator"); `orchestrated_by` is its edge.
+  orchestrator: "Orchestrator",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -1065,6 +1075,7 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   room: "Rooms",
   review: "Reviews",
   test_run: "Test runs",
+  orchestrator: "Orchestrators",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in

@@ -238,8 +238,8 @@ export const OperationalEventTypes = {
 
   // ── Playbook runs ────────────────────────────────────────────────────────
   // A run's status moved — every writer goes through `setRunStatus`
-  // (@synap/database), which owes this in the same transaction (reactions
-  // W1). The one transition shape, subject = the run; `stopReason` says why
+  // (@synap/database), which owes this in the same transaction. The one
+  // transition shape, subject = the run; `stopReason` says why
   // a run that stopped early stopped.
   PLAYBOOK_RUN_TRANSITIONED: {
     type: "playbook_run.transition.completed",
@@ -260,11 +260,10 @@ export const OperationalEventTypes = {
     ],
   },
 
-  // ── Owed slots (a session's declared outputs and asks) ──────────────────
-  // A slot's DERIVED status moved (owed, pending, answered, done, retired):
-  // the slot doors owe this when it changes (reactions W1). Subject id
-  // `<session id>/<slot key>`. The wake of an answered slot stays
-  // `focus_session.slot_answered`.
+  // ── Owed slots (a session's declared outputs and asks) ────────────────── A
+  // slot's DERIVED status moved (owed, pending, answered, done, retired): the
+  // slot doors owe this when it changes. Subject id `<session id>/<slot key>`.
+  // The wake of an answered slot stays `focus_session.slot_answered`.
   SLOT_TRANSITIONED: {
     type: "slot.transition.completed",
     label: "Ask or output changed",
@@ -305,10 +304,10 @@ export const OperationalEventTypes = {
     description: "An AI proposal was rejected.",
     filterKeys: ["proposalStatus", "targetType"],
   },
-  // A proposal's status moved — `transitionProposal`, its one door, owes
-  // this in the same transaction (reactions W1): every move, expiries,
-  // withdrawals, failed approvals and revisions included, pod-wide ones too.
-  // `proposal.approved` / `.rejected` stay beside it (dual emits).
+  // A proposal's status moved — `transitionProposal`, its one door, owes this
+  // in the same transaction: every move, expiries, withdrawals, failed
+  // approvals and revisions included, pod-wide ones too. `proposal.approved` /
+  // `.rejected` stay beside it (dual emits).
   PROPOSAL_TRANSITIONED: {
     type: "proposal.transition.completed",
     label: "Proposal status changed",

@@ -37,7 +37,7 @@ const bindCalls: Array<{
 let bindResult: { status?: string } = { status: "started" };
 
 const dbStub = {
-  // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+  // The proposal door's one statement (`WITH … UPDATE`).
 
   $with: () => ({ as: () => ({}) }),
 

@@ -90,6 +90,7 @@ import {
   withAddedEnumOption,
   getActingAgentUserId,
   getRequestGrant,
+  workUnitActorOf,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
 import { assertFreshAuthentication } from "../utils/device-session.js";
@@ -433,6 +434,26 @@ function pageOnlyFailureFields(error: unknown): {
 
 /** Rows a `package` filter on `list` scans (the `groups` default scan). */
 const PACKAGE_SCAN_LIMIT = 1000;
+
+/**
+ * Who a REJECTION is recorded as. `reviewedBy` is the person who decided
+ * (#1089: an agent's automatic receipt names no reviewer). An agent key that
+ * rejects (an agent withdrawing its own proposal through the CLI) is remapped
+ * to its person (`userId`), so stamping `userId` recorded and announced the
+ * agent's act as the person's decision (ticket 006ce859). For an agent caller
+ * — `ctx.agentUserId`, or the acting-agent ALS every key door enters — the
+ * row names no reviewer and the transition names the agent.
+ */
+function rejectionReviewer(
+  ctx: { agentUserId?: string | null },
+  userId: string
+) {
+  const agentUserId = ctx.agentUserId ?? getActingAgentUserId() ?? null;
+  return {
+    reviewedBy: agentUserId ? null : userId,
+    actor: workUnitActorOf(userId, agentUserId),
+  };
+}
 
 export const proposalsRouter = router({
   /**
@@ -2129,6 +2150,13 @@ export const proposalsRouter = router({
          */
         workspaceId: z.string().nullable().optional(),
         projectId: z.string().nullable().optional(),
+        /**
+         * The revision the reviewer's edit was made against (the length of
+         * `revisionHistory` the page rendered). A change made on top of a
+         * version someone else has since revised is refused (CONFLICT), so
+         * "Approve with your changes" never overwrites an unseen edit.
+         */
+        expectedRevision: z.number().int().nonnegative().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2203,6 +2231,7 @@ export const proposalsRouter = router({
         patch: { kind: "envelope", fields: input.data },
         workspaceId: input.workspaceId,
         projectId: input.projectId,
+        expectedRevision: input.expectedRevision,
         roster: rosterReadFor(ctx),
       });
 
@@ -2274,6 +2303,7 @@ export const proposalsRouter = router({
         });
       }
 
+      const reviewer = rejectionReviewer(ctx, userId);
       const rejected = await transitionProposal(db, {
         to: ProposalStatus.REJECTED,
         set: {
@@ -2281,10 +2311,11 @@ export const proposalsRouter = router({
           // Structured cause (0232) persisted ALONGSIDE the free-text reason —
           // null when the caller omits it (back-compat).
           reasonCode: input.reasonCode ?? null,
-          reviewedBy: userId,
+          reviewedBy: reviewer.reviewedBy,
           reviewedAt: new Date(),
           updatedAt: new Date(),
         },
+        actor: reviewer.actor,
         where: eq(proposals.id, input.proposalId),
       }).returning({ id: proposals.id });
       // The status door matched nothing: the proposal was already approved,
@@ -4016,6 +4047,7 @@ export const proposalsRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertMayDecideProposal("reject");
       const userId = requireUserId(ctx.userId);
+      const reviewer = rejectionReviewer(ctx, userId);
       /** Proposals this call actually moved to REJECTED — see the batched
        *  `markProposalNotificationsActioned` after the loop. */
       const actionedIds: string[] = [];
@@ -4086,10 +4118,11 @@ export const proposalsRouter = router({
             // scorecard histogram, any reason-keyed tightening) silently
             // under-counted — invisibly, because the event path looked right.
             reasonCode: input.reasonCode ?? null,
-            reviewedBy: userId,
+            reviewedBy: reviewer.reviewedBy,
             reviewedAt: new Date(),
             updatedAt: new Date(),
           },
+          actor: reviewer.actor,
           where: and(
             eq(proposals.id, proposalId),
             eq(proposals.status, ProposalStatus.PENDING)

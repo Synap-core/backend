@@ -32,9 +32,21 @@ import { entities } from "@synap/database/schema";
 import { resolveDoNotContactRefusal } from "@synap-core/types/vocabulary";
 import type { ABSTRACT_INTENTS } from "@synap-core/types/capability-intents";
 
-export const DO_NOT_CONTACT_PROPERTY = "doNotContact";
-export const DO_NOT_CONTACT_REASON_PROPERTY = "doNotContactReason";
-export const DO_NOT_CONTACT_SINCE_PROPERTY = "doNotContactSince";
+import {
+  DO_NOT_CONTACT_REASON_PROPERTY,
+  DO_NOT_CONTACT_SINCE_PROPERTY,
+  isDoNotContactSet,
+} from "./do-not-contact-fields.js";
+
+export {
+  DO_NOT_CONTACT_FIELDS,
+  DO_NOT_CONTACT_PROPERTY,
+  DO_NOT_CONTACT_REASON_PROPERTY,
+  DO_NOT_CONTACT_SINCE_PROPERTY,
+  clearsDoNotContact,
+  isDoNotContactSet,
+  isDoNotContactSetWrite,
+} from "./do-not-contact-fields.js";
 
 /** The channel shape the recipient is read from. */
 export interface RecipientChannel {
@@ -50,21 +62,8 @@ export interface DoNotContactFlag {
   since: string | null;
 }
 
-const isRecord = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
-
 const text = (v: unknown): string | null =>
   typeof v === "string" && v.trim() ? v.trim() : null;
-
-/**
- * Is the flag set? `true`, or the string "true" a loose writer may have
- * stored: a consent flag reads closed on the values that mean yes.
- */
-export function isDoNotContactSet(properties: unknown): boolean {
-  if (!isRecord(properties)) return false;
-  const v = properties[DO_NOT_CONTACT_PROPERTY];
-  return v === true || (typeof v === "string" && v.trim() === "true");
-}
 
 /**
  * The flag of the person a channel is bound to, or null when the channel is

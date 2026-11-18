@@ -48,8 +48,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /compacted-states/latest",
   "GET /connectors/broker-diagnostics",
   "GET /connectors/connections/:provider",
-  "GET /connectors/providers",
-  "GET /connectors/sync-status",
   "GET /discord/identity",
   "GET /discord/identity/members",
   "GET /entities/without-project/counts",
@@ -138,4 +136,4 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
 ];
 
 /** The baseline's size when it was cut; it only goes down. */
-export const UNCLASSIFIED_READ_ROUTES_CAP = 118;
+export const UNCLASSIFIED_READ_ROUTES_CAP = 116;

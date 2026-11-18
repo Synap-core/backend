@@ -14,6 +14,7 @@
 
 export type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { noteLimitClamped } from "../call-notices.js";
 import { hubProtocolRouter } from "../../hub-protocol/index.js";
 import { resolveConfinedWorkspace } from "../../hub-protocol/confine-workspace.js";
 import {
@@ -888,7 +889,14 @@ export function pageLimit(raw: unknown, fallback: number, max: number): number {
     typeof raw === "number" && Number.isFinite(raw)
       ? Math.trunc(raw)
       : fallback;
-  return Math.min(Math.max(n, 1), max);
+  const used = Math.min(Math.max(n, 1), max);
+  // A caller's own `limit` that was not honoured is said on the reply
+  // (`limitClamped`, call-notices.ts): 50 rows for `limit: 100` otherwise
+  // reads as "there are only 50" (ticket 1ef84d45).
+  if (typeof raw === "number" && Number.isFinite(raw) && used !== n) {
+    noteLimitClamped(raw, used);
+  }
+  return used;
 }
 
 export function pageOffset(raw: unknown): number {

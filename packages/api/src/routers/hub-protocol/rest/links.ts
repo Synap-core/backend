@@ -154,6 +154,10 @@ const LINK_TYPES = [
   // primary per goal); reader: the pillar health read
   // (`services/projects/pillar-health.ts`).
   "advances",
+  // session --orchestrated_by--> session. Listed because it has a producer,
+  // REFUSED below: only the orchestrator door writes it, governed, with the
+  // hold and the room notes that make it mean something.
+  "orchestrated_by",
 ] as const;
 
 /** Link types this door names but never writes — each has its own human door. */
@@ -162,6 +166,8 @@ const HUMAN_DOOR_LINK_TYPES: Readonly<Record<string, string>> = {
     "dispatched_via links bind an agent to the tool the pod dispatches it through; a person sets them with agentUsers.setBinding, never through this door",
   assigned_to:
     "assigned_to links say which agent takes a playbook's, kind's, project's or space's work; a person sets them with agentUsers.setAssignment, never through this door",
+  orchestrated_by:
+    "orchestrated_by links are written when an orchestrator starts over a set of sessions (POST /focus-sessions/orchestrate), never through this door",
 };
 
 /**

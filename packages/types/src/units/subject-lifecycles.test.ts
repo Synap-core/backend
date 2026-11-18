@@ -1,7 +1,7 @@
 /**
- * The three subjects that joined the transition door in reactions W1 — a
- * playbook run, a proposal and an owed slot — each read ONE declaration of
- * their categories (founder decision D9, 17 Nov 2026).
+ * The three subjects that joined the transition door last — a playbook run,
+ * a proposal and an owed slot — each read ONE declaration of their categories
+ * (founder decision D9, 17 Nov 2026).
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -103,7 +103,7 @@ describe("slot lifecycle (D9): derived, never stored", () => {
   });
 });
 
-describe("a hold may wait on a run or a slot moving (reactions W1)", () => {
+describe("a hold may wait on a run or a slot moving", () => {
   it("names them as `until.moves` subjects; a proposal stays the wait form", async () => {
     const { parseHoldMovesRef, parseHoldWaitRef } =
       await import("../lifecycle/hold.js");

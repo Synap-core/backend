@@ -130,7 +130,7 @@ import {
 } from "./session-needs-you";
 import { RoomPanel } from "./room-panel";
 import { useWorkRead, WorkSection } from "./work-section";
-import { gateProposalIds, offersContinue } from "../work-model";
+import { gatesDrawnAbove, restartPlace } from "../work-model";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { OpenInAppLink } from "../open-in-app-link";
 import { useReauthOnUnauthorized } from "../use-reauth";
@@ -286,7 +286,11 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
   // Continue (the section below) resumes THIS session where it stopped; Run
   // again starts a NEW one. When Continue is on offer it is the restart at
   // rest, and Run again waits in More, saying the difference.
-  const continueHere = offersContinue(work.read);
+  const restart = restartPlace({
+    canRerun: !!canRerun,
+    loading: work.query.isLoading,
+    read: work.read,
+  });
   const previewRerun = () =>
     rerunPreview.mutate({ sessionId: id, mode: "add", dryRun: true });
   const canRevert = owner && sessionCanRevert(session.status);
@@ -331,7 +335,7 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
         >
           {primary.label}
         </Button>
-      ) : canRerun && !continueHere ? (
+      ) : restart === "header" ? (
         <Button
           size="sm"
           radius="md"
@@ -345,13 +349,13 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
       ) : undefined,
       secondaryActions: (
         <>
-          {(more.length > 0 || (canRerun && continueHere)) && (
+          {(more.length > 0 || restart === "more") && (
             <MoreMoves
               moves={more}
               busy={moves.pending !== null || rerunPreview.isPending}
               onPick={pick}
               extra={
-                canRerun && continueHere
+                restart === "more"
                   ? [
                       {
                         key: "rerun",
@@ -501,7 +505,10 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
         {owner && <NeedsYouSection sessionId={id} gradedInRail={railGraded} />}
         <ProposedChangesSection
           sessionId={id}
-          drawnAbove={gateProposalIds(work.read)}
+          drawnAbove={gatesDrawnAbove({
+            loading: work.query.isLoading,
+            read: work.read,
+          })}
         />
 
         {report.isLoading ? (

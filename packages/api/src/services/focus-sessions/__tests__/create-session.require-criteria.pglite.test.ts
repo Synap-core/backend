@@ -11,6 +11,10 @@
  * (echoes the caller's), the session room and the spawn edge (own
  * connections), realtime emit.
  *
+ * Also here (same harness): `templateId: null` records the playbook offer as
+ * made (ticket dddeb66c), and an outcome with `verify` satisfies the rule
+ * (`declaredVerify`, ticket d24c5897).
+ *
  * NOT covered here: which doors set the flag. MCP is pinned by
  * `routers/mcp/handlers/session.start-requires-criteria.test.ts`; the Hub
  * POST door's flag is read off its own line (typecheck only).
@@ -73,6 +77,10 @@ vi.mock("../../../utils/domain-event-bridge.js", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { focusSessions, proposals, links, playbooks } from "@synap/database";
 import { createFocusSession, NO_CRITERIA } from "../create-session.js";
+import {
+  PLAYBOOK_OFFERED_AT_KEY,
+  shouldOfferPlaybooks,
+} from "../session-nudges.js";
 
 const USER = "user-1";
 const AGENT = "agent-1";
@@ -150,6 +158,20 @@ describe("an agent's new session declares what done means", () => {
     expect(await countByGoal(goal)).toBe(1);
   });
 
+  it("starts on an outcome with `verify` that makes no criterion (a deliverable checked by evidence)", async () => {
+    // Ticket d24c5897: the refusal's own words say "an outcome with `verify`"
+    // counts; `verify: { kind: "evidence" }` on a deliverable is one, though
+    // it is checked by its evidence and makes no criterion.
+    const goal = `Ship ${randomUUID()}`;
+    const res = await start(goal, {
+      requireCriteria: true,
+      declaredVerify: true,
+      expectedOutputs: [{ key: "pr", kind: "pull_request", label: "The PR" }],
+    });
+    expect(res.status).toBe("created");
+    expect(await countByGoal(goal)).toBe(1);
+  });
+
   it("continuing a session that already exists is never refused", async () => {
     const goal = `Ship ${randomUUID()}`;
     await start(goal); // no flag: an earlier start without criteria
@@ -162,5 +184,41 @@ describe("an agent's new session declares what done means", () => {
     const goal = `Ship ${randomUUID()}`;
     const res = await start(goal, { agentUserId: undefined });
     expect(res.status).toBe("created");
+  });
+});
+
+describe("templateId: null — the caller said no playbook (ticket dddeb66c)", () => {
+  const metadataOf = (goal: string) =>
+    q<{ metadata: Record<string, unknown> | null; origin: string | null }>(
+      `select metadata, origin from focus_sessions where goal = $1`,
+      [goal]
+    ).then((r) => r.rows[0]!);
+
+  it("records the offer as made, so the update nudge does not offer playbooks again", async () => {
+    const goal = `Ship ${randomUUID()}`;
+    await start(goal, { templateId: null });
+    const row = await metadataOf(goal);
+    expect(typeof row.metadata?.[PLAYBOOK_OFFERED_AT_KEY]).toBe("string");
+    expect(
+      shouldOfferPlaybooks({
+        playbookId: null,
+        origin: row.origin,
+        metadata: row.metadata,
+      } as Parameters<typeof shouldOfferPlaybooks>[0])
+    ).toBe(false);
+  });
+
+  it("CONTROL — a start that said nothing keeps the offer open", async () => {
+    const goal = `Ship ${randomUUID()}`;
+    await start(goal, { templateId: undefined });
+    const row = await metadataOf(goal);
+    expect(row.metadata?.[PLAYBOOK_OFFERED_AT_KEY]).toBeUndefined();
+    expect(
+      shouldOfferPlaybooks({
+        playbookId: null,
+        origin: row.origin,
+        metadata: row.metadata,
+      } as Parameters<typeof shouldOfferPlaybooks>[0])
+    ).toBe(true);
   });
 });

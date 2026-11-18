@@ -140,7 +140,7 @@ const stored = async (id: string): Promise<ExpectedOutput[]> =>
 describe("a decision slot is never closed by a bare 'I did this' (#12)", () => {
   beforeAll(async () => {
     await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
-    // The slot doors owe their transition (reactions W1).
+    // The slot doors owe their transition.
     await h.client!.exec(
       ddlFor(lifecycleTransitionOutbox as unknown as PgTable)
     );

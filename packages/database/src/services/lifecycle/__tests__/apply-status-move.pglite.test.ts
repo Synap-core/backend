@@ -160,7 +160,7 @@ describe("applyStatusMove", () => {
     });
   });
 
-  it("a move a rule caused carries its cause on the transition (reactions W2)", async () => {
+  it("a move a rule caused carries its cause on the transition", async () => {
     const r = await applyStatusMove(db, {
       target: await target(dealId),
       to: "won",
@@ -420,5 +420,71 @@ describe("applyStatusMove — the step wait", () => {
       on: "person",
       ref: "on-the-facet",
     });
+  });
+});
+
+/**
+ * THE APPROVER ACTS (founder, 17 Nov 2026): a move applied by approving an
+ * agent's proposal names the person who approved it, so what it sets off acts
+ * as them; the agent stays the proposer. A move with no proposal names no
+ * approver, so an agent's direct write keeps acting as the agent.
+ */
+describe("applyStatusMove — who approved it", () => {
+  it("an approved replay names its approver and keeps the agent; a direct move names none", async () => {
+    const pact = await kind("pact", "pactStage", [
+      { key: "open", category: "open" },
+      { key: "agreed", category: "active" },
+      { key: "signed", category: "done" },
+    ]);
+    const [e] = await db
+      .insert(schema.entities)
+      .values({
+        userId: "u1",
+        profileId: pact,
+        type: "pact",
+        status: "open",
+        properties: { pactStage: "open" },
+      })
+      .returning();
+
+    const direct = await applyStatusMove(db, {
+      target: await target(e.id),
+      expectedFrom: "open",
+      to: "agreed",
+      actor: AGENT,
+      // An approver with no proposal is not an approval: ignored.
+      approvedBy: "approver-1",
+    });
+    if (direct.status !== "moved") throw new Error(direct.status);
+    expect(direct.transition.agentUserId).toBe("a1");
+    expect(direct.transition).not.toHaveProperty("approvedBy");
+
+    const approved = await applyStatusMove(db, {
+      target: await target(e.id),
+      expectedFrom: "agreed",
+      to: "signed",
+      actor: AGENT,
+      strict: true,
+      proposalId: "22222222-2222-4222-8222-222222222222",
+      approvedBy: "approver-1",
+    });
+    if (approved.status !== "moved") throw new Error(approved.status);
+    expect(approved.transition).toMatchObject({
+      actorKind: "agent",
+      agentUserId: "a1",
+      approvedBy: "approver-1",
+      proposalId: "22222222-2222-4222-8222-222222222222",
+    });
+    // The owed event (what the fan-out replays) carries it too.
+    const [owed] = await db
+      .select()
+      .from(schema.lifecycleTransitionOutbox)
+      .where(
+        eq(
+          schema.lifecycleTransitionOutbox.transitionId,
+          approved.transition.transitionId
+        )
+      );
+    expect(owed.transition).toMatchObject({ approvedBy: "approver-1" });
   });
 });

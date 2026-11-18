@@ -1,10 +1,10 @@
 /**
- * THE RUN STATUS WRITE (reactions W1) — the one writer of
- * `playbook_runs.status` once a run exists, on the model of
- * `setSessionStatus`. Every door that moves a run (the capture applier, the
- * approval replay, the close door, unfollow, revive, reopen, the generate
- * decision, the approved start, cancel, redispatch, the reaper's sweeps) calls
- * this; a run is BORN with its first status (`running`), which is not a move.
+ * THE RUN STATUS WRITE — the one writer of `playbook_runs.status` once a run
+ * exists, on the model of `setSessionStatus`. Every door that moves a run (the
+ * capture applier, the approval replay, the close door, unfollow, revive,
+ * reopen, the generate decision, the approved start, cancel, redispatch, the
+ * reaper's sweeps) calls this; a run is BORN with its first status (`running`),
+ * which is not a move.
  *
  * One transaction (the caller's, as a savepoint, or its own):
  *   1. lock the rows that match (`runId` and/or `where`) AND stand in `from`
@@ -32,10 +32,7 @@
 import { and, asc, eq, inArray, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import {
-  PLAYBOOK_RUN_STATUSES,
-  RUN_STATUS_DECLARATION,
-} from "@synap-core/types/units";
+import { RUN_STATUS_DECLARATION } from "@synap-core/types/units";
 import {
   decideMoveHold,
   type Hold,
@@ -64,10 +61,6 @@ export type RunColumnsPatch = Omit<
   PgUpdateSetSource<typeof playbookRuns>,
   "status" | "id"
 >;
-
-/** Every stored run status: a door that moves from wherever the run stands. */
-export const ANY_RUN_STATUS: readonly PlaybookRunStatus[] =
-  PLAYBOOK_RUN_STATUSES;
 
 /**
  * The hold a run's pause records when its mover gives none: the run waits on
@@ -106,7 +99,7 @@ export interface SetRunStatusInput {
   defaultHold?: Hold;
   occurredAt?: Date | null;
   appId?: string | null;
-  /** The move that caused this one (a reaction, reactions W2). */
+  /** The move that caused this one (a reaction). */
   cause?: TransitionCause | null;
 }
 

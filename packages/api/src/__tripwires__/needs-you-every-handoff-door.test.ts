@@ -70,6 +70,12 @@ const EXEMPT: Record<string, string> = {
   "services/focus-sessions/param-slots.ts":
     "Pure shape builder (no write). Persisted by `create-session.ts` (notifies) " +
     "and the approval executor (exempt above).",
+  "services/focus-sessions/start-orchestrator.ts":
+    "The orchestrator's `plan-approval` slot is written THROUGH " +
+    "`createFocusSession`, at the person's own approval of the proposal " +
+    "(or their own signed-in call): they are looking at it, so a push about " +
+    "their own click is noise (as the focus-session approval executor). The " +
+    "orchestrator's agent asks in the room once the merged plan exists.",
   "services/playbooks/playbook-lifecycle.ts":
     "DEFINES `instantiateSession(Row)`; the notification belongs to the DOOR " +
     "that knows who is in front of the run (`run-playbook.ts` notifies).",

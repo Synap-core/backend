@@ -11,7 +11,9 @@
  * tool run. Nothing new is stored and no rung moves: a more specific rule (one
  * agent, one space) still outranks it, the floors above rung 2.8 (untrusted
  * origin, a pod file leaving, an app's outward run) still propose, and the
- * public-post actions (`PROPOSE_ONLY_CAPABILITY_VERBS`) never run on their own.
+ * propose-only actions (`capabilityVerbAllowsRuleWiden`: a verb declaring
+ * `metadata.proposeOnly`, every verb serving a propose-only intent, and the
+ * legacy Postiz names) never run on their own.
  *
  * WHO: a person who is a pod admin (a pod-wide rule), never an agent's
  * credential and never a scoped key (an app's sign-in): an AI does not loosen
@@ -55,7 +57,8 @@ export interface ActionModeRow {
   mode: ActionRunMode;
   /** The rule that sets it; `null` when it asks first (no rule). */
   ruleId: string | null;
-  /** False for an action no rule may run on its own (a public post). */
+  /** False for an action no rule may run on its own (a public post, a
+   * verb declaring `metadata.proposeOnly`). */
   mayRunOnItsOwn: boolean;
 }
 
@@ -86,6 +89,36 @@ function decidingRow(rows: readonly ModeRuleRow[]): ModeRuleRow | undefined {
   );
 }
 
+/**
+ * May each action run on its own? The ONE derivation the gate reads
+ * (`capabilityVerbAllowsRuleWiden`), with the intent and metadata of the
+ * skills named after it: one serving a public post, or declaring
+ * `metadata.proposeOnly`, never may, whatever its name.
+ */
+async function actionsMayRunOnTheirOwn(
+  actions: readonly string[]
+): Promise<Map<string, boolean>> {
+  const rows = await db
+    .select({
+      name: skills.name,
+      intent: skills.intent,
+      metadata: skills.metadata,
+    })
+    .from(skills)
+    .where(inArray(skills.name, [...actions]));
+  return new Map(
+    actions.map((action) => [
+      action,
+      capabilityVerbAllowsRuleWiden(action) &&
+        rows
+          .filter((r) => r.name === action)
+          .every((r) =>
+            capabilityVerbAllowsRuleWiden(action, r.intent, r.metadata)
+          ),
+    ])
+  );
+}
+
 /** Each action's pod-wide mode, in the order asked. */
 export async function readActionModes(
   actions: readonly string[]
@@ -100,6 +133,7 @@ export async function readActionModes(
     })
     .from(governanceRules)
     .where(podWideModeRows(wanted))) as ModeRuleRow[];
+  const mayRun = await actionsMayRunOnTheirOwn(wanted);
   return wanted.map((action) => {
     const rule = decidingRow(rows.filter((r) => r.targetPattern === action));
     const mode = actionRunModeOf(rule?.verdict);
@@ -107,7 +141,7 @@ export async function readActionModes(
       action,
       mode,
       ruleId: mode === "ask" ? null : (rule?.id ?? null),
-      mayRunOnItsOwn: capabilityVerbAllowsRuleWiden(action),
+      mayRunOnItsOwn: mayRun.get(action) ?? false,
     };
   });
 }
@@ -203,10 +237,13 @@ export async function writeActionMode(input: {
   sourceProposalId?: string;
 }): Promise<WriteActionModeResult> {
   const { userId, action, mode } = input;
-  if (mode === "auto" && !capabilityVerbAllowsRuleWiden(action)) {
+  if (
+    mode === "auto" &&
+    !(await actionsMayRunOnTheirOwn([action])).get(action)
+  ) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: `"${action}" publishes in public: it always asks you first.`,
+      message: `"${action}" publishes in public or cannot be undone: it always asks you first.`,
       cause: { reasonCode: ACTION_ALWAYS_ASKS },
     });
   }

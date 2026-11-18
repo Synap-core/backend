@@ -86,6 +86,8 @@ export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
     "a run tool of the pod's AI (`LONG_RUN_FLOOR` in @synap/playbooks): a playbook run posts in its OWN room with it; a name a playbook's `tools` lists, not a door tool",
   get_brand_kit:
     "a run tool of the pod's AI (`LONG_RUN_FLOOR` in @synap/playbooks): a playbook run reads the brand kit with it; a name a playbook's `tools` lists, not a door tool",
+  focus_session:
+    "a session's subject type, and the prefix of its events (`focus_session.transition.completed`), not a tool",
 };
 
 /** Human door name for the closing note. Product copy, not a domain token. */

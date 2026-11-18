@@ -16,7 +16,7 @@ vi.mock("../../../../services/lifecycle/move-status.js", () => ({
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
-    // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+    // The proposal door's one statement (`WITH … UPDATE`).
     $with: () => ({ as: () => ({}) }),
     with() {
       return this;
@@ -78,7 +78,9 @@ describe("entity/transition executor", () => {
       to: "lost",
       expectedFrom: "negotiating",
       approvedProposalId: "p1",
+      // The agent stays the proposer; the approver acts (17 Nov 2026).
       actor: { kind: "agent", agentUserId: "a1", userId: "u1" },
+      approvedBy: "approver",
     });
     expect(h.updates).toEqual([
       expect.objectContaining({ status: "approved" }),

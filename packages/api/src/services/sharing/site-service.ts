@@ -803,6 +803,14 @@ export async function unpublishSite(
     site,
     await loadProject(database, site.resourceId)
   );
+  // A key narrows only inside its grant (no grant = a person), as charts do.
+  const denied = await grantWriteDenial({
+    subjectType: "share",
+    action: "update",
+    workspaceId: site.workspaceId ?? undefined,
+    projectId: site.resourceId,
+  });
+  if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const updated = await database
     .update(resourceShares)
     .set({ state: "draft", updatedAt: new Date() })
@@ -849,6 +857,15 @@ export async function revokeSite(
     site,
     await loadProject(database, site.resourceId)
   );
+  // A key revokes only inside its grant (no grant = a person): a permanent
+  // revoke is a `share.delete` on the site's space and project.
+  const denied = await grantWriteDenial({
+    subjectType: "share",
+    action: "delete",
+    workspaceId: site.workspaceId ?? undefined,
+    projectId: site.resourceId,
+  });
+  if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const now = new Date();
   const revoke = {
     revokedAt: now,
@@ -1499,6 +1516,14 @@ export async function unpublishFromSite(
     site,
     await loadProject(database, site.resourceId)
   );
+  // A key narrows only inside its grant (no grant = a person), as charts do.
+  const denied = await grantWriteDenial({
+    subjectType: "share",
+    action: "update",
+    workspaceId: site.workspaceId ?? undefined,
+    projectId: site.resourceId,
+  });
+  if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const updated = await database
     .update(resourceShares)
     .set({ state: "draft", updatedAt: new Date() })

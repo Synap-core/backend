@@ -163,6 +163,9 @@ describe("S3 — an agent caller cannot purge a workspace or a project", () => {
   const AGENTS = [
     ["the owner's agent key", { userId: OWNER, agentUserId: OWNER_AGENT }],
     ["the IS internal key", { userId: OWNER, keyType: "is_internal" }],
+    // A pod app's person token resolves AS the owner with no agent and reads
+    // no grant here: a site the owner connected never purges (2026-11-17).
+    ["a pod app's person token", { userId: OWNER, keyType: "app_person" }],
   ] as const;
 
   it.each(AGENTS)(
@@ -197,6 +200,20 @@ describe("S3 — an agent caller cannot purge a workspace or a project", () => {
       expect(n).toBe(1);
     }
   );
+
+  it("CONTROL — the owner's personal access token passes the refusal at both doors", async () => {
+    const pat = { userId: OWNER, keyType: "user_pat" };
+    const p = await seedProject(OWNER);
+    const res = await call(`/projects/${p.id}/purge`, { confirm: p.name }, pat);
+    expect(res.status).toBe(200);
+    expect(await projectExists(p.id)).toBe(false);
+    // The workspace door: past the refusal, stopped by the confirm (kept).
+    const ws = await call(`/workspaces/${WS}/purge`, { confirm: "nope" }, pat);
+    expect(ws.status).toBe(400);
+    expect(((await ws.json()) as { error: string }).error).toMatch(
+      /confirm does not match/
+    );
+  });
 
   it("CONTROL — the owner's own human credential reaches the purge (200)", async () => {
     const p = await seedProject(OWNER);

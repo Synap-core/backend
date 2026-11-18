@@ -39,6 +39,10 @@ import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 import { createFocusSession } from "../services/focus-sessions/create-session.js";
 import {
+  startOrchestrator,
+  startOrchestratorInputSchema,
+} from "../services/focus-sessions/start-orchestrator.js";
+import {
   sessionCriteriaSchema,
   sessionEvidenceSchema,
 } from "../schemas/session-criteria.js";
@@ -731,6 +735,11 @@ export const focusSessionsRouter = router({
    * `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave
    * (the root and every session spawned under it); one or the other. It also
    * carries the PRs, holds and goals its sessions point at.
+   * `playbookId` narrows it to the sessions that follow a playbook (run from
+   * it, or filed in a goal whose method it is; each node's `playbookMatch`
+   * says which), `subjectEntityId` to the sessions on one thing. Both are
+   * clauses of the list's WHERE; goal-filed and worker sessions are often
+   * `run`-kind, so pair them with `kind: "all"`.
    */
   graph: protectedProcedure
     .input(
@@ -748,6 +757,10 @@ export const focusSessionsRouter = router({
           lens: sessionLensSchema,
           trackId: z.string().uuid().optional(),
           rootSessionId: z.string().uuid().optional(),
+          /** Only the sessions that follow this playbook (see above). */
+          playbookId: z.string().uuid().optional(),
+          /** Only the sessions on this thing: its subject, or a worker targeting it. */
+          subjectEntityId: z.string().uuid().optional(),
         })
         .refine((i) => !(i.trackId && i.rootSessionId), {
           message: "Pass trackId or rootSessionId, not both.",
@@ -767,6 +780,8 @@ export const focusSessionsRouter = router({
           : input.rootSessionId
             ? { rootSessionId: input.rootSessionId }
             : undefined,
+        playbookId: input.playbookId,
+        subjectEntityId: input.subjectEntityId,
       });
     }),
   /**
@@ -1508,6 +1523,25 @@ export const focusSessionsRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: result.message });
       }
       return result;
+    }),
+
+  /**
+   * START AN ORCHESTRATOR (founder decision D5): ONE session that coordinates
+   * the picked running sessions — links each (`orchestrated_by`), pauses each
+   * running one until the person approves its merged plan, and posts a note
+   * in each room. Governed (`focus_session/orchestrate`): an agent gets
+   * `{ status: "proposed" }`, a person `{ status: "started" }`. Same service
+   * and input schema as Hub `POST /focus-sessions/orchestrate` and MCP
+   * `synap_start_orchestrator`.
+   */
+  startOrchestrator: protectedProcedure
+    .input(startOrchestratorInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      return startOrchestrator({
+        userId: requireUserId(ctx.userId),
+        agentUserId: ctx.agentUserId ?? null,
+        input,
+      });
     }),
 
   /**
@@ -3093,12 +3127,22 @@ export const focusSessionsRouter = router({
         userId: ctx.userId,
         expectedLabel: input.expectedLabel,
         agentType: input.agentType,
+        actingAgentUserId: ctx.agentUserId ?? null,
       });
       switch (result.status) {
         case "not_found":
           throw new TRPCError({
             code: "NOT_FOUND",
             message: `Focus session ${input.sessionId} not found`,
+          });
+        // Only an AGENT caller meets the hand-off gate; this door is the
+        // person's, so both are refusals here, never a silent success.
+        case "refused":
+          throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+        case "proposed":
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `Handing this to another agent was proposed for review (${result.proposalId}).`,
           });
         case "unknown_label":
           throw new TRPCError({

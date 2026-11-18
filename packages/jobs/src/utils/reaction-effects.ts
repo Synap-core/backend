@@ -1,9 +1,8 @@
 /**
- * THE EFFECTS a reaction applies (reactions W2): one per `ReactionDo` key,
- * each planning its writes (read only) and applying ONE write through the
- * target's OWN door — never a raw UPDATE (tripwire
- * `reactions-apply-through-doors`). The worker (`workers/reactions.ts`) runs
- * the guards between the plan and the apply.
+ * THE EFFECTS a reaction applies: one per `ReactionDo` key, each planning its
+ * writes (read only) and applying ONE write through the target's OWN door —
+ * never a raw UPDATE (tripwire `reactions-apply-through-doors`). The worker
+ * (`workers/reactions.ts`) runs the guards between the plan and the apply.
  *
  * An effect whose door lives in @synap/api (the done door of an outcome) is
  * registered at boot by apps/api (`registerReactionEffect`), the pattern of
@@ -125,7 +124,7 @@ export function slotTheRunWaitsOn(
  * answer the slot the run waits on (`answer:<session>/<slot>`): the session
  * then reads "waits on you", and the hold-resume reactor resumes it once the
  * answer lands (`waitHoldsMet`). The ask itself is already in Needs you (an
- * owed slot, wave 0's `raiseRunAsk`); this adds the session's own state.
+ * owed slot, `raiseRunAsk`); this adds the session's own state.
  */
 export const pauseSessionEffect: ReactionEffect = {
   key: "pause_session",

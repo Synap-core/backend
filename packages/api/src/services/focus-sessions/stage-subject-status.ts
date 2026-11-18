@@ -392,7 +392,7 @@ export async function writeStageReachedStatus(input: {
    * `services/reactions/reach-stage-status-effect.ts`).
    */
   actor?: StatusMoveActor;
-  /** The move that caused this one (a reaction's, reactions W2). */
+  /** The move that caused this one, when a reaction made it. */
   cause?: TransitionCause | null;
   /** The status the mover read (the door's compare-and-set). */
   expectedFrom?: string | null;

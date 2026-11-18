@@ -54,7 +54,7 @@ while IFS= read -r m; do
                     | grep -F "${repo}@sha256:" | head -n 1 | sed 's/.*@//')"
             fi
         fi
-        [ -n "$digest" ] || { echo "resolve-images: could not resolve ${default} (${key}) to a digest: neither \`docker buildx imagetools inspect\` nor a pull + its RepoDigests answered" >&2; exit 1; }
+        [ -n "$digest" ] || { echo "resolve-images: could not resolve ${default} (${key}) to a digest: neither \`docker buildx imagetools inspect\` nor a pull + its RepoDigests answered. The registry (ghcr.io for first-party and most third-party images) must be reachable from this host; offline, use --from-source" >&2; exit 1; }
         ref="${default}@${digest}"
     fi
     [[ "$ref" =~ $DIGEST_RE ]] || { echo "resolve-images: ${key}=${ref} is not pinned by digest" >&2; exit 1; }

@@ -34,7 +34,7 @@ import {
   getWorkspaceMembership,
   getDelegatedTurnAgent,
 } from "@synap/database";
-import { apiKeys } from "@synap/database/schema";
+import { APP_PERSON_KEY_TYPE, apiKeys } from "@synap/database/schema";
 
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -326,8 +326,11 @@ export const AGENT_CANNOT_PURGE =
  * owner action), and the agent-key remap makes `userId` the human owner — so
  * the ownership checks behind these doors passed for the owner's agent.
  * "An agent caller" is the existing definition `isAgentCaller`: an agent key
- * or the Intelligence Service's internal key. A human session or a human
- * personal access token still purges. The tRPC twin
+ * or the Intelligence Service's internal key. A pod app's person token
+ * (`app_person`, key-identity.ts: it resolves AS the person, bounded by its
+ * grant, with no agent) is refused too: a site the person connected is not
+ * the person at the keyboard, and purge reads no grant (2026-11-17). A human
+ * session or a human personal access token still purges. The tRPC twin
  * (`workspaces.adminDelete`) is session-only (`podAdminProcedure` →
  * `protectedProcedure`, never an API key), and no MCP tool purges.
  */
@@ -337,10 +340,14 @@ export function rejectAgentPurger(
 ): Response | null {
   const agentUserId = c.get("agentUserId");
   const keyType = c.get("keyType") as string | undefined;
-  if (!isAgentCaller({ agentUserId, keyType })) return null;
+  if (
+    !isAgentCaller({ agentUserId, keyType }) &&
+    keyType !== APP_PERSON_KEY_TYPE
+  )
+    return null;
   logger.warn(
     { agentUserId, keyType, what },
-    "agent credential attempted a hard purge — blocked (human credential required)"
+    "agent or app credential attempted a hard purge — blocked (human credential required)"
   );
   return c.json({ error: AGENT_CANNOT_PURGE, code: "AGENT_CANNOT_PURGE" }, 403);
 }

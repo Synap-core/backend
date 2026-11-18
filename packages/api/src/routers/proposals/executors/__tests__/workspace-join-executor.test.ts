@@ -41,7 +41,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   // The approval writes membership + status in ONE transaction (#6): the tx
   // handle records into the same lists.
   const writer = {
-    // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+    // The proposal door's one statement (`WITH … UPDATE`).
     $with: () => ({ as: () => ({}) }),
     with() {
       return this;

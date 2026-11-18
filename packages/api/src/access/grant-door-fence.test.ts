@@ -30,6 +30,8 @@ import {
   TRPC_KEY_MUTATION_DOORS,
   trpcProcedureAllowed,
   trpcRefusalMessage,
+  timelineReach,
+  workGraphReach,
   workReleaseReach,
 } from "./grant-door-fence.js";
 
@@ -688,6 +690,55 @@ describe("connection status door (decision 3): the person's accounts, by a named
       "/connectors/sync-status",
     ])
       expect(restDoorAllowed("GET", path, READER), path).toBe(false);
+  });
+});
+
+describe("connector health doors (finding 67b6c332): the person's connections, by `tool.read`", () => {
+  // An app's grant is always pinned to the spaces the person ticked; an agent's
+  // AI preset holds `tool.read` (AI_READ_SUBJECTS).
+  const pinned = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["w1"] });
+  const DOORS = ["/connectors/sync-status", "/connectors/providers"] as const;
+  it.each([
+    [["tool.read"], true],
+    [["tool"], true],
+    [["*"], true],
+    [["messaging.read"], false], // another person door's read
+    [["entity.deal.create"], false], // any write in one space is not enough
+    [[], false], // deny-all (a revoked or expired grant)
+  ] as const)("a pinned key holding %j → %s", (permissions, ok) => {
+    for (const path of DOORS)
+      expect(restDoorAllowed("GET", path, pinned(...permissions)), path).toBe(
+        ok
+      );
+  });
+  it("opens exactly those two doors, nothing beside them", () => {
+    const READER = pinned("tool.read");
+    for (const path of DOORS)
+      expect(restDoorAllowed("GET", `${path}/`, READER), path).toBe(true);
+    for (const path of [
+      "/connectors/broker-diagnostics", // pod admin only
+      "/connectors/connections/google",
+      "/connectors/connect",
+      "/connectors/sync-status/extra",
+    ])
+      expect(restDoorAllowed("GET", path, READER), path).toBe(false);
+  });
+  it("opens no write: tool.read changes no connector write's verdict", () => {
+    // The fence leaves a write to its gate, so a write door's verdict is not
+    // "refused"; what this pins is that `tool.read` adds nothing to it: the
+    // same verdict as a key holding only another door's read.
+    const READER = pinned("tool.read");
+    const OTHER = pinned("messaging.read");
+    for (const [method, path] of [
+      ["POST", "/connectors/connect"],
+      ["POST", "/connectors/session"],
+      ["POST", "/connectors/disconnect"],
+      ["DELETE", "/connectors/connections/conn-1"],
+    ] as const)
+      expect(restDoorAllowed(method, path, READER), `${method} ${path}`).toBe(
+        restDoorAllowed(method, path, OTHER)
+      );
   });
 });
 
@@ -1365,5 +1416,111 @@ describe("the needs-you door: an app reads what needs the person, narrowed", () 
     expect(needsYouReadableWhole(app("session.read", "proposal.read"))).toBe(
       false
     );
+  });
+});
+
+describe("the work graph and timeline doors: an app reads them under its grant (D1)", () => {
+  // A pod app: a pod-wide session read (unpinned), the rest pinned to a space.
+  const app = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["space-a"] });
+  const podWide = (...permissions: string[]) => key({ permissions });
+  it.each([
+    [app("session.read"), true],
+    [podWide("session.read"), true],
+    [podWide("session.read", "proposal.read", "agent.read"), true],
+    [app("proposal.read", "entity.read", "channel.read"), false], // no session
+    [app("session.update"), false], // a write is not a read
+    [app(), false], // deny-all
+  ] as const)(
+    "Hub GET /focus-sessions/graph and /timeline, a key %# → %s",
+    (grant, ok) => {
+      expect(restDoorAllowed("GET", "/focus-sessions/graph", grant)).toBe(ok);
+      expect(restDoorAllowed("GET", "/timeline", grant)).toBe(ok);
+    }
+  );
+
+  it("MCP keeps the whole rule: a session-only key is refused there", () => {
+    const narrow = podWide("session.read");
+    expect(mcpToolAllowed("synap_get_work_graph", true, narrow)).toBe(false);
+    expect(mcpToolAllowed("synap_get_timeline", true, narrow)).toBe(false);
+  });
+
+  it("whole for a person, a full key, a key reading every subject unbounded", () => {
+    expect(workGraphReach(null)).toEqual({ whole: true });
+    expect(workGraphReach(key({ permissions: ["*"] }))).toEqual({
+      whole: true,
+    });
+    const every = key({
+      permissions: [
+        "session.read",
+        "link.read",
+        "proposal.read",
+        "channel.read",
+        "event.read",
+        "automation.read",
+        "entity.read",
+        "track.read",
+      ],
+    });
+    expect(workGraphReach(every)).toEqual({ whole: true });
+    expect(
+      timelineReach(
+        key({
+          permissions: [
+            "track.read",
+            "session.read",
+            "event.read",
+            "proposal.read",
+          ],
+        })
+      )
+    ).toEqual({ whole: true });
+    expect(timelineReach(null)).toEqual({ whole: true });
+  });
+
+  it("narrowed for a pod app: the holder only with agent.read, never the goals", () => {
+    expect(workGraphReach(podWide("session.read"))).toEqual({
+      whole: false,
+      holder: false,
+      goals: false,
+    });
+    expect(workGraphReach(podWide("session.read", "agent.read"))).toEqual({
+      whole: false,
+      holder: true,
+      goals: false,
+    });
+    // `*` pinned to a space reads every subject only there: still narrowed.
+    expect(workGraphReach(app("*")).whole).toBe(false);
+  });
+
+  it("the timeline's decisions and room posts only with a read no pin narrows; runners with agent.read", () => {
+    expect(timelineReach(podWide("session.read"))).toEqual({
+      whole: false,
+      decisions: false,
+      roomPosts: false,
+      runners: false,
+    });
+    expect(
+      timelineReach(
+        podWide("session.read", "proposal.read", "channel.read", "agent.read")
+      )
+    ).toEqual({
+      whole: false,
+      decisions: true,
+      roomPosts: true,
+      runners: true,
+    });
+    // Pinned to a space: the proposal and channel reads do not count; the
+    // agent read is the person's own roster (any pin).
+    expect(
+      timelineReach(
+        app("session.read", "proposal.read", "channel.read", "agent.read")
+      )
+    ).toEqual({
+      whole: false,
+      decisions: false,
+      roomPosts: false,
+      runners: true,
+    });
   });
 });

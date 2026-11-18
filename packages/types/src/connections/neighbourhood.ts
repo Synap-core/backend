@@ -248,6 +248,9 @@ export const LINK_EDGE_ROLES = {
   // track --advances--> workspace: the goal moves that pillar of its project
   // forward. Read like `serves`: work done for it, not a wait.
   advances: { outgoing: "servesAndBlocks", incoming: "work" },
+  // session --orchestrated_by--> session: the child works FOR its
+  // orchestrator, read like `member_of`. Not a wait (the hold is).
+  orchestrated_by: { outgoing: "servesAndBlocks", incoming: "work" },
 } as const satisfies Readonly<Record<string, EdgeRole>>;
 
 /**

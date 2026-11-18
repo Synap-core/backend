@@ -117,8 +117,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     getDb: async () => db,
-    // The run status door (reactions W1) is pinned on PGlite
-    // (run-status.pglite.test.ts); here a recorded result is the run as moved.
+    // The run status door is pinned on PGlite (run-status.pglite.test.ts); here
+    // a recorded result is the run as moved.
     setRunStatus: async (
       _db: unknown,
       input: { runId?: string; to: string }

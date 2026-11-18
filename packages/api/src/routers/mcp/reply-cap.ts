@@ -44,6 +44,8 @@ export const HOW_TO_NARROW: Readonly<Record<string, string>> = {
     "Lower `limit` and page the neighbours with `offset` (use `nextOffset`).",
   synap_get_relations: "Lower `limit` (the newest relations come first).",
   synap_ask: "Call again with detail:'brief' or 'sources', or a lower `limit`.",
+  synap_find:
+    "Lower `limit` (matches per catalog), or name only the `catalogs` you need.",
   synap_list_proposals:
     "Lower `limit`, page with `offset` (use `nextOffset`), or use detail:'summary'.",
   synap_list_profiles:
@@ -60,7 +62,8 @@ export const HOW_TO_NARROW: Readonly<Record<string, string>> = {
     "Lower `limit` and page with `offset` (use `nextOffset`).",
   synap_list_sessions: "Lower `limit` and page with `offset`.",
   synap_list_workspaces: "Lower `limit` and page with `offset`.",
-  synap_list_tracks: "Lower `limit` and page with `offset`.",
+  synap_list_tracks:
+    "Pass `name`, or lower `limit` and page with `offset`; detail:'lean' is the default.",
   synap_list_agents: "Lower `limit` and page with `offset`.",
   synap_get_thread_context:
     "Lower `limit`, and read older messages with `cursor` (the previous `nextCursor`).",

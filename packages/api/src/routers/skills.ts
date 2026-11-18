@@ -65,6 +65,7 @@ import { gateCapabilityExecution } from "../services/capabilities/gate-capabilit
 import {
   allowedHostsChanged,
   boxDeclarationChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
@@ -210,6 +211,7 @@ export function assertSkillGlobalsAllowed(
 export {
   RE_APPROVAL_FIELDS,
   allowedHostsChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
@@ -1112,12 +1114,12 @@ export const skillsRouter = router({
     }),
 
   /**
-   * The RULES the pod's reactions reactor applies (plan 7d71ddcc W3, decision
-   * D8: the person sees one "Rules" list): the built-in ones and the ones a
-   * relation declares, each with WHEN → VIA → DO in words, on or paused, its
-   * owner and what it did lately (applied, proposed, skipped with why). Read
-   * beside `automations.listPage` by the Rules page. Floored: a declared
-   * rule in a space the reader is not in is not listed; the log is theirs.
+   * The RULES the pod's reactions reactor applies (decision D8: the person sees
+   * one "Rules" list): the built-in ones and the ones a relation declares, each
+   * with WHEN → VIA → DO in words, on or paused, its owner and what it did
+   * lately (applied, proposed, skipped with why). Read beside
+   * `automations.listPage` by the Rules page. Floored: a declared rule in a
+   * space the reader is not in is not listed; the log is theirs.
    */
   listReactionRules: protectedProcedure
     .input(
@@ -1865,6 +1867,12 @@ export const skillsRouter = router({
         // this verb before any grant rung — a reviewed action becomes an
         // unattended one. Same peeled-off-metadata blind spot as above.
         readOnlyWidened(
+          metadataPatch as Record<string, unknown> | undefined,
+          existingSkill.metadata as Record<string, unknown> | null
+        ) ||
+        // Turning a declared `metadata.proposeOnly` OFF lets an auto grant or
+        // rule run a verb that always asked: the same escalation.
+        proposeOnlyLoosened(
           metadataPatch as Record<string, unknown> | undefined,
           existingSkill.metadata as Record<string, unknown> | null
         ) ||

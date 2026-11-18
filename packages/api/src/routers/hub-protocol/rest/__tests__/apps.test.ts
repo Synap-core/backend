@@ -92,7 +92,7 @@ function chain(result: unknown): any {
 }
 
 const fakeDb: any = {
-  // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+  // The proposal door's one statement (`WITH … UPDATE`).
   $with: () => ({ as: () => ({}) }),
   with() {
     return this;

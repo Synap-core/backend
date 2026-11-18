@@ -17,15 +17,14 @@
  * Not here, on purpose: inserts. A new proposal is born with its status
  * (`pending`, or `auto_approved` for a receipt); that is not a transition.
  *
- * THE TRANSITION (reactions W1): every move also OWES a
- * `proposal.transition.completed` (the one transition shape, categories from
- * `PROPOSAL_STATUS_DECLARATION`) in the SAME STATEMENT as the write: the
- * lock, the outbox insert and the UPDATE are one `WITH … UPDATE`, atomic on
- * any executor, with no transaction or savepoint of its own (see
- * {@link transitionProposal}). The call keeps the builder's contract (await
- * it, or chain `.returning(…)`), so its ~150 call sites are unchanged. The
- * sweeper delivers the transition (the old `proposal.approved` / `.rejected`
- * events stay, emitted by `emitProposalReviewed`, as dual emits).
+ * THE TRANSITION: every move also OWES a `proposal.transition.completed` (the
+ * one transition shape, categories from `PROPOSAL_STATUS_DECLARATION`) in the
+ * SAME STATEMENT as the write: the lock, the outbox insert and the UPDATE are
+ * one `WITH … UPDATE`, atomic on any executor, with no transaction or savepoint
+ * of its own (see {@link transitionProposal}). The call keeps the builder's
+ * contract (await it, or chain `.returning(…)`), so its ~150 call sites are
+ * unchanged. The sweeper delivers the transition (the old `proposal.approved` /
+ * `.rejected` events stay, emitted by `emitProposalReviewed`, as dual emits).
  */
 import { and, inArray, sql, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
@@ -151,7 +150,7 @@ function categoryCaseSql(expr: SQL): SQL {
  * the proposal row `p`: the document (its target) and the section ids its
  * ops name (the payload nested under `data` or flat, as the patch doors file
  * it). Null for any other proposal. A proposed section joins the door as its
- * proposal (reactions W1).
+ * proposal.
  */
 function sectionSql(): SQL {
   const types = sql.raw(
@@ -212,7 +211,7 @@ export function transitionProposal(
     set?: ProposalTransitionSet;
     actor?: WorkUnitActor;
     reason?: string | null;
-    /** The move that caused this one (a reaction, reactions W2). */
+    /** The move that caused this one (a reaction). */
     cause?: TransitionCause | null;
   }
 ) {

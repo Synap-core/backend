@@ -86,15 +86,21 @@ export function triagePendingWhere(): SQL {
 }
 
 /**
- * SQL: rows that are NOT triage-pending — the default lens.
+ * SQL: rows that are NOT triage-pending — the default lens. The exact
+ * COMPLEMENT of {@link triagePendingWhere}: every row is in one lens and only
+ * one (pinned by `triage-lenses-complement.pglite.test.ts`).
  *
  * `not(triagePendingWhere())` would be wrong on a NULL `origin` (an un-migrated
  * row): `NULL IN (...)` is NULL, and `NOT NULL` is NULL, so the row would vanish
  * from BOTH lenses. Spelled as an explicit OR so an unclassified session stays
- * in the working list, where it was before triage existed.
+ * in the working list, where it was before triage existed. Each clause negates
+ * one clause of the pending predicate — the receipt one too: an open,
+ * unaccepted receipt is not a draft, so it is here, and its owed asks reach
+ * needs-you (ticket 37a6074a).
  */
 export function notTriagePendingWhere(): SQL {
   return or(
+    drizzleSql`${focusSessions.metadata} #>> '{kind}' IS NOT DISTINCT FROM ${AGENT_PROPOSAL_PACKAGE_KIND}`,
     isNull(focusSessions.origin),
     not(inArray(focusSessions.origin, [...TRIAGE_ORIGINS])),
     not(inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])),

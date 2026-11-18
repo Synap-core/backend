@@ -69,7 +69,7 @@ cat > "$TMP/bin/docker" <<'C'
 [ "$1" = run ] || exit 0
 echo docker-cosign >> "$STUB_LOG"
 printf '%s\n' "$@" > "$STUB_DOCKER_ARGS"
-[ -n "${STUB_DOCKER_RC:-}" ] && { echo "docker: Error response from daemon: pull access denied" >&2; exit "$STUB_DOCKER_RC"; }
+[ -n "${STUB_DOCKER_RC:-}" ] && { { echo "docker: Error response from daemon: pull access denied"; echo "Run 'docker run --help' for more information"; } >&2; exit "$STUB_DOCKER_RC"; }
 src=""; prev=""; files=()
 for a in "$@"; do
   [ "$prev" = --mount ] && { src="${a#*src=}"; src="${src%%,*}"; }
@@ -150,6 +150,9 @@ STUB_DOCKER_RC=125 boot dockeronly "" 1 ok
 refused_untouched && grep -q 'refused: could not run the signature check (docker exited 125' "$TMP/out" \
   && ! grep -q 'does not verify' "$TMP/out" \
   && ok "docker cannot run cosign (125) → refused, not called a bad signature" || { bad "dockeronly/125: rc=$RC"; cat "$TMP/out"; }
+# 411935a9: the reason names docker's real error (not its trailing usage hint) and the ghcr.io dependency
+grep -q 'pull access denied' "$TMP/out" && ! grep -q "for more information" "$TMP/out" && grep -q 'ghcr.io must be reachable' "$TMP/out" \
+  && ok "docker 125: shows the pull error, not the usage line, and names ghcr.io" || { bad "dockeronly/125 reason: rc=$RC"; cat "$TMP/out"; }
 
 # warn (opt-in) carries on
 boot bin warn 0 ok

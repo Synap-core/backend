@@ -67,10 +67,10 @@ export function pgliteTableDdl(table: PgTable): string {
 
 /**
  * The tables whose status door OWES a transition in the same statement or
- * transaction (reactions W1): a proposal's (`transitionProposal`), a run's
- * (`setRunStatus`), a session's and its slots' (`setSessionStatus`,
- * `oweSlotTransitions`). A fixture that stands one of them up gets the
- * outbox with it, so the next door that owes does not break it again.
+ * transaction: a proposal's (`transitionProposal`), a run's (`setRunStatus`), a
+ * session's and its slots' (`setSessionStatus`, `oweSlotTransitions`). A
+ * fixture that stands one of them up gets the outbox with it, so the next door
+ * that owes does not break it again.
  */
 const OWING_TABLES: readonly PgTable[] = [
   schema.proposals,

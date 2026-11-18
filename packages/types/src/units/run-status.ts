@@ -1,9 +1,9 @@
 /**
  * The playbook RUN status declaration (`playbook_runs.status`), in a leaf with
- * no runtime imports, like `./track-status.ts`. Since reactions W1 a run's
- * status moves through THE transition door (`setRunStatus`, @synap/database),
- * which reads each status's category here; the read side (`statusOf`) reads
- * the same map. One declaration, never a second category system.
+ * no runtime imports, like `./track-status.ts`. A run's status moves through
+ * THE transition door (`setRunStatus`, @synap/database), which reads each
+ * status's category here; the read side (`statusOf`) reads the same map. One
+ * declaration, never a second category system.
  */
 import type { LifecycleCategory } from "../lifecycle/option.js";
 

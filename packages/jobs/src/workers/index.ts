@@ -909,8 +909,8 @@ export async function registerAllWorkers(): Promise<void> {
   registerHoldResumeReactor();
   logger.info("Registered worker + reactor: hold-resume");
 
-  // Reactions (plan 7d71ddcc W2): every move some rule listens to queues one
-  // job; the job applies the matching rules through their targets' doors.
+  // Reactions: every move some rule listens to queues one job; the job applies
+  // the matching rules through their targets' doors.
   await boss.work(REACTIONS_QUEUE, async ([job]: any[]) =>
     handleReactions((job?.data ?? {}) as ReactionsJobData)
   );

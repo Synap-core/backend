@@ -877,7 +877,7 @@ function goalAdvancesWhere(workspaceId: string): SQL {
   )})`;
 }
 
-// ── A thing's PARTS (a relation's roll-up, reactions wave 3) ───────────────
+// ── A thing's PARTS (a relation's roll-up) ───────────────
 
 /** One parent's parts, as a roll-up counts them. */
 export interface PartsRollup {

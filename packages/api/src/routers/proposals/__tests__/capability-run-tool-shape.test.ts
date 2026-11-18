@@ -34,7 +34,7 @@ const { mockDb, mockRunResolvedSkill, mockTriggerProviderAction } = vi.hoisted(
     mockDb: {
       select: vi.fn(),
       update: vi.fn(),
-      // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+      // The proposal door's one statement (`WITH … UPDATE`).
       $with: () => ({ as: () => ({}) }),
       with() {
         return this;

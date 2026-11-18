@@ -30,9 +30,13 @@ import {
   startTrack,
   type SetTrackStatusResult,
   type TrackActor,
+  type TrackView,
 } from "../../../services/tracks/tracks-service.js";
 import { pickTrackGoalInput } from "../../../services/tracks/goal-content.js";
-import { pickGoalPlacementInput } from "../../../services/tracks/goal-placement.js";
+import {
+  pickGoalPlacementInput,
+  readGoalPlacements,
+} from "../../../services/tracks/goal-placement.js";
 import { lifecycleConflictOf } from "../../../services/lifecycle/conflict.js";
 import { convertEntityToGoal } from "../../../services/tracks/convert-to-goal.js";
 import {
@@ -78,6 +82,39 @@ function isParams(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+/** The list row an agent scans to pick a goal (`detail: 'lean'`). */
+function leanTrackRow(view: TrackView) {
+  return {
+    id: view.id,
+    name: view.name,
+    status: view.status,
+    pausedBy: view.pausedBy,
+    verdict: view.verdict,
+    direction: view.direction,
+    kpi: view.kpi,
+    updatedAt: view.updatedAt,
+  };
+}
+
+/**
+ * Each row with where its goal sits (ticket 3fb0e2c3): `parentGoalId` and
+ * `pillars` (the space ids it advances, primary first), each only when set,
+ * so a page of root goals costs nothing more. ONE read for the page.
+ */
+async function withPlacement<T extends { id: string }>(
+  rows: T[]
+): Promise<Array<T & { parentGoalId?: string; pillars?: string[] }>> {
+  const placed = await readGoalPlacements(rows.map((r) => r.id));
+  return rows.map((r) => {
+    const p = placed.get(r.id);
+    return {
+      ...r,
+      ...(p?.parentGoalId ? { parentGoalId: p.parentGoalId } : {}),
+      ...(p?.pillars.length ? { pillars: p.pillars } : {}),
+    };
+  });
+}
+
 async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {
   try {
     return ok(await fn());
@@ -108,7 +145,9 @@ export const trackHandlers: McpHandlerMap = {
         if (!row || (projectId && row.projectId !== projectId)) {
           return { error: "Track not found" };
         }
-        return { items: await loadTrackViews([row], ctx) };
+        return {
+          items: await withPlacement(await loadTrackViews([row], ctx)),
+        };
       });
     }
     if (!projectId) {
@@ -117,6 +156,18 @@ export const trackHandlers: McpHandlerMap = {
           "projectId (uuid) is required — find it with synap_list_projects. Or pass trackId to read one goal.",
       });
     }
+    // `detail` (tickets c3d00d79, 9753144a): a full row carries criteria,
+    // stages, participants and the loop, so one default page of a busy
+    // project was ~80k chars, cut by the reply cap before the goal a caller
+    // looked for. `lean` (default) is the row an agent scans to pick a goal,
+    // as synap_list_sessions does; `full` (or `trackId`) reads it whole.
+    const detail = ctx.args.detail ?? "lean";
+    if (detail !== "lean" && detail !== "full") {
+      return ok({
+        error: `Unknown detail '${String(detail)}'. Valid values: lean (default), full.`,
+      });
+    }
+    const name = str(ctx.args.name)?.toLowerCase();
     return run(async () => {
       const rows = await listTracks({
         projectId,
@@ -124,13 +175,23 @@ export const trackHandlers: McpHandlerMap = {
         includeArchived: ctx.args.includeArchived === true,
       });
       if (!rows) return { error: "Project not found" };
+      // `name`: a routine finds its own goal by name, before the page is cut.
+      const named = name
+        ? rows.filter((r) => r.name.toLowerCase().includes(name))
+        : rows;
       const { page, paging } = pageSlice(
-        rows,
+        named,
         ctx.args,
         LIST_PAGE_DEFAULT,
         LIST_PAGE_MAX
       );
-      return { items: await loadTrackViews(page, ctx), ...paging };
+      const views = await loadTrackViews(page, ctx);
+      return {
+        items: await withPlacement(
+          detail === "full" ? views : views.map(leanTrackRow)
+        ),
+        ...paging,
+      };
     });
   },
 

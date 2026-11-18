@@ -36,7 +36,7 @@ export type PlaybookRunExecutorRef =
  * load-bearing, because the scorecard feeds governance widening and a `failed`
  * row would grade a playbook for a person's change of mind.
  */
-// `waiting_on_you` (W2 calm): the reaper found the run quiet with its session
+// `waiting_on_you`: the reaper found the run quiet with its session
 // still owing the person an open slot — waiting on the human, never
 // force-failed. `stale`: the reaper found a run an EXTERNAL agent holds quiet
 // past its window (D6, 2026-10-11). Not failed — nothing the pod launched

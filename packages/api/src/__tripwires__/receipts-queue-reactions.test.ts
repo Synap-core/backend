@@ -1,7 +1,6 @@
 /**
  * TRIPWIRE — every door that inserts a proposal ALREADY DECIDED
- * (`auto_approved`, a receipt) queues the reactions job for it (reactions
- * W2, review M1).
+ * (`auto_approved`, a receipt) queues the reactions job for it.
  *
  * A receipt is born decided: its insert owes no transition, by design ("a
  * birth is not a move", `proposal-transition.ts`). So the rules that listen

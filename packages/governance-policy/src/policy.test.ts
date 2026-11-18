@@ -75,6 +75,7 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   set_run_choice: "write", // playbooks.setRunChoice (run choice v3)
   grant_capability: "write",
   assign_agent: "write", // agent-hand-off.ts (focus_session roster add)
+  orchestrate: "write", // start-orchestrator.ts (focus_session orchestrate)
   register: "write", // widget-definitions.ts
   arrange: "write", // hub-protocol/views.ts bento.arrange
   invite: "write", // member.invite (ADMIN_ACTIONS-gated on top)

@@ -258,7 +258,7 @@ export async function syncWaitEpisodesTick(
       });
   }
   for (const h of holds) {
-    // A run's hold (reactions W1) is its session's wait, asked there.
+    // A run's hold is its session's wait, asked there.
     if (h.subjectType === "playbook_run") continue;
     add({
       subjectType: h.subjectType,

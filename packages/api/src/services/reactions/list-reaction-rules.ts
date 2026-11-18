@@ -1,11 +1,11 @@
 /**
- * THE ONE READ of the rules the reactions reactor applies (reactions W2/W3):
- * each built-in or declared rule with its id, its plain-words title, WHEN /
- * VIA / DO in words, whether it is on, who owns it (its rule row in the
- * pod's rule list, `reaction-rules-compile.ts`), and what it did lately (its
- * log, `listReactionOutcomes`, owner-floored). The person's "Rules" list
- * (decision D8: one list, the word "Rules") draws it beside the rules the
- * automation matcher runs; `statusOf` include "reactions" reads it per thing.
+ * THE ONE READ of the rules the reactions reactor applies: each built-in or
+ * declared rule with its id, its plain-words title, WHEN / VIA / DO in words,
+ * whether it is on, who owns it (its rule row in the pod's rule list,
+ * `reaction-rules-compile.ts`), and what it did lately (its log,
+ * `listReactionOutcomes`, owner-floored). The person's "Rules" list (decision
+ * D8: one list, the word "Rules") draws it beside the rules the automation
+ * matcher runs; `statusOf` include "reactions" reads it per thing.
  */
 import {
   and,

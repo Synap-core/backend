@@ -36,7 +36,7 @@ const synap = createSynapClient({
 
 // Typed calls with autocomplete across every router
 const entities = await synap.entities.list.query({ limit: 20 });
-const workspace = await synap.workspaces.get.query();
+const workspace = await synap.workspaces.get.query({ id: "<workspace uuid>" }); // `id` is required (a uuid)
 ```
 
 **Auth, in order of preference:**
@@ -46,6 +46,24 @@ const workspace = await synap.workspaces.get.query();
 | `sessionToken` | `x-session-token`         | **Preferred** — Ory Kratos session token from a Kratos API (native) login flow. For CLI tools, mobile, extensions.                                                                                                                |
 | `apiKey`       | `Authorization: Bearer …` | Only the local-mode token of a desktop pod. A pod refuses hub and user API keys (`synap_hub_…`, `synap_user_…`) on `/trpc`, and the client throws if given one: use `@synap-core/hub-rest-client` against `/api/hub/*` for those. |
 | _(neither)_    | cookie                    | Falls back to cookie-based Kratos session auth.                                                                                                                                                                                   |
+
+**Getting a `sessionToken`.** The pod runs Ory Kratos behind its own domain at
+`<podUrl>/.ory/kratos/public/` (see `deploy/Caddyfile`). Run a Kratos **native
+(API) login flow** against it: create a flow
+(`GET <podUrl>/.ory/kratos/public/self-service/login/api`), then submit it with
+the method your pod enables (for a password identity: `method: "password"`,
+`identifier`, `password`). The answer carries `session_token`; pass it as
+`sessionToken` (the SDK sends it as `x-session-token`). Expired tokens answer
+`401`: log in again. The desktop browser creates its flow through the
+`/browser` endpoint instead (`browser/electron/main/connection/connection-manager.ts`,
+"the /api suffix path is not universally supported"): if the `/api` route is
+refused on your proxy, that is the fallback. For a headless agent, a hub API key
+over `@synap-core/hub-rest-client` needs no login at all.
+
+**No pod yet?** `@synap-core/sdk/testing` ships a mock pod
+(`createMockPod()`, `createMockAuthServer()`): point the client at its URL and
+run your code with no Kratos and no database. Its doors and options are listed in
+the SDK README.
 
 Pass `onAuthError` to handle a `401` gracefully — the client rewrites the pod's
 plain-JSON auth error into a proper tRPC error so your query rejects cleanly

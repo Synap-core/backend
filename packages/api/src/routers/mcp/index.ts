@@ -32,6 +32,7 @@ import { resolveDispatch, withInputSchemaOnError } from "./call-tool.js";
 import { doorToolName } from "./tool-guidance.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
 import { shadowUndeclaredArgs } from "./undeclared-args.js";
+import { runWithCallNotices, withCallNotices } from "./call-notices.js";
 import {
   RUNNER_HEADER,
   recordWorkerServed,
@@ -402,45 +403,52 @@ export function createMCPServer(
       ...args,
     };
 
-    // W-C1 SHADOW: undeclared argument keys are logged, never refused yet
-    // (W-C3 refuses after seven days of these numbers). The caller's own
-    // arguments — the door-injected lens is never "unknown".
-    await shadowUndeclaredArgs(name, args);
+    // What the door does to the caller's arguments is SAID on the reply
+    // (`call-notices.ts`): an argument the tool does not take (`ignoredArgs`)
+    // and a `limit` the page cap clamped (`limitClamped`). One scope around
+    // the shadow check and the tool run, for every tool.
+    const { result, notices } = await runWithCallNotices(async () => {
+      // W-C1 SHADOW: undeclared argument keys are logged and noted, never
+      // refused yet (W-C3 refuses after seven days of these numbers). The
+      // caller's own arguments — the door-injected lens is never "unknown".
+      await shadowUndeclaredArgs(name, args);
 
-    // Session attribution is resolved SERVER-SIDE in the adapter (derived from
-    // the caller's open sessions), so nothing session-shaped is spread into
-    // `scopedArgs`. Every write tool declares an OPTIONAL `sessionId` (derived
-    // in `tools.list()`, W-C1) — the handle a run that named no conversation
-    // keeps itself together with — and an explicit one always wins.
-    const result = await tools.execute(
-      name,
-      scopedArgs,
-      userId,
-      scopes,
-      sessionUserId,
-      agentUserId,
-      // Service-key confinement — pinned per-request through to the executor.
-      keyType,
-      keyWorkspaceId,
-      toolAccessKeyId
-        ? {
-            keyId: toolAccessKeyId,
-            // Related to THIS request, so a streaming transport carries it on
-            // the call's own response stream. The HTTP door answers JSON,
-            // which drops it: `synap_load_skill` returns the unlocked tools'
-            // schemas, and `synap_call_tool` runs them in the same turn.
-            notifyToolsChanged: () =>
-              extra.sendNotification({
-                method: "notifications/tools/list_changed",
-              }),
-          }
-        : undefined,
-      // Cancelled request / closed connection — long waits stop on it.
-      extra.signal
-    );
-    return dispatchedDef
-      ? withInputSchemaOnError(result, dispatchedDef)
-      : result;
+      // Session attribution is resolved SERVER-SIDE in the adapter (derived
+      // from the caller's open sessions), so nothing session-shaped is spread
+      // into `scopedArgs`. Every write tool declares an OPTIONAL `sessionId`
+      // (derived in `tools.list()`, W-C1) — the handle a run that named no
+      // conversation keeps itself together with — and an explicit one always
+      // wins.
+      return tools.execute(
+        name,
+        scopedArgs,
+        userId,
+        scopes,
+        sessionUserId,
+        agentUserId,
+        // Service-key confinement — pinned per-request through to the executor.
+        keyType,
+        keyWorkspaceId,
+        toolAccessKeyId
+          ? {
+              keyId: toolAccessKeyId,
+              // Related to THIS request, so a streaming transport carries it
+              // on the call's own response stream. The HTTP door answers
+              // JSON, which drops it: `synap_load_skill` returns the unlocked
+              // tools' schemas, and `synap_call_tool` runs them in the same
+              // turn.
+              notifyToolsChanged: () =>
+                extra.sendNotification({
+                  method: "notifications/tools/list_changed",
+                }),
+            }
+          : undefined,
+        // Cancelled request / closed connection — long waits stop on it.
+        extra.signal
+      );
+    });
+    const noted = withCallNotices(result, notices);
+    return dispatchedDef ? withInputSchemaOnError(noted, dispatchedDef) : noted;
   });
 
   // Register prompt handlers

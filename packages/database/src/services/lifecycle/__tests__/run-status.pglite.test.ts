@@ -1,6 +1,5 @@
 /**
- * `setRunStatus`, THE run status write (reactions W1), on a real Postgres
- * (PGlite):
+ * `setRunStatus`, THE run status write, on a real Postgres (PGlite):
  *  - compare-and-set on `from`: a run that moved meanwhile is left as it is
  *    and owes nothing (a finished run's verdict is never overwritten);
  *  - the caller's columns in the same statement;

@@ -75,6 +75,8 @@ const PRESERVES: Record<string, string> = {
     "mirrors a peer pod's session row verbatim — the peer's keys are the row's keys",
   "services/focus-sessions/subject-edge.ts":
     "stamps the server-owned `subjectEdge` receipt onto a spread of each stored slot (matched by its derived key)",
+  "services/focus-sessions/start-orchestrator.ts":
+    "`expectedOutputs:` is the orchestrator's slots handed to `createFocusSession`, which keys them (`insertFocusSessionRow`); its `setSessionStatus` pauses the picked sessions and never sets expected_outputs",
   "services/playbooks/stage-gate.ts":
     "`expectedOutputs:` is the READ input of the track check gate's outcome projection (`projectSessionOutcomes`); its `.update(focusSessions)` never sets expected_outputs",
 };

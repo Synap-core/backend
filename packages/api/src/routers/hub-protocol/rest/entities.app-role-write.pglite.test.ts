@@ -43,7 +43,15 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -340,6 +348,14 @@ const KEYS = {
     id: randomUUID(),
     permissions: CRM_APP,
     workspaceIds: [CRM, OTHER],
+    principal: AGENT,
+    person: OWNER,
+  },
+  /** The same app connected to ANOTHER space only (OTHER), never CRM. */
+  otherSpace: {
+    id: randomUUID(),
+    permissions: CRM_APP,
+    workspaceIds: [OTHER],
     principal: AGENT,
     person: OWNER,
   },
@@ -1347,6 +1363,211 @@ describe("a pod-wide lead's LinkedIn profile: proposed in the role's space, neve
       expect(await proposalCount()).toBe(count);
       expect(await coreOf(REACH_P)).toEqual(before);
     }
+  });
+});
+
+// ─── Do not contact: an opt-out the app records holds at once ─────────────
+//
+// CNIL (session 6ade1f9d; a default the founder may override): the CRM app
+// limited to CRM SETS a person's do-not-contact flag on a pod-wide person
+// wearing a role in CRM, through the same reach as the LinkedIn profile above,
+// and the gate APPLIES it (a de-escalation: it only restricts sending), in
+// agent mode too. The send door's reads (`readRecipientDoNotContact`, every
+// channel; `refuseFlaggedCapabilityRecipient`, an email send verb and a
+// LinkedIn invite) then refuse that person. Clearing it is the person's: the
+// app cannot (pod-wide: refused; stored in CRM: proposed, nothing written).
+// Rules out: the set being proposed or riding another field, a key of another
+// space or a person outside CRM's reach being set, and the app lifting it.
+
+describe("do not contact: the CRM app sets the flag at once; only the person lifts it", () => {
+  const DNC_A = randomUUID(); // pod-wide person, lead-ish contact in CRM (agent mode)
+  const DNC_B = randomUUID(); // pod-wide person, contact in CRM (person mode)
+  const DNC_OTHER = randomUUID(); // pod-wide person, contact in OTHER only
+  const DNC_STORED = randomUUID(); // person STORED in CRM, already flagged
+  const DNC_ACME = randomUUID(); // pod-wide company, contact in CRM
+  const OPT_OUT = {
+    doNotContact: true,
+    doNotContactReason: "asked to stop",
+    doNotContactSince: "2026-11-17",
+  };
+
+  // A write grant makes the app's agent an editor of its space
+  // (`syncAppAgentMemberships`, services/app-connect.ts); this file's other
+  // rows never needed it (every agent write there is proposed), so it is
+  // granted here and taken back after.
+  const agentMembership = randomUUID();
+
+  beforeAll(async () => {
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'editor')`,
+      [agentMembership, CRM, AGENT]
+    );
+    for (const [id, ws, kind, kindId, props] of [
+      [DNC_A, null, "person", PERSON_KIND, { email: "a@example.test" }],
+      [DNC_B, null, "person", PERSON_KIND, { email: "b@example.test" }],
+      [DNC_OTHER, null, "person", PERSON_KIND, { email: "o@example.test" }],
+      [DNC_STORED, CRM, "person", PERSON_KIND, { ...OPT_OUT }],
+      [DNC_ACME, null, "company", COMPANY_KIND, {}],
+    ] as const) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
+         values ($1,$2,$3,$4,$5,'Grace',$6::jsonb,'{}'::jsonb)`,
+        [id, OWNER, ws, kindId, kind, JSON.stringify(props)]
+      );
+    }
+    for (const [entityId, ws] of [
+      [DNC_A, CRM],
+      [DNC_B, CRM],
+      [DNC_OTHER, OTHER],
+      [DNC_ACME, CRM],
+    ] as const) {
+      await q(
+        `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, properties)
+         values ($1,$2,$3,$4,$5,null,'{}'::jsonb)`,
+        [randomUUID(), entityId, ROLE_CONTACT, OWNER, ws]
+      );
+    }
+  });
+
+  afterAll(async () => {
+    await q(`delete from workspace_members where id = $1`, [agentMembership]);
+  });
+
+  const patch = (key: KeyName, id: string, body: unknown) =>
+    send(key, "PATCH", `/entities/${id}`, body);
+  const flagOf = async (id: string) =>
+    ((await coreOf(id))!.properties as Record<string, unknown>).doNotContact;
+
+  /** The send door's reads, as each send path calls them. */
+  async function sendDoorRefuses(personId: string) {
+    const { readRecipientDoNotContact } =
+      await import("../../../services/channels/do-not-contact.js");
+    const { refuseFlaggedCapabilityRecipient } =
+      await import("../../../services/capabilities/send-recipient-consent.js");
+    // A message on any channel bound to the person (LinkedIn, email, ...).
+    const channel = await readRecipientDoNotContact({
+      contextObjectType: "entity",
+      contextObjectId: personId,
+    });
+    // A send verb (an email) and a LinkedIn invite, naming the person.
+    const verbs = await Promise.all(
+      (["send_message", "request_connection"] as const).map((intent) =>
+        refuseFlaggedCapabilityRecipient(
+          { intent, inputMap: null },
+          {},
+          { userId: OWNER, agentUserId: AGENT, recipientId: personId }
+        )
+      )
+    );
+    return {
+      channel: channel !== null,
+      email: verbs[0]?.errorClass === "do_not_contact",
+      linkedin: verbs[1]?.errorClass === "do_not_contact",
+    };
+  }
+
+  it("agent mode: the opt-out on a pod-wide person wearing a role in CRM is APPLIED, nothing proposed, and the send door then refuses them", async () => {
+    expect(await sendDoorRefuses(DNC_A)).toEqual({
+      channel: false,
+      email: false,
+      linkedin: false,
+    });
+    const res = await patch("crm", DNC_A, { metadata: OPT_OUT });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.status).not.toBe("proposed");
+    const after = await coreOf(DNC_A);
+    expect(after!.workspace_id).toBeNull();
+    expect(after!.properties).toMatchObject({
+      ...OPT_OUT,
+      email: "a@example.test",
+    });
+    // Nothing waits on the person for it.
+    expect(
+      (
+        await q(
+          `select id from proposals where target_id = $1 and status = 'pending'`,
+          [DNC_A]
+        )
+      ).rows
+    ).toEqual([]);
+    expect(await sendDoorRefuses(DNC_A)).toEqual({
+      channel: true,
+      email: true,
+      linkedin: true,
+    });
+  });
+
+  it("person mode: the person's own token through the app applies the flag alone too", async () => {
+    const res = await patch("crmPerson", DNC_B, {
+      metadata: { doNotContact: true },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(await flagOf(DNC_B)).toBe(true);
+  });
+
+  it("a key of another space, or a person outside CRM's reach: not set (404), nothing filed", async () => {
+    for (const [key, id] of [
+      ["otherSpace", DNC_B],
+      ["otherSpace", DNC_A],
+      ["crm", DNC_OTHER],
+    ] as const) {
+      const before = await coreOf(id);
+      const count = await proposalCount();
+      const res = await patch(key, id, { metadata: { doNotContact: true } });
+      expect([403, 404], `${key} ${id}`).toContain(res.status);
+      expect(await proposalCount()).toBe(count);
+      expect(await coreOf(id)).toEqual(before);
+    }
+    expect(await flagOf(DNC_OTHER)).toBeUndefined();
+  });
+
+  it("the opt-out cannot ride another field, and a company is not a person: refused whole (403)", async () => {
+    for (const [id, body] of [
+      [DNC_B, { title: "Renamed", metadata: { doNotContact: true } }],
+      [DNC_B, { metadata: { doNotContact: true, email: "x@example.test" } }],
+      [DNC_ACME, { metadata: { doNotContact: true } }],
+    ] as const) {
+      const before = await coreOf(id);
+      const count = await proposalCount();
+      const res = await patch("crm", id, body);
+      expect(res.status, JSON.stringify(body)).toBe(403);
+      expect(await proposalCount()).toBe(count);
+      expect(await coreOf(id)).toEqual(before);
+    }
+  });
+
+  it("the app cannot lift it on a pod-wide person: clearing, or removing it, is refused (403) in both modes", async () => {
+    for (const key of ["crm", "crmPerson"] as const) {
+      for (const body of [
+        { metadata: { doNotContact: false } },
+        { deleteProperties: ["doNotContact"] },
+      ]) {
+        const count = await proposalCount();
+        const res = await patch(key, DNC_A, body);
+        expect(res.status, `${key} ${JSON.stringify(body)}`).toBe(403);
+        expect(await proposalCount()).toBe(count);
+        expect(await flagOf(DNC_A)).toBe(true);
+      }
+    }
+    expect((await sendDoorRefuses(DNC_A)).linkedin).toBe(true);
+  });
+
+  it("on a person stored in CRM, the app's clear is PROPOSED in both modes, never applied: the person decides", async () => {
+    for (const key of ["crm", "crmPerson"] as const) {
+      for (const body of [
+        { metadata: { doNotContact: false } },
+        { deleteProperties: ["doNotContact", "doNotContactReason"] },
+      ]) {
+        const res = await patch(key, DNC_STORED, body);
+        const out = await json(res);
+        expect(res.status, `${key} ${JSON.stringify(out)}`).toBe(202);
+        expect(out.status).toBe("proposed");
+        expect(await flagOf(DNC_STORED)).toBe(true);
+      }
+    }
+    expect((await sendDoorRefuses(DNC_STORED)).email).toBe(true);
   });
 });
 

@@ -477,9 +477,12 @@ export {
   lifecycleProfilesOfDef,
   reprojectLifecycleProfiles,
   changeLifecycleOptions,
+  planLifecycleOptionsChange,
   setLifecycleInitialStatus,
   assertNotLifecycleDef,
+  type ChangeLifecycleOptionsInput,
   type ChangeLifecycleOptionsResult,
+  type LifecycleOptionsPlan,
   type SetLifecycleInitialStatusResult,
 } from "./services/lifecycle/lifecycle-def-guard.js";
 export { declaredLifecycleProfilesStatement } from "./services/lifecycle/project-lifecycle-columns.js";
@@ -491,7 +494,6 @@ export {
   type SetSessionStatusResult,
 } from "./services/lifecycle/session-status.js";
 export {
-  ANY_RUN_STATUS,
   RUN_PAUSE_DEFAULT_HOLD,
   setRunStatus,
   type RunColumnsPatch,

@@ -16,12 +16,12 @@
  * (`TRANSITION_EVENT_TYPES`), subject = the goal or the session. Their writers
  * do not dispatch inline; the sweeper delivers them.
  *
- * RUNS, PROPOSALS AND SLOTS (reactions W1): a playbook run's status
- * (`setRunStatus`), a proposal's (`transitionProposal`) and an owed slot's
- * DERIVED status (`oweSlotTransitions`) owe the same shape too, emitted as
+ * RUNS, PROPOSALS AND SLOTS: a playbook run's status (`setRunStatus`), a
+ * proposal's (`transitionProposal`) and an owed slot's DERIVED status
+ * (`oweSlotTransitions`) owe the same shape too, emitted as
  * `playbook_run.transition.completed`, `proposal.transition.completed` and
- * `slot.transition.completed` (subject id `<session id>/<slot key>`). New
- * event types on Hub SSE and webhooks, announced in the event catalog.
+ * `slot.transition.completed` (subject id `<session id>/<slot key>`). New event
+ * types on Hub SSE and webhooks, announced in the event catalog.
  *
  * THE SHARED REPOSITORY: the log row is appended through `eventRepository`,
  * whose hooks (`setup-event-broadcasting.ts`, @synap/api) run on it:
@@ -183,9 +183,11 @@ export async function emitLifecycleTransition(
       ? { ...t, lifecycleProfile: t.role ?? t.profileSlug }
       : { ...t };
   // The fan-out's `userId` is the event's ACTOR (the trigger hop reads it as
-  // the causal-chain producer — `producerAgentUserId`): the agent for an agent
-  // move, the person otherwise. The payload keeps both.
-  const actorId = t.agentUserId ?? t.userId;
+  // the causal-chain producer — `producerAgentUserId` — and the automations it
+  // fires run as it): the person who APPROVED the move when one did (founder,
+  // 17 Nov 2026: the approver acts), else the agent for an agent move, else
+  // the person. The payload and the log row keep the agent as the proposer.
+  const actorId = t.approvedBy ?? t.agentUserId ?? t.userId;
   let eventId = progress.eventId;
   if (!eventId) {
     try {

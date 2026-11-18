@@ -94,8 +94,13 @@ describe("undeclared tool arguments — shadow (W-C1)", () => {
     expect(h.shadowCalls).toEqual([
       ["synap_list_sessions", { bogusFilter: 1 }],
     ]);
-    // Shadow only: the call is not refused.
-    expect(res).toMatchObject({ content: [{ type: "text", text: "{}" }] });
+    // Not refused: the tool ran, and its reply SAYS what was ignored
+    // (`ignoredArgs`, call-notices.ts) instead of dropping it silently.
+    const out = res as { isError?: boolean; content: { text: string }[] };
+    expect(out.isError).toBeUndefined();
+    expect(JSON.parse(out.content[0]!.text)).toMatchObject({
+      ignoredArgs: { keys: ["bogusFilter"] },
+    });
   });
 
   it("a synap_call_tool call is shadowed on the tool it runs, with that tool's arguments", async () => {

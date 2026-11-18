@@ -1,10 +1,10 @@
 /**
- * TRIPWIRE — `playbook_runs.status` has ONE writer once a run exists
- * (reactions W1): `setRunStatus` in
- * `packages/database/src/services/lifecycle/run-status.ts`. It holds the
- * compare-and-set and owes the run's transition in the same transaction; a
- * raw `.update(playbookRuns).set({ status: … })` anywhere else moves a run
- * with no transition (no reaction, no realtime push, no history) and no CAS.
+ * TRIPWIRE — `playbook_runs.status` has ONE writer once a run exists:
+ * `setRunStatus` in `packages/database/src/services/lifecycle/run-status.ts`.
+ * It holds the compare-and-set and owes the run's transition in the same
+ * transaction; a raw `.update(playbookRuns).set({ status: … })` anywhere else
+ * moves a run with no transition (no reaction, no realtime push, no history)
+ * and no CAS.
  *
  * Modelled on `session-status-one-writer.test.ts`. DERIVED: every non-test
  * `.ts` under the backend's source roots is scanned; a new writer joins by

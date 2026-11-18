@@ -20,7 +20,13 @@
  *   - a wave (root → child → grandchild) beside an unrelated session, one PR
  *     recorded by two of its sessions, a paused grandchild with a hold, and a
  *     child filed into a goal — `focus` must keep the wave or the goal only,
- *     and the PR, hold and goal must come back once each.
+ *     and the PR, hold and goal must come back once each;
+ *   - PIVOT: sessions that follow a playbook each way a session can (its own
+ *     `playbook_id`; only through its goal's method; both), beside the ones
+ *     that must NOT match (another playbook, another goal's method, a session
+ *     that RELEASED the playbook and kept only its `template_id`); sessions on
+ *     a thing (subject, worker target) beside one on another thing; a goal
+ *     with a staged method; a live runner on an agent's session.
  *
  * Stubbed: nothing on the read path except one switch that makes
  * `attachSessionEdges` throw, to prove a failed edge read is `unavailable`.
@@ -203,6 +209,8 @@ const graph = (
     workspaceLens?: string;
     boundWorkspaceId?: string;
     focus?: Parameters<typeof buildWorkGraph>[0]["focus"];
+    playbookId?: string;
+    subjectEntityId?: string;
   } = {}
 ) =>
   buildWorkGraph({
@@ -214,7 +222,63 @@ const graph = (
     roster: extra.roster ?? false,
     boundWorkspaceId: extra.boundWorkspaceId,
     focus: extra.focus,
+    playbookId: extra.playbookId,
+    subjectEntityId: extra.subjectEntityId,
   });
+
+// PIVOT: the playbook and subject narrows, the goal's method, the runner.
+const PIVOT = "user-pivot";
+const PLAYBOOK = randomUUID();
+const OTHER_PLAYBOOK = randomUUID();
+const PIVOT_PROJECT = randomUUID();
+const METHOD_TRACK = randomUUID(); // a goal whose method is PLAYBOOK
+const OTHER_TRACK = randomUUID(); // a goal whose method is OTHER_PLAYBOOK
+const THING = randomUUID();
+const OTHER_THING = randomUUID();
+const AGENT = "agent-pivot";
+const MACHINE = "machine-pivot";
+const P = {
+  run: randomUUID(), // run from PLAYBOOK, at its stage "review", agent runs it
+  viaGoal: randomUUID(), // no playbook of its own; filed in METHOD_TRACK
+  both: randomUUID(), // run from PLAYBOOK AND filed in OTHER_TRACK
+  released: randomUUID(), // template_id PLAYBOOK, playbook_id NULL (released)
+  otherGoal: randomUUID(), // filed in OTHER_TRACK only
+  otherRun: randomUUID(), // run from OTHER_PLAYBOOK
+  onThing: randomUUID(), // subject THING
+  worker: randomUUID(), // a worker targeting THING
+  onOther: randomUUID(), // subject OTHER_THING
+};
+
+async function pivotSession(
+  id: string,
+  opts: {
+    playbookId?: string;
+    templateId?: string;
+    trackId?: string;
+    trackStage?: string;
+    subjectEntityId?: string;
+    currentStage?: string;
+    stages?: unknown[];
+    agentIds?: string[];
+  } = {}
+) {
+  await q(
+    `insert into focus_sessions (id, user_id, goal, status, playbook_id, template_id, track_id, track_stage, subject_entity_id, current_stage, stages, expected_outputs, agent_ids, metadata, started_at, created_at, updated_at)
+     values ($1, $2, 'g', 'active', $3, $4, $5, $6, $7, $8, $9::jsonb, '[]'::jsonb, $10, '{}'::jsonb, now() - interval '1 hour', now() - interval '1 hour', now() - interval '1 hour')`,
+    [
+      id,
+      PIVOT,
+      opts.playbookId ?? null,
+      opts.templateId ?? null,
+      opts.trackId ?? null,
+      opts.trackStage ?? null,
+      opts.subjectEntityId ?? null,
+      opts.currentStage ?? null,
+      JSON.stringify(opts.stages ?? []),
+      opts.agentIds ?? [],
+    ]
+  );
+}
 
 beforeAll(async () => {
   const tables = (Object.values(schema) as unknown[]).filter(
@@ -332,6 +396,76 @@ beforeAll(async () => {
           since: new Date().toISOString(),
         },
       }),
+    ]
+  );
+
+  // PIVOT.
+  await q(`insert into projects (id, name, user_id) values ($1, 'p', $2)`, [
+    PIVOT_PROJECT,
+    PIVOT,
+  ]);
+  await q(
+    `insert into project_tracks (id, project_id, user_id, name, status, playbook_id, current_stage, definition_snapshot)
+     values ($1, $2, $3, 'Ship by method', 'active', $4, 'build', $5::jsonb),
+            ($6, $2, $3, 'Another method', 'active', $7, null, '{}'::jsonb)`,
+    [
+      METHOD_TRACK,
+      PIVOT_PROJECT,
+      PIVOT,
+      PLAYBOOK,
+      JSON.stringify({
+        stages: [
+          { key: "shape", name: "Shape it", category: "plan" },
+          { key: "build", name: "Build it" },
+          { key: "ship", name: "Ship it" },
+        ],
+      }),
+      OTHER_TRACK,
+      OTHER_PLAYBOOK,
+    ]
+  );
+  await pivotSession(P.run, {
+    playbookId: PLAYBOOK,
+    templateId: PLAYBOOK,
+    currentStage: "review",
+    stages: [
+      { key: "draft", name: "Draft" },
+      { key: "review", name: "Review it" },
+    ],
+    agentIds: [AGENT],
+  });
+  await pivotSession(P.viaGoal, {
+    trackId: METHOD_TRACK,
+    trackStage: "build",
+  });
+  await pivotSession(P.both, { playbookId: PLAYBOOK, trackId: OTHER_TRACK });
+  await pivotSession(P.released, { templateId: PLAYBOOK });
+  await pivotSession(P.otherGoal, { trackId: OTHER_TRACK });
+  await pivotSession(P.otherRun, { playbookId: OTHER_PLAYBOOK });
+  await pivotSession(P.onThing, { subjectEntityId: THING });
+  await pivotSession(P.worker);
+  await pivotSession(P.onOther, { subjectEntityId: OTHER_THING });
+  await q(
+    `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+     values ($1, 'session', $2, 'entity', $3, 'targets', '{"role":"worker_target"}'::jsonb, now())`,
+    [randomUUID(), P.worker, THING]
+  );
+  // The agent on P.run, hosted by a machine, running now in Claude Code.
+  await q(
+    `insert into users (id, email, name, user_type, agent_type, host_user_id) values
+       ($1, 'm@x.test', 'devbox', 'agent', 'machine', null),
+       ($2, 'a@x.test', 'Claude Code', 'agent', 'claude-code', $1)`,
+    [MACHINE, AGENT]
+  );
+  await q(
+    `insert into session_runners (session_id, client_key, user_id, agent_user_id, harness, conversation_id, machine_user_id, process_key, process_host, state, state_since, state_reported_at, model, first_seen_at, last_seen_at)
+     values ($1, $2, $3, $4, 'claude-code', 'conv-pivot', $5, 'devbox:4242:1761600000000', 'devbox', 'busy', now() - interval '20 seconds', now() - interval '20 seconds', 'claude-opus-4', now() - interval '5 minutes', now() - interval '10 seconds')`,
+    [
+      P.run,
+      `key:${randomUUID()}|conv:claude-code:conv-pivot`,
+      PIVOT,
+      AGENT,
+      MACHINE,
     ]
   );
 
@@ -574,11 +708,127 @@ describe("buildWorkGraph — PRs, holds and goals", () => {
         name: "Ship the thing",
         status: "active",
         projectId: PROJECT,
+        // A goal that follows no method says so, never a guessed stage.
+        playbookId: null,
+        currentStage: null,
+        stages: [],
       },
     ]);
     expect(mine.sections.goals).toEqual({ status: "ok" });
     // USER holds none of WAVE's sessions, so no goal of theirs either.
     const theirs = await graph(USER);
     expect(theirs.goals).toEqual([]);
+  });
+});
+
+describe("buildWorkGraph — by playbook (founder decision D2)", () => {
+  const inWindowIds = (g: Awaited<ReturnType<typeof graph>>) =>
+    g.nodes
+      .filter((n) => n.inWindow)
+      .map((n) => n.id)
+      .sort();
+
+  it("keeps the sessions run from it OR filed in a goal whose method it is, and nothing else", async () => {
+    const g = await graph(PIVOT, { playbookId: PLAYBOOK });
+    expect(inWindowIds(g)).toEqual([P.run, P.viaGoal, P.both].sort());
+    // Another playbook, another goal's method, a RELEASED session (template
+    // id kept, playbook id cleared), and sessions with none: all out.
+    const ids = g.nodes.map((n) => n.id);
+    for (const out of [P.released, P.otherGoal, P.otherRun, P.onThing]) {
+      expect(ids).not.toContain(out);
+    }
+  });
+
+  it("says which way each node follows it: its own playbook first, else its goal", async () => {
+    const g = await graph(PIVOT, { playbookId: PLAYBOOK });
+    const match = Object.fromEntries(
+      g.nodes.map((n) => [n.id, n.playbookMatch])
+    );
+    expect(match[P.run]).toBe("session");
+    expect(match[P.both]).toBe("session");
+    expect(match[P.viaGoal]).toBe("goal");
+    // A goal-filed node carries what places it on the goal's stages.
+    const viaGoal = g.nodes.find((n) => n.id === P.viaGoal)!;
+    expect(viaGoal.trackId).toBe(METHOD_TRACK);
+    expect(viaGoal.trackStage).toBe("build");
+  });
+
+  it("without the narrow, no node claims a match", async () => {
+    const g = await graph(PIVOT);
+    expect(g.nodes.length).toBeGreaterThan(0);
+    for (const n of g.nodes) expect(n).not.toHaveProperty("playbookMatch");
+  });
+});
+
+describe("buildWorkGraph — by thing", () => {
+  it("keeps the sessions on the thing: its subject, or a worker targeting it", async () => {
+    const g = await graph(PIVOT, { subjectEntityId: THING });
+    expect(
+      g.nodes
+        .filter((n) => n.inWindow)
+        .map((n) => n.id)
+        .sort()
+    ).toEqual([P.onThing, P.worker].sort());
+    expect(g.nodes.map((n) => n.id)).not.toContain(P.onOther);
+  });
+});
+
+describe("buildWorkGraph — a goal carries its method", () => {
+  it("names the method, the stage it is at, and every stage placed against it", async () => {
+    const g = await graph(PIVOT);
+    const goal = g.goals.find((x) => x.id === METHOD_TRACK);
+    expect(goal).toEqual({
+      id: METHOD_TRACK,
+      name: "Ship by method",
+      status: "active",
+      projectId: PIVOT_PROJECT,
+      playbookId: PLAYBOOK,
+      currentStage: "build",
+      stages: [
+        { key: "shape", name: "Shape it", category: "plan", position: "done" },
+        { key: "build", name: "Build it", category: null, position: "active" },
+        {
+          key: "ship",
+          name: "Ship it",
+          category: null,
+          position: "not_started",
+        },
+      ],
+    });
+    // A method with no pinned stages: the method, no stages.
+    expect(g.goals.find((x) => x.id === OTHER_TRACK)).toMatchObject({
+      playbookId: OTHER_PLAYBOOK,
+      currentStage: null,
+      stages: [],
+    });
+  });
+});
+
+describe("buildWorkGraph — where the holder runs", () => {
+  it("the holder names the runner its word came from: harness, model, computer, state", async () => {
+    const g = await graph(PIVOT);
+    const run = g.nodes.find((n) => n.id === P.run)!;
+    expect(run.holder).toMatchObject({
+      status: "ok",
+      holder: {
+        kind: "agent",
+        waitKind: "agent_work",
+        source: { from: "runner", state: "busy" },
+        runner: {
+          harness: "claude-code",
+          model: "claude-opus-4",
+          machineUserId: MACHINE,
+          processHost: "devbox",
+          state: "busy",
+          live: true,
+        },
+      },
+    });
+    // No agent, no runner: none, never a guessed one.
+    const viaGoal = g.nodes.find((n) => n.id === P.viaGoal)!;
+    expect(viaGoal.holder).toMatchObject({
+      status: "ok",
+      holder: { kind: "nobody", runner: null },
+    });
   });
 });

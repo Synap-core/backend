@@ -1,10 +1,10 @@
 /**
- * The `roll_up` effect of the reactions reactor (plan 7d71ddcc W3, pod
- * default 1, "roll up along `part_of`"): a thing moved into done or lost →
- * every parent a declared relation links it to → when every NON-lost part of
- * that parent is done and at least one is (decision D5), the parent moves to
- * the declared status (else its next one) through THE thing's door
- * (`moveStatus`), as the `system`, with the reaction's `cause`.
+ * The `roll_up` effect of the reactions reactor (pod default 1, "roll up along
+ * `part_of`"): a thing moved into done or lost → every parent a declared
+ * relation links it to → when every NON-lost part of that parent is done and at
+ * least one is (decision D5), the parent moves to the declared status (else its
+ * next one) through THE thing's door (`moveStatus`), as the `system`, with the
+ * reaction's `cause`.
  *
  *   - Every level works: the parent's move is itself a transition, which
  *     rolls up its own parent when the declaration chains (`chains: true`),

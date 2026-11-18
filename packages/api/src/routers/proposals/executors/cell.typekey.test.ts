@@ -31,7 +31,7 @@ vi.mock("@synap/database", async (importOriginal) => ({
   // The executor's idempotency read (`db.select({...}).from(proposals)`, awaited
   // directly — no `.where()` chain terminator).
   db: {
-    // The proposal door's one statement (`WITH … UPDATE`, reactions W1).
+    // The proposal door's one statement (`WITH … UPDATE`).
     $with: () => ({ as: () => ({}) }),
     with() {
       return this;

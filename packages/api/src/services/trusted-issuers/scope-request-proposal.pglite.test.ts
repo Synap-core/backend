@@ -147,7 +147,7 @@ beforeEach(async () => {
       ddlFor(schema.trustedIssuers as unknown as PgTable) +
       ddlFor(schema.proposals as unknown as PgTable) +
       ddlFor(schema.notifications as unknown as PgTable) +
-      // The proposal door owes its transition (reactions W1).
+      // The proposal door owes its transition.
       ddlFor(schema.lifecycleTransitionOutbox as unknown as PgTable)
   );
 });

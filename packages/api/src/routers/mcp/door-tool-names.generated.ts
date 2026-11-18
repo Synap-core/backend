@@ -35,6 +35,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_change_kind_scope",
     "cp-connector": "pod__change_kind_scope",
   },
+  synap_change_lifecycle_options: {
+    "pod-mcp": "synap_change_lifecycle_options",
+    "cp-connector": null,
+  },
   synap_complete_session: {
     "pod-mcp": "synap_complete_session",
     "cp-connector": "pod__complete_session",
@@ -152,6 +156,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_get_entity",
     "cp-connector": "pod__get_entity",
   },
+  synap_get_file: { "pod-mcp": "synap_get_file", "cp-connector": null },
   synap_get_flow: {
     "pod-mcp": "synap_get_flow",
     "cp-connector": "pod__get_flow",
@@ -337,6 +342,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_request_upload",
     "cp-connector": null,
   },
+  synap_request_workspace_access: {
+    "pod-mcp": "synap_request_workspace_access",
+    "cp-connector": null,
+  },
   synap_rerun_session: {
     "pod-mcp": "synap_rerun_session",
     "cp-connector": "pod__rerun_session",
@@ -396,6 +405,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_set_workspace_focus: {
     "pod-mcp": "synap_set_workspace_focus",
     "cp-connector": "pod__set_workspace_focus",
+  },
+  synap_start_orchestrator: {
+    "pod-mcp": "synap_start_orchestrator",
+    "cp-connector": null,
   },
   synap_start_session: {
     "pod-mcp": "synap_start_session",

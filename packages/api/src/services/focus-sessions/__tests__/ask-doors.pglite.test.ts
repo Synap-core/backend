@@ -340,7 +340,7 @@ describe("W2 typed ask doors", () => {
   beforeAll(async () => {
     for (const t of [
       focusSessions,
-      // Slot doors owe their transition (reactions W1).
+      // Slot doors owe their transition.
       lifecycleTransitionOutbox,
       notifications,
       notificationPreferences,
