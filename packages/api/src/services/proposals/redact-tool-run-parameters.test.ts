@@ -60,7 +60,11 @@ describe("redactRevisionHistory", () => {
     expect(whole.patch.parameters.apiToken).toBe("tok_new");
   });
   it("leaves other entries and a non-list alone", () => {
-    const other = { at: "t", before: { _summary: "a" }, patch: { _summary: "b" } };
+    const other = {
+      at: "t",
+      before: { _summary: "a" },
+      patch: { _summary: "b" },
+    };
     expect(redactRevisionHistory([other], none)[0]).toBe(other);
     expect(redactRevisionHistory(null, none)).toBeNull();
   });

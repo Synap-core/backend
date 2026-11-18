@@ -85,7 +85,6 @@ function updateChain(claimed: boolean) {
   return chain;
 }
 
-
 import { computeRevisedEnvelope } from "../../../services/proposals/proposals-service.js";
 
 const isSecretName = (key: string) => /key|token|secret|password/i.test(key);
@@ -93,13 +92,20 @@ const isSecretName = (key: string) => /key|token|secret|password/i.test(key);
 const ORIGINAL = {
   skillId: "skill-1",
   verbId: "unipile_linkedin_publish_post",
-  parameters: { text: "Hello world", accountId: "acc-1", apiKey: "sk-1", limit: 3 },
+  parameters: {
+    text: "Hello world",
+    accountId: "acc-1",
+    apiKey: "sk-1",
+    limit: 3,
+  },
   targetType: "capability",
   changeType: "run",
   requestId: "req-1",
 };
 
-function proposalWith(data: Record<string, unknown>): ProposalExecutorArgs["proposal"] {
+function proposalWith(
+  data: Record<string, unknown>
+): ProposalExecutorArgs["proposal"] {
   return {
     id: "p1",
     targetType: "capability",
@@ -182,7 +188,10 @@ describe("a revised tool-run argument is the one approval runs", () => {
     expect(merged).not.toHaveProperty("parameterEdits");
 
     primeDb();
-    const executor = proposalExecRegistry.resolve("capability/capability.run", "capability.run");
+    const executor = proposalExecRegistry.resolve(
+      "capability/capability.run",
+      "capability.run"
+    );
     expect(executor).toBeDefined();
     await executor!.execute(argsFor(merged));
 
@@ -196,7 +205,10 @@ describe("a revised tool-run argument is the one approval runs", () => {
 
   it("runs the agent's original text when nothing was revised", async () => {
     primeDb();
-    const executor = proposalExecRegistry.resolve("capability/capability.run", "capability.run");
+    const executor = proposalExecRegistry.resolve(
+      "capability/capability.run",
+      "capability.run"
+    );
     await executor!.execute(argsFor(ORIGINAL));
     expect(mockRunResolvedSkill).toHaveBeenCalledWith(
       expect.anything(),
@@ -207,7 +219,10 @@ describe("a revised tool-run argument is the one approval runs", () => {
 });
 
 describe("the edit scope is text arguments only", () => {
-  const edit = (fields: Record<string, unknown>, proposalType = "capability.run") =>
+  const edit = (
+    fields: Record<string, unknown>,
+    proposalType = "capability.run"
+  ) =>
     computeRevisedEnvelope({
       proposalType,
       envelope: ORIGINAL,
@@ -217,21 +232,29 @@ describe("the edit scope is text arguments only", () => {
     });
 
   it("refuses a credential argument", () => {
-    expect(() => edit({ parameterEdits: { apiKey: "x" } })).toThrow(/credential/);
+    expect(() => edit({ parameterEdits: { apiKey: "x" } })).toThrow(
+      /credential/
+    );
   });
   it("refuses an argument that is not text, or not there", () => {
-    expect(() => edit({ parameterEdits: { limit: "9" } })).toThrow(/not a text argument/);
-    expect(() => edit({ parameterEdits: { nope: "9" } })).toThrow(/not a text argument/);
+    expect(() => edit({ parameterEdits: { limit: "9" } })).toThrow(
+      /not a text argument/
+    );
+    expect(() => edit({ parameterEdits: { nope: "9" } })).toThrow(
+      /not a text argument/
+    );
   });
   it("refuses a non-text new value", () => {
-    expect(() => edit({ parameterEdits: { text: 5 } })).toThrow(/only be changed to text/);
+    expect(() => edit({ parameterEdits: { text: 5 } })).toThrow(
+      /only be changed to text/
+    );
   });
   it("refuses both a whole `parameters` and edits, and other proposal types", () => {
     expect(() =>
       edit({ parameterEdits: { text: "a" }, parameters: {} })
     ).toThrow(/not both/);
-    expect(() => edit({ parameterEdits: { text: "a" } }, "document.update")).toThrow(
-      /Only a tool run/
-    );
+    expect(() =>
+      edit({ parameterEdits: { text: "a" } }, "document.update")
+    ).toThrow(/Only a tool run/);
   });
 });

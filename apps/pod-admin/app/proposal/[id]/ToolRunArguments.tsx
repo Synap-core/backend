@@ -137,9 +137,7 @@ function Argument({
         ) : (
           <Value
             value={
-              edited
-                ? { kind: "text", text: edit?.draft ?? "" }
-                : arg.value
+              edited ? { kind: "text", text: edit?.draft ?? "" } : arg.value
             }
             t={t}
           />
@@ -193,7 +191,9 @@ export function ToolRunArguments({
   const editFor = (arg: ToolRunArgument) => ({
     draft: drafts[arg.key],
     recorded: wasByKey.get(arg.key),
-    onDraft: onDraft ? (text: string | undefined) => onDraft(arg.key, text) : null,
+    onDraft: onDraft
+      ? (text: string | undefined) => onDraft(arg.key, text)
+      : null,
   });
   const account = run.parameters.find(
     (p) =>
@@ -219,7 +219,10 @@ export function ToolRunArguments({
         <h2 className="font-heading text-[15px] font-medium text-foreground">
           {t("toolRun.sends")}
         </h2>
-        <p data-tool-run-consequence="" className="text-[12.5px] text-foreground/65">
+        <p
+          data-tool-run-consequence=""
+          className="text-[12.5px] text-foreground/65"
+        >
           {consequence}
         </p>
       </header>

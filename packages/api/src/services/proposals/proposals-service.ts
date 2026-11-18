@@ -535,9 +535,10 @@ export interface ComputeRevisedEnvelopeParams {
  */
 export const PARAMETER_EDITS_FIELD = "parameterEdits";
 
-function takeParameterEdits(
-  fields: Record<string, unknown>
-): { rest: Record<string, unknown>; edits: Record<string, string> | null } {
+function takeParameterEdits(fields: Record<string, unknown>): {
+  rest: Record<string, unknown>;
+  edits: Record<string, string> | null;
+} {
   if (!(PARAMETER_EDITS_FIELD in fields)) return { rest: fields, edits: null };
   const { [PARAMETER_EDITS_FIELD]: raw, ...rest } = fields;
   const bad = (message: string) =>
@@ -680,7 +681,10 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   }
 
   if (taken.edits) {
-    if (params.proposalType !== "capability.run" || isNestedEnvelope(envelope)) {
+    if (
+      params.proposalType !== "capability.run" ||
+      isNestedEnvelope(envelope)
+    ) {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: "Only a tool run's arguments can be edited this way.",
@@ -1079,9 +1083,8 @@ export async function mergeProposalRevision(
       actorId: params.actorId,
       actingAgentUserId:
         params.attributionAgentUserId ?? actingAgentUserId ?? null,
-      isSecretName: (
-        await import("../capabilities/capability-catalog.js")
-      ).isSecretParamName,
+      isSecretName: (await import("../capabilities/capability-catalog.js"))
+        .isSecretParamName,
     });
     // The stamp `computeRevisedEnvelope` derived knows no row; stamped again
     // here against the row this approval writes, at the scope it now targets

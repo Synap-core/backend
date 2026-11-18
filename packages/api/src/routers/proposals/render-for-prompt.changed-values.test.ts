@@ -35,7 +35,11 @@ beforeEach(() => {
         by: "user-1",
         before: { parameters: proposed },
         patch: {
-          parameters: { ...proposed, text: "Hello, LinkedIn", apiKey: "sk-secret-2" },
+          parameters: {
+            ...proposed,
+            text: "Hello, LinkedIn",
+            apiKey: "sk-secret-2",
+          },
         },
       },
     ],

@@ -109,8 +109,7 @@ export function toolRunArguments(run: ProposalToolRun): ToolRunArgument[] {
     const value = toolRunValue(param);
     const text = typeof param.value === "string" ? param.value : null;
     const idLike = text !== null && isIdLike(param.key, text);
-    const detail =
-      value.kind === "secret" || value.kind === "empty" || idLike;
+    const detail = value.kind === "secret" || value.kind === "empty" || idLike;
     return {
       key: param.key,
       label: param.label,
