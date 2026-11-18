@@ -34873,6 +34873,92 @@
         }
       }
     },
+    "/realtime/room-ticket": {
+      "post": {
+        "tags": ["Documents"],
+        "summary": "Get a ticket to open one document's live room",
+        "description": "For a pod app's connection token (a key held by a person): answers a single-use ticket, valid 60 seconds, for ONE document's live Yjs room. The browser connects to the pod's Socket.IO server (path `/socket.io/`, namespace `/yjs|<room>`) with handshake auth `{ userId, token: ticket }`; a reconnect needs a new ticket. `access` is `edit` when the person may edit the document, the key holds hub-protocol.write and its grant permits `document.update` on it (or `view.update_content` on the view that owns a canvas); otherwise `read`, and a read socket's updates are dropped. Send `access: \"read\"` to ask for less. The socket closes when the app's connection is revoked. A document the person or the grant cannot read is 404. Refused (403) to an agent and to a signed-in session, which opens the room with its own token. Requires hub-protocol.read.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+                  },
+                  "access": { "type": "string", "enum": ["read", "edit"] }
+                },
+                "required": ["documentId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ticket": { "type": "string" },
+                    "expiresAt": { "type": "string" },
+                    "userId": { "type": "string" },
+                    "documentId": { "type": "string" },
+                    "room": { "type": "string" },
+                    "access": { "type": "string", "enum": ["read", "edit"] }
+                  },
+                  "required": [
+                    "ticket",
+                    "expiresAt",
+                    "userId",
+                    "documentId",
+                    "room",
+                    "access"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a person's key",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/mcp-servers": {
       "get": {
         "tags": ["MCP"],
