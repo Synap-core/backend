@@ -95,32 +95,35 @@ function agentRun(verb: Verb, preloaded: boolean) {
   });
 }
 
-const POSTURES: ReadonlyArray<{ posture: string; floored: Verb; control: Verb }> =
-  [
-    {
-      posture: "a publish_post intent under another name",
-      floored: {
-        name: "unipile_publish_post",
-        intent: "publish_post",
-        metadata: null,
-      },
-      control: { name: "unipile_send", intent: "send_message", metadata: null },
+const POSTURES: ReadonlyArray<{
+  posture: string;
+  floored: Verb;
+  control: Verb;
+}> = [
+  {
+    posture: "a publish_post intent under another name",
+    floored: {
+      name: "unipile_publish_post",
+      intent: "publish_post",
+      metadata: null,
     },
-    {
-      posture: "a listed Postiz name, in another case",
-      floored: { name: " Postiz_Publish ", intent: null, metadata: null },
-      control: { name: "postiz_upload_from_url", intent: null, metadata: null },
+    control: { name: "unipile_send", intent: "send_message", metadata: null },
+  },
+  {
+    posture: "a listed Postiz name, in another case",
+    floored: { name: " Postiz_Publish ", intent: null, metadata: null },
+    control: { name: "postiz_upload_from_url", intent: null, metadata: null },
+  },
+  {
+    posture: "a declared metadata.proposeOnly",
+    floored: {
+      name: "hcloud_delete_server",
+      intent: null,
+      metadata: { proposeOnly: true },
     },
-    {
-      posture: "a declared metadata.proposeOnly",
-      floored: {
-        name: "hcloud_delete_server",
-        intent: null,
-        metadata: { proposeOnly: true },
-      },
-      control: { name: "hcloud_delete_server", intent: null, metadata: {} },
-    },
-  ];
+    control: { name: "hcloud_delete_server", intent: null, metadata: {} },
+  },
+];
 
 const WIDENINGS: ReadonlyArray<{
   widening: string;

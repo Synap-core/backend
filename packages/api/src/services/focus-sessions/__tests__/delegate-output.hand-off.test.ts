@@ -84,7 +84,9 @@ const gateAgentHandOff = vi.fn();
 vi.mock("../agent-hand-off.js", () => ({
   gateAgentHandOff: (...a: unknown[]) => gateAgentHandOff(...a),
 }));
-const attachSessionAgent = vi.fn(async () => ({ status: "attached" }));
+const attachSessionAgent = vi.fn(async (_p: Record<string, unknown>) => ({
+  status: "attached",
+}));
 vi.mock("../attach-session-agent.js", () => ({
   attachSessionAgent: (...a: unknown[]) =>
     (attachSessionAgent as unknown as (...x: unknown[]) => unknown)(...a),
@@ -220,7 +222,10 @@ describe("what is not a hand-off", () => {
 describe("an APPROVED hand-off finishes the delegation (the assign_agent executor calls back)", () => {
   it("the approved agent: no second gate; the slot is delegated, the ask posted as the agent's, the turn started", async () => {
     expect(
-      await delegate(CALLER_AGENT, { proposalId: "prop-1", agentId: OTHER_AGENT })
+      await delegate(CALLER_AGENT, {
+        proposalId: "prop-1",
+        agentId: OTHER_AGENT,
+      })
     ).toMatchObject({ status: "delegated", expectedLabel: "Draft" });
     expect(gateAgentHandOff).not.toHaveBeenCalled();
     expect(postChannelMessage.mock.calls[0]![0]).toMatchObject({

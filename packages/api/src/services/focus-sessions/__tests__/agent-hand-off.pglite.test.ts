@@ -491,7 +491,10 @@ describe("delegating a SLOT to another agent — approval finishes the delegatio
     const sessionId = await seedSession();
     await h.client!.query(
       `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
-      [sessionId, JSON.stringify([{ kind: "document", label: "Research brief" }])]
+      [
+        sessionId,
+        JSON.stringify([{ kind: "document", label: "Research brief" }]),
+      ]
     );
     h.channel = randomUUID();
     postChannelMessage.mockClear();
@@ -518,10 +521,11 @@ describe("delegating a SLOT to another agent — approval finishes the delegatio
       expect(approved).not.toHaveProperty("refusals");
       expect(await roster(sessionId)).toEqual([AGENT, HOUSE]);
       const slots = (
-        await h.client!.query<{ expected_outputs: Array<Record<string, unknown>> }>(
-          `select expected_outputs from focus_sessions where id = $1`,
-          [sessionId]
-        )
+        await h.client!.query<{
+          expected_outputs: Array<Record<string, unknown>>;
+        }>(`select expected_outputs from focus_sessions where id = $1`, [
+          sessionId,
+        ])
       ).rows[0]!.expected_outputs;
       expect(slots[0]).toMatchObject({
         label: "Research brief",
