@@ -1357,8 +1357,10 @@ export async function applyPackagePostWorkspace(
               message:
                 !uses.linked && uses.reason === "workspace_not_found"
                   ? `Workspace ${workspaceId} does not exist — the project was not indexed to it.`
-                  : `Project ${body.projectId} is not visible or no longer exists — ` +
-                    `no entity was filed into it.`,
+                  : !uses.linked && uses.reason === "app_grant"
+                    ? `An app cannot add a space to a project: the person files project ${body.projectId} into this space.`
+                    : `Project ${body.projectId} is not visible or no longer exists — ` +
+                      `no entity was filed into it.`,
             };
     } catch (e) {
       result.projectLink = { status: "error", message: (e as Error).message };

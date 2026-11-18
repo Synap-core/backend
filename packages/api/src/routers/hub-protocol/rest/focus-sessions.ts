@@ -23,6 +23,7 @@
  */
 
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
+import { sessionGrantWorkspaceId } from "../../../access/session-counted-spaces.js";
 import {
   mergeOutcomesForStart,
   declaresVerify,
@@ -2587,6 +2588,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId,
         agentUserId,
         workspaceId,
+        // The key's grant: a project-only session counts in its project's
+        // spaces (`session-counted-spaces.ts`); governance stays at its home.
+        grantWorkspaceId: await sessionGrantWorkspaceId(existing, {
+          subjectType: "focus_session",
+          action: "update",
+          data: { id },
+        }),
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",

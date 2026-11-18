@@ -27,6 +27,7 @@ import {
   ownerPrivateVisibleWhere,
   userVisibleWhere,
   drizzleSql,
+  getRequestGrant,
 } from "@synap/database";
 
 /** INDEX projection a UI/agent can name, not just id. */
@@ -78,6 +79,7 @@ import {
   type LinkAttribution,
 } from "../services/links/dependency-links.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { holderOfGrant } from "@synap-core/types/grants";
 
 export type LinkProjectToWorkspaceResult =
   | {
@@ -85,7 +87,10 @@ export type LinkProjectToWorkspaceResult =
       /** The row THIS call inserted — absent when the edge already existed. */
       linkId?: string;
     }
-  | { linked: false; reason: "project_not_found" | "workspace_not_found" };
+  | {
+      linked: false;
+      reason: "project_not_found" | "workspace_not_found" | "app_grant";
+    };
 
 /**
  * Stamp `project --uses--> workspace`. The project is a row in the `projects`
@@ -94,7 +99,17 @@ export type LinkProjectToWorkspaceResult =
  * Verifies the project exists and is visible to `userId` first (same
  * `ownerPrivateVisibleWhere` floor `linkEntityToProject` uses) so a stale or
  * foreign project id cannot write a ghost INDEX edge. Does NOT consult
- * workspace membership — this is an index, not an ACL.
+ * workspace membership.
+ *
+ * NEVER under an APP's grant (`app_grant`). The edge is an index, but since
+ * 18 Nov 2026 a project-only session counts in every space its project uses
+ * for a key's grant (`access/session-counted-spaces.ts`): an app granted
+ * space S that could stamp `project --uses--> S` (a session filed into a goal,
+ * a package applied) would make every project-only session of that project
+ * writable by its grant on S. Which spaces a project runs through is the
+ * person's call (or their own AI's), never an app's. The governed door
+ * (`setProjectWorkspaceMembershipGoverned`) already refuses an app at its gate
+ * (`link.create` at pod scope); this holds for every derived stamp too.
  */
 export async function linkProjectToWorkspace(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -109,6 +124,10 @@ export async function linkProjectToWorkspace(
     purpose?: string | null;
   }
 ): Promise<LinkProjectToWorkspaceResult> {
+  const grant = getRequestGrant();
+  if (grant && holderOfGrant(grant) === "app") {
+    return { linked: false, reason: "app_grant" };
+  }
   const [visible] = await db
     .select({ id: projects.id })
     .from(projects)

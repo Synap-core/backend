@@ -164,6 +164,7 @@ import {
   titleSourcePatch,
   type SessionStatus,
 } from "@synap-core/types/focus-sessions";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
 import {
   decideMoveHold,
   moveFactsWithoutMoveMessage,
@@ -2654,6 +2655,13 @@ export async function updateFocusSession(
         userId,
         agentUserId,
         workspaceId: existing.workspaceId ?? undefined,
+        // The key's grant: a project-only session counts in its project's
+        // spaces (`session-counted-spaces.ts`); governance stays at its home.
+        grantWorkspaceId: await sessionGrantWorkspaceId(existing, {
+          subjectType: "focus_session",
+          action: "update",
+          data: { id: sessionId },
+        }),
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",
