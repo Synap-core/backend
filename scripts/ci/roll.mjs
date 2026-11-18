@@ -150,12 +150,21 @@ export function selectSiblings(registry, dir) {
 }
 
 /** What `plan` says about one sibling (a plain object; `render` prints it). */
-export function planOne({ row, pin, target, head, mirrorsChanged }) {
+export function planOne({
+  row,
+  pin,
+  target,
+  head,
+  mirrorsChanged,
+  lag = null,
+}) {
   return {
     dir: row.dir,
     pin,
     target,
     pinMoves: pin !== target,
+    // commits the target is ahead of the pin; null = not measured / compare failed
+    lag,
     checkout:
       head === undefined
         ? "absent"
@@ -183,6 +192,7 @@ export function render(plans) {
         `${p.dir}`,
         `  pin     ${p.pin}`,
         `  target  ${p.target}${p.pinMoves ? "" : " (the pin already)"}`,
+        `  lag     ${p.lag === null || p.lag === undefined ? "unknown (not measured)" : `${p.lag} commit${p.lag === 1 ? "" : "s"} behind the target`}`,
         `  mirrors ${mirrors}`,
       ].join("\n");
     })
@@ -225,6 +235,14 @@ export async function plan(io, { sibling, ref } = {}, registry = SIBLINGS) {
   for (const row of selectSiblings(registry, sibling)) {
     const target = await resolveTarget(io, row, ref);
     const head = io.head(row.dir);
+    let lag = null;
+    if (io.lag && pins.get(row.dir) !== target) {
+      try {
+        lag = await io.lag(row.repo, pins.get(row.dir), target);
+      } catch {
+        lag = null; // unmeasured, never 0: render says "unknown"
+      }
+    } else if (pins.get(row.dir) === target) lag = 0;
     let mirrorsChanged = null;
     if (head === target) {
       mirrorsChanged = false;
@@ -237,7 +255,14 @@ export async function plan(io, { sibling, ref } = {}, registry = SIBLINGS) {
       }
     }
     out.push(
-      planOne({ row, pin: pins.get(row.dir), target, head, mirrorsChanged })
+      planOne({
+        row,
+        pin: pins.get(row.dir),
+        target,
+        head,
+        mirrorsChanged,
+        lag,
+      })
     );
   }
   return out;
@@ -273,7 +298,7 @@ export async function apply(io, { sibling, ref } = {}, registry = SIBLINGS) {
 
 export function realIo({ root = ROOT, env = process.env } = {}) {
   const token = () => env.CP_READ_TOKEN || env.GH_TOKEN || env.GITHUB_TOKEN;
-  return {
+  const io = {
     root,
     read: (p) => readFileSync(join(root, p), "utf8"),
     write: (p, t) => writeFileSync(join(root, p), t),
@@ -305,33 +330,31 @@ export function realIo({ root = ROOT, env = process.env } = {}) {
         };
       }
     },
-    // The sha of a ref (HEAD = the default branch) through the REST API.
-    resolveRef: async (repo, ref) => {
+    // A GitHub REST GET (the token's, else the developer's own `gh` login).
+    ghGet: async (path) => {
       const t = token();
-      const res = await fetch(
-        `https://api.github.com/repos/${repo}/commits/${encodeURIComponent(ref)}`,
-        {
-          headers: {
-            accept: "application/vnd.github+json",
-            "user-agent": "synap-roll",
-            ...(t ? { authorization: `Bearer ${t}` } : {}),
-          },
-        }
-      );
-      if (res.ok) return (await res.json()).sha;
-      if (!t) {
-        // no token in the environment: the developer's own `gh` login
+      const res = await fetch(`https://api.github.com/${path}`, {
+        headers: {
+          accept: "application/vnd.github+json",
+          "user-agent": "synap-roll",
+          ...(t ? { authorization: `Bearer ${t}` } : {}),
+        },
+      });
+      if (res.ok) return res.json();
+      if (!t)
         return JSON.parse(
-          execFileSync(
-            "gh",
-            ["api", `repos/${repo}/commits/${encodeURIComponent(ref)}`],
-            { encoding: "utf8" }
-          )
-        ).sha;
-      }
-      throw new Error(`GET ${repo} commits/${ref}: HTTP ${res.status}`);
+          execFileSync("gh", ["api", path], { encoding: "utf8" })
+        );
+      throw new Error(`GET ${path}: HTTP ${res.status}`);
     },
+    // The sha of a ref (HEAD = the default branch) through the REST API.
+    resolveRef: async (repo, ref) =>
+      (await io.ghGet(`repos/${repo}/commits/${encodeURIComponent(ref)}`)).sha,
+    // Commits `head` is ahead of `base` (the pin's lag behind the target).
+    lag: async (repo, base, head) =>
+      (await io.ghGet(`repos/${repo}/compare/${base}...${head}`)).ahead_by,
   };
+  return io;
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────

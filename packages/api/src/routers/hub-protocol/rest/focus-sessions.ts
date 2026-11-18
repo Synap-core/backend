@@ -25,6 +25,8 @@
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import {
   mergeOutcomesForStart,
+  declaresVerify,
+  factOutcomeWarnings,
   outcomeDeclarationsSchema,
   upsertOutcomes,
 } from "../../../services/focus-sessions/outcome-declarations.js";
@@ -51,6 +53,7 @@ import { sessionReadableWhere } from "../../../access/session-visibility.js";
 import {
   sessionHolderReadable,
   sessionPacketReadable,
+  workGraphReach,
 } from "../../../access/grant-door-fence.js";
 import {
   checkPermissionOrPropose,
@@ -363,6 +366,11 @@ const WorkGraphWireSchema = z.object({
     ceiling: z.number(),
     truncated: z.boolean(),
     omitted: z.number(),
+    /**
+     * Of `omitted`, the sessions the person sees here that this key's grant
+     * does not cover (a pod app): counted, never returned. 0 otherwise.
+     */
+    omittedByGrant: z.number(),
   }),
 });
 
@@ -947,7 +955,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "403. Floored at the sessions the caller can read, " +
       "like the list. At most 500 window sessions, open first: " +
       "`window.truncated` / `window.omitted` say when it cut. A failed edge " +
-      "read is `sections.<name>.status: unavailable`, never an empty list.",
+      "read is `sections.<name>.status: unavailable`, never an empty list. " +
+      "A pod app (a key holding `session.read` that does not read every " +
+      "subject of the graph) gets the sessions its grant covers and the " +
+      "edges between them; `window.omittedByGrant` counts the sessions it " +
+      "does not cover, and the parts that read past its grant (next move, " +
+      "interactions, waits on an output, PR facts, goals; holder without " +
+      "`agent.read`) are `unavailable` with a reason saying they were withheld.",
     request: {
       query: z.object({
         workspaceId: uuidQueryParam.optional(),
@@ -1737,6 +1751,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // (decision C v1: `rosterReadFor` is false for every Hub caller).
         roster: false,
         boundWorkspaceId: c.get("keyWorkspaceId") ?? undefined,
+        // A pod app reads the sessions its grant covers, the rest withheld
+        // and counted (`workGraphReach`); every other caller reads it whole.
+        reach: workGraphReach(getRequestGrant()),
         focus: trackId
           ? { trackId }
           : rootSessionId
@@ -1888,16 +1905,31 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // without the packet (Content Studio's edit band).
         const { readSessionHolder } =
           await import("../../../services/focus-sessions/session-holder.js");
-        const holder = sessionHolderReadable(getRequestGrant())
-          ? await readSessionHolder(row, { userId: acting.userId })
-          : undefined;
+        const { projectSessionShape } =
+          await import("../../../services/focus-sessions/continuation-packet.js");
+        const readsAgents = sessionHolderReadable(getRequestGrant());
+        const [holder, shape] = await Promise.all([
+          readsAgents
+            ? readSessionHolder(row, { userId: acting.userId })
+            : undefined,
+          // The parts of the packet the grant does read (founder decision
+          // D1): parent, children and siblings under the session floor, the
+          // PRs the row recorded, and its runners with `agent.read`.
+          projectSessionShape(row, {
+            userId: acting.userId,
+            runners: readsAgents,
+            withheldReason:
+              "This key does not read the person's agents: who works this session is not shown.",
+          }),
+        ]);
         return c.json({
           ...attachSessionKind(attachTriage([row]))[0],
           ...(holder ? { holder } : {}),
+          ...shape,
           packet: {
             status: "withheld",
             reason:
-              "This key does not read everything a session's packet holds (its room, outcomes, links and more): only the session itself is shown.",
+              "This key does not read everything a session's packet holds (its room, outcomes, links and more): only the session itself, its neighbour sessions, the pull requests it recorded and (with agent.read) its runners are shown.",
           },
         });
       }
@@ -2083,6 +2115,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // NO_CRITERIA). A person's key and the capture path (X-Capture: 1, a
         // person capturing through a key) are exempt.
         requireCriteria: !!ctxAgentUserId && c.req.header("x-capture") !== "1",
+        // An outcome with `verify` says what done means (F11's own words).
+        declaredVerify: declaresVerify(body.outcomes),
         ...(body.outcomes && body.outcomes.length > 0
           ? mergeOutcomesForStart({
               outcomes: body.outcomes,
@@ -2261,6 +2295,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         );
       }
 
+      // A fact outcome's owner/ask/blocker is not kept: said, never silent.
+      const outcomeWarnings = factOutcomeWarnings(patch.outcomes);
       // `outcomes` → the same two fields, UPSERTED by key onto the
       // loaded row (or onto the wholesale lists this same PATCH sent). From
       // here on the patch is an ordinary `expectedOutputs` / `criteria` write:
@@ -2623,6 +2659,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
           ...(filing ? { filing } : {}),
+          ...(outcomeWarnings.length > 0 ? { warnings: outcomeWarnings } : {}),
           session: null,
         });
       }
@@ -2925,8 +2962,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               ...restatedAskHints(
                 patch.expectedOutputs as Parameters<typeof restatedAskHints>[0]
               ),
+              ...outcomeWarnings,
             ]
-          : [];
+          : outcomeWarnings;
 
       return c.json({
         ...updated,
