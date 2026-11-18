@@ -153,7 +153,14 @@ vi.mock("../../../../utils/permission-check.js", async (importOriginal) => {
         // from firing. Every other agent write proposes.
         if (opts.subjectType === "automation" && opts.action === "create")
           return { allowed: true };
-        return opts.agentUserId
+        // The real gate's ANONYMOUS path: a write branded AI (`source: "ai" |
+        // "intelligence"`) with no agent is an unattributed AI write, and a
+        // structure write (a playbook) proposes (2.09). Without this rule the
+        // mock hid the bug where the approved / person apply branded its new
+        // playbook "intelligence" and re-filed it (perso pod, 18 Nov 2026).
+        const aiBranded =
+          opts.source === "ai" || opts.source === "intelligence";
+        return opts.agentUserId || aiBranded
           ? { proposalId: randomUUID(), proposalType: "create" }
           : { allowed: true };
       }

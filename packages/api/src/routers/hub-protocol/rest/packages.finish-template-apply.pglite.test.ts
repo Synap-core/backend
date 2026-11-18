@@ -209,7 +209,15 @@ import { pgliteTableDdl } from "../../../__tests__/pglite-ddl.js";
 import { registerPackagesRoutes } from "./packages.js";
 import { registerWorkspacesRoutes } from "./workspaces.js";
 import type { HubHono, HubVariables } from "./_shared.js";
-import { listWorkspaceTemplateHealth } from "../../../services/template-health.js";
+import {
+  listWorkspaceTemplateHealth,
+  packageUpdateLink,
+} from "../../../services/template-health.js";
+import { openLink } from "../../../utils/deep-links.js";
+
+/** The pod's sentence for an apply waiting on ONE proposal: its link, then the finish page. */
+const waitingOn = (id: string, slug: string) =>
+  `Waiting on your approval of 1 proposal: ${openLink(id)}. Then finish the update: ${packageUpdateLink(slug)} (or run \`synap templates update ${slug}\`).`;
 import { finishTemplateApply } from "../../../services/template-apply-finisher.js";
 
 const OWNER = randomUUID();
@@ -302,9 +310,7 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
       proposals: [h.filedProposalId],
     });
     // The pod's one sentence, returned by the apply door itself.
-    expect(body.templateApplyWarning).toBe(
-      `Waiting on your approval of 1 proposal (${h.filedProposalId}), then run \`synap templates update ${SLUG}\`.`
-    );
+    expect(body.templateApplyWarning).toBe(waitingOn(h.filedProposalId, SLUG));
     version = body.templateApply.version;
     expect(version).toMatch(/^h-/);
     // The catalog's latest IS this version: only the record can make it drift.
@@ -328,7 +334,7 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
 
   it("(1b) health names the proposal it waits on — read live, plain drift once decided", async () => {
     const { id } = await space();
-    const warning = `Waiting on your approval of 1 proposal (${h.filedProposalId}), then run \`synap templates update ${SLUG}\`.`;
+    const warning = waitingOn(h.filedProposalId, SLUG);
     const [waiting] = await listWorkspaceTemplateHealth([id]);
     expect(waiting).toMatchObject({
       drifted: true,
@@ -348,7 +354,7 @@ describe("the ONE finisher writes the stamp and active only on convergence", () 
     await q(`update proposals set status = 'approved' where id = $1`, [
       h.filedProposalId,
     ]);
-    const finish = `Not finished: run \`synap templates update ${SLUG}\` to apply the rest of ${SLUG}.`;
+    const finish = `Not finished: finish the update of ${SLUG}: ${packageUpdateLink(SLUG)} (or run \`synap templates update ${SLUG}\`).`;
     const [decided] = await listWorkspaceTemplateHealth([id]);
     expect(decided).toMatchObject({
       drifted: true,
