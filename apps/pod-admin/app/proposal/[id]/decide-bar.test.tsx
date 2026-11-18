@@ -79,6 +79,13 @@ vi.mock("../../../lib/trpc", async () => ({
           isPending: state.rejecting,
         }),
       },
+      revise: {
+        useMutation: () => ({
+          mutate() {},
+          mutateAsync: async () => ({}),
+          isPending: false,
+        }),
+      },
       approvalProgress: {
         useQuery: () => ({
           data: null,
