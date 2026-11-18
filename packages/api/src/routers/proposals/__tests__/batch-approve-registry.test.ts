@@ -484,11 +484,10 @@ describe("(c/d) partial failure is isolated and visible", () => {
 // ───────────────────────────────────────────────────────────────────────────
 describe("(e) idempotency per item", () => {
   it("batchApprove skips every terminal status before dispatching", () => {
+    // The one undecided list (pending, approval_failed) through the shared
+    // predicate; a hand-written pair is refused by undecided-statuses-one-list.
     expect(BATCH_APPROVE_BLOCK).toContain(
-      "proposal.status !== ProposalStatus.PENDING"
-    );
-    expect(BATCH_APPROVE_BLOCK).toContain(
-      "proposal.status !== ProposalStatus.APPROVAL_FAILED"
+      "if (!isProposalUndecided(proposal.status)) {"
     );
     const guardIdx = BATCH_APPROVE_BLOCK.indexOf("Already ${proposal.status}");
     const callIdx = BATCH_APPROVE_BLOCK.indexOf(
