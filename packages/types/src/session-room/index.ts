@@ -181,7 +181,9 @@ export function roomTimeline<M extends RoomMessageLike>(
   }
 
   const placed = new Set<RoomSlot>(
-    [...anchored.values()].flatMap((i) => (i.kind === "question" ? [i.slot] : []))
+    [...anchored.values()].flatMap((i) =>
+      i.kind === "question" ? [i.slot] : []
+    )
   );
   for (const q of questions) {
     if (placed.has(q.slot)) continue;
@@ -213,11 +215,26 @@ export function roomTimeline<M extends RoomMessageLike>(
 /** Who works the session, from GET /focus-sessions/:id `holder` (SessionHolder) and `runners`. */
 export type AgentLine =
   /** A live runner busy / a pod agent mid-turn. */
-  | { state: "working"; name: string; computer: string | null; since: string | null }
+  | {
+      state: "working";
+      name: string;
+      computer: string | null;
+      since: string | null;
+    }
   /** Live, idle: it will get messages. */
-  | { state: "reachable"; name: string; computer: string | null; lastSeenAt: string | null }
+  | {
+      state: "reachable";
+      name: string;
+      computer: string | null;
+      lastSeenAt: string | null;
+    }
   /** A known agent, not live (e.g. Claude Code closed). */
-  | { state: "unreachable"; name: string; computer: string | null; lastSeenAt: string | null }
+  | {
+      state: "unreachable";
+      name: string;
+      computer: string | null;
+      lastSeenAt: string | null;
+    }
   /** Nothing runs it: messages wait. */
   | { state: "nobody"; name: null; computer: null }
   /** The read did not say (never folded into 'nobody'). */
@@ -291,7 +308,10 @@ export function agentLineOf(
   }
   const agentUserId = str(agent.agentUserId);
   const name =
-    str(agent.name) ?? str(agent.displayName) ?? str(agent.agentType) ?? "Agent";
+    str(agent.name) ??
+    str(agent.displayName) ??
+    str(agent.agentType) ??
+    "Agent";
   const computer = str(obj(agent.computer)?.name);
 
   const own = (runnerItems(runners) ?? []).filter(
@@ -303,7 +323,8 @@ export function agentLineOf(
     .filter((r) => runnerLive(r, now))
     .sort(
       (a, b) =>
-        Date.parse(str(b.lastSeenAt) ?? "") - Date.parse(str(a.lastSeenAt) ?? "")
+        Date.parse(str(b.lastSeenAt) ?? "") -
+        Date.parse(str(a.lastSeenAt) ?? "")
     );
   const busy = live.find((r) => r.state === "busy");
 
@@ -331,7 +352,8 @@ export function agentLineOf(
     return { state: "reachable", name, computer, lastSeenAt: servedAt };
   }
   let lastSeenAt: string | null = servedAt;
-  for (const r of candidates) lastSeenAt = newest(lastSeenAt, str(r.lastSeenAt));
+  for (const r of candidates)
+    lastSeenAt = newest(lastSeenAt, str(r.lastSeenAt));
   return { state: "unreachable", name, computer, lastSeenAt };
 }
 

@@ -212,7 +212,9 @@ describe("the seen-by-agent mark", () => {
       role: "assistant",
       authorType: "ai_agent",
       content: "Continue?",
-      metadata: { roomPost: { kind: "question", slotLabel: "Keep the run going" } },
+      metadata: {
+        roomPost: { kind: "question", slotLabel: "Keep the run going" },
+      },
       at: "2026-11-17T14:12:27.805Z",
     });
     const typed = await message(channelId, {
