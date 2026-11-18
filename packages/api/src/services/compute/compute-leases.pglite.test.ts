@@ -258,7 +258,11 @@ describe("the TTL sweeper", () => {
       [PROPOSAL_ID, PROVISION_ID]
     );
     await start({ ttlMinutes: 60, maxSpendCents: 300 }, PROPOSAL_ID);
-    // A second lease, not yet due, must be left alone.
+    // A second machine (its own id), not yet due, must be left alone.
+    holder.sandbox = ({ skillId }) =>
+      skillId === PROVISION_ID
+        ? { success: true, result: { resourceId: 4712 } }
+        : { success: true, result: { action: { status: "running" } } };
     await start({ ttlMinutes: 600, maxSpendCents: 300 });
     runSkillMock.mockClear();
 
