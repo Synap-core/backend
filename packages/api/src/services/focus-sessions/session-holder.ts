@@ -204,9 +204,7 @@ function holderRunnerOf(r: HolderFactRunner): HolderRunner {
  * synap-bridge#2): it runs inside its lead's process under the lead's agent
  * user, so it never says who holds the session nor where it runs.
  */
-export function isSubagentHarness(
-  harness: string | null | undefined
-): boolean {
+export function isSubagentHarness(harness: string | null | undefined): boolean {
   return typeof harness === "string" && harness.endsWith("-subagent");
 }
 

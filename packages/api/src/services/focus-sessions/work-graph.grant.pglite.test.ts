@@ -283,8 +283,8 @@ describe("orchestration and lineage across a grant (ops-r2)", () => {
         { kind: "orchestrated_by", from: O.kidOfB, to: O.orchB },
       ])
     );
-    expect(
-      g.nodes.find((n) => n.id === O.childOfB)!.parentSessionId
-    ).toBe(O.parentB);
+    expect(g.nodes.find((n) => n.id === O.childOfB)!.parentSessionId).toBe(
+      O.parentB
+    );
   });
 });

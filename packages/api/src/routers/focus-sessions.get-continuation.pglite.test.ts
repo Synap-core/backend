@@ -649,13 +649,11 @@ describe("focusSessions.get returns the continuation packet", () => {
       });
       expect(c.orchestratedBy).toEqual({
         status: "unavailable",
-        reason:
-          "The orchestrator coordinating this session could not be read.",
+        reason: "The orchestrator coordinating this session could not be read.",
       });
       expect(c.orchestrates).toEqual({
         status: "unavailable",
-        reason:
-          "The sessions this orchestrator coordinates could not be read.",
+        reason: "The sessions this orchestrator coordinates could not be read.",
       });
     } finally {
       await h.client!.exec(ddlFor(links as unknown as PgTable));
