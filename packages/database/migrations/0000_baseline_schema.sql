@@ -5336,6 +5336,23 @@ CREATE INDEX IF NOT EXISTS "compute_leases_created_idx"
 CREATE INDEX IF NOT EXISTS "compute_leases_resource_idx"
   ON "compute_leases" ("user_id", "resource_id") WHERE "state" = 'active';
 
+-- Realtime room tickets (0432): a pod app's single-use, 60 s ticket for ONE
+-- document's live Yjs room (sha256 only). Mirrors 0432.
+CREATE TABLE IF NOT EXISTS "realtime_room_tickets" (
+  "ticket_hash"  text        PRIMARY KEY,
+  "user_id"      text        NOT NULL,
+  "document_id"  uuid        NOT NULL,
+  "access"       text        NOT NULL,
+  "api_key_id"   uuid        NOT NULL,
+  "expires_at"   timestamptz NOT NULL,
+  "consumed_at"  timestamptz,
+  "created_at"   timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "realtime_room_tickets_access_check"
+    CHECK ("access" IN ('read', 'edit'))
+);
+CREATE INDEX IF NOT EXISTS "realtime_room_tickets_expires_idx"
+  ON "realtime_room_tickets" ("expires_at");
+
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.
 CREATE TABLE IF NOT EXISTS "account_recovery_codes" (

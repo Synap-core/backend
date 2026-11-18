@@ -12,6 +12,13 @@
  * resolved by the one lookup (`resolvePersonDeviceSession`)
  * and NEVER sent to Kratos. No other credential is accepted here — API keys
  * have their own socket door (`api-key-auth.ts`, service accounts only).
+ *
+ * On `/yjs` only (`{ roomTicket: true }`), `token` may be a pod app's ROOM
+ * TICKET (`synap_rt_…`, 0432, minted by `POST /api/hub/realtime/room-ticket`):
+ * its person is read here WITHOUT consuming it, because the handshake does
+ * not know the room; the room gate then claims it, once, for its one document
+ * (`yjs-server.ts`). Everywhere else (`/presence`, its sweep) a ticket is
+ * refused and never sent to Kratos: it opens one room, nothing more.
  */
 import { getKratosSessionByCookie, getKratosSessionByToken } from "@synap/auth";
 import { db } from "@synap/database";
@@ -19,6 +26,10 @@ import {
   isPersonDeviceToken,
   resolvePersonDeviceSession,
 } from "@synap/database/person-devices";
+import {
+  isRoomTicket,
+  peekRoomTicket,
+} from "@synap/database/realtime-room-tickets";
 
 export type HandshakeIdentity =
   | {
@@ -26,6 +37,11 @@ export type HandshakeIdentity =
       userId: string;
       /** Set when the token was a device's: the socket lives only as long as it. */
       deviceId?: string;
+      /**
+       * Set when the token was a room ticket (`/yjs` only): the raw ticket,
+       * which the room gate must claim for its room before admitting.
+       */
+      roomTicket?: string;
     }
   | {
       ok: false;
@@ -35,13 +51,38 @@ export type HandshakeIdentity =
     };
 
 export async function verifyHandshakeUser(
-  auth: Record<string, unknown> | undefined
+  auth: Record<string, unknown> | undefined,
+  opts: { roomTicket?: boolean } = {}
 ): Promise<HandshakeIdentity> {
   const userId = typeof auth?.userId === "string" ? auth.userId : null;
   const token = typeof auth?.token === "string" ? auth.token : null;
   if (!userId) return { ok: false, error: "Realtime auth: missing userId" };
   if (!token) {
     return { ok: false, error: "Realtime auth: missing session token" };
+  }
+
+  if (isRoomTicket(token)) {
+    if (!opts.roomTicket) {
+      return {
+        ok: false,
+        error: "Realtime auth: a room ticket opens only its /yjs room",
+      };
+    }
+    let ticket: Awaited<ReturnType<typeof peekRoomTicket>>;
+    try {
+      ticket = await peekRoomTicket(db, token);
+    } catch {
+      return {
+        ok: false,
+        error: "Realtime auth: session validation unavailable",
+        unavailable: true,
+      };
+    }
+    const identity = matchIdentity(
+      ticket ? { identity: { id: ticket.userId }, active: true } : null,
+      userId
+    );
+    return identity.ok ? { ...identity, roomTicket: token } : identity;
   }
 
   let session: Awaited<ReturnType<typeof getKratosSessionByToken>> | null;

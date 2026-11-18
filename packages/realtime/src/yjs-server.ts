@@ -25,6 +25,8 @@ import { resolveDocumentRoomAccess } from "./vendor/document-access.js";
 import type { Socket } from "socket.io";
 import { verifyHandshakeUser } from "./session-auth.js";
 import { trackDeviceSocket } from "./device-sockets.js";
+import { trackTicketSocket } from "./ticket-sockets.js";
+import { claimRoomTicket } from "@synap/database/realtime-room-tickets";
 import { storage } from "@synap/storage";
 import { getViewCategory } from "@synap-core/types/views";
 import { recordYjsPersist, recordYjsPersistFailure } from "./bridge.js";
@@ -199,6 +201,34 @@ const LOAD_FAILED_ACCESS = { access: "read", reason: "load-failed" } as const;
 const verifiedHandshakes = new WeakMap<object, string>();
 /** The device a handshake's token belongs to, when it was a device token. */
 const verifiedDevices = new WeakMap<object, string>();
+/** A handshake's room ticket (unclaimed), when its token was one. */
+const verifiedTickets = new WeakMap<object, string>();
+
+/**
+ * The room gate's answer for a socket that came with a pod app's ROOM TICKET
+ * (0432): the ticket is claimed ONCE, for this room's document only (another
+ * document, expired, already used → refused), and the socket gets the LESSER
+ * of what the ticket allows (decided from the app connection's grant when it
+ * was made) and what the document's own floor allows now: a read ticket never
+ * writes, and an edit ticket of a person demoted since is read-only.
+ *
+ * Exported for `__tests__/yjs-room-auth.test.ts`.
+ */
+export async function authorizeTicketRoomAccess(
+  roomName: string,
+  userId: string,
+  ticket: string
+): Promise<{ access: RoomAccess; apiKeyId?: string }> {
+  const documentId = parseRoomName(roomName);
+  if (!documentId || !isUuid(documentId)) return { access: "none" };
+  const claimed = await claimRoomTicket(db, ticket, documentId);
+  if (!claimed || claimed.userId !== userId) return { access: "none" };
+  const floor = await authorizeRoomAccess(roomName, userId);
+  if (floor === "none") return { access: "none" };
+  const access: RoomAccess =
+    floor === "edit" && claimed.access === "edit" ? "edit" : "read";
+  return { access, apiKeyId: claimed.apiKeyId };
+}
 
 /** Tldraw store snapshot format: Record<id, record> */
 type TldrawStoreSnapshot = Record<string, unknown>;
@@ -811,7 +841,10 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
   //      Kratos session in `token` must resolve to `userId`
   //      (`verifyHandshakeUser`, shared with `/presence`). A client-asserted
   //      `userId` alone is refused. `workspaceId`, if sent, is ignored: it is
-  //      client-supplied and never load-bearing.
+  //      client-supplied and never load-bearing. A pod app sends a ROOM
+  //      TICKET as `token` instead (0432): its person is checked here, and
+  //      gate 2 claims it once for its one document
+  //      (`authorizeTicketRoomAccess`).
   //   2. the room gate (namespace middleware, installed further down): WHAT
   //      they may do in THIS room — `edit`, `read` or refused — from the
   //      document's own floor (`authorizeRoomAccess`).
@@ -840,12 +873,15 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
     gcEnabled: true,
     authenticate: async (handshake) => {
       const identity = await verifyHandshakeUser(
-        handshake.auth as Record<string, unknown> | undefined
+        handshake.auth as Record<string, unknown> | undefined,
+        { roomTicket: true }
       );
       if (identity.ok) {
         verifiedHandshakes.set(handshake, identity.userId);
         if (identity.deviceId)
           verifiedDevices.set(handshake, identity.deviceId);
+        if (identity.roomTicket)
+          verifiedTickets.set(handshake, identity.roomTicket);
         return true;
       }
       console.warn(`[Yjs] Auth rejected: ${identity.error}`);
@@ -931,6 +967,32 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
         return next();
       }
       return next(new Error("Unauthorized"));
+    }
+
+    const ticket = verifiedTickets.get(socket.handshake);
+    // A ticket socket is admitted only through its ticket (never the
+    // insecure dev fallback below): it opens its one room or nothing.
+    if (ticket) {
+      void authorizeTicketRoomAccess(roomName, userId, ticket)
+        .then(({ access, apiKeyId }) => {
+          if (access !== "none" && apiKeyId) {
+            data.yjsAccess = access;
+            trackTicketSocket(socket, apiKeyId);
+            return next();
+          }
+          console.warn(
+            `[Yjs] Room ticket refused: userId=${userId} room=${roomName}`
+          );
+          next(new Error("Unauthorized"));
+        })
+        .catch((err) => {
+          console.error(
+            `[Yjs] Room ticket check failed (DB error) for room=${roomName}, rejecting:`,
+            err
+          );
+          next(new Error("Unauthorized"));
+        });
+      return;
     }
 
     void authorizeRoomAccess(roomName, userId)
