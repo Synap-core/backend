@@ -6,7 +6,13 @@
  * (`GET …/versions`) answer from.
  */
 
-import { db, and, eq, inArray } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  inArray,
+  UNDECIDED_PROPOSAL_STATUSES,
+} from "@synap/database";
 import { proposals } from "@synap/database/schema";
 import { proposalUserFloor } from "../../routers/proposals/scope-conditions.js";
 import { readHeld } from "./held-sends.js";
@@ -37,7 +43,7 @@ export async function findOpenDraftOnChannel(args: {
         eq(proposals.id, args.draftId),
         eq(proposals.proposalType, PROPOSED_MESSAGE_TYPE),
         eq(proposals.targetId, args.channelId),
-        inArray(proposals.status, ["pending", "approval_failed"]),
+        inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES]),
         proposalUserFloor(args.userId)
       )
     )

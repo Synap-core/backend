@@ -347,6 +347,62 @@ describe("what never runs on its own", () => {
     expect(read.modes.map((m) => m.mayRunOnItsOwn)).toEqual([false, true]);
   });
 
+  it("a verb whose pack declares metadata.proposeOnly always asks, and an older rule stops firing (231020d4)", async () => {
+    const DELETE_SERVER = "hcloud_delete_server";
+    const deleteId = randomUUID();
+    await q(
+      `insert into skills (id, name, approved, user_id, metadata) values ($1, $2, true, $3, '{}'::jsonb)`,
+      [deleteId, DELETE_SERVER, ALICE]
+    );
+    // Set before the pack declared it: the rule runs it on its own.
+    await caller(ALICE).setActionMode({ action: DELETE_SERVER, mode: "auto" });
+    expect(await nextRun(DELETE_SERVER, deleteId)).toEqual({ decision: "run" });
+
+    // The pack's update lands the declaration (it only tightens).
+    await q(
+      `update skills set metadata = '{"proposeOnly": true}'::jsonb where id = $1`,
+      [deleteId]
+    );
+    // The gate reads it off the row (the run door pre-loads none) and the
+    // standing rule no longer widens the run.
+    expect(await nextRun(DELETE_SERVER, deleteId)).toMatchObject({
+      decision: "propose",
+    });
+    const err = await errorOf(
+      caller(ALICE).setActionMode({ action: DELETE_SERVER, mode: "auto" })
+    );
+    expect(err.cause?.reasonCode).toBe("ACTION_ALWAYS_ASKS");
+    const read = await caller(ALICE).actionModes({ actions: [DELETE_SERVER] });
+    expect(read.modes[0]).toMatchObject({ mayRunOnItsOwn: false });
+  });
+
+  it("the general rule door refuses the same 'auto', by the verb's name or its row id; CONTROL: an ordinary action is written", async () => {
+    const POST = "unipile_publish_post_2";
+    const postId = randomUUID();
+    await q(
+      `insert into skills (id, name, approved, user_id, intent) values ($1, $2, true, $3, 'publish_post')`,
+      [postId, POST, ALICE]
+    );
+    const rule = (targetPattern: string) =>
+      caller(ALICE).create({
+        principalKind: "any",
+        scopeKind: "pod",
+        targetKind: "capability",
+        targetPattern,
+        verdict: "auto",
+      });
+    for (const target of [POST, postId]) {
+      const err = await errorOf(rule(target));
+      expect(err.code, target).toBe("PRECONDITION_FAILED");
+      expect(err.cause?.reasonCode, target).toBe("ACTION_ALWAYS_ASKS");
+      expect(await activeRules(target), target).toEqual([]);
+    }
+    await rule(ACTION);
+    expect(await activeRules(ACTION)).toEqual([
+      { verdict: "auto", principal_kind: "any" },
+    ]);
+  });
+
   it("a name that is no action on this pod is refused (a rule that never fires)", async () => {
     const err = await errorOf(
       caller(ALICE).setActionMode({ action: "no_such_action", mode: "auto" })

@@ -155,6 +155,12 @@ export interface FindByIntentInput {
   catalogs?: readonly unknown[];
   /** Per-catalog cap. Default {@link CATALOG_LIMIT}. */
   limit?: number;
+  /**
+   * Add `scoring` (what each catalog's numbers mean). Off by default: the
+   * prose is the same on every call and cost most of a reply's budget
+   * (tickets 434d61d7, dfa6003e).
+   */
+  explain?: boolean;
 }
 
 /**
@@ -162,7 +168,11 @@ export interface FindByIntentInput {
  * matched and what it takes.
  */
 export interface CapabilityIntentMatch {
-  /** The launchable action, straight off `projectRunnableActions`. */
+  /**
+   * The launchable action, straight off `projectRunnableActions`, WITHOUT its
+   * `description`: that string is `whenToUse` below, sent once (ticket
+   * dfa6003e: the same prose twice per match).
+   */
   action: RunnableCapabilityAction;
   /**
    * The verb's DECLARED arg schema (`ToolVerbCatalogEntry.argsSchema`) — carried
@@ -312,7 +322,8 @@ export interface FindByIntentResult extends Partial<
   marketplace?: FindMarketplace;
   /** Member spaces to route the work to. ABSENT when not searched. */
   spaces?: FindSpaces;
-  scoring: FindScoring;
+  /** What each catalog's numbers mean. Present only with `explain`. */
+  scoring?: FindScoring;
   coverage: FindCoverage;
   /** Present only when no catalog produced a single match. */
   noConfidentMatch?: NoConfidentMatch;
@@ -585,6 +596,15 @@ const OBJECT_SCORING: Record<ObjectCatalog, ScaleNote> = {
   },
 };
 
+/** The action with its `description` left out: it is `whenToUse`, sent once. */
+function withoutDescription(
+  a: RunnableCapabilityAction
+): RunnableCapabilityAction {
+  const action = { ...a };
+  delete action.description;
+  return action;
+}
+
 export async function findByIntent(
   input: FindByIntentInput
 ): Promise<FindByIntentResult> {
@@ -669,7 +689,8 @@ export async function findByIntent(
   const result: FindByIntentResult = {
     intent: input.intent,
     lens: { workspaceId: input.workspaceId },
-    scoring,
+    // The same prose on every call: sent only when asked (`explain`).
+    ...(input.explain === true ? { scoring } : {}),
     coverage,
   };
 
@@ -694,7 +715,7 @@ export async function findByIntent(
     const best = ranked[0]?.score ?? 0;
     result.capabilities = {
       matches: ranked.slice(0, limit).map((r) => ({
-        action: r.item,
+        action: withoutDescription(r.item),
         ...(r.item.verbId && argsSchemaByVerbId.has(r.item.verbId)
           ? { argsSchema: argsSchemaByVerbId.get(r.item.verbId)! }
           : {}),

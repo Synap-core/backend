@@ -391,6 +391,8 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "The generic door that runs ANY recipe of a tool installed on a computer. What it does is the recipe's (cut, normalise, transcribe, …), so one intent on the door would be a false claim for every other recipe: discovery names each installed recipe under its own intent, and its run is this door.",
   "connector.health_check":
     "Probes an EXISTING connection and nudges a human to repair it. connect_account establishes a NEW authorization; this verb never does.",
+  "inbound_source.connect":
+    "Files a proposal to mint a space's inbound source and set its URL and secret on a host. It authorizes no account (connect_account would be a false claim) and runs no outside job itself: the person's approval does, so an intent would route an agent to a door that only asks.",
   "capability.rotate_key":
     "Replaces the value of a key an installed capability already uses, from a secret the person handed over. No new account is authorized, so connect_account would be a false claim.",
   // ── governance calibration: pod-internal, no external world ───────────

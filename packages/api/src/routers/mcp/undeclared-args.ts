@@ -137,7 +137,7 @@ export async function refuseUndeclaredArgs(
  * arguments the tool does not take (`call-notices.ts`): they were IGNORED,
  * what each was probably meant as, and the inputs the tool has. Pure.
  */
-export function ignoredArgsNote(
+function ignoredArgsNote(
   toolName: string,
   unknown: readonly string[],
   declared: readonly string[],

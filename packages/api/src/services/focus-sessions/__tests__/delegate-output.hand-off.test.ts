@@ -84,7 +84,9 @@ const gateAgentHandOff = vi.fn();
 vi.mock("../agent-hand-off.js", () => ({
   gateAgentHandOff: (...a: unknown[]) => gateAgentHandOff(...a),
 }));
-const attachSessionAgent = vi.fn(async () => ({ status: "attached" }));
+const attachSessionAgent = vi.fn(async (_p: Record<string, unknown>) => ({
+  status: "attached",
+}));
 vi.mock("../attach-session-agent.js", () => ({
   attachSessionAgent: (...a: unknown[]) =>
     (attachSessionAgent as unknown as (...x: unknown[]) => unknown)(...a),
@@ -109,13 +111,17 @@ vi.mock("../../../utils/trigger-auto-respond.js", () => ({
 
 const { delegateExpectedOutput } = await import("../delegate-output.js");
 
-const delegate = (actingAgentUserId: string | null) =>
+const delegate = (
+  actingAgentUserId: string | null,
+  approvedHandOff?: { proposalId: string; agentId: string }
+) =>
   delegateExpectedOutput({
     sessionId: SESSION,
     userId: OWNER,
     expectedLabel: "Draft",
     agentType: "writer",
     actingAgentUserId,
+    approvedHandOff,
   });
 
 /** Nothing reached the room, the roster, the slot or a turn. */
@@ -147,6 +153,8 @@ describe("an agent handing a slot to ANOTHER agent goes through the hand-off gat
       agentUserId: CALLER_AGENT,
       sessionId: SESSION,
       agentId: OTHER_AGENT,
+      // The slot rides on the proposal, so approving it can finish the delegation.
+      slot: { expectedLabel: "Draft", agentType: "writer" },
     });
   });
 
@@ -208,5 +216,45 @@ describe("what is not a hand-off", () => {
     h.delegate = { id: CALLER_AGENT };
     expect(await delegate(CALLER_AGENT)).toMatchObject({ status: "delegated" });
     expect(gateAgentHandOff).not.toHaveBeenCalled();
+  });
+});
+
+describe("an APPROVED hand-off finishes the delegation (the assign_agent executor calls back)", () => {
+  it("the approved agent: no second gate; the slot is delegated, the ask posted as the agent's, the turn started", async () => {
+    expect(
+      await delegate(CALLER_AGENT, {
+        proposalId: "prop-1",
+        agentId: OTHER_AGENT,
+      })
+    ).toMatchObject({ status: "delegated", expectedLabel: "Draft" });
+    expect(gateAgentHandOff).not.toHaveBeenCalled();
+    expect(postChannelMessage.mock.calls[0]![0]).toMatchObject({
+      agentUserId: CALLER_AGENT,
+    });
+    expect(h.txSets[0]!.expectedOutputs).toEqual([
+      expect.objectContaining({ label: "Draft", delegatedTo: "writer" }),
+    ]);
+    expect(triggerAutoRespond.mock.calls[0]![0]).toMatchObject({
+      agentType: "writer",
+      focusSessionId: SESSION,
+    });
+    // The roster append lands under the approved proposal, so it does not
+    // expire that proposal while its executor runs.
+    expect(attachSessionAgent.mock.calls[0]![0]).toMatchObject({
+      agentId: OTHER_AGENT,
+      viaProposalId: "prop-1",
+    });
+  });
+
+  it("CONTROL — an approval naming ANOTHER agent than the type resolves to does not skip the gate", async () => {
+    gateAgentHandOff.mockResolvedValue({
+      status: "proposed",
+      agentId: OTHER_AGENT,
+      proposalId: "prop-2",
+    });
+    expect(
+      await delegate(CALLER_AGENT, { proposalId: "prop-1", agentId: "agent-x" })
+    ).toMatchObject({ status: "proposed", proposalId: "prop-2" });
+    expectNothingWritten();
   });
 });

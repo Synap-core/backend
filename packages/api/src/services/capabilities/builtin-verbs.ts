@@ -91,6 +91,7 @@ import {
 } from "./place-artboard-deck.js";
 import { VerbRefusal } from "./verb-refusal.js";
 import type { FailureErrorClass } from "@synap-core/types/failures";
+import type { QueueRecipeRunInput } from "../host-jobs/hosted-verbs.js";
 import { triageEmails } from "../mail-feed/triage.js";
 import { freezeChartEmbeds } from "../document-charts/freeze-chart-embeds.js";
 import { liveChartReader } from "../document-charts/freeze-charts-verb.js";
@@ -2493,10 +2494,12 @@ const runRecipeParams = z
   })
   .strict();
 
-const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
-  const input = runRecipeParams.parse(params);
-  const { queueRecipeRun } = await import("../host-jobs/hosted-verbs.js");
-  const out = await queueRecipeRun({
+/** The run a `computer.run_recipe` call asks for, read the same way when it is filed and when it runs. */
+function recipeRunInput(
+  input: z.infer<typeof runRecipeParams>,
+  ctx: BuiltinVerbContext
+): QueueRecipeRunInput {
+  return {
     userId: ctx.userId,
     agentUserId: ctx.agentUserId ?? null,
     sessionId: ctx.automationRun?.sessionId ?? ctx.sessionId ?? null,
@@ -2506,7 +2509,13 @@ const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
     recipe: input.recipe,
     values: input.params,
     computer: input.computer ?? null,
-  });
+  };
+}
+
+const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = runRecipeParams.parse(params);
+  const { queueRecipeRun } = await import("../host-jobs/hosted-verbs.js");
+  const out = await queueRecipeRun(recipeRunInput(input, ctx));
   // A refusal is a definite not-run with the next step (`verb-refusal.ts`):
   // an approval records its sentence and can be retried.
   if (!out.ok)
@@ -2533,6 +2542,48 @@ const RECIPE_REFUSAL_CLASS: Record<string, FailureErrorClass> = {
   BAD_PARAMS: "validation",
   NO_SPACE: "validation",
 };
+
+/**
+ * The refusals an agent's recipe run gets when it is FILED, before it becomes
+ * a proposal: what the APPROVED manifests say, which no approval can change
+ * and the agent can act on (pick a recipe it has, ask for the update, fix a
+ * value). With no computer named, only when no computer the approval could
+ * choose has the recipe with these values (`fitsAnotherComputer`).
+ *
+ * Every other refusal files as before: a computer offline or whose check
+ * failed, a tool not installed yet, a file not readable now, can all change
+ * before the person approves, and only the approval's run decides them.
+ */
+const RECIPE_REFUSED_AT_FILING: ReadonlySet<string> = new Set([
+  "UNKNOWN_RECIPE",
+  "BAD_PARAMS",
+]);
+
+/**
+ * The filing check of `computer.run_recipe`: the SAME plan the run makes
+ * (`planRecipeRun`, which `queueRecipeRun` runs on approval), read-only.
+ * `null` = file it; a refusal = refuse it to the caller, nothing filed. A
+ * read that fails THROWS: the filing door files as before, never refusing on
+ * a fact it did not read.
+ */
+export async function recipeRunRefusalAtFiling(
+  params: Record<string, unknown>,
+  ctx: BuiltinVerbContext
+): Promise<{ reasonCode: string; message: string } | null> {
+  // A call the handler's schema refuses is the parameter check's to answer
+  // (`checkVerbParameters`); this one reads the computer, not the call shape.
+  const parsed = runRecipeParams.safeParse(params);
+  if (!parsed.success) return null;
+  const { planRecipeRun } = await import("../host-jobs/hosted-verbs.js");
+  const planned = await planRecipeRun(recipeRunInput(parsed.data, ctx));
+  if (
+    planned.ok ||
+    !RECIPE_REFUSED_AT_FILING.has(planned.code) ||
+    planned.fitsAnotherComputer
+  )
+    return null;
+  return { reasonCode: planned.code, message: planned.error };
+}
 
 const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = marketInstallParams.parse(params);
@@ -2581,6 +2632,71 @@ const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
     mustPropose: ctx.mustPropose === true,
     projectId: input.projectId,
     projectName: input.projectName,
+  });
+};
+
+/**
+ * inbound_source.connect — wire a space's inbound webhook source into the
+ * site that posts to it (decision abaaa696): the pod mints the source and
+ * sets its URL and secret in the host's environment, so no person pastes the
+ * secret and no agent ever holds it. The handler NEVER acts: whatever the
+ * caller and the verdict, it files the direct proposal
+ * `webhook/inbound_source.connect` after a preflight, and the person's
+ * console approval does the work (`executors/webhook.ts`). Self-gated
+ * (`SELF_GATED_BUILTIN_VERBS`) so a propose verdict reaches it instead of a
+ * generic capability run, whose approval would store the secret's value.
+ */
+const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/;
+const inboundSourceConnectParams = z
+  .object({
+    /** The space the source belongs to (defaults to the run's space). */
+    workspaceId: z.string().uuid().optional(),
+    /** The source name the space's automations declare. */
+    name: z.string().trim().min(1).max(200),
+    host: z.enum(["vercel"]).default("vercel"),
+    /** The host project, by id or name. */
+    project: z.string().trim().min(1).max(200),
+    teamId: z.string().trim().min(1).max(200).optional(),
+    urlEnvKey: z.string().regex(ENV_KEY),
+    secretEnvKey: z.string().regex(ENV_KEY),
+    target: z
+      .enum(["production", "preview", "development"])
+      .default("production"),
+    redeploy: z.boolean().default(true),
+    replaceExistingSecret: z.boolean().default(false),
+    /** Why, in the agent's words, for the card. */
+    reasoning: z.string().max(2000).optional(),
+  })
+  .strict();
+
+const inboundSourceConnectHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { reasoning, workspaceId, ...rest } =
+    inboundSourceConnectParams.parse(params);
+  const space = workspaceId ?? ctx.workspaceId;
+  if (!space) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "inbound_source.connect needs the space the source belongs to (workspaceId).",
+    });
+  }
+  // An automation step has no one to show the card to at run time, and this
+  // approval is a console act: refused, never filed unattended.
+  if (ctx.automationRun) {
+    return {
+      success: false,
+      error:
+        "An automation cannot connect an inbound source: a person files it from a session and approves it on the console.",
+    };
+  }
+  const { proposeInboundSourceConnect } =
+    await import("../webhooks/connect-inbound-source.js");
+  return proposeInboundSourceConnect({
+    request: { ...rest, workspaceId: space },
+    userId: ctx.userId,
+    agentUserId: ctx.agentUserId ?? null,
+    sessionId: ctx.sessionId ?? null,
+    ...(reasoning ? { reasoning } : {}),
   });
 };
 
@@ -4857,6 +4973,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Marketplace (Wave 3b) — search/install over cp_catalog_cache.
   "market.search": marketSearchHandler,
   "market.install": marketInstallHandler,
+  // Wire a space's inbound source into its host: always a proposal.
+  "inbound_source.connect": inboundSourceConnectHandler,
   // Marketplace AUTHORING — generate a package skeleton and persist it on the
   // pod as a draft document (the CLI writes it to disk; an agent door cannot).
   "market.scaffold": marketScaffoldHandler,
@@ -4976,6 +5094,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "entity_facet.list": entityFacetListParams,
   "market.search": marketSearchParams,
   "market.install": marketInstallParams,
+  "inbound_source.connect": inboundSourceConnectParams,
   "market.scaffold": marketScaffoldParams,
   "tool.request": toolRequestParams,
   "computer.run_recipe": runRecipeParams,

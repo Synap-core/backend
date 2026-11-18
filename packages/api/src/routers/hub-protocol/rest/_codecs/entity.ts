@@ -13,7 +13,7 @@
 import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
 import { z } from "@hono/zod-openapi";
 import { projectKnowledgeProperties } from "@synap/database";
-import { uuidQueryParam } from "./_openapi.js";
+import { SupersedesBodyField, uuidQueryParam } from "./_openapi.js";
 import { moveHoldInputShape } from "../../../../services/lifecycle/hold-input.js";
 
 // Canonical wire shape for entities returned by Hub Protocol after passing
@@ -268,6 +268,7 @@ export const CreateEntityRequestSchema = z
           "declared on the session's expected outputs. Left unset when the " +
           "create doesn't fulfil a specific declared slot."
       ),
+    supersedes: SupersedesBodyField,
   })
   .openapi("CreateEntityRequest");
 
@@ -334,6 +335,7 @@ export const UpdateEntityRequestSchema = z
       .describe(
         "File a POD-WIDE record for a space (its home): that space's members, and a key limited to it, then read it. Refused (400) on a record that lives in a space (move it instead); refused (403) unless you can write in that space, and under your key's grant. null clears it. An agent's home is always a proposal."
       ),
+    supersedes: SupersedesBodyField,
   })
   .openapi("UpdateEntityRequest");
 

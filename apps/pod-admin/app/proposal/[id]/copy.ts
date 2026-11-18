@@ -18,6 +18,14 @@ export const en = {
   "toolRun.heading": "{action} · {tool}",
   "toolRun.sends": "What it sends",
   "toolRun.noArguments": "It sends no arguments.",
+  "toolRun.details": "Details",
+  "toolRun.edit": "Edit",
+  "toolRun.undoEdit": "Back to what was proposed",
+  "toolRun.yourChange": "Your change, sent when you approve",
+  "toolRun.proposedAs": "Proposed as",
+  "toolRun.through": "through {tool}",
+  "toolRun.as": "as {account}",
+  "toolRun.approveWithChanges": "Approve with your changes",
   "toolRun.secret": "Hidden — a credential",
   "toolRun.empty": "empty",
   "toolRun.yes": "Yes",
@@ -55,11 +63,16 @@ export const en = {
   // One verb with the bar, its sheet and its consequence: reject.
   "outcome.rejected": "You rejected this: the AI was told why.",
   "outcome.reverted": "This change was undone after it was applied.",
-  "outcome.expired":
-    "Its moment passed before anyone decided: nothing was applied.",
-  "outcome.withdrawn": "The AI withdrew this request: nothing was applied.",
-  "repair.label": "Why approving failed",
-  "repair.default": "Approving this failed.",
+  // Expired and withdrawn: the status says it, the end line says who and why
+  // (`proposalEndLine`), so this line says only what was left.
+  "outcome.expired": "Nothing was applied.",
+  "outcome.withdrawn": "Nothing was applied.",
+  // A failed plan whose undo left items in place (`proposalItemsLeft`).
+  "outcome.partlyLeft":
+    "Not applied; {n, plural, one {# item} other {# items}} could not be rolled back",
+  // One word with the chip: "Couldn’t apply".
+  "repair.label": "Why it couldn’t apply",
+  "repair.default": "No reason was recorded.",
   "repair.loadFailed": "Couldn’t load what can be fixed.",
   "repair.checking": "Checking what to fix…",
   "repair.use": "Use “{value}” and approve",
@@ -69,6 +82,7 @@ export const en = {
   "repair.approved": "Repaired and approved",
   "repair.approveFailed": "Repaired, but couldn’t approve",
   "repair.failed": "Couldn’t repair this request",
+  "repair.cause": "Open the server error",
   "stopped.filed":
     "{filed} of {total, plural, one {# item} other {# items}} filed",
   "stopped.couldNot": "{n} could not be filed",
@@ -114,6 +128,14 @@ export const fr: Catalog<typeof en> = {
   "toolRun.heading": "{action} · {tool}",
   "toolRun.sends": "Ce qu’il envoie",
   "toolRun.noArguments": "Il n’envoie aucun argument.",
+  "toolRun.details": "Détails",
+  "toolRun.edit": "Modifier",
+  "toolRun.undoEdit": "Revenir à la proposition",
+  "toolRun.yourChange": "Votre modification, envoyée à l’approbation",
+  "toolRun.proposedAs": "Proposé\u00a0:",
+  "toolRun.through": "via {tool}",
+  "toolRun.as": "en tant que {account}",
+  "toolRun.approveWithChanges": "Approuver avec vos modifications",
   "toolRun.secret": "Masqué\u00a0: un identifiant",
   "toolRun.empty": "vide",
   "toolRun.yes": "Oui",
@@ -154,12 +176,12 @@ export const fr: Catalog<typeof en> = {
   "outcome.rejected":
     "Vous avez rejeté cette demande\u00a0: l’IA a été prévenue du motif.",
   "outcome.reverted": "Ce changement a été annulé après son application.",
-  "outcome.expired":
-    "Le délai est passé avant toute décision\u00a0: rien n’a été appliqué.",
-  "outcome.withdrawn":
-    "L’IA a retiré cette demande\u00a0: rien n’a été appliqué.",
-  "repair.label": "Pourquoi l’approbation a échoué",
-  "repair.default": "L’approbation a échoué.",
+  "outcome.expired": "Rien n’a été appliqué.",
+  "outcome.withdrawn": "Rien n’a été appliqué.",
+  "outcome.partlyLeft":
+    "Non appliqué\u00a0; {n, plural, one {# élément n’a pas pu être annulé} other {# éléments n’ont pas pu être annulés}}",
+  "repair.label": "Pourquoi elle n’a pas été appliquée",
+  "repair.default": "Aucune raison n’a été enregistrée.",
   "repair.loadFailed": "Impossible de charger ce qui peut être corrigé.",
   "repair.checking": "Recherche de ce qu’il faut corriger…",
   "repair.use": "Utiliser «\u00a0{value}\u00a0» et approuver",
@@ -169,6 +191,7 @@ export const fr: Catalog<typeof en> = {
   "repair.approved": "Corrigée et approuvée",
   "repair.approveFailed": "Corrigée, mais impossible de l’approuver",
   "repair.failed": "Impossible de corriger cette demande",
+  "repair.cause": "Ouvrir l’erreur serveur",
   "stopped.filed":
     "{filed} sur {total, plural, one {# élément classé} other {# éléments classés}}",
   "stopped.couldNot":

@@ -91,7 +91,9 @@ import { authoredByUser } from "../services/agent-identity-service.js";
 import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import { readAgentMatrix } from "../services/governance/agent-matrix.js";
 import {
+  ACTION_ALWAYS_ASKS,
   ACTION_MODES_BATCH_MAX,
+  actionsMayRunOnTheirOwn,
   assertPersonSetsActionMode,
   readActionModes,
   writeActionMode,
@@ -838,6 +840,21 @@ export const governanceRulesRouter = router({
             message: `NON_WIDENABLE_FLOOR (${floor}): "${input.targetPattern}" always needs review — no governance rule can auto-approve it.`,
           });
         }
+      }
+      // The same for a capability the gate never widens (a public post, a
+      // verb declaring `metadata.proposeOnly`): the one derivation it reads.
+      if (
+        input.verdict === "auto" &&
+        input.targetKind === "capability" &&
+        !(await actionsMayRunOnTheirOwn([input.targetPattern])).get(
+          input.targetPattern
+        )
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `"${input.targetPattern}" publishes in public or cannot be undone: it always asks you first.`,
+          cause: { reasonCode: ACTION_ALWAYS_ASKS },
+        });
       }
 
       await assertCanManageRule(ctx.userId, input);

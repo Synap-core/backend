@@ -15,6 +15,7 @@ import { playbookDescriptionPreview } from "../../../services/playbooks/playbook
 
 interface MatchRow {
   score: number;
+  triggers?: ReadonlyArray<string>;
   description?: string | null;
   goalTemplate?: string | null;
   signals: ReadonlyArray<{ type: string }>;
@@ -46,6 +47,8 @@ export function compactPlaybookMatches<T extends MatchRow>(
     .map((r) => {
       const out: T = { ...r };
       const cut = out as MatchRow;
+      // What ranked the row, not what the agent reads.
+      delete cut.triggers;
       // The SAME cut synap_find's playbook rows carry (one preview rule).
       if ("description" in r)
         cut.description = playbookDescriptionPreview(r.description) ?? null;

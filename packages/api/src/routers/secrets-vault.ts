@@ -44,6 +44,7 @@ import {
   assertGrantScoped,
   getActingAgentUserId,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
 } from "@synap/database";
 import {
   proposals,
@@ -63,6 +64,7 @@ import type {
   SecretConsumerType,
 } from "@synap-core/types";
 import { makeVaultReference } from "@synap-core/types/vault";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import { auditLog } from "../utils/audit-log.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
@@ -1031,10 +1033,7 @@ export const secretsVaultRouter = router({
       // Only an OPEN request is granted: one decided elsewhere (rejected in
       // the console, approved on the phone) must not hand the agent a secret
       // from a card that is still on screen. A failed approval stays open.
-      if (
-        proposalRow.status !== ProposalStatus.PENDING &&
-        proposalRow.status !== ProposalStatus.APPROVAL_FAILED
-      ) {
+      if (!isProposalUndecided(proposalRow.status)) {
         throw new TRPCError({
           code: "CONFLICT",
           message:
@@ -1132,7 +1131,7 @@ export const secretsVaultRouter = router({
         //    and no status guard.
         const approved = await transitionProposal(tx, {
           to: ProposalStatus.APPROVED,
-          from: [ProposalStatus.PENDING, ProposalStatus.APPROVAL_FAILED],
+          from: UNDECIDED_PROPOSAL_STATUSES,
           set: {
             reviewedBy: ctx.userId,
             reviewedAt: new Date(),

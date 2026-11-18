@@ -9598,7 +9598,8 @@ declare const GOVERNANCE_CEILING_AXES: [
 	"worker_pending_approvals",
 	"worker_irreversible_sends_daily",
 	"linkedin_invitations_daily",
-	"linkedin_actions_daily"
+	"linkedin_actions_daily",
+	"compute_spend_daily_cents"
 ];
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];
 declare const CONFIG_SCOPE_KINDS: [
@@ -14692,29 +14693,24 @@ export interface KnownSourceHash {
  * matched no word at all and rode back as "Runs for anything new" at 0.5.
  *
  * ── THE NAME IS THE EVIDENCE (tickets b2ba4b6b, 84d2add0, 9753144a) ───────
- * A candidate's body (description, a ~5,000-char goal template, stage names)
- * holds so many words that common ones always hit somewhere: "write and send
- * this week's newsletter issue" ranked "Derive outputs" (whose description
- * mentions "optionally a newsletter issue") above the playbook NAMED
- * "Newsletter issue", and a Postgres restore drill was offered "Build a
- * website (Website Factory)" on "prove, backend, pod, new, apply". So:
+ * A candidate's body (description, goal template, stage names) holds so many
+ * words that common ones always hit somewhere, so:
  *   - a word that is also in the candidate's NAME counts twice
  *     (`WEIGHT.nameTerm` on top of `WEIGHT.intentTerm`);
  *   - RELEVANCE FLOOR (`FLOOR`): a candidate whose only evidence is words (no
  *     subject, kind or facet signal) is returned only when its NAME holds one
- *     of the request's words per five words asked, or its DESCRIPTION (its
- *     own "when to use me") holds half of them. Matches in the rest of the
- *     body (goal template, stage names) still score, but never admit a
- *     candidate alone: they made one long playbook the magnet of every
- *     request (plan 2026-11-05, document 7fbd45a7, step 5). The name share is
- *     PROPORTIONAL because one name word is a coincidence in a long request:
- *     "Design and build a feature: space brief … then fix MCP discovery gaps"
- *     (10 words) otherwise offered "Lead → qualified (discovery)" on
- *     "discovery" alone. With nothing better, nothing is offered: an empty
- *     list is a fact, a wrong first candidate teaches agents to skip the
- *     list. Measured on the live pool of 84 active playbooks, 2026-11-17.
+ *     of the request's words per five words asked, or its DESCRIPTION holds
+ *     half of them. Body matches score but never admit a candidate alone.
+ *     With nothing better, nothing is offered.
  * A structural signal (subject, kind, facet) is evidence about the ENTITY, so
  * a candidate carrying one is never cut by the floor.
+ *
+ * ── DECLARED TRIGGERS (plan a640c5bb) ───────────────────────────────────────
+ * A playbook DECLARES `triggers`, phrases it is for (`metadata.triggers`). A
+ * trigger the request holds whole (every word, with the request's stems,
+ * stopwords and generic work words) ADMITS the candidate, and its words score
+ * like name words (`WEIGHT.nameTerm`). A trigger held only in part is body
+ * text: it scores, never admits.
  *
  * ── TIES ────────────────────────────────────────────────────────────────────
  * Broken by relevance, never by recency: more distinct intent words, then the
@@ -14742,6 +14738,12 @@ export interface RouteCandidate {
 	 * body field that can admit a word-only candidate (the relevance floor).
 	 */
 	description?: string | null;
+	/**
+	 * Phrases the candidate declares it is for (a playbook's
+	 * `metadata.triggers`): one whose every word is in the request admits it,
+	 * and those words score like name words (header, DECLARED TRIGGERS).
+	 */
+	triggers?: ReadonlyArray<string>;
 	/** The kind the candidate is built for; `null` = fires for any kind. */
 	subjectProfileSlug: string | null;
 	/**
@@ -19580,7 +19582,7 @@ export interface RankComparison {
  * `playbooks`). It runs only for a how-to or which-tool question (see
  * `CATALOG_CUES`).
  */
-export type SubstrateKind = "catalog" | "episodic" | "library" | "procedural" | "semantic" | "structured";
+export type SubstrateKind = "catalog" | "episodic" | "library" | "procedural" | "project" | "semantic" | "structured";
 /** One owed deliverable, with just enough of its session to be actionable. */
 export interface OwedSlot {
 	sessionId: string;
@@ -21409,14 +21411,21 @@ export interface StartHere {
 		items: Array<{
 			/** How many criteria it declares (0 = a lasting goal). */
 			criteria: number;
-			/** What "done" looks like — `null` when unsaid. */
+			/**
+			 * What "done" looks like — `null` when unsaid. Light cuts it at
+			 * {@link LIGHT_ROW_PROSE_MAX} chars (`truncated`, `more`).
+			 */
 			endState: string | null;
 			id: string;
+			/** With `truncated`: the read that returns it whole. */
+			more?: string;
 			name: string;
 			projectId: string;
 			/** Where it stands: since when, its work per category, moves, waits. */
 			rollup: GoalRollup | StartHereUnavailable;
 			status: string;
+			/** Light only, and only when `endState` was cut. */
+			truncated?: true;
 		}>;
 		lens: "pod" | "project";
 		/** The window `rollup.moved` counts over. */
@@ -22127,7 +22136,11 @@ export type FindCatalog = (typeof FIND_CATALOGS)[number];
  * matched and what it takes.
  */
 export interface CapabilityIntentMatch {
-	/** The launchable action, straight off `projectRunnableActions`. */
+	/**
+	 * The launchable action, straight off `projectRunnableActions`, WITHOUT its
+	 * `description`: that string is `whenToUse` below, sent once (ticket
+	 * dfa6003e: the same prose twice per match).
+	 */
 	action: RunnableCapabilityAction;
 	/**
 	 * The verb's DECLARED arg schema (`ToolVerbCatalogEntry.argsSchema`) — carried
@@ -22290,7 +22303,8 @@ export interface FindByIntentResult extends Partial<Record<ObjectCatalog, FindOb
 	marketplace?: FindMarketplace;
 	/** Member spaces to route the work to. ABSENT when not searched. */
 	spaces?: FindSpaces;
-	scoring: FindScoring;
+	/** What each catalog's numbers mean. Present only with `explain`. */
+	scoring?: FindScoring;
 	coverage: FindCoverage;
 	/** Present only when no catalog produced a single match. */
 	noConfidentMatch?: NoConfidentMatch;
@@ -23436,6 +23450,9 @@ export type ExecuteCapabilityResult = {
 	 * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
 	 * person's stored "Never" on this capability for this agent (0381).
 	 * Such a refusal carries no `enable`: enabling would not fix it.
+	 * A recipe run refused when filed carries its run's own code
+	 * (`UNKNOWN_RECIPE`, `BAD_PARAMS`; `recipeRunRefusalAtFiling`), and the
+	 * sentence names the fix.
 	 */
 	reasonCode?: string;
 } | {
@@ -23495,10 +23512,11 @@ export type ExecuteCapabilityResult = {
  * template field, nothing stored (the retired `settings.taskIntents`).
  *
  * ── WHY A MIRROR AND NOT AN IMPORT ─────────────────────────────────────────
- * THE SSOT IS THE POD's `needs` TABLE, seeded by migration `0426_needs.sql`.
+ * THE SSOT IS THE POD's `needs` TABLE, seeded by migrations `0426_needs.sql`
+ * and `0431_compute_need_and_leases.sql` (`compute`).
  * This list is a hand mirror with a parity guard (`parity.test.ts`) that
  * re-derives the seed SQL. ⚠️ MIRRORED IN LOCKSTEP with:
- *   - the `INSERT INTO "needs"` rows — migration `0426`
+ *   - the `INSERT INTO "needs"` rows — migrations `0426`, `0431`
  *   - `NEEDS` — synap-control-plane-api `src/seeds/need-vocabulary.ts`
  * A slug added in a NEW migration must be added to both guards' filename
  * lists: extending the list is part of adding the slug.
@@ -24925,7 +24943,8 @@ export interface ActionModeRow {
 	mode: ActionRunMode;
 	/** The rule that sets it; `null` when it asks first (no rule). */
 	ruleId: string | null;
-	/** False for an action no rule may run on its own (a public post). */
+	/** False for an action no rule may run on its own (a public post, a
+	 * verb declaring `metadata.proposeOnly`). */
 	mayRunOnItsOwn: boolean;
 }
 export interface WriteActionModeResult {
@@ -43497,7 +43516,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		set: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId?: string | null | undefined;
-				axis?: "daily_write_count" | "pending_proposal_cap" | undefined;
+				axis?: "compute_spend_daily_cents" | "daily_write_count" | "pending_proposal_cap" | undefined;
 				capabilityId?: string | null | undefined;
 				configScopeKind?: string | undefined;
 				limitValue?: number | undefined;
@@ -43592,7 +43611,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ceiling: {
 					agentUserId: string | null;
-					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
+					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "compute_spend_daily_cents" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
 					createdAt: Date;
 					createdBy: string;
 					expiresAt: Date | null;
@@ -43618,7 +43637,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				ceilings: {
 					agentLabel: string | null;
 					agentUserId: string | null;
-					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
+					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "compute_spend_daily_cents" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
 					createdAt: Date;
 					createdBy: string;
 					expiresAt: Date | null;
@@ -43640,7 +43659,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ceiling: {
 					agentUserId: string | null;
-					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
+					axis: "automation_ai_dispatch_daily" | "automation_ai_dispatch_per_run" | "compute_spend_daily_cents" | "daily_write_count" | "linkedin_actions_daily" | "linkedin_invitations_daily" | "pending_proposal_cap" | "worker_irreversible_sends_daily" | "worker_pending_approvals";
 					createdAt: Date;
 					createdBy: string;
 					expiresAt: Date | null;
@@ -50271,6 +50290,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				inputStrategy?: Record<string, unknown> | undefined;
 				metadata?: {
 					[x: string]: unknown;
+					triggers?: string[] | undefined;
 					lineage?: {
 						[x: string]: unknown;
 						apqc?: string | undefined;
@@ -51076,6 +51096,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					subjectFilter: {} | null;
 					subjectProfileSlug: string | null;
 					templateKind: string;
+					triggers: string[];
 					workspaceId: string | null;
 				}[];
 				workspaceId: string;
@@ -51109,6 +51130,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subjectFilter: {} | null;
 				subjectProfileSlug: string | null;
 				templateKind: string;
+				triggers: string[];
 				workspaceId: string | null;
 			}[];
 		}>;
@@ -51691,7 +51713,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				humanOnlyStatuses?: string[] | undefined;
 				id: string;
 				inputStrategy?: Record<string, unknown> | undefined;
-				metadata?: Record<string, unknown> | undefined;
+				metadata?: {
+					[x: string]: unknown;
+					triggers?: string[] | undefined;
+					lineage?: {
+						[x: string]: unknown;
+						apqc?: string | undefined;
+						method?: string | undefined;
+						onet?: string[] | undefined;
+					} | undefined;
+				} | undefined;
 				name?: string | undefined;
 				params?: Record<string, unknown>[] | undefined;
 				reasoning?: string | undefined;
@@ -55870,6 +55901,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		revise: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				data: Record<string, unknown>;
+				expectedRevision?: number | undefined;
 				projectId?: string | null | undefined;
 				proposalId: string;
 				workspaceId?: string | null | undefined;
@@ -63049,6 +63081,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						inputStrategy?: Record<string, unknown> | undefined;
 						metadata?: {
 							[x: string]: unknown;
+							triggers?: string[] | undefined;
 							lineage?: {
 								[x: string]: unknown;
 								apqc?: string | undefined;

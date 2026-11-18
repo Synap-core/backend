@@ -113,6 +113,7 @@ vi.mock("../../../lib/trpc", async () => ({
         }),
       },
       reject: { useMutation: () => ({ mutate() {}, isPending: false }) },
+      revise: { useMutation: () => ({ mutate() {}, isPending: false }) },
       // Nothing is applying in the background (`approval-progress`).
       approvalProgress: {
         useQuery: () => ({
@@ -166,6 +167,7 @@ vi.mock("../../../lib/trpc", async () => ({
     },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
+      actionModes: { useQuery: () => ({ data: undefined }) },
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
       setActionMode: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },

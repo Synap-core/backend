@@ -169,14 +169,26 @@ import {
 } from "./use-proposal-decision";
 import { useRecordDefinitions } from "./use-record-definitions";
 import { ToolRunArguments } from "./ToolRunArguments";
-import { reviewToolRun, toolRunArguments } from "./tool-run-model";
+import {
+  changedDrafts,
+  reviewToolRun,
+  toolRunArguments,
+} from "./tool-run-model";
+import { toolRunEdits } from "@synap-core/types/proposals/capability-run";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
+import {
+  proposalEndLine,
+  proposalItemsLeft,
+  type ProposalEndLine,
+  type ProposalItemLeft,
+} from "@synap-core/types/proposals/ended";
 
 /**
- * `pending` and `approval_failed` are the two states a reviewer can still decide;
- * everything else is terminal (already approved / rejected / reverted / withdrawn).
+ * Can a reviewer still decide it? The one predicate (`isProposalUndecided`:
+ * pending, or an approval that failed); everything else is terminal.
  */
 export function isActionable(status: string): boolean {
-  return status === "pending" || status === "approval_failed";
+  return isProposalUndecided(status);
 }
 
 /**
@@ -419,9 +431,15 @@ const OUTCOME_TONE: Record<
 function Outcome({
   status,
   created,
+  ended,
+  left = [],
 }: {
   status: string;
   created?: CreatedObject | null;
+  /** Why a withdrawn or expired request ended, and who (`proposalEndLine`). */
+  ended?: ProposalEndLine | null;
+  /** What a failed plan applied and could not roll back (`proposalItemsLeft`). */
+  left?: readonly ProposalItemLeft[];
 }) {
   const o = terminalOutcome(status);
   const tone = OUTCOME_TONE[o.tone];
@@ -438,12 +456,106 @@ function Outcome({
         <span className="text-[15px] font-medium text-foreground">
           {resolveStatusLabel(status)}
         </span>
-        <span className="text-[13px] leading-relaxed text-foreground/70">
-          {t(o.messageKey)}
-        </span>
+        {/* An ended request says who and why ONCE (its end line), then what
+            it left: never the status word a second and third time. */}
+        {ended && <EndLine ended={ended} />}
+        {ended && left.length > 0 ? (
+          <LeftInPlace items={left} />
+        ) : (
+          <span className="text-[13px] leading-relaxed text-foreground/70">
+            {t(o.messageKey)}
+          </span>
+        )}
         {created && <CreatedDoor created={created} />}
       </div>
     </div>
+  );
+}
+
+/**
+ * Why it ended with nobody deciding it: the one end line (who took it back,
+ * or why it ended), the words its author gave (theirs, quoted), and the door
+ * to what it names: the newer version, the record that already exists, the
+ * session or goal that ended.
+ */
+function EndLine({ ended }: { ended: ProposalEndLine }) {
+  const door = ended.door;
+  return (
+    <span
+      data-end-reason={ended.reason}
+      className="mt-1 flex min-w-0 flex-col gap-1 text-[13px] text-foreground/80"
+    >
+      <span>{ended.text}</span>
+      {ended.withdrawReason && (
+        <q className="min-w-0 break-words text-foreground/70">
+          {ended.withdrawReason}
+        </q>
+      )}
+      {door?.kind === "proposal" ? (
+        <Link
+          href={`/proposal/${encodeURIComponent(door.id)}`}
+          data-superseded-by={door.id}
+          className="self-start font-medium rq-ink underline underline-offset-2"
+        >
+          {door.label}
+        </Link>
+      ) : door ? (
+        <span className="self-start" data-end-door={door.kind}>
+          <ExitLink
+            exit={openIn({
+              kind: "object",
+              objectKind: door.kind,
+              id: door.id,
+            })}
+            label={door.label}
+          />
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** The kinds a left item opens as (the rest are named, with no door). */
+const LEFT_ITEM_KIND: Readonly<Record<string, string>> = {
+  entity: "entity",
+  document: "document",
+  session: "session",
+  skill: "skill",
+  automation: "automation",
+  playbook: "playbook",
+};
+const LEFT_ITEMS_SHOWN = 5;
+
+/**
+ * A failed plan that could not roll back everything it applied: "nothing was
+ * applied" would be false, so it says how many items are still in place and
+ * opens each one.
+ */
+function LeftInPlace({ items }: { items: readonly ProposalItemLeft[] }) {
+  const t = proposalPageT();
+  const doors = items.filter((i) => LEFT_ITEM_KIND[i.kind]);
+  return (
+    <span
+      data-items-left={items.length}
+      className="mt-1 flex min-w-0 flex-col gap-1 text-[13px] leading-relaxed text-foreground/70"
+    >
+      <span>{t("outcome.partlyLeft", { n: items.length })}</span>
+      {doors.length > 0 && (
+        <span className="flex flex-wrap gap-x-3 gap-y-1">
+          {doors.slice(0, LEFT_ITEMS_SHOWN).map((item) => (
+            <ExitLink
+              key={`${item.kind}:${item.id}`}
+              exit={openIn({
+                kind: "object",
+                objectKind: LEFT_ITEM_KIND[item.kind]!,
+                id: item.id,
+              })}
+              label={resolveObjectNoun(LEFT_ITEM_KIND[item.kind]!)}
+            />
+          ))}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -500,8 +612,15 @@ function DecisionButtons({
   resume = false,
   stopTwins = null,
   setupBlock = null,
+  toolEdits = null,
 }: {
   proposal: ProposalReviewData;
+  /**
+   * The text changes made on a tool run's card, not yet sent: Approve then
+   * says "Approve with your changes" and sends them with the approval, in one
+   * press (`decision.approveWithChanges`).
+   */
+  toolEdits?: Readonly<Record<string, string>> | null;
   /**
    * What must be handed over before it can apply (founder default B5): the
    * label of the first required setup row still empty. Approve waits, with
@@ -617,6 +736,23 @@ function DecisionButtons({
     waiting = missing.length > 0;
   }
 
+  const withEdits =
+    toolEdits !== null && Object.keys(toolEdits).length > 0 && !resume;
+  // A tool run's policy menus are the advanced part: behind Details.
+  const policyMenus =
+    reviewToolRun(p.review) !== null
+      ? (menus: ReactNode) => (
+          <details data-tool-run-policy="" className="text-[12.5px]">
+            <summary className="min-h-11 cursor-pointer select-none py-2.5 font-medium text-foreground/70">
+              {t("toolRun.details")}
+            </summary>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              {menus}
+            </div>
+          </details>
+        )
+      : (menus: ReactNode) => <>{menus}</>;
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button
@@ -627,32 +763,42 @@ function DecisionButtons({
         isDisabled={busy || waiting || setupBlock !== null}
         // The primary verb, at the same size as Refuse beside it (S8).
         aria-describedby={setupBlock ? "review-setup-block" : undefined}
-        onPress={() => decision.approve(choice)}
+        onPress={() =>
+          withEdits
+            ? decision.approveWithChanges({ ...toolEdits }, choice)
+            : decision.approve(choice)
+        }
       >
-        {resolveActionLabel(resume ? "resume" : "approve")}
+        {withEdits
+          ? t("toolRun.approveWithChanges")
+          : resolveActionLabel(resume ? "resume" : "approve")}
       </Button>
       {rejectButton}
-      {/* Never widen autonomy beside the approval of something that acts on
-          its own: that moment is for reading it, not for "always". */}
       {mayRule &&
         mode.kind === "plain" &&
-        !pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
-          <AlwaysApproveMenu
-            proposal={p}
-            disabled={busy}
-            onRunningChange={setRuleRunning}
-            onDone={onDecided}
-          />
+        policyMenus(
+          <>
+            {/* Never widen autonomy beside the approval of something that
+                acts on its own: that moment is for reading it, not for
+                "always". */}
+            {!pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
+              <AlwaysApproveMenu
+                proposal={p}
+                disabled={busy}
+                onRunningChange={setRuleRunning}
+                onDone={onDecided}
+              />
+            )}
+            {/* "Never" narrows, so it stays beside a change that acts on its
+                own. */}
+            <RejectNeverMenu
+              proposal={p}
+              disabled={busy}
+              onRunningChange={setRuleRunning}
+              onDone={onDecided}
+            />
+          </>
         )}
-      {/* "Never" narrows, so it stays beside a change that acts on its own. */}
-      {mayRule && mode.kind === "plain" && (
-        <RejectNeverMenu
-          proposal={p}
-          disabled={busy}
-          onRunningChange={setRuleRunning}
-          onDone={onDecided}
-        />
-      )}
       {undoChip}
       {waiting && (
         <span className="text-[12px] text-foreground/70">
@@ -847,6 +993,9 @@ export function ProposalReviewBody({
     !graph && !appConnect && !docChanges && !deferredWrites && !turnsOn
       ? reviewToolRun(p.review)
       : null;
+  // The text changes made on a tool run's card, not yet sent.
+  const [toolDrafts, setToolDrafts] = useState<Record<string, string>>({});
+  const toolEdits = toolRun ? changedDrafts(toolRun, toolDrafts) : null;
   const edges = graphItems.flatMap((item) =>
     item.shape === "edge" ? [item.edge] : []
   );
@@ -1114,12 +1263,27 @@ export function ProposalReviewBody({
                     resume={stopped}
                     stopTwins={stoppedOnTwins(run) ? run.twins : null}
                     setupBlock={status === "pending" ? setupBlock : null}
+                    toolEdits={status === "pending" ? toolEdits : null}
                   />
                 </>
               ) : (
                 <>
                   <Outcome
                     status={status}
+                    ended={proposalEndLine(
+                      {
+                        status,
+                        data: p.data,
+                        approverName: p.approverName ?? null,
+                        agentActorName: agentName,
+                        authorName: p.authorName ?? null,
+                        sessionId: p.sessionId ?? null,
+                        targetType: p.targetType ? String(p.targetType) : null,
+                        targetId: p.targetId ?? null,
+                      },
+                      locale
+                    )}
+                    left={proposalItemsLeft(p.data)}
                     created={createdObject({
                       status,
                       action,
@@ -1200,7 +1364,30 @@ export function ProposalReviewBody({
             />
           </Section>
         ) : toolRun ? (
-          <ToolRunArguments run={toolRun} />
+          <ToolRunArguments
+            run={toolRun}
+            drafts={toolDrafts}
+            onDraft={
+              actionable && status === "pending"
+                ? (key, text) =>
+                    setToolDrafts((d) => {
+                      const { [key]: _gone, ...rest } = d;
+                      return text === undefined
+                        ? rest
+                        : { ...rest, [key]: text };
+                    })
+                : null
+            }
+            recorded={toolRunEdits(p.revisionHistory, {
+              isSecretName: () => false,
+              secretKeys: new Set(
+                toolRun.parameters.filter((x) => x.secret).map((x) => x.key)
+              ),
+            })}
+          >
+            {/* The reason it needed approval: said once, in Details. */}
+            {reason && <DisclosedMark mark={reason} icon={ShieldCheck} />}
+          </ToolRunArguments>
         ) : records.length > 0 ? (
           <div className="flex flex-col gap-3">
             {groups.map((group) => (
@@ -1295,22 +1482,23 @@ export function ProposalReviewBody({
         {/* Why: ONE mark (its sentence on press), then the requester's own
           words, as theirs. Worded for every status: an approved proposal
           still needed approval. */}
-        {(reason ||
+        {((reason && !toolRun) ||
           why.proposer ||
           duplicate?.check.status === "unchecked") && (
           <section
             aria-label={pt("review.why")}
             className="flex flex-col gap-3"
           >
-            {(reason || duplicate?.check.status === "unchecked") && (
+            {((reason && !toolRun) ||
+              duplicate?.check.status === "unchecked") && (
               <div className="flex flex-wrap items-center gap-2">
-                {reason && (
+                {reason && !toolRun && (
                   <DisclosedMark
                     mark={reason}
                     icon={reason.tone === "warning" ? ShieldAlert : ShieldCheck}
                   />
                 )}
-                {reason && reasonComputer && (
+                {reason && !toolRun && reasonComputer && (
                   <Link
                     href={computerHref(reasonComputer.id)}
                     className="text-[12.5px] font-medium rq-ink underline underline-offset-2"

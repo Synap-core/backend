@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "1.12.13",
+  "version": "1.12.14",
   "description": "Shared TypeScript types and Zod schemas for the Synap platform",
   "type": "module",
   "publishConfig": {
@@ -228,6 +228,10 @@
     "./proposals/fate": {
       "types": "./dist/proposals/fate.d.ts",
       "import": "./dist/proposals/fate.js"
+    },
+    "./proposals/ended": {
+      "types": "./dist/proposals/ended.d.ts",
+      "import": "./dist/proposals/ended.js"
     },
     "./proposals/item-pack": {
       "types": "./dist/proposals/item-pack.d.ts",

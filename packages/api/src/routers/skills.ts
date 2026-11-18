@@ -65,6 +65,7 @@ import { gateCapabilityExecution } from "../services/capabilities/gate-capabilit
 import {
   allowedHostsChanged,
   boxDeclarationChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
@@ -210,6 +211,7 @@ export function assertSkillGlobalsAllowed(
 export {
   RE_APPROVAL_FIELDS,
   allowedHostsChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
@@ -1868,6 +1870,12 @@ export const skillsRouter = router({
           metadataPatch as Record<string, unknown> | undefined,
           existingSkill.metadata as Record<string, unknown> | null
         ) ||
+        // Turning a declared `metadata.proposeOnly` OFF lets an auto grant or
+        // rule run a verb that always asked: the same escalation.
+        proposeOnlyLoosened(
+          metadataPatch as Record<string, unknown> | undefined,
+          existingSkill.metadata as Record<string, unknown> | null
+        ) ||
         // A box skill's packages, hosts and limits were approved with its
         // code; a change is new code or a wider egress allowlist.
         boxDeclarationChanged(
@@ -2111,6 +2119,18 @@ export const skillsRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `Skill is not active (status: ${skill.status})`,
+        });
+      }
+
+      // COMPUTE (plan a640c5bb B3): a compute start leaves a lease and a
+      // release closes one, in the capability runner only; this door runs
+      // the skill's code alone, so it would start a machine nothing releases.
+      const { readComputeRun } =
+        await import("../services/compute/compute-contract.js");
+      if (readComputeRun(skill, input.input).kind !== "none") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `"${skill.name}" starts or releases compute: run it as a capability (run_capability), which records its time to live.`,
         });
       }
 

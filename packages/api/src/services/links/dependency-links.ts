@@ -252,6 +252,14 @@ async function restampPrimaryMark(
 }
 
 /**
+ * A goal's `advances` edge (`links`, the outer row) is a pillar only while
+ * the goal's project still `uses` that space. Read by both pillar readers
+ * (`readGoalPrimary`, `readGoalPlacements`).
+ */
+export const pillarStillUsedSql = () =>
+  drizzleSql`EXISTS (SELECT 1 FROM links u JOIN ${projectTracks} t ON t.project_id::text = u.from_id WHERE t.id::text = ${links.fromId} AND u.link_type = 'uses' AND u.from_type = 'project' AND u.to_type = 'workspace' AND u.to_id = ${links.toId})`;
+
+/**
  * THE primary reader: the end of goal `goalId`'s PRIMARY `linkType` edge
  * (`metadata.primary`), or `null` when it has none. For `advances`, only an
  * edge to a space the goal's project still `uses` counts (a pillar the
@@ -276,9 +284,7 @@ export async function readGoalPrimary(
         except
           ? drizzleSql`NOT (${links.toType} = ${except.toType} AND ${links.toId} = ${except.toId})`
           : undefined,
-        linkType === ADVANCES_LINK_TYPE
-          ? drizzleSql`EXISTS (SELECT 1 FROM links u JOIN ${projectTracks} t ON t.project_id::text = u.from_id WHERE t.id::text = ${links.fromId} AND u.link_type = 'uses' AND u.from_type = 'project' AND u.to_type = 'workspace' AND u.to_id = ${links.toId})`
-          : undefined
+        linkType === ADVANCES_LINK_TYPE ? pillarStillUsedSql() : undefined
       )
     )
     .limit(1);

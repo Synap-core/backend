@@ -100,6 +100,7 @@ import {
   playbookRequiredIntentsSchema,
   playbookToolsSchema,
   playbookGuidanceSchema,
+  playbookMetadataSchema,
   foldPlaybookTools,
   describeStageToolsOutside,
 } from "../schemas/playbook-definition.js";
@@ -131,7 +132,10 @@ import {
   proposedMessageFor,
 } from "../utils/permission-check.js";
 import { definitionVersionChanged } from "../services/playbooks/definition-version.js";
-import { playbookSearchText } from "../services/playbooks/playbook-search-text.js";
+import {
+  playbookSearchText,
+  playbookTriggers,
+} from "../services/playbooks/playbook-search-text.js";
 import {
   PINNED_ENTITY_IDS_KEY,
   explainPinnedIdRejection,
@@ -577,9 +581,11 @@ export const updateInputSchema = z.object({
    * A PATCH shallow-merged onto the row's `metadata` bag (keys not named are
    * kept) — the same contract views/skills/automations `.update` honour. It is
    * how the template reconcile advances a playbook's `metadata.marketSource`
-   * baseline through this governed door instead of a raw UPDATE.
+   * baseline through this governed door instead of a raw UPDATE. Parsed with
+   * the create door's schema, so a `triggers` list is checked the same way
+   * (`playbookTriggersSchema`).
    */
-  metadata: jsonRecord.optional(),
+  metadata: playbookMetadataSchema.optional(),
 });
 
 /**
@@ -1595,6 +1601,7 @@ export async function matchPlaybooks(
       // The SAME words synap_find's playbook arm ranks (one definition).
       text: playbookSearchText(p),
       description: p.description,
+      triggers: playbookTriggers(p.metadata),
       subjectProfileSlug:
         (p.subjectProfile as { profileSlug?: string } | null)?.profileSlug ??
         null,
@@ -1623,6 +1630,9 @@ export async function matchPlaybooks(
       // (`compactPlaybookMatches`), a UI strip may show it whole.
       description: candidate.row.description ?? null,
       goalTemplate: candidate.row.goalTemplate,
+      // The phrases it is for, so a second ranking (the capture follow-up,
+      // `load-route-suggestions.ts`) admits a trigger-only match too.
+      triggers: candidate.triggers ?? [],
       subjectProfileSlug: candidate.subjectProfileSlug,
       // The workers it declares ("How often?" offers these; [] when none or
       // unreadable), read through the ONE process reader, and whether it

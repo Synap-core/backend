@@ -547,6 +547,78 @@ describe("resolveWorkSession precedence", () => {
   });
 });
 
+// A2 (plan a640c5bb): one conversation's sub-agents share its client key, so a
+// write with no sessionId used to land in the newest session that key started
+// (live: a lead's capture filed into a sibling lane's session). Several started
+// and open ⇒ nothing is guessed: the door lists them, the gate files into the
+// client's receipt.
+describe("several sessions one conversation started → no guess (A2)", () => {
+  async function twoStarted() {
+    const older = await session({
+      origin: "agent",
+      goal: "Lane one",
+      metadata: { clientKey: CONV_A },
+    });
+    const newer = await session({
+      origin: "agent",
+      goal: "Lane two",
+      metadata: { clientKey: CONV_A },
+    });
+    return [older, newer];
+  }
+
+  it("the door resolves none and lists both as candidates — never the newest, never rung 3", async () => {
+    const started = await twoStarted();
+    // One unclaimed session the person is in: rung 3 must not take it either.
+    await session({ origin: "human", goal: "the person's" });
+    const r = await resolveWorkSession({ userId: USER, clientKey: CONV_A });
+    expect(r.sessionId).toBeUndefined();
+    expect(r.source).toBe("none");
+    expect(r.clientSessions?.count).toBe(2);
+    expect(r.clientSessions?.sessions.map((x) => x.id).sort()).toEqual(
+      [...started].sort()
+    );
+  });
+
+  it("the gate files the write into a receipt of its own, not into either session", async () => {
+    const started = await twoStarted();
+    const filed = await receipt(CONV_A, "Update playbook");
+    expect(filed).toBeTruthy();
+    expect(started).not.toContain(filed);
+    const row = (await rows()).find((r) => r.id === filed)!;
+    expect(row.metadata).toMatchObject({
+      kind: "agent-proposal-package",
+      autoOpened: true,
+      clientKey: CONV_A,
+    });
+    // The next write of the same stretch joins that receipt (one, not N).
+    expect(await receipt(CONV_A, "Define kind")).toBe(filed);
+  });
+
+  it("CONTROL — one started session still takes the write, at the door and the gate", async () => {
+    const only = await session({
+      origin: "agent",
+      metadata: { clientKey: CONV_A },
+    });
+    expect(
+      await resolveWorkSession({ userId: USER, clientKey: CONV_A })
+    ).toMatchObject({ sessionId: only, source: "client" });
+    expect(await receipt(CONV_A, "Update playbook")).toBe(only);
+  });
+
+  it("CONTROL — another conversation's started session never counts toward several", async () => {
+    const mine = await session({
+      origin: "agent",
+      metadata: { clientKey: CONV_A },
+    });
+    await session({ origin: "agent", metadata: { clientKey: CONV_B } });
+    expect(
+      (await resolveWorkSession({ userId: USER, clientKey: CONV_A })).sessionId
+    ).toBe(mine);
+    expect(await receipt(CONV_A, "Update playbook")).toBe(mine);
+  });
+});
+
 describe("start_session adopts the auto-opened session (never a duplicate)", () => {
   it("auto-open then start → adopted, ONE row, no longer a receipt", async () => {
     const auto = await receipt(CONV_A, "Create task Buy milk");

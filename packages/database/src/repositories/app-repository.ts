@@ -737,11 +737,17 @@ export class AppRepository {
    * Withdraw the app's still-PENDING `app/connect` requests — a revoked app
    * asks for nothing, so its request must leave every review surface. Returns
    * the withdrawn proposal ids (the caller clears their notifications).
+   *
+   * `end` says why, as a reason (`data.ended`), never as English stored for
+   * an author: `app_revoked`, or `superseded` by the newer consent request
+   * that replaces it (its id is the door the end line opens).
    */
   async withdrawPendingRequests(
     appId: string,
     by: string,
-    reason: string,
+    end:
+      | { reason: "app_revoked" }
+      | { reason: "superseded"; supersededBy: string },
     /**
      * Only the requests filed through this door (`data.via`): an additive
      * consent withdraws the consent it interrupted, never the app's own asks
@@ -752,17 +758,21 @@ export class AppRepository {
     const now = new Date();
     const rows = await transitionProposal(this.db, {
       to: ProposalStatus.WITHDRAWN,
+      ended: end,
       set: {
         reviewedBy: by,
         reviewedAt: now,
         updatedAt: now,
-        data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${reason}::text)`,
       },
       where: and(
         eq(proposals.targetType, APP_CONNECT_TARGET_TYPE),
         eq(proposals.proposalType, APP_CONNECT_PROPOSAL_TYPE),
         eq(proposals.targetId, appId),
         eq(proposals.status, ProposalStatus.PENDING),
+        // The newer request is never its own replaced one.
+        ...(end.reason === "superseded"
+          ? [ne(proposals.id, end.supersededBy)]
+          : []),
         ...(onlyVia
           ? [
               sql`COALESCE(${proposals.data}->'data'->>'via', ${proposals.data}->>'via') = ${onlyVia}`,
