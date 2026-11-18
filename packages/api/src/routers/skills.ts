@@ -65,6 +65,7 @@ import { gateCapabilityExecution } from "../services/capabilities/gate-capabilit
 import {
   allowedHostsChanged,
   boxDeclarationChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
@@ -210,6 +211,7 @@ export function assertSkillGlobalsAllowed(
 export {
   RE_APPROVAL_FIELDS,
   allowedHostsChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
@@ -1865,6 +1867,12 @@ export const skillsRouter = router({
         // this verb before any grant rung — a reviewed action becomes an
         // unattended one. Same peeled-off-metadata blind spot as above.
         readOnlyWidened(
+          metadataPatch as Record<string, unknown> | undefined,
+          existingSkill.metadata as Record<string, unknown> | null
+        ) ||
+        // Turning a declared `metadata.proposeOnly` OFF lets an auto grant or
+        // rule run a verb that always asked: the same escalation.
+        proposeOnlyLoosened(
           metadataPatch as Record<string, unknown> | undefined,
           existingSkill.metadata as Record<string, unknown> | null
         ) ||

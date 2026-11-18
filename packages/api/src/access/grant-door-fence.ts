@@ -1222,6 +1222,11 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
 export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_get_entities: SEAMED,
   synap_get_document: SEAMED,
+  // A file entity's signed URL (+ a small image inline): the ONE signer of
+  // `GET /files/:id/url` (`signFileEntityUrl` → `loadSignableFileEntity`,
+  // the entity read through `scopedDb`, grant ANDed), so a key pinned to
+  // one space reads that space's files and is refused the others.
+  synap_get_file: SEAMED,
   synap_get_relations: SEAMED,
   synap_list_tracks: SEAMED,
   synap_resolve_identity: SEAMED,
@@ -1393,6 +1398,10 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_add_track_stage: WRITE,
     synap_update_project: WRITE,
     synap_project_use_workspace: WRITE,
+    // Files the gate's own workspace JOIN proposal (never through the gate:
+    // it is the gate's rung-4 join, asked for on purpose), after checking the
+    // key's grant reaches the space; returns the receipt, never rows.
+    synap_request_workspace_access: WRITE,
     synap_file_into_project: WRITE,
     synap_archive_workspace: WRITE,
     synap_retire_workspace: WRITE,
@@ -1405,6 +1414,9 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     // Always files a profile/declare_lifecycle proposal and returns its receipt,
     // never rows (backend#689).
     synap_declare_lifecycle: WRITE,
+    // Always files a property_def/change_lifecycle_options proposal (or
+    // refuses), never rows; authority on the loaded def at filing and approval.
+    synap_change_lifecycle_options: WRITE,
     synap_create_view: WRITE,
     synap_update_view_content: WRITE,
     // Hub `views.updateView`: the view.update gate on the loaded view's space.

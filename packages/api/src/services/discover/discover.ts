@@ -88,6 +88,7 @@ import {
   ONE_SPACE_PER_DOMAIN_RULE,
 } from "../one-space-per-domain.js";
 import { isHiddenAsArchived } from "../../utils/workspace-archived.js";
+import { clip } from "../../utils/section-excerpt.js";
 
 export type DiscoverDetail = "light" | "full";
 
@@ -193,8 +194,15 @@ export interface StartHere {
           name: string;
           status: string;
           projectId: string;
-          /** What "done" looks like — `null` when unsaid. */
+          /**
+           * What "done" looks like — `null` when unsaid. Light cuts it at
+           * {@link LIGHT_ROW_PROSE_MAX} chars (`truncated`, `more`).
+           */
           endState: string | null;
+          /** Light only, and only when `endState` was cut. */
+          truncated?: true;
+          /** With `truncated`: the read that returns it whole. */
+          more?: string;
           /** How many criteria it declares (0 = a lasting goal). */
           criteria: number;
           /** Where it stands: since when, its work per category, moves, waits. */
@@ -472,7 +480,12 @@ interface DiscoverWorkspace {
 interface DiscoverProject {
   id: string;
   name: string;
+  /** Light cuts it at {@link LIGHT_ROW_PROSE_MAX} chars (`truncated`, `more`). */
   description: string | null;
+  /** Light only, and only when `description` was cut. */
+  truncated?: true;
+  /** With `truncated`: the read that returns it whole. */
+  more?: string;
   status: string | null;
   workspaceId: string | null;
   homeWorkspace: string | null;
@@ -765,6 +778,48 @@ async function buildWhoBlock(userId: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The most chars of one row's prose (a goal's end state, a project's
+ * description) a LIGHT orient carries. Lists were capped by count, not their
+ * rows' text: one goal's end state could be longer than the rest of the
+ * briefing (tickets 434d61d7, dfa6003e). A cut row says so (`truncated`) and
+ * names the read that returns it whole (`more`); detail:'full' is never cut.
+ */
+export const LIGHT_ROW_PROSE_MAX = 240;
+
+/** `text` within the light budget; `cut` names the door when it was cut. */
+function lightRowProse(
+  text: string | null,
+  more: string
+): { text: string | null; cut?: { truncated: true; more: string } } {
+  if (text === null || text.length <= LIGHT_ROW_PROSE_MAX) return { text };
+  return {
+    text: clip(text, LIGHT_ROW_PROSE_MAX, "head"),
+    cut: { truncated: true, more },
+  };
+}
+
+/** The light briefing's goals and projects with their row prose cut. */
+function capLightRowProse(result: DiscoverResult): void {
+  const goals = result.startHere.openGoals;
+  if (goals && "items" in goals) {
+    goals.items = goals.items.map((g) => {
+      const { text, cut } = lightRowProse(
+        g.endState,
+        `list_tracks {trackId:"${g.id}"}`
+      );
+      return cut ? { ...g, endState: text, ...cut } : g;
+    });
+  }
+  result.projects = result.projects.map((p) => {
+    const { text, cut } = lightRowProse(
+      p.description,
+      `get_project {projectId:"${p.id}"}`
+    );
+    return cut ? { ...p, description: text, ...cut } : p;
+  });
 }
 
 export async function discover(
@@ -1120,6 +1175,7 @@ export async function discover(
       explain: detail === "full" || params.explain === true,
     }),
   };
+  if (detail === "light") capLightRowProse(result);
 
   // Team roster — same loader capture uses for structure. One workspace only
   // (pinned or first accessible sample) so light orient stays cheap. Best-

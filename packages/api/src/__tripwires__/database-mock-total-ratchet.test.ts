@@ -113,7 +113,10 @@ import { dirname, join, relative } from "node:path";
 // converted — the recorder now imports `isUniqueViolation` from the one door.
 // 43 → 42 on 2026-11-07 (#894): `routers/__tests__/file-upload-membership.test.ts`
 // converted — the write gate now imports `personOfOwner` from @synap/database.
-const BASELINE = 42;
+// 42 → 40 on 2026-11-18 (backend#1135): `routers/__tests__/file-url-doors.test.ts`
+// and `store-document-provenance.test.ts` take `importOriginal` (file-upload.ts
+// gained `getRequestGrant` / `runWithoutGrant`).
+const BASELINE = 40;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

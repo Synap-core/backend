@@ -33,7 +33,10 @@ import {
   type TrackView,
 } from "../../../services/tracks/tracks-service.js";
 import { pickTrackGoalInput } from "../../../services/tracks/goal-content.js";
-import { pickGoalPlacementInput } from "../../../services/tracks/goal-placement.js";
+import {
+  pickGoalPlacementInput,
+  readGoalPlacements,
+} from "../../../services/tracks/goal-placement.js";
 import { lifecycleConflictOf } from "../../../services/lifecycle/conflict.js";
 import { convertEntityToGoal } from "../../../services/tracks/convert-to-goal.js";
 import {
@@ -93,6 +96,25 @@ function leanTrackRow(view: TrackView) {
   };
 }
 
+/**
+ * Each row with where its goal sits (ticket 3fb0e2c3): `parentGoalId` and
+ * `pillars` (the space ids it advances, primary first), each only when set,
+ * so a page of root goals costs nothing more. ONE read for the page.
+ */
+async function withPlacement<T extends { id: string }>(
+  rows: T[]
+): Promise<Array<T & { parentGoalId?: string; pillars?: string[] }>> {
+  const placed = await readGoalPlacements(rows.map((r) => r.id));
+  return rows.map((r) => {
+    const p = placed.get(r.id);
+    return {
+      ...r,
+      ...(p?.parentGoalId ? { parentGoalId: p.parentGoalId } : {}),
+      ...(p?.pillars.length ? { pillars: p.pillars } : {}),
+    };
+  });
+}
+
 async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {
   try {
     return ok(await fn());
@@ -123,7 +145,9 @@ export const trackHandlers: McpHandlerMap = {
         if (!row || (projectId && row.projectId !== projectId)) {
           return { error: "Track not found" };
         }
-        return { items: await loadTrackViews([row], ctx) };
+        return {
+          items: await withPlacement(await loadTrackViews([row], ctx)),
+        };
       });
     }
     if (!projectId) {
@@ -163,7 +187,9 @@ export const trackHandlers: McpHandlerMap = {
       );
       const views = await loadTrackViews(page, ctx);
       return {
-        items: detail === "full" ? views : views.map(leanTrackRow),
+        items: await withPlacement(
+          detail === "full" ? views : views.map(leanTrackRow)
+        ),
         ...paging,
       };
     });
