@@ -118,7 +118,10 @@ describe("roomTimeline", () => {
       "message",
       "question",
     ]);
-    expect(items[2]).toMatchObject({ anchorMessageId: null, at: slot.owedSince });
+    expect(items[2]).toMatchObject({
+      anchorMessageId: null,
+      at: slot.owedSince,
+    });
   });
 
   it("asked twice: the NEWEST question message anchors it, the older stays a message", () => {
@@ -141,20 +144,23 @@ describe("roomTimeline", () => {
       [msg("a", "2026-11-17T14:05:00Z"), msg("b", "2026-11-17T14:15:00Z")],
       [slot]
     );
-    expect(items.map((i) => (i.kind === "message" ? i.message.id : "Q"))).toEqual(
-      ["a", "Q", "b"]
-    );
+    expect(
+      items.map((i) => (i.kind === "message" ? i.message.id : "Q"))
+    ).toEqual(["a", "Q", "b"]);
   });
 
   it("no owedSince: after every message, even one later than the input order says", () => {
     const slot = open({ owedSince: null });
     const items = roomTimeline(
-      [msg("late", "2026-11-18T09:00:00Z"), msg("early", "2026-11-17T09:00:00Z")],
+      [
+        msg("late", "2026-11-18T09:00:00Z"),
+        msg("early", "2026-11-17T09:00:00Z"),
+      ],
       [slot]
     );
-    expect(items.map((i) => (i.kind === "message" ? i.message.id : "Q"))).toEqual(
-      ["early", "late", "Q"]
-    );
+    expect(
+      items.map((i) => (i.kind === "message" ? i.message.id : "Q"))
+    ).toEqual(["early", "late", "Q"]);
     expect(items[2]!.at).toBe("2026-11-18T09:00:00Z");
   });
 
@@ -162,9 +168,9 @@ describe("roomTimeline", () => {
     const at = "2026-11-17T14:10:00.000Z";
     const slot = open({ owedSince: at });
     const items = roomTimeline([msg("x", at), msg("y", at)], [slot]);
-    expect(items.map((i) => (i.kind === "message" ? i.message.id : "Q"))).toEqual(
-      ["Q", "x", "y"]
-    );
+    expect(
+      items.map((i) => (i.kind === "message" ? i.message.id : "Q"))
+    ).toEqual(["Q", "x", "y"]);
   });
 
   it("an answered question is drawn too, folded by its state", () => {
@@ -213,7 +219,11 @@ const runner = (over: Record<string, unknown> = {}) => ({
   firstSeenAt: ago(3_600_000),
   ...over,
 });
-const items = (...r: unknown[]) => ({ status: "ok", total: r.length, items: r });
+const items = (...r: unknown[]) => ({
+  status: "ok",
+  total: r.length,
+  items: r,
+});
 
 describe("agentLineOf", () => {
   it("an unreadable holder is 'unknown', never 'nobody'", () => {
@@ -235,9 +245,9 @@ describe("agentLineOf", () => {
   });
 
   it("a bare SessionHolder (no section) reads the same", () => {
-    expect(
-      agentLineOf(holder().holder, items(runner()), NOW)
-    ).toMatchObject({ state: "reachable" });
+    expect(agentLineOf(holder().holder, items(runner()), NOW)).toMatchObject({
+      state: "reachable",
+    });
   });
 
   it("the holder's agent_work → working (a pod agent mid-turn)", () => {
@@ -351,9 +361,9 @@ describe("deliveryOf", () => {
   });
   it("seen by the agent → seen, whoever works it now", () => {
     const seen = { ...person, seenByAgentAt: "2026-11-18T11:01:00Z" };
-    expect(deliveryOf(seen, { state: "nobody", name: null, computer: null })).toBe(
-      "seen"
-    );
+    expect(
+      deliveryOf(seen, { state: "nobody", name: null, computer: null })
+    ).toBe("seen");
   });
   it("nobody / unreachable → waiting; reachable, working, unknown → sent", () => {
     expect(
@@ -369,7 +379,12 @@ describe("deliveryOf", () => {
     ).toBe("waiting");
     expect(deliveryOf(person, reachable)).toBe("sent");
     expect(
-      deliveryOf(person, { state: "working", name: "x", computer: null, since: null })
+      deliveryOf(person, {
+        state: "working",
+        name: "x",
+        computer: null,
+        since: null,
+      })
     ).toBe("sent");
     expect(deliveryOf(person, { state: "unknown" })).toBe("sent");
   });

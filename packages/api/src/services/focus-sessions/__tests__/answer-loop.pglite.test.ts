@@ -848,9 +848,7 @@ describe("the answer loop", () => {
    * A live pod run that stopped and asked "Keep the run going" (what
    * `askToKeepGoing` leaves), its ledger holding the last stop's checkpoint.
    */
-  async function stoppedRunAsking(
-    opts: { agentIds?: string[] } = {}
-  ): Promise<{
+  async function stoppedRunAsking(opts: { agentIds?: string[] } = {}): Promise<{
     sessionId: string;
     channelId: string;
     idea: string;
@@ -1089,9 +1087,9 @@ describe("the answer loop", () => {
     });
     // No second card: the second slot is still the agent's.
     const slots = await slotsOf(sessionId);
-    expect(slots.filter((s) => s.owner === "human").map((s) => s.label)).toEqual(
-      ["Stripe account"]
-    );
+    expect(
+      slots.filter((s) => s.owner === "human").map((s) => s.label)
+    ).toEqual(["Stripe account"]);
     // The question sits on the card the person answers.
     expect((await metaOf(body.messageId))!.roomPost).toMatchObject({
       kind: "question",

@@ -34,10 +34,7 @@
  */
 
 import type { ExpectedOutput } from "@synap/playbooks";
-import {
-  isOpenQuestion,
-  type RoomSlot,
-} from "@synap-core/types/session-room";
+import { isOpenQuestion, type RoomSlot } from "@synap-core/types/session-room";
 import { normalizeExpectedLabel } from "./expected-label.js";
 
 /** What a deduped hand-over says back: the card the person already has. */
@@ -120,7 +117,11 @@ function sameChoice(a: AskLike, b: AskLike): boolean {
 }
 
 /** The labels name the same subject (see the header's rule 2). */
-function sameSubject(a: ExpectedOutput, b: ExpectedOutput, ask: AskLike): boolean {
+function sameSubject(
+  a: ExpectedOutput,
+  b: ExpectedOutput,
+  ask: AskLike
+): boolean {
   const optionWords = new Set(optionLabels(ask).flatMap(words));
   const subject = (label: string) =>
     new Set(words(label).filter((w) => !optionWords.has(w)));
