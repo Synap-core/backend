@@ -50587,7 +50587,7 @@
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Start an orchestrator over several running sessions",
-        "description": "Files ONE governed write (focus_session/orchestrate). On approval (or at once for a person): an orchestrator session (goal = the brief, a merged-plan deliverable, the person's plan-approval slot), one `orchestrated_by` link per picked session, each running one paused until the person answers plan-approval, and a handoff note in each room. Same service as tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
+        "description": "Files ONE governed write (focus_session/orchestrate). On approval (or at once for a person): an orchestrator session (goal = the brief, a merged-plan deliverable, the person's plan-approval slot), one `orchestrated_by` link per picked session, each running one paused until the person answers plan-approval, and a handoff note in each room. Until then a held session changes no stage. A yes resumes them; a no resumes them as they were and cancels the orchestrator ('Plan declined'); an orchestrator that ends unanswered releases them. 403 when a picked session is outside the key's grant or bound workspace (nothing written). Same service as tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
