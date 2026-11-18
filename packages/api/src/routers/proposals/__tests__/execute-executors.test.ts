@@ -209,11 +209,12 @@ describe("(b) automation/execute executor re-enters automations.trigger", () => 
   });
 
   it("surfaces failure instead of swallowing it (no try/catch around the run)", () => {
-    // The dispatch site in proposals.ts records APPROVAL_FAILED + re-throws, so
-    // an executor must let the error propagate.
+    // The dispatch site (applyProposalApproval, which both approve doors of
+    // proposals.ts call) records APPROVAL_FAILED + re-throws, so an executor
+    // must let the error propagate.
     expect(AUTOMATION_EXEC_BLOCK).not.toContain("catch");
-    const proposalsSrc = readSrc("routers/proposals.ts");
-    expect(proposalsSrc).toContain("ProposalStatus.APPROVAL_FAILED");
+    const dispatchSrc = readSrc("routers/proposals/apply-approval.ts");
+    expect(dispatchSrc).toContain("ProposalStatus.APPROVAL_FAILED");
   });
 });
 

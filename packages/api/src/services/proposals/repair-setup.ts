@@ -32,7 +32,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { ProposalStatus } from "@synap/database/schema";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import {
   SECRET_TYPES,
   parseVaultReference,
@@ -182,10 +182,7 @@ export async function describeSetupRepair(
   source: SetupSource,
   userId: string
 ): Promise<ProposalRepairSetup | null> {
-  if (
-    source.status !== ProposalStatus.APPROVAL_FAILED &&
-    source.status !== ProposalStatus.PENDING
-  ) {
+  if (!isProposalUndecided(source.status)) {
     return null;
   }
   const kind = setupRepairKind(source);
