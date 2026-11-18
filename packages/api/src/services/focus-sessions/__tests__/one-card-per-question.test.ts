@@ -128,6 +128,24 @@ describe("sameQuestion — the cf60123c twin and the rows that rule each rule in
     ).toBe(true);
   });
 
+  it("a label that names MORE is a different question: 'Send the email' and 'Send the email to Bob' stay apart (lead review)", () => {
+    const send = {
+      label: "Send the email",
+      ask: { mode: "confirm", prompt: "Send it?" },
+    } as ExpectedOutput;
+    const toBob = {
+      label: "Send the email to Bob",
+      ask: { mode: "confirm", prompt: "Send it?" },
+    } as ExpectedOutput;
+    expect(sameQuestion(send, toBob)).toBe(false);
+    expect(sameQuestion(toBob, send)).toBe(false);
+    const d = dedupeOpenQuestions(
+      [{ ...send, kind: "decision", owner: "human" } as ExpectedOutput],
+      [{ ...toBob, kind: "decision", owner: "human" } as ExpectedOutput]
+    );
+    expect(d.deduped).toEqual([]);
+  });
+
   it("a confirm: same prompt AND same subject; a generic prompt alone is not enough", () => {
     const a = {
       label: "Send the follow-up to Engbers",
