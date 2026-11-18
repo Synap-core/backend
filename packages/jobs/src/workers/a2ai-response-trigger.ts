@@ -57,6 +57,7 @@ import {
   claimRun,
   drizzleSql,
   playbookRuns,
+  stampMessagesSeenByAgent,
   RoutedSource,
   type AgentTurnOverrides,
 } from "@synap/database";
@@ -518,6 +519,23 @@ export async function handleA2AIResponseTrigger(
     streamError = result.error;
     aiSteps = result.steps;
     partialFailure = result.partialFailure;
+    // The turn ran with the person's message as its trigger: in a session's
+    // room that is the "Seen by the agent" mark (`seen-by-agent.ts`). Once,
+    // never on a failed call (the agent never read it), never thrown.
+    if (job.data.focusSessionId) {
+      try {
+        await stampMessagesSeenByAgent({
+          channelId,
+          messageIds: [userMessageId],
+          agentUserId: agentUserId ?? null,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, channelId, userMessageId },
+          "A2AI: the seen-by-agent mark was not stamped"
+        );
+      }
+    }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     logger.error(

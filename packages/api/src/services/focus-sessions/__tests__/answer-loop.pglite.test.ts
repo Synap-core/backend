@@ -848,12 +848,16 @@ describe("the answer loop", () => {
    * A live pod run that stopped and asked "Keep the run going" (what
    * `askToKeepGoing` leaves), its ledger holding the last stop's checkpoint.
    */
-  async function stoppedRunAsking(): Promise<{
+  async function stoppedRunAsking(
+    opts: { agentIds?: string[] } = {}
+  ): Promise<{
     sessionId: string;
     channelId: string;
     idea: string;
   }> {
-    const { sessionId, channelId } = await seed();
+    const { sessionId, channelId } = await seed(
+      opts.agentIds ? { agentIds: opts.agentIds } : {}
+    );
     const runId = randomUUID();
     await q(
       `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, started_at)
@@ -942,6 +946,157 @@ describe("the answer loop", () => {
     expect(turn.run).toBeDefined();
     expect(turn).not.toHaveProperty("turnContext");
     expect(String(turn.content)).not.toContain(idea);
+  });
+
+  /**
+   * The live shape of session cf60123c (17-18 Nov 2026): a pod run (is-agent)
+   * stopped after its automatic continuations; its roster names only the
+   * agent that STARTED it, a pull agent on a computer (Hermes; here the
+   * external agent, which owns a door key). Every answer recorded, no turn
+   * followed: the answer door had no way to the run its roster does not name.
+   */
+  it("a YES to 'Keep the run going' wakes the RUN even when the roster names only a pull agent (cf60123c)", async () => {
+    const { sessionId } = await stoppedRunAsking({ agentIds: [EXT_AGENT] });
+    const res = await send(
+      app(),
+      "POST",
+      `/focus-sessions/${sessionId}/outputs/answer`,
+      {
+        expectedLabel: RUN_CONTINUE_SLOT_LABEL,
+        value: { type: "confirm", confirmed: true },
+        text: "Yes",
+      }
+    );
+    expect(await res.json()).toMatchObject({
+      triggered: true,
+      wokeAgentType: "meta",
+    });
+    expect(h.triggers).toHaveLength(1);
+    expect(h.triggers[0]).toMatchObject({
+      agentType: "meta",
+      run: { playbookId: expect.any(String) },
+    });
+  });
+
+  it("an answer to a card the run filed (no room question) wakes the run, the pull agent on the roster notwithstanding (cf60123c)", async () => {
+    const { sessionId } = await stoppedRunAsking({ agentIds: [EXT_AGENT] });
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        sessionId,
+        JSON.stringify([
+          {
+            key: "validation-esteban-arias",
+            kind: "decision",
+            label: "Disposition Esteban Arias",
+            owner: "human",
+            blockedReason: "decision",
+            why: "Prometheus est une association.",
+            owedSince: "2026-11-17T14:11:30.000Z",
+            unblocks: "La fiche est clôturée",
+            ask: {
+              mode: "choose",
+              options: [
+                { label: "Nurturing", value: "nurturing" },
+                { label: "Disqualified", value: "disqualified" },
+              ],
+            },
+          },
+        ]),
+      ]
+    );
+    const res = await send(
+      app(),
+      "POST",
+      `/focus-sessions/${sessionId}/outputs/answer`,
+      {
+        expectedLabel: "Disposition Esteban Arias",
+        value: {
+          type: "chip",
+          chip: { label: "Disqualified", value: "disqualified" },
+        },
+        text: "Disqualified",
+      }
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      triggered: true,
+      wokeAgentType: "meta",
+    });
+    expect(h.triggers).toHaveLength(1);
+    expect(h.triggers[0]).toMatchObject({ run: expect.any(Object) });
+  });
+
+  it("ONE CARD PER QUESTION: an agent's room question on a second slot asking the open card's question files on the open card", async () => {
+    const { sessionId, channelId } = await seed();
+    const choose = {
+      mode: "choose",
+      options: [
+        { label: "EU", value: "eu" },
+        { label: "US", value: "us" },
+      ],
+    };
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        sessionId,
+        JSON.stringify([
+          {
+            key: "stripe-account",
+            kind: "decision",
+            label: "Stripe account",
+            owner: "human",
+            blockedReason: "decision",
+            why: WHY,
+            owedSince: "2026-09-25T09:00:00.000Z",
+            unblocks: "The billing switch-over",
+            ask: choose,
+          },
+          {
+            key: "stripe-account-billing",
+            kind: "decision",
+            label: "Stripe account (billing)",
+            unblocks: "The billing switch-over",
+          },
+        ]),
+      ]
+    );
+    const res = await send(
+      app({ agentUserId: IS_AGENT }),
+      "POST",
+      `/threads/${channelId}/messages`,
+      {
+        role: "assistant",
+        content: "EU or US for billing?",
+        userId: OWNER,
+        kind: "question",
+        slotLabel: "Stripe account (billing)",
+        ask: choose,
+      }
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      messageId: string;
+      slot: Record<string, unknown>;
+    };
+    expect(body.slot).toMatchObject({
+      status: "blocked",
+      deduped: {
+        key: "stripe-account",
+        label: "Stripe account",
+        asked: "Stripe account (billing)",
+      },
+    });
+    // No second card: the second slot is still the agent's.
+    const slots = await slotsOf(sessionId);
+    expect(slots.filter((s) => s.owner === "human").map((s) => s.label)).toEqual(
+      ["Stripe account"]
+    );
+    // The question sits on the card the person answers.
+    expect((await metaOf(body.messageId))!.roomPost).toMatchObject({
+      kind: "question",
+      slotLabel: "Stripe account",
+    });
   });
 
   it("the direct door with NO pod-run agent staffed and no question wakes nobody", async () => {

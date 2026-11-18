@@ -133,6 +133,7 @@ import {
   expectedOutputWireSchema,
   outputRefWireSchema,
   mergeExpectedOutputs,
+  dedupeOpenQuestions,
 } from "../services/focus-sessions/update-session.js";
 import {
   addSessionBlocker,
@@ -2417,6 +2418,18 @@ export const focusSessionsRouter = router({
       );
       if (moveRefusal) {
         throw new TRPCError({ code: "BAD_REQUEST", message: moveRefusal });
+      }
+
+      // ONE CARD PER QUESTION — the MCP and Hub doors' rule
+      // (`dedupeOpenQuestions`): an agent driving this door does not hand the
+      // person a second card for a question an open one already asks. This
+      // door's reply is the row (the person's door), so the twin left out is
+      // seen there: no card was added.
+      if (ctx.agentUserId && patch.expectedOutputs !== undefined) {
+        patch.expectedOutputs = dedupeOpenQuestions(
+          (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
+          patch.expectedOutputs
+        ).incoming as typeof patch.expectedOutputs;
       }
 
       // DECLARED STAGES ONLY — the advance door's rule (`stage-declared.ts`),

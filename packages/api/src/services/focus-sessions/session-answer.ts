@@ -742,6 +742,42 @@ async function liveRunWakeTarget(
   return { reach: "pod", agentType: reported?.trim() || "meta" };
 }
 
+/**
+ * WHO an answer to a slot wakes when no room question names its asker: the
+ * roster's agent the pod can reach (`resolveWakeTarget`), else — the roster
+ * names nobody the pod can wake — the session's own live run on Synap AI
+ * (`liveRunWakeTarget`), the fallback a FREE message already had.
+ *
+ * Live, session cf60123c (17-18 Nov 2026): a pod-run agent (run d35f877d,
+ * is-agent) stopped after its two automatic continuations and filed its
+ * questions as slots (`update_run`, no room question). The session's roster
+ * held only the agent that STARTED it, Hermes, a pull agent on a computer,
+ * which `resolveWakeTarget` rightly never wakes. The person then answered
+ * every card (and "Keep the run going": Yes) and no turn followed: the run
+ * that owed the work was never asked, because this door, unlike the free
+ * message, had no way to reach a run its roster does not name.
+ *
+ * A question's asker still wins outright (`resolveWakeTarget`): this fallback
+ * runs only when there is no asker. No loop: each wake is one person's answer
+ * (the answer door's at-most-once claim), and an automatic continuation is
+ * still capped by the run (`MAX_AUTO_CONTINUATIONS`).
+ */
+async function answerWakeTarget(p: {
+  askingAgentUserId: string | null | undefined;
+  slot: ExpectedOutput | null;
+  agentIds: string[];
+  session: { id: string; ownerId: string };
+}): Promise<WakeTarget | null> {
+  const target = await resolveWakeTarget(p);
+  if (target || p.askingAgentUserId) return target;
+  const [row] = await db
+    .select({ metadata: focusSessions.metadata })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, p.session.id))
+    .limit(1);
+  return liveRunWakeTarget(p.session.id, row?.metadata);
+}
+
 /** An answer's wake opens the window too: the messages right after it are read by that turn. */
 async function openWakeWindowAfterAnswer(sessionId: string): Promise<void> {
   try {
@@ -1447,7 +1483,7 @@ export async function answerSessionSlot(p: {
         });
         if (claimed) questionId = question.id;
       }
-      const target = await resolveWakeTarget({
+      const target = await answerWakeTarget({
         askingAgentUserId: questionId ? question?.agentUserId : null,
         slot: answered.before,
         agentIds: answered.session.agentIds,
@@ -1588,7 +1624,7 @@ export async function attestSessionSlot(p: {
         });
         if (claimed) questionId = question.id;
       }
-      const target = await resolveWakeTarget({
+      const target = await answerWakeTarget({
         askingAgentUserId: questionId ? question?.agentUserId : null,
         slot: attested.before,
         agentIds: attested.session.agentIds,

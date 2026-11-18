@@ -55,7 +55,7 @@ import {
   unreachableOutputRefError,
 } from "./assert-output-ref-visible.js";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
-import { findSlotIndex } from "./slot-keys.js";
+import { deriveSlotKeys, findSlotIndex } from "./slot-keys.js";
 import { updateExpectedOutputsLocked } from "./delegate-output.js";
 import { reconcileOwedSince } from "./update-session.js";
 import {
@@ -75,6 +75,12 @@ import {
   DECLINED_REASK_MESSAGE,
   isIdenticalReaskOfDecline,
 } from "./declined-reask.js";
+import {
+  dedupedQuestionWarning,
+  isOpenQuestionSlot,
+  openTwinQuestion,
+  type DedupedQuestion,
+} from "./same-question.js";
 
 export interface BlockExpectedOutputParams {
   sessionId: string;
@@ -178,9 +184,18 @@ export type BlockExpectedOutputResult =
       /**
        * Block only: what the pod did not keep as sent, while the block landed.
        * Today: an agent's hand-over that said nothing it unblocks, stamped
-       * with `ASK_UNBLOCKS_DEFAULT` (`unblocksAdvisedMessage`).
+       * with `ASK_UNBLOCKS_DEFAULT` (`unblocksAdvisedMessage`); and a deduped
+       * hand-over (`deduped`), said in words.
        */
       warnings?: string[];
+      /**
+       * Block only — ONE CARD PER QUESTION (`same-question.ts`): an agent's
+       * hand-over that asks what an OPEN question of the session already asks
+       * made no second card. Nothing was written; `expectedLabel` and `kind`
+       * are then the OPEN card's (the one the person answers), and this names
+       * it with the label the caller asked about.
+       */
+      deduped?: DedupedQuestion;
     };
 
 /**
@@ -294,10 +309,36 @@ export async function blockExpectedOutput(
   // The locked base and result, captured for the `slot_asked` history row.
   let lockedBefore: ExpectedOutput[] = [];
   let lockedAfter: ExpectedOutput[] = [];
+  // ONE CARD PER QUESTION: judged UNDER the lock, on the slot as it would be
+  // stamped, against the session's other open questions. An agent only (a
+  // person handing themselves a card is not asking twice); re-blocking a slot
+  // that is already the person's open question is never a twin of itself.
+  const found: { twin?: ExpectedOutput } = {};
   const stamped = await updateExpectedOutputsLocked(
     params.sessionId,
     (current) => {
       lockedBefore = current;
+      found.twin = undefined;
+      if (params.agentUserId) {
+        const self = current[findSlotIndex(current, slot.label)];
+        if (self && !isOpenQuestionSlot(self)) {
+          const asStamped = stampBlocked(
+            [self],
+            self.label,
+            params.blockedReason,
+            params.why,
+            undefined,
+            params.ref,
+            params.ask,
+            params.unblocks
+          )[0]!;
+          found.twin = openTwinQuestion(current, asStamped, self);
+        }
+      }
+      if (found.twin) {
+        lockedAfter = current;
+        return current;
+      }
       lockedAfter = stampAskProvenance(
         current,
         stampBlocked(
@@ -320,6 +361,23 @@ export async function blockExpectedOutput(
     }
   );
   if (!stamped) return { status: "not_found" };
+
+  const open = found.twin;
+  if (open) {
+    const keys = deriveSlotKeys(lockedBefore);
+    const deduped: DedupedQuestion = {
+      key: keys[lockedBefore.indexOf(open)] ?? null,
+      label: open.label,
+      asked: slot.label,
+    };
+    return {
+      status: "blocked",
+      expectedLabel: open.label,
+      kind: open.kind,
+      deduped,
+      warnings: [dedupedQuestionWarning(deduped)],
+    };
+  }
 
   // The ask AS POSED, durably — the answer's hand-back clears it from the slot.
   await logSlotsAsked({
