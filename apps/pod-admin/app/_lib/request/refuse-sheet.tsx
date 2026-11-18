@@ -17,6 +17,7 @@
 
 import { useId, useState } from "react";
 import { Button, Radio, RadioGroup, Textarea } from "@heroui/react";
+import { X } from "lucide-react";
 import { resolveActionLabel } from "@synap-core/types/vocabulary";
 import { useT } from "../../../lib/i18n/locale-provider";
 import { REQUEST_CATALOGS } from "./copy";
@@ -80,7 +81,10 @@ export function RefuseTrigger({
   return (
     <Button
       variant="bordered"
-      className="rq-refuse min-h-11"
+      className="rq-refuse min-h-11 px-3 sm:px-4"
+      startContent={
+        <X aria-hidden size={16} className="rq-lead hidden sm:block" />
+      }
       isDisabled={isDisabled}
       onPress={onPress}
       data-refuse-trigger=""

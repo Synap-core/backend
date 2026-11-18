@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * "Approve & always…" — the secondary affordance beside the primary Approve
- * button. Approving normally decides once; picking a granularity here does
+ * "Approve & always…" — the chevron segment of the Approve split button
+ * (founder, 17 Nov 2026: the verbs in one row on a phone). Approving normally decides once; picking a granularity here does
  * that AND writes one revocable `governance_rules` row (Governance
  * Convergence Plan, Phase A/D) so the same kind of write auto-approves next
  * time — until someone takes it back in Settings (`request-rules.tsx`).
@@ -33,6 +33,12 @@
  * with `DENIED_BY_RULE`, above the floors (decision 956930ad). Pod admin runs
  * the pod: a rule about what an agent may do. Both menus are offered to a pod
  * admin only (`ProposalReviewCard`): the rule door refuses anyone else.
+ * Two trigger forms (founder, 18 Nov 2026: "keep the full row with approve
+ * always & reject always when on desktop"): `chevron`, the segment of its
+ * verb's split button in a narrow bar, named by `aria-label`
+ * (`always.trigger` / `never.trigger`); `labelled`, the button with its words
+ * beside the verbs in a wide bar, as it was before the phone row. The bar
+ * renders both and its width picks one (`.rq-verbs` in globals.css).
  */
 
 import { useState } from "react";
@@ -76,6 +82,10 @@ import {
 import { showReceipt } from "../../_lib/receipt/decision-receipt-toast";
 import { alwaysApproveT } from "./copy";
 import { approveInput, renderedRevision } from "./use-proposal-decision";
+
+/** Which trigger opens the menu: the split button's chevron, or the
+ *  labelled button of the wide bar. */
+export type RuleTriggerForm = "chevron" | "labelled";
 
 type CreateRuleInput = CreateGovernanceRuleInput;
 
@@ -243,9 +253,14 @@ export function AlwaysApproveMenu({
   disabled,
   onRunningChange,
   onDone,
+  trigger = "chevron",
+  className = "",
 }: {
   proposal: ProposalForRule;
   disabled?: boolean;
+  trigger?: RuleTriggerForm;
+  /** Where the bar shows this form (a width class from globals.css). */
+  className?: string;
   /** Tells the bar a decision is in flight, so it holds every other verb. */
   onRunningChange?: (running: boolean) => void;
   onDone: () => void;
@@ -336,18 +351,39 @@ export function AlwaysApproveMenu({
   }
 
   return (
-    <Dropdown placement="bottom-start">
+    <Dropdown
+      placement={trigger === "labelled" ? "bottom-start" : "bottom-end"}
+    >
       <DropdownTrigger>
-        <Button
-          variant="flat"
-          className="h-auto min-h-10 max-w-full whitespace-normal py-2 text-left"
-          startContent={<Repeat size={14} />}
-          endContent={<ChevronDown size={14} />}
-          isLoading={running}
-          isDisabled={disabled || running}
-        >
-          {t("always.trigger")}
-        </Button>
+        {trigger === "labelled" ? (
+          <Button
+            variant="flat"
+            className={`h-auto min-h-10 max-w-full whitespace-normal py-2 text-left ${className}`}
+            startContent={<Repeat size={14} />}
+            endContent={<ChevronDown size={14} />}
+            data-rule-menu="always"
+            data-rule-trigger="labelled"
+            isLoading={running}
+            isDisabled={disabled || running}
+          >
+            {t("always.trigger")}
+          </Button>
+        ) : (
+          /* The chevron segment of Approve's split button: its name says
+             which menu it opens; 44 px square on a phone. */
+          <Button
+            isIconOnly
+            color="success"
+            className={`min-h-11 min-w-11 ${className}`}
+            aria-label={t("always.trigger")}
+            data-rule-menu="always"
+            data-rule-trigger="chevron"
+            isLoading={running}
+            isDisabled={disabled || running}
+          >
+            <ChevronDown aria-hidden size={16} />
+          </Button>
+        )}
       </DropdownTrigger>
       <DropdownMenu
         aria-label={t("always.menu")}
@@ -377,9 +413,14 @@ export function RejectNeverMenu({
   disabled,
   onRunningChange,
   onDone,
+  trigger = "chevron",
+  className = "",
 }: {
   proposal: ProposalForRule;
   disabled?: boolean;
+  trigger?: RuleTriggerForm;
+  /** Where the bar shows this form (a width class from globals.css). */
+  className?: string;
   /** Tells the bar a decision is in flight, so it holds every other verb. */
   onRunningChange?: (running: boolean) => void;
   onDone: () => void;
@@ -452,19 +493,39 @@ export function RejectNeverMenu({
   }
 
   return (
-    <Dropdown placement="bottom-start">
+    <Dropdown
+      placement={trigger === "labelled" ? "bottom-start" : "bottom-end"}
+    >
       <DropdownTrigger>
-        <Button
-          color="danger"
-          variant="light"
-          className="h-auto min-h-10 max-w-full whitespace-normal py-2 text-left"
-          startContent={<Ban size={14} />}
-          endContent={<ChevronDown size={14} />}
-          isLoading={running}
-          isDisabled={disabled || running}
-        >
-          {t("never.trigger")}
-        </Button>
+        {trigger === "labelled" ? (
+          <Button
+            color="danger"
+            variant="light"
+            className={`h-auto min-h-10 max-w-full whitespace-normal py-2 text-left ${className}`}
+            startContent={<Ban size={14} />}
+            endContent={<ChevronDown size={14} />}
+            data-rule-menu="never"
+            data-rule-trigger="labelled"
+            isLoading={running}
+            isDisabled={disabled || running}
+          >
+            {t("never.trigger")}
+          </Button>
+        ) : (
+          /* The chevron segment of Reject's split button. */
+          <Button
+            isIconOnly
+            variant="bordered"
+            className={`rq-refuse min-h-11 min-w-11 ${className}`}
+            aria-label={t("never.trigger")}
+            data-rule-menu="never"
+            data-rule-trigger="chevron"
+            isLoading={running}
+            isDisabled={disabled || running}
+          >
+            <ChevronDown aria-hidden size={16} />
+          </Button>
+        )}
       </DropdownTrigger>
       <DropdownMenu
         aria-label={t("never.menu")}

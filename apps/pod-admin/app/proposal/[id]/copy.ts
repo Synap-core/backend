@@ -55,7 +55,10 @@ export const en = {
   "html.unchanged": "The page is the same before and after.",
   openInDesktop: "Open in the Synap desktop app",
   "decide.pickFirst": "Pick the record for each item first.",
-  "decide.as": "You decide as {identity} · recorded in the",
+  // An irreversible approve asks once more, in place (feedback-and-forms §3):
+  // the verb on the button, named, and Cancel focused beside it.
+  "decide.confirmIrreversible": "{verb} · can’t be undone",
+  "decide.confirmCancel": "Cancel",
   "decide.recorded": "Recorded in the",
   "outcome.approved": "You approved this change: it’s now in your pod.",
   "outcome.auto_approved":
@@ -167,7 +170,8 @@ export const fr: Catalog<typeof en> = {
   "html.unchanged": "La page est identique avant et après.",
   openInDesktop: "Ouvrir dans l’application Synap pour ordinateur",
   "decide.pickFirst": "Choisissez d’abord la fiche de chaque élément.",
-  "decide.as": "Vous décidez en tant que {identity} · enregistré dans",
+  "decide.confirmIrreversible": "{verb} · irréversible",
+  "decide.confirmCancel": "Annuler",
   "decide.recorded": "Enregistré dans",
   "outcome.approved":
     "Vous avez approuvé ce changement\u00a0: il est maintenant dans votre pod.",
@@ -239,7 +243,9 @@ export function proposalPageT() {
 }
 
 /**
- * "Approve and always allow…" (`AlwaysApproveMenu.tsx`): each option says
+ * "Always approve…" (`AlwaysApproveMenu.tsx`; the founder's words, 18 Nov
+ * 2026: the trigger is short, the menu's title and options say exactly what
+ * the rule covers): each option says
  * what it covers and what still asks. "Sending, publishing and deleting still
  * ask" is true for every option but "this tool" and a session's tool grant: a
  * broad rule never authorizes a tool run (the outward floor,
@@ -250,14 +256,14 @@ export function proposalPageT() {
  * and the pod-wide ones. The decision's title is the receipt's
  * (`_lib/receipt`).
  *
- * "Refuse and never allow…" (`RejectNeverMenu`, same file): stores a deny rule
+ * "Always reject…" (`RejectNeverMenu`, same file): stores a deny rule
  * for THIS agent and THIS act, pod-wide (`deriveGovernanceNeverOption`), then
  * rejects the request; the pod refuses that act from then on without asking
  * (decision 956930ad). Both rules are taken back in Settings.
  * `never.reason` is the rejection reason the agent reads.
  */
 export const alwaysEn = {
-  "always.trigger": "Approve and always allow…",
+  "always.trigger": "Always approve…",
   "always.menu": "Approve and keep allowing this",
   "always.capability.label": "Always let your AIs use “{name}”",
   "always.capability.covers":
@@ -279,7 +285,7 @@ export const alwaysEn = {
   "always.ruleSaved": "Rule saved",
   "always.ruleFailed": "Approved, but the rule wasn’t saved",
   "always.ruleFailedHint": "The next request like this one will ask you again.",
-  "never.trigger": "Reject and never allow…",
+  "never.trigger": "Always reject…",
   "never.menu": "Reject, and never allow this from now on",
   "never.action.label": "This change from this AI, never",
   "never.action.covers":
@@ -296,7 +302,7 @@ export const alwaysEn = {
 } as const;
 
 export const alwaysFr: Catalog<typeof alwaysEn> = {
-  "always.trigger": "Approuver et toujours autoriser…",
+  "always.trigger": "Toujours approuver…",
   "always.menu": "Approuver et continuer à l’autoriser",
   "always.capability.label": "Toujours laisser vos IA utiliser « {name} »",
   "always.capability.covers":
@@ -320,7 +326,7 @@ export const alwaysFr: Catalog<typeof alwaysEn> = {
   "always.ruleFailed": "Approuvée, mais la règle n’a pas été enregistrée",
   "always.ruleFailedHint":
     "La prochaine demande comme celle-ci vous sera de nouveau soumise.",
-  "never.trigger": "Rejeter et ne plus autoriser…",
+  "never.trigger": "Toujours rejeter…",
   "never.menu": "Rejeter et ne plus l’autoriser",
   "never.action.label": "Ce changement par cette IA, jamais",
   "never.action.covers":
