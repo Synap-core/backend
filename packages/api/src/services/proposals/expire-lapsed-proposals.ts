@@ -21,12 +21,15 @@
  */
 
 import { isSessionBoundDraft } from "@synap-core/types/proposals/fate";
+import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import {
   db,
   proposals,
+  focusSessions,
   users,
   ProposalStatus,
+  drizzleSql,
   eq,
   and,
   inArray,
@@ -44,6 +47,7 @@ import { createLogger } from "@synap-core/core";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
 import { scrubGuestPayloads } from "../forms/guest-retention.js";
 import {
+  CAPABILITY_RUN_PROPOSAL_TYPE,
   CLASS_LIFETIME_HOURS,
   capabilityRunVerbId,
   proposalLifetimeHours,
@@ -135,6 +139,57 @@ function failureClassOf(data: unknown): string | undefined {
     : undefined;
 }
 
+/** A failed row whose failure class is kept off the lapse clock. */
+function failureKeptOffTheClock(data: unknown): boolean {
+  const cls = failureClassOf(data);
+  return (
+    cls !== undefined &&
+    LAPSE_EXEMPT_FAILURE_CLASSES.has(cls as FailureErrorClass)
+  );
+}
+
+/** The proposal types of a RUN request: a skill, playbook or capability run. */
+const RUN_PROPOSAL_TYPES: ReadonlySet<string> = new Set([
+  "run",
+  CAPABILITY_RUN_PROPOSAL_TYPE,
+]);
+
+/**
+ * Does this undecided row end when its session ends? `diesWithSession`, or a
+ * RUN request whose approval failed for a reason a retry or a person's fix
+ * would not clear (any verb, any class: a playbook run, or a run of a verb
+ * that acts on a durable object, which `diesWithSession` keeps).
+ *
+ * A run ends with its job; a record outlives it. So a failed create, update
+ * or capture is NOT ended here (plan 8032a127 D7: the record it carries may
+ * still be wanted, its author or the founder decides), nor a failure kept
+ * off the lapse clock ({@link LAPSE_EXEMPT_FAILURE_CLASSES}).
+ *
+ * Read by the session's close ({@link expireSessionEphemerals}) and by the
+ * 6-hourly catch-up for sessions that ended before it
+ * ({@link expireFailedRowsOfEndedSessions}): one rule, two moments.
+ */
+export function endsWithItsSession(row: {
+  proposalType: string;
+  targetType: string;
+  status?: string | null;
+  data?: unknown;
+}): boolean {
+  if (
+    diesWithSession(
+      row.proposalType,
+      row.targetType,
+      capabilityRunVerbId(row.data)
+    )
+  )
+    return true;
+  return (
+    row.status === ProposalStatus.APPROVAL_FAILED &&
+    RUN_PROPOSAL_TYPES.has(row.proposalType) &&
+    !failureKeptOffTheClock(row.data)
+  );
+}
+
 /** The minimum a row must carry for the lapse decision. */
 export interface LapseCandidate {
   id: string;
@@ -182,11 +237,7 @@ export function selectLapsedIds(
     );
     if (hours === null) continue;
     const failed = p.status === ProposalStatus.APPROVAL_FAILED;
-    if (failed) {
-      const cls = failureClassOf(p.data);
-      if (cls && LAPSE_EXEMPT_FAILURE_CLASSES.has(cls as FailureErrorClass))
-        continue;
-    }
+    if (failed && failureKeptOffTheClock(p.data)) continue;
     const since = failed ? (p.reviewedAt ?? p.createdAt) : p.createdAt;
     if (now.getTime() - since.getTime() > hours * 60 * 60 * 1000) {
       out.push(p.id);
@@ -291,6 +342,57 @@ async function scrubExpiredGuestPayloadsSafely(): Promise<void> {
       "expiry: guest payload scrub failed (retried next run)"
     );
   }
+}
+
+/**
+ * The failed rows of sessions that had ALREADY ended and that end with their
+ * session ({@link endsWithItsSession}): EXPIRED as their session's close
+ * would have, stamped `session_ended`, naming no person, not scored. The
+ * close ends them since #1090; this is the catch-up for a session that ended
+ * before (census bcef4627: four playbook runs of sessions closed on 5 Oct, a
+ * playbook update of one closed on 7 Oct) or whose close ran no helper.
+ * Failed rows only: a pending row of an ended session is not this sweep's.
+ * Returns the ids it moved.
+ */
+export async function expireFailedRowsOfEndedSessions(
+  now: Date
+): Promise<string[]> {
+  const failed = await db
+    .select({
+      id: proposals.id,
+      proposalType: proposals.proposalType,
+      targetType: proposals.targetType,
+      status: proposals.status,
+      data: proposals.data,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.status, ProposalStatus.APPROVAL_FAILED),
+        drizzleSql`EXISTS (SELECT 1 FROM ${focusSessions}
+          WHERE ${focusSessions.id} = ${proposals.sessionId}
+            AND ${inArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES])})`
+      )
+    );
+  // Failed rows only, re-read here: `endsWithItsSession` alone also takes a
+  // pending outward call, which is the lapse clock's.
+  const ids = failed
+    .filter(
+      (p) =>
+        p.status === ProposalStatus.APPROVAL_FAILED && endsWithItsSession(p)
+    )
+    .map((p) => p.id);
+  if (ids.length === 0) return [];
+  const rows = await transitionProposal(db, {
+    to: ProposalStatus.EXPIRED,
+    set: { ...endedByNoPersonSet(), updatedAt: now },
+    ended: { reason: "session_ended" },
+    from: [ProposalStatus.APPROVAL_FAILED],
+    where: and(inArray(proposals.id, ids), NOT_PARTLY_APPLIED),
+  }).returning({ id: proposals.id });
+  const moved = rows.map((r) => r.id);
+  await discardExpiredSourceBlobs(moved, failed);
+  return moved;
 }
 
 export interface ExpireLapsedResult {
@@ -407,9 +509,29 @@ export async function expireLapsedProposals(
     );
   }
 
+  // Failed rows of sessions that had already ended, which their close would
+  // end today (a run, never a record). Same failure rule as the scans above.
+  let endedWithSession: string[] = [];
+  try {
+    endedWithSession = await expireFailedRowsOfEndedSessions(now);
+  } catch (err) {
+    logger.warn(
+      { err },
+      "expiry: failed rows of ended sessions scan failed (retried next run)"
+    );
+  }
+  if (endedWithSession.length > 0) {
+    markProposalNotificationsActioned(endedWithSession);
+    logger.info(
+      { expired: endedWithSession.length, proposalIds: endedWithSession },
+      "expired failed requests of sessions that had already ended"
+    );
+  }
+  const endedBefore = orphanedGates.length + endedWithSession.length;
+
   if (lapsed.length === 0) {
     await scrubExpiredGuestPayloadsSafely();
-    return { scanned: pending.length, expired: orphanedGates.length };
+    return { scanned: pending.length, expired: endedBefore };
   }
 
   // Chunked, and re-asserting in the WHERE the status each row was READ in: a
@@ -460,7 +582,7 @@ export async function expireLapsedProposals(
     { scanned: pending.length, expired },
     "expired lapsed proposals (moment passed, never decided)"
   );
-  return { scanned: pending.length, expired: expired + orphanedGates.length };
+  return { scanned: pending.length, expired: expired + endedBefore };
 }
 
 /**
@@ -471,10 +593,10 @@ export async function expireLapsedProposals(
  * The real trigger. Called from `completeSession`, best-effort: a session must
  * close even if this fails, so it never throws.
  *
- * `diesWithSession` decides — classes with a lifetime (ephemeral outbound
- * calls) plus the session-bound drafts (`isSessionBoundDraft`). Closing a session must not discard a
- * proposed entity or a merge candidate that happened to be created during it;
- * those outlive the session by design.
+ * `endsWithItsSession` decides — classes with a lifetime (ephemeral outbound
+ * calls), the session-bound drafts (`isSessionBoundDraft`), and a failed run.
+ * Closing a session must not discard a proposed entity or a merge candidate
+ * that happened to be created during it; those outlive the session by design.
  */
 export async function expireSessionEphemerals(
   sessionId: string,
@@ -486,6 +608,7 @@ export async function expireSessionEphemerals(
         id: proposals.id,
         proposalType: proposals.proposalType,
         targetType: proposals.targetType,
+        status: proposals.status,
         data: proposals.data,
       })
       .from(proposals)
@@ -496,15 +619,7 @@ export async function expireSessionEphemerals(
         )
       );
 
-    const ids = pending
-      .filter((p) =>
-        diesWithSession(
-          p.proposalType,
-          p.targetType,
-          capabilityRunVerbId(p.data)
-        )
-      )
-      .map((p) => p.id);
+    const ids = pending.filter(endsWithItsSession).map((p) => p.id);
     if (ids.length === 0) return 0;
 
     const rows = await transitionProposal(db, {
