@@ -27,7 +27,7 @@ import {
   type ConnectionSelector,
   type FailureErrorClass,
 } from "../../connectors/external-dispatch.js";
-import { interpolateString, interpolateDeep } from "../_shared/interpolate.js";
+import { interpolateString, interpolateTyped } from "../_shared/interpolate.js";
 import { encodeFormBody } from "../../connectors/form-encode.js";
 
 type DetailSpec = Omit<ProviderVerbSpec, "tool" | "expand">;
@@ -281,7 +281,7 @@ export function buildProviderRequest(
   if (spec.transport === "graphql") {
     const body: Record<string, unknown> = {
       query: interpolateString(spec.graphql?.query ?? "", mapped),
-      variables: interpolateDeep(
+      variables: interpolateTyped(
         spec.graphql?.variables ?? {},
         mapped
       ) as Record<string, unknown>,
@@ -291,7 +291,7 @@ export function buildProviderRequest(
 
   let query = buildQueryString(spec.query, mapped);
   let body = spec.body
-    ? (interpolateDeep(spec.body, mapped) as Record<string, unknown>)
+    ? (interpolateTyped(spec.body, mapped) as Record<string, unknown>)
     : undefined;
   if (spec.bodyFrom) {
     const passed = passThroughObject(spec.bodyFrom, mapped[spec.bodyFrom]);

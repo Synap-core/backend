@@ -89,11 +89,19 @@ export function isNonWidenableGovernanceReason(
 
 /**
  * Capability verb ids a stored `auto` rule never widens to a direct run: a
- * public post stays a person's yes. The ONE list: the capability gate reads
- * it through `@synap/governance-policy`'s re-export and refuses such a rule
+ * public post stays a person's yes. The capability gate reads it through
+ * `@synap/governance-policy`'s re-export and refuses such a rule
  * (`capabilityRuleAuthorizesRun`), and no "always" menu offers one, since a
  * rule that never fires would tell the person the next post goes without
  * asking. Gmail and every other send stay off the list.
+ *
+ * LEGACY: these four verbs now DECLARE `metadata.proposeOnly: true` in the
+ * postiz pack (catalog data, `SKILL_METADATA_PROPOSE_ONLY` below). The list is
+ * kept only while an installed pod may still hold postiz rows written before
+ * the flag: the drift comparator v16 re-diffs each container once and the
+ * update lands the flag without a re-approval (it only tightens). It can go
+ * once every pod has re-synced the postiz pack, i.e. no installed `postiz_*`
+ * row named here lacks `metadata.proposeOnly: true`.
  */
 export const PROPOSE_ONLY_CAPABILITY_VERBS = [
   "postiz_draft",
@@ -114,18 +122,45 @@ export const PROPOSE_ONLY_CAPABILITY_VERBS = [
 export const PROPOSE_ONLY_CAPABILITY_INTENTS = ["publish_post"] as const;
 
 /**
+ * The key of a verb's `skills.metadata` bag where its definition DECLARES that
+ * it is propose-only: no `auto` grant and no stored `auto` rule ever runs it on
+ * its own (a destructive verb such as deleting a server, a public post). Same
+ * path as the declared `readOnly`: authored in the capability definition,
+ * written and drift-checked by the template applier, read by the gate. Adding
+ * it only tightens, so it needs no re-approval; removing it (an explicit
+ * `false` over a live `true`) re-earns approval (`proposeOnlyLoosened`).
+ * Declared beside `readOnly`, it wins: the verb proposes.
+ */
+export const SKILL_METADATA_PROPOSE_ONLY = "proposeOnly";
+
+/**
+ * The propose-only posture a verb's metadata DECLARES, or `undefined` when it
+ * declares none. Only a real boolean counts: `"true"` declares nothing, the
+ * same strict reading as `readOnly`.
+ */
+export function declaredProposeOnly(
+  metadata: Record<string, unknown> | null | undefined
+): boolean | undefined {
+  const raw = (metadata ?? {})[SKILL_METADATA_PROPOSE_ONLY];
+  return typeof raw === "boolean" ? raw : undefined;
+}
+
+/**
  * May a stored `auto` rule (or an `auto` grant) run this verb on its own? The
  * ONE derivation the capability gate and every "always" menu read: no for a
- * verb on the list above (its name trimmed and lowercased, so a case variant
- * is the same verb) or a verb whose intent is propose-only. Pass the intent
- * whenever the caller has it: the name list alone misses another provider's
- * public post.
+ * verb whose metadata declares `proposeOnly: true`, a verb whose intent is
+ * propose-only, or a verb on the legacy name list above (its name trimmed and
+ * lowercased, so a case variant is the same verb). Pass the intent and the
+ * skill's `metadata` whenever the caller has them: the name list alone misses
+ * every other provider.
  */
 export function capabilityVerbAllowsRuleWiden(
   verbName: string | null | undefined,
-  intent?: string | null
+  intent?: string | null,
+  metadata?: Record<string, unknown> | null
 ): boolean {
   const norm = (v: string) => v.trim().toLowerCase();
+  if (declaredProposeOnly(metadata) === true) return false;
   if (
     intent &&
     (PROPOSE_ONLY_CAPABILITY_INTENTS as readonly string[]).includes(

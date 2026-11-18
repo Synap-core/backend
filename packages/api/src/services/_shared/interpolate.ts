@@ -84,6 +84,59 @@ export function interpolateDeep<T>(
   return value;
 }
 
+/** A string that IS one `{{param}}` and nothing else: the same grammar. */
+const WHOLE_VALUE_PARAM_RE = new RegExp(`^${PARAM_PLACEHOLDER_RE.source}$`);
+
+/** Marks a whole-value token whose param is absent: its key is left out. */
+const OMIT = Symbol("omit");
+
+/**
+ * Deep-interpolate a REQUEST value a verb sends (a declarative verb's `body`,
+ * its GraphQL `variables`) from the run's parameters, keeping types:
+ * - a string that is EXACTLY one `{{param}}` becomes the param's raw value
+ *   (an array, an object, a number, a boolean, `null`), not `String(value)`;
+ * - such a string whose param is absent (`undefined`) is left out: its key is
+ *   omitted from the parent object, or its element from the parent array. A
+ *   required param never gets here absent (the verb's parameter check and
+ *   `paramMapping.required` refuse the run first), so absent = optional;
+ * - a string mixing text and tokens stays a string (`interpolateString`).
+ * Run-time only: install-time template params keep `interpolateDeep`, whose
+ * output the drift comparator measures installed rows against.
+ */
+export function interpolateTyped<T>(
+  value: T,
+  params: Record<string, unknown>
+): T {
+  const out = typedValue(value, params);
+  return (out === OMIT ? undefined : out) as T;
+}
+
+function typedValue(
+  value: unknown,
+  params: Record<string, unknown>
+): unknown {
+  if (typeof value === "string") {
+    const whole = WHOLE_VALUE_PARAM_RE.exec(value);
+    if (!whole) return interpolateString(value, params);
+    const v = params[whole[1]!];
+    return v === undefined ? OMIT : v;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => typedValue(v, params))
+      .filter((v) => v !== OMIT);
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const typed = typedValue(v, params);
+      if (typed !== OMIT) out[k] = typed;
+    }
+    return out;
+  }
+  return value;
+}
+
 /**
  * `{{vault:<ref>}}` — a template's reference to ONE OF ITS OWN `vault[]`
  * entries, by that entry's template-local `ref`.

@@ -105,6 +105,12 @@ export interface GateSkillRow {
    * that floor needs it, `null` = the verb declares none.
    */
   intent?: string | null;
+  /**
+   * The skill's `metadata` bag: its declared `proposeOnly` (no auto grant and
+   * no auto rule ever runs it) is read from here. Absent (not pre-loaded) →
+   * the gate reads it when a widening is decided, never assumes none.
+   */
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface GateCapabilityExecutionInput {
@@ -303,10 +309,11 @@ export async function gateCapabilityExecution(
   // of only the row id (reinstall-unstable). `null` for commands (no row) or a
   // pre-loaded row that omitted `name`.
   let verbName: string | null = null;
-  // The intent the verb serves (a skill only; `undefined` = not loaded yet):
-  // a propose-only intent (a public post) is never widened by a rule or an
-  // auto grant, whatever the verb is named (`capabilityVerbAllowsRuleWiden`).
-  let knownIntent: string | null | undefined = null;
+  // What the verb declares about widening (a skill only; a field left
+  // `undefined` = not loaded yet): a propose-only intent (a public post) or a
+  // declared `metadata.proposeOnly` is never widened by a rule or an auto
+  // grant, whatever the verb is named (`capabilityVerbAllowsRuleWiden`).
+  let knownPosture: Partial<VerbPosture> = { intent: null, metadata: null };
 
   if (input.capabilityKind === "tool") {
     let row = input.tool ?? null;
@@ -337,6 +344,7 @@ export async function gateCapabilityExecution(
           userId: skills.userId,
           name: skills.name,
           intent: skills.intent,
+          metadata: skills.metadata,
         })
         .from(skills)
         .where(eq(skills.id, input.capabilityId));
@@ -345,7 +353,9 @@ export async function gateCapabilityExecution(
     approved = row?.approved ?? null;
     ownerId = row?.userId ?? null;
     verbName = row?.name ?? null;
-    knownIntent = row ? row.intent : null;
+    knownPosture = row
+      ? { intent: row.intent, metadata: row.metadata }
+      : { intent: null, metadata: null };
   } else {
     // commands have no approved/owner column today → conservative defaults.
     approved = null;
@@ -370,10 +380,10 @@ export async function gateCapabilityExecution(
   }
 
   // Read only when a widening is about to be decided; a row pre-loaded
-  // without its intent is read, never assumed to have none.
-  let intentRead: Promise<string | null> | null = null;
-  const verbIntent = (): Promise<string | null> =>
-    (intentRead ??= readVerbIntent(input, knownIntent));
+  // without its intent or metadata is read, never assumed to have none.
+  let postureRead: Promise<VerbPosture> | null = null;
+  const verbPosture = (): Promise<VerbPosture> =>
+    (postureRead ??= readVerbPosture(input, knownPosture));
 
   // The capability rule for this agent run, read ONCE: the "Never" check
   // below and both widening checks further down derive their answer from it.
@@ -533,7 +543,7 @@ export async function gateCapabilityExecution(
       // 2.55 sits above rung 2.8) — skip the rule shortcut and propose.
       if (
         !originUntrusted &&
-        (await capabilityRuleAuthorizesRun(rule, verbName, verbIntent))
+        (await capabilityRuleAuthorizesRun(rule, verbName, verbPosture))
       ) {
         return { decision: "run" };
       }
@@ -580,7 +590,7 @@ export async function gateCapabilityExecution(
   if (verdict.verdict === "execute") {
     // An auto grant must not publish. The rule path is refused inside
     // capabilityRuleAuthorizesRun; this is the grant-execMode auto path.
-    if (!capabilityVerbAllowsRuleWiden(verbName, await verbIntent())) {
+    if (!verbAllowsWiden(verbName, await verbPosture())) {
       return buildProposeDecision(input, "CAPABILITY_PROPOSE");
     }
     return { decision: "run" };
@@ -593,7 +603,7 @@ export async function gateCapabilityExecution(
   // can NEVER be widened to run by a rule (rung 2.55 sits above rung 2.8).
   if (
     !originUntrusted &&
-    (await capabilityRuleAuthorizesRun(rule, verbName, verbIntent))
+    (await capabilityRuleAuthorizesRun(rule, verbName, verbPosture))
   ) {
     return { decision: "run" };
   }
@@ -719,26 +729,44 @@ async function resolveCapabilityRule(
 async function capabilityRuleAuthorizesRun(
   rule: GovernanceRuleMatch | undefined,
   verbName: string | null,
-  verbIntent: () => Promise<string | null>
+  verbPosture: () => Promise<VerbPosture>
 ): Promise<boolean> {
   if (rule?.verdict !== "auto") return false;
-  // A public post stays a proposal even when a lane rule says auto.
-  return capabilityVerbAllowsRuleWiden(verbName, await verbIntent());
+  // A public post or a declared propose-only verb stays a proposal even when
+  // a lane rule says auto.
+  return verbAllowsWiden(verbName, await verbPosture());
 }
 
-/** The verb's intent: a skill's, read when its row came without it. */
-async function readVerbIntent(
+/** What a verb declares about widening: its intent and its metadata bag. */
+interface VerbPosture {
+  intent: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+function verbAllowsWiden(verbName: string | null, p: VerbPosture): boolean {
+  return capabilityVerbAllowsRuleWiden(verbName, p.intent, p.metadata);
+}
+
+/** A skill's intent and metadata, each read when its row came without it. */
+async function readVerbPosture(
   input: GateCapabilityExecutionInput,
-  known: string | null | undefined
-): Promise<string | null> {
-  if (input.capabilityKind !== "skill") return null;
-  if (known !== undefined) return known;
+  known: Partial<VerbPosture>
+): Promise<VerbPosture> {
+  if (input.capabilityKind !== "skill") return { intent: null, metadata: null };
+  if (known.intent !== undefined && known.metadata !== undefined)
+    return { intent: known.intent, metadata: known.metadata };
   const db = await getDb();
   const [row] = await db
-    .select({ intent: skills.intent })
+    .select({ intent: skills.intent, metadata: skills.metadata })
     .from(skills)
     .where(eq(skills.id, input.capabilityId));
-  return row?.intent ?? null;
+  return {
+    intent: known.intent !== undefined ? known.intent : (row?.intent ?? null),
+    metadata:
+      known.metadata !== undefined
+        ? known.metadata
+        : (row?.metadata ?? null),
+  };
 }
 
 /**

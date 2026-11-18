@@ -347,6 +347,35 @@ describe("what never runs on its own", () => {
     expect(read.modes.map((m) => m.mayRunOnItsOwn)).toEqual([false, true]);
   });
 
+  it("a verb whose pack declares metadata.proposeOnly always asks, and an older rule stops firing (231020d4)", async () => {
+    const DELETE_SERVER = "hcloud_delete_server";
+    const deleteId = randomUUID();
+    await q(
+      `insert into skills (id, name, approved, user_id, metadata) values ($1, $2, true, $3, '{}'::jsonb)`,
+      [deleteId, DELETE_SERVER, ALICE]
+    );
+    // Set before the pack declared it: the rule runs it on its own.
+    await caller(ALICE).setActionMode({ action: DELETE_SERVER, mode: "auto" });
+    expect(await nextRun(DELETE_SERVER, deleteId)).toEqual({ decision: "run" });
+
+    // The pack's update lands the declaration (it only tightens).
+    await q(
+      `update skills set metadata = '{"proposeOnly": true}'::jsonb where id = $1`,
+      [deleteId]
+    );
+    // The gate reads it off the row (the run door pre-loads none) and the
+    // standing rule no longer widens the run.
+    expect(await nextRun(DELETE_SERVER, deleteId)).toMatchObject({
+      decision: "propose",
+    });
+    const err = await errorOf(
+      caller(ALICE).setActionMode({ action: DELETE_SERVER, mode: "auto" })
+    );
+    expect(err.cause?.reasonCode).toBe("ACTION_ALWAYS_ASKS");
+    const read = await caller(ALICE).actionModes({ actions: [DELETE_SERVER] });
+    expect(read.modes[0]).toMatchObject({ mayRunOnItsOwn: false });
+  });
+
   it("a name that is no action on this pod is refused (a rule that never fires)", async () => {
     const err = await errorOf(
       caller(ALICE).setActionMode({ action: "no_such_action", mode: "auto" })

@@ -99,6 +99,7 @@ import {
   MCP_SERVER_RE_APPROVAL_FIELDS,
   allowedHostsChanged,
   boxDeclarationChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
 } from "./skill-exec-fields.js";
 import {
@@ -552,7 +553,8 @@ export function definitionSkillChangesExecution(
  * The execution fields applying `s` would change on its installed row, by
  * name: the `RE_APPROVAL_FIELDS` columns (`code`, `inputMap`, ...) in that
  * order, then the `metadata` keys the same rule reads, as
- * `metadata.allowedHosts`, `metadata.box` and `metadata.readOnly`. Empty =
+ * `metadata.allowedHosts`, `metadata.box`, `metadata.readOnly` and
+ * `metadata.proposeOnly`. Empty =
  * the update leaves what the skill runs alone. A held update names these to
  * the owner (`reconcile-capabilities-to-templates.ts`).
  */
@@ -615,6 +617,17 @@ export function definitionSkillExecChanges(
     )
   ) {
     changed.push("metadata.readOnly");
+  }
+  // The mirror image: turning a declared `metadata.proposeOnly` OFF lets an
+  // auto grant or rule run a verb that always asked. Turning it on tightens
+  // and keeps the approval.
+  if (
+    proposeOnlyLoosened(
+      s.metadata as Record<string, unknown> | undefined,
+      existing.metadata as Record<string, unknown> | null
+    )
+  ) {
+    changed.push("metadata.proposeOnly");
   }
   return changed;
 }

@@ -40,7 +40,7 @@ export function actionModeChoices(input: {
   const reads = input.type === "read";
   const line: Record<ActionRunMode, string> = {
     auto: !input.mayRunOnItsOwn
-      ? "It publishes in public, so it always asks you first."
+      ? "It publishes in public or cannot be undone, so it always asks you first."
       : reads
         ? "Your AIs use it without asking you. It only reads."
         : "Your AIs use it without asking you, even when it sends or changes something outside your pod.",
