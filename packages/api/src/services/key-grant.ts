@@ -31,9 +31,12 @@ import {
 import { apiKeys, grants as grantRows, users } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import {
+  holderOfGrant,
   KEY_USES,
   MAX_GRANT_PERMISSIONS,
   meetScope,
+  parsePlace,
+  PlaceError,
   pinningWithin,
   scopesForKey,
   type KeyUseId,
@@ -231,6 +234,105 @@ export function summarizeKeyGrant(grant: KeyGrant): KeyGrantSummary {
     })),
     clientId: grant.clientId,
   };
+}
+
+/**
+ * One part of what the calling credential holds (`GET /auth/grant`): its
+ * permissions and the ONE place they reach (`parsePlace`).
+ */
+export interface OwnGrantPart {
+  permissions: string[];
+  /**
+   * `pod`: reads everywhere in the pod (an app's pod-wide reads, decision
+   * e1b59d38 "B"); `spaces`: only in `spaces` (none = nowhere); `anywhere`:
+   * not limited to spaces (a person's or an AI's own key).
+   */
+  place: "pod" | "spaces" | "anywhere";
+  /** The spaces of a `spaces` part, named; empty for `pod` and `anywhere`. */
+  spaces: Array<{ id: string; name: string | null }>;
+  /** Further limits within the place, or null for none. */
+  projectIds: string[] | null;
+  entityIds: string[] | null;
+}
+
+/**
+ * What the calling credential holds, for an app (or an AI) to explain itself
+ * ("this app can see notes in Brand, and playbooks everywhere"): its grant as
+ * the gates read it for THIS request, each part by place. Only ever the
+ * caller's own grant; it reads no row a grant bounds beyond the names of the
+ * spaces that grant already names.
+ */
+export interface OwnGrant {
+  /** `app`: an app's token (the grant names it); `key`: any other key. */
+  holder: "app" | "key";
+  /** The app the credential acts as (`grants.client_id`), or null. */
+  clientId: string | null;
+  /** True only for the unbounded `*` (`isFullAccessGrant`). */
+  isFullAccess: boolean;
+  /** The same phrase `/auth/status` and the owner refusals print. */
+  summary: string;
+  /** Each part that grants something; a part that grants nothing is left out. */
+  parts: OwnGrantPart[];
+}
+
+/**
+ * The calling credential's grant by place (`OwnGrant`). `spaceNames` names
+ * the spaces it holds (an unknown id keeps a null name). A part whose place
+ * cannot be read (an empty or blank space list) reaches no space: it is shown
+ * as `spaces` with none, never as `anywhere` (fail closed).
+ */
+export function describeOwnGrant(
+  grant: KeyGrant,
+  spaceNames: ReadonlyMap<string, string> = new Map()
+): OwnGrant {
+  const holder = holderOfGrant(grant);
+  const parts: OwnGrantPart[] = [];
+  for (const scope of grant.scopes) {
+    if (scope.permissions.length === 0) continue;
+    let place: OwnGrantPart["place"] = "spaces";
+    let spaceIds: readonly string[] = [];
+    try {
+      const parsed = parsePlace(scope, holder);
+      if (parsed.kind === "pod") place = "pod";
+      else if (parsed.kind === "unbounded") place = "anywhere";
+      else spaceIds = parsed.ids;
+    } catch (err) {
+      if (!(err instanceof PlaceError)) throw err;
+    }
+    parts.push({
+      permissions: [...scope.permissions],
+      place,
+      spaces: spaceIds.map((id) => ({ id, name: spaceNames.get(id) ?? null })),
+      projectIds: scope.projectIds ? [...scope.projectIds] : null,
+      entityIds: scope.entityIds ? [...scope.entityIds] : null,
+    });
+  }
+  return {
+    // `holderOfGrant` names only these two for a stored grant.
+    holder: holder === "app" ? "app" : "key",
+    clientId: grant.clientId,
+    isFullAccess: isFullAccessGrant(grant),
+    summary: describeGrantLimit(grant),
+    parts,
+  };
+}
+
+/**
+ * Every space a grant names, deduplicated (to name them for
+ * `describeOwnGrant`), read through the one place parse (`parsePlace`).
+ */
+export function grantSpaceIds(grant: KeyGrant): string[] {
+  const holder = holderOfGrant(grant);
+  const ids = new Set<string>();
+  for (const scope of grant.scopes) {
+    try {
+      const place = parsePlace(scope, holder);
+      if (place.kind === "spaces") for (const id of place.ids) ids.add(id);
+    } catch (err) {
+      if (!(err instanceof PlaceError)) throw err;
+    }
+  }
+  return [...ids];
 }
 
 /**

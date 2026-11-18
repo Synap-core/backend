@@ -41,6 +41,10 @@ import {
   formatAppAccessAskPair,
   parseSynapAsk,
 } from "@synap-core/types/grants";
+import {
+  assertPermissions,
+  InvalidPermissionError,
+} from "@synap/governance-policy/grants";
 import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 
 import {
@@ -78,6 +82,8 @@ import {
   isFirstPartyClientId,
   personDeviceClient,
   OAUTH_DEFAULT_SCOPES,
+  OAUTH_SUPPORTED_SCOPES,
+  PERSON_SCOPE,
   isSynapApp,
   normalizeRequestedScopes,
   resolveFirstPartyClient,
@@ -346,6 +352,84 @@ function requireIssuer(): string {
   return issuer;
 }
 
+/** Where the client is being resolved, for when its document is read again. */
+export interface ResolveClientOptions {
+  /**
+   * The consent screen: a person is about to read what the app asks for and
+   * decide on it, so the offer is built from the app's CURRENT document, not
+   * a copy still fresh by its Cache-Control (`consentRereadIf`).
+   */
+  consentScreen?: boolean;
+}
+
+/** Is this a grant-grammar permission (what a pod app declares and asks)? */
+function isGrantPermission(value: string): boolean {
+  try {
+    assertPermissions([value]);
+    return true;
+  } catch (err) {
+    if (err instanceof InvalidPermissionError) return false;
+    throw err;
+  }
+}
+
+/**
+ * Does this request ask a pod app for a permission its cached document does
+ * not declare: a grant permission in `scope` (an `mcp.*` scope or `person`
+ * is not one) or a `synap_ask` pair's? Then the copy may simply be older than
+ * the document that declares it, and the request is read against the current
+ * one: otherwise `/authorize` narrows the new permission out of the scope it
+ * forwards, and the consent screen can never offer it. A `synap_ask` that does
+ * not parse asks for nothing here (its own check refuses it).
+ */
+export function asksBeyondCachedDocument(
+  cached: Pick<StoredClient, "requestedPermissions">,
+  params: Pick<AuthorizeParams, "scope" | "synapAsk">
+): boolean {
+  const declared = new Set(cached.requestedPermissions);
+  const notGrant = new Set<string>([...OAUTH_SUPPORTED_SCOPES, PERSON_SCOPE]);
+  const asked = normalizeRequestedScopes(parseScopeParam(params.scope)).filter(
+    (s) => !notGrant.has(s) && isGrantPermission(s)
+  );
+  if (params.synapAsk) {
+    try {
+      asked.push(...parseSynapAsk(params.synapAsk).map((p) => p.permission));
+    } catch (err) {
+      if (!(err instanceof AppAccessAskSyntaxError)) throw err;
+    }
+  }
+  return asked.some((p) => !declared.has(p));
+}
+
+/**
+ * When a pod app's cached document is read again before it expires
+ * (`resolveCimdClient` `rereadIf`, never sooner than `CIMD_REREAD_FLOOR_MS`
+ * after the last read): on the consent screen (a person decides on the
+ * offer), on `prompt=consent` (the app asks for the consent again: "Ask
+ * again"), and when the request asks for a permission the copy does not
+ * declare (`asksBeyondCachedDocument`, which covers the short consent's
+ * `synap_ask`). Founder dogfood 18 Nov 2026: an app that newly declared
+ * pod-wide reads was offered them per space, from a copy cached before.
+ *
+ * SECURITY: a re-read only ever replaces the cache with the document the app
+ * serves NOW, through the same SSRF-safe fetch, budget and validation; it
+ * never widens what a person gives. The consent click still checks the ticks
+ * against the offer (`connectOAuthApp`): a pair is given pod-wide only when
+ * the person ticked it pod-wide, which only the screen's offer shows, and
+ * only a read can be pod-wide (`isPodWideReadPermission`); writes stay per
+ * space. The decision itself does not re-read early (`consentScreen`
+ * unset), so it judges the ticks against the copy the screen just read.
+ */
+export function consentRereadIf(
+  params: Pick<AuthorizeParams, "scope" | "synapAsk" | "prompt">,
+  options: ResolveClientOptions = {}
+): (cached: StoredClient) => boolean {
+  return (cached) =>
+    options.consentScreen === true ||
+    params.prompt === "consent" ||
+    asksBeyondCachedDocument(cached, params);
+}
+
 /**
  * PHASE 1 — resolve the client and its redirect_uri. Failures here throw
  * `AuthorizeUserError` because there is no verified URI to redirect to yet.
@@ -356,7 +440,8 @@ function requireIssuer(): string {
  * for.
  */
 export async function resolveClientAndRedirect(
-  params: AuthorizeParams
+  params: AuthorizeParams,
+  options: ResolveClientOptions = {}
 ): Promise<{ client: StoredClient; redirectUri: string }> {
   const clientId = params.clientId?.trim();
   if (!clientId) {
@@ -387,7 +472,13 @@ export async function resolveClientAndRedirect(
       );
     }
     try {
-      client = await resolveCimdClient(clientId, resolveIssuer());
+      client = await resolveCimdClient(
+        clientId,
+        resolveIssuer(),
+        undefined,
+        undefined,
+        { rereadIf: consentRereadIf(params, options) }
+      );
       // A document declaring `person`: a native app signing the person in
       // on a device, the same door as the built-in Synap apps (config.ts).
       client = personDeviceClient(client) ?? client;
@@ -551,9 +642,13 @@ export function isMcpClient(
 
 /** Both phases, in order. Used by the consent surface (which needs both). */
 export async function resolveAuthorizeRequest(
-  params: AuthorizeParams
+  params: AuthorizeParams,
+  options: ResolveClientOptions = {}
 ): Promise<ValidatedAuthorizeRequest> {
-  const { client, redirectUri } = await resolveClientAndRedirect(params);
+  const { client, redirectUri } = await resolveClientAndRedirect(
+    params,
+    options
+  );
   return validateAuthorizeRequest(client, redirectUri, params);
 }
 
@@ -815,7 +910,8 @@ export async function getOAuthConsentContext(
   callerSession?:
     (KratosAuthenticationFacts & { authenticated_at?: string | null }) | null
 ): Promise<OAuthConsentContext> {
-  const req = await resolveAuthorizeRequest(params);
+  // The person reads the offer now: built from the app's current document.
+  const req = await resolveAuthorizeRequest(params, { consentScreen: true });
   const reauthenticate = reauthenticationRequired(
     params,
     sessionAuthenticatedAt(callerSession)
