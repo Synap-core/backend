@@ -53,7 +53,19 @@ export interface CanApplyInput {
   workspaceId: string | null;
   agentUserId?: string | null;
   sessionId?: string | null;
+  /**
+   * The filing transaction, when the door files inside one: an entry's own
+   * reads go through it (a read beside an open transaction waits on it on a
+   * single-connection database). Absent = the pool.
+   */
+  reader?: CanApplyReader;
 }
+
+/** What an entry reads with: the pool, or the filing transaction. */
+export type CanApplyReader = Pick<
+  typeof import("@synap/database").db,
+  "select"
+>;
 
 /** Why it cannot apply: the approval's own sentence, and a stable code. */
 export interface CanApplyRefusal {
@@ -104,7 +116,7 @@ const CAN_APPLY: Readonly<Record<string, CanApplyCheck>> = {
     const skillId = payload.skillId;
     if (typeof skillId !== "string") return null;
     const { db, skills, eq } = await import("@synap/database");
-    const [skill] = await db
+    const [skill] = await (input.reader ?? db)
       .select({ id: skills.id, name: skills.name, kind: skills.kind })
       .from(skills)
       .where(eq(skills.id, skillId))
@@ -138,7 +150,7 @@ const CAN_APPLY: Readonly<Record<string, CanApplyCheck>> = {
   "focus_session/update": async (payload, input) => {
     if (!Array.isArray(payload.expectedOutputs)) return null;
     const { db, focusSessions, eq } = await import("@synap/database");
-    const [session] = await db
+    const [session] = await (input.reader ?? db)
       .select({ expectedOutputs: focusSessions.expectedOutputs })
       .from(focusSessions)
       .where(eq(focusSessions.id, input.targetId))

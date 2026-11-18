@@ -27,7 +27,9 @@ import ts from "typescript";
  *      `recipeRunRefusalAtFiling`, and it calls the check.
  *   3. THE ONE FILING CHECK (`can-apply.ts`, plan 8032a127 D1). The door
  *      that inserts every API-filed pending row, `createPendingProposalRow`,
- *      calls `proposalCannotApply` before `insertPendingProposal`; a revision
+ *      calls `proposalCannotApply` before `insertPendingProposal` (a caller
+ *      that asked it itself, before its transaction, files with
+ *      `canApplyAsked`: `createProposal`); a revision
  *      asks it too (`checkRevisedPayload`), and no door-local copy is left
  *      (`REVISED_PAYLOAD_VALIDATORS`, `executeCapability`'s own recipe call).
  *      Every entry of its table is DERIVED from the source and must name the
@@ -491,14 +493,50 @@ describe("filing and approval share the check", () => {
       expect(check).toBeLessThan(insert);
     });
 
-    it("createProposal turns the refusal into the gate's denial", () => {
-      const fn = namedFunction(parse(PERMISSION_CHECK), "createProposal");
-      let mapped = false;
-      walk(fn, (n) => {
-        if (ts.isCallExpression(n) && calleeName(n) === "filingRefusalOf")
-          mapped = true;
+    it("a caller that files with `canApplyAsked` asked the check itself first (createProposal, before its transaction)", () => {
+      const sf = parse(PERMISSION_CHECK);
+      const skips: Array<{ fn: FnNode | null; at: number }> = [];
+      const visit = (n: ts.Node, fn: FnNode | null): void => {
+        const inner = isFn(n) ? n : fn;
+        if (
+          ts.isCallExpression(n) &&
+          calleeName(n) === "createPendingProposalRow" &&
+          n.arguments[2] &&
+          /canApplyAsked/.test(n.arguments[2].getText())
+        )
+          skips.push({ fn: inner, at: n.getStart() });
+        n.forEachChild((c) => visit(c, inner));
+      };
+      visit(sf, null);
+      // Non-vacuity: createProposal's call is seen.
+      expect(skips.length).toBeGreaterThanOrEqual(1);
+      const unasked = skips.filter((s) => {
+        // The call sits in the transaction's callback: ask of the function
+        // that opens it, the outermost function holding the call.
+        let outer: ts.Node | null = s.fn;
+        let top: FnNode | null = s.fn;
+        while (outer) {
+          if (isFn(outer)) top = outer;
+          outer = outer.parent;
+        }
+        if (!top) return true;
+        let asked = -1;
+        walk(top, (n) => {
+          if (
+            asked < 0 &&
+            ts.isCallExpression(n) &&
+            calleeName(n) === "proposalCannotApply"
+          )
+            asked = n.getStart();
+        });
+        return asked < 0 || asked > s.at;
       });
-      expect(mapped).toBe(true);
+      expect(unasked).toEqual([]);
+      const createProposal = namedFunction(sf, "createProposal");
+      const asked = firstCallAt(createProposal, "proposalCannotApply");
+      const tx = firstCallAt(createProposal, "transaction");
+      expect(asked).toBeGreaterThan(0);
+      expect(asked).toBeLessThan(tx);
     });
 
     it("a revision asks the same check, and no revise-only copy is left", () => {
