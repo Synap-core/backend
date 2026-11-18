@@ -377,6 +377,25 @@ describe("readNeedsYouContext — a failed part is unreadable, never empty", () 
     }
   });
 
+  it("the runner and room-post reads are never made: their failure leaves the story readable", async () => {
+    // The card's story does not show who stamped in or what the room said
+    // (`NEEDS_YOU_TIMELINE_WITHHELD`): those sources are not read at all, so
+    // a fault only they meet must not take the timeline down with them.
+    await h.client!.exec(
+      `alter table session_runners rename to session_runners_away;
+       alter table messages rename column message_category to message_category_away`
+    );
+    try {
+      const ctx = await readNeedsYouContext(ROWS, reader);
+      expect(ctx.sessions[S.main]!.timeline.status).toBe("ok");
+    } finally {
+      await h.client!.exec(
+        `alter table session_runners_away rename to session_runners;
+         alter table messages rename column message_category_away to message_category`
+      );
+    }
+  });
+
   it("the subject read fails: the subject is unreadable, the rest answers", async () => {
     // A fault only the subject read meets: it selects `system_data`. Renaming
     // `profiles` would also fail the timeline, which reads room posts through
