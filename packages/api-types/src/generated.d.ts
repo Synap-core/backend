@@ -892,6 +892,8 @@ export interface GoalCriterionView {
 	stageKey?: string;
 	checkKind?: CriterionCheckMeaning;
 	about?: CriterionAbout;
+	/** The key of the session output this criterion checks (absent = none named). */
+	outputKey?: string;
 	/** The judge's stored decision — `null` until one is made. */
 	acceptance: GoalCriterionAcceptance | null;
 	mark: GoalCriterionMark | null;
@@ -10163,7 +10165,7 @@ export interface ProposalToolRunParameter {
 	label: string;
 	/** What the verb's schema says the argument is, when it says. */
 	description?: string;
-	/** The value the agent passed, whole. Absent when `secret`. */
+	/** The value the agent passed, whole (a pod registration code in it masked). Absent when `secret`. */
 	value?: unknown;
 	/** The argument names a credential: its value never leaves the pod. */
 	secret?: true;
@@ -16240,6 +16242,8 @@ export interface SessionCriterion {
 	checkKind?: CriterionCheckMeaning$1;
 	/** R7 — about the result (absent = result) or the method. */
 	about?: CriterionAbout$1;
+	/** The key of the session output this criterion checks (absent = none named). */
+	outputKey?: string;
 }
 /**
  * The normalized shape the Phase-1 adapters produce from builtin IS tools,
@@ -42418,6 +42422,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
+					outputKey?: string | undefined;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 					statement: string;
@@ -43210,6 +43215,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
+						outputKey?: string | undefined;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
 						statement: string;
@@ -50167,6 +50173,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
+					outputKey?: string | undefined;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 					statement: string;
@@ -50568,6 +50575,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
+						outputKey?: string | undefined;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
 						statement: string;
@@ -51591,6 +51599,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
+					outputKey?: string | undefined;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 					statement: string;
@@ -51992,6 +52001,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
+						outputKey?: string | undefined;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
 						statement: string;
@@ -60733,6 +60743,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
+					outputKey?: string | undefined;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 					statement: string;
@@ -60819,6 +60830,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
+					outputKey?: string | undefined;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 					statement: string;
@@ -62973,6 +62985,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							};
 							checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 							key: string;
+							outputKey?: string | undefined;
 							required?: boolean | undefined;
 							stageKey?: string | undefined;
 							statement: string;
@@ -63375,6 +63388,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								};
 								checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 								key: string;
+								outputKey?: string | undefined;
 								required?: boolean | undefined;
 								stageKey?: string | undefined;
 								statement: string;
