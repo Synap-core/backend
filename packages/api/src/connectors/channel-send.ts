@@ -518,6 +518,12 @@ export async function planChannelSend(args: {
   return { ok: true, kind: "start", attendee: reach.attendee };
 }
 
+/** The reach refusals a send is filed HELD for, instead of refused or run. */
+const HELD_AT_FILING: ReadonlySet<string> = new Set([
+  "not_connected",
+  "missing_field",
+]);
+
 /**
  * The reach check when a send is FILED for review (not on an approved one):
  * a LinkedIn message that would start a chat with someone who is not a
@@ -528,10 +534,12 @@ export async function planChannelSend(args: {
  * (`services/channels/held-sends.ts`). Same rule as at dispatch
  * (`readChannelReach`).
  *
- * Only `not_connected` holds here. Everything else files as before, and the
- * dispatch check still holds: a channel with a chat (it continues), another
- * provider, no account to read with, and a read that FAILED (LinkedIn or
- * Unipile down): an unread reach is not "not connected".
+ * Two refusals hold here: `not_connected`, and `missing_field` (no LinkedIn
+ * profile on file for them: only the person can add it, plan 8032a127 D1).
+ * Everything else files as before, and the dispatch check still holds: a
+ * channel with a chat (it continues), another provider, no account to read
+ * with, and a read that FAILED (LinkedIn or Unipile down): an unread reach is
+ * not "not connected".
  */
 export async function reachHoldAtFiling(args: {
   channel: SendChannel;
@@ -556,7 +564,7 @@ export async function reachHoldAtFiling(args: {
       accountId,
       now: args.now,
     });
-    return !reach.ok && reach.errorClass === "not_connected" ? reach : null;
+    return !reach.ok && HELD_AT_FILING.has(reach.errorClass) ? reach : null;
   } catch (err) {
     logger.warn(
       { err, channelId: channel.id },

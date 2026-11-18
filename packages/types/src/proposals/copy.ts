@@ -49,6 +49,18 @@ export const en = {
   "proposals.who.rule": "Approved by a standing rule",
   "proposals.who.withdrawn": "Withdrawn by {who}",
   "proposals.who.asked": "Asked by {who}",
+  // CANNOT APPLY YET (`cannotApplyYet`, `./cannot-apply.ts`): a request still
+  // to decide that cannot apply until the person (or the day) does something.
+  // One line per reason, naming the next step.
+  "proposals.cannotApplyYet.label": "Can’t apply yet",
+  "proposals.cannotApplyYet.not_connected":
+    "Not one of your LinkedIn connections yet. It can go once they accept your connection request.",
+  "proposals.cannotApplyYet.no_profile":
+    "No LinkedIn profile on file for this person. Add their LinkedIn URL to their record, then send it.",
+  "proposals.cannotApplyYet.daily_limit":
+    "Your LinkedIn account reached today’s limit. It can go tomorrow.",
+  "proposals.cannotApplyYet.needs_setup":
+    "Needs setup before it can apply. Add what it asks for.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -88,6 +100,15 @@ export const fr: Catalog<typeof en> = {
   "proposals.who.rule": "Approuvé par une règle permanente",
   "proposals.who.withdrawn": "Retiré par {who}",
   "proposals.who.asked": "Demandé par {who}",
+  "proposals.cannotApplyYet.label": "Ne peut pas encore s’appliquer",
+  "proposals.cannotApplyYet.not_connected":
+    "Cette personne ne fait pas encore partie de vos relations LinkedIn. Le message pourra partir dès qu’elle aura accepté votre invitation.",
+  "proposals.cannotApplyYet.no_profile":
+    "Aucun profil LinkedIn enregistré pour cette personne. Ajoutez son URL LinkedIn à sa fiche, puis envoyez-le.",
+  "proposals.cannotApplyYet.daily_limit":
+    "Votre compte LinkedIn a atteint sa limite du jour. Le message pourra partir demain.",
+  "proposals.cannotApplyYet.needs_setup":
+    "Une configuration est nécessaire avant de l’appliquer. Ajoutez ce qui est demandé.",
 };
 
 export const proposalsCopy = { en, fr } as const;

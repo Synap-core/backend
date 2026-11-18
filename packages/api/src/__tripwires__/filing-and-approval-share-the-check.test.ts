@@ -23,8 +23,16 @@ import ts from "typescript";
  *      by existing.
  *   2. RECIPE RUNS. The check is `planRecipeRun`. Approval: the
  *      `computer.run_recipe` handler → `queueRecipeRun` → the check. Filing:
- *      `executeCapability` calls `recipeRunRefusalAtFiling` before
- *      `createPendingProposal`, and it calls the check.
+ *      the one filing check's `capability.run` entry calls
+ *      `recipeRunRefusalAtFiling`, and it calls the check.
+ *   3. THE ONE FILING CHECK (`can-apply.ts`, plan 8032a127 D1). The door
+ *      that inserts every API-filed pending row, `createPendingProposalRow`,
+ *      calls `proposalCannotApply` before `insertPendingProposal`; a revision
+ *      asks it too (`checkRevisedPayload`), and no door-local copy is left
+ *      (`REVISED_PAYLOAD_VALIDATORS`, `executeCapability`'s own recipe call).
+ *      Every entry of its table is DERIVED from the source and must name the
+ *      function its approval runs (`APPROVAL_TWINS` below): an entry with no
+ *      proven twin goes red, so a new kind joins by existing.
  *
  * Behaviour is proven elsewhere (`fileable-expected-outputs.test.ts`,
  * governance-seams M5b, `focus-sessions.patch-stamps.test.ts`,
@@ -69,6 +77,24 @@ const EXECUTE_CAPABILITY = join(
   "capabilities",
   "execute-capability.ts"
 );
+
+const CAN_APPLY = join(API_SRC, "services", "proposals", "can-apply.ts");
+const PERMISSION_CHECK = join(API_SRC, "utils", "permission-check.ts");
+const PROPOSALS_SERVICE = join(
+  API_SRC,
+  "services",
+  "proposals",
+  "proposals-service.ts"
+);
+const PLAYBOOKS_ROUTER = join(API_SRC, "routers", "playbooks.ts");
+const PLAYBOOK_EXECUTOR = join(
+  API_SRC,
+  "routers",
+  "proposals",
+  "executors",
+  "playbook.ts"
+);
+const MATERIALIZER = join(JOBS_SRC, "workers", "materializer.ts");
 
 const FILING_CALLS = new Set([
   "checkPermissionOrPropose",
@@ -346,16 +372,203 @@ describe("filing and approval share the check", () => {
       ).toBe(true);
     });
 
-    it("executeCapability runs the filing check before the proposal is filed", () => {
+    it("executeCapability keeps no copy: the check runs inside createPendingProposal, and its refusal is mapped", () => {
       const execute = namedFunction(
         parse(EXECUTE_CAPABILITY),
         "executeCapability"
       );
-      const check = firstCallAt(execute, "recipeRunRefusalAtFiling");
-      const file = firstCallAt(execute, "createPendingProposal");
-      expect(file).toBeGreaterThan(0);
+      expect(firstCallAt(execute, "createPendingProposal")).toBeGreaterThan(0);
+      let ownCall = false;
+      walk(execute, (n) => {
+        if (
+          ts.isCallExpression(n) &&
+          calleeName(n) === "recipeRunRefusalAtFiling"
+        )
+          ownCall = true;
+      });
+      expect(ownCall).toBe(false);
+      let mapped = false;
+      walk(execute, (n) => {
+        if (ts.isCallExpression(n) && calleeName(n) === "filingRefusalOf")
+          mapped = true;
+      });
+      expect(mapped).toBe(true);
+    });
+  });
+
+  describe("the one filing check: proposalCannotApply", () => {
+    /**
+     * Each entry of `CAN_APPLY`: the function it calls (`calls`, defined in
+     * `callsIn`), the function both sides share (`shared`), and where the
+     * APPROVAL calls it (a function of a file, or the file alone when the
+     * approval replays through a router procedure).
+     */
+    const APPROVAL_TWINS: Record<
+      string,
+      {
+        calls: string;
+        callsIn: string;
+        shared: string;
+        approval: { file: string; fn?: string };
+      }
+    > = {
+      "capability.run": {
+        calls: "recipeRunRefusalAtFiling",
+        callsIn: BUILTIN_VERBS,
+        shared: "planRecipeRun",
+        approval: { file: HOSTED_VERBS, fn: "queueRecipeRun" },
+      },
+      "playbook/create": {
+        calls: "assertRevisedPlaybookPayload",
+        callsIn: PLAYBOOKS_ROUTER,
+        shared: "assertPlaybookDefinitionWritable",
+        approval: { file: PLAYBOOKS_ROUTER },
+      },
+      "playbook/update": {
+        calls: "assertRevisedPlaybookPayload",
+        callsIn: PLAYBOOKS_ROUTER,
+        shared: "assertPlaybookDefinitionWritable",
+        approval: { file: PLAYBOOKS_ROUTER },
+      },
+      "command/execute": {
+        calls: "commandPolicyRefusal",
+        callsIn: "",
+        shared: "commandPolicyRefusal",
+        approval: { file: MATERIALIZER },
+      },
+      "focus_session/update": {
+        calls: "detectServerStampedWrites",
+        callsIn: "",
+        shared: "detectServerStampedWrites",
+        approval: { file: UPDATE_SESSION, fn: "mergeExpectedOutputs" },
+      },
+    };
+
+    /** `callee` is called by `fn` of `file`, or anywhere in `file`. */
+    function reaches(file: string, fn: string | undefined, callee: string) {
+      if (fn) return calls(file, fn, callee);
+      let hit = false;
+      walk(parse(file), (n) => {
+        if (ts.isCallExpression(n) && calleeName(n) === callee) hit = true;
+      });
+      return hit;
+    }
+
+    /** The entries of `CAN_APPLY`, each with the calls its function makes. */
+    function canApplyEntries(): Map<string, Set<string>> {
+      const out = new Map<string, Set<string>>();
+      walk(parse(CAN_APPLY), (n) => {
+        if (
+          ts.isVariableDeclaration(n) &&
+          ts.isIdentifier(n.name) &&
+          n.name.text === "CAN_APPLY" &&
+          n.initializer &&
+          ts.isObjectLiteralExpression(n.initializer)
+        ) {
+          for (const p of n.initializer.properties) {
+            if (!ts.isPropertyAssignment(p) || !ts.isStringLiteral(p.name))
+              continue;
+            const called = new Set<string>();
+            walk(p.initializer, (c) => {
+              if (ts.isCallExpression(c)) {
+                const name = calleeName(c);
+                if (name) called.add(name);
+              }
+            });
+            out.set(p.name.text, called);
+          }
+        }
+      });
+      return out;
+    }
+
+    it("createPendingProposalRow asks it before the row is inserted", () => {
+      const row = namedFunction(parse(PERMISSION_CHECK), "createPendingProposalRow");
+      const check = firstCallAt(row, "proposalCannotApply");
+      const insert = firstCallAt(row, "insertPendingProposal");
+      expect(insert).toBeGreaterThan(0);
       expect(check).toBeGreaterThan(0);
-      expect(check).toBeLessThan(file);
+      expect(check).toBeLessThan(insert);
+    });
+
+    it("createProposal turns the refusal into the gate's denial", () => {
+      const fn = namedFunction(parse(PERMISSION_CHECK), "createProposal");
+      let mapped = false;
+      walk(fn, (n) => {
+        if (ts.isCallExpression(n) && calleeName(n) === "filingRefusalOf")
+          mapped = true;
+      });
+      expect(mapped).toBe(true);
+    });
+
+    it("a revision asks the same check, and no revise-only copy is left", () => {
+      expect(
+        calls(PROPOSALS_SERVICE, "checkRevisedPayload", "proposalCannotApply")
+      ).toBe(true);
+      expect(readFileSync(PROPOSALS_SERVICE, "utf8")).not.toMatch(
+        /REVISED_PAYLOAD_VALIDATORS/
+      );
+    });
+
+    it("every entry calls the function its approval runs, and has a declared twin", () => {
+      const entries = canApplyEntries();
+      // Non-vacuity, and a new entry joins by existing: the table must name
+      // exactly the entries the source declares.
+      expect([...entries.keys()].sort()).toEqual(
+        Object.keys(APPROVAL_TWINS).sort()
+      );
+      const problems: string[] = [];
+      for (const [key, called] of entries) {
+        const twin = APPROVAL_TWINS[key]!;
+        // Directly, or through one local helper of can-apply.ts.
+        const entryCalls =
+          called.has(twin.calls) ||
+          [...called].some((c) => {
+            try {
+              return calls(CAN_APPLY, c, twin.calls);
+            } catch {
+              return false;
+            }
+          });
+        if (!entryCalls) problems.push(`${key}: does not call ${twin.calls}`);
+        if (
+          twin.calls !== twin.shared &&
+          !calls(twin.callsIn, twin.calls, twin.shared)
+        )
+          problems.push(`${key}: ${twin.calls} does not call ${twin.shared}`);
+        if (!reaches(twin.approval.file, twin.approval.fn, twin.shared))
+          problems.push(
+            `${key}: the approval (${relative(API_SRC, twin.approval.file)}${twin.approval.fn ? ` ${twin.approval.fn}` : ""}) does not call ${twin.shared}`
+          );
+      }
+      expect(problems).toEqual([]);
+    });
+
+    it("the playbook approval replays the router procedures that run the definition check", () => {
+      const replays = readFileSync(PLAYBOOK_EXECUTOR, "utf8");
+      expect(replays).toMatch(/playbookCaller\.create\(/);
+      expect(replays).toMatch(/playbookCaller\.update\(/);
+    });
+
+    it("self-check: the entry scan sees a literal sample's keys and calls", () => {
+      const sf = ts.createSourceFile(
+        "sample.ts",
+        `const CAN_APPLY = { "a/b": async (p) => helper(p), "c": (p) => other(p) };`,
+        ts.ScriptTarget.Latest,
+        true
+      );
+      const keys: string[] = [];
+      walk(sf, (n) => {
+        if (
+          ts.isVariableDeclaration(n) &&
+          n.initializer &&
+          ts.isObjectLiteralExpression(n.initializer)
+        )
+          for (const p of n.initializer.properties)
+            if (ts.isPropertyAssignment(p) && ts.isStringLiteral(p.name))
+              keys.push(p.name.text);
+      });
+      expect(keys).toEqual(["a/b", "c"]);
     });
   });
 });

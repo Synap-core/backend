@@ -692,7 +692,8 @@ export type PermissionResult =
       /**
        * A typed refusal: `DENIED_BY_RULE` = a person's stored "Never" for this
        * agent and this kind of act (0381). The reason text opens with it too,
-       * for doors that forward only the text.
+       * for doors that forward only the text. Or the code of a proposal
+       * that cannot apply, refused when filed (`can-apply.ts`).
        */
       reasonCode?: string;
       /**
@@ -4112,6 +4113,25 @@ async function createPendingProposalRow(
   input: CreatePendingProposalInput,
   tx?: DbTx
 ): Promise<InsertPendingProposalResult> {
+  // CAN IT APPLY? The ONE check per proposal kind (`can-apply.ts`, plan
+  // 8032a127 D1), asked here because every API door files through this row:
+  // a proposal its approval would refuse is refused NOW, before a receipt
+  // session is minted or a row inserted, with the approval's own sentence.
+  // A read that fails files as before.
+  const { proposalCannotApply, ProposalCannotApplyError } =
+    await import("../services/proposals/can-apply.js");
+  const cannotApply = await proposalCannotApply({
+    targetType: input.targetType,
+    targetId: input.targetId,
+    proposalType: input.proposalType,
+    data: input.data,
+    userId: input.userId,
+    workspaceId: input.workspaceId ?? null,
+    agentUserId: input.agentUserId ?? null,
+    sessionId: input.sessionId ?? null,
+  });
+  if (cannotApply) throw new ProposalCannotApplyError(cannotApply);
+
   // Wave 2 — agent writes without a session get packaged into a focus session
   // (teammate metaphor). Humans and already-sessioned callers are untouched.
   // Never mint for focus_session self-writes (recursion). Best-effort.
@@ -4889,8 +4909,13 @@ async function createProposal(args: {
   // `.requested` append failure now ROLLS BACK the proposal instead of being
   // swallowed — an un-traceable proposal is worse than a surfaced error.
   // Notifications run AFTER commit (never hold the tx across network/queue work).
-  const { proposal, pendingInput, deduped, superseded } = await db.transaction(
-    async (tx) => {
+  //
+  // A proposal that CANNOT APPLY (`can-apply.ts`, asked by
+  // `createPendingProposalRow`) rolls the transaction back, so neither the
+  // event nor the row exists, and comes back as this gate's denial with the
+  // approval's own sentence and code.
+  const filed = await db
+    .transaction(async (tx) => {
       let reqEventId = requestedEventId;
       if (!reqEventId) {
         reqEventId = await logEvent(
@@ -4941,8 +4966,22 @@ async function createProposal(args: {
         superseded,
       } = await createPendingProposalRow(pendingInput, tx);
       return { proposal: created, pendingInput, deduped, superseded };
-    }
-  );
+    })
+    .catch(async (err: unknown) => {
+      const { filingRefusalOf } =
+        await import("../services/proposals/can-apply.js");
+      const refused = filingRefusalOf(err);
+      if (!refused) throw err;
+      return { refused };
+    });
+  if ("refused" in filed) {
+    return {
+      denied: true,
+      reason: filed.refused.message,
+      reasonCode: filed.refused.reasonCode,
+    };
+  }
+  const { proposal, pendingInput, deduped, superseded } = filed;
 
   // Post-commit notifications (broadcast / side-effects / notification center).
   // A dedup hit returned a pre-existing proposal — it already notified when

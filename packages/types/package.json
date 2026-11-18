@@ -233,6 +233,10 @@
       "types": "./dist/proposals/ended.d.ts",
       "import": "./dist/proposals/ended.js"
     },
+    "./proposals/cannot-apply": {
+      "types": "./dist/proposals/cannot-apply.d.ts",
+      "import": "./dist/proposals/cannot-apply.js"
+    },
     "./proposals/item-pack": {
       "types": "./dist/proposals/item-pack.d.ts",
       "import": "./dist/proposals/item-pack.js"

@@ -1100,7 +1100,8 @@ export async function sendExternalMessage(
     !input.alreadyApproved
   ) {
     // The reach check at FILING (CRM Messages contract b4f8c2cd, B): a
-    // LinkedIn first message to someone who is not a connection is HELD, never
+    // LinkedIn first message to someone who is not a connection, or who has
+    // no LinkedIn profile on file (plan 8032a127 D1), is HELD, never
     // refused: filed as a proposal with `data.held` and the next step named,
     // so the draft is kept and shown, and becomes sendable once they connect
     // (`services/channels/held-sends.ts`). Same rule as at dispatch
@@ -1113,7 +1114,14 @@ export async function sendExternalMessage(
         connector,
         namedAccountId: input.accountId,
       });
-      if (unreachable) held = heldSend(unreachable.error);
+      if (unreachable)
+        held = heldSend(
+          unreachable.error,
+          new Date(),
+          unreachable.errorClass === "missing_field"
+            ? "missing_field"
+            : "not_connected"
+        );
     }
     held = held ?? limitHold;
     const gateResult = await gateMessagingSend({
