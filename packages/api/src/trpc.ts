@@ -17,6 +17,7 @@ import {
 } from "./utils/device-session.js";
 import {
   presenceProofSchema,
+  presenceSessionKey,
   sensitiveActionReason,
   type PresenceProof,
   type SensitiveActionPath,
@@ -154,6 +155,16 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
 });
 
 /**
+ * `kratos:<id>` of a browser session (`presenceSessionKey`, the one
+ * derivation of `callerSessionKey`), or null for a session that names none.
+ */
+function browserSessionKey(session: unknown): string | null {
+  const s = session as { id?: unknown; device?: unknown } | null | undefined;
+  if (!s || s.device) return null;
+  return presenceSessionKey("kratos", typeof s.id === "string" ? s.id : null);
+}
+
+/**
  * A person's Kratos session (pod admin in a browser) runs in the scope that
  * lets a typed presence code count (`runAsBrowserPerson`). Only
  * `createContext` sets `sessionKind: "kratos"`; a Hub caller, a key or a
@@ -161,7 +172,7 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
  */
 const browserPersonMiddleware = t.middleware((opts) =>
   opts.ctx.authenticated && opts.ctx.sessionKind === "kratos"
-    ? runAsBrowserPerson(() => opts.next())
+    ? runAsBrowserPerson(() => opts.next(), browserSessionKey(opts.ctx.session))
     : opts.next()
 );
 

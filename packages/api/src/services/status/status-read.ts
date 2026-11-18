@@ -98,6 +98,7 @@ import {
   type WaitingOnMark,
   type WaitingOnSource,
   type ThingBlocker,
+  type TimelineWithheldSource,
   deriveThingBlocker,
   deriveWaitingOn,
 } from "@synap-core/types/units";
@@ -144,6 +145,7 @@ import {
   type WaitingOnQuestion,
 } from "./status-facts.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { stageLedgerEventId } from "../focus-sessions/stage-ledger-event.js";
 
 const logger = createLogger({ module: "status-read" });
 
@@ -295,6 +297,18 @@ function openSessionsOf(rollup: StatusOfRollup): number {
   return (c.open ?? 0) + (c.active ?? 0) + (c.paused ?? 0);
 }
 
+/**
+ * The session timeline sources whose events `include: ["history"]` never
+ * keeps (`isStatusHistoryEvent`): not read at all, so neither their cost nor
+ * a failed read reaches the history.
+ */
+export const STATUS_HISTORY_TIMELINE_WITHHELD = [
+  "dev_facts",
+  "decisions",
+  "runners",
+  "room_posts",
+] as const satisfies readonly TimelineWithheldSource[];
+
 /** Newest first; a tie by id, as the timeline orders its own. */
 function newestFirst(a: StatusOfHistoryEvent, b: StatusOfHistoryEvent): number {
   const t = Date.parse(b.at) - Date.parse(a.at);
@@ -306,7 +320,11 @@ function newestFirst(a: StatusOfHistoryEvent, b: StatusOfHistoryEvent): number {
  * A session's stage ledger as `stage_entered` history entries, each actor
  * named by the pod. The ledger comes with the session's own row, read under
  * the session floor: no second read of its stages. An entry whose time does
- * not parse is left out. The id is the change feed's `stage_moved` id.
+ * not parse is left out. The id is the one every ledger reader gives the
+ * entry (`stageLedgerEventId`): the change feed's and the timeline's
+ * `stage_moved` id. The timeline carries the same entries as `stage_moved`;
+ * this read keeps its own `stage_entered` shape (actor named, `stageKey`),
+ * and drops the timeline's twin, which it filters out.
  */
 async function stageEnteredEvents(
   sessionId: string,
@@ -319,7 +337,7 @@ async function stageEnteredEvents(
   return entries.map((e) => {
     const actorId = typeof e.actor === "string" && e.actor ? e.actor : null;
     return {
-      id: `stage:${sessionId}:${e.enteredAt}:${e.stageKey}`,
+      id: stageLedgerEventId(sessionId, e),
       kind: "stage_entered" as const,
       at: new Date(e.enteredAt).toISOString(),
       actor: activityActorOf(
@@ -748,7 +766,10 @@ export async function readStatusOf(
       (async (): Promise<StatusOfHistory | Unavailable> => {
         const { readTimeline } = await import("../timeline/read-timeline.js");
         const [t, stages, episodes] = await Promise.all([
-          readTimeline(subject, { userId }),
+          readTimeline(subject, {
+            userId,
+            withhold: STATUS_HISTORY_TIMELINE_WITHHELD,
+          }),
           stageEnteredEvents(subject.id, ledger, userId),
           episodesOf(subject),
         ]);

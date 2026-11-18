@@ -8,6 +8,7 @@
  * Scopes: mcp.read (reads), mcp.write (writes)
  */
 
+import { REPLY_CAP_CHARS } from "../reply-cap-budget.js";
 import type { Tool, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import {
@@ -772,9 +773,10 @@ async function withYourTools(
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
     return result;
-  // A reply the cap already cut (`reply-cap.ts`) keeps its envelope's shape and
-  // budget: adding a block to it made `{yourTools, truncated, head}`, over the
-  // cap and no longer the envelope a caller recognises.
+  // A reply the cap cut to a head (`reply-cap.ts`, a reply that is not a JSON
+  // object) keeps its envelope's shape and budget: adding a block to it made
+  // `{yourTools, truncated, head}`, over the cap and no longer the envelope a
+  // caller recognises.
   if ("truncated" in parsed && "head" in parsed) return result;
   let yourTools: Record<string, unknown>;
   try {
@@ -797,7 +799,11 @@ async function withYourTools(
     yourTools,
     ...rest,
   };
-  return { ...result, content: [{ type: "text", text: JSON.stringify(out) }] };
+  const text = JSON.stringify(out);
+  // A reply the cap FITTED (`fit`, `reply-cap.ts`) gets the block only when
+  // it still fits: the cap ran before this block was added.
+  if ("fit" in parsed && text.length > REPLY_CAP_CHARS) return result;
+  return { ...result, content: [{ type: "text", text }] };
 }
 
 /**
@@ -3583,7 +3589,13 @@ export const tools = {
               enum: ["lean", "full"],
               default: "lean",
               description:
-                "'lean' (default) = id, title, status, kind, trackId, projectId, workspaceId, updatedAt per row. 'full' = every column (goal, criteria, stages, metadata…): large, use `synap_get_session` for one session instead.",
+                "'lean' (default) = id, title, status, kind, trackId, projectId, workspaceId, updatedAt per row. 'full' = every column (large): prefer `fields`, or `synap_get_session` for one session.",
+            },
+            fields: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Lean only: columns added whole to each row, e.g. ['currentStage','stages']. Names no row has: `unknownFields`.",
             },
             playbookId: {
               type: "string",
@@ -3627,7 +3639,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "The map of YOUR work in one read — read-only: every OPEN session, every session settled in the last `windowHours` (default 72), and the far end of every edge. `nodes`, flat `edges` (`blocked_by` waiter→blocker, `spawned_from` child→parent, `waits_on_output`, `triggered`, `updated`), `pullRequests` (with state), `holds`, `goals` (with their method: `playbookId`, `currentStage`, `stages`), `sections` (a FAILED read is `unavailable`, never empty) and `window` (`truncated` + `omitted` past the 500-session ceiling). Use it instead of one `synap_get_session` per session. Pod-wide unless narrowed by workspace, project, goal, wave, playbook or thing.",
+          "The map of YOUR work in one read — read-only: every OPEN session, every session settled in the last `windowHours` (default 72), and the far end of every edge. `nodes`, flat `edges` (`blocked_by` waiter→blocker, `spawned_from` child→parent, `orchestrated_by` child→orchestrator, `waits_on_output`, `triggered`, `updated`), `pullRequests` (with state), `holds`, `goals` (with their method: `playbookId`, `currentStage`, `stages`), `sections` (a FAILED read is `unavailable`, never empty) and `window` (`truncated` + `omitted` past the 500-session ceiling). Use it instead of one `synap_get_session` per session. Pod-wide unless narrowed by workspace, project, goal, wave, playbook or thing.",
         inputSchema: {
           type: "object",
           properties: {

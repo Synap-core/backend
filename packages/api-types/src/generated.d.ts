@@ -20918,6 +20918,17 @@ export interface ContinuationPacket {
 	 * the inbound twin of `blockedBy`: closing this session releases them.
 	 */
 	unblocks: PacketSection<PacketChildItem>;
+	/**
+	 * The orchestrator coordinating this session
+	 * (`this --orchestrated_by--> orchestrator`, `start-orchestrator.ts`): it
+	 * holds this session until the person approves its merged plan.
+	 */
+	orchestratedBy: PacketSection<PacketChildItem>;
+	/**
+	 * The sessions this orchestrator coordinates
+	 * (`other --orchestrated_by--> this`), open first: the inbound twin.
+	 */
+	orchestrates: PacketSection<PacketChildItem>;
 	/** Capture clarification questions still open in this session's room, oldest first. */
 	openQuestions: PacketSection<PacketQuestionItem>;
 	/**
@@ -23102,6 +23113,16 @@ export interface AutomationCard {
 		kind: "add" | "none" | "run";
 	};
 }
+export type EnableManyItemResult = {
+	id: string;
+	kind: "skill" | "tool";
+	ok: true;
+} | {
+	error: string;
+	id: string;
+	kind: "skill" | "tool";
+	ok: false;
+};
 export interface CreateCapabilityResult {
 	capabilityKey: string;
 	created: {
@@ -26171,6 +26192,7 @@ export interface WorkGraphGoal {
 declare const WORK_GRAPH_EDGE_KINDS: readonly [
 	"blocked_by",
 	"spawned_from",
+	"orchestrated_by",
 	"waits_on_output",
 	"triggered",
 	"updated"
@@ -26197,6 +26219,8 @@ export type WorkGraphSection = {
 export interface WorkGraphSections {
 	/** Declared `blocked_by` edges. */
 	blockedBy: WorkGraphSection;
+	/** Declared `orchestrated_by` edges (who coordinates whom). */
+	orchestration: WorkGraphSection;
 	/** Derived waits on another open session's output. */
 	waitsOnOutputs: WorkGraphSection;
 	/** Derived `triggered` / `updated` interactions. */
@@ -33332,6 +33356,46 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message?: undefined;
 				result: {} | null;
 				skillId: string;
+			};
+		}>;
+		enableMany: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+				skillIds?: string[] | undefined;
+				toolIds?: string[] | undefined;
+			};
+			meta: object;
+			output: {
+				results: EnableManyItemResult[];
 			};
 		}>;
 		enrichEntity: import("@trpc/server").TRPCMutationProcedure<{
@@ -52761,7 +52825,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				request: {
 					id: string;
-					kind: "app_connection_request" | "device_enroll" | "device_link" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "recovery_codes" | "skill" | "tool" | "totp_enroll" | "trusted_issuer";
+					kind: "app_connection_request" | "capability_batch" | "device_enroll" | "device_link" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "recovery_codes" | "skill" | "tool" | "totp_enroll" | "trusted_issuer";
 				};
 			} | {
 				action: {
@@ -53129,6 +53193,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				approvalsOff: readonly string[];
 				changedAt: string | null;
 				changedBy: string | null;
+				graceSecondsLeft: number | null;
 				mode: PresenceMode;
 			};
 		}>;
@@ -60413,7 +60478,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
-				tool: Tool;
+				tool: {
+					approved: boolean;
+					authBinding: ToolAuthBinding;
+					capabilities: ToolVerbCatalogEntry[];
+					config: unknown;
+					createdAt: Date;
+					createdBy: string;
+					credentialRef: string | null;
+					description: string | null;
+					executor: ToolExecutorRef;
+					id: string;
+					inputSchema: unknown;
+					kind: ToolKind;
+					metadata: unknown;
+					name: string;
+					status: "active" | "error" | "inactive";
+					updatedAt: Date;
+					workspaceId: string | null;
+				};
 			};
 		}>;
 		setAuthBinding: import("@trpc/server").TRPCMutationProcedure<{

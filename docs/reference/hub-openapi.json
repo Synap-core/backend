@@ -148,6 +148,72 @@
         },
         "required": ["error"]
       },
+      "OwnGrant": {
+        "type": "object",
+        "properties": {
+          "holder": {
+            "type": "string",
+            "enum": ["app", "key"],
+            "description": "`app`: an app's token (its grant names the app); `key`: any other key."
+          },
+          "clientId": {
+            "type": ["string", "null"],
+            "description": "The app the credential acts as, or null."
+          },
+          "isFullAccess": {
+            "type": "boolean",
+            "description": "True only for unrestricted full access (`*`, no limit)."
+          },
+          "summary": {
+            "type": "string",
+            "description": "The limit in words, as `/auth/status` prints it."
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "permissions": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "place": {
+                  "type": "string",
+                  "enum": ["pod", "spaces", "anywhere"],
+                  "description": "`pod`: reads everywhere in the pod (an app's pod-wide reads); `spaces`: only in `spaces` (none = nowhere); `anywhere`: not limited to spaces."
+                },
+                "spaces": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string" },
+                      "name": { "type": ["string", "null"] }
+                    },
+                    "required": ["id", "name"]
+                  }
+                },
+                "projectIds": {
+                  "type": ["array", "null"],
+                  "items": { "type": "string" }
+                },
+                "entityIds": {
+                  "type": ["array", "null"],
+                  "items": { "type": "string" }
+                }
+              },
+              "required": [
+                "permissions",
+                "place",
+                "spaces",
+                "projectIds",
+                "entityIds"
+              ]
+            }
+          }
+        },
+        "required": ["holder", "clientId", "isFullAccess", "summary", "parts"]
+      },
       "KeyHolderState": {
         "type": "object",
         "properties": {
@@ -7904,6 +7970,73 @@
           },
           "404": {
             "description": "Key was accepted by the auth middleware but its row was deleted concurrently.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a refusal the caller can act on",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/grant": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "What the calling credential holds, by place",
+        "description": "Returns the calling credential's own grant — the one the pod enforces on this request — as parts of permissions, each with the place it reaches: `pod` (reads everywhere in the pod: an app's pod-wide reads), `spaces` (named, with their names) or `anywhere`. An app reads it to say what it can see. Read-only; never another credential's grant. 403 for a caller with no key (a signed-in session holds the person's own reach, not a grant).",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "The calling credential's grant.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OwnGrant" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — the wrapped door refused the input",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": {
+            "description": "Forbidden — the caller holds no key grant",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -44077,7 +44210,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "The work graph: open work, recently settled work, every edge",
-        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. `playbookId` narrows it to the sessions that follow a playbook: run from it, or filed in a goal whose method it is (each window node's `playbookMatch` says which: `session` or `goal`). `subjectEntityId` narrows it to the sessions on one thing (its subject, or a worker targeting it). Each goal carries its method (`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list. A pod app (a key holding `session.read` that does not read every subject of the graph) gets the sessions its grant covers and the edges between them; `window.omittedByGrant` counts the sessions it does not cover, and the parts that read past its grant (next move, interactions, waits on an output, PR facts, goals; holder without `agent.read`) are `unavailable` with a reason saying they were withheld.",
+        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. `playbookId` narrows it to the sessions that follow a playbook: run from it, or filed in a goal whose method it is (each window node's `playbookMatch` says which: `session` or `goal`). `subjectEntityId` narrows it to the sessions on one thing (its subject, or a worker targeting it). Each goal carries its method (`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list. A pod app (a key holding `session.read` that does not read every subject of the graph) gets the sessions its grant covers and the edges between them; `window.omittedByGrant` counts the sessions it does not cover, and the parts that read past its grant (next move, interactions, waits on an output, PR facts, goals; holder without `agent.read`) are `unavailable` with a reason saying they were withheld.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -44231,6 +44364,7 @@
                             "enum": [
                               "blocked_by",
                               "spawned_from",
+                              "orchestrated_by",
                               "waits_on_output",
                               "triggered",
                               "updated"
@@ -44350,6 +44484,17 @@
                           },
                           "required": ["status"]
                         },
+                        "orchestration": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
                         "waitsOnOutputs": {
                           "type": "object",
                           "properties": {
@@ -44419,6 +44564,7 @@
                       },
                       "required": [
                         "blockedBy",
+                        "orchestration",
                         "waitsOnOutputs",
                         "interactions",
                         "farEnds",

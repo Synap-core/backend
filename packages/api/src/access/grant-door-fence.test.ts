@@ -421,10 +421,18 @@ describe("self-introspection doors", () => {
   // A computer / agent key from the device flow carries the AI preset; it must
   // still learn who it is (2026-10-11: Claude Code's installer got 403 here).
   const denyAll = key({ permissions: [] });
-  it.each(["/users/me", "/auth/status"])(
+  // An app's token: pinned to a space, plus pod-wide reads, naming the app.
+  const appToken = {
+    scopes: [
+      { permissions: ["entity.note.create"], workspaceIds: ["w1"] },
+      { permissions: ["playbook.read"] },
+    ],
+    clientId: "app_00000000-0000-4000-8000-000000000001",
+  } as never;
+  it.each(["/users/me", "/auth/status", "/auth/grant"])(
     "GET %s is open to every scoped key",
     (path) => {
-      for (const grant of [AI, DOC_ONLY, denyAll]) {
+      for (const grant of [AI, DOC_ONLY, appToken, denyAll]) {
         expect(restDoorAllowed("GET", path, grant)).toBe(true);
       }
     }
