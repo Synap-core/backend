@@ -22,7 +22,10 @@ import {
   resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
-import { proposalWho, type ProposalWho } from "@synap-core/types/proposals/ended";
+import {
+  proposalWho,
+  type ProposalWho,
+} from "@synap-core/types/proposals/ended";
 import type { StatusKind } from "../../components/status-pill";
 import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
 import {

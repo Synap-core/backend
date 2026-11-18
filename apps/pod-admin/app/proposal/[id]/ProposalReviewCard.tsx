@@ -502,7 +502,11 @@ function EndLine({ ended }: { ended: ProposalEndLine }) {
       ) : door ? (
         <span className="self-start" data-end-door={door.kind}>
           <ExitLink
-            exit={openIn({ kind: "object", objectKind: door.kind, id: door.id })}
+            exit={openIn({
+              kind: "object",
+              objectKind: door.kind,
+              id: door.id,
+            })}
             label={door.label}
           />
         </span>

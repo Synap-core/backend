@@ -78,7 +78,8 @@ export const fr: Catalog<typeof en> = {
     "Retiré par un nettoyage que vous avez approuvé",
   "proposals.ended.sent_outside": "Le message a été envoyé directement",
   "proposals.ended.request_changed": "N’est plus demandé",
-  "proposals.ended.app_revoked": "L’application qui le demandait a été révoquée",
+  "proposals.ended.app_revoked":
+    "L’application qui le demandait a été révoquée",
   "proposals.ended.door.proposal": "Ouvrir la version plus récente",
   "proposals.ended.door.entity": "Ouvrir l’élément",
   "proposals.ended.door.session": "Ouvrir la session",

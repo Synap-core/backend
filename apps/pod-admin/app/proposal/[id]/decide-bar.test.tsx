@@ -253,7 +253,11 @@ describe("an ended request: one line that names who, and its doors", () => {
         planFailure: {
           compensation: {
             notCompensated: [
-              { kind: "entity", id: "44444444-4444-4444-8444-444444444444", reason: "x" },
+              {
+                kind: "entity",
+                id: "44444444-4444-4444-8444-444444444444",
+                reason: "x",
+              },
               { kind: "relation", id: "r1", reason: "x" },
             ],
           },

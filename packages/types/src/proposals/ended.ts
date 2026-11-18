@@ -195,7 +195,9 @@ export function proposalEnded(row: ProposalEndedRow): ProposalEnded | null {
     // before it had a reason of its own: read the reason the words name.
     const stamped = stamp.reason as ProposalEndReason;
     const helper =
-      stamped === "request_changed" ? helperReason(stamp.withdrawReason) : undefined;
+      stamped === "request_changed"
+        ? helperReason(stamp.withdrawReason)
+        : undefined;
     return {
       reason: helper ?? stamped,
       by:
@@ -403,7 +405,11 @@ export function proposalWho(
     const ended = proposalEnded(row);
     const name = ended ? endedByName(row, ended) : null;
     return name
-      ? { kind: "withdrawn", name, text: t("proposals.who.withdrawn", { who: name }) }
+      ? {
+          kind: "withdrawn",
+          name,
+          text: t("proposals.who.withdrawn", { who: name }),
+        }
       : null;
   }
   if (!DECIDED_STATUSES.has(status)) return null;
@@ -419,7 +425,11 @@ export function proposalWho(
   if (status === "approval_failed") {
     const asker = text(row.agentActorName) ?? text(row.authorName);
     return asker
-      ? { kind: "asked", name: asker, text: t("proposals.who.asked", { who: asker }) }
+      ? {
+          kind: "asked",
+          name: asker,
+          text: t("proposals.who.asked", { who: asker }),
+        }
       : null;
   }
   return null;
@@ -438,8 +448,9 @@ export interface ProposalItemLeft {
  * was applied" would be false. Empty for every other row.
  */
 export function proposalItemsLeft(data: unknown): ProposalItemLeft[] {
-  const left = record(record(record(data)?.planFailure)?.compensation)
-    ?.notCompensated;
+  const left = record(
+    record(record(data)?.planFailure)?.compensation
+  )?.notCompensated;
   if (!Array.isArray(left)) return [];
   return left.flatMap((item) => {
     const r = record(item);

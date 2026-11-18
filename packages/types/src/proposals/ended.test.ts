@@ -321,7 +321,12 @@ describe("proposalWho — one who per decided or ended request", () => {
     ({ agentActorName: "Scout", ...over }) as ProposalWhoRow;
 
   it("a person's decision is 'Decided by' them", () => {
-    for (const status of ["approved", "rejected", "reverted", "approval_failed"])
+    for (const status of [
+      "approved",
+      "rejected",
+      "reverted",
+      "approval_failed",
+    ])
       expect(proposalWho(row({ status, approverName: "Alice" }), "en")).toEqual(
         { kind: "decided", name: "Alice", text: "Decided by Alice" }
       );
@@ -345,9 +350,7 @@ describe("proposalWho — one who per decided or ended request", () => {
       name: "Scout",
       text: "Asked by Scout",
     });
-    expect(
-      proposalWho({ status: "approval_failed" }, "en")
-    ).toBeNull();
+    expect(proposalWho({ status: "approval_failed" }, "en")).toBeNull();
   });
 
   it("a withdrawal names who withdrew it, from the stamp's by", () => {
@@ -376,7 +379,10 @@ describe("proposalWho — one who per decided or ended request", () => {
   it("never says 'Decided by' for an end nobody decided", () => {
     for (const status of ["withdrawn", "expired", "approval_failed"]) {
       const who = proposalWho(
-        row({ status, data: { ended: { reason: "lapsed", by: "system", at: "x" } } }),
+        row({
+          status,
+          data: { ended: { reason: "lapsed", by: "system", at: "x" } },
+        }),
         "en"
       );
       expect(who?.kind).not.toBe("decided");
