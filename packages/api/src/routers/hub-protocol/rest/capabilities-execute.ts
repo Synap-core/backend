@@ -68,10 +68,11 @@ const ExecuteCapabilityRequestSchema = CapabilityExecuteInput.extend({
   // Hub REST only (`SUPERSEDES_DOORS`): read by the door's wrapper, never by
   // the shared core, so it stays out of the contract tRPC also accepts.
   supersedes: SupersedesBodyField,
-}).refine(
-  (b) => !!b.verbId || !!b.skillId,
-  { message: "Either verbId or skillId is required" }
-).openapi("ExecuteCapabilityRequest");
+})
+  .refine((b) => !!b.verbId || !!b.skillId, {
+    message: "Either verbId or skillId is required",
+  })
+  .openapi("ExecuteCapabilityRequest");
 
 const ExecuteCapabilityResultSchema = z
   .object({

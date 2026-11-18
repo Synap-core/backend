@@ -52,8 +52,7 @@ export const SUPERSEDES_DOORS = [
 
 /** What a door received as `supersedes`: nothing, an id, or a refusal. */
 export type SupersedesRead =
-  | { ok: true; id: string | undefined }
-  | { ok: false; problem: string };
+  { ok: true; id: string | undefined } | { ok: false; problem: string };
 
 /** Read the `supersedes` a caller sent (blank = not sent). */
 export function readSupersedes(raw: unknown): SupersedesRead {
