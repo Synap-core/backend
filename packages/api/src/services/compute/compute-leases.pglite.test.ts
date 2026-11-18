@@ -16,7 +16,15 @@
  *  - a manual destroy closes the lease of the machine it names; a stop does
  *    not.
  */
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeAll,
+  afterAll,
+  beforeEach,
+} from "vitest";
 
 const holder = vi.hoisted(() => ({
   db: undefined as unknown,
@@ -164,8 +172,9 @@ afterAll(async () => pg?.close());
 beforeEach(async () => {
   await pg.exec(`delete from compute_leases; delete from proposals;`);
   runSkillMock.mockReset();
-  runSkillMock.mockImplementation(async (args: { skillId: string; parameters: unknown }) =>
-    holder.sandbox(args)
+  runSkillMock.mockImplementation(
+    async (args: { skillId: string; parameters: unknown }) =>
+      holder.sandbox(args)
   );
   holder.sandbox = ({ skillId }) =>
     skillId === PROVISION_ID
@@ -204,8 +213,9 @@ describe("a compute start through runResolvedSkill", () => {
       PROPOSAL_ID
     );
     expect(out.kind).toBe("run");
-    const report = (out as { result: { computeLease: Record<string, unknown> } })
-      .result.computeLease;
+    const report = (
+      out as { result: { computeLease: Record<string, unknown> } }
+    ).result.computeLease;
     expect(report).toMatchObject({ state: "active", resourceId: "4711" });
     const [lease] = await leases();
     expect(lease).toMatchObject({

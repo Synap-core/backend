@@ -72,7 +72,10 @@ export async function resolveReleaseVerb(
     })
     .from(skills)
     .where(
-      and(answeringSkillsWhere(userId, workspaceId), eq(skills.name, releaseVerb))
+      and(
+        answeringSkillsWhere(userId, workspaceId),
+        eq(skills.name, releaseVerb)
+      )
     )
     .orderBy(...answeringSkillOrder())
     .limit(1);
@@ -150,9 +153,7 @@ export async function openComputeLease(input: {
  */
 export async function settleComputeLease(
   lease: { id: string; expiresAt: Date },
-  outcome:
-    | { ran: false }
-    | { ran: true; delivered: boolean; result: unknown }
+  outcome: { ran: false } | { ran: true; delivered: boolean; result: unknown }
 ): Promise<ComputeLeaseReport> {
   const resourceId =
     outcome.ran && outcome.delivered ? resourceIdOf(outcome.result) : null;

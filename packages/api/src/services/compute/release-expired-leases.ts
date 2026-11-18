@@ -64,7 +64,9 @@ async function releaseOne(lease: ComputeLease): Promise<boolean> {
       releaseAttempts: drizzleSql`${computeLeases.releaseAttempts} + 1`,
       updatedAt: at,
     })
-    .where(and(eq(computeLeases.id, lease.id), eq(computeLeases.state, "active")))
+    .where(
+      and(eq(computeLeases.id, lease.id), eq(computeLeases.state, "active"))
+    )
     .returning({ id: computeLeases.id });
   if (!claimed) return false;
 

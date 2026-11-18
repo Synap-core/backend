@@ -116,9 +116,10 @@ describe("migrations 0429-0431 — compute lifecycle", () => {
         .sort()
     );
     await lease();
-    const { rows } = await pg.query<{ state: string; release_attempts: number }>(
-      `SELECT state, release_attempts FROM compute_leases`
-    );
+    const { rows } = await pg.query<{
+      state: string;
+      release_attempts: number;
+    }>(`SELECT state, release_attempts FROM compute_leases`);
     expect(rows[0]).toEqual({ state: "starting", release_attempts: 0 });
   });
 

@@ -511,7 +511,10 @@ const computeSchema = z
     /** provision_compute: the release_compute verb run at the TTL (destroy). */
     releaseVerb: z.string().min(1).optional(),
     /** release_compute: the modes this verb serves. */
-    modes: z.array(z.enum(["stop", "destroy"])).min(1).optional(),
+    modes: z
+      .array(z.enum(["stop", "destroy"]))
+      .min(1)
+      .optional(),
   })
   .refine((c) => c.releaseVerb !== undefined || c.modes !== undefined);
 

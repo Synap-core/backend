@@ -34,8 +34,7 @@ const T = {
 const fakeDb = {
   select: () => ({
     from: (table: { __t: string }) => ({
-      where: async () =>
-        table.__t === "leases" ? [{ total: dayTotal }] : [],
+      where: async () => (table.__t === "leases" ? [{ total: dayTotal }] : []),
     }),
   }),
 };

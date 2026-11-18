@@ -767,8 +767,7 @@ export async function executeCapability(input: {
     intentRun: !!input.intentRequest,
     carriesPodFiles: podFiles.files.length > 0,
     // A compute start's maximum, for the compute spend ceiling (0430).
-    computeSpendCents:
-      compute.kind === "start" ? compute.maxSpendCents : null,
+    computeSpendCents: compute.kind === "start" ? compute.maxSpendCents : null,
   });
 
   // A person's "Never" (0381) is not an approval problem: enabling would not
@@ -988,15 +987,15 @@ export async function executeCapability(input: {
                   compute
                 )
               : input.intentRequest
-              ? describeIntentRun(input.intentRequest)
-              : describeCapabilityRun(
-                  verbId ?? null,
-                  parameters ?? {},
-                  await resolveEntityVerbRunSubject(
-                    entityVerbRunTarget(verbId ?? null, parameters ?? {}),
-                    userId
-                  )
-                ),
+                ? describeIntentRun(input.intentRequest)
+                : describeCapabilityRun(
+                    verbId ?? null,
+                    parameters ?? {},
+                    await resolveEntityVerbRunSubject(
+                      entityVerbRunTarget(verbId ?? null, parameters ?? {}),
+                      userId
+                    )
+                  ),
         ...(podFiles.files.length > 0 ? { files: podFiles.files } : {}),
         // A compute start's terms, for the review card: approving it
         // approves the destroy at its time to live (founder, 18 Nov 2026).
@@ -1886,7 +1885,10 @@ export async function runResolvedSkill(
       compute.releaseVerb
     );
     if (!release.ok) {
-      return { kind: "error", message: `${release.message} Nothing was started.` };
+      return {
+        kind: "error",
+        message: `${release.message} Nothing was started.`,
+      };
     }
     try {
       lease = await openComputeLease({

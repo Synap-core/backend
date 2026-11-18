@@ -13,7 +13,9 @@ import {
   resourceIdOf,
 } from "./compute-contract.js";
 
-const provision = (metadata: unknown = { compute: { releaseVerb: "cloud_delete" } }) => ({
+const provision = (
+  metadata: unknown = { compute: { releaseVerb: "cloud_delete" } }
+) => ({
   name: "cloud_create",
   intent: "provision_compute",
   metadata,
@@ -27,7 +29,11 @@ const release = (modes: unknown = ["destroy"]) => ({
 describe("readComputeRun — a start", () => {
   it("a start with both terms and a release verb is a start", () => {
     expect(
-      readComputeRun(provision(), { ttlMinutes: 120, maxSpendCents: 300, size: "cx22" })
+      readComputeRun(provision(), {
+        ttlMinutes: 120,
+        maxSpendCents: 300,
+        size: "cx22",
+      })
     ).toEqual({
       kind: "start",
       ttlMinutes: 120,
@@ -45,10 +51,22 @@ describe("readComputeRun — a start", () => {
     ["no maximum", { ttlMinutes: 60 }, /maxSpendCents/],
     ["neither", {}, /ttlMinutes .* and maxSpendCents/],
     ["a zero ttl", { ttlMinutes: 0, maxSpendCents: 300 }, /ttlMinutes/],
-    ["a negative maximum", { ttlMinutes: 60, maxSpendCents: -5 }, /maxSpendCents/],
+    [
+      "a negative maximum",
+      { ttlMinutes: 60, maxSpendCents: -5 },
+      /maxSpendCents/,
+    ],
     ["a fractional ttl", { ttlMinutes: 1.5, maxSpendCents: 300 }, /ttlMinutes/],
-    ["a ttl past a year", { ttlMinutes: 525_601, maxSpendCents: 300 }, /ttlMinutes/],
-    ["a word for a ttl", { ttlMinutes: "two hours", maxSpendCents: 300 }, /ttlMinutes/],
+    [
+      "a ttl past a year",
+      { ttlMinutes: 525_601, maxSpendCents: 300 },
+      /ttlMinutes/,
+    ],
+    [
+      "a word for a ttl",
+      { ttlMinutes: "two hours", maxSpendCents: 300 },
+      /ttlMinutes/,
+    ],
   ])("refuses %s", (_label, params, why) => {
     const run = readComputeRun(provision(), params);
     expect(run.kind).toBe("refused");
@@ -57,7 +75,12 @@ describe("readComputeRun — a start", () => {
   });
 
   it("refuses a start whose verb names no release verb, whatever its terms", () => {
-    for (const metadata of [null, {}, { compute: {} }, { compute: { modes: ["destroy"] } }]) {
+    for (const metadata of [
+      null,
+      {},
+      { compute: {} },
+      { compute: { modes: ["destroy"] } },
+    ]) {
       const run = readComputeRun(provision(metadata), {
         ttlMinutes: 60,
         maxSpendCents: 300,
@@ -107,11 +130,17 @@ describe("readComputeRun — anything else", () => {
   it("a verb of another intent is not a compute run, whatever it carries", () => {
     expect(
       readComputeRun(
-        { name: "x", intent: "run_external_job", metadata: { compute: { releaseVerb: "y" } } },
+        {
+          name: "x",
+          intent: "run_external_job",
+          metadata: { compute: { releaseVerb: "y" } },
+        },
         {}
       )
     ).toEqual({ kind: "none" });
-    expect(readComputeRun({ name: "x", intent: null, metadata: null }, {})).toEqual({
+    expect(
+      readComputeRun({ name: "x", intent: null, metadata: null }, {})
+    ).toEqual({
       kind: "none",
     });
   });
@@ -120,7 +149,10 @@ describe("readComputeRun — anything else", () => {
 describe("the review card's words", () => {
   it("says how long, at most what, and that it ends by itself", () => {
     expect(
-      describeComputeStart("Hetzner Cloud", { ttlMinutes: 150, maxSpendCents: 1234 })
+      describeComputeStart("Hetzner Cloud", {
+        ttlMinutes: 150,
+        maxSpendCents: 1234,
+      })
     ).toBe(
       "Start a cloud machine (Hetzner Cloud) for 2 h 30 min, spending at most 12.34 in the provider's currency. It is destroyed automatically after 2 h 30 min."
     );

@@ -57,7 +57,10 @@ export const computeLeases = pgTable(
     resourceId: text("resource_id"),
     ttlMinutes: integer("ttl_minutes").notNull(),
     maxSpendCents: integer("max_spend_cents").notNull(),
-    state: text("state").$type<ComputeLeaseState>().notNull().default("starting"),
+    state: text("state")
+      .$type<ComputeLeaseState>()
+      .notNull()
+      .default("starting"),
     expiresAt: timestamp("expires_at", {
       mode: "date",
       withTimezone: true,
