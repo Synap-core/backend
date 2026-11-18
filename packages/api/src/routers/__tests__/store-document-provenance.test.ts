@@ -11,13 +11,18 @@ vi.mock("@synap/storage", () => ({
   StorageUploadUnavailableError: class extends Error {},
   storage: {},
 }));
-vi.mock("@synap/database", () => {
+// `importOriginal` so a name `file-upload.ts` gains later (the grant helpers
+// `getRequestGrant` / `runWithoutGrant` its 403 reads) is the real one, never
+// a missing export of a total factory (total-mock-missing-export-ratchet).
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
   const chain = {
     from: () => chain,
     where: () => chain,
     limit: async () => [{ id: "doc-1", storageKey: "k" }],
   };
   return {
+    ...actual,
     db: { select: () => chain },
     eq: vi.fn(),
     entities: {},

@@ -20,7 +20,11 @@ vi.mock("@synap/storage", () => ({
     getSignedUrl: vi.fn(async (key: string) => `https://blobs.test/${key}`),
   },
 }));
-vi.mock("@synap/database", () => ({
+// `importOriginal` so a name `file-upload.ts` gains later (the grant helpers
+// `getRequestGrant` / `runWithoutGrant` its 403 reads) is the real one, never
+// a missing export of a total factory (total-mock-missing-export-ratchet).
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   db: {
     query: {
       documents: { findFirst: h.findDoc },
