@@ -57,7 +57,7 @@ describe("tripwire: batchApprove is diff-scoped", () => {
     // ORDER is the real guarantee: an assertion after the state transition
     // would refuse a write that already happened.
     const assertAt = block.indexOf("assertReviewedRevision(");
-    const statusGuard = block.indexOf("ProposalStatus.PENDING");
+    const statusGuard = block.indexOf("!isProposalUndecided(proposal.status)");
     expect(assertAt, "assertReviewedRevision not found").toBeGreaterThan(-1);
     expect(statusGuard, "status guard not found").toBeGreaterThan(-1);
     expect(

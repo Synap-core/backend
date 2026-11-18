@@ -59,7 +59,11 @@ import {
   type RequiredLinkDebt,
 } from "./links/required-links.js";
 import { isUuid } from "@synap-core/types/property-render";
-import { packageHasUpdate } from "@synap-core/types/package-updates";
+import {
+  packageHasUpdate,
+  packageUpdateReviewPath,
+} from "@synap-core/types/package-updates";
+import { openLink, podPublicOrigin } from "../utils/deep-links.js";
 
 const logger = createLogger({ module: "template-health" });
 
@@ -649,8 +653,11 @@ export function templateApplyWarning(
         ? `Not finished: the last update of ${slug} stopped before it completed. Run ${run} to resume.`
         : `Not finished: the last update of ${slug} failed. Run ${run} to resume.`;
     case "awaiting-approval": {
+      // The exact next steps, as links (founder, 18 Nov 2026: "give me the
+      // link of the next step"): each proposal it waits on, then the page
+      // that finishes the update.
       const n = livePending.length;
-      return `Waiting on your approval of ${n} proposal${n === 1 ? "" : "s"} (${livePending.join(", ")}), then run ${run}.`;
+      return `Waiting on your approval of ${n} proposal${n === 1 ? "" : "s"}: ${livePending.map((id) => openLink(id)).join(", ")}. Then finish the update: ${packageUpdateLink(slug)} (or run ${run}).`;
     }
     case "partial": {
       // What did not land, with its reason (the finisher records each line).
@@ -666,10 +673,21 @@ export function templateApplyWarning(
         : `Not finished: part of ${slug} did not apply. Run ${run} to retry.`;
     }
     case "layer-2-not-run":
-      return `Not finished: run ${run} to apply the rest of ${slug}.`;
+      return `Not finished: finish the update of ${slug}: ${packageUpdateLink(slug)} (or run ${run}).`;
     default:
       return opts.dataChangesHeld ? dataChangesHeldSentence(slug) : null;
   }
+}
+
+/**
+ * The page that finishes ONE package's update (`/open/update/<slug>`, which
+ * the pod sends on to pod admin's review page), absolute when the pod knows
+ * its public origin, else pod-relative.
+ */
+export function packageUpdateLink(slug: string): string {
+  const path = packageUpdateReviewPath(slug);
+  const origin = podPublicOrigin();
+  return origin ? `${origin}${path}` : path;
 }
 
 /** How many recorded reasons the sentence names before "and N more". */

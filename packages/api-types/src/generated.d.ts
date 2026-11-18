@@ -20918,6 +20918,17 @@ export interface ContinuationPacket {
 	 * the inbound twin of `blockedBy`: closing this session releases them.
 	 */
 	unblocks: PacketSection<PacketChildItem>;
+	/**
+	 * The orchestrator coordinating this session
+	 * (`this --orchestrated_by--> orchestrator`, `start-orchestrator.ts`): it
+	 * holds this session until the person approves its merged plan.
+	 */
+	orchestratedBy: PacketSection<PacketChildItem>;
+	/**
+	 * The sessions this orchestrator coordinates
+	 * (`other --orchestrated_by--> this`), open first: the inbound twin.
+	 */
+	orchestrates: PacketSection<PacketChildItem>;
 	/** Capture clarification questions still open in this session's room, oldest first. */
 	openQuestions: PacketSection<PacketQuestionItem>;
 	/**
@@ -26181,6 +26192,7 @@ export interface WorkGraphGoal {
 declare const WORK_GRAPH_EDGE_KINDS: readonly [
 	"blocked_by",
 	"spawned_from",
+	"orchestrated_by",
 	"waits_on_output",
 	"triggered",
 	"updated"
@@ -26207,6 +26219,8 @@ export type WorkGraphSection = {
 export interface WorkGraphSections {
 	/** Declared `blocked_by` edges. */
 	blockedBy: WorkGraphSection;
+	/** Declared `orchestrated_by` edges (who coordinates whom). */
+	orchestration: WorkGraphSection;
 	/** Derived waits on another open session's output. */
 	waitsOnOutputs: WorkGraphSection;
 	/** Derived `triggered` / `updated` interactions. */

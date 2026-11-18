@@ -40,7 +40,7 @@ import {
   type EffectiveProperty,
   type PropertyIssue,
 } from "@synap/database";
-import { ProposalStatus } from "@synap/database/schema";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import {
   describeSetupRepair,
   type ProposalRepairSetup,
@@ -233,10 +233,7 @@ export async function describeProposalRepair(
       ? { ...none, repairable: setup.blocking && !setup.unreadable, setup }
       : none;
   }
-  if (
-    source.status !== ProposalStatus.APPROVAL_FAILED &&
-    source.status !== ProposalStatus.PENDING
-  ) {
+  if (!isProposalUndecided(source.status)) {
     return none;
   }
 

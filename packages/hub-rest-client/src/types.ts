@@ -1436,10 +1436,15 @@ export interface GetWorkGraphOptions {
   rootSessionId?: string;
 }
 
-/** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker. */
+/** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker; `orchestrated_by` from the coordinated session to its orchestrator. */
 export interface HubWorkGraphEdge {
   kind:
-    "blocked_by" | "spawned_from" | "waits_on_output" | "triggered" | "updated";
+    | "blocked_by"
+    | "spawned_from"
+    | "orchestrated_by"
+    | "waits_on_output"
+    | "triggered"
+    | "updated";
   from: string;
   to: string;
   entityId?: string;
@@ -1515,6 +1520,7 @@ export interface HubWorkGraph {
   goals: HubWorkGraphGoal[];
   sections: {
     blockedBy: HubWorkGraphSection;
+    orchestration: HubWorkGraphSection;
     waitsOnOutputs: HubWorkGraphSection;
     interactions: HubWorkGraphSection;
     farEnds: HubWorkGraphSection;
