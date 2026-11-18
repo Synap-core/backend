@@ -88,3 +88,26 @@ export function faultHeadline(fault: FaultLike, max = 160): string {
 export function faultRequest(fault: FaultLike): string {
   return [fault.method, fault.path].filter(Boolean).join(" ") || "—";
 }
+
+/**
+ * The proposal an approval's fault belongs to (`door: "proposal"`, recorded by
+ * `recordProposalFault` with the path `/proposal/<id>`), or null for any other
+ * fault. No HTTP request happened for it: the path is a pointer to the
+ * proposal, which the page opens as a link, never shows as a request.
+ */
+export function faultProposalId(fault: FaultLike): string | null {
+  if (fault.door !== "proposal" || !fault.path) return null;
+  const m = /^\/proposal\/([^/?#\s]+)$/.exec(fault.path);
+  // Written raw (`/proposal/${proposalId}`, a uuid): read raw.
+  return m ? m[1]! : null;
+}
+
+/**
+ * The HTTP status to show, or null when the fault answered no HTTP request:
+ * an approval's status is derived from its error class (`CLASS_TRPC_CODE`) to
+ * keep the column's meaning, and reading it as "HTTP 500" would claim a
+ * request that never was.
+ */
+export function faultHttpStatus(fault: FaultLike): number | null {
+  return fault.door === "proposal" ? null : fault.status;
+}

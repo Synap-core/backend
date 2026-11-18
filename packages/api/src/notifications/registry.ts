@@ -647,28 +647,33 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
-     * An approval failed with nobody watching (plan 8032a127 D6): an agent's
-     * auto-applied receipt whose materialization threw, or an approval the
-     * background job applied after the request returned. A person who clicked
-     * Approve and read the failure in their toast gets no row. Producer:
+     * A change failed to apply where no one saw it fail (plan 8032a127 D6): an
+     * agent's auto-applied receipt whose materialization threw (nobody
+     * approved anything), or an approval the background job applied after the
+     * request returned. A person who clicked Approve and read the failure in
+     * their toast gets no row. So the words claim neither an approval nor a
+     * watcher: they say whose change and why. Producer:
      * `notifyUnseenApprovalFailure` (`services/proposals/unseen-approval-failure.ts`),
      * to the proposal's human owner. One open row per proposal (its groupKey
      * is the proposal); every door that ends or approves the proposal settles
      * it (`markProposalNotificationsActioned`, sourceType `proposal`). Like
      * `proposal.created`, needs-you counts the proposal itself, never this row.
      * Tokens: `named` (yes | no) + `name`, the proposal's display name for
-     * the owner; `reason` (yes | no) + `sentence`, the safe classified sentence.
+     * the owner; `reason` (yes | no) + `sentence`, the safe classified sentence;
+     * `agent` (yes | no), an agent is behind the change. No verb list in the
+     * body: what can be done (retry, repair, dismiss) depends on the failure,
+     * and the "Review" action opens the proposal that offers it.
      */
     type: "proposal.approval_failed",
     category: "governance",
-    label: "Approval couldn’t apply",
+    label: "Change couldn’t apply",
     icon: "triangle-alert",
     priority: "high",
     messageSyntax: "icu",
     titleTemplate:
       "{named, select, yes {Couldn’t apply: {name}} other {A change couldn’t apply}}",
     bodyTemplate:
-      "{reason, select, yes {{sentence}} other {It failed while nobody was watching.}} Open it to retry, repair or dismiss it.",
+      "{reason, select, yes {{sentence}} other {{agent, select, yes {An agent’s change couldn’t be applied.} other {The change couldn’t be applied.}}}}",
     // In the bell. A phone push needs a `PUSH_TYPE_RULES` entry
     // (`@synap-core/types/push`): not decided yet.
     defaultChannels: ["in_app"],

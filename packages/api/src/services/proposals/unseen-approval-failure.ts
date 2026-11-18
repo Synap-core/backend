@@ -70,13 +70,10 @@ export async function notifyUnseenApprovalFailure(
       .limit(1);
     // Decided meanwhile (a retry applied it, someone rejected it): no news.
     if (!row || !UNDECIDED.includes(row.status)) return false;
-    if (
-      opts.agentReceipt &&
-      !row.agentUserId &&
-      (row.data as { source?: unknown } | null)?.source !== "agent"
-    ) {
-      return false;
-    }
+    const byAgent =
+      Boolean(row.agentUserId) ||
+      (row.data as { source?: unknown } | null)?.source === "agent";
+    if (opts.agentReceipt && !byAgent) return false;
     const owner = await resolveProposalHumanOwner(row);
     if (!owner) return false;
 
@@ -108,6 +105,7 @@ export async function notifyUnseenApprovalFailure(
         name: name ?? "",
         reason: sentence ? "yes" : "no",
         sentence: sentence ?? "",
+        agent: byAgent ? "yes" : "no",
       },
     });
     return id !== undefined;

@@ -10,6 +10,7 @@
  * written (content), never translated.
  */
 
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { trpc } from "../../../../lib/trpc";
 import { formatRelative, formatTimestamp } from "../../../../lib/format";
@@ -17,10 +18,13 @@ import { navHref, navLabel } from "../../../../lib/console-nav";
 import { useT } from "../../../../lib/i18n/locale-provider";
 import { couldNotLoad, loadFailure } from "../../../_lib/object/load-failure";
 import { useReauthOnUnauthorized } from "../../../_lib/object/use-reauth";
+import { objectPage } from "../../../_lib/object/content/markdown-model";
 import { consoleFrame } from "../../../_lib/object/views/object-frame";
 import { ERRORS_CATALOGS } from "../_lib/copy";
 import {
   faultHeadline,
+  faultHttpStatus,
+  faultProposalId,
   faultRequest,
   readableMessage,
   rootCause,
@@ -62,6 +66,10 @@ export default function ServerErrorPage() {
   }
 
   const cause = rootCause(fault);
+  // An approval's fault answered no HTTP request: its proposal is what it
+  // points at (a door to pod admin's review page), and it has no HTTP status.
+  const proposalId = faultProposalId(fault);
+  const httpStatus = faultHttpStatus(fault);
   // The chain, outermost first: the error that reached the handler, then
   // what it was caused by.
   const chain: FaultCauseLike[] = [
@@ -74,11 +82,14 @@ export default function ServerErrorPage() {
       kind: "server_error",
       noun: t("noun.fault"),
       title: faultHeadline(fault),
-      summary: faultRequest(fault),
-      status: {
-        kind: "down",
-        label: t("status.code", { status: String(fault.status) }),
-      },
+      summary: proposalId ? undefined : faultRequest(fault),
+      status:
+        httpStatus === null
+          ? null
+          : {
+              kind: "down",
+              label: t("status.code", { status: String(httpStatus) }),
+            },
       breadcrumb: FRAME.breadcrumb?.(errorId),
     },
     facts: [
@@ -86,7 +97,27 @@ export default function ServerErrorPage() {
         label: t("fact.when"),
         value: `${formatTimestamp(fault.occurredAt)} (${formatRelative(fault.occurredAt)})`,
       },
-      { label: t("fact.request"), value: faultRequest(fault), mono: true },
+      proposalId
+        ? {
+            label: t("fact.proposal"),
+            value: (
+              <Link
+                href={
+                  objectPage("proposal", proposalId) ??
+                  `/proposal/${encodeURIComponent(proposalId)}`
+                }
+                prefetch={false}
+                className="text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              >
+                {t("proposal.open")}
+              </Link>
+            ),
+          }
+        : {
+            label: t("fact.request"),
+            value: faultRequest(fault),
+            mono: true,
+          },
       {
         label: t("fact.door"),
         value:
@@ -96,8 +127,9 @@ export default function ServerErrorPage() {
               ? t("door.proposal")
               : t("door.rest"),
       },
-      // An approval's fault with no caller recorded is not "before sign-in":
-      // its proposal (the Request) says whose it was.
+      // An approval's fault with no caller recorded is not "before sign-in",
+      // so the row is left out: the linked proposal (the Proposal row) names
+      // its owner.
       ...(fault.userId || fault.door !== "proposal"
         ? [
             {
