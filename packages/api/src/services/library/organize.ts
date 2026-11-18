@@ -33,6 +33,7 @@ import {
   eq,
   inArray,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import {
@@ -369,10 +370,7 @@ export async function markOrganizeProposalApproved(
     },
     where: and(
       eq(proposals.id, proposalId),
-      inArray(proposals.status, [
-        ProposalStatus.PENDING,
-        ProposalStatus.APPROVAL_FAILED,
-      ])
+      inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES])
     ),
   }).returning({ id: proposals.id });
   return rows.length > 0;

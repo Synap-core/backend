@@ -66,7 +66,7 @@ import {
   SCOPE_SPECIFICITY,
   resolveMostSpecificPosture,
   MessageAuthorType,
-  ProposalStatus,
+  UNDECIDED_PROPOSAL_STATUSES,
   entities,
   profiles,
   entityFacets,
@@ -1752,10 +1752,7 @@ export async function getSignalSummary(
       .where(
         and(
           proposalUserFloor(userId),
-          inArray(proposals.status, [
-            ProposalStatus.PENDING,
-            ProposalStatus.APPROVAL_FAILED,
-          ]),
+          inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES]),
           capChannelIds
             ? exists(
                 db

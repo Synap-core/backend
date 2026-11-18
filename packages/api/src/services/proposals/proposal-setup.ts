@@ -55,7 +55,7 @@ import {
 import { lookupCatalogEntry } from "../capabilities/marketplace-install.js";
 import { fetchCPCapabilityTemplate } from "../capabilities/cp-template-client.js";
 import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
-import { ProposalStatus } from "@synap/database/schema";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import { createLogger } from "@synap-core/core";
 import { isBlankParamValue } from "./setup-required-error.js";
 import {
@@ -142,10 +142,7 @@ export interface ProposalSetup {
 
 /** Still to be decided: the only rows whose setup a person can act on. */
 function isActionable(row: Record<string, unknown>): boolean {
-  return (
-    row.status === ProposalStatus.PENDING ||
-    row.status === ProposalStatus.APPROVAL_FAILED
-  );
+  return typeof row.status === "string" && isProposalUndecided(row.status);
 }
 
 /**

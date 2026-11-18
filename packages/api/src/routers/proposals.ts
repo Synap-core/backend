@@ -70,6 +70,7 @@ import {
   PROPOSAL_STATUSES,
   SESSION_BOOKKEEPING_PROPOSAL_TYPES,
   SESSION_BOOKKEEPING_TARGET_TYPE,
+  isProposalUndecided,
   resolveProposalAttention,
 } from "@synap-core/types/proposals/attention";
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
@@ -2036,10 +2037,7 @@ export const proposalsRouter = router({
             : "Only a record's create or update can be repaired here. Ask the AI to redo this one, or dismiss it.",
         });
       }
-      if (
-        proposal.status !== ProposalStatus.APPROVAL_FAILED &&
-        proposal.status !== ProposalStatus.PENDING
-      ) {
+      if (!isProposalUndecided(proposal.status)) {
         throw new TRPCError({
           code: "CONFLICT",
           message:
@@ -3927,10 +3925,7 @@ export const proposalsRouter = router({
           // exists to send. `CONFLICT` here is the revision guard OR a weak
           // same-name create (`reasonCode: "ENTITY_WEAK_DEDUP"` on the item).
           // Clients must branch on reasonCode, not on CONFLICT alone.
-          if (
-            proposal.status !== ProposalStatus.PENDING &&
-            proposal.status !== ProposalStatus.APPROVAL_FAILED
-          ) {
+          if (!isProposalUndecided(proposal.status)) {
             throw new TRPCError({
               code: "PRECONDITION_FAILED",
               message: `Already ${proposal.status}`,
@@ -4435,10 +4430,7 @@ async function repairProposalSetup(args: {
         "This proposal takes no key or value to hand over. Ask the AI to redo it, or dismiss it.",
     });
   }
-  if (
-    proposal.status !== ProposalStatus.APPROVAL_FAILED &&
-    proposal.status !== ProposalStatus.PENDING
-  ) {
+  if (!isProposalUndecided(proposal.status)) {
     throw new TRPCError({
       code: "CONFLICT",
       message:

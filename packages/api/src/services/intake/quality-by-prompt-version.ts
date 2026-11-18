@@ -50,6 +50,7 @@ import {
   countRejectedDispositions,
   isPartiallyApprovedData,
 } from "@synap-core/types/proposals";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import {
   db,
   and,
@@ -209,11 +210,12 @@ export function computeQualityByPromptVersion(
     if (!g) continue;
     const c = g.proposals;
     c.total += 1;
+    if (hasHumanRevision(p.revisionHistory)) c.revised += 1;
+    if (isProposalUndecided(p.status)) {
+      c.pending += 1;
+      continue;
+    }
     switch (p.status) {
-      case ProposalStatus.PENDING:
-      case ProposalStatus.APPROVAL_FAILED:
-        c.pending += 1;
-        break;
       case ProposalStatus.APPROVED:
         if (isPartiallyApprovedData(p.data)) c.partiallyApproved += 1;
         else c.approved += 1;
@@ -233,7 +235,6 @@ export function computeQualityByPromptVersion(
       default:
         c.notScored += 1;
     }
-    if (hasHumanRevision(p.revisionHistory)) c.revised += 1;
   }
 
   return [...groups.values()]
