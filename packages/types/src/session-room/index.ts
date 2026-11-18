@@ -97,7 +97,7 @@ function outstanding(slot: RoomSlot): boolean {
   return (
     slot.status !== "done" &&
     !decidedByAnswer(slot) &&
-    slot.retiredAt == null &&
+    !slot.retiredAt &&
     slot.optional !== true
   );
 }

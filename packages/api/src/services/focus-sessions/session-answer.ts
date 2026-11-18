@@ -748,8 +748,7 @@ async function answerWakeTarget(p: {
     .from(focusSessions)
     .where(eq(focusSessions.id, p.session.id))
     .limit(1);
-  if (row?.status !== "active") return null;
-  return liveRunWakeTarget(p.session.id, row.metadata);
+  return liveRunWakeTarget(p.session.id, row?.metadata);
 }
 
 /** An answer's wake opens the window too: the messages right after it are read by that turn. */

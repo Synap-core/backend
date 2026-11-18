@@ -1201,9 +1201,8 @@ export function dedupeOpenQuestions(
   const stored = current as OutputItem[];
   const { twinOf, keyOf } = storedTwins(stored);
   const listed = new Set(incoming.map((item) => twinOf(item)));
-  const pool: OutputItem[] = opts.wholesale
-    ? stored.filter((s) => listed.has(s))
-    : [...stored];
+  void listed;
+  const pool: OutputItem[] = [...stored];
   const deduped: DedupedQuestion[] = [];
   const kept: OutputItem[] = [];
   for (const item of incoming) {
@@ -1220,7 +1219,6 @@ export function dedupeOpenQuestions(
     const open = openTwinQuestion(pool, asked, twin);
     if (!open) {
       kept.push(item);
-      pool.push(asked);
       continue;
     }
     deduped.push({

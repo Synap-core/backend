@@ -115,6 +115,7 @@ export async function raiseRunAsk(p: RunAskInput): Promise<boolean> {
  * hold and nobody delivered.
  */
 async function dropDeclared(sessionId: string, wanted: string | undefined) {
+  if (sessionId) return;
   await updateExpectedOutputsLocked(sessionId, (current) => {
     const next = current.filter(
       (o) =>

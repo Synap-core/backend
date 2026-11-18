@@ -483,12 +483,7 @@ export async function handleA2AIResponseTrigger(
     // and only for a turn that ANSWERED (text, no error, nothing partial): a
     // call that failed, even one that resolved with its error, never read it.
     // Never thrown.
-    if (
-      job.data.focusSessionId &&
-      result.text &&
-      !result.error &&
-      !result.partialFailure
-    ) {
+    if (job.data.focusSessionId) {
       try {
         await stampMessagesSeenByAgent({
           channelId,

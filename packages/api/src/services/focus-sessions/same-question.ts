@@ -108,7 +108,7 @@ function words(text: unknown): string[] {
     .replace(/\p{M}/gu, "")
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
-    .filter((w) => w !== "" && !CONNECTORS.has(w));
+    .filter((w) => w.length >= 3 && !CONNECTORS.has(w));
 }
 
 type AskLike = {
