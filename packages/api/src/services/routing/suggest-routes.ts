@@ -308,9 +308,12 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
     intent.size > 0
       ? input.candidates.map((c) =>
           tokenize(
-            [c.name, c.description, ...(c.text ?? []), ...(c.triggers ?? [])].join(
-              " "
-            ),
+            [
+              c.name,
+              c.description,
+              ...(c.text ?? []),
+              ...(c.triggers ?? []),
+            ].join(" "),
             GENERIC_WORK_WORDS
           )
         )

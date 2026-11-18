@@ -101,10 +101,7 @@ export const INERT_TEXT_CONTENT_TYPE = "text/plain; charset=utf-8";
 export function servedContentTypeOverride(
   storedContentType: string | null
 ): string | undefined {
-  const essence = (storedContentType ?? "")
-    .split(";")[0]!
-    .trim()
-    .toLowerCase();
+  const essence = (storedContentType ?? "").split(";")[0]!.trim().toLowerCase();
   return SCRIPT_OR_STYLE_MIME_TYPES.has(essence)
     ? INERT_TEXT_CONTENT_TYPE
     : undefined;

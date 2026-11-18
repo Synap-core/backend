@@ -15,10 +15,7 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { fileChecksum } from "./checksum.js";
 import type { SignedGetObject } from "./interface.js";
-import {
-  attachmentDisposition,
-  servedContentTypeOverride,
-} from "./utils.js";
+import { attachmentDisposition, servedContentTypeOverride } from "./utils.js";
 
 // ============================================================================
 // TYPES

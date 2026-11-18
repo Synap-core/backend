@@ -14,10 +14,7 @@ import { describe, it, expect } from "vitest";
 import { MinIOStorageProvider } from "../minio-provider.js";
 import { R2StorageProvider } from "../r2-provider.js";
 import { R2Storage } from "../r2.js";
-import {
-  attachmentDisposition,
-  servedContentTypeOverride,
-} from "../utils.js";
+import { attachmentDisposition, servedContentTypeOverride } from "../utils.js";
 
 const creds = { accessKeyId: "k", secretAccessKey: "s", bucketName: "b" };
 
