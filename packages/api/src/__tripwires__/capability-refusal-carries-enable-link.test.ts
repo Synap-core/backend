@@ -21,7 +21,14 @@
  * a governance one; forcing an "Enable X" hint onto it would name the wrong fix,
  * which is exactly the approve-vs-connect collapse this work exists to prevent.
  * The class predicate — not a list of files — is what keeps that judgement
- * reviewable.
+ * reviewable. So is the recipe run refused at filing: its reason is opaque here,
+ * so it is exempt only while builtin-verbs.ts PROVES its codes are configuration
+ * codes (`recipeFilingExemption`); a code that reads approval-class, or maps to
+ * a governance failure class, puts it back in scope.
+ *
+ * What it does NOT cover: the recipe refusal's message TEXT is not classified
+ * (an UNKNOWN_RECIPE sentence may say "approved version", which is accurate:
+ * the fix it names is an update request, not enabling). The code is the class.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -75,10 +82,111 @@ function isRefusalInScope(literal: string): boolean {
   // A TRIAL run's write (the rule lab, `reasonCode: TRIAL_RUN_WRITE_REFUSED`)
   // is refused by design: nothing to enable, so no enable-link either.
   if (/reasonCode:\s*TRIAL_RUN_WRITE_REFUSED\b/.test(literal)) return false;
+  // A recipe run refused AT FILING (`recipeRunRefusalAtFiling`): its reason is
+  // the run's own sentence, opaque here, but its codes are PROVEN
+  // configuration codes from builtin-verbs.ts (`recipeFilingExemption`). The
+  // capability is already enabled; an "Enable X" link would name the wrong fix.
+  if (isRecipeFilingRefusal(literal) && recipeFilingExemption().ok)
+    return false;
   if (APPROVAL_CLASS.test(literal)) return true;
   const reason = /reason:\s*([\s\S]*?)(?:,\n|\n\s*\})/.exec(literal)?.[1] ?? "";
   const isLiteralText = /^\s*[`"']/.test(reason);
   return !isLiteralText;
+}
+
+const BUILTIN_VERBS = join(API_SRC, "services/capabilities/builtin-verbs.ts");
+
+/**
+ * The failure classes (`@synap-core/types/failures`) that name a CONFIGURATION
+ * fix: the ask is wrong, or what it points at is not there. `permission`,
+ * `auth`, `no_connection`, `not_connected` are governance or connection fixes
+ * and are deliberately absent.
+ */
+const CONFIGURATION_CLASSES = new Set([
+  "validation",
+  "conflict",
+  "target_missing",
+  "missing_field",
+]);
+
+/**
+ * Is this deny the recipe run's FILING refusal? Its reason and code must both
+ * read the value `recipeRunRefusalAtFiling` returned: the nearest
+ * `const <name> = await <fn>(` before the deny names that function. A deny
+ * reading any other `<name>.reasonCode` is not exempted.
+ */
+function isRecipeFilingRefusal(
+  literal: string,
+  src: string = readFileSync(EXECUTE, "utf-8")
+): boolean {
+  const code = /reasonCode:\s*(\w+)\.reasonCode\b/.exec(literal)?.[1];
+  if (!code) return false;
+  if (!new RegExp(`reason:\\s*${code}\\.message\\b`).test(literal))
+    return false;
+  const at = src.indexOf(literal);
+  if (at === -1) return false;
+  const binds = [
+    ...src
+      .slice(0, at)
+      .matchAll(new RegExp(`const ${code} = await (\\w+)\\(`, "g")),
+  ];
+  return binds.at(-1)?.[1] === "recipeRunRefusalAtFiling";
+}
+
+/**
+ * Proves, from builtin-verbs.ts's own source, that `recipeRunRefusalAtFiling`
+ * only refuses with configuration codes: it returns `null` for any code not in
+ * `RECIPE_REFUSED_AT_FILING`, and every member of that set (a) has no
+ * approval, grant or enablement word and (b) maps, in `RECIPE_REFUSAL_CLASS`,
+ * to a configuration class. Any failed proof drops the exemption, so the deny
+ * falls back in scope and the enable-link assertion goes red.
+ */
+function recipeFilingExemption(): { ok: boolean; problems: string[] } {
+  const src = readFileSync(BUILTIN_VERBS, "utf-8");
+  const problems: string[] = [];
+  const set =
+    /const RECIPE_REFUSED_AT_FILING: ReadonlySet<string> = new Set\(\[([^\]]*)\]\)/.exec(
+      src
+    );
+  const codes = [...(set?.[1] ?? "").matchAll(/"([A-Z_]+)"/g)].map(
+    (m) => m[1]
+  );
+  if (codes.length === 0)
+    problems.push("RECIPE_REFUSED_AT_FILING not found or empty");
+  const map =
+    /const RECIPE_REFUSAL_CLASS: Record<string, FailureErrorClass> = \{([^}]*)\}/.exec(
+      src
+    );
+  if (!map) problems.push("RECIPE_REFUSAL_CLASS not found");
+  const classOf = new Map(
+    [...(map?.[1] ?? "").matchAll(/(\w+):\s*"(\w+)"/g)].map((m) => [
+      m[1],
+      m[2],
+    ])
+  );
+  for (const code of codes) {
+    if (APPROVAL_CLASS.test(code.replace(/_/g, " ")))
+      problems.push(`${code} reads approval-class`);
+    const cls = classOf.get(code);
+    if (!cls || !CONFIGURATION_CLASSES.has(cls))
+      problems.push(`${code} maps to ${cls ?? "no class"}`);
+  }
+  const fn =
+    /export async function recipeRunRefusalAtFiling\([\s\S]*?\n\}\n/.exec(src);
+  if (!fn) problems.push("recipeRunRefusalAtFiling not found");
+  else {
+    if (!/!RECIPE_REFUSED_AT_FILING\.has\(planned\.code\)/.test(fn[0]))
+      problems.push("recipeRunRefusalAtFiling does not gate on the set");
+    const returns = [...fn[0].matchAll(/return \{([^}]*)\}/g)];
+    if (
+      returns.length !== 1 ||
+      !/reasonCode:\s*planned\.code\b/.test(returns[0][1])
+    )
+      problems.push(
+        "recipeRunRefusalAtFiling must refuse once, with reasonCode: planned.code"
+      );
+  }
+  return { ok: problems.length === 0, problems };
 }
 
 /**
@@ -119,6 +227,33 @@ describe("TRIPWIRE: capability refusals carry an enable-link", () => {
     expect(
       denies.filter((d) => !isRefusalInScope(d)).length
     ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("the recipe-filing exemption is PROVEN, and fires on exactly one deny", () => {
+    // Floors: a broken parse must fail here, never exempt silently. The proof
+    // reads builtin-verbs.ts; if it fails the deny is back in scope and the
+    // next test goes red too, naming the deny.
+    const proof = recipeFilingExemption();
+    expect(proof.problems).toEqual([]);
+    expect(
+      denyReturns(executeSrc).filter((d) => isRecipeFilingRefusal(d))
+    ).toHaveLength(1);
+    // Self-check on a literal sample: the same deny shape is exempted only
+    // when its value was bound from `recipeRunRefusalAtFiling`.
+    const deny =
+      'return {\n  kind: "deny",\n  reason: r.message,\n  reasonCode: r.reasonCode,\n}';
+    expect(
+      isRecipeFilingRefusal(
+        deny,
+        `const r = await recipeRunRefusalAtFiling(p);\n${deny}`
+      )
+    ).toBe(true);
+    expect(
+      isRecipeFilingRefusal(
+        deny,
+        `const r = await recipeRunRefusalAtFiling(p);\nconst r = await somethingElse(p);\n${deny}`
+      )
+    ).toBe(false);
   });
 
   it("every approval-class deny carries `enable`", () => {
