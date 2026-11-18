@@ -24925,7 +24925,8 @@ export interface ActionModeRow {
 	mode: ActionRunMode;
 	/** The rule that sets it; `null` when it asks first (no rule). */
 	ruleId: string | null;
-	/** False for an action no rule may run on its own (a public post). */
+	/** False for an action no rule may run on its own (a public post, a
+	 * verb declaring `metadata.proposeOnly`). */
 	mayRunOnItsOwn: boolean;
 }
 export interface WriteActionModeResult {
