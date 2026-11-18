@@ -47,6 +47,7 @@ import {
   drizzleSql,
   type MergeMaterializedStamp,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { readItemPackRefs } from "@synap-core/types/proposals/item-pack";
@@ -2150,6 +2151,13 @@ export const proposalsRouter = router({
          */
         workspaceId: z.string().nullable().optional(),
         projectId: z.string().nullable().optional(),
+        /**
+         * The revision the reviewer's edit was made against (the length of
+         * `revisionHistory` the page rendered). A change made on top of a
+         * version someone else has since revised is refused (CONFLICT), so
+         * "Approve with your changes" never overwrites an unseen edit.
+         */
+        expectedRevision: z.number().int().nonnegative().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2224,6 +2232,7 @@ export const proposalsRouter = router({
         patch: { kind: "envelope", fields: input.data },
         workspaceId: input.workspaceId,
         projectId: input.projectId,
+        expectedRevision: input.expectedRevision,
         roster: rosterReadFor(ctx),
       });
 
@@ -2698,9 +2707,12 @@ export const proposalsRouter = router({
    *     agent's still-pending request.
    *   - the human creator of an agent-less proposal (`agentUserId` NULL AND
    *     `createdBy === userId`) — the intake doors stamp no proposedByUserId.
+   *   - the AGENT that authored it (`agentUserId` = the acting agent): it
+   *     takes back its own request, pending or failed, and nothing scores it
+   *     (plan 8032a127 D2; it used to have only `reject`, which scores).
    * Anyone else — including a workspace owner/admin who is NOT the proposer —
-   * must use `reject`, not `withdraw`. Pending-only: an already
-   * approved/rejected/withdrawn proposal cannot be withdrawn.
+   * must use `reject`, not `withdraw`. Undecided only (pending, or its approval
+   * failed): an approved/rejected/withdrawn proposal cannot be withdrawn.
    */
   withdraw: protectedProcedure
     .input(
@@ -2735,10 +2747,14 @@ export const proposalsRouter = router({
           message: "Proposal not found",
         });
       }
-      if (proposal.status !== ProposalStatus.PENDING) {
+      // A failed approval is as undecided as a pending one: its author may
+      // take it back (plan 8032a127 D2).
+      const from = proposal.status as ProposalStatus;
+      if (!UNDECIDED_PROPOSAL_STATUSES.includes(from)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Only a pending proposal can be withdrawn.",
+          message:
+            "Only a proposal still waiting for a decision (pending, or whose approval failed) can be withdrawn.",
         });
       }
 
@@ -2768,17 +2784,8 @@ export const proposalsRouter = router({
       //     principal acting as itself.
       //   · revise    — matches `ctx.agentUserId === proposals.agentUserId`,
       //     which DOES fire for the ordinary agent key.
-      // So today an ordinary agent key can amend its own proposal but cannot
-      // withdraw it. That divergence is KNOWN and deliberately left in place:
-      // withdraw is TERMINAL and revise is not. A revise leaves the proposal
-      // pending with `revisionHistory` appended, so the human still decides on
-      // a request they can see changed; a withdraw removes it from the queue
-      // outright, and a human about to approve simply loses it with no
-      // equivalent trace. "Still asking, not deciding" justifies the revise
-      // rung and does not transfer to a terminal state change.
-      // Aligning them would WIDEN withdraw — a separate decision needing its
-      // own evidence (how many pending proposals are agent-authored, and
-      // whether any surface treats `withdrawn` differently from `rejected`).
+      // The ordinary agent key withdraws its own proposal through the
+      // author-agent rung below (plan 8032a127 D2), not through this one.
       const isActingAgent =
         !!proposal.agentUserId && proposal.createdBy === userId;
       // The human CREATOR of an agent-less proposal: most capture/import doors
@@ -2788,19 +2795,43 @@ export const proposalsRouter = router({
       // proposer — not a widening to other users or to session owners.
       const isHumanCreator =
         !proposal.agentUserId && proposal.createdBy === userId;
-      if (!isHumanProposer && !isActingAgent && !isHumanCreator) {
+      // THE AUTHOR AGENT (plan 8032a127 D2): the agent IDENTITY (the key's
+      // agent), never the session, matched as the revise author rung matches.
+      const actingAgentUserId =
+        getActingAgentUserId() ?? ctx.agentUserId ?? null;
+      const isAuthorAgent =
+        !!actingAgentUserId && proposal.agentUserId === actingAgentUserId;
+
+      if (
+        !isHumanProposer &&
+        !isActingAgent &&
+        !isHumanCreator &&
+        !isAuthorAgent
+      ) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "Only the proposer can withdraw this proposal.",
         });
       }
 
-      await transitionProposal(db, {
+      const now = new Date();
+      const withdrawn = await transitionProposal(db, {
         to: ProposalStatus.WITHDRAWN,
+        // The status it was read and authorized in: a proposal decided, or
+        // retried into another status, meanwhile keeps that.
+        from: [from],
         set: {
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
+          // Its author agent taking it back names no person (decision F2); a
+          // person withdrawing, through any key, is named.
+          reviewedBy:
+            isAuthorAgent &&
+            !isHumanProposer &&
+            !isActingAgent &&
+            !isHumanCreator
+              ? null
+              : userId,
+          reviewedAt: now,
+          updatedAt: now,
           // On `data.withdrawReason` (the `data.revertReason` precedent), NEVER
           // `rejectionReason`: the agent scorecard buckets that column for every
           // row, so a withdrawal would read as a "top rejection reason".
@@ -2811,10 +2842,17 @@ export const proposalsRouter = router({
             : {}),
         },
         where: eq(proposals.id, input.proposalId),
-      });
+      }).returning({ id: proposals.id });
+      if (withdrawn.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "This proposal was decided while you were withdrawing it, so it was left as it is.",
+        });
+      }
 
-      // WITHDRAWN is terminal, and it is PENDING-only — so no reject can ever
-      // follow to clean up after it. A staged source blob left here is orphaned
+      // WITHDRAWN is terminal — so no reject can ever follow to clean up
+      // after it. A staged source blob left here is orphaned
       // permanently, exactly as it would be after a rejection. Same one door
       // `reject`/`batchReject`/the expiry scanners use.
       await discardProposalSourceBlob({

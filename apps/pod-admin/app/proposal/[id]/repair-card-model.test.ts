@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { pickAct, repairRows, REPAIR_CHOICES_CAP } from "./repair-card-model";
+import {
+  failureCauseHref,
+  pickAct,
+  repairRows,
+  REPAIR_CHOICES_CAP,
+} from "./repair-card-model";
 
 const CATEGORIES = [
   "working_style",
@@ -87,5 +92,25 @@ describe("repairRows", () => {
       },
     ]);
     expect(row!.choices).toHaveLength(REPAIR_CHOICES_CAP);
+  });
+});
+
+describe("failureCauseHref", () => {
+  const data = { failure: { errorClass: "unknown", errorId: "f-1/x" } };
+
+  it("an admin gets the server error page of the failure's cause", () => {
+    expect(failureCauseHref(data, "admin")).toBe("/errors/f-1%2Fx");
+  });
+
+  it("a member gets no door: the cause is read only with pod-admin rights", () => {
+    expect(failureCauseHref(data, "member")).toBeNull();
+  });
+
+  it("no recorded cause, no door", () => {
+    expect(
+      failureCauseHref({ failure: { errorClass: "auth" } }, "admin")
+    ).toBeNull();
+    expect(failureCauseHref(null, "admin")).toBeNull();
+    expect(failureCauseHref({ failure: "x" }, "admin")).toBeNull();
   });
 });

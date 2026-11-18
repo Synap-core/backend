@@ -44,3 +44,26 @@ export function satisfiesRange(version, range) {
   if (minor > 0) return v[0] === 0 && v[1] === minor;
   return compare(v, base) === 0;
 }
+
+/**
+ * A checkout whose version is BEHIND the published one: drift, or a run that
+ * started before main took the publish's own bump commit?
+ *
+ * publish-types.yml publishes to npm, THEN pushes its version-bump commit. A
+ * CI run on an earlier main commit that overlaps a publish therefore reads
+ * "local behind published" with nothing wrong: on 2026-11-18 main's run on
+ * 3b69ed414 (1.34.2) checked six seconds after 1.34.3 was published by a run
+ * dispatched on that same commit, and main went red. What must hold is that npm
+ * is never AHEAD OF MAIN, so the verdict reads main's head:
+ * `"main-moved-on"` when main's head has reached the published version,
+ * `"drift"` when it has not (an out-of-band publish), `null` when either
+ * version cannot be read (the caller says so; never folded into a verdict).
+ *
+ * @returns {"main-moved-on" | "drift" | null}
+ */
+export function behindVerdict(published, mainHead) {
+  const p = parse(published ?? "");
+  const h = parse(mainHead ?? "");
+  if (!p || !h) return null;
+  return compare(h, p) >= 0 ? "main-moved-on" : "drift";
+}

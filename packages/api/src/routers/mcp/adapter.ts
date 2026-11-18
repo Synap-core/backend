@@ -25,8 +25,13 @@ import {
 import { getAgentFocusWorkspaceId } from "../../services/agent-identity-service.js";
 import {
   runWithDerivedSession,
+  runWithSupersedes,
   runWithWriteSessionLedger,
+  supersedesProblem,
+  type SupersedesSlot,
 } from "@synap/database";
+import { toolError } from "./tool-errors.js";
+import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
 import {
   describeWriteSessions,
   firstTopicHint,
@@ -52,6 +57,7 @@ import { trackHandlers } from "./handlers/track.js";
 import { trackParticipantHandlers } from "./handlers/track-participants.js";
 import { workerHandlers } from "./handlers/workers.js";
 import { installationHandlers } from "./handlers/installations.js";
+import { fileHandlers } from "./handlers/files.js";
 import { devApprovalHandlers } from "./handlers/dev-approval.js";
 import { askPersonHandlers } from "./handlers/ask-person.js";
 import { parseJsonObject, withUiStructuredContent } from "./ui-tools.js";
@@ -85,6 +91,7 @@ const TOOL_HANDLERS: McpHandlerMap = {
   ...trackParticipantHandlers,
   ...workerHandlers,
   ...installationHandlers,
+  ...fileHandlers,
   ...devApprovalHandlers,
   ...askPersonHandlers,
 };
@@ -242,12 +249,50 @@ export async function executeMCPToolViaHubProtocol(
   // write, by client + project), so the reply below names what landed. A
   // derived RECEIPT carries its project so the gate can re-key a write of
   // another project to that project's receipt.
-  const { ledger, result: pending } = runWithWriteSessionLedger(() =>
+  const routed = () =>
     session?.attribution === "derived"
       ? runWithDerivedSession(session.sessionId, invokeHandler, session.receipt)
-      : invokeHandler()
-  );
-  const result = await pending;
+      : invokeHandler();
+  // D3 (plan 8032a127): a write that REPLACES a failed proposal names it
+  // (`supersedes`, on SUPERSEDES_TOOLS only: any other tool refuses it).
+  // Refused here, before the handler, when the name cannot be replaced (the
+  // insert door checks it again, and the request kind, against the row it
+  // files); otherwise the proposal this call files for it ends it.
+  const supersedes =
+    typeof args.supersedes === "string" && args.supersedes.trim() !== ""
+      ? args.supersedes.trim()
+      : undefined;
+  if (args.supersedes !== undefined && !SUPERSEDES_TOOLS.includes(toolName)) {
+    return toolError(
+      `${toolName} does not take \`supersedes\` — NOTHING WAS CHANGED. Only ${SUPERSEDES_TOOLS.join(", ")} file a request that replaces a failed one.`
+    );
+  }
+  if (supersedes) {
+    const problem = await supersedesProblem(supersedes, userId);
+    if (problem) {
+      return toolError(
+        `supersedes ${supersedes}: ${problem} Nothing was filed.`
+      );
+    }
+  }
+  let replacing: SupersedesSlot | undefined;
+  const { ledger, result: pending } = runWithWriteSessionLedger(() => {
+    if (!supersedes) return routed();
+    const run = runWithSupersedes(supersedes, routed);
+    replacing = run.slot;
+    return run.result;
+  });
+  const handled = await pending;
+  // Said when nothing this call filed went to review (a refusal, a write that
+  // applied at once): the failed proposal is still there, and the agent must
+  // not believe it ended.
+  const result =
+    replacing && !replacing.replacedBy && !handled.isError
+      ? withNote(
+          handled,
+          `supersedes: this call filed nothing for review, so proposal ${replacing.proposalId} was left as it is (still failed).`
+        )
+      : handled;
   const filed = resolution
     ? await describeWriteSessions(ledger.filings, { userId, agentUserId })
     : undefined;

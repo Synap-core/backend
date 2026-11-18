@@ -29,7 +29,7 @@ import {
 } from "../../hub-protocol/rest/_shared.js";
 import { revisionReplyFields } from "../../hub-protocol/rest/_codecs/proposal.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
-import { CONTENT_KINDS } from "@synap/database/schema";
+import { CONTENT_KINDS, proposals } from "@synap/database/schema";
 import {
   CellPlacementSchema,
   checkCellPlacement,
@@ -54,8 +54,10 @@ import {
   bindCapabilityRenderer,
   withCapabilityPage,
 } from "../../../services/capabilities/bind-capability-renderer.js";
-import { getDb, getRequestGrant } from "@synap/database";
+import { getDb, getRequestGrant, eq } from "@synap/database";
 import { processReadableByGrant } from "../../../access/grant-door-fence.js";
+import { AccessContext, scopedDb } from "../../../access/index.js";
+import { assertKeyMayWrite } from "../../../utils/assert-key-may-write.js";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
 import {
@@ -744,6 +746,11 @@ export const buildHandlers: McpHandlerMap = {
       // What a run may use, "only these": validated by `playbooks.create`
       // (`playbookToolsSchema`, a stage list a subset), refused, never dropped.
       ...(args.tools !== undefined ? { tools: args.tools as string[] } : {}),
+      // The phrases that offer it (`metadata.triggers`): validated by
+      // `playbooks.create` (`playbookTriggersSchema`), refused, never dropped.
+      ...(args.triggers !== undefined
+        ? { triggers: args.triggers as string[] }
+        : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
@@ -800,6 +807,11 @@ export const buildHandlers: McpHandlerMap = {
           ? { statusProperty: args.statusProperty }
           : {}),
       };
+    }
+    // `metadata.triggers`: the metadata patch is shallow-merged, so this
+    // replaces the trigger list and keeps every other metadata key.
+    if (args.triggers !== undefined) {
+      patch.metadata = { triggers: args.triggers };
     }
     const reasoning = readReasoning(args);
     if (reasoning) patch.reasoning = reasoning;
@@ -1264,6 +1276,58 @@ export const buildHandlers: McpHandlerMap = {
     const rejectCaller = proposalsRouter.createCaller(
       rejectCtx as Parameters<typeof proposalsRouter.createCaller>[0]
     );
+    // YOUR OWN proposal is WITHDRAWN, not rejected (plan 8032a127 D2). An agent
+    // taking back a write it now knows is wrong is the proposer retracting,
+    // which `withdrawn` means and nothing scores; a reject is a reviewer's
+    // judgement on the agent's work and lowers its approve rate. Agents were
+    // told to "withdraw" with this tool, so each did the right thing and
+    // scored itself down. Anyone else's stays a reject, with its reviewer
+    // authority. This read only ROUTES, through the caller's own floor: the
+    // withdraw door re-checks the author, and an unreadable row is rejected.
+    const [filed] = agentUserId
+      ? await scopedDb(AccessContext.operator({ userId })).findMany<{
+          agentUserId: string | null;
+          workspaceId: string | null;
+          projectId: string | null;
+          targetId: string | null;
+        }>(proposals, {
+          where: eq(proposals.id, resolvedProposalId),
+          columns: {
+            agentUserId: true,
+            workspaceId: true,
+            projectId: true,
+            targetId: true,
+          },
+        })
+      : [];
+    if (agentUserId && filed?.agentUserId === agentUserId) {
+      // The key's grant still bounds this tool: a key that may not reject a
+      // proposal here may not take one back here either (the same right, on
+      // the proposal's own space, project and object, that the reject door
+      // asks), so routing to the withdraw never widens what the key can do.
+      await assertKeyMayWrite({
+        subjectType: "proposal",
+        action: "reject",
+        workspaceId: filed.workspaceId,
+        projectId: filed.projectId,
+        data: { entityId: filed.targetId },
+      });
+      await rejectCaller.withdraw({
+        proposalId: resolvedProposalId,
+        reason: args.reason as string | undefined,
+      });
+      return ok({
+        success: true,
+        proposalId: resolvedProposalId,
+        status: "withdrawn",
+        message: "withdrawn: yours, not scored",
+        ...(args.reasonCode !== undefined
+          ? {
+              note: "reasonCode is not kept on a withdrawal (only `reason` is).",
+            }
+          : {}),
+      });
+    }
     await rejectCaller.reject({
       proposalId: resolvedProposalId,
       reason: args.reason as string | undefined,
@@ -1271,7 +1335,11 @@ export const buildHandlers: McpHandlerMap = {
       // by the reject procedure's zod enum; an unknown value is rejected there.
       reasonCode: args.reasonCode as ProposalRejectionReasonCode | undefined,
     });
-    return ok({ success: true, proposalId: resolvedProposalId });
+    return ok({
+      success: true,
+      proposalId: resolvedProposalId,
+      status: "rejected",
+    });
   },
   synap_run_playbook: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, requestedWorkspaceId } = ctx;

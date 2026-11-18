@@ -43,6 +43,8 @@ import {
   type QueryUnderstanding,
 } from "../retrieval/understand-query.js";
 import type { RetrievalVerdict } from "../retrieval/grade.js";
+import type { RecallWindow } from "../retrieval/recall-window.js";
+import { projectIdsForAsk, readProjectsForAsk } from "./project-lane.js";
 import { classifySubstrates, type SubstrateKind } from "./classify.js";
 import {
   COMMON_STOPWORDS,
@@ -124,6 +126,12 @@ export interface AskParams {
    * `sources` keep the complete set.
    */
   detail?: AskDetail;
+  /**
+   * A time window on `updatedAt` (`synap_ask` `since` / `until`, ticket
+   * a9888512): a FILTER on the entity lanes' candidate fetch (semantic and
+   * structured), applied before ranking. The door that takes it echoes it.
+   */
+  window?: RecallWindow | null;
 }
 
 export interface AskAnswer {
@@ -299,6 +307,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     catalog,
     limit,
     compare,
+    window: params.window ?? null,
   });
   // knowledge_keys has no user column; scope to the user's namespace (workspaceId
   // slot), matching GET /knowledge/search — `undefined` would read UNFILTERED
@@ -399,6 +408,26 @@ export async function ask(params: AskParams): Promise<AskResult> {
     semanticStatus = "error";
   }
 
+  // PROJECT source (ticket 8e2c7018): the `projects` table is where a
+  // project's current facts live. Read for the project lens and for every
+  // semantic hit that IS a project (the entity migration 0151 left behind,
+  // same id). A twin answered by its row leaves the semantic block: the table
+  // is the truth, the entity is July's copy.
+  const askedProjects = projectIdsForAsk(projectId, semantic.entities);
+  const project: Settled | null =
+    askedProjects.length > 0
+      ? await settle(readProjectsForAsk({ userId, projectIds: askedProjects }))
+      : null;
+  if (project && project.status === "ok" && project.items.length > 0) {
+    const answered = new Set(project.items.map((p) => p.id));
+    semantic = {
+      ...semantic,
+      entities: semantic.entities.filter(
+        (e) => !answered.has((e as { id?: string }).id)
+      ),
+    };
+  }
+
   // STRUCTURED substrate — an enumerative, typed listing dispatched through the
   // SAME scoped door entities.list uses. The catalog-resolved profile slug comes
   // from the semantic engine's own type inference (the top inferred profile), so
@@ -421,6 +450,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
             // sanity ceiling, not a relevance cut. A `brief` ask promises a
             // short answer instead, so it reads the caller's limit (B1-b).
             limit: params.detail === "brief" ? limit : Math.max(limit, 200),
+            window: params.window ?? null,
           })
         )
       : { status: "ok", items: [] };
@@ -486,6 +516,14 @@ export async function ask(params: AskParams): Promise<AskResult> {
   // whole-substrate error — surfaced so a caller knows recall was weakened.
   if (semanticStatus === "ok" && semantic.vectorDown)
     degraded.push("semantic:vector-down");
+  if (project) {
+    answers.push({
+      substrate: "project",
+      items: project.items,
+      status: project.status,
+    });
+    if (project.status === "error") degraded.push("project");
+  }
   if (structured) {
     answers.push({
       substrate: "structured",
@@ -537,6 +575,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
   // `catalog` comes right after `procedural`: a how-to whose runbooks came back
   // empty is answered by the skill or playbook before stale notes.
   const FALLBACK_ORDER = [
+    "project",
     "structured",
     "procedural",
     "catalog",
@@ -562,7 +601,8 @@ export async function ask(params: AskParams): Promise<AskResult> {
 
   return {
     query,
-    routedTo: substrates,
+    // The project source ran (it is not routed by cues): say so.
+    routedTo: project ? [...substrates, "project"] : substrates,
     intent,
     primary,
     answers,

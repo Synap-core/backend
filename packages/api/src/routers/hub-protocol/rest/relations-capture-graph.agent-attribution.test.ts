@@ -19,7 +19,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TRPCError } from "@trpc/server";
 
-const USER_ID = "e418d146-0000-4000-8000-000000000001";
+const USER_ID = "00000000-0000-4000-8000-0000000000a1";
 const AGENT_ID = "0e0403a8-0000-4000-8000-000000000002";
 const BODY_AGENT_ID = "0e0403a8-0000-4000-8000-000000000003";
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";

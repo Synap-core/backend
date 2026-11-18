@@ -584,7 +584,10 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
     expect(onApprovalFailed).toHaveBeenCalledWith(
       "p1",
       "Couldn't apply — an internal error occurred.",
-      { errorClass: "unknown", detail: "automation was deleted" }
+      { errorClass: "unknown", detail: "automation was deleted" },
+      // The error itself, for the owner-only record of its cause
+      // (`recordProposalFault`, plan 8032a127 D5); never stored on the row.
+      expect.objectContaining({ message: "automation was deleted" })
     );
     // …and the raw text reaches the PERSISTED payload only through `detail`,
     // never through the user-facing sentence. (`onApprovalFailed` is a
@@ -627,7 +630,8 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
     expect(onApprovalFailed).toHaveBeenCalledWith(
       "p1",
       "Couldn't apply — target no longer exists",
-      expect.objectContaining({ errorClass: "target_missing" })
+      expect.objectContaining({ errorClass: "target_missing" }),
+      expect.any(TRPCError)
     );
   });
 });

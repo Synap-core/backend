@@ -138,8 +138,8 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-      // 16: a compute verb's declared lifecycle (`metadata.compute`).
-    ).toBe(16);
+      // 17: a compute verb's declared lifecycle (`metadata.compute`).
+    ).toBe(17);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -411,7 +411,7 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     });
 
     it("a compute-declaration-only difference is drift, and the projection installs it", () => {
-      // The sixth definition-owned key (v16). Without it in the projection a
+      // The seventh definition-owned key (v17). Without it in the projection a
       // provision verb would install with no release verb and every start
       // would be refused; without it in the comparator no installed pod would
       // ever receive a declaration added to its template.

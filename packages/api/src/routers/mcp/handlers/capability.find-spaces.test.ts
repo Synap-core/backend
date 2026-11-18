@@ -197,7 +197,10 @@ beforeEach(() => {
 
 describe("synap_find — the spaces catalog", () => {
   it("routes 'store brand assets logo colors fonts' to Brand Library, with the brand-* kinds to write", async () => {
-    const out = await find({ intent: "store brand assets logo colors fonts" });
+    const out = await find({
+      intent: "store brand assets logo colors fonts",
+      explain: true,
+    });
     const matches = out.spaces.matches as Array<Record<string, any>>;
     // Non-vacuity: more than one space matched, so Brand Library won on merit.
     expect(matches.length).toBeGreaterThan(1);
@@ -214,6 +217,19 @@ describe("synap_find — the spaces catalog", () => {
     expect(matches[0]!.purpose).toMatch(/^Reusable source of truth for brand/);
     expect(matches[0]!.termCoverage.hit).toBeGreaterThanOrEqual(4);
     expect(out.scoring.spaces.scale).toMatch(/best space score/);
+  });
+
+  it("leaves `scoring` out unless the call passes explain:true", async () => {
+    const plain = await find({
+      intent: "store brand assets logo colors fonts",
+    });
+    expect(plain.spaces.matches.length).toBeGreaterThan(0);
+    expect(plain).not.toHaveProperty("scoring");
+    const explained = await find({
+      intent: "store brand assets logo colors fonts",
+      explain: true,
+    });
+    expect(explained.scoring.spaces.scale).toMatch(/best space score/);
   });
 
   it("is searched by default (no catalogs arg) and alone when named", async () => {

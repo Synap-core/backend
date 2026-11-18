@@ -87,7 +87,12 @@ export interface EvaluateSessionParams {
   userId: string;
   agentUserId?: string | null;
   evidence?: PostedEvidence;
-  /** Restrict to the criteria copied from this stage (the `check` gate). */
+  /**
+   * Restrict to the criteria copied from this stage (the `check` gate).
+   * Absent (and no `criterionKeys`): the criteria of a stage the session has
+   * not reached yet are skipped, never graded early (db6a5e17) — see
+   * {@link criteriaNotReached}.
+   */
   stageKey?: string;
   /**
    * Restrict to these check kinds. The evidence door passes `["evidence"]` so
@@ -233,6 +238,16 @@ export async function evaluateSession(
   );
 
   const results: CriterionRunOutcome[] = [];
+  // BOUNDED BY DEFAULT (db6a5e17): a call that names no stage and no criteria
+  // grades the stages up to the session's current one. A judge run on a stage
+  // whose work does not exist yet spends one of its attempts for nothing.
+  const notReached =
+    params.stageKey === undefined && params.criterionKeys === undefined
+      ? await criteriaNotReached(session, pending, params.evidence)
+      : new Map<string, string>();
+  for (const [key, reason] of notReached) {
+    results.push({ key, status: "skipped", reason });
+  }
   const exhausted: SessionCriterion[] = [];
   const record = async (
     c: SessionCriterion,
@@ -266,6 +281,7 @@ export async function evaluateSession(
 
   const judged: SessionCriterion[] = [];
   for (const c of pending) {
+    if (notReached.has(c.key)) continue;
     if (c.check.kind === "evidence") {
       const posted = c.check.evidenceKey
         ? params.evidence?.[c.check.evidenceKey]
@@ -460,6 +476,62 @@ export async function evaluateSession(
     summary: after,
   });
   return { status: "evaluated", results, resumed, ...after };
+}
+
+/**
+ * The pending criteria of a stage AFTER the session's current one, each with
+ * the reason it is skipped. The stage order is the session's own stages, else
+ * its run's (`loadSessionProcess`: the frozen snapshot, then the playbook). A
+ * criterion with no stage, or a stage the order does not list, is graded as
+ * before; so is an evidence criterion whose evidence this call posts (the
+ * caller named it). A session in no stage has reached none.
+ */
+async function criteriaNotReached(
+  session: {
+    id: string;
+    playbookId: string | null;
+    currentStage: string | null;
+    stages: unknown;
+  },
+  pending: readonly SessionCriterion[],
+  evidence: PostedEvidence | undefined
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const staged = pending.filter(
+    (c) =>
+      !!c.stageKey &&
+      !(
+        c.check.kind === "evidence" &&
+        c.check.evidenceKey !== undefined &&
+        evidence?.[c.check.evidenceKey] !== undefined
+      )
+  );
+  if (staged.length === 0) return out;
+  let stages: unknown[] = Array.isArray(session.stages) ? session.stages : [];
+  if (stages.length === 0) {
+    const { loadSessionProcess } =
+      await import("@synap/jobs/utils/session-process.js");
+    stages =
+      (
+        await loadSessionProcess({
+          sessionId: session.id,
+          playbookId: session.playbookId,
+        })
+      )?.stages ?? [];
+  }
+  const keys = stages.map((s) => (s as { key?: unknown } | null)?.key);
+  const at = session.currentStage ? keys.indexOf(session.currentStage) : -1;
+  for (const c of staged) {
+    const index = keys.indexOf(c.stageKey);
+    if (index === -1 || index <= at) continue;
+    out.set(
+      c.key,
+      session.currentStage
+        ? `Stage "${c.stageKey}" is not reached yet (the session is at "${session.currentStage}"): it is graded once the session enters it.`
+        : `Stage "${c.stageKey}" is not reached yet (the session is in no stage): it is graded once the session enters it.`
+    );
+  }
+  return out;
 }
 
 /**

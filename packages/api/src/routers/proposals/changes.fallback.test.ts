@@ -61,7 +61,7 @@ describe("buildProposalChanges — uncovered keys always render, plumbing never"
         url: null,
         type: "markdown",
         title: "Launch readiness",
-        userId: "e418d146-e495-4b8a-8e8b-985f9f885431",
+        userId: "00000000-0000-4000-8000-0000000000a1",
         content: "# Launch readiness\n\nEvery known issue, ranked.",
         idempotencyKey: "k-1",
       },

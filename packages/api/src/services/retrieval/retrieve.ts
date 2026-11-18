@@ -27,12 +27,14 @@ import {
   type FacetVisibilityScope,
   listableEntityWhere,
   loadDocumentBodyTexts,
+  type SQL,
 } from "@synap/database";
 import {
   projectLensWhere,
   BELONGS_TO_PROJECT,
 } from "../../utils/project-scope.js";
 import { embedQuery, hybridRecall, rrf } from "./hybrid-recall.js";
+import { recallWindowWhere, type RecallWindow } from "./recall-window.js";
 import { graphExpand, type Seed } from "./graph-signal.js";
 import { latestEventTimestamps } from "./temporal-signal.js";
 import { compositeRerank } from "./composite-rerank.js";
@@ -81,6 +83,12 @@ export interface RetrieveParams {
    * ADDS a `comparison` block. Defaults false.
    */
   compare?: boolean;
+  /**
+   * A time window on `updatedAt` (`recall-window.ts`): a FILTER on every
+   * candidate source (both recall halves, the graph neighbours, the final
+   * read), applied before ranking. Absent = no window.
+   */
+  window?: RecallWindow | null;
 }
 
 /** One ranked entry in an A/B comparison list (top-`limit`). */
@@ -158,7 +166,8 @@ export async function fetchOrdered(
   ids: string[],
   userId: string,
   projectId: string | null | undefined,
-  facetVisibilityScope: FacetVisibilityScope
+  facetVisibilityScope: FacetVisibilityScope,
+  window?: RecallWindow | null
 ): Promise<EntityRow[]> {
   if (ids.length === 0) return [];
   // Defense-in-depth: gate on the loaded row's userId even though every id
@@ -176,7 +185,8 @@ export async function fetchOrdered(
         // THE listing rule over every id source (recall, graph signal,
         // structured): no probe rows, no demo rows unless project-lensed.
         listableEntityWhere({ projectLens: projectId }),
-        ...(projectId ? [projectLensWhere(entities.id, projectId)] : [])
+        ...(projectId ? [projectLensWhere(entities.id, projectId)] : []),
+        recallWindowWhere(entities.updatedAt, window)
       )
     );
 
@@ -259,6 +269,16 @@ export async function resolveProjectIds(
 
 const titleOf = (r: EntityRow): string => r.title ?? "";
 
+/** `ids` in order, keeping those whose row is inside the window. */
+async function keepInWindow(ids: string[], inWindow: SQL): Promise<string[]> {
+  const rows = await db
+    .select({ id: entities.id })
+    .from(entities)
+    .where(and(inArray(entities.id, ids), inWindow));
+  const kept = new Set(rows.map((r) => r.id));
+  return ids.filter((id) => kept.has(id));
+}
+
 /**
  * Build the A/B comparison from the two rankings over the SAME pool. Baseline
  * scores are rank-normalized (the composite ranker exposes only an ordering, by
@@ -310,7 +330,7 @@ function buildComparison(
 export async function retrieve(
   params: RetrieveParams
 ): Promise<RetrieveResult> {
-  const { query, userId, workspaceId, projectId, catalog } = params;
+  const { query, userId, workspaceId, projectId, catalog, window } = params;
   const limit = params.limit ?? 20;
   const facetVisibilityScope = await resolveFacetVisibilityScope(
     userId,
@@ -351,6 +371,7 @@ export async function retrieve(
       limit,
       embedding,
       facetVisibilityScope,
+      window,
     }),
     // Type-scoped passes fuse at equal RRF weight, so they only run for a
     // list-shaped query ("show my events"); a technical query that merely
@@ -368,6 +389,7 @@ export async function retrieve(
         limit,
         embedding,
         facetVisibilityScope,
+        window,
       })
     ),
   ]);
@@ -392,7 +414,16 @@ export async function retrieve(
     seedCap: GRAPH_SEED_CAP,
     hops: 2,
   });
-  const graphList = graphHits.map((h) => h.id);
+  // A neighbour outside the window must not take a pool slot from a recall
+  // hit inside it (the final read would drop it, leaving the pool short).
+  const inWindow = recallWindowWhere(entities.updatedAt, window);
+  const graphList =
+    inWindow && graphHits.length > 0
+      ? await keepInWindow(
+          graphHits.map((h) => h.id),
+          inWindow
+        )
+      : graphHits.map((h) => h.id);
 
   // 3. Fuse recall + graph into a pool 2× the final limit (re-rank headroom).
   const fusedIds = rrf([...recallLists, graphList], 60, limit * 2);
@@ -411,13 +442,15 @@ export async function retrieve(
           workspaceId,
           limit,
           facetVisibilityScope,
+          window,
         });
         if (r2.ids.length > 0) {
           const rows2 = await fetchOrdered(
             r2.ids,
             userId,
             projectId,
-            facetVisibilityScope
+            facetVisibilityScope,
+            window
           );
           return {
             entities: rows2.slice(0, limit) as Record<string, unknown>[],
@@ -446,7 +479,8 @@ export async function retrieve(
     fusedIds,
     userId,
     projectId,
-    facetVisibilityScope
+    facetVisibilityScope,
+    window
   );
 
   // 4. Rank — resolve the ACTIVE strategy (pod_settings JSONB; default 'baseline'
