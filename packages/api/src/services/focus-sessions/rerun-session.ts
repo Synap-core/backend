@@ -67,6 +67,7 @@ import { createHash } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { resolveActionLabel } from "@synap-core/types/vocabulary";
 import type { Context } from "../../types/context.js";
+import type { OwnWithdrawEnd } from "../../routers/proposals.js";
 import { isTerminalSessionStatus } from "./session-statuses.js";
 import {
   revertSession,
@@ -440,8 +441,11 @@ export async function rerunSession(args: {
   /** Injected for tests. */
   replayers?: RerunReplayers;
   revert?: typeof revertSession;
-  /** Injected for tests; defaults to the `proposals.withdraw` door. */
-  withdrawPending?: (proposalId: string, reason: string) => Promise<unknown>;
+  /** Injected for tests; defaults to the withdraw door (`withdrawOwnProposal`). */
+  withdrawPending?: (
+    proposalId: string,
+    end: OwnWithdrawEnd
+  ) => Promise<unknown>;
   /** Injected for tests; the dedupe window's clock. */
   now?: Date;
   readBytes?: (storageKey: string) => Promise<Buffer>;
@@ -708,7 +712,6 @@ export async function rerunSession(args: {
               pending: applied.filter(
                 (p) => p.status === ProposalStatus.PENDING
               ),
-              childSessionId,
               withdraw:
                 args.withdrawPending ??
                 defaultWithdraw(args.userId, args.callerContext),
@@ -775,19 +778,21 @@ export async function rerunSession(args: {
 
 async function withdrawParentPending(args: {
   pending: Array<{ id: string }>;
-  childSessionId: string;
-  withdraw: (proposalId: string, reason: string) => Promise<unknown>;
+  withdraw: (proposalId: string, end: OwnWithdrawEnd) => Promise<unknown>;
 }): Promise<
   Pick<RerunRevertSummary, "withdrawnPending" | "pendingNotWithdrawn">
 > {
   // A replaced run's undecided proposals are no longer the question: take them
   // out of the queue through the ONE withdraw door. A refusal is listed, never
-  // swallowed — that proposal stays pending.
+  // swallowed — that proposal stays pending. The rerun REPLACES them: they end
+  // `superseded` (the end line says so), never with a sentence stored as if
+  // their author wrote it. No one newer proposal replaces each, so no
+  // `supersededBy`: the rerun files its own.
   const withdrawnPending: string[] = [];
   const pendingNotWithdrawn: RerunRevertSummary["pendingNotWithdrawn"] = [];
   for (const p of args.pending) {
     try {
-      await args.withdraw(p.id, `Replaced by rerun ${args.childSessionId}`);
+      await args.withdraw(p.id, { reason: "superseded" });
       withdrawnPending.push(p.id);
     } catch (err) {
       pendingNotWithdrawn.push({
@@ -1047,14 +1052,12 @@ async function readText(
 function defaultWithdraw(
   userId: string,
   callerContext: Context | undefined
-): (proposalId: string, reason: string) => Promise<unknown> {
-  return async (proposalId, reason) => {
-    // Lazy: the proposals router imports back into services.
-    const { proposalsRouter } = await import("../../routers/proposals.js");
-    const caller = proposalsRouter.createCaller(
-      callerContext ?? { db, authenticated: true, userId }
-    );
-    return caller.withdraw({ proposalId, reason });
+): (proposalId: string, end: OwnWithdrawEnd) => Promise<unknown> {
+  return async (proposalId, end) => {
+    // Lazy: the proposals router imports back into services. The door itself,
+    // not its tRPC procedure: the procedure takes only an author's words.
+    const { withdrawOwnProposal } = await import("../../routers/proposals.js");
+    return withdrawOwnProposal(callerContext ?? { userId }, proposalId, end);
   };
 }
 
