@@ -142,10 +142,80 @@ describe("GET /brand/kit", () => {
     expect(body.reason).toBeUndefined();
   });
 
+  describe("token formats (dtcg, synap-css)", () => {
+    const DTCG = {
+      surface: {
+        background: {
+          $type: "color",
+          $value: "#1a1a1a",
+          $extensions: { "com.synap.modes": { light: "#ffffff" } },
+        },
+      },
+      space: { "space-200": { $value: { value: 10, unit: "px" } } },
+      grid: { "grid-columns-expanded": { $value: 12 } },
+    };
+    const TOKEN_SET = {
+      profileSlug: "brand-token-set",
+      title: "CRM tokens",
+      properties: { "token-json": JSON.stringify(DTCG) },
+    };
+
+    it("format=dtcg serves the brand's approved DTCG token set and its hash", async () => {
+      h.kitSource = [S_COLOR, TOKEN_SET];
+      const res = await buildApp().request(
+        `/brand/kit?format=dtcg&projectId=${PROJECT}`
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, string>;
+      expect(body).toMatchObject({
+        format: "dtcg",
+        brandIdentityId: IDENTITY,
+        resolvedVia: "project",
+      });
+      expect(JSON.parse(body.content!)).toEqual(DTCG);
+      expect(body.hash).toMatch(/^[0-9a-f]{14}$/);
+    });
+
+    it("format=synap-css serves --synap-* declarations with no selector, under the same hash", async () => {
+      h.kitSource = [S_COLOR, TOKEN_SET];
+      const dtcg = (await (
+        await buildApp().request("/brand/kit?format=dtcg")
+      ).json()) as Record<string, string>;
+      const res = await buildApp().request("/brand/kit?format=synap-css");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, string>;
+      expect(body.format).toBe("synap-css");
+      expect(JSON.parse(body.content!)).toEqual({
+        vars: {
+          "--synap-space-200": "10px",
+          "--synap-grid-columns-expanded": "12",
+        },
+        light: { "--synap-background": "#ffffff" },
+        dark: { "--synap-background": "#1a1a1a" },
+      });
+      expect(body.hash).toBe(dtcg.hash);
+    });
+
+    it("a brand with no DTCG token set serves an empty set, never the kit", async () => {
+      h.kitSource = [S_COLOR];
+      const dtcg = (await (
+        await buildApp().request("/brand/kit?format=dtcg")
+      ).json()) as Record<string, string>;
+      expect(dtcg.content).toBe("{}\n");
+      const css = (await (
+        await buildApp().request("/brand/kit?format=synap-css")
+      ).json()) as Record<string, string>;
+      expect(JSON.parse(css.content!)).toEqual({ vars: {}, light: {}, dark: {} });
+    });
+  });
+
   it("rejects an unknown format and a malformed id with 400", async () => {
     expect((await buildApp().request("/brand/kit?format=pdf")).status).toBe(
       400
     );
+    expect(
+      (await buildApp().request("/brand/kit?format=css-shadcn")).status
+    ).toBe(400);
     expect((await buildApp().request("/brand/kit?projectId=nope")).status).toBe(
       400
     );
