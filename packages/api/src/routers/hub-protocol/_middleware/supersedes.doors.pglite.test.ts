@@ -197,7 +197,7 @@ function bodyFor(door: Door): Record<string, unknown> {
         ],
       };
   }
-  throw new Error(`no body for ${door.route}`);
+  throw new Error(`no body for ${(door as Door).route}`);
 }
 
 async function call(door: Door, extra: Record<string, unknown> = {}) {

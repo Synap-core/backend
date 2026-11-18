@@ -20,6 +20,7 @@
  * plus a `note` when the failed proposal is still failed (`leftFailedNote`).
  */
 import type { Context, MiddlewareHandler, Next } from "hono";
+import type { SupersedesSlot } from "@synap/database";
 import {
   fileSuperseding,
   leftFailedNote,
@@ -95,7 +96,7 @@ function refuse(c: Context, problem: string): Response {
 /** The route's JSON answer, with what became of the failed proposal. */
 async function withSupersedesReply(
   c: Context,
-  slot: { proposalId: string; replacedBy: string | null }
+  slot: SupersedesSlot
 ): Promise<void> {
   if (!(c.res.headers.get("content-type") ?? "").includes("application/json"))
     return;
