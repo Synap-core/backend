@@ -371,8 +371,8 @@ beforeAll(async () => {
     );
     await q(
       `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata)
-       values ($1,$2,'project',$3,'workspace',$2,'uses','{}'::jsonb)`,
-      [randomUUID(), ws, project]
+       values ($1,$2,'project',$3,'workspace',$4,'uses','{}'::jsonb)`,
+      [randomUUID(), ws, project, ws]
     );
   }
   await seedRun(IN_CONTENT_PROJECT.room, IN_CONTENT_PROJECT.session, null, {

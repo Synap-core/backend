@@ -120,8 +120,8 @@ const sorted = (ids: string[]) => [...new Set(ids)].sort();
 const usesEdge = (project: string, ws: string) =>
   q(
     `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata)
-     values ($1,$2,'project',$3,'workspace',$2,'uses','{}'::jsonb)`,
-    [randomUUID(), ws, project]
+     values ($1,$2,'project',$3,'workspace',$4,'uses','{}'::jsonb)`,
+    [randomUUID(), ws, project, ws]
   );
 
 beforeAll(async () => {

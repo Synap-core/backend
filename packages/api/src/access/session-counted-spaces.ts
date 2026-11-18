@@ -141,34 +141,38 @@ export async function sessionGrantWorkspaceId(
 /**
  * READ half: a `projectId` column whose project counts in one of `spaces`
  * (home there, or a `uses` edge to it). The same two sources as
- * {@link projectCountedSpaceIds}.
+ * {@link projectCountedSpaceIds}, and like it, a project that is not there
+ * counts nowhere.
+ *
+ * NOT correlated on purpose: a relational read (`db.query.focusSessions`)
+ * aliases the outer table (`"focusSessions"`), and a column named inside a
+ * subquery is rendered with the table's real name, which that query cannot
+ * see ("invalid reference to FROM-clause entry"). Only `projectIdColumn`
+ * itself stands outside the subquery.
  */
 export function projectCountsInSpacesWhere(
   projectIdColumn: AnyPgColumn,
   spaces: string[]
 ): SQL {
-  return or(
-    inArray(
-      projectIdColumn,
-      db
-        .select({ id: projects.id })
-        .from(projects)
-        .where(inArray(projects.workspaceId, spaces))
-    ),
-    exists(
-      db
-        .select({ one: drizzleSql`1` })
-        .from(links)
-        .where(
-          and(
-            usesEdge(),
+  return inArray(
+    projectIdColumn,
+    db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(
+        or(
+          inArray(projects.workspaceId, spaces),
+          inArray(
             // `links.from_id` is text (polymorphic): cast the uuid side.
-            eq(links.fromId, drizzleSql`${projectIdColumn}::text`),
-            inArray(links.toId, spaces)
+            drizzleSql`${projects.id}::text`,
+            db
+              .select({ id: links.fromId })
+              .from(links)
+              .where(and(usesEdge(), inArray(links.toId, spaces)))
           )
         )
-    )
-  )!;
+      )
+  );
 }
 
 /** READ half: a project-only session that counts in one of `spaces`. */
