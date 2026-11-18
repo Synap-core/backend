@@ -473,7 +473,7 @@ export async function withdrawOwnProposal(
   ctx: Pick<Context, "userId" | "agentUserId">,
   proposalId: string,
   end: OwnWithdrawEnd
-): Promise<{ success: true }> {
+): Promise<{ success: boolean }> {
   const userId = requireUserId(ctx.userId);
 
   const proposal = await db.query.proposals.findFirst({
