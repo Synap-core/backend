@@ -15,19 +15,21 @@
  *   2. both asks are the same KIND of question —
  *        `choose` with the same set of option labels (at least two), or
  *        `confirm` with the same prompt —
- *      AND their labels name the same subject: the words of one label (letters
- *      and digits, accents folded, 3+ characters, minus the option labels'
- *      own words and a few filler words) are all in the other, and there are
- *      at least two of them;
+ *      AND their labels name the same subject: once text in parentheses or
+ *      brackets is dropped, their word SETS (letters and digits, accents
+ *      folded, 3+ characters, minus the option labels' own words and a few
+ *      filler words) are EQUAL, with at least two words;
  *   3. never when both slots point at different objects (`ref.id`).
  *
  * What it does NOT see, said: two questions with different options about the
  * same subject (they differ: both stand), the same question re-worded with
  * different subject words ("Disposition Arias" vs "What to do with Esteban":
  * both stand), and a `form` / `act` / `provide` ask (only rule 1 applies).
- * A label whose subject is a subset of another's with the same choice ("Send
- * the email" vs "Send the email to Bob", same Yes/No prompt) IS merged:
- * the cost of that rare false twin is one card the person answers once.
+ * A label that names MORE than another ("Send the email" vs "Send the email
+ * to Bob", same Yes/No prompt) is a different question: both stand (lead
+ * review of backend#1162 — a subset rule would drop a real question). A
+ * parenthesised aside is not the subject ("Disposition d'Esteban Arias
+ * (Prometheus)" names Esteban Arias).
  *
  * Pure. "Open" is THE rule of the room model (`isOpenQuestion`,
  * `@synap-core/types/session-room`).
@@ -124,12 +126,15 @@ function sameSubject(
 ): boolean {
   const optionWords = new Set(optionLabels(ask).flatMap(words));
   const subject = (label: string) =>
-    new Set(words(label).filter((w) => !optionWords.has(w)));
+    new Set(
+      words(label.replace(/\([^)]*\)|\[[^\]]*\]/g, " ")).filter(
+        (w) => !optionWords.has(w)
+      )
+    );
   const wa = subject(a.label);
   const wb = subject(b.label);
-  const [small, large] = wa.size <= wb.size ? [wa, wb] : [wb, wa];
-  if (small.size < 2) return false;
-  for (const w of small) if (!large.has(w)) return false;
+  if (wa.size < 2 || wa.size !== wb.size) return false;
+  for (const w of wa) if (!wb.has(w)) return false;
   return true;
 }
 
