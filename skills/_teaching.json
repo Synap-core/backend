@@ -1068,7 +1068,7 @@
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Design-to-code loop: ui-design Puck JSON (a page, or a canvas of frames), three variants, Checked/Pattern/Opinion critique, human approval, implement, compare Today/Design/Built, where designs are viewed.",
+    "summary": "Design-to-code loop: ui-design canvas of Puck pages (one frame per screen), three variants, Checked/Pattern/Opinion critique, human approval, implement, compare Today/Design/Built, where designs are viewed.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

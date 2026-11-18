@@ -10,7 +10,10 @@ The process "Design to implementation" (Builder space) carries a design from dra
 person, or an agent asked to, starts it on the request design with `synap_run_playbook`; it does not
 start itself on every new `ui-design`, because sibling variants are `ui-design`s too.
 
-## 1. The design is Puck JSON from real components
+## 1. The design is a canvas of Puck pages from real components
+
+A design is a canvas (`schema-version` `3`): one frame per screen, and a single screen is a canvas with one
+frame (section 1b). This section is the rules of a frame's page, the Puck data each frame holds:
 
 ```json
 {
@@ -47,14 +50,15 @@ start itself on every new `ui-design`, because sibling variants are `ui-design`s
   `[{ "trigger": "enter", "target": "SpatialPanel-1", "preset": "fade-rise" }]` with named presets only.
 - Lay out every state the screen has: empty, loading, failed, full, long content. Each empty state is
   OMIT, INVITE, EXPLAIN or REASSURE; a failed read is its own state with a retry.
-- The canvas validates on load: an unknown `type` refuses the whole design; an undeclared or wrong prop
-  is stripped and listed. Check yours with the canvas's Paste JSON.
+- The Map canvas (Design app, `#/map/canvas/<id>`) opens the design and validates on load: an unknown
+  `type` is dropped and named; an undeclared or wrong prop is stripped and listed. Open yours there.
 
-## 1b. A canvas: several screens or a flow
+## 1b. The canvas: one frame per screen
 
-One screen is a page (section 1, `schema-version` `1`). **Several screens, or a user flow, is a canvas**:
-`schema-version` `3`, and `design-json` is a board of frames, each frame holding one screen's Puck page.
-Never write `schema-version` `2` (an older board is migrated on read; the next save writes 3).
+**Every design is a canvas**: `schema-version` `3`, and `design-json` is a board of frames, each frame
+holding one screen's Puck page. One screen is a canvas with one frame; several screens or a user flow
+are several frames. Always write `schema-version` `3`, never `1` or `2`: the canvas migrates an older
+design on read (a page becomes one frame) and every save writes 3.
 
 ```json
 {
@@ -99,7 +103,7 @@ Find before you create: `synap_find` for an existing `ui-design` on the same `ta
   `target-surface` (app and screen), `design-scope` (`component` or `page`; a canvas is `page`), `design-goal` (the job the
   screen does; the critique judges against it), `design-json`, `components-used` (the distinct `type`
   values, derived from the JSON, recursive across every frame of a canvas, never typed by hand),
-  `schema-version` (`1` for a page, `3` for a canvas), `motion`,
+  `schema-version` (`3`), `motion`,
   `current-story-id` (the story of the screen as it is today, when it exists), `design-notes`.
 - **Three variants by default.** One request is three designs: the request plus two siblings, sharing
   one `variant-group`, `target-surface`, `design-scope` and `design-goal`. Make them genuinely
