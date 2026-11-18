@@ -178,7 +178,9 @@ import { toolRunEdits } from "@synap-core/types/proposals/capability-run";
 import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import {
   proposalEndLine,
+  proposalItemsLeft,
   type ProposalEndLine,
+  type ProposalItemLeft,
 } from "@synap-core/types/proposals/ended";
 
 /**
@@ -430,11 +432,14 @@ function Outcome({
   status,
   created,
   ended,
+  left = [],
 }: {
   status: string;
   created?: CreatedObject | null;
-  /** Why a withdrawn or expired request ended (`proposalEndLine`). */
+  /** Why a withdrawn or expired request ended, and who (`proposalEndLine`). */
   ended?: ProposalEndLine | null;
+  /** What a failed plan applied and could not roll back (`proposalItemsLeft`). */
+  left?: readonly ProposalItemLeft[];
 }) {
   const o = terminalOutcome(status);
   const tone = OUTCOME_TONE[o.tone];
@@ -451,10 +456,16 @@ function Outcome({
         <span className="text-[15px] font-medium text-foreground">
           {resolveStatusLabel(status)}
         </span>
-        <span className="text-[13px] leading-relaxed text-foreground/70">
-          {t(o.messageKey)}
-        </span>
+        {/* An ended request says who and why ONCE (its end line), then what
+            it left: never the status word a second and third time. */}
         {ended && <EndLine ended={ended} />}
+        {ended && left.length > 0 ? (
+          <LeftInPlace items={left} />
+        ) : (
+          <span className="text-[13px] leading-relaxed text-foreground/70">
+            {t(o.messageKey)}
+          </span>
+        )}
         {created && <CreatedDoor created={created} />}
       </div>
     </div>
@@ -462,11 +473,13 @@ function Outcome({
 }
 
 /**
- * Why it ended with nobody deciding it: the one end line, the words its author
- * gave (theirs, quoted), and the door to the request that replaced it.
+ * Why it ended with nobody deciding it: the one end line (who took it back,
+ * or why it ended), the words its author gave (theirs, quoted), and the door
+ * to what it names: the newer version, the record that already exists, the
+ * session or goal that ended.
  */
 function EndLine({ ended }: { ended: ProposalEndLine }) {
-  const t = proposalPageT();
+  const door = ended.door;
   return (
     <span
       data-end-reason={ended.reason}
@@ -478,14 +491,69 @@ function EndLine({ ended }: { ended: ProposalEndLine }) {
           {ended.withdrawReason}
         </q>
       )}
-      {ended.supersededBy && (
+      {door?.kind === "proposal" ? (
         <Link
-          href={`/proposal/${encodeURIComponent(ended.supersededBy)}`}
-          data-superseded-by={ended.supersededBy}
+          href={`/proposal/${encodeURIComponent(door.id)}`}
+          data-superseded-by={door.id}
           className="self-start font-medium rq-ink underline underline-offset-2"
         >
-          {t("outcome.newerVersion")}
+          {door.label}
         </Link>
+      ) : door ? (
+        <span className="self-start" data-end-door={door.kind}>
+          <ExitLink
+            exit={openIn({
+              kind: "object",
+              objectKind: door.kind,
+              id: door.id,
+            })}
+            label={door.label}
+          />
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** The kinds a left item opens as (the rest are named, with no door). */
+const LEFT_ITEM_KIND: Readonly<Record<string, string>> = {
+  entity: "entity",
+  document: "document",
+  session: "session",
+  skill: "skill",
+  automation: "automation",
+  playbook: "playbook",
+};
+const LEFT_ITEMS_SHOWN = 5;
+
+/**
+ * A failed plan that could not roll back everything it applied: "nothing was
+ * applied" would be false, so it says how many items are still in place and
+ * opens each one.
+ */
+function LeftInPlace({ items }: { items: readonly ProposalItemLeft[] }) {
+  const t = proposalPageT();
+  const doors = items.filter((i) => LEFT_ITEM_KIND[i.kind]);
+  return (
+    <span
+      data-items-left={items.length}
+      className="mt-1 flex min-w-0 flex-col gap-1 text-[13px] leading-relaxed text-foreground/70"
+    >
+      <span>{t("outcome.partlyLeft", { n: items.length })}</span>
+      {doors.length > 0 && (
+        <span className="flex flex-wrap gap-x-3 gap-y-1">
+          {doors.slice(0, LEFT_ITEMS_SHOWN).map((item) => (
+            <ExitLink
+              key={`${item.kind}:${item.id}`}
+              exit={openIn({
+                kind: "object",
+                objectKind: LEFT_ITEM_KIND[item.kind]!,
+                id: item.id,
+              })}
+              label={resolveObjectNoun(LEFT_ITEM_KIND[item.kind]!)}
+            />
+          ))}
+        </span>
       )}
     </span>
   );
@@ -1202,12 +1270,20 @@ export function ProposalReviewBody({
                 <>
                   <Outcome
                     status={status}
-                    ended={proposalEndLine({
-                      status,
-                      data: p.data,
-                      reviewedBy: (p as { reviewedBy?: string | null })
-                        .reviewedBy,
-                    })}
+                    ended={proposalEndLine(
+                      {
+                        status,
+                        data: p.data,
+                        approverName: p.approverName ?? null,
+                        agentActorName: agentName,
+                        authorName: p.authorName ?? null,
+                        sessionId: p.sessionId ?? null,
+                        targetType: p.targetType ? String(p.targetType) : null,
+                        targetId: p.targetId ?? null,
+                      },
+                      locale
+                    )}
+                    left={proposalItemsLeft(p.data)}
                     created={createdObject({
                       status,
                       action,

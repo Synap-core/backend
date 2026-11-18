@@ -63,14 +63,16 @@ export const en = {
   // One verb with the bar, its sheet and its consequence: reject.
   "outcome.rejected": "You rejected this: the AI was told why.",
   "outcome.reverted": "This change was undone after it was applied.",
-  // Expired and withdrawn also end a FAILED approval (and a send replaced by a
-  // newer one), so these lines say only what holds in every case.
-  "outcome.expired": "This request expired: nothing was applied.",
-  "outcome.withdrawn": "This request was withdrawn: nothing was applied.",
-  // The door to the request that replaced it (its end line, `proposalEndLine`).
-  "outcome.newerVersion": "Open the newer version",
-  "repair.label": "Why approving failed",
-  "repair.default": "Approving this failed.",
+  // Expired and withdrawn: the status says it, the end line says who and why
+  // (`proposalEndLine`), so this line says only what was left.
+  "outcome.expired": "Nothing was applied.",
+  "outcome.withdrawn": "Nothing was applied.",
+  // A failed plan whose undo left items in place (`proposalItemsLeft`).
+  "outcome.partlyLeft":
+    "Not applied; {n, plural, one {# item} other {# items}} could not be rolled back",
+  // One word with the chip: "Couldn’t apply".
+  "repair.label": "Why it couldn’t apply",
+  "repair.default": "No reason was recorded.",
   "repair.loadFailed": "Couldn’t load what can be fixed.",
   "repair.checking": "Checking what to fix…",
   "repair.use": "Use “{value}” and approve",
@@ -174,12 +176,12 @@ export const fr: Catalog<typeof en> = {
   "outcome.rejected":
     "Vous avez rejeté cette demande\u00a0: l’IA a été prévenue du motif.",
   "outcome.reverted": "Ce changement a été annulé après son application.",
-  "outcome.expired": "Cette demande a expiré\u00a0: rien n’a été appliqué.",
-  "outcome.withdrawn":
-    "Cette demande a été retirée\u00a0: rien n’a été appliqué.",
-  "outcome.newerVersion": "Ouvrir la version plus récente",
-  "repair.label": "Pourquoi l’approbation a échoué",
-  "repair.default": "L’approbation a échoué.",
+  "outcome.expired": "Rien n’a été appliqué.",
+  "outcome.withdrawn": "Rien n’a été appliqué.",
+  "outcome.partlyLeft":
+    "Non appliqué\u00a0; {n, plural, one {# élément n’a pas pu être annulé} other {# éléments n’ont pas pu être annulés}}",
+  "repair.label": "Pourquoi elle n’a pas été appliquée",
+  "repair.default": "Aucune raison n’a été enregistrée.",
   "repair.loadFailed": "Impossible de charger ce qui peut être corrigé.",
   "repair.checking": "Recherche de ce qu’il faut corriger…",
   "repair.use": "Utiliser «\u00a0{value}\u00a0» et approuver",

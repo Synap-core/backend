@@ -12,8 +12,7 @@ import { join, relative } from "path";
  * (`services/proposals/supersedes-door.ts`). The MCP adapter and the Hub REST
  * wrapper (the Intelligence Service's door) both call it. A door that called
  * the two primitives itself would be a second copy of the rule, free to
- * drift: the Hub door once had NO `supersedes` at all while MCP did, so the
- * agent Ask AI wakes could only file an orphan beside the failure.
+ * drift.
  *
  * If this fails: call `fileSuperseding` from your door. Do NOT add your file
  * to the allowlist. Reachability of the Hub door is pinned by

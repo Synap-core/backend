@@ -20,18 +20,35 @@ export const en = {
   "proposals.requester.actorForAnother": "{actor}, for another user",
   "proposals.requester.guestThrough": "{guest}, through {form}",
   // HOW IT ENDED (`proposalEndLine`, `./ended.ts`): the line under a withdrawn
-  // or expired request's status chip, one per end reason.
+  // or expired request's status chip, one per end reason. It never repeats the
+  // chip ("Withdrawn"); the doors it names (the newer version, the record, the
+  // session, the goal) are drawn beside it by each surface.
   "proposals.ended.superseded": "Replaced by a newer version",
-  "proposals.ended.author": "Withdrawn by whoever asked for it",
+  "proposals.ended.author": "Taken back by {who}",
+  "proposals.ended.authorUnnamed": "Taken back by the one who asked for it",
   "proposals.ended.record_landed": "The record already exists",
-  "proposals.ended.session_ended": "Its job ended",
+  "proposals.ended.session_ended": "Its session ended",
   "proposals.ended.goal_ended": "Its goal ended",
-  "proposals.ended.lapsed": "Its moment passed",
+  "proposals.ended.lapsed":
+    "Nobody decided it in time. Ask again if you still need it.",
   "proposals.ended.lifecycle_move": "A later change made it unnecessary",
-  "proposals.ended.agent_attached": "The agent is already on the job",
+  "proposals.ended.agent_attached":
+    "The agent it asked for is already on this session",
   "proposals.ended.cleanup_pack": "Cleared by a cleanup you approved",
   "proposals.ended.sent_outside": "The message was sent directly",
   "proposals.ended.request_changed": "No longer asked for",
+  "proposals.ended.app_revoked": "The app that asked was revoked",
+  // The one door beside the end line (`ProposalEndLine.door`).
+  "proposals.ended.door.proposal": "Open the newer version",
+  "proposals.ended.door.entity": "Open the record",
+  "proposals.ended.door.session": "Open the session",
+  "proposals.ended.door.track": "Open the goal",
+  // WHO (`proposalWho`, `./ended.ts`): who decided or ended a request, beside
+  // its status chip. An expiry names nobody.
+  "proposals.who.decided": "Decided by {who}",
+  "proposals.who.rule": "Approved by a standing rule",
+  "proposals.who.withdrawn": "Withdrawn by {who}",
+  "proposals.who.asked": "Asked by {who}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -44,19 +61,33 @@ export const fr: Catalog<typeof en> = {
   "proposals.requester.actorOwnerUnknown": "{actor}, propriétaire inconnu",
   "proposals.requester.actorForAnother": "{actor}, pour un autre utilisateur",
   "proposals.requester.guestThrough": "{guest}, via {form}",
-  "proposals.ended.superseded": "Remplacée par une version plus récente",
-  "proposals.ended.author": "Retirée par son demandeur",
+  // A participle agrees with the status chip beside it, which is masculine
+  // ("Retiré", "Expiré": vocabulary D4).
+  "proposals.ended.superseded": "Remplacé par une version plus récente",
+  "proposals.ended.author": "Repris par {who}",
+  "proposals.ended.authorUnnamed": "Repris par son demandeur",
   "proposals.ended.record_landed": "L’élément existe déjà",
-  "proposals.ended.session_ended": "Son travail est terminé",
+  "proposals.ended.session_ended": "Sa session est terminée",
   "proposals.ended.goal_ended": "Son objectif est terminé",
-  "proposals.ended.lapsed": "Elle n’est plus d’actualité",
-  "proposals.ended.lifecycle_move":
-    "Un changement ultérieur l’a rendue inutile",
-  "proposals.ended.agent_attached": "L’agent est déjà sur ce travail",
+  "proposals.ended.lapsed":
+    "Personne ne l’a décidé à temps. Redemandez-le si vous en avez encore besoin.",
+  "proposals.ended.lifecycle_move": "Un changement ultérieur l’a rendu inutile",
+  "proposals.ended.agent_attached":
+    "L’agent demandé travaille déjà sur cette session",
   "proposals.ended.cleanup_pack":
-    "Retirée par un nettoyage que vous avez approuvé",
+    "Retiré par un nettoyage que vous avez approuvé",
   "proposals.ended.sent_outside": "Le message a été envoyé directement",
-  "proposals.ended.request_changed": "N’est plus demandée",
+  "proposals.ended.request_changed": "N’est plus demandé",
+  "proposals.ended.app_revoked":
+    "L’application qui le demandait a été révoquée",
+  "proposals.ended.door.proposal": "Ouvrir la version plus récente",
+  "proposals.ended.door.entity": "Ouvrir l’élément",
+  "proposals.ended.door.session": "Ouvrir la session",
+  "proposals.ended.door.track": "Ouvrir l’objectif",
+  "proposals.who.decided": "Décidé par {who}",
+  "proposals.who.rule": "Approuvé par une règle permanente",
+  "proposals.who.withdrawn": "Retiré par {who}",
+  "proposals.who.asked": "Demandé par {who}",
 };
 
 export const proposalsCopy = { en, fr } as const;
