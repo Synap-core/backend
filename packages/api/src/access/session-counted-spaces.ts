@@ -55,6 +55,7 @@ import {
   projects,
 } from "@synap/database/schema";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { holderOfGrant } from "@synap-core/types/grants";
 import {
   grantDeniedKey,
   type GrantWriteInput,
@@ -208,4 +209,16 @@ export function sessionRoomCountsInSpacesWhere(spaces: string[]): SQL {
         )
     )
   )!;
+}
+
+/**
+ * Is the request bounded by an APP's grant? Such a request never adds a space
+ * to a project (`linkProjectToWorkspace` refuses it): a `uses` edge widens
+ * every pinned grant's reach over the project's sessions (this module), so
+ * which spaces a project runs through stays the person's call.
+ */
+export function requestIsAnAppGrant(
+  grant: KeyGrant | undefined = getRequestGrant()
+): boolean {
+  return !!grant && holderOfGrant(grant) === "app";
 }

@@ -27,7 +27,6 @@ import {
   ownerPrivateVisibleWhere,
   userVisibleWhere,
   drizzleSql,
-  getRequestGrant,
 } from "@synap/database";
 
 /** INDEX projection a UI/agent can name, not just id. */
@@ -79,7 +78,7 @@ import {
   type LinkAttribution,
 } from "../services/links/dependency-links.js";
 import { isUuid } from "@synap-core/types/property-render";
-import { holderOfGrant } from "@synap-core/types/grants";
+import { requestIsAnAppGrant } from "../access/session-counted-spaces.js";
 
 export type LinkProjectToWorkspaceResult =
   | {
@@ -124,8 +123,7 @@ export async function linkProjectToWorkspace(
     purpose?: string | null;
   }
 ): Promise<LinkProjectToWorkspaceResult> {
-  const grant = getRequestGrant();
-  if (grant && holderOfGrant(grant) === "app") {
+  if (requestIsAnAppGrant()) {
     return { linked: false, reason: "app_grant" };
   }
   const [visible] = await db
