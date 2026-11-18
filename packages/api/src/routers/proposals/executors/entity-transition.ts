@@ -60,6 +60,9 @@ export function registerEntityTransitionExecutors(): void {
         reason: typeof inner.reason === "string" ? inner.reason : null,
         workspaceId: proposal.workspaceId ?? null,
         approvedProposalId: input.proposalId,
+        // The approver acts (founder, 17 Nov 2026): what this move sets off
+        // runs as the person who approved it; the agent stays the proposer.
+        approvedBy: userId,
         // The pause's hold and the move's time, as filed (W4).
         hold:
           inner.hold && typeof inner.hold === "object"
