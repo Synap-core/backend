@@ -40864,7 +40864,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | string[] | null | undefined;
 				q?: string | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
+				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -42160,7 +42160,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
+				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
