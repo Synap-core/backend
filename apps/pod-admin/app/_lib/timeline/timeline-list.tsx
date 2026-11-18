@@ -167,7 +167,9 @@ function TimelineRow({
   onSelect?: (entry: WorkEntry) => void;
 }) {
   const Icon = glyphIcon(entry.mark.glyph);
-  const secondary = [entry.who, detail, checksLabel].filter(Boolean).join(" · ");
+  const secondary = [entry.who, detail, checksLabel]
+    .filter(Boolean)
+    .join(" · ");
   const body = (
     <>
       <Icon

@@ -32,20 +32,27 @@ describe("decisionEntry", () => {
   });
 
   it("falls back to what was decided when the title leads with no verb", () => {
-    const d = decision({ proposalType: "dev_deploy", title: "Push of a524c103 to main" });
+    const d = decision({
+      proposalType: "dev_deploy",
+      title: "Push of a524c103 to main",
+    });
     expect(decisionAction(d)).toBe("approve");
     expect(decisionEntry(d).text).toBe("Approved Push of a524c103 to main");
   });
 
   it("a rejected request is not marked done", () => {
-    const e = decisionEntry(decision({ status: "rejected", proposalType: null, title: "Add Léa" }));
+    const e = decisionEntry(
+      decision({ status: "rejected", proposalType: null, title: "Add Léa" })
+    );
     expect(e.action).toBe("reject");
     expect(e.mark.state).toBe("rejected");
     expect(e.mark.tone).not.toBe("success");
   });
 
   it("a failed receipt is a failed entry", () => {
-    const e = decisionEntry(decision({ status: "approval_failed", decidedBy: null }));
+    const e = decisionEntry(
+      decision({ status: "approval_failed", decidedBy: null })
+    );
     expect(e.failed).toBe(true);
     expect(e.who).toBe("Scout");
   });
@@ -87,7 +94,10 @@ describe("day groups and the cap", () => {
   const groups = dayGroups(entries, "UTC", new Date("2026-11-18T12:00:00Z"));
 
   it("groups by day, newest order kept, today marked", () => {
-    expect(groups.map((g) => g.key)).toEqual(["day:2026-11-18", "day:2026-11-17"]);
+    expect(groups.map((g) => g.key)).toEqual([
+      "day:2026-11-18",
+      "day:2026-11-17",
+    ]);
     expect(groups[0]!.label).toMatchObject({ isToday: true });
     expect(rowCount(groups)).toBe(3);
   });

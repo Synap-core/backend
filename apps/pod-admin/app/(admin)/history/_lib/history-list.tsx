@@ -142,10 +142,7 @@ function detailOf(
   );
 }
 
-function actionsOf(
-  row: HistoryRow | undefined,
-  t: TFunction<typeof en>
-) {
+function actionsOf(row: HistoryRow | undefined, t: TFunction<typeof en>) {
   if (!row) return null;
   // Offered on an applied change only (`undoOf`): Undo takes it back.
   if (row.undo === "available")

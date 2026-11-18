@@ -192,7 +192,10 @@ export function ActivitySection({
   }, [events, filters.actions, filters.workspaceIds, filters.userIds]);
 
   const [showAll, setShowAll] = useState(false);
-  const byId = useMemo(() => new Map(filtered.map((e) => [e.id, e])), [filtered]);
+  const byId = useMemo(
+    () => new Map(filtered.map((e) => [e.id, e])),
+    [filtered]
+  );
   const entries = useMemo(
     () =>
       filtered.map((ev) => {
@@ -209,7 +212,6 @@ export function ActivitySection({
           actorName: actor?.email ?? actor?.name ?? shortId(ev.userId),
         });
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [filtered, auditQuery.data]
   );
 

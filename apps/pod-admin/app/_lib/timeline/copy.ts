@@ -8,8 +8,7 @@ import type { Catalog } from "@synap-core/types/i18n";
 export const en = {
   today: "Today",
   unknownDay: "Date unknown",
-  checks:
-    "{n, plural, one {# check passed} other {# checks passed}}",
+  checks: "{n, plural, one {# check passed} other {# checks passed}}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
