@@ -480,8 +480,15 @@ export async function handleA2AIResponseTrigger(
     partialFailure = result.partialFailure;
     // The turn ran with the person's message as its trigger: in a session's
     // room that is the "Seen by the agent" mark (`seen-by-agent.ts`). Once,
-    // never on a failed call (the agent never read it), never thrown.
-    if (job.data.focusSessionId) {
+    // and only for a turn that ANSWERED (text, no error, nothing partial): a
+    // call that failed, even one that resolved with its error, never read it.
+    // Never thrown.
+    if (
+      job.data.focusSessionId &&
+      result.text &&
+      !result.error &&
+      !result.partialFailure
+    ) {
       try {
         await stampMessagesSeenByAgent({
           channelId,

@@ -2426,9 +2426,12 @@ export const focusSessionsRouter = router({
       // seen there: no card was added. Not a gate (nothing is refused or
       // proposed here): the write and its governance below are unchanged.
       if (patch.expectedOutputs !== undefined && ctx.agentUserId) {
+        // This door's list is WHOLESALE (a slot it omits is deleted): only
+        // the cards it keeps can be a twin.
         patch.expectedOutputs = dedupeOpenQuestions(
           (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
-          patch.expectedOutputs
+          patch.expectedOutputs,
+          { wholesale: true }
         ).incoming as typeof patch.expectedOutputs;
       }
 

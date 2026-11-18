@@ -227,6 +227,30 @@ describe("handleA2AIResponseTrigger", () => {
     expect(mocks.stampMessagesSeenByAgent).not.toHaveBeenCalled();
   });
 
+  it("a call that RESOLVED with an error (or partly failed) marks nothing", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "",
+      error: "model overloaded",
+      steps: [],
+    });
+    await handleA2AIResponseTrigger(baseJob({ focusSessionId: "fs-1" })).catch(
+      () => undefined
+    );
+    expect(mocks.stampMessagesSeenByAgent).not.toHaveBeenCalled();
+
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "half",
+      error: "stream cut",
+      steps: [],
+    });
+    await handleA2AIResponseTrigger(baseJob({ focusSessionId: "fs-1" })).catch(
+      () => undefined
+    );
+    expect(mocks.stampMessagesSeenByAgent).not.toHaveBeenCalled();
+  });
+
   it("a failed seen mark never fails the turn", async () => {
     mocks.insertReturning = [runningTurn()];
     mocks.stampMessagesSeenByAgent.mockRejectedValue(new Error("lock"));

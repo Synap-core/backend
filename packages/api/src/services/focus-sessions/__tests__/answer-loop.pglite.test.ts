@@ -157,6 +157,7 @@ import {
 } from "../../runs/run-turn-end.js";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
 import { registerThreadsRoutes } from "../../../routers/hub-protocol/rest/threads.js";
+import { raiseRunAsk } from "../../runs/run-ask.js";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const OTHER = "33333333-3333-4333-8333-333333333333";
@@ -1059,6 +1060,14 @@ describe("the answer loop", () => {
         ]),
       ]
     );
+    const updatedAt = async () =>
+      (
+        await q<{ updated_at: unknown }>(
+          `select updated_at::text as updated_at from focus_sessions where id = $1`,
+          [sessionId]
+        )
+      ).rows[0]!.updated_at;
+    const before = await updatedAt();
     const res = await send(
       app({ agentUserId: IS_AGENT }),
       "POST",
@@ -1095,6 +1104,76 @@ describe("the answer loop", () => {
       kind: "question",
       slotLabel: "Stripe account",
     });
+    // A deduped hand-over writes nothing to the session row.
+    expect(await updatedAt()).toBe(before);
+  });
+
+  it("ONE CARD PER QUESTION: a run's ask that the agent's update_run card already asks leaves no stray slot (cf60123c)", async () => {
+    const { sessionId, channelId } = await seed();
+    const options = [
+      { label: "Nurturing", value: "nurturing" },
+      { label: "Disqualified", value: "disqualified" },
+    ];
+    // The card the agent filed through update_run (no room question).
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        sessionId,
+        JSON.stringify([
+          {
+            key: "validation-esteban-arias",
+            kind: "decision",
+            label: "Disposition Esteban Arias — Nurturing ou Disqualified",
+            owner: "human",
+            blockedReason: "decision",
+            why: "Antoine doit choisir.",
+            owedSince: "2026-11-17T14:11:30.000Z",
+            unblocks: "La fiche est clôturée",
+            ask: { mode: "choose", options },
+          },
+        ]),
+      ]
+    );
+    const asked = await raiseRunAsk({
+      runId: randomUUID(),
+      session: { id: sessionId, userId: OWNER, channelId },
+      askingAgentUserId: IS_AGENT,
+      slot: {
+        kind: "decision",
+        label: "Disposition d'Esteban Arias (Prometheus)",
+        status: "pending",
+        unblocks: "La fiche est clôturée",
+      },
+      blockedReason: "decision",
+      why: "Prometheus a répondu : pas un fit actuel.",
+      question: "Nurturing ou Disqualified ?",
+      ask: { mode: "choose", options } as never,
+      idempotencyKey: `run-ask:${randomUUID()}`,
+    });
+    expect(asked).toBe(true);
+    const slots = await slotsOf(sessionId);
+    expect(slots.map((s) => s.label)).toEqual([
+      "Disposition Esteban Arias — Nurturing ou Disqualified",
+    ]);
+  });
+
+  it("a PAUSED session's answer does not wake its run (the wake fallback holds for an active session only)", async () => {
+    const { sessionId } = await stoppedRunAsking({ agentIds: [EXT_AGENT] });
+    await q(`update focus_sessions set status = 'paused' where id = $1`, [
+      sessionId,
+    ]);
+    const res = await send(
+      app(),
+      "POST",
+      `/focus-sessions/${sessionId}/outputs/answer`,
+      {
+        expectedLabel: RUN_CONTINUE_SLOT_LABEL,
+        value: { type: "confirm", confirmed: true },
+        text: "Yes",
+      }
+    );
+    expect(await res.json()).toMatchObject({ triggered: false });
+    expect(h.triggers).toHaveLength(0);
   });
 
   it("the direct door with NO pod-run agent staffed and no question wakes nobody", async () => {
