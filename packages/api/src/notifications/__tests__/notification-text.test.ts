@@ -95,6 +95,49 @@ describe("security.factor_changed — the registry owns the words", () => {
   });
 });
 
+describe("proposal.approval_failed — whose change, and why, never a verb list", () => {
+  const FAILED = getNotificationDef("proposal.approval_failed")!;
+  const render = (data: Record<string, string>) =>
+    renderNotificationText(FAILED, data);
+
+  it("an agent's receipt with no sentence says whose change, and claims no approval", () => {
+    const text = render({ named: "no", reason: "no", agent: "yes" });
+    expect(text).toEqual({
+      title: "A change couldn’t apply",
+      body: "An agent’s change couldn’t be applied.",
+    });
+    expect(FAILED.label).not.toMatch(/approv/i);
+  });
+
+  it("a person's change applied in the background reads as a change, not an agent's", () => {
+    expect(render({ named: "no", reason: "no", agent: "no" }).body).toBe(
+      "The change couldn’t be applied."
+    );
+  });
+
+  it("the classified sentence and the proposal's name, when there are", () => {
+    expect(
+      render({
+        named: "yes",
+        name: "Create note Q3",
+        reason: "yes",
+        sentence: "The plan did not apply.",
+        agent: "yes",
+      })
+    ).toEqual({
+      title: "Couldn’t apply: Create note Q3",
+      body: "The plan did not apply.",
+    });
+  });
+
+  it("GUARDRAIL: no blame, no verbs the proposal may not offer", () => {
+    for (const agent of ["yes", "no"]) {
+      const { body } = render({ named: "no", reason: "no", agent });
+      expect(body).not.toMatch(/nobody|watching|retry|repair|dismiss/i);
+    }
+  });
+});
+
 describe("renderNotificationText — mustache rows are unchanged", () => {
   it("interpolates {{variable}} and prints a missing value as nothing", () => {
     expect(

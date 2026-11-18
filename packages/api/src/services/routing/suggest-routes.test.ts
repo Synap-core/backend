@@ -4,6 +4,7 @@ import {
   rankRouteCandidates,
   suggestRoutesForEntities,
   tokenize,
+  triggerWords,
   type RouteCandidate,
 } from "./suggest-routes.js";
 
@@ -232,6 +233,59 @@ describe("rankRouteCandidates — the live CRM Hygiene case", () => {
     // another sense) for a 10-word request, under the floor's one per five.
     // No playbook of this pool is named for this work, so none is offered.
     expect(ranked).toEqual([]);
+  });
+
+  // Plan a640c5bb D3 (founder, 2026-11-18): the floor left AI Dev Session
+  // unreachable for this request ("build" sits only in its goal template).
+  // The answer is a DECLARED trigger, not a looser ranker.
+  const withTriggers = (triggers: string[]): RouteCandidate[] =>
+    pool.map((p) => (p.name === "AI Dev Session" ? { ...p, triggers } : p));
+
+  it("D3: a trigger the request holds whole offers AI Dev Session, first, its words scored like name words", () => {
+    const ranked = rankRouteCandidates({
+      entity: {},
+      intentText: INTENT,
+      candidates: withTriggers(["build a feature"]),
+    });
+    expect(ranked.map((r) => r.candidate.name)).toEqual(["AI Dev Session"]);
+    const intent = ranked[0]!.signals.find((s) => s.type === "intent");
+    expect(intent).toMatchObject({
+      terms: expect.arrayContaining(["build", "feature"]),
+    });
+    // The same words in its body only do not admit it: the floor still holds
+    // for body text; only the declared phrase admits.
+    const bodyOnly = rankRouteCandidates({
+      entity: {},
+      intentText: INTENT,
+      candidates: pool.map((p) =>
+        p.name === "AI Dev Session"
+          ? { ...p, text: [...(p.text ?? []), "build a feature"] }
+          : p
+      ),
+    });
+    expect(bodyOnly).toEqual([]);
+  });
+
+  it("D3: a trigger like 'workspace hygiene' offers it for a hygiene request, never for part of the phrase", () => {
+    const candidates = withTriggers(["workspace hygiene"]);
+    const hygiene = rankRouteCandidates({
+      entity: {},
+      intentText: "run a workspace hygiene pass on the CRM",
+      candidates,
+    }).map((r) => r.candidate.name);
+    expect(hygiene).toContain("AI Dev Session");
+    // CRM Hygiene is still offered, on its own name.
+    expect(hygiene).toContain("CRM Hygiene");
+    // One word of the phrase is not the phrase.
+    for (const partial of ["clean up this workspace", INTENT]) {
+      expect(
+        rankRouteCandidates({
+          entity: {},
+          intentText: partial,
+          candidates,
+        }).map((r) => r.candidate.name)
+      ).not.toContain("AI Dev Session");
+    }
   });
 
   it("returns only candidates that matched a word (no bare 'Runs for anything new')", () => {
@@ -567,5 +621,18 @@ describe("rankRouteCandidates — the name is the evidence, a relevance floor", 
     });
     expect(ranked.map((r) => r.candidate.id)).toEqual(["kind"]);
     expect(ranked[0]!.signals.map((s) => s.type)).toEqual(["intent", "kind"]);
+  });
+});
+
+describe("triggerWords — a trigger is read exactly as a request is", () => {
+  it("drops stop words and generic work words, keeps the stems", () => {
+    expect(triggerWords("build a feature")).toEqual(["build", "feature"]);
+    expect(triggerWords("Workspace hygiene reviews")).toEqual([
+      "workspace",
+      "hygiene",
+      "review",
+    ]);
+    // Stop words and generic work words only: can never match.
+    expect(triggerWords("the work for this session")).toEqual([]);
   });
 });

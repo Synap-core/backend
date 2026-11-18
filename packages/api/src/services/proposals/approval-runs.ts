@@ -64,6 +64,7 @@ import {
 import type { Context } from "../../context.js";
 import type { MaterializeProgress } from "../../utils/materialize-composite.js";
 import { readWeakDedupWire } from "../../utils/weak-dedup-wire.js";
+import { notifyUnseenApprovalFailure } from "./unseen-approval-failure.js";
 import {
   classifyThrownFailure,
   safeFailureSentence,
@@ -638,6 +639,9 @@ export async function runApprovalJob(payload: {
       { err, runId: run.id, proposalId: run.proposalId },
       "background approval failed"
     );
+    // The request returned long ago: nobody saw this fail. Tell the owner
+    // while the proposal is still undecided (plan 8032a127 D6).
+    await notifyUnseenApprovalFailure(run.proposalId, { sentence });
     return { status: "failed" };
   }
 }

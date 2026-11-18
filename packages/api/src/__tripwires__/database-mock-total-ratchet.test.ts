@@ -113,9 +113,12 @@ import { dirname, join, relative } from "node:path";
 // converted — the recorder now imports `isUniqueViolation` from the one door.
 // 43 → 42 on 2026-11-07 (#894): `routers/__tests__/file-upload-membership.test.ts`
 // converted — the write gate now imports `personOfOwner` from @synap/database.
-// 42 → 41 on 2026-11-18 (backend#1130): `hub-protocol/_middleware/session.test.ts`
+// 42 → 40 on 2026-11-18 (backend#1135): `routers/__tests__/file-url-doors.test.ts`
+// and `store-document-provenance.test.ts` take `importOriginal` (file-upload.ts
+// gained `getRequestGrant` / `runWithoutGrant`).
+// 40 → 39 on 2026-11-18 (backend#1130): `hub-protocol/_middleware/session.test.ts`
 // converted — the session middleware now imports `runWithNamedSession`.
-const BASELINE = 41;
+const BASELINE = 39;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

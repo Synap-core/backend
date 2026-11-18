@@ -14716,6 +14716,17 @@ export interface KnownSourceHash {
  * A structural signal (subject, kind, facet) is evidence about the ENTITY, so
  * a candidate carrying one is never cut by the floor.
  *
+ * ── DECLARED TRIGGERS (plan a640c5bb D3, founder 2026-11-18) ───────────────
+ * The floor left a playbook whose only words sit in its body unreachable
+ * ("AI Dev Session" for the space-brief request: "build" is in its goal
+ * template only). The answer is configuration, not a looser ranker: a playbook
+ * DECLARES `triggers`, phrases it is for (`metadata.triggers`). A trigger
+ * MATCHES when the request holds every one of its words (the same stems,
+ * stopwords and generic work words as the request); a match ADMITS the
+ * candidate, and its words score like name words (`WEIGHT.nameTerm`). A
+ * trigger the request holds only part of is body text: it scores, never
+ * admits.
+ *
  * ── TIES ────────────────────────────────────────────────────────────────────
  * Broken by relevance, never by recency: more distinct intent words, then the
  * rarest word matched, then the structural signal (kind > facet), then the
@@ -14742,6 +14753,12 @@ export interface RouteCandidate {
 	 * body field that can admit a word-only candidate (the relevance floor).
 	 */
 	description?: string | null;
+	/**
+	 * Phrases the candidate declares it is for (a playbook's
+	 * `metadata.triggers`): one whose every word is in the request admits it,
+	 * and those words score like name words (header, DECLARED TRIGGERS).
+	 */
+	triggers?: ReadonlyArray<string>;
 	/** The kind the candidate is built for; `null` = fires for any kind. */
 	subjectProfileSlug: string | null;
 	/**
@@ -19580,7 +19597,7 @@ export interface RankComparison {
  * `playbooks`). It runs only for a how-to or which-tool question (see
  * `CATALOG_CUES`).
  */
-export type SubstrateKind = "catalog" | "episodic" | "library" | "procedural" | "semantic" | "structured";
+export type SubstrateKind = "catalog" | "episodic" | "library" | "procedural" | "project" | "semantic" | "structured";
 /** One owed deliverable, with just enough of its session to be actionable. */
 export interface OwedSlot {
 	sessionId: string;
@@ -21409,14 +21426,21 @@ export interface StartHere {
 		items: Array<{
 			/** How many criteria it declares (0 = a lasting goal). */
 			criteria: number;
-			/** What "done" looks like — `null` when unsaid. */
+			/**
+			 * What "done" looks like — `null` when unsaid. Light cuts it at
+			 * {@link LIGHT_ROW_PROSE_MAX} chars (`truncated`, `more`).
+			 */
 			endState: string | null;
 			id: string;
+			/** With `truncated`: the read that returns it whole. */
+			more?: string;
 			name: string;
 			projectId: string;
 			/** Where it stands: since when, its work per category, moves, waits. */
 			rollup: GoalRollup | StartHereUnavailable;
 			status: string;
+			/** Light only, and only when `endState` was cut. */
+			truncated?: true;
 		}>;
 		lens: "pod" | "project";
 		/** The window `rollup.moved` counts over. */
@@ -22127,7 +22151,11 @@ export type FindCatalog = (typeof FIND_CATALOGS)[number];
  * matched and what it takes.
  */
 export interface CapabilityIntentMatch {
-	/** The launchable action, straight off `projectRunnableActions`. */
+	/**
+	 * The launchable action, straight off `projectRunnableActions`, WITHOUT its
+	 * `description`: that string is `whenToUse` below, sent once (ticket
+	 * dfa6003e: the same prose twice per match).
+	 */
 	action: RunnableCapabilityAction;
 	/**
 	 * The verb's DECLARED arg schema (`ToolVerbCatalogEntry.argsSchema`) — carried
@@ -22290,7 +22318,8 @@ export interface FindByIntentResult extends Partial<Record<ObjectCatalog, FindOb
 	marketplace?: FindMarketplace;
 	/** Member spaces to route the work to. ABSENT when not searched. */
 	spaces?: FindSpaces;
-	scoring: FindScoring;
+	/** What each catalog's numbers mean. Present only with `explain`. */
+	scoring?: FindScoring;
 	coverage: FindCoverage;
 	/** Present only when no catalog produced a single match. */
 	noConfidentMatch?: NoConfidentMatch;
@@ -23436,6 +23465,9 @@ export type ExecuteCapabilityResult = {
 	 * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
 	 * person's stored "Never" on this capability for this agent (0381).
 	 * Such a refusal carries no `enable`: enabling would not fix it.
+	 * A recipe run refused when filed carries its run's own code
+	 * (`UNKNOWN_RECIPE`, `BAD_PARAMS`; `recipeRunRefusalAtFiling`), and the
+	 * sentence names the fix.
 	 */
 	reasonCode?: string;
 } | {
@@ -24925,7 +24957,8 @@ export interface ActionModeRow {
 	mode: ActionRunMode;
 	/** The rule that sets it; `null` when it asks first (no rule). */
 	ruleId: string | null;
-	/** False for an action no rule may run on its own (a public post). */
+	/** False for an action no rule may run on its own (a public post, a
+	 * verb declaring `metadata.proposeOnly`). */
 	mayRunOnItsOwn: boolean;
 }
 export interface WriteActionModeResult {
@@ -50271,6 +50304,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				inputStrategy?: Record<string, unknown> | undefined;
 				metadata?: {
 					[x: string]: unknown;
+					triggers?: string[] | undefined;
 					lineage?: {
 						[x: string]: unknown;
 						apqc?: string | undefined;
@@ -51691,7 +51725,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				humanOnlyStatuses?: string[] | undefined;
 				id: string;
 				inputStrategy?: Record<string, unknown> | undefined;
-				metadata?: Record<string, unknown> | undefined;
+				metadata?: {
+					[x: string]: unknown;
+					triggers?: string[] | undefined;
+					lineage?: {
+						[x: string]: unknown;
+						apqc?: string | undefined;
+						method?: string | undefined;
+						onet?: string[] | undefined;
+					} | undefined;
+				} | undefined;
 				name?: string | undefined;
 				params?: Record<string, unknown>[] | undefined;
 				reasoning?: string | undefined;
@@ -55870,6 +55913,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		revise: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				data: Record<string, unknown>;
+				expectedRevision?: number | undefined;
 				projectId?: string | null | undefined;
 				proposalId: string;
 				workspaceId?: string | null | undefined;
@@ -63049,6 +63093,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						inputStrategy?: Record<string, unknown> | undefined;
 						metadata?: {
 							[x: string]: unknown;
+							triggers?: string[] | undefined;
 							lineage?: {
 								[x: string]: unknown;
 								apqc?: string | undefined;

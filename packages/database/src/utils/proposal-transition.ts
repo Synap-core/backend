@@ -91,8 +91,20 @@ export const PROPOSAL_TRANSITIONS: Readonly<
   ],
   // A failed approval stays in the actionable queue: retried (approved, or
   // failed again) or rejected; or its author revises it, which reopens it
-  // for review (`proposals-service.ts` revise, #512).
-  [APPROVAL_FAILED]: [APPROVED, APPROVAL_FAILED, REJECTED, PENDING],
+  // for review (`proposals-service.ts` revise, #512). It also ends with nobody
+  // deciding, like a pending one (decision D2, plan 8032a127, founder 17 Nov
+  // 2026: 44 failed rows could leave only through a person's reject, which
+  // scores against the agent): withdrawn by its author or replaced by a newer
+  // filing (`supersededBy`), expired when its moment passed or its record
+  // landed. Neither is scored.
+  [APPROVAL_FAILED]: [
+    APPROVED,
+    APPROVAL_FAILED,
+    REJECTED,
+    PENDING,
+    WITHDRAWN,
+    EXPIRED,
+  ],
   // Re-stamp; revert; revert-and-reopen (`proposals.revert {reopen}`); a
   // library organise claim given back after a later step threw.
   [APPROVED]: [APPROVED, REVERTED, PENDING, APPROVAL_FAILED],
@@ -125,6 +137,43 @@ export function proposalStatusesThatMayBecome(
     (from) => canTransitionProposal(from, to)
   );
 }
+
+/**
+ * The statuses nobody has decided yet: waiting for a review, or a review whose
+ * approval failed (it is retried, repaired or ended). The end helpers that
+ * retire a request whose moment passed (a record landed, a hand-off became
+ * moot, a lifetime ran out) take both, and re-assert them in their WHERE.
+ */
+export const UNDECIDED_PROPOSAL_STATUSES: readonly ProposalStatus[] = [
+  PENDING,
+  APPROVAL_FAILED,
+];
+
+/**
+ * The columns an end with NO person writes (decision F2, plan 8032a127): a
+ * FAILED row that a sweep or helper expires, or that its author or a newer
+ * filing withdraws, names no reviewer and claims no review time, exactly like
+ * a pending row that lapses (whose review columns are already empty). The
+ * caller writes `updatedAt`, and readers date the end by
+ * `coalesce(reviewedAt, updatedAt)` (tripwire history-lens-includes-expired:
+ * never stamp a review nobody made). Every end helper spreads this into its
+ * `set`, so "who ended it" has one rule.
+ */
+export function endedByNoPersonSet(): ProposalTransitionSet {
+  const failed = sql`${proposals.status} = ${APPROVAL_FAILED}`;
+  return {
+    reviewedBy: sql`CASE WHEN ${failed} THEN NULL ELSE ${proposals.reviewedBy} END`,
+    reviewedAt: sql`CASE WHEN ${failed} THEN NULL ELSE ${proposals.reviewedAt} END`,
+  };
+}
+
+/**
+ * Not a connected plan that PARTLY applied: a failed plan whose undo left
+ * steps in place (`planFailure.compensation.notCompensated`) stays failed, so
+ * a person sees what landed; no sweep, helper or newer filing ends it (plan
+ * 8032a127 Q6; the revise door refuses to reopen it the same way).
+ */
+export const NOT_PARTLY_APPLIED: SQL = sql`CASE WHEN jsonb_typeof(${proposals.data} #> '{planFailure,compensation,notCompensated}') = 'array' THEN jsonb_array_length(${proposals.data} #> '{planFailure,compensation,notCompensated}') = 0 ELSE true END`;
 
 /** The statuses that mean "the approval applied". */
 export const APPLIED_PROPOSAL_STATUSES: readonly ProposalStatus[] = [

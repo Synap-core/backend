@@ -384,6 +384,83 @@ describe("attach: the session joins the playbook's runs and STAYS WORK", () => {
     expect(res.status === "updated" && res.follow?.stageKey).toBe("build");
   });
 
+  it("OWES the stage slots of every stage up to the one it follows into (db6a5e17)", async () => {
+    const playbookId = await seedPlaybook({
+      stages: [
+        {
+          key: "discover",
+          name: "Discover",
+          expectedOutputs: [{ kind: "document", label: "Brief" }],
+        },
+        {
+          key: "build",
+          name: "Build",
+          expectedOutputs: [
+            {
+              kind: "decision",
+              label: "Founder sign-off",
+              owner: "human",
+              blockedReason: "decision",
+              why: "only the founder signs the build off",
+            },
+          ],
+        },
+        {
+          key: "ship",
+          name: "Ship",
+          expectedOutputs: [{ kind: "report", label: "Release notes" }],
+        },
+      ],
+    });
+
+    const inBuild = await seedSession();
+    const res = await updateFocusSession({
+      sessionId: inBuild,
+      userId: USER,
+      followPlaybookId: playbookId,
+      followStageKey: "build",
+    });
+    expect(res.status === "updated" && res.follow?.mergedOutputs).toBe(3);
+    const owed = (await readRow(inBuild)).expected_outputs as Array<{
+      label: string;
+      owner?: string;
+    }>;
+    expect(owed.map((o) => o.label)).toEqual([
+      "Pricing sign-off",
+      "Launch note",
+      "Brief",
+      "Founder sign-off",
+    ]);
+    // The stage's PERSON slot lands as the person's, so they see its ask.
+    expect(owed.find((o) => o.label === "Founder sign-off")?.owner).toBe(
+      "human"
+    );
+
+    // Following again owes nothing twice.
+    await updateFocusSession({
+      sessionId: inBuild,
+      userId: USER,
+      followPlaybookId: playbookId,
+      followStageKey: "build",
+    });
+    expect(
+      ((await readRow(inBuild)).expected_outputs as unknown[]).length
+    ).toBe(4);
+
+    // In no stage: no stage is owed, only the playbook's own slots.
+    const nowhere = await seedSession();
+    await updateFocusSession({
+      sessionId: nowhere,
+      userId: USER,
+      followPlaybookId: playbookId,
+    });
+    expect(
+      ((await readRow(nowhere)).expected_outputs as { label: string }[]).map(
+        (o) => o.label
+      )
+    ).toEqual(["Pricing sign-off", "Launch note"]);
+  });
+
   it("REFUSES an unknown stage key, names the valid ones, and changes NOTHING", async () => {
     const sessionId = await seedSession();
     const playbookId = await seedPlaybook();

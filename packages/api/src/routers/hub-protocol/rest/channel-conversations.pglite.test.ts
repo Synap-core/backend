@@ -1105,6 +1105,8 @@ describe("POST /channels/:id/send — the person sends what is in the box", () =
         [id]
       )
     ).rows[0]!;
+  /** The held draft on Nora's channel once a new typed message replaced P_NOCONN. */
+  let heldNoconn = "";
 
   it("a typed message with no draft: filed, approved by the click, sent once", async () => {
     const res = await post("crm", `/channels/${CH.QUIET}/send`, {
@@ -1145,20 +1147,27 @@ describe("POST /channels/:id/send — the person sends what is in the box", () =
       body: "Nora, my own words",
       held: { errorClass: "not_connected" },
     });
+    // ONE undecided send per person's channel (plan 8032a127 D2, decision
+    // Q3): the new words replace the held draft already there, which ends
+    // withdrawn pointing at them, never a second card for Nora.
+    const replaced = await statusOf(P_NOCONN);
+    expect(replaced.status).toBe("withdrawn");
+    expect(replaced.data.supersededBy).toBe(body.proposalId);
+    heldNoconn = body.proposalId;
   });
 
   it("sending a held draft while still not connected: it stays held, never failed", async () => {
     const res = await post("crm", `/channels/${CH.NOCONN}/send`, {
       text: "Hello there\nsecond line",
-      draftId: P_NOCONN,
+      draftId: heldNoconn,
       workspaceId: CRM,
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
       status: "held",
-      proposalId: P_NOCONN,
+      proposalId: heldNoconn,
     });
-    expect((await statusOf(P_NOCONN)).status).toBe("pending");
+    expect((await statusOf(heldNoconn)).status).toBe("pending");
     expect(startChat).not.toHaveBeenCalled();
   });
 

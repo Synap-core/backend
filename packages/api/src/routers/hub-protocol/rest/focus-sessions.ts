@@ -178,6 +178,7 @@ import {
   expectedOutputWireSchema,
   outputRefWireSchema,
   mergeExpectedOutputs,
+  fileableExpectedOutputs,
   droppedAskWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
@@ -2329,6 +2330,20 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         !criteriaDiffer(existing.criteria, patch.criteria as SessionCriterion[])
       ) {
         delete patch.criteria;
+      }
+
+      // Step 2a: AUTHORITY FLOOR on the slots, before the membrane: the same
+      // `fileableExpectedOutputs` as `updateFocusSession`.
+      if (patch.expectedOutputs !== undefined) {
+        const fileable = fileableExpectedOutputs(
+          Array.isArray(existing.expectedOutputs)
+            ? (existing.expectedOutputs as ExpectedOutput[])
+            : [],
+          patch.expectedOutputs
+        );
+        if (!fileable.ok) return c.json({ error: fileable.reason }, 400);
+        patch.expectedOutputs =
+          fileable.expectedOutputs as typeof patch.expectedOutputs;
       }
 
       // Step 2b: VISIBILITY FLOOR on the subject anchor, before the membrane

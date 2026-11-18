@@ -477,9 +477,12 @@ export {
   lifecycleProfilesOfDef,
   reprojectLifecycleProfiles,
   changeLifecycleOptions,
+  planLifecycleOptionsChange,
   setLifecycleInitialStatus,
   assertNotLifecycleDef,
+  type ChangeLifecycleOptionsInput,
   type ChangeLifecycleOptionsResult,
+  type LifecycleOptionsPlan,
   type SetLifecycleInitialStatusResult,
 } from "./services/lifecycle/lifecycle-def-guard.js";
 export { declaredLifecycleProfilesStatement } from "./services/lifecycle/project-lifecycle-columns.js";

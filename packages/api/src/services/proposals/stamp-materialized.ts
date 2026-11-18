@@ -56,6 +56,7 @@ import {
   type ProposalFailureMeta,
 } from "../../routers/proposals/failure-classification.js";
 import { redactForStorage, redactSecrets } from "../../utils/redact-secrets.js";
+import { recordProposalFault } from "../server-faults/record.js";
 import {
   SESSION_UNDO_COLUMNS,
   type SessionUndoColumn,
@@ -1356,7 +1357,16 @@ export async function writeProducedEdges(args: {
  * erase the provenance the linkage exists for.
  */
 export async function runMaterializationUnderReceipt<T>(
-  receipt: { id?: string; data?: Record<string, unknown> } | undefined,
+  receipt:
+    | {
+        id?: string;
+        data?: Record<string, unknown>;
+        // Present when the caller passes the receipt ROW (the agent capture
+        // door does): who the owner-only fault record names.
+        createdBy?: string | null;
+        agentUserId?: string | null;
+      }
+    | undefined,
   run: () => Promise<T>,
   database: Pick<typeof db, "update"> = db
 ): Promise<T> {
@@ -1420,6 +1430,15 @@ export async function runMaterializationUnderReceipt<T>(
             "materialization failed and what landed could not be described — the receipt records the failure only"
           );
         }
+        // The exact cause for the pod's owner only; the row keeps its id
+        // (plan 8032a127 D5, finding 7ca4953f).
+        const errorId = await recordProposalFault({
+          proposalId: receipt.id,
+          err,
+          meta,
+          userId: receipt.createdBy,
+          agentUserId: receipt.agentUserId,
+        });
         await transitionProposal(database, {
           to: ProposalStatus.APPROVAL_FAILED,
           set: {
@@ -1436,11 +1455,25 @@ export async function runMaterializationUnderReceipt<T>(
               materializationError: redactForStorage(
                 err instanceof Error ? err.message : String(err)
               ),
-              failure: failureRecord(meta),
+              failure: failureRecord({ ...meta, errorId }),
             },
           },
           where: eq(proposals.id, receipt.id),
         });
+        // An agent's receipt failed with no person in the loop: tell its
+        // owner (plan 8032a127 D6). Fire-and-forget; loaded lazily, as it
+        // reaches the notification and naming doors.
+        const failedId = receipt.id;
+        void import("./unseen-approval-failure.js")
+          .then((m) =>
+            m.notifyUnseenApprovalFailure(failedId, { agentReceipt: true })
+          )
+          .catch((notifyErr) =>
+            logger.warn(
+              { err: notifyErr, proposalId: failedId },
+              "receipt failure: the owner could not be notified"
+            )
+          );
       } catch (markErr) {
         logger.error(
           { err: markErr, proposalId: receipt.id },

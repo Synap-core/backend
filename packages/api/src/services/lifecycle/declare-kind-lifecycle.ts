@@ -177,7 +177,7 @@ export function decideKindLifecycleDeclaration(
     reasons.push(
       `"${profile.slug}" already declares "${e.propertySlug}" as its lifecycle (${e.options.join(", ")}). ` +
         `This door never replaces one: append an option (with its category) through the field's update, ` +
-        `recategorise or retire one through the lifecycle door (propertyDefs.changeLifecycleOptions)`
+        `relabel, reorder, recategorise or retire them with synap_change_lifecycle_options (the lifecycle door)`
     );
   }
   if (!PROPERTY_SLUG.test(property)) {

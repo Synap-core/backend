@@ -18,6 +18,7 @@ import {
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 import { buildAskWireSchema } from "./ask-wire-schema.js";
+import { CAPTURE_TABLE_MAX_ROWS } from "../../../services/capture-agent/capture-table.js";
 import { ASK_DETAILS } from "../../../services/knowledge/synthesize.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
 import {
@@ -81,6 +82,7 @@ import { FIND_CATALOGS } from "../../../services/capabilities/find-intent.js";
 // reason for a copy. Widening the union now widens what MCP advertises, in the
 // same commit, and `output-ref-kinds-parity` audits the mirrors this file
 // cannot import (the Hub REST client's duplicated literal).
+import { SUPERSEDES_TOOLS } from "../supersedes-tools.js";
 import {
   BLOCKED_REASONS,
   CRITERION_ABOUT,
@@ -564,6 +566,18 @@ const PLAYBOOK_PARAMS_PROPERTY = {
   },
 };
 
+/**
+ * `metadata.triggers` (plan a640c5bb D3), parsed by `playbookTriggersSchema`:
+ * the suggestion ranker offers the playbook when a request holds every word
+ * of one phrase.
+ */
+const PLAYBOOK_TRIGGERS_PROPERTY = {
+  type: "array",
+  items: { type: "string" },
+  description:
+    "Phrases it is for: a request holding every word of one gets it offered.",
+};
+
 /** The rules a playbook follows (design b199a3a4), parsed by `playbookGuidanceSchema`. */
 const PLAYBOOK_GUIDANCE_PROPERTY = {
   type: "array",
@@ -707,6 +721,12 @@ const ATTRIBUTED_SESSION_ID_PARAM = {
   type: "string",
   description:
     "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error.",
+} as const;
+
+/** `supersedes`, declared on {@link SUPERSEDES_TOOLS} only (see there). */
+const SUPERSEDES_PARAM = {
+  type: "string",
+  description: "Failed proposal id",
 } as const;
 
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
@@ -874,7 +894,7 @@ export const tools = {
           "THE recall door, for what you cannot already name (it asks the POD; to ask the PERSON, use synap_ask_person). Ask the user's Synap pod anything in natural language — it routes across all knowledge substrates (entities/notes/tasks, how-to runbooks, remembered facts/preferences, and the links/files the user kept in their Library — found by what was read from them) and returns ONE provenance-tagged answer saying which substrate answered. " +
           "COST: an answer (detail full or brief, the default) runs a model and spends this key's AI budget, far smaller than its read budget; detail:'sources' runs no model and is a plain read. " +
           "READ DIRECTLY WHEN YOU CAN: you have the id → synap_get_entity / synap_get_document / synap_get_session; you know the kind → synap_get_entities; you want what links to it → synap_get_graph; your open work → synap_orient. Never ask for something one of those returns. " +
-          "Ask when you do not know where the data is, before a non-trivial task or a question about the user's life, work, projects or preferences (the pod is their source of truth, prefer it over your assumptions), and before creating anything, to check what already exists (detail:'sources' is enough for that). This single tool replaces the old search/search_entities/recall_facts/get_knowledge tools.",
+          "Ask when you do not know where the data is, before a non-trivial task or a question about the user's life, work, projects or preferences (the pod is their source of truth, prefer it over your assumptions), and before creating anything, to check what already exists (detail:'sources' is enough for that).",
         inputSchema: {
           type: "object",
           properties: {
@@ -905,8 +925,14 @@ export const tools = {
             compare: {
               type: "boolean",
               description:
-                "A/B DIAGNOSTIC: run BOTH the baseline and Horizon rankers on the same candidate pool and return { baseline, horizon, diff:{ overlapAtN, moved } } instead of a synthesized answer. Read-only — does NOT change normal recall. For evaluating ranking changes.",
+                "A/B diagnostic: the baseline vs Horizon rankings of one pool instead of an answer. Read-only.",
             },
+            since: {
+              type: "string",
+              description:
+                "ISO date: only things updated from then, filtered before ranking (echoed as `window`).",
+            },
+            until: { type: "string", description: "ISO date, exclusive." },
           },
           required: ["query"],
         },
@@ -1042,6 +1068,31 @@ export const tools = {
         },
       },
       {
+        name: "synap_get_file",
+        annotations: {
+          title: "Get a stored file",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Look at a stored file (a `file` entity: an upload, an image, a PDF). Returns `url`, a signed download link that expires in 15 minutes (`expiresAt`), with `title`, `mimeType` and `size`. A PNG, JPEG, GIF or WebP image up to 3 MB also comes back as an image you can see (`inline.sent`); pass inline:false to get only the link. Refused when the file is outside this key's grant or the person cannot read it: the error says which (`refusedBy`).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description: "The file entity's UUID.",
+            },
+            inline: {
+              type: "boolean",
+              description:
+                "Default true: send a small image inline. false: the link only.",
+            },
+          },
+          required: ["entityId"],
+        },
+      },
+      {
         name: "synap_get_thread_context",
         annotations: {
           title: "Get thread context",
@@ -1139,7 +1190,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR the same proposal with synap_revise_proposal (never file a second one pointing at the first), or withdraw it with synap_reject_proposal. A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned.",
+          "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR it: yours with synap_revise_proposal; another's, file the fix with `supersedes` = this id (capture, create/update_entity, run_capability). Take back yours with synap_reject_proposal (unscored). A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2803,7 +2854,7 @@ export const tools = {
             addOutput: {
               type: "object",
               description:
-                "DEPRECATED alias — prefer `outcomes` (one entry upserts one deliverable). Append ONE new deliverable (stored with status 'pending'). This is also how you HAND WORK BACK: set owner='human' with a blockedReason, a one-line why AND an `ask` (confirm yes/no, choose options, ...) so the person answers in one tap instead of a bare 'I did this' button.",
+                "DEPRECATED alias — prefer `outcomes` (one entry upserts one deliverable).",
             },
             retireOutput: {
               type: "string",
@@ -2856,6 +2907,13 @@ export const tools = {
               maxItems: 20,
               description:
                 "Stop waiting on these sessions — how you RE-PLAN when a blocker was dropped (cancelled / failed), or when it is no longer needed. Reported per id on `blockerRemovals` (removed | absent — there was no such edge | proposed | failed with a reason). To wait on a retry instead, remove the old one and add the retry (`addBlockedBySessionIds`) in the same call.",
+            },
+            alsoServesTrackIds: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+              maxItems: 5,
+              description:
+                "Goals this session ALSO serves, beside `trackId` (a `serves` link each). Reported per id on `servesLinks`.",
             },
           },
         },
@@ -3999,7 +4057,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator, or a cron synap_create_automation with a playbook_run node. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
+          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator, or a cron synap_create_automation with a playbook_run node. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
         inputSchema: {
           type: "object",
           properties: {
@@ -4045,6 +4103,7 @@ export const tools = {
             runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
             requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
             tools: PLAYBOOK_PROCESS_JSON_SCHEMA.tools,
+            triggers: PLAYBOOK_TRIGGERS_PROPERTY,
             sessionId: {
               type: "string",
               description:
@@ -4063,7 +4122,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change — an absent field stays as it is; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
+          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators, triggers) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4089,6 +4148,7 @@ export const tools = {
             runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
             requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
             tools: PLAYBOOK_PROCESS_JSON_SCHEMA.tools,
+            triggers: PLAYBOOK_TRIGGERS_PROPERTY,
             subjectProfileSlug: {
               type: "string",
               description:
@@ -4258,9 +4318,9 @@ export const tools = {
           "• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n" +
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
           "• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
-          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap, and re-sending a capped write through another door is how the same playbook lands in the pod twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person can see what is still owed instead of being told a percentage.\n" +
+          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap; re-sending a capped write through another door lands the same playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is still owed, not a percentage.\n" +
           "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
-          "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n" +
+          "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. A URL under any other key (e.g. `url`) is NOT a dedup signal: it duplicates the entity.\n" +
           "\n" +
           'EXAMPLES (text, one entity, a graph, a connected plan): synap_load_skill("system/synap/multi-entity-capture").\n' +
           'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\n' +
@@ -4310,12 +4370,15 @@ export const tools = {
                   existingEntityId: {
                     type: "string",
                     description:
-                      "UUID of an entity that already exists. On its own this LINKS — the entity is attached and its fields are left untouched, so the properties you extracted are DISCARDED. Pair it with `updateExisting: true` to write them instead.",
+                      "UUID of an entity that already exists: this LINKS it, its fields untouched (the properties you send are dropped).",
                   },
                   updateExisting: {
                     type: "boolean",
+                    // Refused by the handler, by name (it would discard the
+                    // properties): the composite graph can create or link,
+                    // never patch. The text was trimmed to pay for `table`.
                     description:
-                      "NOT SUPPORTED ON THIS LANE — sending it here is REFUSED, by design, rather than accepted and dropped. The structured `entities[]` lane materializes through a composite graph whose operations can only create or LINK, never patch, so honouring this flag is impossible here and silently ignoring it would discard the properties you sent while reporting success. To PATCH an entity you recognise: send the same information as `text` (that lane routes to the update-capable door and will patch a confident identity match that carries new facts), or call `synap_update_entity` with the entityId and the fields to change. Note `existingEntityId` ALONE still links — the target keeps its existing fields and your extracted properties are dropped.",
+                      "REFUSED here: this lane only creates or links. To patch, send `text` or call synap_update_entity.",
                   },
                   facets: {
                     type: "array",
@@ -4368,6 +4431,32 @@ export const tools = {
                 },
                 required: ["sourceRef", "targetRef", "type"],
               },
+            },
+            // Ticket a8884743 (plan B2): a register of ONE kind as columns,
+            // expanded server-side into entities[] + relations[] (one
+            // proposal). `services/capture-agent/capture-table.ts`.
+            table: {
+              type: "object",
+              description: `Rows of ONE kind (max ${CAPTURE_TABLE_MAX_ROWS}, one proposal). Column \`title\` is the title, \`description\`/\`content\` those fields, others properties. \`linkBy\`: link each row by relation \`type\` to the \`profileSlug\` entity whose \`property\` equals its \`column\` cell exactly; misses come back in the reply's \`table\`.`,
+              properties: {
+                profileSlug: { type: "string" },
+                columns: { type: "array", items: { type: "string" } },
+                rows: { type: "array", items: { type: "array" } },
+                linkBy: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      column: { type: "string" },
+                      profileSlug: { type: "string" },
+                      property: { type: "string" },
+                      type: { type: "string" },
+                    },
+                    required: ["column", "profileSlug", "property", "type"],
+                  },
+                },
+              },
+              required: ["profileSlug", "columns", "rows"],
             },
             projects: {
               type: "array",
@@ -4861,7 +4950,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List a project's GOALS — what people call a goal is a TRACK in tool and field names (say 'goal' to the person; the tools keep 'track'): the goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. LEGACY: an old track also follows a project-scoped playbook (its method, with stages), pinned at the version it started with; a new track has none (playbookId null, no stages). Each row (lean, the default): id, name, status (proposed|agreed|ready|active|paused|completed|archived — completed reads Closed, archived Dropped), pausedBy (check|human|null), verdict (how a closed or dropped goal ended, else null), direction, kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED), updatedAt. detail:'full' adds the rest (criteria, stages, participants…). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects; `trackId` reads one goal in full.",
+          "List a project's GOALS — what people call a goal is a TRACK in tool and field names (say 'goal' to the person; the tools keep 'track'): the goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. LEGACY: an old track follows a staged playbook; a new one has none. Each row (lean, the default): id, name, status (proposed|agreed|ready|active|paused|completed|archived — completed reads Closed, archived Dropped), pausedBy (check|human|null), verdict (how a closed or dropped goal ended, else null), direction, kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED), updatedAt, and when set parentGoalId and pillars (space ids, primary first). detail:'full' adds the rest (criteria, stages, participants…). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects; `trackId` reads one goal in full.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5518,6 +5607,27 @@ export const tools = {
         },
       },
       {
+        name: "synap_request_workspace_access",
+        annotations: {
+          title: "Request space access",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Ask to join a space BEFORE you work in it, instead of finding out on your first write. Already a member: `status: member` with your `role`, nothing filed. Not a member: files ONE join request for the person to approve (`proposed` is success; a pending one is reused); writes you make there meanwhile are kept on it and replayed when it is approved. Refused, nothing filed, when this key's grant does not reach the space or the space is archived.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: {
+              type: "string",
+              description: "The space's UUID (synap_list_workspaces).",
+            },
+          },
+          required: ["workspaceId"],
+        },
+      },
+      {
         name: "synap_file_into_project",
         annotations: {
           title: "File into project",
@@ -5763,6 +5873,57 @@ export const tools = {
             },
           },
           required: ["propertyDefId"],
+        },
+      },
+      {
+        name: "synap_change_lifecycle_options",
+        annotations: {
+          title: "Change a kind's lifecycle options",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Propose adding, relabelling, reordering, recategorising or retiring the options of a kind that already has a lifecycle (a kind with none: synap_declare_lifecycle). `options` is the complete new list, in order: an option you keep needs only its `key` plus what changes (a field you leave out keeps its stored value). A key left out is retired: `remap` names where its records move. Always a proposal, for anyone: `proposed` is success; on approval records at a retired key move and no status-change events are sent. REFUSED, nothing filed, with the reason: a retired key with no `remap`, a new key with no category, a kind with no lifecycle. Keys stay stable: rename what people read with `label`.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            profileId: {
+              type: "string",
+              description: "The kind's profile UUID (synap_list_profiles).",
+            },
+            options: {
+              type: "array",
+              description:
+                "The complete new option list, in order. Each: `key`, and for a new key its `category`.",
+              items: {
+                type: "object",
+                properties: {
+                  key: { type: "string", description: "The stored value." },
+                  category: {
+                    type: "string",
+                    enum: ["open", "active", "paused", "done", "lost"],
+                  },
+                  label: {
+                    type: "string",
+                    description: "The words people read.",
+                  },
+                },
+                required: ["key"],
+              },
+            },
+            remap: {
+              type: "object",
+              description:
+                'Retired key → the kept key its records move to, e.g. { "dropped": "lost" }.',
+              additionalProperties: { type: "string" },
+            },
+            reasoning: {
+              type: "string",
+              description: "Why — shown to the reviewer. One line.",
+            },
+          },
+          required: ["profileId", "options"],
         },
       },
       {
@@ -6365,8 +6526,8 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Reject a pending proposal so the queued change never lands — withdraw a write you now know is wrong (a duplicate, a superseded plan, a mistaken read) instead of leaving it in the user's review queue. Give a `reason`: it is recorded on the proposal and feeds your agent scorecard. " +
-          "There is deliberately NO approve tool: approval is the HUMAN step (an agent key that approved its own write would be self-approving) — point the user at the proposal's review link instead. Rejecting is safe by the same logic in reverse: it only PREVENTS a pending change from landing, so it carries no self-approval or undo risk. Only a still-pending proposal can be rejected.",
+          "Take a proposal out of the review queue so it never lands. YOUR OWN (pending or failed; matched on your agent identity, not the session) is WITHDRAWN, not scored: a write you now know is wrong (a duplicate, a superseded plan, a mistaken read). Another's is REJECTED: the `reason` is recorded and feeds that agent's scorecard. To replace a failed one with a corrected request, file that request with `supersedes` instead. The reply's `status` says which. " +
+          "There is deliberately NO approve tool: approval is the HUMAN step (an agent key that approved its own write would be self-approving) — point the user at the proposal's review link instead. Rejecting is safe by the same logic in reverse: it only PREVENTS a change from landing, so it carries no self-approval or undo risk.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6385,8 +6546,7 @@ export const tools = {
             },
             reason: {
               type: "string",
-              description:
-                "Why you are rejecting it (recorded on the proposal). Always give one.",
+              description: "Why (recorded on the proposal). Always give one.",
             },
             reasonCode: {
               type: "string",
@@ -6485,7 +6645,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. Pass `intent` as free text. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+          "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
         inputSchema: {
           type: "object",
           properties: {
@@ -6496,8 +6656,7 @@ export const tools = {
             },
             workspaceId: {
               type: "string",
-              description:
-                "Optional workspace lens. Omit for pod altitude, which is what 'what can this pod do?' usually means.",
+              description: "Optional workspace lens; omit for the whole pod.",
             },
             catalogs: {
               type: "array",
@@ -6508,6 +6667,10 @@ export const tools = {
             limit: {
               type: "number",
               description: "Max matches per catalog (default 5).",
+            },
+            explain: {
+              type: "boolean",
+              description: "Add `scoring` (what the numbers mean).",
             },
           },
           required: ["intent"],
@@ -6579,18 +6742,22 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, ask with synap_request_installation.",
+          "What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Filter with `computerId` or `capabilityKey`. `installationId` reads ONE row with its approved snapshot (`manifest`, `digests`), the pod's `current` definition and `drift` (same: an update is a repair; changed: an update asks again). Read-only; to install, update, check or remove, ask with synap_request_installation.",
         inputSchema: {
           type: "object",
           properties: {
             computerId: {
               type: "string",
-              description: "One computer's id (its users id).",
+              description: "One computer's id (synap_list_agents).",
             },
             capabilityKey: {
               type: "string",
               description:
                 "A capability's catalog slug, e.g. media-transcribe: which computers have it.",
+            },
+            installationId: {
+              type: "string",
+              description: "One installation: its snapshot and drift.",
             },
           },
           required: [],
@@ -7310,13 +7477,21 @@ export const tools = {
     // W-C1: every attributed tool declares `sessionId`, derived here so a new
     // write tool declares it the moment it is listed. A tool that declares its
     // own (`synap_update_session`'s target, …) keeps it.
+    // D3: `supersedes`, on the filing doors of SUPERSEDES_TOOLS only.
     for (const tool of toolDefs) {
       if (tool.annotations?.readOnlyHint === true) continue;
       const properties = tool.inputSchema.properties ?? {};
-      if ("sessionId" in properties) continue;
       tool.inputSchema = {
         ...tool.inputSchema,
-        properties: { ...properties, sessionId: ATTRIBUTED_SESSION_ID_PARAM },
+        properties: {
+          ...properties,
+          ...("sessionId" in properties
+            ? {}
+            : { sessionId: ATTRIBUTED_SESSION_ID_PARAM }),
+          ...(SUPERSEDES_TOOLS.includes(tool.name)
+            ? { supersedes: SUPERSEDES_PARAM }
+            : {}),
+        },
       };
     }
 

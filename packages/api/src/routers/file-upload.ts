@@ -23,6 +23,8 @@ import {
   resolveImportEntityPlacement,
   eventRepository,
   EntityBodyService,
+  getRequestGrant,
+  runWithoutGrant,
 } from "@synap/database";
 import { channelContextItems } from "@synap/database/schema";
 import { appSessionMiddleware } from "../middleware/app-session.js";
@@ -61,6 +63,14 @@ const ALLOWED_MIME_TYPES = new Set([
   // `attachment` and `/synap-storage/*` carries `CSP: sandbox`; viewing is a
   // sandboxed `srcdoc` iframe. Tripwire: active-mime-needs-attachment-disposition.
   "text/html",
+  // Source code (ticket 15bc541d), stored as-is. Safe only because every
+  // signed GET serves these as `text/plain` (`servedContentTypeOverride`,
+  // @synap/storage) under Caddy's `nosniff`: a `<script src>` on the pod origin
+  // ignores `attachment`, so the served TYPE is what keeps them inert (plan
+  // D1). Same tripwire.
+  "text/javascript",
+  "application/javascript",
+  "text/css",
   // Brand fonts (C4: 5 MB cap). Font files are inert data — no script vector.
   "font/woff2",
   "font/woff",
@@ -689,7 +699,9 @@ async function finishUpload(p: {
   let previewUrl: string | undefined;
   if (mimeType.startsWith("image/")) {
     try {
-      previewUrl = await storage.getSignedUrl(storageKey, 3600);
+      previewUrl = await storage.getSignedUrl(storageKey, 3600, {
+        contentType: mimeType,
+      });
     } catch {
       // Non-fatal
     }
@@ -850,7 +862,8 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
     const expiresInSeconds = FILE_URL_DEFAULT_TTL_SECONDS;
     const url = await storage.getSignedUrl(
       document.storageKey,
-      expiresInSeconds
+      expiresInSeconds,
+      { contentType: document.mimeType }
     );
     const expiresAt = new Date(
       Date.now() + expiresInSeconds * 1000
@@ -869,18 +882,41 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
   }
 });
 
+/** Which floor refused a file the caller asked for (the 403's `refusedBy`). */
+export type FileReadRefusal = "key_grant" | "person";
+
+/** The 403's words, by the floor that refused (ticket 66e66dce). */
+export const FILE_READ_REFUSED: Readonly<Record<FileReadRefusal, string>> = {
+  key_grant:
+    "Forbidden: this file is outside what this key's grant reaches (its spaces, projects or objects). The person can widen the key's grant, or share the file into a space the key reaches. Nothing was signed.",
+  person:
+    "Forbidden: the person this key acts for cannot read this file (it is not theirs and was not shared with them). Nothing was signed.",
+};
+
 /**
  * The file entity `userId` may READ, or why not — the read floor and the
  * 403/404 split every `…/:entityId/…` file door shares (`signFileEntityUrl`,
  * Hub `POST /files/:entityId/transcribe`). `loadSignableFileEntity` reads
  * through `scopedDb`, so a key's grant narrows it.
+ *
+ * A 403 says WHICH floor refused (`refusedBy`): when a key's grant is in
+ * force, the same read is asked again for the person alone
+ * (`runWithoutGrant`, a verdict about the person, never rows returned). A
+ * file the person reads is outside the key's grant; one the person cannot
+ * read is refused for the person. A bare "Forbidden" sent agents guessing
+ * between a missing scope, a space pin and a sharing gap.
  */
 export async function readableFileEntity(
   userId: string,
   entityId: string
 ): Promise<
   | { ok: true; entity: SignableFileEntity }
-  | { ok: false; status: 403 | 404; error: string }
+  | {
+      ok: false;
+      status: 403 | 404;
+      error: string;
+      refusedBy?: FileReadRefusal;
+    }
 > {
   const entity = await loadSignableFileEntity(userId, entityId);
   if (entity) return { ok: true, entity };
@@ -888,9 +924,20 @@ export async function readableFileEntity(
     where: eq(entities.id, entityId),
     columns: { id: true },
   });
-  return exists
-    ? { ok: false, status: 403, error: "Forbidden" }
-    : { ok: false, status: 404, error: "File entity not found" };
+  if (!exists) {
+    return { ok: false, status: 404, error: "File entity not found" };
+  }
+  const refusedBy: FileReadRefusal =
+    getRequestGrant() &&
+    (await runWithoutGrant(() => loadSignableFileEntity(userId, entityId)))
+      ? "key_grant"
+      : "person";
+  return {
+    ok: false,
+    status: 403,
+    error: FILE_READ_REFUSED[refusedBy],
+    refusedBy,
+  };
 }
 
 /** What a file-entity URL door answers: the signed GET, or why not. */
@@ -901,7 +948,12 @@ export type FileEntityUrlResult =
       /** The file the URL signs, as the read floor returned it (never on the wire). */
       entity: SignableFileEntity;
     }
-  | { ok: false; status: 403 | 404; error: string };
+  | {
+      ok: false;
+      status: 403 | 404;
+      error: string;
+      refusedBy?: FileReadRefusal;
+    };
 
 /**
  * Sign a file entity's blob for `userId` — the ONE body of every
@@ -917,10 +969,12 @@ export type FileEntityUrlResult =
  * proves the document is the entity's to share.
  *
  * Returns the URL only. The signer (`storage.getSignedUrl`) forces an
- * `attachment` disposition and never overrides the stored content type — an
- * active blob (HTML, SVG) can never render from this URL (D10; tripwire
- * `active-mime-needs-attachment-disposition`). `mimeType` is the stored type,
- * reported so a client decides drawability on what is actually served.
+ * `attachment` disposition — an active blob (HTML, SVG) can never render from
+ * this URL (D10) — and serves a script or style blob as `text/plain` (plan D1),
+ * every other type as stored (tripwire
+ * `active-mime-needs-attachment-disposition`). `mimeType` is the stored type;
+ * it differs from the served one only for script and style, which no client
+ * draws.
  */
 export async function signFileEntityUrl(
   userId: string,
@@ -941,7 +995,9 @@ export async function signFileEntityUrl(
 
   const expiresInSeconds =
     opts.expiresInSeconds ?? FILE_URL_DEFAULT_TTL_SECONDS;
-  const url = await storage.getSignedUrl(entity.storageKey, expiresInSeconds);
+  const url = await storage.getSignedUrl(entity.storageKey, expiresInSeconds, {
+    contentType: entity.mimeType,
+  });
   const expiresAt = new Date(
     Date.now() + expiresInSeconds * 1000
   ).toISOString();

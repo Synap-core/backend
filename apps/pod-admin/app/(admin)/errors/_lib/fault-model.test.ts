@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   faultHeadline,
+  faultHttpStatus,
+  faultProposalId,
   faultRequest,
   readableMessage,
   rootCause,
@@ -83,5 +85,44 @@ describe("faultRequest", () => {
   it("is the method and path, or a dash", () => {
     expect(faultRequest(fault())).toBe("POST /api/hub/packages/apply");
     expect(faultRequest(fault({ method: null, path: null }))).toBe("—");
+  });
+});
+
+// `recordProposalFault` (packages/api/src/services/server-faults/record.ts)
+// writes an approval's fault with door "proposal", no method, the path
+// `/proposal/<id>` and a status derived from its error class.
+describe("an approval's fault (door: proposal)", () => {
+  const PROPOSAL_ID = "7ad8bdde-3c1b-4f5e-9a2d-0b6c1e4f8a10";
+  const approval = (over: Partial<FaultLike> = {}) =>
+    fault({
+      door: "proposal",
+      method: null,
+      path: `/proposal/${PROPOSAL_ID}`,
+      status: 500,
+      ...over,
+    });
+
+  it("names its proposal, which the page opens as a link", () => {
+    expect(faultProposalId(approval())).toBe(PROPOSAL_ID);
+  });
+
+  it("has no HTTP status: no request ever happened", () => {
+    expect(faultHttpStatus(approval())).toBeNull();
+  });
+
+  it("a request's fault keeps its HTTP status and names no proposal", () => {
+    expect(faultHttpStatus(fault())).toBe(500);
+    expect(faultProposalId(fault())).toBeNull();
+    // A REST path that merely looks like one is still a request.
+    const rest = fault({ door: "rest", path: `/proposal/${PROPOSAL_ID}` });
+    expect(faultProposalId(rest)).toBeNull();
+  });
+
+  it("a proposal fault with no readable path names no proposal", () => {
+    expect(faultProposalId(approval({ path: null }))).toBeNull();
+    expect(faultProposalId(approval({ path: "/proposal/" }))).toBeNull();
+    expect(
+      faultProposalId(approval({ path: `/proposal/${PROPOSAL_ID}/x` }))
+    ).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 {
   "name": "@synap-core/markdown-core",
   "version": "0.1.0",
-  "description": "The ONE Synap markdown spine: parse, embeds, container scan, sections, plain text, inline markers, diagnostics, blame. Pure \u2014 no React, no Tiptap.",
+  "description": "The ONE Synap markdown spine: parse, embeds, container scan, sections, plain text, inline markers, diagnostics, blame. Pure — no React, no Tiptap.",
   "type": "module",
   "publishConfig": {
     "access": "public",

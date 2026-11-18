@@ -36,6 +36,8 @@ import { changeKindScope } from "../../../services/profiles/change-kind-scope.js
 import { matchFocusTarget, isClearFocusArg } from "./focus-target-match.js";
 import { projectsRouter } from "../../projects.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
+import { requestWorkspaceJoin } from "../../../utils/permission-check.js";
+import { fullUuidError } from "../tool-errors.js";
 import {
   archiveWorkspaceDoor,
   fileIntoProjectDoor,
@@ -775,6 +777,26 @@ export const workspaceHandlers: McpHandlerMap = {
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
+  },
+  // Ask on purpose for the workspace JOIN the gate files on a first write
+  // (ticket 4790c862): the gate's own join, so later writes ride on it.
+  synap_request_workspace_access: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, userId, apiKeyScopes, agentUserId, sessionId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    // The confined value: a bound service key cannot name another space.
+    const workspaceId = ctx.confinedWorkspaceId ?? "";
+    const badId = fullUuidError(toolName, "workspaceId", workspaceId);
+    if (badId) return badId;
+    return ok(
+      await requestWorkspaceJoin({
+        userId,
+        agentUserId,
+        workspaceId,
+        ...(sessionId ? { sessionId } : {}),
+      })
+    );
   },
   synap_project_use_workspace: async (
     ctx: McpToolContext

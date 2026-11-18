@@ -60,6 +60,7 @@ import {
   runnerNamesAgentId,
 } from "./playbook-runner.js";
 import { playbookScheduleInputSchema } from "./playbook-schedule.js";
+import { triggerWords } from "../services/routing/suggest-routes.js";
 
 export const playbookExecutorSchema = z.enum([
   "is-agent",
@@ -151,12 +152,41 @@ export const playbookExpectedOutputSchema = z.looseObject({
   lands: outputLandingSchema.optional(),
 });
 
+/** Most trigger phrases one playbook declares. */
+export const PLAYBOOK_TRIGGERS_MAX = 20;
+/** Longest trigger phrase, in characters. */
+export const PLAYBOOK_TRIGGER_MAX_CHARS = 120;
+
 /**
- * `metadata` — the owner's free-form bag, with ONE conventional key typed:
+ * `metadata.triggers` — phrases the playbook is FOR. The suggestion ranker
+ * (`rankRouteCandidates`) admits the playbook when a request holds every word
+ * of one, and scores those words like name words (plan a640c5bb D3). A phrase
+ * with no word the ranker reads (stop words only) could never match, so it is
+ * refused here rather than stored and silently ignored.
+ */
+export const playbookTriggersSchema = z
+  .array(z.string().trim().min(1).max(PLAYBOOK_TRIGGER_MAX_CHARS))
+  .max(PLAYBOOK_TRIGGERS_MAX)
+  .superRefine((phrases, ctx) => {
+    phrases.forEach((phrase, index) => {
+      if (triggerWords(phrase).length === 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: [index],
+          message: `triggers[${index}] ("${phrase}") holds no word a request can match: name the work ("workspace hygiene"), not only common words`,
+        });
+      }
+    });
+  });
+
+/**
+ * `metadata` — the owner's free-form bag, with two conventional keys typed:
  * `lineage` (where the process comes from — an APQC PCF id, a named method,
- * O*NET task ids). Convention only: nothing branches on it.
+ * O*NET task ids; convention only, nothing branches on it) and `triggers`
+ * (the phrases that offer it, read by the suggestion ranker).
  */
 export const playbookMetadataSchema = z.looseObject({
+  triggers: playbookTriggersSchema.optional(),
   lineage: z
     .looseObject({
       apqc: z.string().max(200).optional(),

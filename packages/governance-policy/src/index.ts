@@ -2981,9 +2981,20 @@ export const DIRECT_PROPOSAL_DOORS = {
   // kind every space may read — always a pending proposal, for anyone; the
   // approval half re-runs the preflight and calls `declareLifecycle`.
   "profile/declare_lifecycle": "direct",
+  // Relabelling, reordering or retiring a declared lifecycle's options
+  // (`services/lifecycle/change-lifecycle-options.ts`, ticket fd146324): the
+  // same policy — always a pending proposal; the approval half runs the
+  // lifecycle door (`changeLifecycleOptions`), which re-decides.
+  "property_def/change_lifecycle_options": "direct",
   "profile/merge": "direct",
   "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",
+  // Wiring a space's inbound webhook source into a host (decision abaaa696):
+  // the Synap Core verb `inbound_source.connect` ALWAYS files this, for anyone
+  // (`services/webhooks/connect-inbound-source.ts`). Approved by
+  // `routers/proposals/executors/webhook.ts` (pod admin, console only): it
+  // mints the source and hands its secret to the host, never to a person.
+  "webhook/inbound_source.connect": "direct",
   "workspace/join": "direct",
   // D7 — owner consent to a trusted issuer's wider scopes. Filed at boot by
   // `services/trusted-issuers/scope-request-proposal.ts`; approved by

@@ -476,6 +476,89 @@ describe("(b) advancing A → C checks every gated stage in between", () => {
   });
 });
 
+// db6a5e17: the move into a check-gated stage was written, the check paused
+// the run and sent it back, only because a criterion had no grade yet.
+describe("(d) an entry check that is only UNGRADED refuses the move before writing", () => {
+  const CHECKED = [
+    { key: "discover", name: "Discover" },
+    { key: "build", name: "Build", gate: { kind: "check" } },
+  ];
+  async function checkedSession(): Promise<string> {
+    const sessionId = await seedSession(await seedPlaybook(CHECKED));
+    await q(`update focus_sessions set criteria = $2::jsonb where id = $1`, [
+      sessionId,
+      JSON.stringify([
+        {
+          key: "brief-posted",
+          statement: "The brief is posted",
+          stageKey: "discover",
+          check: { kind: "evidence", evidenceKey: "brief" },
+        },
+      ]),
+    ]);
+    return sessionId;
+  }
+  const grade = (sessionId: string, verdict: "pass" | "fail") =>
+    q(
+      `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evidence, created_at)
+       values ($1, $2, $3, 'brief-posted', 1, $4, 'evidence', '{}'::jsonb, now())`,
+      [randomUUID(), sessionId, USER, verdict]
+    );
+  const advance = (sessionId: string) =>
+    updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      currentStage: "build",
+    });
+
+  beforeEach(async () => {
+    await h.client!.exec("delete from session_evaluations;");
+  });
+
+  it("MCP door: refused, nothing written, and the reply names what to grade", async () => {
+    const sessionId = await checkedSession();
+    const res = await advance(sessionId);
+
+    const row = await readRow(sessionId);
+    expect(row).toMatchObject({ status: "active", current_stage: "discover" });
+    expect(row.metadata.checkGate).toBeUndefined();
+    expect(res.status).toBe("denied");
+    if (res.status === "denied") {
+      expect(res.reason).toContain('"brief-posted"');
+      expect(res.reason).toContain("`brief`");
+    }
+  });
+
+  it("Hub PATCH: refused the same way (409), nothing written", async () => {
+    const sessionId = await checkedSession();
+    const res = await patch(sessionId, { currentStage: "build" }, AGENT);
+    expect(res.status).toBe(409);
+    expect((await readRow(sessionId)).current_stage).toBe("discover");
+  });
+
+  it("once graded PASS the move lands and the check lets it through", async () => {
+    const sessionId = await checkedSession();
+    await grade(sessionId, "pass");
+    const res = await advance(sessionId);
+    expect(res.status).toBe("updated");
+    expect(await readRow(sessionId)).toMatchObject({
+      status: "active",
+      current_stage: "build",
+    });
+  });
+
+  it("graded FAIL is a measurement, not a missing grade: the gate still holds (unchanged)", async () => {
+    const sessionId = await checkedSession();
+    await grade(sessionId, "fail");
+    const res = await advance(sessionId);
+    expect(res.status).toBe("updated");
+    const row = await readRow(sessionId);
+    expect(row).toMatchObject({ status: "paused", current_stage: "build" });
+    expect(row.metadata.checkGate).toMatchObject({ failing: ["brief-posted"] });
+  });
+});
+
 describe("(c) metadata.devLoop is written only by its approval", () => {
   const forged = {
     devLoop: {

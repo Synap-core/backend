@@ -35,6 +35,19 @@ export function playbookSearchText(p: SearchablePlaybook): string[] {
 }
 
 /**
+ * The phrases a playbook declares it is FOR (`metadata.triggers`, validated
+ * at the write door by `playbookTriggersSchema`): the ranker admits it when a
+ * request holds every word of one (`RouteCandidate.triggers`). Read
+ * tolerantly: a row written before the door checked yields only its strings.
+ */
+export function playbookTriggers(metadata: unknown): string[] {
+  const triggers = (metadata as { triggers?: unknown } | null)?.triggers;
+  return Array.isArray(triggers)
+    ? triggers.filter((t): t is string => typeof t === "string")
+    : [];
+}
+
+/**
  * The description as a match row shows it: whitespace folded to single
  * spaces, cut at a word boundary under {@link PLAYBOOK_DESCRIPTION_CAP} with
  * "…". `undefined` when there is none, so a row without one carries no key.
