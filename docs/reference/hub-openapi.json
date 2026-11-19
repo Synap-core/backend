@@ -6968,6 +6968,18 @@
         },
         "required": ["kitId", "hash", "components", "layout", "grid"]
       },
+      "DesignKitFile": {
+        "type": "object",
+        "properties": {
+          "kitId": { "type": "string" },
+          "hash": { "type": "string" },
+          "part": { "type": "string", "enum": ["js", "css"] },
+          "sha256": { "type": "string" },
+          "bytes": { "type": "integer" },
+          "content": { "type": "string" }
+        },
+        "required": ["kitId", "hash", "part", "sha256", "bytes", "content"]
+      },
       "ApplyDesignReply": {
         "type": "object",
         "properties": {
@@ -53341,7 +53353,7 @@
       "get": {
         "tags": ["Designs"],
         "summary": "One code file of an app's component kit",
-        "description": "The bytes of an app's kit.js (`part=js`) or kit.css (`part=css`), as its catalog (the app's `design-kit` file) names them, for the Design app to load on its own origin through its Hub proxy. Read through the caller's read floor (the app, then each file). The bytes are checked against the sha256 the catalog pins: other bytes are a 412, never served. Always `text/plain` with `nosniff`, so the pod's origin never runs or applies it; the Design app checks the hash again (`X-Kit-Sha256`) before it loads it. 404 when the app has no kit.",
+        "description": "The bytes of an app's kit.js (`part=js`) or kit.css (`part=css`), as its catalog (the app's `design-kit` file) names them, for the Design app to load on its own origin through its Hub proxy. Read through the caller's read floor (the app, then each file). The bytes are checked against the sha256 the catalog pins: other bytes are refused (422 `DESIGN_KIT_BYTES_MISMATCH`), never served. Answered as JSON (`content` is the file's text, `sha256` its pinned hash), never as served code, so the pod's origin never runs or applies it; the Design app checks the hash again before it loads it. 404 when the app has no kit.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -53358,7 +53370,14 @@
           }
         ],
         "responses": {
-          "200": { "description": "The file's bytes (text/plain)" },
+          "200": {
+            "description": "The file's text and its hash",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DesignKitFile" }
+              }
+            }
+          },
           "400": {
             "description": "Bad request",
             "content": {
@@ -53384,7 +53403,15 @@
             }
           },
           "412": {
-            "description": "The kit cannot be read, or the bytes are not the pinned ones",
+            "description": "The kit cannot be read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "422": {
+            "description": "The bytes are not the pinned ones (DESIGN_KIT_BYTES_MISMATCH)",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

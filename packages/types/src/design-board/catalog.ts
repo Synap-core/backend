@@ -14,6 +14,7 @@
  * Pure: no I/O. `readDesignCatalog` refuses a snapshot it cannot trust
  * (never "repairs" one into an empty catalog).
  */
+import { isUuid } from "../property-render/structured-value.js";
 import { GRID_PROPS } from "./grid.js";
 import type { CanvasSchema, FieldSpec, ItemFieldSpec } from "./schema.js";
 
@@ -181,7 +182,6 @@ export interface DesignKitCatalog extends DesignCatalogSnapshot {
 export type ReadKitCatalogResult =
   { ok: true; catalog: DesignKitCatalog } | { ok: false; error: string };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/;
 
 /**
@@ -230,7 +230,7 @@ export function readKitCatalog(raw: unknown): ReadKitCatalogResult {
     if (
       !isObj(f) ||
       typeof f.entityId !== "string" ||
-      !UUID.test(f.entityId) ||
+      !isUuid(f.entityId) ||
       typeof f.sha256 !== "string" ||
       !SHA256.test(f.sha256) ||
       typeof f.bytes !== "number"

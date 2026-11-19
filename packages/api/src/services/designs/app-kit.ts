@@ -22,12 +22,11 @@ import {
   type DesignKitCatalog,
   type KitPart,
 } from "@synap-core/types/design-board";
+import { isUuid } from "@synap-core/types/property-render";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 
 /** The kind of an app (builder.yaml). */
 export const APP_PROFILE = "devplane_app";
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type AppKitRead =
   /** The app names no kit: its designs are drawn with Synap's components. */
@@ -40,11 +39,23 @@ export type AppKitRead =
       kit: DesignKitCatalog;
     };
 
+/**
+ * The bytes stored under a kit file's id are not the ones its catalog pins:
+ * a REFUSAL (the Hub answers 422 `DESIGN_KIT_BYTES_MISMATCH`), never the
+ * bytes.
+ */
+export class KitBytesMismatchError extends TRPCError {
+  readonly reasonCode = "DESIGN_KIT_BYTES_MISMATCH";
+  constructor(message: string) {
+    super({ code: "UNPROCESSABLE_CONTENT", message });
+  }
+}
+
 const precondition = (message: string) =>
   new TRPCError({ code: "PRECONDITION_FAILED", message });
 
 async function loadApp(userId: string, appId: string) {
-  if (!UUID.test(appId))
+  if (!isUuid(appId))
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `appId "${appId}" is not an id.`,
@@ -111,7 +122,7 @@ export async function readAppKit(
   const ref = app.properties[DESIGN_KIT_PROPERTY];
   if (ref === undefined || ref === null || ref === "")
     return { status: "none", appId };
-  if (typeof ref !== "string" || !UUID.test(ref))
+  if (typeof ref !== "string" || !isUuid(ref))
     throw precondition(
       `App ${appId}'s ${DESIGN_KIT_PROPERTY} is not a file id; publish the kit again (pnpm design:kit --publish).`
     );
@@ -164,7 +175,7 @@ export async function readKitPart(
   );
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   if (sha256 !== ref.sha256)
-    throw precondition(
+    throw new KitBytesMismatchError(
       `App ${appId}'s kit ${part} (file ${ref.entityId}) is not the one its catalog pins (sha256 ${sha256.slice(0, 12)}…, expected ${ref.sha256.slice(0, 12)}…); publish the kit again.`
     );
   return { kitId: read.kit.kitId, hash: read.kit.hash, part, sha256, bytes };

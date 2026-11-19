@@ -41,7 +41,8 @@ vi.mock("@synap/storage", () => ({
   },
 }));
 
-const { readAppKit, readKitPart } = await import("./app-kit.js");
+const { KitBytesMismatchError, readAppKit, readKitPart } =
+  await import("./app-kit.js");
 
 const APP = "11111111-1111-4111-8111-111111111111";
 const CAT = "22222222-2222-4222-8222-222222222222";
@@ -123,9 +124,12 @@ describe("readKitPart", () => {
 
   it("refuses other bytes under the pinned id, and an app with no kit", async () => {
     h.files.set(CSS, Buffer.from("body { display: none }"));
-    await expect(readKitPart("u", APP, "css")).rejects.toThrow(
-      /not the one its catalog pins/
-    );
+    const refused = await readKitPart("u", APP, "css").catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(KitBytesMismatchError);
+    expect(refused).toMatchObject({
+      reasonCode: "DESIGN_KIT_BYTES_MISMATCH",
+      message: expect.stringMatching(/not the one its catalog pins/),
+    });
     h.appRows = app({});
     await expect(readKitPart("u", APP, "js")).rejects.toThrow(/no design kit/);
   });
