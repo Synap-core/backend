@@ -165,7 +165,7 @@ export async function resolveSessionWorkspacePlacement(
   if (ctx.explicitWorkspaceId) {
     return {
       workspaceId: ctx.explicitWorkspaceId,
-      rung: ctx.explicitRung ?? "explicit",
+      rung: "explicit",
     };
   }
 
