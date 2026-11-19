@@ -346,29 +346,108 @@ describe("check gate", () => {
 });
 
 describe("checkGateFailing", () => {
+  const evidence = { kind: "evidence" as const, evidenceKey: "e" };
   const criteria = [
-    { key: "a", stageKey: "build" },
-    { key: "b", stageKey: "build", required: false },
-    { key: "c", stageKey: "ship" },
+    { key: "a", statement: "A", check: evidence, stageKey: "build" },
+    {
+      key: "b",
+      statement: "B",
+      check: evidence,
+      stageKey: "build",
+      required: false,
+    },
+    { key: "c", statement: "C", check: evidence, stageKey: "ship" },
   ];
+  const pass = (criterionKey: string) => ({
+    criterionKey,
+    verdict: "pass" as const,
+    evaluatorKind: "evidence" as const,
+    createdAt: "2026-11-19T10:00:00.000Z",
+  });
+  const none = { stages: [], expectedOutputs: [] };
+
   it("counts only the left stage's REQUIRED criteria that are not passing", () => {
-    expect(checkGateFailing({ criteria, evaluations: [] }, "build")).toEqual([
-      "a",
-    ]);
+    expect(
+      checkGateFailing({ ...none, criteria, evaluations: [] }, "build")
+    ).toEqual(["a"]);
     expect(
       checkGateFailing(
         {
+          ...none,
           criteria,
-          evaluations: [{ criterionKey: "a", verdict: "unmeasured" }],
+          evaluations: [{ ...pass("a"), verdict: "unmeasured" as const }],
         },
         "build"
       )
     ).toEqual(["a"]);
     expect(
+      checkGateFailing({ ...none, criteria, evaluations: [pass("a")] }, "build")
+    ).toEqual([]);
+  });
+
+  // W6: the session gate reads the stage's OUTCOMES, as the goal gate does —
+  // an output the stage declares holds it until it is delivered.
+  const stages = [
+    {
+      key: "build",
+      name: "Build",
+      expectedOutputs: [{ kind: "code", label: "Pull request" }],
+    },
+    { key: "ship", name: "Ship", gate: { kind: "check" } },
+  ];
+  const slot = (extra: Record<string, unknown> = {}) => ({
+    key: "pull-request",
+    kind: "code",
+    label: "Pull request",
+    ...extra,
+  });
+
+  it("an output the left stage declares holds it until delivered", () => {
+    expect(
       checkGateFailing(
-        { criteria, evaluations: [{ criterionKey: "a", verdict: "pass" }] },
+        { stages, expectedOutputs: [slot()], criteria: [], evaluations: [] },
         "build"
       )
+    ).toEqual(["pull-request"]);
+    expect(
+      checkGateFailing(
+        {
+          stages,
+          expectedOutputs: [slot({ status: "done" })],
+          criteria: [],
+          evaluations: [],
+        },
+        "build"
+      )
+    ).toEqual([]);
+  });
+
+  it("a delivered output a failing required criterion checks still holds it (D4 a)", () => {
+    const checked = [
+      {
+        key: "pr-green",
+        statement: "Checks green",
+        check: evidence,
+        stageKey: "build",
+        outputKey: "pull-request",
+      },
+    ];
+    const input = {
+      stages,
+      expectedOutputs: [slot({ status: "done" })],
+      criteria: checked,
+    };
+    expect(
+      checkGateFailing(
+        {
+          ...input,
+          evaluations: [{ ...pass("pr-green"), verdict: "fail" as const }],
+        },
+        "build"
+      )
+    ).toEqual(["pull-request"]);
+    expect(
+      checkGateFailing({ ...input, evaluations: [pass("pr-green")] }, "build")
     ).toEqual([]);
   });
 });

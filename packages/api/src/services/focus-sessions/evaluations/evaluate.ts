@@ -43,6 +43,7 @@ import {
   type SessionCriterion,
 } from "@synap/playbooks";
 import { deriveSlotKeys } from "../slot-keys.js";
+import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import {
   isJudgeRequestRefused,
   judgeSessionCriteria,
@@ -112,6 +113,12 @@ export interface EvaluateSessionParams {
    * tRPC `evaluate`) set it; absent ⇒ a spent criterion stays the agent's work.
    */
   escalate?: boolean;
+  /**
+   * The check of a stage gate, inside an advance (`stage-gate.ts`): the
+   * gate reads the grades itself, so this evaluation neither resumes a held
+   * gate nor advances the step (that would advance twice in one move).
+   */
+  asGateCheck?: boolean;
 }
 
 export interface CriterionRunOutcome {
@@ -488,11 +495,22 @@ export async function evaluateSession(
     session.criteria,
     await listSessionEvaluations({ sessionId, userId })
   );
+  if (params.asGateCheck) {
+    return { status: "evaluated", results, resumed: false, ...after };
+  }
   const resumed = await resumeCheckGateIfMet({
     sessionId,
     userId,
     summary: after,
   });
+  // A pass may complete the stage's work: the step moves on by itself (W6).
+  const passed = results.find(
+    (r) => r.status === "recorded" && r.verdict === "pass"
+  );
+  if (!resumed && passed) {
+    const { advanceOnGrade } = await import("../advance-if-stage-met.js");
+    await advanceOnGrade({ sessionId, criterionKey: passed.key });
+  }
   return { status: "evaluated", results, resumed, ...after };
 }
 
@@ -614,6 +632,14 @@ export async function gradeCriterionAsOwner(params: {
     sessionId: params.sessionId,
     userId: params.userId,
   });
+  // A pass may complete the stage's work: the step moves on by itself (W6).
+  if (!resumed && params.verdict === "pass") {
+    const { advanceOnGrade } = await import("../advance-if-stage-met.js");
+    await advanceOnGrade({
+      sessionId: params.sessionId,
+      criterionKey: params.criterionKey,
+    });
+  }
   return { out, resumed };
 }
 
@@ -694,7 +720,20 @@ export async function resumeCheckGateIfMet(params: {
         userId: params.userId,
       })
     );
-  if (checkGateFailing(summary, gate.fromStage).length > 0) return false;
+  const proc = await loadSessionProcess({
+    sessionId: session.id,
+    playbookId: session.playbookId,
+  });
+  const failing = checkGateFailing(
+    {
+      stages: proc?.stages ?? [],
+      expectedOutputs: session.expectedOutputs,
+      criteria: summary.criteria,
+      evaluations: summary.evaluations,
+    },
+    gate.fromStage
+  );
+  if (failing.length > 0) return false;
   // The check gate's own release: the system's move.
   const { rows: resumed } = await setSessionStatus(db, {
     sessionId: session.id,

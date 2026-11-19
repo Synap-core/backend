@@ -22872,6 +22872,10 @@ export type ReactionDo =
  | {
 	effect: "reach_stage_status";
 }
+/** Advance the session to its next stage (the one advance door, W6). */
+ | {
+	effect: "advance_stage";
+}
 /**
  * Roll the parent up (decision D5): when every non-lost part is done and
  * at least one is, the parent moves to `to`, else to its next status
