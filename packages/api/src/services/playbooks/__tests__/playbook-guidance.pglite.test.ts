@@ -774,4 +774,41 @@ describe("one object (plan W8, D10a): subject:<relation> and entity:<id> refs", 
     });
     expect(h.kickoffs[0]).toContain("### This client's voice · Outreach voice");
   });
+  it("what earlier runs of the whole playbook taught reaches the IS kickoff and the bind door (W8 D7a)", async () => {
+    await q(`update playbooks set metadata = $2::jsonb where id = $1`, [
+      ONE_OBJECT,
+      JSON.stringify({
+        lessons: ["Read the brief before drafting"],
+        whatWorked: {
+          runs: 4,
+          parts: [{ kind: "tool", name: "web.read", runs: 3 }],
+        },
+      }),
+    ]);
+    const learned = [
+      "## What earlier runs of this playbook taught",
+      "- Read the brief before drafting",
+      "Successful runs used: web.read (tool, 3 of 4 runs)",
+    ].join("\n");
+    h.kickoffs.length = 0;
+    await new IsAgentExecutor().run({
+      workspaceId: WS,
+      userId: USER,
+      playbookId: ONE_OBJECT,
+      sessionId: randomUUID(),
+      channelId: randomUUID(),
+      goal: "Write for Jane.",
+      capabilities: [],
+      input: {},
+    });
+    expect(h.kickoffs[0]).toContain(learned);
+    const bound = await loadBoundPlaybookMethod({
+      playbookId: ONE_OBJECT,
+      stageKey: null,
+      stages: [],
+      userId: USER,
+    });
+    if (bound.status !== "ok") throw new Error(bound.error);
+    expect(bound.text).toContain(learned);
+  });
 });

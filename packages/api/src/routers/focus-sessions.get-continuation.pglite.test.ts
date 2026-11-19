@@ -1294,4 +1294,69 @@ describe("focusSessions.get returns the continuation packet", () => {
       await h.client!.exec(ddlFor(projects as unknown as PgTable));
     }
   });
+  it("howOthersDidIt: the reader's earlier SUCCESSFUL runs of the same playbook, what each used, and the scorecard (W8 D7a)", async () => {
+    const playbookId = randomUUID();
+    const toolId = randomUUID();
+    await q(
+      `insert into tools (id, created_by, name, kind, created_at, updated_at) values ($1, $2, 'web.read', 'read', now(), now())`,
+      [toolId, USER]
+    );
+    const CRITERIA = JSON.stringify([
+      {
+        key: "tsc",
+        statement: "Typecheck passes",
+        required: true,
+        check: { kind: "judge" },
+      },
+    ]);
+    const earlier = async (title: string, verdict: "pass" | "fail", daysAgo: number) => {
+      const id = randomUUID();
+      await q(
+        `insert into focus_sessions (id, user_id, goal, title, status, playbook_id, criteria, expected_outputs, metadata, created_at, updated_at, closed_at)
+         values ($1, $2, 'Ship it', $3, 'closed', $4, $5::jsonb, '[]'::jsonb, '{}'::jsonb, now(), now(), now() - ($6::int * interval '1 day'))`,
+        [id, USER, title, playbookId, CRITERIA, daysAgo]
+      );
+      await q(
+        `insert into session_evaluations (id, session_id, criterion_key, verdict, evaluator_kind, attempt, created_at)
+         values ($1, $2, 'tsc', $3, 'ai', 1, now())`,
+        [randomUUID(), id, verdict]
+      );
+      return id;
+    };
+    const older = await earlier("Ship v1", "pass", 9);
+    const newer = await earlier("Ship v2", "pass", 2);
+    await earlier("Ship v3", "fail", 1);
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_by, created_at)
+       values ($1, 'session', $2, 'tool', $3, 'used', $4, now())`,
+      [randomUUID(), newer, toolId, USER]
+    );
+    const id = await seed({ owed: false });
+    await q(`update focus_sessions set playbook_id = $1 where id = $2`, [
+      playbookId,
+      id,
+    ]);
+
+    const c = (await get(id)).continuation;
+    expect(c.howOthersDidIt).toEqual({
+      status: "ok",
+      playbookId,
+      scorecard: expect.objectContaining({ closedRuns: 3, evaluatedRuns: 3 }),
+      precedents: {
+        status: "ok",
+        total: 2,
+        // Newest first; the failed run is no precedent.
+        items: [
+          expect.objectContaining({ sessionId: newer, title: "Ship v2", used: ["web.read"] }),
+          expect.objectContaining({ sessionId: older, title: "Ship v1", used: [] }),
+        ],
+      },
+    });
+    expectSamePacket((await mcpGet(id)).continuation, c);
+  });
+
+  it("howOthersDidIt is null for a session that follows no playbook", async () => {
+    const id = await seed({ owed: false });
+    expect((await get(id)).continuation.howOthersDidIt).toBeNull();
+  });
 });
