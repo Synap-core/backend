@@ -7,6 +7,13 @@
 import { describe, expect, it } from "vitest";
 import {
   KINDS_ROW,
+  accessOfNamed,
+  contractDraft,
+  contractOf,
+  heldOfContract,
+  namesOfNamed,
+  offerOfContract,
+  wasPairs,
   allowNew,
   canRows,
   canSummary,
@@ -190,7 +197,7 @@ describe("a first consent's draft (design A §2)", () => {
     expect(d.write).toEqual({ spaces: ["w-content", "w-eco"], projects: [] });
   });
 
-  it("no templates, one writable place: that place, the only valid option", () => {
+  it("no templates, one writable place: still nothing picked (a default only when declared)", () => {
     const one: ConsentAppWire = {
       ...STUDIO,
       templates: [],
@@ -199,7 +206,7 @@ describe("a first consent's draft (design A §2)", () => {
         workspaces: [BUILDER],
       })),
     };
-    expect(firstDraft(offerOf(one)).write.spaces).toEqual(["w-builder"]);
+    expect(firstDraft(offerOf(one)).write.spaces).toEqual([]);
   });
 
   it("no templates, no pod-wide read: every space its reads are offered in, as today", () => {
@@ -243,7 +250,7 @@ describe("what Allow sends", () => {
     });
   });
 
-  it("on today's wire: pod-wide reads as null, other reads in every offered space under All; writes in the picked spaces only", () => {
+  it("on today's wire: pod-wide reads as null under All, a read with no pod-wide form left out (named under In); writes in the picked spaces only", () => {
     const offer = offerOf(CHAT);
     const d = toggleWritePlace(firstDraft(offer), "space", "w-builder");
     const pairs = toApprovedPairs(d, offer);
@@ -251,10 +258,7 @@ describe("what Allow sends", () => {
       permission: "entity.task.read",
       workspaceId: null,
     });
-    expect(pairs).toContainEqual({
-      permission: "track.read",
-      workspaceId: "w-finance",
-    });
+    expect(pairs.some((p) => p.permission === "track.read")).toBe(false);
     expect(pairs).toContainEqual({
       permission: "session.update",
       workspaceId: "w-builder",
@@ -489,5 +493,93 @@ describe("what the connection holds: re-consent", () => {
     const b: ConsentDraft = { ...a, permissions: new Set(ids(a).reverse()) };
     expect(sameDraft(a, b)).toBe(true);
     expect(sameDraft(a, toggleWritePlace(a, "space", "w-builder"))).toBe(false);
+  });
+});
+
+describe("the W3d consent contract (be6caecc v1)", () => {
+  const sp = (id: string, name: string, templateSlug: string | null = null) => ({ id, name, templateSlug });
+  const contract = {
+    asked: {
+      permissions: [
+        { permission: "entity.task.read", tier: "read" as const, reason: " To show tasks. ", kindGroup: { permission: "entity.read", kinds: ["task"] }, allSpaces: true, offerable: true },
+        { permission: "track.read", tier: "read" as const, reason: null, kindGroup: null, allSpaces: false, offerable: true },
+        { permission: "session.update", tier: "write" as const, reason: null, kindGroup: null, allSpaces: false, offerable: true },
+        { permission: "agent.read", tier: "read" as const, reason: null, kindGroup: null, allSpaces: false, offerable: false },
+      ],
+      templates: ["content-os"],
+    },
+    places: {
+      read: { allSpaces: false, spaces: [sp("w-b", "Builder"), sp("w-c", "Content OS", "content-os")], projects: [{ id: "p-l", name: "Launch", workspaceId: "w-b" }] },
+      write: { spaces: [sp("w-c", "Content OS", "content-os")], projects: [], suggestedSpaceIds: ["w-c"] },
+    },
+    current: null,
+    reconsent: null,
+    ask: null,
+  };
+
+  it("is read only when the pod sends it", () => {
+    expect(contractOf({})).toBeNull();
+    expect(contractOf({ access: contract })).toBe(contract);
+  });
+
+  it("becomes this model's offer: tier places, pod-wide when allSpaces, nothing for what cannot be given", () => {
+    const offer = offerOfContract(contract);
+    expect(offer.items.map((i) => [i.permission, i.podWide, i.spaces.length, i.projects.length])).toEqual([
+      ["entity.task.read", true, 2, 1],
+      ["track.read", false, 2, 1],
+      ["session.update", false, 1, 0],
+      ["agent.read", false, 0, 0],
+    ]);
+    expect(offer.items[0]!.reason).toBe("To show tasks.");
+    expect(cantGive(offer, []).map((c) => c.permission)).toEqual(["agent.read"]);
+  });
+
+  it("a first draft writes only in the server's suggested spaces; under All a read with no pod-wide form is not sent", () => {
+    const offer = offerOfContract(contract);
+    const d = contractDraft(contract, offer);
+    expect(d.read).toEqual({ spaces: "all", projects: "all" });
+    expect(d.write).toEqual({ spaces: ["w-c"], projects: [] });
+    const access = toAccess(d, offer);
+    expect(access.permissions).toEqual(["entity.task.read", "session.update"]);
+    expect(notEverywhere(d, canRows(offer, "person"), offer)).toEqual(["goals"]);
+  });
+
+  it("a re-consent drafts the server's proposed form; now / was come from `was`", () => {
+    const proposed = {
+      version: 2 as const,
+      permissions: ["entity.task.read", "track.read"],
+      read: { spaces: [sp("w-b", "Builder"), sp("w-c", "Content OS")], projects: [] },
+      write: { spaces: [], projects: [] },
+    };
+    const c = {
+      ...contract,
+      reconsent: {
+        reason: "widens" as const,
+        was: [
+          { permission: "entity.task.read", place: { kind: "space" as const, id: "w-b", name: "Builder" } },
+          { permission: "track.read", place: { kind: "space" as const, id: "w-c", name: "Content OS" } },
+        ],
+        proposed,
+      },
+    };
+    const offer = offerOfContract(c);
+    const d = contractDraft(c, offer);
+    expect([...d.permissions]).toEqual(["entity.task.read", "track.read"]);
+    expect(d.read.spaces).toEqual(["w-b", "w-c"]);
+    const held = heldOfContract(c);
+    expect(held.kind).toBe("reconsent");
+    const changes = reconsentChanges(held, offer, canRows(offer, "person"), wasPairs(c.reconsent));
+    expect(changes.filter((x) => x.mark === "wider").map((x) => x.was)).toEqual(["in Builder", "in Content OS"]);
+    expect(namesOfNamed(proposed)).toEqual({ "w-b": "Builder", "w-c": "Content OS" });
+  });
+
+  it("a connected app's current access is what it holds", () => {
+    const current = {
+      version: 2 as const,
+      permissions: ["entity.task.read"],
+      read: { spaces: "all" as const, projects: "all" as const },
+      write: { spaces: [], projects: [] },
+    };
+    expect(heldOfContract({ ...contract, current })).toEqual({ kind: "access", access: accessOfNamed(current) });
   });
 });

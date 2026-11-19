@@ -279,7 +279,7 @@ export function InChoices({
         ))}
       </div>
     ) : null;
-  const missing = notEverywhere(draft, rows);
+  const missing = notEverywhere(draft, rows, offer);
   return (
     <div className="flex flex-col gap-4">
       <div
