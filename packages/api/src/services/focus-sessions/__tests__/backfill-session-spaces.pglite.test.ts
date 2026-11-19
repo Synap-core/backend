@@ -89,10 +89,10 @@ beforeAll(async () => {
     `insert into users (id, email, name, user_type) values ($1,'o@x.test','Owner','human'),($2,'x@x.test','Outsider','human')`,
     [OWNER, OUTSIDER]
   );
-  await q(`insert into workspaces (id, name, owner_id) values ($1,'Builder',$2)`, [
-    BUILDER,
-    OWNER,
-  ]);
+  await q(
+    `insert into workspaces (id, name, owner_id) values ($1,'Builder',$2)`,
+    [BUILDER, OWNER]
+  );
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
     [randomUUID(), BUILDER, OWNER]

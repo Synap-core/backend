@@ -96,7 +96,11 @@ export async function backfillSessionSpaces(opts: {
       userId: row.userId,
     });
     if (!check.ok) {
-      report.refused.push({ sessionId: row.id, workspaceId, reason: check.reason });
+      report.refused.push({
+        sessionId: row.id,
+        workspaceId,
+        reason: check.reason,
+      });
       continue;
     }
     if (opts.apply) {

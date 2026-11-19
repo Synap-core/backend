@@ -90,6 +90,7 @@ import * as schema from "@synap/database/schema";
 import {
   openRunSession,
   resolveSessionWorkspacePlacement,
+  workspaceMemberMayWrite,
 } from "@synap/database";
 import { createFocusSession } from "../create-session.js";
 import { applySessionWorkspaceMove } from "../move-session-workspace.js";
@@ -222,11 +223,16 @@ beforeAll(async () => {
   }
 }, 120_000);
 
-const ladder = (ctx: Record<string, unknown>) =>
+/** The ladder as the run door asks it: the actor's membership decides. */
+const ladder = ({
+  actor = AGENT,
+  ...ctx
+}: Record<string, unknown> & { actor?: string }) =>
   resolveSessionWorkspacePlacement(h.db as never, {
     userId: PERSON,
-    agentUserId: AGENT,
     ...ctx,
+    mayPlaceIn: (workspaceId) =>
+      workspaceMemberMayWrite(h.db as never, actor, workspaceId),
   });
 
 describe("the space ladder — each rung, in order (D1 a)", () => {
@@ -328,7 +334,7 @@ describe("a derived rung counts only where the actor may write", () => {
     // PERSON owns BUILDER; STRANGER is a member of nothing.
     expect(
       await ladder({
-        agentUserId: STRANGER,
+        actor: STRANGER,
         projectId: PROJECT.builderHome,
       })
     ).toEqual({ workspaceId: null, rung: null });
@@ -336,9 +342,8 @@ describe("a derived rung counts only where the actor may write", () => {
 
   it("CONTROL — a pod-wide subject filed for a space it CAN write places there", async () => {
     expect(
-      await resolveSessionWorkspacePlacement(h.db as never, {
-        userId: PERSON,
-        agentUserId: null,
+      await ladder({
+        actor: PERSON,
         subjectEntityId: SUBJECT.podWideForBrand,
       })
     ).toEqual({ workspaceId: null, rung: null }); // PERSON is not in BRAND
@@ -347,9 +352,8 @@ describe("a derived rung counts only where the actor may write", () => {
       [randomUUID(), BRAND, PERSON]
     );
     expect(
-      await resolveSessionWorkspacePlacement(h.db as never, {
-        userId: PERSON,
-        agentUserId: null,
+      await ladder({
+        actor: PERSON,
         subjectEntityId: SUBJECT.podWideForBrand,
       })
     ).toEqual({ workspaceId: BRAND, rung: "subject" });
@@ -366,10 +370,9 @@ describe("a derived rung counts only where the actor may write", () => {
 const sessionRow = async (r: unknown) => {
   const id = (r as { session: { id: string } }).session.id;
   return (
-    await q(
-      `select workspace_id, metadata from focus_sessions where id = $1`,
-      [id]
-    )
+    await q(`select workspace_id, metadata from focus_sessions where id = $1`, [
+      id,
+    ])
   ).rows[0] as {
     workspace_id: string | null;
     metadata: Record<string, unknown> | null;
@@ -499,14 +502,17 @@ describe("a copied space keeps its source's rung; a move restamps it", () => {
     });
     const id = (res as { session: { id: string } }).session.id;
     const move = (workspaceId: string | null) =>
-      (h.db as { transaction: (f: (tx: never) => Promise<void>) => Promise<void> })
-        .transaction((tx) =>
-          applySessionWorkspaceMove(tx, {
-            sessionId: id,
-            channelId: null,
-            workspaceId,
-          })
-        );
+      (
+        h.db as {
+          transaction: (f: (tx: never) => Promise<void>) => Promise<void>;
+        }
+      ).transaction((tx) =>
+        applySessionWorkspaceMove(tx, {
+          sessionId: id,
+          channelId: null,
+          workspaceId,
+        })
+      );
     await move(CONTENT);
     expect((await sessionRow(res)).metadata?.workspacePlacement).toEqual({
       rung: "explicit",
@@ -544,15 +550,19 @@ describe("an adopted receipt is re-homed through the move", () => {
       h.adoptee = null;
     }
     const row = (
-      await q(`select workspace_id, metadata from focus_sessions where id = $1`, [
-        receipt,
-      ])
+      await q(
+        `select workspace_id, metadata from focus_sessions where id = $1`,
+        [receipt]
+      )
     ).rows[0] as { workspace_id: string; metadata: Record<string, unknown> };
     expect(row.workspace_id).toBe(BUILDER);
     expect(row.metadata.workspacePlacement).toEqual({ rung: "project_home" });
     expect(
-      (await q(`select workspace_id, scope from channels where id = $1`, [room]))
-        .rows[0]
+      (
+        await q(`select workspace_id, scope from channels where id = $1`, [
+          room,
+        ])
+      ).rows[0]
     ).toEqual({ workspace_id: BUILDER, scope: "workspace" });
   });
 });

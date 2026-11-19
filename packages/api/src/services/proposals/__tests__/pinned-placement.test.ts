@@ -128,7 +128,10 @@ describe("a revise cannot change where a pending write lands or who it is shared
           data: { id: "s-2", goal: "Ship it" },
         },
         actorId: "u1",
-        patch: { kind: "inner", fields: { workspacePlacement: "project_home" } },
+        patch: {
+          kind: "inner",
+          fields: { workspacePlacement: "project_home" },
+        },
       })
     ).toThrow(/workspacePlacement/);
   });
