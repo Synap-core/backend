@@ -52968,14 +52968,21 @@
     "/brand/kit": {
       "get": {
         "tags": ["Brand"],
-        "summary": "The caller's brand kit (json, css, frame-md or od-design-system)",
-        "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
+        "summary": "The caller's brand kit (json, css, frame-md, od-design-system, dtcg or synap-css)",
+        "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. `dtcg` and `synap-css` render the brand's approved DTCG token set instead (the file, or its `--synap-*` declarations as JSON `{vars, light, dark}` with no selector), hashed by that set; a brand with none renders `{}` and empty declarations. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "enum": ["json", "css", "frame-md", "od-design-system"],
+              "enum": [
+                "json",
+                "css",
+                "frame-md",
+                "od-design-system",
+                "dtcg",
+                "synap-css"
+              ],
               "default": "json"
             },
             "required": false,
@@ -53005,7 +53012,14 @@
                   "properties": {
                     "format": {
                       "type": "string",
-                      "enum": ["json", "css", "frame-md", "od-design-system"]
+                      "enum": [
+                        "json",
+                        "css",
+                        "frame-md",
+                        "od-design-system",
+                        "dtcg",
+                        "synap-css"
+                      ]
                     },
                     "content": { "type": "string" },
                     "hash": { "type": "string" },
