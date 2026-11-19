@@ -592,7 +592,7 @@ describe("compare-and-set on the step", () => {
       outputs: [spec({ status: "done" })],
       stages,
     });
-    const step = await planStageWorkStep(id);
+    const step = await planStageWorkStep(id, { slotKey: "spec" });
     expect(step).toMatchObject({
       kind: "advance",
       fromStage: "build",
