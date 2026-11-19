@@ -1266,6 +1266,49 @@ describe("T5 — never wider than the consent; the app's lifecycle reaches it", 
     }
   });
 
+  // W3a: a sign-in scope pinned to a project (or objects) beside its spaces
+  // was read as those whole spaces, so narrowing re-minted it from pairs
+  // WITHOUT the pin: a narrower approval widened the token to every row of
+  // Sales. A MIXED token: its unpinned scope is kept (narrowed), its pinned
+  // scopes are dropped, never re-minted.
+  it.each(["project_ids", "entity_ids"])(
+    "narrowing keeps the unpinned scope and drops the one pinned by %s",
+    async (pin) => {
+      const t = await signIn(OWNER);
+      const keyId = (await keyRow(t)).id;
+      // Pin every scope the sign-in minted...
+      await q(
+        `update grants set ${pin} = $2::uuid[] where api_key_id = $1 and revoked_at is null`,
+        [keyId, `{${randomUUID()}}`]
+      );
+      // ...and add ONE unpinned scope beside them: read people in Sales.
+      await q(
+        `insert into grants (id, api_key_id, principal_user_id, on_behalf_of, permissions, workspace_ids, created_by, client_id, expires_at)
+         select gen_random_uuid(), api_key_id, principal_user_id, on_behalf_of, '{entity.person.read}'::text[], $2::uuid[], created_by, client_id, expires_at
+           from grants where api_key_id = $1 and revoked_at is null limit 1`,
+        [keyId, `{${SALES}}`]
+      );
+      const repo = new AppRepository(h.db as never);
+      await repo.setApprovedRequests(
+        appId,
+        APPROVED.filter((r) => r.workspaceId === SALES)
+      );
+      try {
+        await applyApprovedReach(appId);
+        expect((await keyRow(t)).is_active).toBe(true);
+        // Only the unpinned scope's pair survives; nothing of the pinned ones.
+        expect(await livePairs(keyId)).toEqual(["Sales:entity.person.read"]);
+        const pinned = await q<{ n: number }>(
+          `select count(*)::int as n from grants where api_key_id = $1 and revoked_at is null and (project_ids is not null or entity_ids is not null)`,
+          [keyId]
+        );
+        expect(pinned.rows[0]!.n).toBe(0);
+      } finally {
+        await repo.setApprovedRequests(appId, APPROVED);
+      }
+    }
+  );
+
   it("rotating the app's own key keeps the person signed in; revoking the app ends it", async () => {
     const t = await signIn(OWNER);
     appKey = (
