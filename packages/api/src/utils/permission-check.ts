@@ -5197,9 +5197,13 @@ export async function requestWorkspaceJoin(opts: {
     grant &&
     !grant.scopes.some((scope) => {
       const place = placeBeyondPodWideReads(scope);
+      // A project pin reads here as it did before projects were a place
+      // (no space narrowing); its projects narrow at `permits` (W1).
       return (
         place !== null &&
-        (place.kind === "unbounded" || place.ids.includes(workspaceId))
+        (place.kind === "unbounded" ||
+          place.kind === "projects" ||
+          place.ids.includes(workspaceId))
       );
     })
   ) {

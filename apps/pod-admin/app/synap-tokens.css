@@ -480,6 +480,36 @@
   --synap-bp-sm: 560px;
   --synap-bp-md: 900px;
   --synap-bp-lg: 1100px;
+  --synap-bp-medium: 600px;
+  --synap-bp-expanded: 1024px;
+
+  /* ── Page grid (Design app W3, plan 0fc746f4 §2.4, §2.5) ─────────────────
+   * The column grid of a page, per width class of the page grammar (compact < 600
+   * <= medium < 1024 <= expanded, measured on the page's container, never the
+   * device): 4 / 8 / 12 columns, and the gap between them as a space step. A
+   * project's brand may set them (`@synap-core/types/brand-kit` DTCG_TO_SYNAP).
+   * A container query cannot read a custom property: the widths stay literal in
+   * the CSS that switches class (pinned to PAGE_BREAKPOINTS). */
+  --synap-grid-columns-compact: 4;
+  --synap-grid-columns-medium: 8;
+  --synap-grid-columns-expanded: 12;
+  --synap-grid-gap-compact: var(--synap-space-200);
+  --synap-grid-gap-medium: var(--synap-space-300);
+  --synap-grid-gap-expanded: var(--synap-space-300);
+
+  /* ── Page gutter (Design app W3, plan 0fc746f4 §2.5) ─────────────────────
+   * The inline margin of a page's content, per width class: nothing on a page is
+   * glued to its border. `SpatialPageFrame`'s `--synap-page-gutter` reads the
+   * medium step. */
+  --synap-page-gutter-compact: var(--synap-space-200);
+  --synap-page-gutter-medium: var(--synap-space-300);
+  --synap-page-gutter-expanded: var(--synap-space-400);
+
+  /* ── Section rhythm (Design app W3, plan 0fc746f4 §2.5) ──────────────────
+   * The block padding of a page section, per width class. */
+  --synap-section-y-compact: var(--synap-space-600);
+  --synap-section-y-medium: var(--synap-space-800);
+  --synap-section-y-expanded: var(--synap-space-1000);
 
   /* ── Row heights (surfaces W0, 2026-10-12) ───────────────────────────────
    * The ONE height scale for list rows and cards, shared by web and relay:

@@ -33,6 +33,7 @@ const APPS_REMOVED = read("0312_apps_removed_at.sql");
 const APPS_AGENT = read("0313_apps_agent_user.sql");
 const APPS_OAUTH = read("0338b_pod_app_oauth_apps.sql");
 const APPS_SIGN_IN = read("0339_app_person_sign_in.sql");
+const APPS_ACCESS = read("0434_apps_approved_access.sql");
 
 const OWNER = "owner-1";
 const OTHER_OWNER = "owner-2";
@@ -76,6 +77,7 @@ beforeAll(async () => {
     CREATE TABLE oauth_authorization_codes (code_hash text PRIMARY KEY);`);
   await pg.exec(APPS_OAUTH);
   await pg.exec(APPS_SIGN_IN);
+  await pg.exec(APPS_ACCESS);
   // The pending projection reads only these `proposals` columns.
   await pg.exec(`CREATE TABLE proposals (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),

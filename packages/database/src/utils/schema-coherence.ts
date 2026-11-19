@@ -1214,6 +1214,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "approved_requests",
     addedBy: "0309_apps.sql",
   },
+  // apps.approved_access — the approval in its v2 form (0434, app permissions
+  // W2). Missing means every app read and approval write would 42703.
+  {
+    table: "apps",
+    column: "approved_access",
+    addedBy: "0434_apps_approved_access.sql",
+  },
   // apps.removed_at — "Remove for good" (0312). Missing means every app read
   // (`listForOwner` filters on it) would 42703.
   {
