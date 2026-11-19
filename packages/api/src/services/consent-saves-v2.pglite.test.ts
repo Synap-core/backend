@@ -807,7 +807,10 @@ describe("R1 — a forged v2 app/connect applies nothing (review of #1197, must-
   });
   beforeEach(async () => {
     await allow({
-      access: access({ permissions: [READ], read: { spaces: [BRAND], projects: [] } }),
+      access: access({
+        permissions: [READ],
+        read: { spaces: [BRAND], projects: [] },
+      }),
     });
   });
 
@@ -827,7 +830,10 @@ describe("R1 — a forged v2 app/connect applies nothing (review of #1197, must-
         targetType: "app",
         targetId: (await row())!.id,
         proposalType: "connect",
-        data: { access: wide, askedAccess: { permissions: [UNASKED], podWide: [] } },
+        data: {
+          access: wide,
+          askedAccess: { permissions: [UNASKED], podWide: [] },
+        },
       }),
     });
     expect(res.status).toBe(403);
@@ -837,8 +843,18 @@ describe("R1 — a forged v2 app/connect applies nothing (review of #1197, must-
   });
 
   it.each([
-    ["filed by an agent", { createdBy: "agent-of-owner", agentUserId: "agent-of-owner", via: "oauth-consent" }],
-    ["filed as the person but not by the consent door", { createdBy: OWNER, agentUserId: null, via: "access-ask" }],
+    [
+      "filed by an agent",
+      {
+        createdBy: "agent-of-owner",
+        agentUserId: "agent-of-owner",
+        via: "oauth-consent",
+      },
+    ],
+    [
+      "filed as the person but not by the consent door",
+      { createdBy: OWNER, agentUserId: null, via: "access-ask" },
+    ],
   ])("%s: refused, nothing stored", async (_label, who) => {
     const before = (await row())!.approved_access;
     const out = await fileAndApprove({
@@ -847,7 +863,10 @@ describe("R1 — a forged v2 app/connect applies nothing (review of #1197, must-
       data: {
         via: who.via,
         access: wide,
-        askedAccess: { permissions: [READ, NOTE_READ, CREATE, UNASKED], podWide: [READ] },
+        askedAccess: {
+          permissions: [READ, NOTE_READ, CREATE, UNASKED],
+          podWide: [READ],
+        },
         requests: [{ permission: READ, workspaceId: BRAND, scope: "space" }],
       },
     });
@@ -966,7 +985,10 @@ describe("R5 — an All-spaces connection never shows an Allow the server refuse
       }),
     });
     const ask = { synapAsk: `${NOTE_READ}@${BRAND}` };
-    const ctx = await getOAuthConsentContext(authorizeParams(ask) as never, OWNER);
+    const ctx = await getOAuthConsentContext(
+      authorizeParams(ask) as never,
+      OWNER
+    );
     expect(ctx.app!.access!.ask!.unavailable).toContain(`${NOTE_READ}@all`);
     await expectRefusedUnchanged(() => allow({}, ask), /in all spaces/);
   });
@@ -1053,8 +1075,9 @@ describe("R7 — person tokens and projects (review tests)", () => {
     const stored = (await new GrantRepository(h.db as never).resolveForKey(
       key.id
     ))!;
-    const reached = (g: { scopes: readonly { projectIds?: readonly string[] | null }[] }) =>
-      g.scopes.flatMap((s) => [...(s.projectIds ?? [])]).sort();
+    const reached = (g: {
+      scopes: readonly { projectIds?: readonly string[] | null }[];
+    }) => g.scopes.flatMap((s) => [...(s.projectIds ?? [])]).sort();
     expect(reached(await effectiveKeyGrant(key.id, stored))).toEqual(
       [temp, P_SOLO].sort()
     );

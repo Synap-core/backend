@@ -1013,9 +1013,10 @@ function askTitle(
     ])
   );
   const projectName = new Map(
-    [...offer.places.read.projects, ...offer.places.write.projects].map(
-      (x) => [x.id, x.name]
-    )
+    [...offer.places.read.projects, ...offer.places.write.projects].map((x) => [
+      x.id,
+      x.name,
+    ])
   );
   const placesOf = (tier: AppAccess["read"] | AppAccess["write"]): string => {
     const spaces: readonly string[] | "all" = tier.spaces;
@@ -1026,8 +1027,7 @@ function askTitle(
       ...(projectIds === "all"
         ? ["every project"]
         : projectIds.map(
-            (id) =>
-              `project ${projectName.get(id) ?? "you no longer see"}`
+            (id) => `project ${projectName.get(id) ?? "you no longer see"}`
           )),
     ];
     return `in ${named.join(", ")}`;
@@ -1106,13 +1106,7 @@ async function consentAccessBlock(
     const needsWritePlace =
       adds.some((i) => i.tier === "write") && !hasWritePlace(current);
     accessAsk = {
-      title: askTitle(
-        client.clientName,
-        current,
-        adds,
-        needsWritePlace,
-        offer
-      ),
+      title: askTitle(client.clientName, current, adds, needsWritePlace, offer),
       adds,
       needsWritePlace,
       unavailable: [
@@ -1133,7 +1127,9 @@ async function consentAccessBlock(
     asked: offer.asked,
     places: offer.places,
     current: current ? await nameAppAccess(current, callerUserId) : null,
-    reconsent: approval ? await reconsentViewOf(approval, callerUserId, offer.ceiling) : null,
+    reconsent: approval
+      ? await reconsentViewOf(approval, callerUserId, offer.ceiling)
+      : null,
     ask: accessAsk,
   };
 }

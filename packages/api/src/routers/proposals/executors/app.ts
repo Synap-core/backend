@@ -550,7 +550,9 @@ async function addPairsThroughAccess(
       const first = permissions.filter((p) => !isReadPermission(p));
       const at = (p: string) =>
         writes.filter((r) => r.permission === p).map((r) => r.workspaceId);
-      if (first.some((p) => !same(at(p) as string[], at(first[0]!) as string[]))) {
+      if (
+        first.some((p) => !same(at(p) as string[], at(first[0]!) as string[]))
+      ) {
         state.refusal = placeChanges();
         return null;
       }

@@ -635,28 +635,31 @@ describe("appAccessBeyond — ceiling variants (review of #1197)", () => {
       ["*", "entity.*.read", "entity.read", W_UNASKED],
     ],
   ];
-  it.each(variants)("%s: never beyond, no phantom", (_label, ceiling, perms) => {
-    const allProjects = [...ceiling.read.projects];
-    const mintIt = (a: AppAccess) => grantScopesForAccess(a, { allProjects });
-    const ceilingTable = permitsTable(ceilingScopes(ceiling));
-    const ceilingPlaces = placement(ceilingScopes(ceiling));
-    let valid = 0;
-    for (const access of accessUniverse(perms)) {
-      if (appAccessBeyond(access, ceiling).length > 0) continue;
-      valid++;
-      const grants = mintIt(access);
-      const table = permitsTable(grants);
-      if (
-        !subsetOf(table, ceilingTable) ||
-        !placedWithin(placement(grants), ceilingPlaces)
-      )
-        throw new Error(`widens: ${JSON.stringify(access)}`);
-      const doc = permitsTable(documentScopes(access, allProjects));
-      if ([...doc].sort().join() !== [...table].sort().join())
-        throw new Error(`phantom: ${JSON.stringify(access)}`);
+  it.each(variants)(
+    "%s: never beyond, no phantom",
+    (_label, ceiling, perms) => {
+      const allProjects = [...ceiling.read.projects];
+      const mintIt = (a: AppAccess) => grantScopesForAccess(a, { allProjects });
+      const ceilingTable = permitsTable(ceilingScopes(ceiling));
+      const ceilingPlaces = placement(ceilingScopes(ceiling));
+      let valid = 0;
+      for (const access of accessUniverse(perms)) {
+        if (appAccessBeyond(access, ceiling).length > 0) continue;
+        valid++;
+        const grants = mintIt(access);
+        const table = permitsTable(grants);
+        if (
+          !subsetOf(table, ceilingTable) ||
+          !placedWithin(placement(grants), ceilingPlaces)
+        )
+          throw new Error(`widens: ${JSON.stringify(access)}`);
+        const doc = permitsTable(documentScopes(access, allProjects));
+        if ([...doc].sort().join() !== [...table].sort().join())
+          throw new Error(`phantom: ${JSON.stringify(access)}`);
+      }
+      expect(valid).toBeGreaterThan(0);
     }
-    expect(valid).toBeGreaterThan(0);
-  });
+  );
 });
 
 describe("withoutDormantPermissions — Q4 never switches on a stored dormant write", () => {

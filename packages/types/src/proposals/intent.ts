@@ -816,10 +816,9 @@ export function summarizeAppAccessProposal(input: {
   for (const id of access.write.projects)
     line(writes, { kind: "projects", ids: [id] }, null);
   const title = `${input.appName} asks for access`;
-  const sentence = describeAccess(
-    accessModel(documentScopes(access), "app"),
-    { names }
-  ).sentence;
+  const sentence = describeAccess(accessModel(documentScopes(access), "app"), {
+    names,
+  }).sentence;
   return {
     appName: input.appName,
     title,

@@ -3362,8 +3362,7 @@ async function placeNames(
           )
           .then((rows) => new Set(rows.map((r) => r.id))),
   ]);
-  const seesSpace = (id: string) =>
-    trusted || (seenSpaces?.has(id) ?? false);
+  const seesSpace = (id: string) => trusted || (seenSpaces?.has(id) ?? false);
   const seesProject = (id: string) =>
     trusted || (seenProjects?.has(id) ?? false);
   const [spaceRows, projectRows] = await Promise.all([
@@ -3790,11 +3789,9 @@ export async function connectOAuthAppAccess(args: {
   // The card reads `access` (what is applied) and names its places from this
   // (review of #1197): every space and project it names, as the person sees.
   const accessIds = accessPlaceIds(access);
-  const accessNameOf = await placeNames(
-    accessIds.spaces,
-    accessIds.projects,
-    { userId: args.ownerUserId }
-  );
+  const accessNameOf = await placeNames(accessIds.spaces, accessIds.projects, {
+    userId: args.ownerUserId,
+  });
   const accessNames: Record<string, string> = Object.fromEntries([
     ...accessIds.spaces.map((id) => [id, accessNameOf.space(id).name]),
     ...accessIds.projects.map((id) => [id, accessNameOf.project(id).name]),
