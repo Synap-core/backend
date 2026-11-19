@@ -2327,7 +2327,7 @@
           },
           "expectedStage": {
             "type": ["string", "null"],
-            "description": "With `currentStage`: the stage you read. A step moves on by itself once its work is met: if it moved, status='conflict' and nothing is written."
+            "description": "With `currentStage`: the stage you read; required to move back. If it moved: status='conflict' and nothing is written."
           },
           "stageRunner": {
             "description": "With currentStage: who works it (system/synap/processes)."
