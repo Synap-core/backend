@@ -141,7 +141,7 @@ describe("the short consent", () => {
     expect(allow(out)).toContain("disabled");
   });
 
-  it("U4/Q4: no write place yet: the ask's own space is pre-ticked and tagged Asked, only places within In, and no \\"never changes where it works\\"", () => {
+  it("U4/Q4: no write place yet: the ask's own space is pre-ticked and tagged Asked, only places within In, and no “never changes where it works”", () => {
     const offer = offerOf(APP);
     const draft = { ...firstDraft(offer), write: { spaces: ["ws-content"], projects: [] } };
     const out = html(ASK, { writePlace: draft });
