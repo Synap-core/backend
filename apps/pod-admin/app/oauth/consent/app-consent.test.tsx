@@ -43,10 +43,26 @@ import {
 
 type App = ComponentProps<typeof AppConsent>["app"];
 
-const BUILDER = { workspaceId: "w-builder", workspaceName: "Builder", templateSlug: null };
-const CONTENT = { workspaceId: "w-content", workspaceName: "Content OS", templateSlug: "content-os" };
-const ECO = { workspaceId: "w-eco", workspaceName: "Ecosystem", templateSlug: "ecosystem" };
-const FINANCE = { workspaceId: "w-finance", workspaceName: "Finance", templateSlug: null };
+const BUILDER = {
+  workspaceId: "w-builder",
+  workspaceName: "Builder",
+  templateSlug: null,
+};
+const CONTENT = {
+  workspaceId: "w-content",
+  workspaceName: "Content OS",
+  templateSlug: "content-os",
+};
+const ECO = {
+  workspaceId: "w-eco",
+  workspaceName: "Ecosystem",
+  templateSlug: "ecosystem",
+};
+const FINANCE = {
+  workspaceId: "w-finance",
+  workspaceName: "Finance",
+  templateSlug: null,
+};
 
 const KINDS = ["task", "person", "deal"];
 const GROUP = { permission: "entity.read", kinds: KINDS };
@@ -66,12 +82,28 @@ const CHAT = {
   ...base,
   domain: "chat.synap.live",
   permissions: [
-    { permission: "session.update", workspaces: [BUILDER, CONTENT], reason: "To answer a run, as you." },
-    { permission: "track.read", workspaces: [BUILDER, CONTENT, FINANCE], reason: null },
-    { permission: "proposal.approve", workspaces: [BUILDER, CONTENT], reason: null },
+    {
+      permission: "session.update",
+      workspaces: [BUILDER, CONTENT],
+      reason: "To answer a run, as you.",
+    },
+    {
+      permission: "track.read",
+      workspaces: [BUILDER, CONTENT, FINANCE],
+      reason: null,
+    },
+    {
+      permission: "proposal.approve",
+      workspaces: [BUILDER, CONTENT],
+      reason: null,
+    },
   ],
   podWide: [
-    ...KINDS.map((k) => ({ permission: `entity.${k}.read`, reason: "To show records.", kindGroup: GROUP })),
+    ...KINDS.map((k) => ({
+      permission: `entity.${k}.read`,
+      reason: "To show records.",
+      kindGroup: GROUP,
+    })),
     { permission: "session.read", reason: null, kindGroup: null },
   ],
   templates: [],
@@ -82,9 +114,21 @@ const STUDIO = {
   ...base,
   domain: "studio.synap.live",
   permissions: [
-    { permission: "entity.post.read", workspaces: [BUILDER, CONTENT, ECO], reason: null },
-    { permission: "entity.post.create", workspaces: [BUILDER, CONTENT, ECO], reason: "To draft your posts." },
-    { permission: "document.read", workspaces: [BUILDER, CONTENT, ECO], reason: null },
+    {
+      permission: "entity.post.read",
+      workspaces: [BUILDER, CONTENT, ECO],
+      reason: null,
+    },
+    {
+      permission: "entity.post.create",
+      workspaces: [BUILDER, CONTENT, ECO],
+      reason: "To draft your posts.",
+    },
+    {
+      permission: "document.read",
+      workspaces: [BUILDER, CONTENT, ECO],
+      reason: null,
+    },
   ],
   podWide: [],
   templates: ["content-os", "ecosystem"],
@@ -92,13 +136,19 @@ const STUDIO = {
 
 const html = (el: ReactElement) => render(<Card>{el}</Card>);
 
-function consent(app: App, draft?: ConsentDraft, step: Step = { kind: "idle" }) {
+function consent(
+  app: App,
+  draft?: ConsentDraft,
+  step: Step = { kind: "idle" }
+) {
   const offer = offerOf(app);
   const d = draft ?? reconsentDraft(heldAccessOf(app.approved), offer);
   return html(
     <AppConsent
       app={app}
-      appName={app.domain === "chat.synap.live" ? "Synap Chat" : "Content Studio"}
+      appName={
+        app.domain === "chat.synap.live" ? "Synap Chat" : "Content Studio"
+      }
       registeredAt={new Date("2026-10-01T00:00:00Z")}
       redirectHost={app.domain}
       draft={d}
@@ -106,7 +156,11 @@ function consent(app: App, draft?: ConsentDraft, step: Step = { kind: "idle" }) 
       onSpaceCreated={() => {}}
       busy={false}
       step={step}
-      blockedReason={draftBlockedReason(d, offer, canRows(offer, app.actsAs.kind))}
+      blockedReason={draftBlockedReason(
+        d,
+        offer,
+        canRows(offer, app.actsAs.kind)
+      )}
       onDecide={() => {}}
     />
   );
@@ -131,7 +185,9 @@ describe("first connect (design A)", () => {
     expect(out).toContain('aria-live="polite"');
     expect(out).toContain(">Review<");
     expect(out.match(/aria-haspopup="dialog"/g)).toHaveLength(3);
-    expect(out).toContain("Every space and every project, including ones you create later");
+    expect(out).toContain(
+      "Every space and every project, including ones you create later"
+    );
     expect(out).toMatch(/View<\/span> records \(3 kinds\)/);
     expect(out).not.toContain("Customize");
     expect(out).not.toContain("Everywhere in your pod</p>");
@@ -145,7 +201,9 @@ describe("first connect (design A)", () => {
     const button = allow(out);
     expect(button).toContain("disabled");
     expect(button).toMatch(/aria-describedby="[^"]+-blocked"/);
-    expect(out).toContain("Pick where it can make changes, or set Jobs to View.");
+    expect(out).toContain(
+      "Pick where it can make changes, or set Jobs to View."
+    );
   });
 
   it("templates: its template spaces are picked; Allow may be pressed", () => {
@@ -162,7 +220,9 @@ describe("first connect (design A)", () => {
     expect(out).toContain("It acts as you.");
     expect(out).toContain("Sends you back to");
     expect(out).toContain("First seen");
-    expect(out.match(/Revoking there stops it in every browser/g)).toHaveLength(1);
+    expect(out.match(/Revoking there stops it in every browser/g)).toHaveLength(
+      1
+    );
   });
 });
 
@@ -212,7 +272,10 @@ describe("asks for something you can't give", () => {
 
 describe("Allow failed", () => {
   it("a danger alert above the buttons, the choices kept, Allow becomes Try again", () => {
-    const out = consent(STUDIO, undefined, { kind: "error", message: "Pod did not answer" });
+    const out = consent(STUDIO, undefined, {
+      kind: "error",
+      message: "Pod did not answer",
+    });
     expect(out).toContain('role="alert"');
     expect(out).toContain("Couldn’t connect Content Studio");
     expect(out).toContain("Nothing was given. Your choices are kept.");
@@ -230,7 +293,12 @@ describe("loading and read failed", () => {
 
   it("read failed: the retry inside the failure, saying nothing was given", () => {
     const out = html(
-      <ReadFailed onRetry={() => {}} retrying={false} onDecline={() => {}} busy={false} />
+      <ReadFailed
+        onRetry={() => {}}
+        retrying={false}
+        onDecline={() => {}}
+        busy={false}
+      />
     );
     expect(out).toContain('role="alert"');
     expect(out).toContain("Couldn’t read what this app asks for");
@@ -268,14 +336,27 @@ describe("the sheets' choices", () => {
   it("In: All spaces with its hint, and every project included under All", () => {
     const offer = offerOf({
       ...CHAT,
-      permissions: (CHAT.permissions as Array<Record<string, unknown>>).map((p) => ({
-        ...p,
-        projects: [{ projectId: "p-launch", projectName: "Launch v1", workspaceId: "w-builder" }],
-      })),
+      permissions: (CHAT.permissions as unknown as Array<Record<string, unknown>>).map(
+        (p) => ({
+          ...p,
+          projects: [
+            {
+              projectId: "p-launch",
+              projectName: "Launch v1",
+              workspaceId: "w-builder",
+            },
+          ],
+        })
+      ),
     } as unknown as App);
     const rows = canRows(offer, "person");
     const all = html(
-      <InChoices draft={firstDraft(offer)} offer={offer} rows={rows} onChange={() => {}} />
+      <InChoices
+        draft={firstDraft(offer)}
+        offer={offer}
+        rows={rows}
+        onChange={() => {}}
+      />
     );
     expect(all).toContain("All spaces");
     expect(all).toContain("Includes spaces you create later.");
@@ -284,7 +365,10 @@ describe("the sheets' choices", () => {
     // A read with no pod-wide form is named, never dropped silently.
     expect(all).toContain("With all spaces it still cannot see goals");
 
-    const picked = toggleReadSpace(setReadSpacesMode(firstDraft(offer), offer, "pick"), "w-builder");
+    const picked = toggleReadSpace(
+      setReadSpacesMode(firstDraft(offer), offer, "pick"),
+      "w-builder"
+    );
     const pick = html(
       <InChoices draft={picked} offer={offer} rows={rows} onChange={() => {}} />
     );
@@ -298,12 +382,21 @@ describe("the sheets' choices", () => {
   it("In, person has no projects: All (none yet, includes later) and No projects; never a disabled pick", () => {
     const offer = offerOf({
       ...STUDIO,
-      permissions: (STUDIO.permissions as Array<Record<string, unknown>>).map((p) => ({ ...p, projects: [] })),
+      permissions: (STUDIO.permissions as unknown as Array<Record<string, unknown>>).map(
+        (p) => ({ ...p, projects: [] })
+      ),
     } as unknown as App);
     const out = html(
-      <InChoices draft={firstDraft(offer)} offer={offer} rows={canRows(offer, "person")} onChange={() => {}} />
+      <InChoices
+        draft={firstDraft(offer)}
+        offer={offer}
+        rows={canRows(offer, "person")}
+        onChange={() => {}}
+      />
     );
-    expect(out).toContain("You have no projects yet. This includes the ones you create later.");
+    expect(out).toContain(
+      "You have no projects yet. This includes the ones you create later."
+    );
     expect(out).toContain("No projects");
     expect(out).not.toContain("Only the projects I pick");
   });
@@ -311,7 +404,12 @@ describe("the sheets' choices", () => {
   it("In, before the server offers projects: the Projects choice is omitted, not guessed", () => {
     const offer = offerOf(STUDIO);
     const out = html(
-      <InChoices draft={firstDraft(offer)} offer={offer} rows={canRows(offer, "person")} onChange={() => {}} />
+      <InChoices
+        draft={firstDraft(offer)}
+        offer={offer}
+        rows={canRows(offer, "person")}
+        onChange={() => {}}
+      />
     );
     expect(out).not.toContain("All projects");
   });
@@ -319,7 +417,11 @@ describe("the sheets' choices", () => {
   it("It changes things in: only places it may change; view-only spaces named once; no everywhere", () => {
     const offer = offerOf(CHAT);
     const out = html(
-      <WriteChoices draft={firstDraft(offer)} offer={offer} onChange={() => {}} />
+      <WriteChoices
+        draft={firstDraft(offer)}
+        offer={offer}
+        onChange={() => {}}
+      />
     );
     expect(out).toContain("Builder");
     expect(out).toContain("Content OS");

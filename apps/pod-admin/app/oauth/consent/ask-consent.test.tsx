@@ -9,11 +9,20 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup as render } from "react-dom/server";
 import { Card } from "@heroui/react";
-import { AskConsent, askCount, type AskApp, type ConsentAsk } from "./AskConsent";
+import {
+  AskConsent,
+  askCount,
+  type AskApp,
+  type ConsentAsk,
+} from "./AskConsent";
 import { offerOf, firstDraft } from "./consent-access";
 import type { Step } from "./ConsentForm";
 
-const CONTENT = { workspaceId: "ws-content", workspaceName: "Content OS", templateSlug: null };
+const CONTENT = {
+  workspaceId: "ws-content",
+  workspaceName: "Content OS",
+  templateSlug: null,
+};
 
 const ASK: ConsentAsk = {
   title: "Content Studio asks to read notes in Content OS",
@@ -31,7 +40,11 @@ const ASK: ConsentAsk = {
 const APP: AskApp = {
   permissions: [
     { permission: "entity.post.read", workspaces: [CONTENT], reason: null },
-    { permission: "entity.note.read", workspaces: [CONTENT], reason: "To quote your notes in a post." },
+    {
+      permission: "entity.note.read",
+      workspaces: [CONTENT],
+      reason: "To quote your notes in a post.",
+    },
   ],
   podWide: [],
   templates: [],
@@ -43,7 +56,10 @@ const html = (
   opts: { app?: AskApp; step?: Step; writePlace?: boolean } = {}
 ) => {
   const app = opts.app ?? APP;
-  const draft = { ...firstDraft(offerOf(app)), write: { spaces: [], projects: [] } };
+  const draft = {
+    ...firstDraft(offerOf(app)),
+    write: { spaces: [], projects: [] },
+  };
   return render(
     <Card>
       <AskConsent
@@ -82,7 +98,7 @@ describe("the short consent", () => {
   it("links the app's page only once it is connected", () => {
     expect(html(ASK)).toContain('href="/apps/app_123"');
     expect(html({ ...ASK, connectionPublicId: null })).not.toContain(
-      "href=\"/apps/"
+      'href="/apps/'
     );
   });
 
@@ -98,11 +114,24 @@ describe("the short consent", () => {
       ...APP,
       permissions: [
         ...APP.permissions,
-        { permission: "entity.task.update", workspaces: [CONTENT], reason: null },
+        {
+          permission: "entity.task.update",
+          workspaces: [CONTENT],
+          reason: null,
+        },
       ],
     };
     const out = html(
-      { ...ASK, pairs: [{ permission: "entity.task.update", workspaceId: "ws-content", workspaceName: "Content OS" }] },
+      {
+        ...ASK,
+        pairs: [
+          {
+            permission: "entity.task.update",
+            workspaceId: "ws-content",
+            workspaceName: "Content OS",
+          },
+        ],
+      },
       { app, writePlace: true }
     );
     expect(out).toContain("Pick where it can make this change");

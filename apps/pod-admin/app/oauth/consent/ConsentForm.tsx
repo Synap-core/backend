@@ -417,19 +417,16 @@ export function ConsentForm({
                 />
               ))}
 
-            {context.data &&
-              app &&
-              ask &&
-              step.kind !== "denied" && (
-                <AskConsent
-                  app={app}
-                  appName={appName}
-                  ask={ask}
-                  busy={busy}
-                  step={step}
-                  onDecide={act}
-                />
-              )}
+            {context.data && app && ask && step.kind !== "denied" && (
+              <AskConsent
+                app={app}
+                appName={appName}
+                ask={ask}
+                busy={busy}
+                step={step}
+                onDecide={act}
+              />
+            )}
 
             {context.data &&
               app &&
@@ -931,7 +928,10 @@ export function AppConsent({
         </p>
         <div className="flex flex-wrap items-baseline gap-x-1.5 text-xs text-foreground/65">
           <span>{t("facts.sendsBack")}</span>
-          <HostName host={redirectHost} className="text-xs text-foreground/90" />
+          <HostName
+            host={redirectHost}
+            className="text-xs text-foreground/90"
+          />
           <span aria-hidden>·</span>
           <span>
             {t("facts.firstSeen")} {formatRelative(registeredAt)}
@@ -1039,19 +1039,25 @@ export function ReconsentCallout({
       data-reconsent
       className="flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
     >
-      <Info className="mt-0.5 h-4 w-4 shrink-0 text-foreground/75" aria-hidden />
+      <Info
+        className="mt-0.5 h-4 w-4 shrink-0 text-foreground/75"
+        aria-hidden
+      />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         {moved.length > 0 ? (
           <>
             <p id={`${id}-t`} className="text-sm font-medium text-foreground">
-              {t("reconsent.title", { n: moved.length + (fresh.length > 0 ? 1 : 0) })}
+              {t("reconsent.title", {
+                n: moved.length + (fresh.length > 0 ? 1 : 0),
+              })}
             </p>
             <p className="text-pretty text-xs leading-relaxed text-foreground/75">
               {t("reconsent.body", { name: appName })}
             </p>
             <ul className="flex flex-col gap-2">
               {moved.map((c) => {
-                const off = c.mark === "wider" && !draft.permissions.has(c.permission);
+                const off =
+                  c.mark === "wider" && !draft.permissions.has(c.permission);
                 return (
                   <li key={c.key} className="flex items-start gap-2">
                     <span
@@ -1062,10 +1068,16 @@ export function ReconsentCallout({
                     </span>
                     <span className="flex min-w-0 flex-col">
                       <span className="sr-only">
-                        {c.mark === "wider" ? t("reconsent.wider") : t("reconsent.narrower")}:{" "}
+                        {c.mark === "wider"
+                          ? t("reconsent.wider")
+                          : t("reconsent.narrower")}
+                        :{" "}
                       </span>
-                      <span className={`text-sm ${off ? "text-foreground/65 line-through" : "text-foreground/90"}`}>
-                        {c.what} <strong className="font-medium">{c.now}</strong>
+                      <span
+                        className={`text-sm ${off ? "text-foreground/65 line-through" : "text-foreground/90"}`}
+                      >
+                        {c.what}{" "}
+                        <strong className="font-medium">{c.now}</strong>
                       </span>
                       {off ? (
                         <span className="text-xs text-foreground/65">
@@ -1118,7 +1130,9 @@ export function ReconsentCallout({
                   {c.reason ? (
                     <span className="text-pretty text-xs leading-relaxed text-foreground/75">
                       {/* The developer's words, as text: why it asks. */}
-                      <span className="text-foreground/65">{t("reason.prefix")} </span>
+                      <span className="text-foreground/65">
+                        {t("reason.prefix")}{" "}
+                      </span>
                       {c.reason}
                     </span>
                   ) : null}

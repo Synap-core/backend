@@ -51,7 +51,9 @@ export function KindsGroupRow({
   // The requests as declared ("entity.read · kinds: 29"), never hidden.
   const declared = [
     ...new Set(
-      row.permissions.map((p) => p.permission.replace(/^entity\.[^.]+\./, "entity."))
+      row.permissions.map((p) =>
+        p.permission.replace(/^entity\.[^.]+\./, "entity.")
+      )
     ),
   ].join(" · ");
   return (

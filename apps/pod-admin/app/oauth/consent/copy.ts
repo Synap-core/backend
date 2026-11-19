@@ -61,7 +61,8 @@ export const en = {
   "write.asked": "Asked",
   "write.viewOnly":
     "{names} {n, plural, one {isn’t listed: you can only view it.} other {aren’t listed: you can only view them.}}",
-  "write.noEverywhere": "Pick each place. There is no “everywhere” for changes.",
+  "write.noEverywhere":
+    "Pick each place. There is no “everywhere” for changes.",
   "write.noPlace": "You have no space where it could make changes.",
   "kinds.count": "{n, plural, one {# kind} other {# kinds}}",
   "kinds.all": "All {n} kinds it asked for",
@@ -84,7 +85,8 @@ export const en = {
   "cant.title":
     "{n, plural, one {It also asked for # thing you can’t give} other {It also asked for # things you can’t give}}",
   "cant.notGiven": "Not given",
-  "cant.rest": "It still connects with the rest. If it needs these, it will tell you.",
+  "cant.rest":
+    "It still connects with the rest. If it needs these, it will tell you.",
   "facts.sendsBack": "Sends you back to",
   "facts.firstSeen": "First seen",
   "act.allow": "Allow",
@@ -96,7 +98,8 @@ export const en = {
   "allowFailed.hint": "Nothing was given. Your choices are kept.",
   "revoke.before": "You can change or revoke it any time from",
   "revoke.link": "Connected",
-  "revoke.after": ". Revoking there stops it in every browser, not just this one.",
+  "revoke.after":
+    ". Revoking there stops it in every browser, not just this one.",
   "loading.label": "Loading what this app asks for",
   "readFailed.title": "Couldn’t read what this app asks for",
   "readFailed.hint": "Your pod did not answer. Nothing was given.",
@@ -104,7 +107,8 @@ export const en = {
   "ask.title":
     "{name} asks for {n, plural, one {one more thing} other {# more things}}",
   "ask.where": "in {where}",
-  "ask.stays": "Asking for more never changes where it works. To change that, open",
+  "ask.stays":
+    "Asking for more never changes where it works. To change that, open",
   "ask.page": "its page",
   "ask.pickFor": "Pick where it can make this change",
   "ask.newChoice": "It changes nothing yet, so this is a new choice.",
@@ -131,7 +135,8 @@ export const en = {
     "It keeps working as before. You confirm the new form the next time you sign in to it.",
   "blocked.noSpace": "You have no space to give it yet.",
   "blocked.nothing": "Turn on at least one thing it asks for.",
-  "blocked.writeOrView": "Pick where it can make changes, or set {names} to View.",
+  "blocked.writeOrView":
+    "Pick where it can make changes, or set {names} to View.",
   "blocked.write": "Pick where it can make changes.",
   "blocked.read": "Pick at least one space or project it can work in.",
   "reconsent.keepKinds": "Keep to the {n} kinds",
@@ -139,7 +144,8 @@ export const en = {
   "reconsent.noLonger": "no longer {where}",
   "reconsent.nowhere": "nowhere",
   "cant.ignored": "Apps are never given this.",
-  "cant.noWriteSpace": "You have no space where you can let it make this change.",
+  "cant.noWriteSpace":
+    "You have no space where you can let it make this change.",
   "cant.noReadSpace": "You have no space where you can let it see this.",
 } as const;
 
@@ -186,8 +192,7 @@ export const fr: Catalog<typeof en> = {
   "in.notEverywhere":
     "Avec tous les espaces, il ne voit toujours pas {names} : ils ne valent que dans les espaces que vous choisissez.",
   "in.nowhere": "Nulle part pour l’instant",
-  "in.every":
-    "Chaque espace et chaque projet, y compris ceux que vous créerez",
+  "in.every": "Chaque espace et chaque projet, y compris ceux que vous créerez",
   "in.union":
     "Il atteint une fiche lorsqu’elle est dans un espace choisi, ou classée dans un projet choisi. Les fiches d’un projet hors de vos espaces choisis sont incluses.",
   "write.spaces": "Espaces",
@@ -197,7 +202,8 @@ export const fr: Catalog<typeof en> = {
     "{names} {n, plural, one {n’apparaît pas : vous pouvez seulement le consulter.} other {n’apparaissent pas : vous pouvez seulement les consulter.}}",
   "write.noEverywhere":
     "Choisissez chaque lieu. Il n’y a pas de « partout » pour les modifications.",
-  "write.noPlace": "Vous n’avez aucun espace où il pourrait faire des modifications.",
+  "write.noPlace":
+    "Vous n’avez aucun espace où il pourrait faire des modifications.",
   "kinds.count": "{n, plural, one {# type} other {# types}}",
   "kinds.all": "Les {n} types demandés",
   "kinds.on": "{n} activés",
@@ -230,7 +236,8 @@ export const fr: Catalog<typeof en> = {
   "act.tryAgain": "Réessayer",
   "allowFailed.title": "Impossible de connecter {name}",
   "allowFailed.hint": "Rien n’a été accordé. Vos choix sont gardés.",
-  "revoke.before": "Vous pouvez le modifier ou le révoquer à tout moment depuis",
+  "revoke.before":
+    "Vous pouvez le modifier ou le révoquer à tout moment depuis",
   "revoke.link": "Connectés",
   "revoke.after":
     ". Le révoquer là-bas l’arrête dans tous les navigateurs, pas seulement celui-ci.",
@@ -273,7 +280,8 @@ export const fr: Catalog<typeof en> = {
   "blocked.writeOrView":
     "Choisissez où il peut faire des modifications, ou réglez {names} sur Voir.",
   "blocked.write": "Choisissez où il peut faire des modifications.",
-  "blocked.read": "Choisissez au moins un espace ou un projet où il peut travailler.",
+  "blocked.read":
+    "Choisissez au moins un espace ou un projet où il peut travailler.",
   "reconsent.keepKinds": "Garder les {n} types",
   "reconsent.turnOff": "Désactiver : {what}",
   "reconsent.noLonger": "plus {where}",

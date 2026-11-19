@@ -113,9 +113,7 @@ export function AppAccessSection({
         onClose={() => setPending(null)}
         onConfirm={() => void applyPending()}
         title={t("page.confirmTitle", { name: appName })}
-        consequence={
-          <p>{t("page.confirmBody", { name: appName })}</p>
-        }
+        consequence={<p>{t("page.confirmBody", { name: appName })}</p>}
         confirmLabel={t("sheet.save")}
         isPending={saving}
       />
