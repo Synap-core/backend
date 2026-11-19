@@ -72,6 +72,10 @@ import {
   existingEntitiesGrantMayFile,
   fileEntitiesGoverned,
 } from "../services/projects/file-entities.js";
+import { withProposalTargetPlace } from "./proposal-target-place.js";
+import { assertMayDecideProposalAt } from "../routers/proposals/review-authority.js";
+import { startOrchestrator } from "../services/focus-sessions/start-orchestrator.js";
+import { gateSessionFiling } from "../services/focus-sessions/session-filing-gate.js";
 
 const ALICE = randomUUID();
 const W = randomUUID();
@@ -94,12 +98,29 @@ const REL = {
 };
 const SESS = { p: randomUUID(), q: randomUUID(), n: randomUUID() };
 const CH = {
-  room: randomUUID(), // the room of SESS.p
-  pinned: randomUUID(), // channels.project_id = P
-  ofEntity: randomUUID(), // the channel of E.p
+  room: randomUUID(), // the room of SESS.p — the ONE channel a P pin reads
+  pinned: randomUUID(), // a GROUP room tagged channels.project_id = P
+  ofEntity: randomUUID(), // the thread of E.p (filed in P)
+  external: randomUUID(), // a person's external channel; the person is in P
   none: randomUUID(),
 };
-const PROP = { p: randomUUID(), q: randomUUID(), n: randomUUID() };
+/** A person filed in P, whose external channel is CH.external. */
+const PERSON = randomUUID();
+/**
+ * In P by TARGET, never by `project_id` (a provenance tag):
+ *   p    — about E.p (in P), stamped Q;
+ *   q    — about E.q (in Q), STAMPED P: the receipt the review found;
+ *   n    — about E.n (no project), stamped P;
+ *   sess — about SESS.p; trk — about TRACK.p; odd — an unknown target type.
+ */
+const PROP = {
+  p: randomUUID(),
+  q: randomUUID(),
+  n: randomUUID(),
+  sess: randomUUID(),
+  trk: randomUUID(),
+  odd: randomUUID(),
+};
 const VIEW = { p: randomUUID(), q: randomUUID(), n: randomUUID() };
 const TRACK = { p: randomUUID(), q: randomUUID() };
 const PART = { p: randomUUID(), q: randomUUID() };
@@ -167,6 +188,11 @@ beforeAll(async () => {
   await rel(REL.bpP2, E.p2, P, "belongs_to_project");
   await rel(REL.bpQ, E.q, Q, "belongs_to_project");
   await rel(REL.inside, E.p, E.p2, "related_to");
+  await q(
+    `insert into entities (id, type, user_id, workspace_id) values ($1,'person',$2,null)`,
+    [PERSON, ALICE]
+  );
+  await rel(randomUUID(), PERSON, P, "belongs_to_project");
   await rel(REL.outside, E.p, E.n, "related_to");
   await q(
     `insert into focus_sessions (id, user_id, workspace_id, project_id, channel_id, goal, status) values
@@ -178,14 +204,34 @@ beforeAll(async () => {
        ($1,$5,null,null,'ai_thread','active','focus_session',$6),
        ($2,$5,null,$7,'ai_thread','active',null,null),
        ($3,$5,$8,null,'ai_thread','active','entity',$9),
-       ($4,$5,$8,null,'ai_thread','active',null,null)`,
-    [CH.room, CH.pinned, CH.ofEntity, CH.none, ALICE, SESS.p, P, W, E.p]
+       ($4,$5,$8,null,'ai_thread','active',null,null),
+       ($10,$5,null,$7,'external_dm','active','entity',$11)`,
+    [
+      CH.room,
+      CH.pinned,
+      CH.ofEntity,
+      CH.none,
+      ALICE,
+      SESS.p,
+      P,
+      W,
+      E.p,
+      CH.external,
+      PERSON,
+    ]
   );
-  await q(
-    `insert into proposals (id, created_by, status, workspace_id, project_id) values
-       ($1,$4,'pending',$5,$6),($2,$4,'pending',$5,$7),($3,$4,'pending',$5,null)`,
-    [PROP.p, PROP.q, PROP.n, ALICE, W, P, Q]
-  );
+  const prop = (id: string, type: string, target: string, stamp: string | null) =>
+    q(
+      `insert into proposals (id, created_by, status, workspace_id, project_id, target_type, target_id, proposal_type, data)
+       values ($1,$2,'pending',$3,$4,$5,$6,'update','{}'::jsonb)`,
+      [id, ALICE, W, stamp, type, target]
+    );
+  await prop(PROP.p, "entity", E.p, Q);
+  await prop(PROP.q, "entity", E.q, P);
+  await prop(PROP.n, "entity", E.n, P);
+  await prop(PROP.sess, "focus_session", SESS.p, null);
+  await prop(PROP.trk, "track", TRACK.p, null);
+  await prop(PROP.odd, "probe", P, P);
   await q(
     `insert into views (id, name, type, user_id, workspace_id, project_id) values
        ($1,'v','table',$4,$5,$6),($2,'v','table',$4,$5,$7),($3,'v','table',$4,$5,null)`,
@@ -251,13 +297,19 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
       [SESS.p],
     ],
     [
-      "channels (pinned to P, or the room of a session in P)",
+      "channels (ONLY the room of a session in P)",
       channels,
       channels.id,
       "channel.read",
-      [CH.room, CH.pinned],
+      [CH.room],
     ],
-    ["proposals", proposals, proposals.id, "proposal.read", [PROP.p]],
+    [
+      "proposals (by TARGET, never by their project_id stamp)",
+      proposals,
+      proposals.id,
+      "proposal.read",
+      [PROP.p, PROP.sess, PROP.trk],
+    ],
     ["views", views, views.id, "view.read", [VIEW.p]],
     [
       "project_tracks",
@@ -311,13 +363,21 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
     ]);
   });
 
-  it("a channel of a record follows that record, when the scope also reads records", async () => {
-    expect(
-      await reads(channels, channels.id, {
-        permissions: ["channel.read", "entity.read"],
-        projectIds: [P],
-      })
-    ).toEqual(sorted(CH.room, CH.pinned, CH.ofEntity));
+  it("DELIBERATE DEFAULT: a group room tagged P, a P record's thread and the external channel of a person in P are NOT read — only the room", async () => {
+    const read = await reads(channels, channels.id, {
+      permissions: ["channel.read", "entity.read"],
+      projectIds: [P],
+    });
+    expect(read).toEqual([CH.room]);
+    for (const out of [CH.pinned, CH.ofEntity, CH.external])
+      expect(read).not.toContain(out);
+  });
+
+  it("a proposal STAMPED P about a record outside P is not read; an unknown target type fails closed", async () => {
+    const read = await reads(proposals, proposals.id, inP("proposal.read"));
+    expect(read).not.toContain(PROP.q);
+    expect(read).not.toContain(PROP.n);
+    expect(read).not.toContain(PROP.odd);
   });
 
   it("the subject still decides: a project pin reads no table its permissions do not name", async () => {
@@ -326,14 +386,21 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
     ).toEqual([]);
   });
 
-  it("a space pin and a project pin together read the rows in BOTH", async () => {
+  it("a space pin and a project pin in ONE scope read their INTERSECTION (in W and in P)", async () => {
+    expect(
+      await reads(focusSessions, focusSessions.id, {
+        permissions: ["session.read"],
+        workspaceIds: [W],
+        projectIds: [P],
+      })
+    ).toEqual([SESS.p]); // in P, and counts in W through P's home (#1158); SESS.n is in W only
     expect(
       await reads(proposals, proposals.id, {
         permissions: ["proposal.read"],
         workspaceIds: [W],
         projectIds: [P],
       })
-    ).toEqual([PROP.p]);
+    ).toEqual(sorted(PROP.p, PROP.sess, PROP.trk));
   });
 
   it("a relational read (db.query) of sessions renders the project path", async () => {
@@ -531,5 +598,154 @@ describe("the filing rule: a project pin never decides what a project holds", ()
     ).toEqual([E.n]);
     // No grant (a signed-in person): the key half checks nothing.
     expect(await existingEntitiesGrantMayFile([E.n, E.q])).toEqual([E.n, E.q]);
+  });
+});
+
+describe("a non-create write is placed by its STORED row, never the door's projectId (W1 review)", () => {
+  const P_KEY: GrantScope = {
+    permissions: [
+      "view.update",
+      "profile.renderer.set",
+      "profile.update",
+      "track.update",
+      "proposal.reject",
+      "proposal.approve",
+      "session.update",
+      "session.read",
+      "project.read",
+    ],
+    projectIds: [P],
+  };
+  const denial = (input: GrantWriteInput) =>
+    runWithGrant(grantOfScope(P_KEY), () => grantWriteDenial(input));
+
+  it("a lens or provenance projectId on a non-create write is no place", async () => {
+    // A view update and a profile renderer bind, the X-Project-Id lens named P.
+    expect(
+      await denial({
+        subjectType: "view",
+        action: "update",
+        workspaceId: W,
+        projectId: P,
+        data: { id: VIEW.q },
+      })
+    ).toMatch(/does not allow/);
+    // Not vacuous: the same view write, placed by a door that read P from
+    // the row, passes — the refusal above is the place, not the right.
+    expect(
+      await denial({
+        subjectType: "view",
+        action: "update",
+        workspaceId: W,
+        projectId: P,
+        storedProjectIds: [P],
+        data: { id: VIEW.q },
+      })
+    ).toBeNull();
+    expect(
+      await denial({
+        subjectType: "profile",
+        action: "renderer.set",
+        workspaceId: W,
+        projectId: P,
+        data: { profileSlug: "task" },
+      })
+    ).toMatch(/does not allow/);
+  });
+
+  it("CONTROL — a goal is placed by its stored project; a door's stored flag counts", async () => {
+    expect(
+      await denial({
+        subjectType: "track",
+        action: "update",
+        workspaceId: null,
+        projectId: Q, // the door's value is not read for a stored goal
+        data: { id: TRACK.p },
+      })
+    ).toBeNull();
+    expect(
+      await denial({
+        subjectType: "track",
+        action: "update",
+        workspaceId: null,
+        projectId: P,
+        data: { id: TRACK.q },
+      })
+    ).toMatch(/does not allow/);
+    // A door that read the session's project from its row (the answer door).
+    const answer = {
+      subjectType: "focus_session",
+      action: "update",
+      workspaceId: null,
+      projectId: P,
+    };
+    expect(await denial({ ...answer, storedProjectIds: [P] })).toBeNull();
+    expect(await denial(answer)).toMatch(/does not allow/);
+  });
+
+  it("a proposal is decided where its TARGET is: one stamped P about a record of Q is refused", async () => {
+    const decide = (id: string) =>
+      runWithGrant(grantOfScope(P_KEY), async () => {
+        const [row] = (
+          await q(
+            `select id, workspace_id as "workspaceId", project_id as "projectId", target_type as "targetType", target_id as "targetId" from proposals where id = $1`,
+            [id]
+          )
+        ).rows as Array<Record<string, string | null>>;
+        assertMayDecideProposalAt(
+          "reject",
+          "reject",
+          await withProposalTargetPlace(row!)
+        );
+      }).then(
+        () => null,
+        (e: unknown) => (e as Error).message
+      );
+    expect(await decide(PROP.q)).toMatch(/may not reject/);
+    expect(await decide(PROP.n)).toMatch(/may not reject/);
+    expect(await decide(PROP.odd)).toMatch(/may not reject/);
+    expect(await decide(PROP.p)).toBeNull();
+    expect(await decide(PROP.sess)).toBeNull();
+  });
+
+  it("a mixed-project orchestrate (sessions of P and Q) is refused at the grant rung", async () => {
+    const err = await runWithGrant(grantOfScope(P_KEY), () =>
+      startOrchestrator({
+        userId: ALICE,
+        input: { sessionIds: [SESS.p, SESS.q], brief: "coordinate" },
+      })
+    ).then(
+      () => null,
+      (e: unknown) => e as { code?: string; message: string }
+    );
+    expect(err?.code).toBe("FORBIDDEN");
+    expect(err?.message).toMatch(/grant does not allow/);
+    // The same gate input with every session in P passes rung 0.
+    expect(
+      await denial({
+        subjectType: "focus_session",
+        action: "orchestrate",
+        workspaceId: null,
+        projectId: P,
+        storedProjectIds: [P],
+        data: { id: randomUUID() },
+      })
+    ).toBeNull();
+  });
+
+  it("the agent's session filing gate refuses filing a session INTO P under a P pin (real gate, rung 0)", async () => {
+    const decision = await runWithGrant(grantOfScope(P_KEY), () =>
+      gateSessionFiling({
+        userId: ALICE,
+        agentUserId: randomUUID(),
+        workspaceId: W,
+        session: { id: SESS.n, goal: "g" },
+        filing: { projectId: P },
+      })
+    );
+    expect(decision.status).toBe("denied");
+    expect((decision as { reason: string }).reason).toMatch(
+      /grant does not allow/
+    );
   });
 });

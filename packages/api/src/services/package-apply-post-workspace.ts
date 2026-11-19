@@ -1326,10 +1326,25 @@ export async function applyPackagePostWorkspace(
         workspaceId,
         userId,
       });
-      const rows = await db
+      const spaceRows = await db
         .select({ id: entities.id })
         .from(entities)
         .where(eq(entities.workspaceId, workspaceId));
+      // THE FILING RULE (app-permission plan 8189ae7c, W1): an app grant
+      // never decides what a project holds. The `uses` door refused an app
+      // (`app_grant`): honour it and file nothing. Under any other key's
+      // grant, only the records it may write where they are now
+      // (`existingEntitiesGrantMayFile`). A person (no grant) files them all.
+      const { existingEntitiesGrantMayFile } =
+        await import("./projects/file-entities.js");
+      const fileable =
+        !uses.linked && uses.reason === "app_grant"
+          ? new Set<string>()
+          : new Set(
+              await existingEntitiesGrantMayFile(spaceRows.map((r) => r.id))
+            );
+      const rows = spaceRows.filter((r) => fileable.has(r.id));
+      const withheld = spaceRows.length - rows.length;
       // Count what the DOOR actually did, never the loop iterations.
       // `linkEntityToProject` can REFUSE (`{linked:false}`) when the project is
       // gone or invisible — it stopped writing ghost edges. Incrementing
@@ -1359,6 +1374,7 @@ export async function applyPackagePostWorkspace(
               projectId: body.projectId,
               entities: linked,
               ...(refused > 0 ? { refused } : {}),
+              ...(withheld > 0 ? { withheldByGrant: withheld } : {}),
             }
           : {
               status: "not_linked",

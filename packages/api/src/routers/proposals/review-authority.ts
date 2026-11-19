@@ -6,6 +6,7 @@
  * nothing else — a pure, DB-touching authority layer with no router coupling.
  */
 
+import { withProposalTargetPlace } from "../../access/proposal-target-place.js";
 import { TRPCError } from "@trpc/server";
 import {
   and,
@@ -841,7 +842,11 @@ export async function assertCanReviewProposal(args: {
     !proposal.agentUserId ||
     proposal.agentUserId !== getActingAgentUserId()
   ) {
-    assertMayDecideProposalAt("reject", action, proposal);
+    assertMayDecideProposalAt(
+      "reject",
+      action,
+      await withProposalTargetPlace(proposal)
+    );
   }
 
   // reject / reopen — the documented agent capability ("can reject but never
@@ -909,7 +914,13 @@ export function assertMayDecideProposal(
       qualifier: null,
       workspaceId: target.workspaceId ?? null,
       entityId: target.targetId ?? null,
-      projectIds: target.projectId ? [target.projectId] : null,
+      // Where its TARGET is filed, read by the door
+      // (`withProposalTargetPlace`). Never the proposal's own `projectId`, a
+      // provenance tag (`access/proposal-target-place.ts`): unread, a key
+      // pinned to projects decides nothing here (fail closed).
+      projectIds: target.targetProjectIds?.length
+        ? [...target.targetProjectIds]
+        : null,
     };
     if (grant.scopes.some((s) => permits(s, scoped))) return;
     throw new TRPCError({
@@ -1004,7 +1015,7 @@ export function assertMayReviseProposal(
   // D3: the revised proposal's own space / project / object bound the key.
   assertMayDecideProposal("approve", "revise", grant, {
     workspaceId: proposal.workspaceId ?? null,
-    projectId: proposal.projectId ?? null,
+    targetProjectIds: proposal.targetProjectIds ?? null,
     targetId: proposal.targetId ?? null,
   });
 }
@@ -1023,7 +1034,7 @@ export function assertMayDecideProposalAt(
 ): void {
   assertMayDecideProposal(verb, act, getRequestGrant(), {
     workspaceId: proposal.workspaceId ?? null,
-    projectId: proposal.projectId ?? null,
+    targetProjectIds: proposal.targetProjectIds ?? null,
     targetId: proposal.targetId ?? null,
   });
 }
@@ -1031,6 +1042,17 @@ export function assertMayDecideProposalAt(
 /** Where a decided proposal lives, for the key's resource fences (D3). */
 export interface ProposalGrantTarget {
   workspaceId?: string | null;
+  /**
+   * Provenance only (the lens it was filed under): never read by the fence.
+   * Kept so a loaded row still fits this shape.
+   */
   projectId?: string | null;
+  targetType?: string | null;
   targetId?: string | null;
+  /**
+   * The projects its TARGET row is filed in, read by the door
+   * (`withProposalTargetPlace`, access/proposal-target-place.ts). Unset or
+   * null: a key pinned to projects may not decide it.
+   */
+  targetProjectIds?: readonly string[] | null;
 }

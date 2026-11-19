@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { withProposalTargetPlace } from "../../../access/proposal-target-place.js";
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -1288,14 +1289,14 @@ export const buildHandlers: McpHandlerMap = {
       ? await scopedDb(AccessContext.operator({ userId })).findMany<{
           agentUserId: string | null;
           workspaceId: string | null;
-          projectId: string | null;
+          targetType: string | null;
           targetId: string | null;
         }>(proposals, {
           where: eq(proposals.id, resolvedProposalId),
           columns: {
             agentUserId: true,
             workspaceId: true,
-            projectId: true,
+            targetType: true,
             targetId: true,
           },
         })
@@ -1305,11 +1306,14 @@ export const buildHandlers: McpHandlerMap = {
       // proposal here may not take one back here either (the same right, on
       // the proposal's own space, project and object, that the reject door
       // asks), so routing to the withdraw never widens what the key can do.
+      // Its project is where its TARGET is filed now, never the proposal's
+      // `project_id`, a provenance tag (`access/proposal-target-place.ts`).
+      const { targetProjectIds } = await withProposalTargetPlace(filed);
       await assertKeyMayWrite({
         subjectType: "proposal",
         action: "reject",
         workspaceId: filed.workspaceId,
-        projectId: filed.projectId,
+        storedProjectIds: targetProjectIds,
         data: { entityId: filed.targetId },
       });
       await rejectCaller.withdraw({

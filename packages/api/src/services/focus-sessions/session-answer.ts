@@ -1065,6 +1065,7 @@ export async function answerGrantWrite(sessionId: string): Promise<{
   action: "update";
   workspaceId: string | null;
   projectId: string | null;
+  storedProjectIds?: string[] | null;
 }> {
   // Only a key bounded by space or project needs the session's place; a
   // signed-in person (no grant) and an unbounded key are answered as before.
@@ -1092,6 +1093,9 @@ export async function answerGrantWrite(sessionId: string): Promise<{
     subjectType: "focus_session" as const,
     action: "update" as const,
     projectId: row?.projectId ?? null,
+    // Read from the row itself: where the session lives now (the filing
+    // rule, `grant-write-check.ts`), not a lens.
+    ...(row ? { storedProjectIds: row.projectId ? [row.projectId] : null } : {}),
   };
   return {
     ...write,

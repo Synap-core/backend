@@ -32,15 +32,24 @@
  *   entity    = data.id / data.entityId
  *   projects  = WHERE THE ROW LIVES NOW, never where a caller says it is or
  *               sends it (app-permission plan 8189ae7c, W1, "the filing
- *               rule"): for a stored entity, the projects it is filed in
- *               (`belongs_to_project`); for a stored session, its
- *               `project_id`; else the gate's projectId, and `data.projectId`
- *               only for a CREATE (where the new row lands). A write that
- *               files a row into or out of a project (`filesIntoProject`,
- *               `project.file_entities`, a `belongs_to_project` edge) carries
- *               no project: a project pin never covers it, so an app grant
- *               never decides what a project holds. Unknown → a
- *               project-restricted grant fails closed.
+ *               rule"), first match wins:
+ *                 1. a FILING (`filesIntoProject`, `project.file_entities`, a
+ *                    `belongs_to_project` link or relation) carries no
+ *                    project: a project pin never covers it, so an app grant
+ *                    never decides what a project holds;
+ *                 2. `storedProjectIds`, the row's projects as the DOOR read
+ *                    them from the row itself (the gate's
+ *                    `grantProjectIdIsStored`);
+ *                 3. the stored row named by data.id / data.entityId, read
+ *                    here: an entity's `belongs_to_project` edges, a
+ *                    session's or a goal's `project_id`, a project itself;
+ *                 4. a CREATE: where the new row lands (the gate's projectId,
+ *                    else `data.projectId`).
+ *               Anything else carries no project. The gate's projectId on a
+ *               non-create write is the caller's LENS or a provenance tag
+ *               (the X-Project-Id header, the agent's focus, a first-row
+ *               fallback), never a place. No project → a project-restricted
+ *               grant fails closed.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -50,6 +59,7 @@ import {
   focusSessions,
   profiles,
   projects,
+  projectTracks,
   relations,
 } from "@synap/database/schema";
 import { grantRequestKey, grantRequestKeys } from "@synap/governance-policy";
@@ -81,6 +91,13 @@ export interface GrantWriteInput {
    * see the module doc).
    */
   filesIntoProject?: boolean;
+  /**
+   * The projects the row of this write is filed in, as the DOOR read them
+   * from the stored row (a session's `project_id`, a proposal's target):
+   * where it lives now. `null` = in none. Leave it out unless the door read
+   * it from the row: a lens, a header or a provenance tag is never a place.
+   */
+  storedProjectIds?: readonly string[] | null;
 }
 
 /** A door's named permission (`<subject>.<action>`) and the space it lands in. */
@@ -212,6 +229,30 @@ async function storedEntity(
   };
 }
 
+/** A stored goal's project; undefined = no row. */
+async function storedTrackProject(
+  trackId: string
+): Promise<string | undefined> {
+  if (!UUID.test(trackId)) return undefined;
+  const [row] = await db
+    .select({ projectId: projectTracks.projectId })
+    .from(projectTracks)
+    .where(eq(projectTracks.id, trackId))
+    .limit(1);
+  return row?.projectId ?? undefined;
+}
+
+/** Is there a project with this id? */
+async function projectExists(projectId: string): Promise<boolean> {
+  if (!UUID.test(projectId)) return false;
+  const [row] = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  return !!row;
+}
+
 /** A stored session's project (null = none); undefined = no row. */
 async function storedSessionProject(
   sessionId: string
@@ -278,6 +319,16 @@ export async function grantRequestsForWrite(
   } else if (subject === "session" && entityId && readsProjects) {
     const project = await storedSessionProject(entityId);
     if (project !== undefined) storedProjectIds = project ? [project] : null;
+  } else if (subject === "track" && entityId && readsProjects) {
+    const project = await storedTrackProject(entityId);
+    if (project !== undefined) storedProjectIds = [project];
+  } else if (
+    subject === "project" &&
+    entityId &&
+    readsProjects &&
+    (await projectExists(entityId))
+  ) {
+    storedProjectIds = [entityId];
   } else if (subject === "capability" && action === "run") {
     // Only a RUN is qualified by intent; a create/attach body's `intent` is
     // the caller's data, never the request key.
@@ -287,18 +338,24 @@ export async function grantRequestsForWrite(
     // (`ci.workflow.completed` → `ci`); none → only an every-family grant.
     qualifier = str(data.family);
   }
-  // `data.projectId` is where a NEW row lands; on any other write it is
-  // where the caller sends the row, never where it is.
-  const doorProjectId =
-    str(input.projectId) ??
-    (action === "create" ? str(data.projectId) : undefined);
-  const projectIds = writeFilesIntoProject(input)
+  // Where the row lives now (the module doc's order). The gate's projectId
+  // and `data.projectId` say where a NEW row lands; on any other write they
+  // are a lens or where the caller sends the row, never where it is.
+  const createdIn =
+    action === "create"
+      ? (str(input.projectId) ?? str(data.projectId))
+      : undefined;
+  const projectIds: string[] | null = writeFilesIntoProject(input)
     ? null
-    : storedProjectIds !== undefined
-      ? storedProjectIds
-      : doorProjectId
-        ? [doorProjectId]
-        : null;
+    : input.storedProjectIds !== undefined
+      ? input.storedProjectIds?.length
+        ? [...input.storedProjectIds]
+        : null
+      : storedProjectIds !== undefined
+        ? storedProjectIds
+        : createdIn
+          ? [createdIn]
+          : null;
   const req: GrantRequest = {
     subject,
     qualifier: qualifier ?? null,

@@ -19,10 +19,12 @@
  *
  * PROJECT REACH (app-permission plan 8189ae7c, W1, 19 Nov 2026). A grant
  * restricted to projects P reads the rows IN P: an entity filed in P (its
- * `belongs_to_project` edge, `projectLensWhere`), a session, proposal, view,
- * channel or goal whose `project_id` is P, the project row itself, and what
- * follows them (a body follows its entity, an edge both of its ends, a
- * session's room its session, who is on a goal the goal). Each table says so
+ * `belongs_to_project` edge, `projectLensWhere`), a session, view or goal
+ * whose `project_id` is P, the project row itself, a proposal whose TARGET
+ * is in P (`proposal-target-place.ts`), and what follows them (a body
+ * follows its entity, an edge both of its ends, a session's room its
+ * session, who is on a goal the goal). A channel is in P only as the room of
+ * a session of P. Each table says so
  * in `projectReach`; a table without one still fails closed. Being IN P is
  * never an app's call: the write gate (grant-write-check.ts) reads a row's
  * project where it lives now, and a project pin never covers filing a row
@@ -127,6 +129,7 @@ import {
   sessionRoomCountsInSpacesWhere,
   sessionRoomInProjectsWhere,
 } from "./session-counted-spaces.js";
+import { proposalTargetInProjectsWhere } from "./proposal-target-place.js";
 
 export interface GrantReadSpec {
   /** The grant subject (governance spelling): `entity`, `document`, … */
@@ -287,10 +290,12 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
       }
     ),
   ],
+  // In a project when what it is ABOUT is (its target row), never by its
+  // `project_id`, a provenance tag (`proposal-target-place.ts`).
   [
     proposals,
     spec("proposal", proposals, {
-      projectReach: (ids) => inArray(proposals.projectId, ids),
+      projectReach: (ids) => proposalTargetInProjectsWhere(ids),
     }),
   ],
   // "Later" (0381): one person's setting aside of a request. No workspace of
@@ -328,14 +333,14 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
           channelFollowsEntityWhere(scope),
           sessionRoomCountsInSpacesWhere(spaces)
         )!,
-      // Pinned to the project (`channels.project_id`, 0171), the room of a
-      // session filed in it, or the channel of a record this same scope reads.
-      projectReach: (ids, scope) =>
-        or(
-          inArray(channels.projectId, ids),
-          sessionRoomInProjectsWhere(ids),
-          channelFollowsEntityWhere(scope)
-        )!,
+      // DELIBERATE DEFAULT (W1 review, 19 Nov 2026, until the founder
+      // decides otherwise): under a project pin, ONLY the room of a session
+      // filed in the project. `channels.project_id` is set with no grant
+      // check (channel create / resolve doors), and a channel following its
+      // record would hand an app pinned to P a person's whole external
+      // email or WhatsApp history once that person is filed in P. Both fail
+      // closed for a project pin.
+      projectReach: (ids) => sessionRoomInProjectsWhere(ids),
     }),
   ],
   [events, spec("event", events)],
