@@ -723,7 +723,9 @@ export function canSummary(
       text:
         by.view.length > 0
           ? andList(more > 0 ? [...by.view, `${more} more`] : by.view)
-          : andList(more <= 3 ? also : [...also.slice(0, 2), `${more - 2} more`]),
+          : andList(
+              more <= 3 ? also : [...also.slice(0, 2), `${more - 2} more`]
+            ),
     });
   }
   if (by.edit.length > 0) out.push({ level: "edit", text: andList(by.edit) });

@@ -1020,7 +1020,7 @@ export function AppConsent({
             <span className="flex flex-col gap-0.5">
               <span>{t("allowFailed.hint")}</span>
               {failed ? (
-                <span className="break-words text-xs opacity-80">{failed}</span>
+                <span className="break-words text-xs">{failed}</span>
               ) : null}
             </span>
           }
@@ -1146,18 +1146,18 @@ export function ReconsentCallout({
                         :{" "}
                       </span>
                       <span
-                        className={`text-sm ${off ? "text-foreground/65 line-through" : "text-foreground/90"}`}
+                        className={`text-sm ${off ? "text-foreground/80 line-through" : "text-foreground/90"}`}
                       >
                         {c.what}{" "}
                         <strong className="font-medium">{c.now}</strong>
                       </span>
                       {off ? (
-                        <span className="text-xs text-foreground/65">
+                        <span className="text-xs text-foreground/80">
                           {t("reconsent.turnedOff")}
                         </span>
                       ) : null}
                       {c.was ? (
-                        <span className="text-xs text-foreground/65">
+                        <span className="text-xs text-foreground/80">
                           {t("reconsent.was", { where: c.was })}
                         </span>
                       ) : null}
@@ -1195,7 +1195,7 @@ export function ReconsentCallout({
                 <li key={c.key} className="flex flex-col gap-0.5">
                   <span className="text-sm text-foreground/90">
                     {c.what}{" "}
-                    <span className="font-mono text-xs text-foreground/65">
+                    <span className="font-mono text-xs text-foreground/80">
                       {c.permission}
                     </span>
                   </span>
@@ -1225,7 +1225,7 @@ export function ReconsentCallout({
           </div>
         ) : null}
         {moved.length > 0 ? (
-          <p className="text-xs text-foreground/65">{t("reconsent.rest")}</p>
+          <p className="text-xs text-foreground/80">{t("reconsent.rest")}</p>
         ) : null}
       </div>
     </section>
@@ -1488,7 +1488,6 @@ export function ReadFailed({
           <Button
             size="sm"
             variant="flat"
-            color="danger"
             className="min-h-10"
             isLoading={retrying}
             onPress={onRetry}

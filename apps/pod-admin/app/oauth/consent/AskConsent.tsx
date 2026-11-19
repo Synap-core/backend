@@ -218,7 +218,7 @@ export function AskConsent({
             <span className="flex flex-col gap-0.5">
               <span>{t("allowFailed.hint")}</span>
               {failed ? (
-                <span className="break-words text-xs opacity-80">{failed}</span>
+                <span className="break-words text-xs">{failed}</span>
               ) : null}
             </span>
           }
