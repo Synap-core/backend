@@ -674,7 +674,7 @@ export const sessionHandlers: McpHandlerMap = {
         // space. The agent's workspace focus is NOT folded in here: it is the
         // last rung of the space ladder (`resolveSessionWorkspacePlacement`,
         // W3 D1 a), below the playbook, subject, parent and project home.
-        workspaceId: confinedWorkspaceId,
+        workspaceId: confinedWorkspaceId ?? ctx.lensWorkspaceId,
         projectId: args.projectId as string | undefined,
         trackId:
           typeof args.trackId === "string" && args.trackId.trim()
