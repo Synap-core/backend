@@ -104,6 +104,7 @@ vi.mock("../focus-sessions/evaluations/evaluate.js", () => ({
 import {
   applyStageGateOnAdvance,
   checkGateFailing,
+  checkGateHold,
   findStage,
   CHECK_GATE_UNEVALUATED,
 } from "./stage-gate.js";
@@ -450,4 +451,37 @@ describe("checkGateFailing", () => {
       checkGateFailing({ ...input, evaluations: [pass("pr-green")] }, "build")
     ).toEqual([]);
   });
+
+  // A criterion of a LATER step (the merge check on the PR output) decides
+  // the output at its own step: it never holds the step that declares it.
+  it("a later step's criterion on the output does not hold the step that declares it", () => {
+    const merge = {
+      key: "pr-merged",
+      statement: "Merged",
+      check: evidence,
+      stageKey: "ship",
+      outputKey: "pull-request",
+    };
+    expect(
+      checkGateFailing(
+        {
+          stages,
+          expectedOutputs: [slot({ status: "done" })],
+          criteria: [merge],
+          evaluations: [],
+        },
+        "build"
+      )
+    ).toEqual([]);
+    // Undelivered and decided later: the hold says a claim cannot meet it here.
+    const held = checkGateHold(
+      { stages, expectedOutputs: [slot()], criteria: [merge], evaluations: [] },
+      "build"
+    );
+    expect(held.failing).toEqual(["pull-request"]);
+    expect(held.reason).toContain(
+      'Output "pull-request" is owed here, but "pr-merged" decides it later, so completing it does not meet it now: name it by outputKey "pull-request" in a criterion of this step.'
+    );
+  });
 });
+

@@ -14,6 +14,16 @@
  * reading: an output a required criterion checks is met only when that
  * criterion passes (D4 a), a retired one is neither met nor owed.
  *
+ * AT A STEP, ONLY THE CRITERIA OF THAT STEP AND THE STEPS BEFORE IT COUNT
+ * (their `stageKey`). The projection is read over that narrower list, never
+ * re-derived: a criterion of a LATER step (a merge check on the pull request
+ * the PR step declares) decides the output at its own step, and a criterion
+ * with no step is the session's, decided at its close. Counting either here
+ * would hold a step on work that comes after it: Ship a change's PR output,
+ * named by its merge criterion, held `pr-opened ⇒ checks` until the merge,
+ * which comes after checks. The session check gate counted only its step's
+ * criteria before W6; this keeps that, and adds the outputs.
+ *
  * A LEAF (no database, no door): the status writer, the slot merge
  * (`stage-slots.ts`) and the gate all read it, and none must load the update
  * door to answer a pure question.
@@ -65,7 +75,16 @@ export interface StageOutcomes {
    * The OUTPUTS among `unmet` (never a criterion's fact), with their kind:
    * what a held gate tells the agent to deliver ({@link owedOutputHint}).
    */
-  unmetOutputs: Array<{ key: string; kind: string | null }>;
+  unmetOutputs: Array<{
+    key: string;
+    kind: string | null;
+    /**
+     * The required criteria that name it but do not count at this step (a
+     * later step's, or the session's): the doors leave such an output to
+     * them, so completing it does not meet it here.
+     */
+    decidedLater: string[];
+  }>;
   /** Every required outcome met, and at least one outcome met. */
   met: boolean;
 }
@@ -84,14 +103,28 @@ export function readStageOutcomes(
   if (!stageKey) {
     return { outcomes: [], unmet: [], unmetOutputs: [], met: false };
   }
+  const all = (input.criteria ?? []) as OutcomeCriterionLike[];
+  const order = stageKeysOf(stages);
+  const at = order.indexOf(stageKey);
+  const scope = new Set(at >= 0 ? order.slice(0, at + 1) : [stageKey]);
+  const counted = all.filter(
+    (c) => typeof c.stageKey === "string" && scope.has(c.stageKey)
+  );
   const { outcomes } = projectSessionOutcomes({
     expectedOutputs: input.expectedOutputs,
-    criteria: (input.criteria ?? []) as OutcomeCriterionLike[],
+    criteria: counted,
     evaluations: input.evaluations ?? [],
     sessionTerminal: false,
   });
+  const decidedLater = (key: string) =>
+    all
+      .filter(
+        (c) =>
+          c.outputKey === key && c.required !== false && !counted.includes(c)
+      )
+      .map((c) => c.key);
   const picked = new Set<SessionOutcome>();
-  const missing: Array<{ key: string; kind: string | null }> = [];
+  const missing: StageOutcomes["unmetOutputs"] = [];
   for (const o of declaredStageOutputs(stages, stageKey)) {
     const key = (o as { key?: unknown }).key;
     const label = normalizeExpectedLabel(o?.label);
@@ -111,6 +144,7 @@ export function readStageOutcomes(
       missing.push({
         key: typeof key === "string" && key ? key : (o?.label ?? ""),
         kind: typeof o?.kind === "string" ? o.kind : null,
+        decidedLater: [],
       });
     }
   }
@@ -123,7 +157,11 @@ export function readStageOutcomes(
   const unmetOutputs = [
     ...list
       .filter((x) => held.has(x.key) && x.source !== "criterion")
-      .map((x) => ({ key: x.key, kind: x.kind ?? null })),
+      .map((x) => ({
+        key: x.key,
+        kind: x.kind ?? null,
+        decidedLater: decidedLater(x.key),
+      })),
     ...missing,
   ];
   const unmet = [...held, ...missing.map((m) => m.key)];
@@ -139,15 +177,29 @@ export function readStageOutcomes(
  * How the agent delivers an output a stage still owes — the line a held check
  * gate carries (its hold reason, and the session's nudge). An agent that
  * recorded its pull request as a NEW outcome (`pr-<repo>-<n>`) still owes the
- * slot the stage declared: nothing pairs the two but the slot's own key. PURE.
+ * slot the stage declared: nothing pairs the two but the slot's own key. An
+ * output a later step's criterion decides cannot be completed by a claim (the
+ * doors leave it to that criterion): a criterion of THIS step must name it.
+ * PURE.
  */
-export function owedOutputHint(o: {
-  key: string;
-  kind: string | null;
-}): string {
+export function owedOutputHint(
+  o: StageOutcomes["unmetOutputs"][number]
+): string {
+  if (o.decidedLater.length > 0) {
+    return `Output "${o.key}" is owed here, but ${o.decidedLater.map((k) => `"${k}"`).join(", ")} decide${o.decidedLater.length === 1 ? "s" : ""} it later, so completing it does not meet it now: name it by outputKey "${o.key}" in a criterion of this step.`;
+  }
   return o.kind === "pull_request"
-    ? `Output "${o.key}" is owed: complete it with your PR's url (completeOutput "${o.key}" with ref.url), or name it as the outputKey of your PR criterion.`
-    : `Output "${o.key}" is owed: complete it with its evidence (completeOutput "${o.key}" with its ref), or name it as the outputKey of the criterion that checks it.`;
+    ? `Output "${o.key}" is owed: complete it with your PR's url (completeOutput "${o.key}" with ref.url).`
+    : `Output "${o.key}" is owed: complete it with its evidence (completeOutput "${o.key}" with its ref).`;
+}
+
+/** The stage keys of a process, in order. */
+function stageKeysOf(stages: unknown): string[] {
+  return Array.isArray(stages)
+    ? stages
+        .map((s) => (s as { key?: unknown } | null)?.key)
+        .filter((k): k is string => typeof k === "string")
+    : [];
 }
 
 /**

@@ -150,6 +150,7 @@ import {
 } from "../advance-if-stage-met.js";
 import { gradeCriterionAsOwner } from "../evaluations/evaluate.js";
 import { loadSessionNudges } from "../session-nudges.js";
+import { collectPlaybookCriteria } from "@synap/playbooks";
 import {
   satisfyClaimsByEvidence,
   satisfyOutputsByRef,
@@ -725,7 +726,7 @@ describe("a held check gate tells the agent how to get out", () => {
     const s = await sessionOf(id);
     expect(s.status).toBe("paused");
     const how =
-      'Output "pull-request" is owed: complete it with your PR\'s url (completeOutput "pull-request" with ref.url), or name it as the outputKey of your PR criterion.';
+      'Output "pull-request" is owed: complete it with your PR\'s url (completeOutput "pull-request" with ref.url).';
     const gate = s.metadata.checkGate as { failing: string[]; reason: string };
     expect(gate.failing).toEqual(["pull-request"]);
     expect(gate.reason).toContain(how);
@@ -756,5 +757,162 @@ describe("a held check gate tells the agent how to get out", () => {
     expect(
       (nudges as { hints: string[] }).hints.some((x) => x.includes(how))
     ).toBe(true);
+  });
+});
+
+/**
+ * SHIP A CHANGE, WALKED WITH ITS REAL DEFINITION (the catalog sibling,
+ * `synap-app/packages/workspace-templates`): shape → build → pr-opened →
+ * checks → merge, the steps advancing by themselves on the grades and the
+ * outputs. The deadlock to rule out: the PR output the PR step declares is
+ * also named by the MERGE criterion, so a step reading every criterion would
+ * hold `pr-opened ⇒ checks` until the merge, which comes after checks.
+ */
+describe("Ship a change walks shape → merge with its real definition (no deadlock)", () => {
+  const CATALOG = fileURLToPath(
+    new URL(
+      "../../../../../../../synap-app/packages/workspace-templates/src/templates.ts",
+      import.meta.url
+    )
+  );
+  type Stage = {
+    key: string;
+    expectedOutputs?: Array<Record<string, unknown>>;
+    criteria?: Array<Record<string, unknown>>;
+  };
+  const PR = "https://github.com/Synap-core/backend/pull/7";
+
+  async function shipAChange(): Promise<{ stages: Stage[]; criteria: unknown[] }> {
+    const { getWorkspaceTemplate } = (await import(/* @vite-ignore */ CATALOG)) as {
+      getWorkspaceTemplate: (slug: string) => { playbooks?: unknown[] } | undefined;
+    };
+    const pb = (getWorkspaceTemplate("builder-workspace")?.playbooks ?? []).find(
+      (p) => (p as { name?: string }).name === "Ship a change"
+    ) as { stages: Stage[]; criteria?: unknown[] } | undefined;
+    expect(pb, "Ship a change is not in the catalog sibling").toBeDefined();
+    return { stages: pb!.stages, criteria: collectPlaybookCriteria(pb!) };
+  }
+
+  const grade = (id: string, key: string) =>
+    gradeCriterionAsOwner({
+      sessionId: id,
+      userId: USER,
+      criterionKey: key,
+      verdict: "pass",
+    });
+  const keysOf = (criteria: unknown[], stage: string) =>
+    (criteria as Array<{ key: string; stageKey?: string; required?: boolean }>)
+      .filter((c) => c.stageKey === stage && c.required !== false)
+      .map((c) => c.key);
+  const prSlotOf = async (id: string) => {
+    const [row] = (
+      await q<{ expected_outputs: Array<Record<string, unknown>> }>(
+        `select expected_outputs from focus_sessions where id = $1`,
+        [id]
+      )
+    ).rows;
+    return row!.expected_outputs.find((o) => o.kind === "pull_request")!;
+  };
+
+  /** The walk: every step's criteria graded, the PR recorded as `record` says. */
+  async function walk(
+    def: { stages: Stage[]; criteria: unknown[] },
+    record: (id: string) => Promise<void>
+  ): Promise<string> {
+    const id = await runAt({
+      stage: "shape",
+      stages: def.stages,
+      criteria: def.criteria,
+    });
+    for (const k of keysOf(def.criteria, "shape")) await grade(id, k);
+    expect((await sessionOf(id)).current_stage).toBe("build");
+    for (const k of keysOf(def.criteria, "build")) await grade(id, k);
+    expect((await sessionOf(id)).current_stage).toBe("pr-opened");
+    await record(id);
+    for (const k of keysOf(def.criteria, "pr-opened")) await grade(id, k);
+    const atChecks = await sessionOf(id);
+    expect(atChecks.current_stage).toBe("checks");
+    expect(atChecks.status).toBe("active");
+    for (const k of keysOf(def.criteria, "checks")) await grade(id, k);
+    return id;
+  }
+
+  it("as the catalog teaches today: the PR completes the declared slot, its merge criterion names its own outcome", async () => {
+    const def = await shipAChange();
+    const id = await walk(def, async (sid) => {
+      const slot = await prSlotOf(sid);
+      const current = (
+        await q<{ criteria: unknown[] }>(
+          `select criteria from focus_sessions where id = $1`,
+          [sid]
+        )
+      ).rows[0]!.criteria;
+      const res = await updateFocusSession({
+        sessionId: sid,
+        userId: USER,
+        agentUserId: AGENT,
+        expectedOutputs: [
+          { ...slot, ref: { url: PR } },
+          {
+            key: "pr-backend-7",
+            kind: "pull_request",
+            label: "backend#7",
+            ref: { url: PR },
+          },
+        ] as never,
+        completeOutput: (slot.key ?? slot.label) as string,
+        criteria: [
+          ...(current as never[]),
+          {
+            key: "backend-7-merged",
+            statement: "backend#7 is merged",
+            check: { kind: "capability", capability: "github_check_pr_merged" },
+            outputKey: "pr-backend-7",
+          },
+        ] as never,
+      });
+      expect(res.status).toBe("updated");
+    });
+    const s = await sessionOf(id);
+    expect(s.current_stage).toBe("merge");
+    expect(s.status).toBe("active");
+  });
+
+  it("the declared PR output named by the MERGE step's criterion too (app-bases@fix/catalog-pr-slot-wording): pr-opened ⇒ checks does not wait for the merge", async () => {
+    const real = await shipAChange();
+    // The companion's three edits, applied to the real definition: the slot
+    // keyed `pull-request`, named by the PR step's criterion AND the merge
+    // step's.
+    const stages = real.stages.map((st) =>
+      st.key === "pr-opened"
+        ? {
+            ...st,
+            expectedOutputs: (st.expectedOutputs ?? []).map((o) => ({
+              ...o,
+              key: "pull-request",
+            })),
+          }
+        : st
+    );
+    const criteria = (real.criteria as Array<Record<string, unknown>>).map((c) =>
+      c.key === "pr-opened" || c.key === "merged"
+        ? { ...c, outputKey: "pull-request" }
+        : c
+    );
+    const id = await walk({ stages, criteria }, async (sid) => {
+      const slot = await prSlotOf(sid);
+      expect(slot.key).toBe("pull-request");
+      const res = await updateFocusSession({
+        sessionId: sid,
+        userId: USER,
+        agentUserId: AGENT,
+        expectedOutputs: [{ ...slot, ref: { url: PR } }] as never,
+        completeOutput: "pull-request",
+      });
+      expect(res.status).toBe("updated");
+    });
+    const s = await sessionOf(id);
+    expect(s.current_stage).toBe("merge");
+    expect(s.status).toBe("active");
   });
 });
