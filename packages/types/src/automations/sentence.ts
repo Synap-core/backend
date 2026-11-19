@@ -937,15 +937,16 @@ export type PlaybookActivatorTrigger =
   | {
       /**
        * A LINK: a run of `afterPlaybookId` ended — the session close event
-       * (`focus_session.closed.completed`) filtered on the session's
-       * `playbookId` and, for an `outcome`, its terminal `status`
-       * (`delivered` = closed; `dropped` = cancelled or failed). The new run
-       * works on the ended session's subject (the matcher derives it from the
-       * event, `run-subject.ts`).
+       * (`focus_session.closed.completed`), filtered on its data: the
+       * session's `playbookId`, its owner (`userId`: the rule owner's own
+       * runs only), not a session merely `attached` to the playbook, and for
+       * an `outcome` its `closedAs` (`done` / `not_done`). The new run works
+       * on the ended session's subject (`run-subject.ts`).
        */
       on: "run_ended";
       afterPlaybookId: string;
-      outcome?: "delivered" | "dropped";
+      ownerUserId: string;
+      outcome?: "done" | "not_done";
     };
 
 /**
@@ -1058,14 +1059,15 @@ function activatorTriggerShape(
           operator: "is",
           value: t.afterPlaybookId,
         },
+        { id: "link-owner", key: "userId", operator: "is", value: t.ownerUserId },
+        { id: "link-attached", key: "attached", operator: "is_false", value: "" },
         ...(t.outcome
           ? [
               {
                 id: "link-outcome",
-                key: "status",
-                operator: (t.outcome === "delivered" ? "is" : "is_not") as
-                  "is" | "is_not",
-                value: "closed",
+                key: "closedAs",
+                operator: "is" as const,
+                value: t.outcome,
               },
             ]
           : []),

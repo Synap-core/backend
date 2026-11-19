@@ -75,10 +75,10 @@ export function workerWhen(w: TriggerWorker): string | null {
       const name = a.playbook?.trim();
       const which = name && !isUuid(name) ? name : "another playbook";
       const end =
-        a.outcome === "delivered"
-          ? "is delivered"
-          : a.outcome === "dropped"
-            ? "is dropped"
+        a.outcome === "done"
+          ? "is done"
+          : a.outcome === "not_done"
+            ? "ends not done"
             : "ends";
       return `When a run of ${which} ${end}`;
     }

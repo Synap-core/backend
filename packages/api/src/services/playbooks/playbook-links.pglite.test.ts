@@ -1,18 +1,16 @@
 /**
- * Playbook links (W8a) against real SQL (PGlite, every table): which playbook
- * a declared link names, and the write-time loop guard.
+ * Playbook links against real SQL (PGlite, every table): which playbook a
+ * declared link names, and the write-time loop guard.
  *
  * Rows rule out:
- *  - a link resolved to a playbook of ANOTHER space, or to an archived one;
- *  - a name that matches a pod-wide playbook AND the space's own resolving
- *    to the pod-wide one;
- *  - a pod-wide playbook resolving a link into a space;
- *  - a loop of links (two playbooks, three, a playbook following itself)
- *    let through, by id or by name (a create has no id yet);
- *  - a chain that does not come back reported as a loop.
- *
- * Cannot see: the router doors that call the guard (a 5-line call each), the
- * rule the link compiles to (`playbook-activators.test.ts`).
+ *  - a link resolved into ANOTHER space, to an archived playbook, from a
+ *    pod-wide playbook into a space, or (two of one name) to the newer one;
+ *  - a loop let through because "self" was only recognised among stored
+ *    rows: creating B after A while A already follows the name "B" (also how
+ *    an install of two playbooks that follow each other lands), renaming to
+ *    a name another playbook follows, unarchiving a playbook in a loop;
+ *  - a loop that mixes a link and a step that `uses` a playbook;
+ *  - a legitimate chain longer than 3 reported as a loop.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -42,6 +40,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import type { PlaybookActivator } from "@synap/playbooks";
 import {
   findPlaybookLinkCycle,
   playbookLinkCycleMessage,
@@ -63,17 +62,22 @@ function ddlFor(table: PgTable): string {
   return `create table if not exists ${schema}"${cfg.name}" (${cols.join(", ")});`;
 }
 
-/** A playbook whose activators follow `after` (names or ids), one link each. */
+const after = (...refs: string[]): PlaybookActivator[] =>
+  refs.map((p) => ({ on: "run_ended", playbook: p, mode: "propose" }));
+
+let clock = 0;
+/** A playbook following `after` (names or ids); `uses` = playbooks its steps use. */
 async function playbook(o: {
   name: string;
   workspaceId: string | null;
   after?: string[];
+  uses?: string[];
   status?: string;
 }): Promise<string> {
   const id = randomUUID();
   await h.client!.query(
-    `insert into playbooks (id, workspace_id, created_by, name, goal_template, status, subject_profile)
-     values ($1,$2,'user-1',$3,'g',$4,$5::jsonb)`,
+    `insert into playbooks (id, workspace_id, created_by, name, goal_template, status, subject_profile, stages, created_at)
+     values ($1,$2,'user-1',$3,'g',$4,$5::jsonb,$6::jsonb, timestamp '2026-01-01' + ($7::text || ' minutes')::interval)`,
     [
       id,
       o.workspaceId,
@@ -81,12 +85,16 @@ async function playbook(o: {
       o.status ?? "active",
       JSON.stringify({
         profileSlug: "devplane_feature",
-        activators: (o.after ?? []).map((p) => ({
-          on: "run_ended",
-          playbook: p,
-          mode: "propose",
-        })),
+        activators: after(...(o.after ?? [])),
       }),
+      JSON.stringify(
+        (o.uses ?? []).map((u, i) => ({
+          key: `s${i}`,
+          name: `S${i}`,
+          uses: { playbookId: u, version: 1 },
+        }))
+      ),
+      String(++clock),
     ]
   );
   return id;
@@ -109,6 +117,9 @@ beforeAll(async () => {
     workspaceId: WS,
     status: "archived",
   });
+  // Two pod-wide playbooks of one name (rows from before the name index).
+  ids.twinOld = await playbook({ name: "Twin", workspaceId: null });
+  ids.twinNew = await playbook({ name: "Twin", workspaceId: null });
   // A chain in WS: Announce follows Ship; Recap follows Announce.
   ids.announce = await playbook({
     name: "Announce",
@@ -123,13 +134,14 @@ beforeAll(async () => {
 });
 
 describe("resolveLinkedPlaybooks — the playbook a link names", () => {
-  it("resolves a name (any case) to the space's own playbook before a pod-wide one, and an id as itself", async () => {
+  it("a name (any case) → the space's own before a pod-wide one; an id → itself; two of one name → the older", async () => {
     const r = await resolveLinkedPlaybooks(
-      ["SHIP A CHANGE", ids.announce!],
+      ["SHIP A CHANGE", ids.announce!, "twin"],
       WS
     );
     expect(r.get("SHIP A CHANGE")?.id).toBe(ids.ship);
     expect(r.get(ids.announce!)?.name).toBe("Announce");
+    expect(r.get("twin")?.id).toBe(ids.twinOld);
   });
 
   it("never resolves into another space, an archived playbook, or (from a pod-wide one) a space", async () => {
@@ -137,11 +149,9 @@ describe("resolveLinkedPlaybooks — the playbook a link names", () => {
       [ids.other!, "Old announce", "Announce"],
       WS2
     );
-    // WS2 sees its own Announce, not WS's; the WS-archived one not at all.
     expect(r.get("Announce")?.id).toBe(ids.other);
     expect(r.has("Old announce")).toBe(false);
-    const fromWs = await resolveLinkedPlaybooks([ids.other!], WS);
-    expect(fromWs.size).toBe(0);
+    expect((await resolveLinkedPlaybooks([ids.other!], WS)).size).toBe(0);
     const podWide = await resolveLinkedPlaybooks(
       ["Ship a change", "Announce"],
       null
@@ -152,51 +162,109 @@ describe("resolveLinkedPlaybooks — the playbook a link names", () => {
 });
 
 describe("findPlaybookLinkCycle — the write-time loop guard", () => {
-  it("refuses a link back to the start of a chain (by id: an update)", async () => {
-    // Ship ← Announce ← Recap; Ship following Recap closes the loop.
+  it("an update closing a chain back to itself, named in the person's words", async () => {
     const cycle = await findPlaybookLinkCycle({
       id: ids.ship!,
       name: "Ship a change",
       workspaceId: WS,
-      activators: [{ on: "run_ended", playbook: "Recap", mode: "propose" }],
+      activators: after("Recap"),
+      stages: [],
     });
     expect(cycle).toEqual([
       "Ship a change",
-      "Recap",
       "Announce",
+      "Recap",
       "Ship a change",
     ]);
     expect(playbookLinkCycleMessage(cycle!)).toContain(
-      "Ship a change starts after Recap starts after Announce starts after Ship a change"
+      "Ship a change → Announce → Recap → Ship a change"
     );
   });
 
-  it("refuses it by name too (a create has no id yet), and a playbook following itself", async () => {
+  it("a create (or the second of an install) whose name another playbook already follows", async () => {
+    // "Alpha" follows "Beta", which does not exist yet.
+    await playbook({ name: "Alpha", workspaceId: WS, after: ["Beta"] });
     expect(
       await findPlaybookLinkCycle({
         id: null,
-        name: "ship a change",
+        name: "beta",
         workspaceId: WS,
-        activators: [{ on: "run_ended", playbook: "Announce", mode: "run" }],
+        activators: after("Alpha"),
+        stages: [],
       })
-    ).toEqual(["ship a change", "Announce", "ship a change"]);
-    expect(
-      await findPlaybookLinkCycle({
-        id: ids.recap!,
-        name: "Recap",
-        workspaceId: WS,
-        activators: [{ on: "run_ended", playbook: "Recap", mode: "run" }],
-      })
-    ).toEqual(["Recap", "Recap"]);
+    ).toEqual(["beta", "Alpha", "beta"]);
   });
 
-  it("lets a chain that does not come back through", async () => {
+  it("a rename to a name another playbook follows", async () => {
+    // "Gamma" follows "Delta" (none yet); "Epsilon" follows "Gamma".
+    await playbook({ name: "Gamma", workspaceId: WS, after: ["Delta"] });
+    const epsilon = await playbook({
+      name: "Epsilon",
+      workspaceId: WS,
+      after: ["Gamma"],
+    });
+    const as = (name: string) =>
+      findPlaybookLinkCycle({
+        id: epsilon,
+        name,
+        workspaceId: WS,
+        activators: after("Gamma"),
+        stages: [],
+      });
+    expect(await as("Epsilon")).toBeNull();
+    expect(await as("Delta")).toEqual(["Delta", "Gamma", "Delta"]);
+  });
+
+  it("an archived playbook coming back into a loop", async () => {
+    // Archived "Zeta" follows "Eta"; active "Eta" follows "Zeta".
+    const zeta = await playbook({
+      name: "Zeta",
+      workspaceId: WS,
+      after: ["Eta"],
+      status: "archived",
+    });
+    await playbook({ name: "Eta", workspaceId: WS, after: ["Zeta"] });
+    expect(
+      await findPlaybookLinkCycle({
+        id: zeta,
+        name: "Zeta",
+        workspaceId: WS,
+        activators: after("Eta"),
+        stages: [],
+      })
+    ).toEqual(["Zeta", "Eta", "Zeta"]);
+  });
+
+  it("a loop mixing a step that uses a playbook and a link", async () => {
+    // Kappa's step uses Lambda; Kappa starts when a run of Lambda ends.
+    const lambda = await playbook({ name: "Lambda", workspaceId: WS });
+    const self = {
+      id: null,
+      name: "Kappa",
+      workspaceId: WS,
+      activators: after("Lambda"),
+    };
+    expect(
+      await findPlaybookLinkCycle({
+        ...self,
+        stages: [{ key: "s", uses: { playbookId: lambda, version: 1 } }],
+      })
+    ).toEqual(["Kappa", "Lambda", "Kappa"]);
+    // The link alone, or the step alone, is no loop.
+    expect(await findPlaybookLinkCycle({ ...self, stages: [] })).toBeNull();
+  });
+
+  it("a legitimate chain longer than 3 is no loop", async () => {
+    let prev = await playbook({ name: "C1", workspaceId: WS });
+    for (const n of ["C2", "C3", "C4", "C5"])
+      prev = await playbook({ name: n, workspaceId: WS, after: [prev] });
     expect(
       await findPlaybookLinkCycle({
         id: null,
-        name: "Newsletter",
+        name: "C6",
         workspaceId: WS,
-        activators: [{ on: "run_ended", playbook: "Recap", mode: "propose" }],
+        activators: after("C5"),
+        stages: [],
       })
     ).toBeNull();
     // A link into another space names nothing there: no loop.
@@ -205,9 +273,8 @@ describe("findPlaybookLinkCycle — the write-time loop guard", () => {
         id: ids.other!,
         name: "Announce",
         workspaceId: WS2,
-        activators: [
-          { on: "run_ended", playbook: ids.recap!, mode: "propose" },
-        ],
+        activators: after(ids.recap!),
+        stages: [],
       })
     ).toBeNull();
   });

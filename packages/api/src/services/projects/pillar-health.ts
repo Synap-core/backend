@@ -25,9 +25,8 @@
  *   indicator  the things of declared-lifecycle kinds in the project AND the
  *              space, per kind (`readScopeMoves`), plus a kind the
  *              space declares as an output (`readSpaceOutputs`) with none yet.
- *              A kind the space declares a HELPER (`settings.intent.helpers`,
- *              W8a: worked to serve an output, a story feeding a feature) is
- *              not the pillar's output: left out of it, never listed empty.
+ *              A HELPER kind (`settings.intent.helpers`) is not the
+ *              pillar's output: left out of it, never listed empty.
  *              No such kind ⇒ `declared: false`, never an invented one.
  *
  * Health is derived on every read, never stored. A project the caller cannot

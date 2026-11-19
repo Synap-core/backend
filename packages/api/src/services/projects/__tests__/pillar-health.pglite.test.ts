@@ -18,7 +18,7 @@
  *     pillar's health, a dropped primary goal leaves it, a paused primary
  *     goal stalls its pillar, the root is the worst pillar, a space
  *     with no declared-lifecycle kind says so, and a kind the space declares
- *     a HELPER is not the pillar's output (W8a).
+ *     a HELPER is not the pillar's output.
  *
  * Only `getEffectiveLifecycle` is stubbed (its own suites prove it).
  */
@@ -791,7 +791,7 @@ describe("readProjectPillars — the derived read", () => {
     expect(await readProjectPillars("user-stranger", P)).toBeNull();
   });
 
-  it("a kind the space declares a HELPER is not the pillar's output (W8a)", async () => {
+  it("a kind the space declares a HELPER is not the pillar's output", async () => {
     // Through the real read: Sales declaring its deals a helper drops them
     // from its indicator (the first test reads them there without it).
     const [{ settings }] = (

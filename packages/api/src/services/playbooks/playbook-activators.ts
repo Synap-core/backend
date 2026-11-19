@@ -231,7 +231,7 @@ export function modeOfCompiledRule(meta: RuleMetadata): "run" | "propose" {
 /** Every rule of one seed namespace, with its parsed metadata. */
 export async function rulesOfSeedTemplate(
   template: string
-): Promise<Array<{ id: string; meta: RuleMetadata }>> {
+): Promise<Array<{ id: string; meta: RuleMetadata; userId?: string }>> {
   return (await rulesOfSeedTemplates([template])).get(template) ?? [];
 }
 
@@ -242,13 +242,17 @@ export async function rulesOfSeedTemplate(
  */
 export async function rulesOfSeedTemplates(
   templates: readonly string[]
-): Promise<Map<string, Array<{ id: string; meta: RuleMetadata }>>> {
-  const out = new Map<string, Array<{ id: string; meta: RuleMetadata }>>(
+): Promise<Map<string, Array<{ id: string; meta: RuleMetadata; userId?: string }>>> {
+  const out = new Map<string, Array<{ id: string; meta: RuleMetadata; userId?: string }>>(
     templates.map((t) => [t, []])
   );
   if (templates.length === 0) return out;
   const rows = await db
-    .select({ id: skills.id, metadata: skills.metadata })
+    .select({
+      id: skills.id,
+      metadata: skills.metadata,
+      userId: skills.userId,
+    })
     .from(skills)
     .where(
       and(
@@ -265,7 +269,7 @@ export async function rulesOfSeedTemplates(
     // stamp does not parse to an asked namespace is not ours to converge.
     const template = meta?.seed?.template;
     if (meta && template && out.has(template)) {
-      out.get(template)!.push({ id: row.id, meta });
+      out.get(template)!.push({ id: row.id, meta, userId: row.userId });
     }
   }
   return out;
@@ -342,10 +346,12 @@ export function activatorRuleDecl(input: {
   };
   /**
    * A `run_ended` link's playbook, by the ref it was declared with
-   * (`resolveLinkedPlaybooks`). A ref absent here names no playbook in the
-   * space yet: the link does not compile.
+   * (`resolveLinkedPlaybooks`), and the rule's owner, whose own runs alone
+   * fire it. A ref absent here names no playbook in the space yet: the link
+   * does not compile.
    */
   linked?: ReadonlyMap<string, { id: string; name: string }>;
+  ownerUserId?: string;
 }):
   | TemplateRuleDecl
   | { key: string; error: string }
@@ -420,6 +426,9 @@ export function activatorRuleDecl(input: {
     }
     const ref = a.playbook?.trim() ?? "";
     const after = input.linked?.get(ref);
+    if (!input.ownerUserId) {
+      return { key, error: "a link needs the owner whose runs it follows" };
+    }
     if (!after) {
       return {
         key,
@@ -430,10 +439,10 @@ export function activatorRuleDecl(input: {
       return { key, error: "a playbook cannot start when its own run ends" };
     }
     const end =
-      a.outcome === "delivered"
-        ? "is delivered"
-        : a.outcome === "dropped"
-          ? "is dropped"
+      a.outcome === "done"
+        ? "is done"
+        : a.outcome === "not_done"
+          ? "ends not done"
           : "ends";
     return {
       key,
@@ -442,6 +451,7 @@ export function activatorRuleDecl(input: {
         ...common,
         on: "run_ended",
         afterPlaybookId: after.id,
+        ownerUserId: input.ownerUserId,
         ...(a.outcome ? { outcome: a.outcome } : {}),
       }),
     };
@@ -579,7 +589,14 @@ export const ACTIVATOR_COMPILE_VERSION = 2;
 /** One playbook's memory of the rules its activators produced (see header). */
 interface ActivatorMemory {
   template: string;
-  rules: Record<string, { ruleId: string; retired?: true }>;
+  /**
+   * `linkedPlaybookId`: the playbook a `run_ended` link resolved to when it
+   * compiled, kept so a later playbook of the same name never retargets it.
+   */
+  rules: Record<
+    string,
+    { ruleId: string; retired?: true; linkedPlaybookId?: string }
+  >;
   /** The compile version of the last pass that converged (absent = 1). */
   compileVersion?: number;
 }
@@ -603,11 +620,18 @@ function readActivatorMemory(
     typeof raw.rules === "object"
   ) {
     for (const [k, v] of Object.entries(raw.rules as Record<string, unknown>)) {
-      const r = v as { ruleId?: unknown; retired?: unknown } | null;
+      const r = v as {
+        ruleId?: unknown;
+        retired?: unknown;
+        linkedPlaybookId?: unknown;
+      } | null;
       if (typeof r?.ruleId === "string")
         rules[k] = {
           ruleId: r.ruleId,
           ...(r.retired === true ? { retired: true as const } : {}),
+          ...(typeof r.linkedPlaybookId === "string"
+            ? { linkedPlaybookId: r.linkedPlaybookId }
+            : {}),
         };
     }
   }
@@ -690,7 +714,10 @@ async function applyOnce(input: {
     : { kind: "pod" as const };
 
   // Every rule this playbook's activators ever produced (by seed namespace).
-  const grouped = new Map<string, Array<{ id: string; meta: RuleMetadata }>>();
+  const grouped = new Map<
+    string,
+    Array<{ id: string; meta: RuleMetadata; userId?: string }>
+  >();
   for (const row of await rulesOfSeedTemplate(template)) {
     const list = grouped.get(row.meta.seed!.key) ?? [];
     list.push(row);
@@ -698,7 +725,10 @@ async function applyOnce(input: {
   }
   // One row per key: the remembered one, else a live one, else the first.
   // Every OTHER live row of that key is a duplicate a race created — retired.
-  const byKey = new Map<string, { id: string; meta: RuleMetadata }>();
+  const byKey = new Map<
+    string,
+    { id: string; meta: RuleMetadata; userId?: string }
+  >();
   const duplicates: Array<{ key: string; id: string; meta: RuleMetadata }> = [];
   for (const [key, list] of grouped) {
     const primary =
@@ -718,11 +748,25 @@ async function applyOnce(input: {
    * automations are linked with (`link` for a `run_ended` link).
    */
   const liveRules = new Map<string, string>();
-  // The playbooks this one's links follow, resolved in its space.
-  const linked = await resolveLinkedPlaybooks(
-    linkRefsOf(declared),
+  // The playbooks this one's links follow: the one each link compiled to
+  // before (pinned in the memory), else resolved in its space now.
+  const pinOf = (a: PlaybookActivator) =>
+    memory.rules[activatorKey(a)]?.linkedPlaybookId;
+  const resolved = await resolveLinkedPlaybooks(
+    [
+      ...linkRefsOf(declared),
+      ...declared.flatMap((a) => (a.on === "run_ended" && pinOf(a) ? [pinOf(a)!] : [])),
+    ],
     pb.workspaceId
   );
+  const linkedOf = (a: PlaybookActivator) => {
+    const ref = a.playbook?.trim() ?? "";
+    // A pin is kept even when its playbook is gone: the link then stops
+    // (refused by name) rather than follow another playbook of that name.
+    const pin = pinOf(a);
+    const hit = pin ? resolved.get(pin) : resolved.get(ref);
+    return new Map(hit ? [[ref, hit]] : []);
+  };
 
   // Every activator needs it: `enters_status` for where the status lives,
   // `created` because a ROLE is never created — it is attached.
@@ -739,7 +783,13 @@ async function applyOnce(input: {
           profileSlug: process.profileSlug,
           statusProperty: process.statusProperty,
           subject,
-          linked,
+          ...(activator.on === "run_ended"
+            ? {
+                linked: linkedOf(activator),
+                ownerUserId:
+                  byKey.get(activatorKey(activator))?.userId ?? input.userId,
+              }
+            : {}),
         })
       : {
           key: activatorKey(activator),
@@ -889,6 +939,14 @@ async function applyOnce(input: {
         reason: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  // A link that is live remembers the playbook it follows (see the memory).
+  for (const a of declared) {
+    if (a.on !== "run_ended") continue;
+    const entry = memory.rules[activatorKey(a)];
+    const hit = linkedOf(a).values().next().value;
+    if (entry && !entry.retired && hit) entry.linkedPlaybookId = hit.id;
   }
 
   // ── Retire what is no longer declared (and duplicate rows of one key) ─────

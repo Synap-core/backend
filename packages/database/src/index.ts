@@ -355,6 +355,8 @@ export {
 // A template's `meta.intent` → `settings.intent` (object-first homes).
 export {
   projectTemplateIntent,
+  readStoredIntent,
+  type StoredSpaceIntent,
   workspaceIntentDefinitionSchema,
   type WorkspaceIntentDefinition,
 } from "./utils/workspace-intent.js";

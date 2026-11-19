@@ -526,18 +526,18 @@ function foldProcessDeclarationsOrRefuse(
 }
 
 /**
- * A playbook's declared links (`run_ended` activators) must not make a loop
- * (`findPlaybookLinkCycle`): refused here, at the write door, before the
- * gate. Reads the links off the `subjectProfile` as it will be stored.
+ * A playbook's links and steps must not start each other in a loop
+ * (`findPlaybookLinkCycle`): refused at the write door, before the gate,
+ * over the definition as it will be stored.
  */
 async function assertNoPlaybookLinkCycle(self: {
   id: string | null;
   name: string;
   workspaceId: string | null;
   subjectProfile: unknown;
+  stages: unknown;
 }): Promise<void> {
   const { activators } = readPlaybookProcess(self.subjectProfile);
-  if (!activators.some((a) => a.on === "run_ended")) return;
   const cycle = await findPlaybookLinkCycle({ ...self, activators });
   if (cycle) {
     throw new TRPCError({
@@ -2117,6 +2117,7 @@ export const playbooksRouter = router({
         name: input.name,
         workspaceId: ctx.workspaceId ?? null,
         subjectProfile: input.subjectProfile,
+        stages: input.stages,
       });
       // Dangling `subjectProfile` slugs and goal placeholders no run will
       // fill are refused here, before the gate.
@@ -2520,13 +2521,21 @@ export const playbooksRouter = router({
           humanOnlyStatuses: input.humanOnlyStatuses,
         }) as typeof input.subjectProfile;
       }
-      // 2b'. A link that would close a loop is refused (the create door's rule).
-      if (input.subjectProfile !== undefined || input.name !== undefined) {
+      // 2b'. A loop of links / steps is refused (the create door's rule):
+      // on a change of what it follows, its steps or its name, and when it
+      // becomes active again (an archived playbook was outside the walk).
+      if (
+        input.subjectProfile !== undefined ||
+        input.name !== undefined ||
+        input.stages !== undefined ||
+        (input.status === "active" && existing.status !== "active")
+      ) {
         await assertNoPlaybookLinkCycle({
           id: existing.id,
           name: input.name ?? existing.name,
           workspaceId: existing.workspaceId,
           subjectProfile: input.subjectProfile ?? existing.subjectProfile,
+          stages: input.stages ?? existing.stages,
         });
       }
 

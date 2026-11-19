@@ -1,5 +1,5 @@
 /**
- * The run-time loop guard of playbook links (W8a) on real SQL (PGlite): the
+ * The run-time loop guard of playbook links on real SQL (PGlite): the
  * chain of link-started runs read off the sessions and automation runs the
  * pod already writes (`metadata.automationRunId` →
  * `automation_runs.trigger_payload` of a session close → the run before).
@@ -10,6 +10,8 @@
  *    chain of six playbooks still starts its seventh;
  *  - the walk crossing a run no close started (a person's, a schedule's):
  *    the chain stops there;
+ *  - a loop mixing a step's child run and a link let through (the walk
+ *    follows `metadata.stageOf` to the parent run);
  *  - a chain past `LINK_CHAIN_MAX` read as anything but capped.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
@@ -58,10 +60,12 @@ const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
  */
 async function run(
   playbookId: string,
-  o: { after?: string; startedBy?: string } = {}
+  o: { after?: string; startedBy?: string; stepOf?: string } = {}
 ): Promise<string> {
   const sessionId = randomUUID();
-  let metadata: Record<string, unknown> = {};
+  let metadata: Record<string, unknown> = o.stepOf
+    ? { stageOf: { sessionId: o.stepOf, stageKey: "s", stageRunId: "r" } }
+    : {};
   if (o.after || o.startedBy) {
     const runId = randomUUID();
     await q(
@@ -135,6 +139,15 @@ describe("the link chain a run ended in", () => {
       false
     );
     void a;
+  });
+
+  it("a loop through a step's child run: A's step runs B, B's end would start A", async () => {
+    const a = await run(PB.a!);
+    const b = await run(PB.b!, { stepOf: a });
+    expect((await readLinkLineage(b)).playbookIds).toEqual([PB.b, PB.a]);
+    expect(await linkWouldLoop({ endedSessionId: b, playbookId: PB.a! })).toBe(
+      true
+    );
   });
 
   it("a chain past the cap reads as capped, and is refused", async () => {

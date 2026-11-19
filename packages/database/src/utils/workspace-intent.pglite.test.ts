@@ -283,7 +283,7 @@ describe("settings.intent — projected by the create and reconcile writers", ()
     });
   });
 
-  it("(6) a helper kind and the kind it feeds land with it (W8a, kinds per space)", async () => {
+  it("(6) a helper kind lands with it; the primary is never one", async () => {
     const r = await createWorkspaceFromDefinition({
       definition: {
         workspaceName: "Builder",
@@ -291,13 +291,9 @@ describe("settings.intent — projected by the create and reconcile writers", ()
           label: "Product",
           primary: "devplane_feature",
           produces: [
-            { profile: "devplane_feature" },
-            {
-              profile: "devplane_story",
-              role: "helper",
-              feeds: "devplane_feature",
-            },
-            { profile: "ui-design", role: "produced" },
+            { profile: "devplane_feature", as: "helper" },
+            { profile: "devplane_story", as: "helper" },
+            { profile: "ui-design", as: "output" },
           ],
         },
       },
@@ -311,23 +307,17 @@ describe("settings.intent — projected by the create and reconcile writers", ()
       produces: ["devplane_feature", "devplane_story", "ui-design"],
       primary: "devplane_feature",
       helpers: ["devplane_story"],
-      feeds: { devplane_story: "devplane_feature" },
       source: "template",
     });
-    // A `feeds` naming no produced kind (or itself) drops alone; an unknown
-    // role drops its entry, like any malformed one.
+    // An unknown `as` drops its entry, like any malformed one.
     expect(
       projectTemplateIntent({
         label: "Product",
-        produces: [
-          { profile: "devplane_feature", feeds: "devplane_feature" },
-          { profile: "devplane_story", feeds: "invoice" },
-          { profile: "note", role: "sidekick" },
-        ],
+        produces: [{ profile: "devplane_feature" }, { profile: "note", as: "sidekick" }],
       })
     ).toEqual({
       label: "Product",
-      produces: ["devplane_feature", "devplane_story"],
+      produces: ["devplane_feature"],
       source: "template",
     });
   });

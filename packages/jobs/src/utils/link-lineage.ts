@@ -1,21 +1,18 @@
 /**
- * THE RUN-TIME LOOP GUARD OF PLAYBOOK LINKS (work model W8a).
+ * THE RUN-TIME LOOP GUARD OF PLAYBOOK LINKS.
  *
- * A link ("when a run of X ends, start Y": a `run_ended` activator) is
- * refused at the playbook write door when its chain comes back to the
- * playbook being written (`api` `playbook-links.ts`). A loop can still form
- * past that door: a rename, an install, a playbook edited outside it. So the
- * one place a link starts a run (`steps/playbook-run.ts`) asks this first:
- * is the playbook about to start already in the chain of link-started runs
- * that led here?
+ * A loop of links is refused at the playbook write door (`api`
+ * `playbook-links.ts`), but can still form past it (a rename, an install).
+ * So the one place a link starts a run (`steps/playbook-run.ts`) asks first:
+ * is the playbook about to start already in the chain of runs that led here?
  *
- * The chain is read off what the runs already record, nothing new: a run a
- * rule started carries its automation run on its session
- * (`metadata.automationRunId`, `buildRunSessionMetadata`), and that run
- * keeps the event that fired it (`automation_runs.trigger_payload`). When
- * that event is a session close (a link fired), its `data.sessionId` is the
- * run before. The walk stops at a run no close started (a person's, a
- * schedule's, an entity event's) and after {@link LINK_CHAIN_MAX} runs.
+ * The chain is read off what runs already record. A run a rule started
+ * carries its automation run on its session (`metadata.automationRunId`),
+ * whose `trigger_payload` is the event that fired it: a session close (a
+ * link fired) names the run before (`data.sessionId`). A run a step started
+ * names its parent run (`metadata.stageOf.sessionId`, api `stage-of.ts`), so
+ * a loop mixing links and steps is seen too. The walk stops at a run nothing
+ * started (a person's, a schedule's) and after {@link LINK_CHAIN_MAX} runs.
  *
  * NOT seen, by design: a run a person approved from a link's proposal is not
  * stamped with the automation run (the approval replays `playbooks.run`), so
@@ -57,7 +54,14 @@ export async function readLinkLineage(
     const meta = session.metadata as {
       automationRunId?: unknown;
       automationChainContext?: { automationRunId?: unknown };
+      stageOf?: { sessionId?: unknown };
     } | null;
+    // A step's run: its parent run started it.
+    const parent = meta?.stageOf?.sessionId;
+    if (typeof parent === "string" && parent) {
+      sessionId = parent;
+      continue;
+    }
     const runId =
       meta?.automationRunId ?? meta?.automationChainContext?.automationRunId;
     if (typeof runId !== "string" || !runId) break;

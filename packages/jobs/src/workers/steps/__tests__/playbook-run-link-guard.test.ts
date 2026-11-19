@@ -1,5 +1,5 @@
 /**
- * A LINK starts no loop (W8a): the real `executePlaybookRun`, the one place a
+ * A LINK starts no loop: the real `executePlaybookRun`, the one place a
  * `run_ended` link starts a run.
  *
  *   - a link whose playbook is already in its chain (`linkWouldLoop`, its

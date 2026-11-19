@@ -37,6 +37,9 @@ const closeData = {
   origin: "human",
   goal: "Ship the workbench",
   status: "closed",
+  // What the close door adds for a link (complete-session.ts).
+  closedAs: "done",
+  attached: false,
 };
 
 const config = (c: Partial<AutomationTriggerConfig>) =>
@@ -94,18 +97,19 @@ describe("focus_session close trigger match", () => {
 });
 
 /**
- * A playbook LINK (W8a, `run_ended`): the rule its activator compiles to
+ * A playbook LINK (`run_ended`): the rule its activator compiles to
  * (`playbookActivatorSentence` → `toBackendTrigger`, the rule door's own
- * compile) fires on the close of a run of the followed playbook — and only
- * on the end it names.
+ * compile) fires on the close of its owner's run of the followed playbook,
+ * and only on the end it names.
  */
 describe("a playbook link fires on the close of the followed playbook's run", () => {
-  const link = (outcome?: "delivered" | "dropped") => {
+  const link = (outcome?: "done" | "not_done") => {
     const sentence = playbookActivatorSentence({
       playbookId: "44444444-4444-4444-8444-444444444444",
       profileSlug: "devplane_feature",
       on: "run_ended",
       afterPlaybookId: closeData.playbookId,
+      ownerUserId: "user-1",
       ...(outcome ? { outcome } : {}),
       mode: "propose",
     });
@@ -124,25 +128,27 @@ describe("a playbook link fires on the close of the followed playbook's run", ()
       config(t as Partial<AutomationTriggerConfig>)
     );
 
-  it("any end of a run of the followed playbook", () => {
+  it("any end of its owner's run of the followed playbook", () => {
     expect(fires(link(), closeData)).toBe(true);
-    expect(fires(link(), { ...closeData, status: "cancelled" })).toBe(true);
+    expect(
+      fires(link(), { ...closeData, status: "cancelled", closedAs: "not_done" })
+    ).toBe(true);
   });
 
-  it("a delivered link fires on a closed run only; a dropped one on a cancelled or failed run only", () => {
-    expect(fires(link("delivered"), closeData)).toBe(true);
-    expect(fires(link("delivered"), { ...closeData, status: "failed" })).toBe(
-      false
-    );
-    expect(fires(link("dropped"), closeData)).toBe(false);
-    expect(fires(link("dropped"), { ...closeData, status: "cancelled" })).toBe(
-      true
-    );
+  it("done fires on a run closed done only, never on one closed NOT done; not_done the reverse", () => {
+    expect(fires(link("done"), closeData)).toBe(true);
+    // Closed, but with required work open (`closedNotDone`): not a success.
+    const closedNotDone = { ...closeData, closedAs: "not_done" };
+    expect(fires(link("done"), closedNotDone)).toBe(false);
+    expect(fires(link("not_done"), closedNotDone)).toBe(true);
+    expect(fires(link("not_done"), closeData)).toBe(false);
   });
 
-  it("never on another playbook's run, nor on a session that follows none", () => {
+  it("never on another playbook's run, a session that follows none, a session only attached to it, or another member's run", () => {
     const other = "55555555-5555-4555-8555-555555555555";
     expect(fires(link(), { ...closeData, playbookId: other })).toBe(false);
     expect(fires(link(), { ...closeData, playbookId: null })).toBe(false);
+    expect(fires(link(), { ...closeData, attached: true })).toBe(false);
+    expect(fires(link(), { ...closeData, userId: "user-2" })).toBe(false);
   });
 });

@@ -9,7 +9,7 @@
  * Also pinned here, at the router: archive and a status change re-run the
  * activator pass (only an ACTIVE playbook declares — the applier's own suite
  * covers what the pass then does); a link (`run_ended`) that would close a
- * loop is refused at the update door, writing nothing (W8a; the walk itself
+ * loop is refused at the update door, writing nothing (the walk itself
  * is `playbook-links.pglite.test.ts`).
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -196,46 +196,65 @@ describe("what starts it follows the playbook's status", () => {
   });
 });
 
-describe("a link that closes a loop is refused at the door (W8a)", () => {
-  it("Produce Content following a playbook that follows it is refused; the stored process is unchanged", async () => {
-    // "Review Content" starts when a run of "Produce Content" ends.
+describe("a loop of links is refused at the update door", () => {
+  async function other(name: string, follows: string, status = "active") {
+    const id = randomUUID();
     await q(
       `insert into playbooks (id, workspace_id, created_by, name, goal_template, status, executor, subject_profile, metadata, version)
-       values ($1,$2,$3,'Review Content','Review {post}','active','is-agent',$4::jsonb,'{}'::jsonb,1)`,
+       values ($1,$2,$3,$4,'Review {post}',$5,'is-agent',$6::jsonb,'{}'::jsonb,1)`,
       [
-        randomUUID(),
+        id,
         WS,
         OWNER,
+        name,
+        status,
         JSON.stringify({
           profileSlug: "post",
-          activators: [
-            { on: "run_ended", playbook: "Produce Content", mode: "propose" },
-          ],
+          activators: [{ on: "run_ended", playbook: follows, mode: "propose" }],
         }),
       ]
     );
+    return id;
+  }
+  const link = (playbook: string) => [
+    { on: "run_ended" as const, playbook, mode: "propose" as const },
+  ];
+
+  it("following a playbook that follows it is refused, writing nothing; a link that does not come back is written", async () => {
+    await other("Review Content", "Produce Content");
     const before = await stored();
     await expect(
-      caller().update({
-        id: PB,
-        activators: [
-          { on: "run_ended", playbook: "Review Content", mode: "propose" },
-        ],
-      })
+      caller().update({ id: PB, activators: link("Review Content") })
     ).rejects.toThrow(
-      /loop: Produce Content starts after Review Content starts after Produce Content/
+      /loop: Produce Content → Review Content → Produce Content/
     );
     expect(await stored()).toEqual(before);
     expect(h.converged).toEqual([]);
-    // A link that does not come back is written.
-    await caller().update({
-      id: PB,
-      activators: [
-        { on: "run_ended", playbook: "Plan Content", mode: "propose" },
-      ],
-    });
-    expect((await stored()).activators).toEqual([
-      { on: "run_ended", playbook: "Plan Content", mode: "propose" },
+    await caller().update({ id: PB, activators: link("Plan Content") });
+    expect((await stored()).activators).toEqual(link("Plan Content"));
+  });
+
+  it("a RENAME to a name another playbook follows is refused", async () => {
+    // "Recap Content" follows "Weekly Content"; Produce Content follows Recap.
+    await other("Recap Content", "Weekly Content");
+    await caller().update({ id: PB, activators: link("Recap Content") });
+    await expect(
+      caller().update({ id: PB, name: "Weekly Content" })
+    ).rejects.toThrow(/loop: Weekly Content → Recap Content → Weekly Content/);
+  });
+
+  it("UNARCHIVING a playbook into a loop is refused (a status-only update)", async () => {
+    // Produce Content follows "Edit Content", which follows it back; then it
+    // is archived (out of every walk) and later made active again.
+    await other("Edit Content", "Produce Content");
+    await q(`update playbooks set status = 'archived', subject_profile = $1::jsonb where id = $2`, [
+      JSON.stringify({ ...PROCESS, activators: link("Edit Content") }),
+      PB,
     ]);
+    await expect(caller().update({ id: PB, status: "active" })).rejects.toThrow(
+      /loop: Produce Content → Edit Content → Produce Content/
+    );
+    const { rows } = await q(`select status from playbooks where id = $1`, [PB]);
+    expect((rows[0] as { status: string }).status).toBe("archived");
   });
 });

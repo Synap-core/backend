@@ -36,10 +36,9 @@
  *                    `per_moment` (the count IS the moment).
  *   manual         — never by itself: a button that runs the worker over its
  *                    enablement's filter. Compiles no rule.
- *   run_ended      — a run of another playbook (`playbook`) ended, delivered
- *                    or dropped (`outcome`, absent = either): a LINK between
- *                    playbooks. The new run works on the ended run's subject.
- *                    Space-wide only (never enabled for a project or session).
+ *   run_ended      — a LINK: a run of another playbook (`playbook`) ended,
+ *                    done or not (`outcome`, absent = either). The new run
+ *                    works on the ended run's subject. Space-wide only.
  */
 export const WORKER_ACTIVATOR_TRIGGERS = [
   "created",
@@ -52,10 +51,11 @@ export const WORKER_ACTIVATOR_TRIGGERS = [
 export type WorkerActivatorTrigger = (typeof WORKER_ACTIVATOR_TRIGGERS)[number];
 
 /**
- * How a run ended, for a `run_ended` link: `delivered` = its session closed
- * done (`closed`); `dropped` = it was cancelled or failed.
+ * How a run ended, for a `run_ended` link: `done` = its session closed with
+ * nothing required left open (no `closedNotDone` record); `not_done` = it
+ * closed anyway with required work open, or was cancelled or failed.
  */
-export const WORKER_RUN_OUTCOMES = ["delivered", "dropped"] as const;
+export const WORKER_RUN_OUTCOMES = ["done", "not_done"] as const;
 export type WorkerRunOutcome = (typeof WORKER_RUN_OUTCOMES)[number];
 
 /**

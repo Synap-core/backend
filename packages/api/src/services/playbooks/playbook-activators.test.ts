@@ -1277,13 +1277,32 @@ describe("D4: rules compiled before the worker spec re-converge once", () => {
   });
 });
 
-describe("a LINK: when a run of another playbook ends (W8a)", () => {
+describe("a LINK: when a run of another playbook ends", () => {
   const SHIP = { id: "pb-ship", name: "Ship a change" };
   const LINK = {
     on: "run_ended",
     playbook: "Ship a change",
-    outcome: "delivered",
+    outcome: "done",
     mode: "propose",
+  };
+  const base = {
+    playbookId: PB,
+    playbookName: "Repurpose",
+    profileSlug: "post",
+    statusProperty: null,
+    subject: { profileKind: "kind" as const, lifecycleProperty: null },
+  };
+  const filtersOf = (decl: unknown) => {
+    const s = (
+      decl as {
+        sentence: {
+          trigger: Parameters<typeof toBackendTrigger>[0];
+          conditions: Parameters<typeof toBackendTrigger>[1];
+        };
+      }
+    ).sentence;
+    return toBackendTrigger(s.trigger, s.conditions).triggerConfig
+      .filters as Record<string, unknown>;
   };
 
   it("compiles onto the session close of the followed playbook, through the rule door, linked as `link`", async () => {
@@ -1291,12 +1310,12 @@ describe("a LINK: when a run of another playbook ends (W8a)", () => {
     setPlaybook([LINK, TWO[0]]);
     const res = await run();
     expect(res.outcomes.map((o) => [o.key, o.status])).toEqual([
-      ["run_ended:Ship a change:delivered", "created"],
+      ["run_ended:Ship a change:done", "created"],
       ["created", "created"],
     ]);
     const call = vi.mocked(createRuleGoverned).mock.calls[0]![0];
     expect(call.intent).toBe(
-      'When a run of "Ship a change" is delivered, propose running "Repurpose" on its post.'
+      'When a run of "Ship a change" is done, propose running "Repurpose" on its post.'
     );
     const sentence = call.sentence as {
       trigger: Parameters<typeof toBackendTrigger>[0];
@@ -1304,19 +1323,24 @@ describe("a LINK: when a run of another playbook ends (W8a)", () => {
       actions: Array<{ config: Record<string, unknown> }>;
     };
     const trigger = toBackendTrigger(sentence.trigger, sentence.conditions);
-    // The close door's event (its SSOT), filtered on the followed playbook
-    // and the end.
+    // The close door's event (its SSOT), filtered on the followed playbook,
+    // the rule owner's own runs, runs (not attached sessions), and the end.
     expect(trigger).toEqual({
       triggerType: "event",
       triggerConfig: {
         eventPattern: FOCUS_SESSION_CLOSED_EVENT_TYPE,
-        filters: { playbookId: "pb-ship", status: "closed" },
+        filters: {
+          playbookId: "pb-ship",
+          userId: "user-1",
+          attached: false,
+          closedAs: "done",
+        },
       },
     });
     // The flow read draws the edge back off that same trigger.
     expect(linkOfTrigger(trigger.triggerConfig)).toEqual({
       playbookId: "pb-ship",
-      outcome: "delivered",
+      outcome: "done",
     });
     // …and its THEN starts THIS playbook on the ended run's subject.
     expect(sentence.actions[0]!.config).toMatchObject({
@@ -1330,34 +1354,27 @@ describe("a LINK: when a run of another playbook ends (W8a)", () => {
     ]);
   });
 
-  it("a dropped end filters on a status that is not closed; any end filters on none", async () => {
-    linkable.rows.set("Ship a change", SHIP);
-    for (const [outcome, status] of [
-      ["dropped", { $ne: "closed" }],
-      [undefined, undefined],
-    ] as const) {
-      const decl = activatorRuleDecl({
-        activator: { ...LINK, outcome } as never,
-        playbookId: PB,
-        playbookName: "Repurpose",
-        profileSlug: "post",
-        statusProperty: null,
-        subject: { profileKind: "kind", lifecycleProperty: null },
-        linked: linkable.rows,
-      });
-      const s = (
-        decl as {
-          sentence: {
-            trigger: Parameters<typeof toBackendTrigger>[0];
-            conditions: Parameters<typeof toBackendTrigger>[1];
-          };
-        }
-      ).sentence;
-      const filters = toBackendTrigger(s.trigger, s.conditions).triggerConfig
-        .filters as Record<string, unknown>;
-      expect(filters.status).toEqual(status);
-      expect(filters.playbookId).toBe("pb-ship");
-    }
+  it("not_done filters on it; any end filters on none; the owner is the rule's", () => {
+    const linked = new Map([["Ship a change", SHIP]]);
+    const notDone = activatorRuleDecl({
+      ...base,
+      activator: { ...LINK, outcome: "not_done" } as never,
+      linked,
+      ownerUserId: "owner-9",
+    });
+    expect(filtersOf(notDone)).toEqual({
+      playbookId: "pb-ship",
+      userId: "owner-9",
+      attached: false,
+      closedAs: "not_done",
+    });
+    const any = activatorRuleDecl({
+      ...base,
+      activator: { ...LINK, outcome: undefined } as never,
+      linked,
+      ownerUserId: "owner-9",
+    });
+    expect(filtersOf(any)).not.toHaveProperty("closedAs");
   });
 
   it("a link to a playbook the space does not hold is refused by name, then compiles once it is installed", async () => {
@@ -1365,7 +1382,7 @@ describe("a LINK: when a run of another playbook ends (W8a)", () => {
     const before = await run();
     expect(before.outcomes).toEqual([
       expect.objectContaining({
-        key: "run_ended:Ship a change:delivered",
+        key: "run_ended:Ship a change:done",
         status: "denied",
         reason: expect.stringContaining('no playbook "Ship a change"'),
       }),
@@ -1376,30 +1393,46 @@ describe("a LINK: when a run of another playbook ends (W8a)", () => {
     expect(after.outcomes[0]!.status).toBe("created");
   });
 
-  it("a playbook following itself, or a link enabled for a project, compiles nothing", () => {
-    const base = {
-      playbookId: PB,
-      playbookName: "Repurpose",
-      profileSlug: "post",
-      statusProperty: null,
-      subject: { profileKind: "kind" as const, lifecycleProperty: null },
+  it("the playbook a link compiled to is pinned: another of the same name never retargets it", async () => {
+    linkable.rows.set("Ship a change", SHIP);
+    setPlaybook([LINK]);
+    await run();
+    const memory = (store.playbook!.metadata as Row).activatorRules as {
+      rules: Record<string, { linkedPlaybookId?: string }>;
     };
+    expect(memory.rules["run_ended:Ship a change:done"]!.linkedPlaybookId).toBe(
+      "pb-ship"
+    );
+    // The name now resolves to another playbook; the pinned one still exists.
+    linkable.rows.set("Ship a change", { id: "pb-other", name: "Ship a change" });
+    linkable.rows.set("pb-ship", SHIP);
+    vi.mocked(createRuleGoverned).mockClear();
+    const again = await run();
+    expect(again.outcomes[0]!.status).toBe("unchanged");
+    expect(updateRuleGoverned).not.toHaveBeenCalled();
+  });
+
+  it("a playbook following itself, a link with no owner, or a link enabled for a project, compiles nothing", () => {
     const self = activatorRuleDecl({
       ...base,
       activator: { ...LINK, playbook: "Repurpose" } as never,
       linked: new Map([["Repurpose", { id: PB, name: "Repurpose" }]]),
+      ownerUserId: "user-1",
     });
-    expect(self).toMatchObject({
-      error: expect.stringContaining("its own run"),
+    expect(self).toMatchObject({ error: expect.stringContaining("its own run") });
+    const ownerless = activatorRuleDecl({
+      ...base,
+      activator: LINK as never,
+      linked: new Map([["Ship a change", SHIP]]),
     });
+    expect(ownerless).toMatchObject({ error: expect.stringContaining("owner") });
     const scoped = activatorRuleDecl({
       ...base,
       activator: LINK as never,
       linked: new Map([["Ship a change", SHIP]]),
+      ownerUserId: "user-1",
       scope: { projectId: "proj-1" },
     });
-    expect(scoped).toMatchObject({
-      error: expect.stringContaining("space-wide"),
-    });
+    expect(scoped).toMatchObject({ error: expect.stringContaining("space-wide") });
   });
 });

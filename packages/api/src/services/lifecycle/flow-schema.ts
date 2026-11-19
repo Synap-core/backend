@@ -234,8 +234,6 @@ export const flowOfSchema = z.object({
       produces: z.array(z.string()),
       /** Kinds of `produces` that are helpers: worked here, not an output. */
       helpers: z.array(z.string()),
-      /** A kind of `produces` → the kind it feeds. */
-      feeds: z.record(z.string(), z.string()),
     })
     .nullable(),
   totals: z.object({

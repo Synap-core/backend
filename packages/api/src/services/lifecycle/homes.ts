@@ -38,6 +38,7 @@ import {
   isNotNull,
   drizzleSql,
   declaredLifecycleProfilesStatement,
+  readStoredIntent,
 } from "@synap/database";
 import {
   entities,
@@ -168,13 +169,8 @@ export interface ProducedKind {
     status: string | null;
     reason: HeadlineReason;
   } | null;
-  /**
-   * `helper`: the template says this kind serves the space's output without
-   * being one (`settings.intent.helpers`). Absent = produced.
-   */
-  role?: "helper";
-  /** The kind this one feeds (`settings.intent.feeds`); absent = none declared. */
-  feeds?: string;
+  /** `helper`: worked here to serve an output, not one (`settings.intent.helpers`); absent = an output. */
+  as?: "helper";
 }
 
 export interface SpaceIntent {
@@ -378,39 +374,9 @@ async function projectSpaceIds(
   ]);
 }
 
-/** The stored (template) intent, when well-formed. */
-function storedIntentOf(settings: Record<string, unknown> | null): {
-  label: string;
-  produces: string[];
-  helpers: string[];
-  feeds: Record<string, string>;
-} | null {
-  const intent = settings?.intent as
-    | {
-        label?: unknown;
-        produces?: unknown;
-        helpers?: unknown;
-        feeds?: unknown;
-      }
-    | null
-    | undefined;
-  if (!intent || typeof intent.label !== "string" || !intent.label.trim())
-    return null;
-  const strings = (v: unknown) =>
-    Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
-  const feeds: Record<string, string> = {};
-  if (intent.feeds && typeof intent.feeds === "object") {
-    for (const [k, v] of Object.entries(intent.feeds)) {
-      if (typeof v === "string") feeds[k] = v;
-    }
-  }
-  return {
-    label: intent.label,
-    produces: strings(intent.produces),
-    helpers: strings(intent.helpers),
-    feeds,
-  };
-}
+/** The stored (template) intent, when well-formed (THE reader, `readStoredIntent`). */
+const storedIntentOf = (settings: Record<string, unknown> | null) =>
+  readStoredIntent(settings);
 
 /**
  * Counts PER SPACE and profile — what a space with no declared intent
@@ -851,7 +817,6 @@ export async function readHome(
           source: "template" as const,
           produces: own.produces,
           helpers: own.helpers,
-          feeds: own.feeds,
         }
       : {
           space: s,
@@ -859,7 +824,6 @@ export async function readHome(
           source: "inferred" as const,
           produces: inferred.get(s.id) ?? [],
           helpers: [] as string[],
-          feeds: {} as Record<string, string>,
         };
   });
 
@@ -934,13 +898,10 @@ export async function readHome(
   const out = intents.map((i, idx): SpaceIntent => {
     const produced = read
       .filter((p, n): p is ProducedKind => p !== null && pairs[n]!.idx === idx)
-      // What the template says each kind is to the space (W8a).
+      // What the template says each kind is to the space.
       .map((p) => ({
         ...p,
-        ...(i.helpers.includes(p.profileSlug)
-          ? { role: "helper" as const }
-          : {}),
-        ...(i.feeds[p.profileSlug] ? { feeds: i.feeds[p.profileSlug] } : {}),
+        ...(i.helpers.includes(p.profileSlug) ? { as: "helper" as const } : {}),
       }));
     return {
       workspaceId: i.space.id,

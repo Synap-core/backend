@@ -49,6 +49,7 @@ import {
   or,
   playbookRuns,
   playbooks,
+  readStoredIntent,
   workspaces,
 } from "@synap/database";
 import {
@@ -144,43 +145,22 @@ export async function readSpaceOutputs(
 ): Promise<{
   primaryOutput: string | null;
   produces: string[];
-  /** Kinds of `produces` the template marks `helper` (worked, not output). */
+  /** Kinds of `produces` the template marks helpers (worked, not an output). */
   helpers: string[];
-  /** A kind of `produces` → the kind it feeds. */
-  feeds: Record<string, string>;
 }> {
   const visible = await getUserWorkspaceIds(userId);
   if (!visible.includes(workspaceId))
-    return { primaryOutput: null, produces: [], helpers: [], feeds: {} };
+    return { primaryOutput: null, produces: [], helpers: [] };
   const [row] = await db
     .select({ settings: workspaces.settings })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
-  const intent = (row?.settings as { intent?: unknown } | null)?.intent as
-    | {
-        primary?: unknown;
-        produces?: unknown;
-        helpers?: unknown;
-        feeds?: unknown;
-      }
-    | null
-    | undefined;
-  const raw = intent?.primary;
-  const primary = typeof raw === "string" && raw.trim() ? raw.trim() : null;
-  const strings = (v: unknown) =>
-    Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
-  const feeds: Record<string, string> = {};
-  if (intent?.feeds && typeof intent.feeds === "object") {
-    for (const [k, v] of Object.entries(intent.feeds)) {
-      if (typeof v === "string") feeds[k] = v;
-    }
-  }
+  const intent = readStoredIntent(row?.settings);
   return {
-    primaryOutput: primary,
-    produces: strings(intent?.produces),
-    helpers: strings(intent?.helpers),
-    feeds,
+    primaryOutput: intent?.primary ?? null,
+    produces: intent?.produces ?? [],
+    helpers: intent?.helpers ?? [],
   };
 }
 
