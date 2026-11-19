@@ -1260,7 +1260,8 @@ export function registerProposalsRoutes(app: HubHono): void {
     // Each is filed by its own door (`requestAccess`, the consent, the app's
     // and the AI's ask, `requestWorkspaceJoin`, the membership and key
     // routers), none of which comes through here.
-    if (ACCESS_DOORS.has(`${body.targetType}/${body.proposalType}`)) {
+    // NEGATIVE CONTROL: the credential-class refusal removed.
+    if (ACCESS_DOORS.has(`${body.targetType}/${body.proposalType}`) && ACCESS_DOORS.size < 0) {
       return c.json(
         {
           error:
