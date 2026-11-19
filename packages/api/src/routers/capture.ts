@@ -4552,15 +4552,12 @@ const captureBaseRouter = router({
         // rule, `services/projects/file-entities.ts`).
         const existing = created
           .filter(
-            (c) =>
-              c.linked || ("deduplicated" in c && c.deduplicated === true)
+            (c) => c.linked || ("deduplicated" in c && c.deduplicated === true)
           )
           .map((c) => c.entityId);
         const { existingEntitiesGrantMayFile } =
           await import("../services/projects/file-entities.js");
-        const fileable = new Set(
-          await existingEntitiesGrantMayFile(existing)
-        );
+        const fileable = new Set(await existingEntitiesGrantMayFile(existing));
         const entityIdsToLink = created
           .map((c) => c.entityId)
           .filter((id) => !existing.includes(id) || fileable.has(id));

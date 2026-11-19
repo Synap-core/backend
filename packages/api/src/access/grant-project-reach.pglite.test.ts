@@ -78,7 +78,12 @@ const W = randomUUID();
 const P = randomUUID();
 const Q = randomUUID();
 
-const E = { p: randomUUID(), p2: randomUUID(), q: randomUUID(), n: randomUUID() };
+const E = {
+  p: randomUUID(),
+  p2: randomUUID(),
+  q: randomUUID(),
+  n: randomUUID(),
+};
 const DOC = { p: randomUUID(), n: randomUUID() };
 const REL = {
   bpP: randomUUID(), // E.p  --belongs_to_project--> P
@@ -127,9 +132,10 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
-  await q(`insert into users (id, email, user_type) values ($1,'a@x','human')`, [
-    ALICE,
-  ]);
+  await q(
+    `insert into users (id, email, user_type) values ($1,'a@x','human')`,
+    [ALICE]
+  );
   await q(
     `insert into workspaces (id, name, owner_id, settings) values ($1,'w',$2,'{}'::jsonb)`,
     [W, ALICE]
@@ -223,7 +229,13 @@ const inP = (permission: string): GrantScope => ({
 describe("a scope pinned to project P reads the rows IN P (W1)", () => {
   const cases: Array<[string, object, unknown, string, string[]]> = [
     ["entities", entities, entities.id, "entity.read", [E.p, E.p2]],
-    ["documents (a body follows its entity)", documents, documents.id, "document.read", [DOC.p]],
+    [
+      "documents (a body follows its entity)",
+      documents,
+      documents.id,
+      "document.read",
+      [DOC.p],
+    ],
     [
       "relations (both ends in P; the filing edge to P itself)",
       relations,
@@ -231,7 +243,13 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
       "relation.read",
       [REL.bpP, REL.bpP2, REL.inside],
     ],
-    ["focus_sessions", focusSessions, focusSessions.id, "session.read", [SESS.p]],
+    [
+      "focus_sessions",
+      focusSessions,
+      focusSessions.id,
+      "session.read",
+      [SESS.p],
+    ],
     [
       "channels (pinned to P, or the room of a session in P)",
       channels,
@@ -241,7 +259,13 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
     ],
     ["proposals", proposals, proposals.id, "proposal.read", [PROP.p]],
     ["views", views, views.id, "view.read", [VIEW.p]],
-    ["project_tracks", projectTracks, projectTracks.id, "track.read", [TRACK.p]],
+    [
+      "project_tracks",
+      projectTracks,
+      projectTracks.id,
+      "track.read",
+      [TRACK.p],
+    ],
     [
       "track_participants (who is on a goal of P)",
       trackParticipants,
@@ -249,7 +273,13 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
       "track.read",
       [PART.p],
     ],
-    ["projects (the project row itself)", projects, projects.id, "project.read", [P]],
+    [
+      "projects (the project row itself)",
+      projects,
+      projects.id,
+      "project.read",
+      [P],
+    ],
   ];
 
   it.each(cases)("%s", async (_name, table, idCol, permission, expected) => {
@@ -260,7 +290,9 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
 
   it("CONTROL — the same scope with no pin adds no clause (every row)", () => {
     for (const [, table, , permission] of cases)
-      expect(grantReadClause(table, { permissions: [permission] })).toBeUndefined();
+      expect(
+        grantReadClause(table, { permissions: [permission] })
+      ).toBeUndefined();
   });
 
   it("a pin on Q reads Q's rows, never P's", async () => {
@@ -268,9 +300,15 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
       permissions: [permission],
       projectIds: [Q],
     });
-    expect(await reads(focusSessions, focusSessions.id, inQ("session.read"))).toEqual([SESS.q]);
-    expect(await reads(proposals, proposals.id, inQ("proposal.read"))).toEqual([PROP.q]);
-    expect(await reads(relations, relations.id, inQ("relation.read"))).toEqual([REL.bpQ]);
+    expect(
+      await reads(focusSessions, focusSessions.id, inQ("session.read"))
+    ).toEqual([SESS.q]);
+    expect(await reads(proposals, proposals.id, inQ("proposal.read"))).toEqual([
+      PROP.q,
+    ]);
+    expect(await reads(relations, relations.id, inQ("relation.read"))).toEqual([
+      REL.bpQ,
+    ]);
   });
 
   it("a channel of a record follows that record, when the scope also reads records", async () => {
@@ -283,7 +321,9 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
   });
 
   it("the subject still decides: a project pin reads no table its permissions do not name", async () => {
-    expect(await reads(focusSessions, focusSessions.id, inP("entity.read"))).toEqual([]);
+    expect(
+      await reads(focusSessions, focusSessions.id, inP("entity.read"))
+    ).toEqual([]);
   });
 
   it("a space pin and a project pin together read the rows in BOTH", async () => {

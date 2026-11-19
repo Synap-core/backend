@@ -44,13 +44,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import {
-  and,
-  db,
-  eq,
-  getRequestGrant,
-  type KeyGrant,
-} from "@synap/database";
+import { and, db, eq, getRequestGrant, type KeyGrant } from "@synap/database";
 import {
   entities,
   focusSessions,

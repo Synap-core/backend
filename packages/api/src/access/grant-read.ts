@@ -216,7 +216,10 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
             .select({ id: entities.documentId })
             .from(entities)
             .where(
-              and(isNull(entities.deletedAt), projectLensWhere(entities.id, ids))
+              and(
+                isNull(entities.deletedAt),
+                projectLensWhere(entities.id, ids)
+              )
             )
         ),
     }),

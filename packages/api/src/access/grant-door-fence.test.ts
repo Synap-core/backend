@@ -1557,10 +1557,13 @@ describe("a PROJECT pin is narrowed like a space pin (app-permission plan W1)", 
     ["GET", "/projects"],
     // A narrowed door: the row read through the grant-aware predicate.
     ["GET", `/focus-sessions/${S}`],
-  ] as const)("%s %s admits a project pin as it admits a space pin", (m, path) => {
-    expect(restDoorAllowed(m, path, IN_SPACE)).toBe(true);
-    expect(restDoorAllowed(m, path, IN_PROJECT)).toBe(true);
-  });
+  ] as const)(
+    "%s %s admits a project pin as it admits a space pin",
+    (m, path) => {
+      expect(restDoorAllowed(m, path, IN_SPACE)).toBe(true);
+      expect(restDoorAllowed(m, path, IN_PROJECT)).toBe(true);
+    }
+  );
 
   it("an aggregate READS door refuses a project pin as it refuses a space pin", () => {
     for (const tool of ["synap_list_sessions", "synap_list_proposals"]) {
