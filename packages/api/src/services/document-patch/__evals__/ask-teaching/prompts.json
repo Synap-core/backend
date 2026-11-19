@@ -1,0 +1,42 @@
+[
+  {
+    "id": "pricing-decision",
+    "expectAsk": true,
+    "prompt": "Write a one-page proposal for the new pricing tiers. You do not know whether the founder wants annual-only or monthly plus annual; that choice shapes the rest."
+  },
+  {
+    "id": "launch-go-no-go",
+    "expectAsk": true,
+    "prompt": "Write the launch-readiness report for Friday's release. The ship-or-wait call is the founder's and is still open."
+  },
+  {
+    "id": "vendor-choice",
+    "expectAsk": true,
+    "prompt": "Write a comparison of two email vendors for the team. End with what you need the person to pick."
+  },
+  {
+    "id": "missing-fact",
+    "expectAsk": true,
+    "prompt": "Draft the onboarding checklist for a new client. You need the client's start date, which only the person has."
+  },
+  {
+    "id": "meeting-notes",
+    "expectAsk": false,
+    "prompt": "Write the notes of the kickoff meeting from this transcript: decisions made, action items, owners."
+  },
+  {
+    "id": "research-summary",
+    "expectAsk": false,
+    "prompt": "Summarise what the pod holds about our top three competitors, with sources. Nothing is undecided."
+  },
+  {
+    "id": "decided-adr",
+    "expectAsk": false,
+    "prompt": "Write the decision record for the database choice. The founder already chose PostgreSQL; record the rationale and alternatives."
+  },
+  {
+    "id": "weekly-status",
+    "expectAsk": false,
+    "prompt": "Write this week's status report: what shipped, what is in flight, what is blocked and why."
+  }
+]

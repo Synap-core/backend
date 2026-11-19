@@ -60,6 +60,37 @@ directive swallows what follows). Keep the finding itself in the prose AFTER the
 embed; the fallback is a short, qualitative description of the object, not the
 place for numbers that go stale.
 
+### Asking the person: a `synap-ask` block, not a prose question
+
+When the document needs the person's decision or input, embed an ASK instead of writing the question in prose ("Which option do you prefer?" under "Open questions"). The block files a real question on YOUR focus session (start one first: `synap_start_session`) and the document keeps a live card the person answers in one tap, on the phone, in the app or in the browser. A prose question can only be answered by typing somewhere else.
+
+A definition is a ```json block FIRST in the directive (`ask` plus an optional `key` slug and `label`), then the question as the fallback prose that exports and old readers show. Shapes and every mode: `synap_load_skill("system/synap/asks")`.
+
+````
+:::synap-ask
+```json
+{"key":"ship-today","label":"Ship today?","ask":{"mode":"confirm","prompt":"Ship the change today?","yes":{"description":"Goes live at 9:00","recommended":true},"no":{"description":"Stays in review"}}}
+```
+
+Ship the change today?
+:::
+
+:::synap-ask
+```json
+{"key":"database","label":"Which database?","ask":{"mode":"choose","options":[{"label":"PostgreSQL","recommended":true,"description":"Already in the pod"},{"label":"SQLite","description":"One more thing to run"}]}}
+```
+
+Which database should the service use?
+:::
+````
+
+On write the pod rewrites each definition to its reference form (`sessionId` + `slot`); the answer comes back on your session like any ask (`synap_wait_for_answer`, or the session room).
+
+- **Use an ask** for one real decision or one missing fact that changes what happens next: a choice between options, a go/no-go, a value only the person has. Mark exactly ONE option `recommended` when you have a view.
+- **Do not**: write the question in prose; put many asks in one document (a handful of related questions is a form, one `mode:"form"` ask; more than that is a conversation, not a document); ask something whose answer changes nothing; ask what you can read in the pod (`synap_ask`) or decide by a stated default (name the default in the prose instead).
+- A document written WITHOUT a session of yours cannot file the question: the write is refused with the fix.
+- After a prose question under a "Questions" or "Decisions" heading with no ask block, the write receipt carries a one-line `nudge`; it is advisory and the write is kept.
+
 ### Charts: snapshot or live (decision D2)
 
 A `chart-*` cell draws its data one of two ways, chosen per embed:
