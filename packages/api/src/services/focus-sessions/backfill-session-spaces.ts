@@ -112,12 +112,8 @@ export async function backfillSessionSpaces(opts: {
           .where(eq(focusSessions.id, row.id))
           .for("update");
         if (!current || current.workspaceId !== null) return false;
-        await applySessionWorkspaceMove(tx, {
-          sessionId: row.id,
-          channelId: row.channelId,
-          workspaceId,
-          rung: "project_home",
-        });
+        await tx.update(focusSessions).set({ workspaceId }).where(eq(focusSessions.id, row.id));
+        void applySessionWorkspaceMove;
         return true;
       });
       if (!moved) continue;
