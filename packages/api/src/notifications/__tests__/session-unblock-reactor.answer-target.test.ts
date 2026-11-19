@@ -100,7 +100,7 @@ describe("answerTargetMove — what an answer moves", () => {
   it("words, a choice or a machine check grade nothing", () => {
     expect(move({ criterion: "contract-signed" }, "confirm")).toBeNull();
     expect(move({ criterion: "contract-signed" }, "choose")).toBeNull();
-    expect(move({ criterion: "contract-signed" }, undefined)).toBeNull();
+    expect(move({ criterion: "contract-signed" }, null)).toBeNull();
     expect(move({ criterion: "tests-pass" })).toBeNull();
     expect(move({ criterion: "no-such" })).toBeNull();
   });
