@@ -803,7 +803,12 @@ describe("a FILING proposal is never decided by a project pin (W1 review N1)", (
         [id]
       )
     ).rows as Array<Record<string, unknown>>;
-    return row as Record<string, unknown> & { id: string };
+    return row as Record<string, unknown> & {
+      id: string;
+      targetType: string;
+      proposalType: string;
+      data: unknown;
+    };
   };
   const decide = (
     row: Record<string, unknown>,
