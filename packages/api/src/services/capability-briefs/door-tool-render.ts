@@ -62,6 +62,8 @@ export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
   synap_ai:
     "a runner value (the pod's own AI) in a playbook's or a step's `runner`, not a tool",
   synap_packages: "a database table (the marketplace catalog), not a tool",
+  run_ended:
+    "a playbook activator trigger (`on: run_ended`, a link between playbooks), not a tool",
   market_publish:
     "a tool of the Synap control-plane connector (the catalog), not a pod tool",
   market_search:

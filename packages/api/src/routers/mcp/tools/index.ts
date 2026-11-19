@@ -474,7 +474,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
   ),
   activators: deriveJsonSchema(
     playbookActivatorsSchema,
-    "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual' | 'run_ended' (a link: playbook = the playbook, by name or id, whose run ending starts this one on the same subject; outcome?: 'done' | 'not_done': not_done = closed with required work open, cancelled or failed; only the owner's own runs, never a session merely attached), status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition. A chain of links that loops is refused."
+    "Workers (when the process starts on its subject): [{ on: 'created' | 'enters_status' | 'count' | 'schedule' (cron) | 'manual' | 'run_ended' (a link: when a run of `playbook` ends; outcome?), status?, min?, size?, mode: 'propose' (default) | 'run', maxPendingApprovals? }]. `run` only when cheap and safe. Grammar and limits: skill system/synap/processes. Needs subjectProfileSlug; compiled to a governed rule the owner can pause."
   ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,
