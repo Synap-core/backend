@@ -77,8 +77,25 @@ function setup(overrides: Partial<CellFrameHostOptions> = {}) {
 }
 
 describe("the module frame host", () => {
-  it("answers ready with init, stamped sdk 2, to that frame only", async () => {
+  it("one load says ready twice: a read sent between the two is still answered", async () => {
+    const { posted, send } = setup({ read: async () => ({ ok: true }) });
+    await send({ type: "synap:ready" });
+    const read = send({
+      type: "synap:query",
+      id: "q1",
+      operation: "entities.list",
+    });
+    await send({ type: "synap:ready" });
+    await read;
+    expect(posted.map((p) => p.message.type)).toEqual([
+      "synap:init",
+      "synap:query:result",
+    ]);
+  });
+
+  it("answers ready with init once, stamped sdk 2, to that frame only", async () => {
     const { posted, send } = setup();
+    await send({ type: "synap:ready" });
     await send({ type: "synap:ready" });
     expect(posted).toEqual([
       {
@@ -94,49 +111,6 @@ describe("the module frame host", () => {
         },
         target: "*",
       },
-    ]);
-  });
-
-  it("a srcdoc reload (same window, a new ready) starts a new load: init again, mounted again, the in-flight cap starts over", async () => {
-    const pending: Array<() => void> = [];
-    const { posted, on, send } = setup({
-      read: () =>
-        new Promise((resolve) => pending.push(() => resolve({ ok: true }))),
-    });
-    await send({ type: "synap:ready" });
-    await send({ type: "synap:mounted" });
-    // The first load fills the cap; its reads never come back before the reload.
-    const runs = Array.from({ length: CELL_BRIDGE_MAX_IN_FLIGHT }, (_, i) =>
-      send({ type: "synap:query", id: `q${i}`, operation: "entities.list" })
-    );
-    await Promise.resolve();
-    expect(pending).toHaveLength(CELL_BRIDGE_MAX_IN_FLIGHT);
-    // The reload: the same contentWindow says ready again.
-    await send({ type: "synap:ready" });
-    await send({ type: "synap:mounted" });
-    const fresh = send({
-      type: "synap:query",
-      id: "q0",
-      operation: "entities.list",
-    });
-    await Promise.resolve();
-    expect(pending).toHaveLength(CELL_BRIDGE_MAX_IN_FLIGHT + 1);
-    pending.forEach((done) => done());
-    await Promise.all([...runs, fresh]);
-    const types = posted.map((p) => p.message.type);
-    expect(types.filter((t) => t === "synap:init")).toHaveLength(2);
-    // Only the new load's read is answered: the old load's answers are dropped.
-    expect(
-      posted.filter((p) => p.message.type === "synap:query:result")
-    ).toEqual([
-      {
-        message: { type: "synap:query:result", id: "q0", data: { ok: true } },
-        target: "*",
-      },
-    ]);
-    expect(on.status.mock.calls).toEqual([
-      [{ state: "ready" }],
-      [{ state: "ready" }],
     ]);
   });
 

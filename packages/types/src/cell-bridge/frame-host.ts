@@ -16,13 +16,13 @@
  *   - it parses (`parseCellFrameMessage`).
  *
  * Then:
- *   - `synap:ready` → `synap:init`, with the host's context (`init()`). A
- *     ready starts a new LOAD: a srcdoc reload keeps the same `contentWindow`,
- *     so the window cannot tell one load from the next. The load's state (the
- *     mounted flag, the in-flight count) starts over, and an answer to a
- *     request of an older load is dropped, never posted to the new document
- *     (whose request ids start over too);
- *   - `synap:mounted` → `on.status({ state: "ready" })`, once per load;
+ *   - `synap:ready` → `synap:init` once, with the host's context (`init()`).
+ *     One load sends ready twice (the init queue, then the SDK's onInit), so a
+ *     repeat is ignored. A srcdoc reload keeps the same `contentWindow`, so
+ *     this host cannot tell one load from the next: ONE host per frame load —
+ *     a host that reloads its frame makes a new host (ViewFrame, pod admin's
+ *     module frame);
+ *   - `synap:mounted` → `on.status({ state: "ready" })`, once;
  *   - `synap:error` → `on.status({ state: "error", message })`;
  *   - `synap:resize` → `on.resize(height)`;
  *   - a read: only an op of `CELL_BRIDGE_READ_OPS`, refused when it reads one
@@ -168,8 +168,9 @@ function mutateAnswer(
 
 /** The `message` handler for one running module frame (one per frame load). */
 export function createCellFrameHost(options: CellFrameHostOptions) {
-  /** The current load's state; a `synap:ready` replaces it. */
-  let load = { mounted: false, inFlight: 0 };
+  let inFlight = 0;
+  let ready = false;
+  let mounted = false;
   const mechanism = options.mechanism ?? "module";
   const on = options.on ?? {};
 
@@ -179,17 +180,17 @@ export function createCellFrameHost(options: CellFrameHostOptions) {
     if (event.origin !== "null") return;
     const msg = parseCellFrameMessage(event.data);
     if (!msg) return;
-    if (msg.type === "synap:ready") load = { mounted: false, inFlight: 0 };
-    const current = load;
 
     const post = (message: unknown) => {
-      // The frame may have been torn down, or reloaded (a newer ready), meanwhile.
-      if (options.frameWindow() !== frame || load !== current) return;
+      // The frame may have been reloaded or torn down meanwhile.
+      if (options.frameWindow() !== frame) return;
       frame.postMessage(message, "*");
     };
 
     switch (msg.type) {
       case "synap:ready":
+        if (ready) return;
+        ready = true;
         post({
           type: "synap:init",
           config: {},
@@ -197,8 +198,8 @@ export function createCellFrameHost(options: CellFrameHostOptions) {
         });
         return;
       case "synap:mounted":
-        if (current.mounted) return;
-        current.mounted = true;
+        if (mounted) return;
+        mounted = true;
         on.status?.({ state: "ready" });
         return;
       case "synap:error":
@@ -238,11 +239,11 @@ export function createCellFrameHost(options: CellFrameHostOptions) {
           fail(CELL_FRAME_NO_READS);
           return;
         }
-        if (current.inFlight >= CELL_BRIDGE_MAX_IN_FLIGHT) {
+        if (inFlight >= CELL_BRIDGE_MAX_IN_FLIGHT) {
           fail(BUSY);
           return;
         }
-        current.inFlight += 1;
+        inFlight += 1;
         try {
           const data = await options.read(
             msg.operation,
@@ -252,7 +253,7 @@ export function createCellFrameHost(options: CellFrameHostOptions) {
         } catch (err) {
           fail(cellBridgeErrorText(err));
         } finally {
-          current.inFlight -= 1;
+          inFlight -= 1;
         }
         return;
       }
@@ -282,12 +283,12 @@ export function createCellFrameHost(options: CellFrameHostOptions) {
           deny(CELL_FRAME_NO_WRITES);
           return;
         }
-        if (current.inFlight >= CELL_BRIDGE_MAX_IN_FLIGHT) {
+        if (inFlight >= CELL_BRIDGE_MAX_IN_FLIGHT) {
           deny(BUSY);
           return;
         }
         const { typeKey, viewId } = options.identity;
-        current.inFlight += 1;
+        inFlight += 1;
         try {
           const result = await options.write({
             op,
@@ -300,7 +301,7 @@ export function createCellFrameHost(options: CellFrameHostOptions) {
         } catch (err) {
           deny(cellBridgeErrorText(err));
         } finally {
-          current.inFlight -= 1;
+          inFlight -= 1;
         }
         return;
       }
