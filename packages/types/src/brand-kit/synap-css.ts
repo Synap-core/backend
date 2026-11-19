@@ -267,16 +267,24 @@ function synapText(
   value: unknown,
   self: string,
   leaves: Map<string, unknown>,
-  depth = 0
+  depth = 0,
+  /** false: every alias is followed to its value (a projection whose names are not Synap's). */
+  liveAliases = true
 ): string | undefined {
   if (depth > 5) return undefined;
   if (typeof value === "string") {
     const ref = /^\{([^}]+)\}$/.exec(value.trim());
     if (ref) {
-      const name = SYNAP_NAME_BY_PATH.get(ref[1]!);
+      const name = liveAliases ? SYNAP_NAME_BY_PATH.get(ref[1]!) : undefined;
       // An alias to a Synap path stays live; to itself it would be a cycle.
       if (name) return name === self ? undefined : `var(${name})`;
-      return synapText(leaves.get(ref[1]!), self, leaves, depth + 1);
+      return synapText(
+        leaves.get(ref[1]!),
+        self,
+        leaves,
+        depth + 1,
+        liveAliases
+      );
     }
     return value.trim();
   }
@@ -367,4 +375,18 @@ export function renderSynapCss(
   dtcg: Record<string, unknown> | undefined
 ): string {
   return JSON.stringify(synapCssFromDtcg(dtcg), null, 2) + "\n";
+}
+
+/**
+ * A DTCG value as plain CSS text, every alias followed inside the file (no
+ * live `var(--synap-…)`: for a projection onto names that are not Synap's,
+ * `shadcn-css.ts`). Sanitized; undefined when unreadable.
+ */
+export function dtcgCssText(
+  value: unknown,
+  leaves: Map<string, unknown>
+): string | undefined {
+  const t = synapText(value, "", leaves, 0, false);
+  const v = t === undefined ? "" : cssValue(t);
+  return v || undefined;
 }

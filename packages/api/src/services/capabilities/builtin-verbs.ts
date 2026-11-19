@@ -4942,7 +4942,7 @@ const pdfInfoHandler: BuiltinVerbHandler = async (params, ctx) => {
 //
 //   design.read     READ-ONLY: a design, its board, an outline per frame,
 //                   whether it may be edited, what the catalog cannot place.
-//   design.catalog  READ-ONLY: the installed kit, its components and props,
+//   design.catalog  READ-ONLY: the kit (Synap's, or `appId`'s own), its props,
 //                   the canvas blocks, the grid, the frame presets.
 //   design.apply    WRITE, SELF-GATED (`SELF_GATED_BUILTIN_VERBS`): the entity
 //                   door is the one gate, so one proposal carries the entity
@@ -4956,7 +4956,7 @@ const pdfInfoHandler: BuiltinVerbHandler = async (params, ctx) => {
 // design, a grant that does not allow it) is a `VerbRefusal`.
 
 const designReadParams = z.object({ designId: z.string().uuid() });
-const designCatalogParams = z.object({});
+const designCatalogParams = z.object({ appId: z.string().uuid().optional() });
 const designApplyParams = z.object({
   designId: z.string().uuid().optional(),
   baseUpdatedAt: z.string().min(1).optional(),
@@ -4999,10 +4999,12 @@ const designReadHandler: BuiltinVerbHandler = async (params, ctx) => {
   );
 };
 
-const designCatalogHandler: BuiltinVerbHandler = async (params) => {
-  designCatalogParams.parse(params);
+const designCatalogHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = designCatalogParams.parse(params);
   const { designCatalog } = await import("../designs/design-door.js");
-  return designDoorRefusals(() => designCatalog());
+  return designDoorRefusals(() =>
+    designCatalog(ctx.userId, input.appId ?? null)
+  );
 };
 
 const designApplyHandler: BuiltinVerbHandler = async (params, ctx) => {

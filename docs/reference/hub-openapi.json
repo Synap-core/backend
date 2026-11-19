@@ -6952,7 +6952,19 @@
           "layout": { "type": "object", "additionalProperties": {} },
           "grid": { "type": "object", "additionalProperties": {} },
           "frames": {},
-          "generatedAt": { "type": "string" }
+          "generatedAt": { "type": "string" },
+          "appId": { "type": "string" },
+          "kit": {
+            "type": "object",
+            "properties": {
+              "kitId": { "type": "string" },
+              "hash": { "type": "string" },
+              "react": { "type": "string" },
+              "files": { "type": "object", "additionalProperties": {} },
+              "canvas": {}
+            },
+            "required": ["kitId", "hash", "react", "files"]
+          }
         },
         "required": ["kitId", "hash", "components", "layout", "grid"]
       },
@@ -53118,8 +53130,8 @@
     "/brand/kit": {
       "get": {
         "tags": ["Brand"],
-        "summary": "The caller's brand kit (json, css, frame-md, od-design-system, dtcg or synap-css)",
-        "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. `dtcg` and `synap-css` render the brand's approved DTCG token set instead (the file, or its `--synap-*` declarations as JSON `{vars, light, dark}` with no selector), hashed by that set; a brand with none renders `{}` and empty declarations. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
+        "summary": "The caller's brand kit (json, css, frame-md, od-design-system, dtcg, synap-css or css-shadcn)",
+        "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. `dtcg`, `synap-css` and `css-shadcn` render the brand's approved DTCG token set instead (the file, its `--synap-*` declarations, or its shadcn variables for a client app's kit, as JSON `{vars, light, dark}` with no selector), hashed by that set; a brand with none renders `{}` and empty declarations. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -53131,7 +53143,8 @@
                 "frame-md",
                 "od-design-system",
                 "dtcg",
-                "synap-css"
+                "synap-css",
+                "css-shadcn"
               ],
               "default": "json"
             },
@@ -53168,7 +53181,8 @@
                         "frame-md",
                         "od-design-system",
                         "dtcg",
-                        "synap-css"
+                        "synap-css",
+                        "css-shadcn"
                       ]
                     },
                     "content": { "type": "string" },
@@ -53256,14 +53270,35 @@
       "get": {
         "tags": ["Designs"],
         "summary": "The design catalog the pod checks designs against",
-        "description": "The installed `design` capability's catalog snapshot: the kit (`kitId`, `hash`), its components and their props, the canvas blocks (`layout`), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets. 412 when no catalog is installed (never an empty catalog).",
+        "description": "The installed `design` capability's catalog snapshot: the kit (`kitId`, `hash`), its components and their props, the canvas blocks (`layout`), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets. With `appId`, the catalog of that app's designs: when the app names its own kit (`design-kit`), the kit's components with Synap's canvas blocks, a hash naming both, and `kit` (React major, the two code files' sha256, how a dropped block starts). 412 when no catalog is installed or the app's kit cannot be read (never an empty catalog, never Synap's in place of the app's).",
         "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "The app (devplane_app) whose designs to check: its own kit when it names one (`design-kit`), else Synap's."
+            },
+            "required": false,
+            "description": "The app (devplane_app) whose designs to check: its own kit when it names one (`design-kit`), else Synap's.",
+            "name": "appId",
+            "in": "query"
+          }
+        ],
         "responses": {
           "200": {
             "description": "The catalog",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/DesignCatalog" }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an app",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
@@ -53275,8 +53310,81 @@
               }
             }
           },
+          "404": {
+            "description": "No such app",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
           "412": {
-            "description": "No catalog installed",
+            "description": "No catalog installed, or the app's kit cannot be read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/kit": {
+      "get": {
+        "tags": ["Designs"],
+        "summary": "One code file of an app's component kit",
+        "description": "The bytes of an app's kit.js (`part=js`) or kit.css (`part=css`), as its catalog (the app's `design-kit` file) names them, for the Design app to load on its own origin through its Hub proxy. Read through the caller's read floor (the app, then each file). The bytes are checked against the sha256 the catalog pins: other bytes are a 412, never served. Always `text/plain` with `nosniff`, so the pod's origin never runs or applies it; the Design app checks the hash again (`X-Kit-Sha256`) before it loads it. 404 when the app has no kit.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "appId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "enum": ["js", "css"] },
+            "required": true,
+            "name": "part",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": { "description": "The file's bytes (text/plain)" },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such app, or no kit",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "The kit cannot be read, or the bytes are not the pinned ones",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
