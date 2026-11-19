@@ -474,7 +474,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
   ),
   activators: deriveJsonSchema(
     playbookActivatorsSchema,
-    "Workers (when the process starts on its subject): [{ on: 'created' | 'enters_status' | 'count' | 'schedule' (cron) | 'manual' | 'run_ended' (a link: when a run of `playbook` ends; outcome?), status?, min?, size?, mode: 'propose' (default) | 'run', maxPendingApprovals? }]. `run` only when cheap and safe. Grammar and limits: skill system/synap/processes. Needs subjectProfileSlug; compiled to a governed rule the owner can pause."
+    "Workers: when the process starts on its subject (`run_ended` = a link: when a run of `playbook` ends). Mode 'propose' (default) or 'run' (only when cheap and safe). Grammar: skill system/synap/processes. Needs subjectProfileSlug; each compiles to a governed rule the owner can pause."
   ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,
