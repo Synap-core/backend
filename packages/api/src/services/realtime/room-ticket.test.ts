@@ -41,24 +41,28 @@ const DOCS: Record<string, { id: string; type: string; workspaceId: string }> =
     [BOARD]: { id: BOARD, type: "whiteboard", workspaceId: SPACE },
   };
 
-vi.mock("@synap/database", () => ({
-  eq: (_col: unknown, value: unknown) => ({ value }),
-  getRequestGrant: () => h.grant,
-  db: {
-    query: {
-      documents: {
-        findFirst: async ({ where }: { where: { value: string } }) =>
-          DOCS[where.value],
-      },
-      views: {
-        findFirst: async ({ where }: { where: { value: string } }) =>
-          where.value === BOARD
-            ? { id: BOARD_VIEW, workspaceId: SPACE, projectId: null }
-            : undefined,
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return {
+    ...actual,
+    eq: (_col: unknown, value: unknown) => ({ value }),
+    getRequestGrant: () => h.grant,
+    db: {
+      query: {
+        documents: {
+          findFirst: async ({ where }: { where: { value: string } }) =>
+            DOCS[where.value],
+        },
+        views: {
+          findFirst: async ({ where }: { where: { value: string } }) =>
+            where.value === BOARD
+              ? { id: BOARD_VIEW, workspaceId: SPACE, projectId: null }
+              : undefined,
+        },
       },
     },
-  },
-}));
+  };
+});
 vi.mock("@synap/database/realtime-room-tickets", () => ({
   mintRoomTicket: async (_db: unknown, input: Record<string, unknown>) => {
     h.minted.push(input);

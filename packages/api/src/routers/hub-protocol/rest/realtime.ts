@@ -15,7 +15,12 @@
 import { z as zOpenapi } from "@hono/zod-openapi";
 import { ErrorSchema, uuidParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  httpStatusForTrpcError,
+  logger,
+  type HubHono,
+} from "./_shared.js";
 
 const RoomTicketBodySchema = zOpenapi.object({
   documentId: uuidParam,
@@ -138,7 +143,10 @@ export function registerRealtimeRoutes(app: HubHono): void {
         { err, userId, documentId: body.data.documentId },
         "POST /realtime/room-ticket failed"
       );
-      return c.json({ error: "The room ticket could not be issued" }, 500);
+      return c.json(
+        { error: "The room ticket could not be issued" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 }
