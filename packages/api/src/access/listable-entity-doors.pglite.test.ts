@@ -724,6 +724,8 @@ const WITHHELD_FILES: Record<string, string> = {
   "routers/resource-state.ts": "the person's own pinned/recent items, by id",
   "routers/subscriptions.ts": "names subjects of reactions",
   "services/capabilities/builtin-verbs.ts": "searchCollection for dedup",
+  "services/whiteboards/place-on-board.ts":
+    "reference check by id (entity cards the agent names): not a listing, by-id reads stay open",
   "services/capabilities/capability-run-subject.ts": "proposal title",
   "services/capabilities/verb-write-back.ts": "write target",
   "services/capture-agent/submit-capture-graph.ts":

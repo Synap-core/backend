@@ -95,3 +95,6 @@ deploy/state/
 
 # pnpm pack output (scripts/contracts-publish.mjs packs here, then copies out).
 packages/*/*.tgz
+
+# eslint cache (absolute local paths)
+.eslintcache

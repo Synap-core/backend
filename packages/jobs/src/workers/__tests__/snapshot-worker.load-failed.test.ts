@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const m = vi.hoisted(() => ({
   upload: vi.fn(),
   broadcast: vi.fn(),
+  broadcastError: vi.fn(),
   insert: vi.fn(),
 }));
 
@@ -56,6 +57,7 @@ vi.mock("@synap/database/schema", () => ({
 vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
 vi.mock("../../utils/realtime-broadcast.js", () => ({
   broadcastSuccess: async (...args: unknown[]) => m.broadcast(...args),
+  broadcastError: async (...args: unknown[]) => m.broadcastError(...args),
 }));
 
 const { handleWhiteboardSnapshot, handleWhiteboardRestore } =
@@ -143,5 +145,38 @@ describe("handleWhiteboardRestore and a room that failed to load", () => {
     );
     await expect(handleWhiteboardRestore(restoreJob)).rejects.toThrow(/409/);
     expect(m.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("a board nobody has open (applied: false) is never announced as restored", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ success: true, applied: false }), {
+          status: 200,
+        })
+    );
+    await handleWhiteboardRestore(restoreJob);
+    expect(m.broadcast).not.toHaveBeenCalled();
+    expect(m.broadcastError).toHaveBeenCalledWith(
+      "user-1",
+      "whiteboard.restore.failed",
+      expect.stringContaining("not open")
+    );
+  });
+
+  it("CONTROL: an open room that took the state is announced as restored", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ success: true, applied: true }), {
+          status: 200,
+        })
+    );
+    await handleWhiteboardRestore(restoreJob);
+    expect(m.broadcast).toHaveBeenCalledWith(
+      "user-1",
+      "whiteboard.restored",
+      expect.objectContaining({ viewId: "view-1" })
+    );
   });
 });

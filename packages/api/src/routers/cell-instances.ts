@@ -31,17 +31,19 @@ import {
   desc,
   getDb,
   eventRepository,
-  createDocumentWithContent,
   RelationRepository,
   RelationDefRepository,
   SYSTEM_RELATION_TYPES,
-  normalizeDocumentType,
   cellInstances,
   documents,
   entities,
 } from "@synap/database";
 import { requireUserId } from "../utils/user-scoped.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import {
+  createHtmlCellInstance,
+  insertCellInstance,
+} from "../services/cells/create-cell-instance.js";
 
 // ============================================================================
 // SCHEMAS
@@ -125,20 +127,15 @@ export const cellInstancesRouter = router({
         }
       }
 
-      const [row] = await db
-        .insert(cellInstances)
-        .values({
-          workspaceId,
-          userId,
-          cellType: input.cellType,
-          config: input.config ?? {},
-          name: input.name,
-          isTemplate: input.isTemplate ?? false,
-          sourceDocumentId: input.sourceDocumentId,
-          createdByKind: "user",
-          trustLevel: "trusted",
-        })
-        .returning();
+      const row = await insertCellInstance({
+        workspaceId,
+        userId,
+        cellType: input.cellType,
+        config: input.config,
+        name: input.name,
+        isTemplate: input.isTemplate,
+        sourceDocumentId: input.sourceDocumentId,
+      });
 
       return serialize(row);
     }),
@@ -169,36 +166,14 @@ export const cellInstancesRouter = router({
       // land in `workspaceId`, which the input may name. Editor+ there (F10).
       await assertWorkspaceWrite(db, userId, { workspaceId });
 
-      const title = input.name ?? "HTML Cell";
-
-      // 1. Create the backing document through the ONE create door
-      //    (fresh-key upload + row + v1 checkpoint).
-      const document = await createDocumentWithContent(db, eventRepository, {
-        ownerUserId: userId,
+      // The backing document goes through the ONE create door (fresh-key
+      // upload + row + v1 checkpoint), then the html-embed cell references it.
+      const row = await createHtmlCellInstance({
         workspaceId,
-        title,
-        type: normalizeDocumentType("text", "text"),
-        extension: "html",
-        content: input.html,
-        mimeType: "text/html",
-        provenance: { createdByKind: "human" },
+        userId,
+        html: input.html,
+        name: input.name,
       });
-
-      // 2. Create the html-embed cell referencing the versioned document.
-      const [row] = await db
-        .insert(cellInstances)
-        .values({
-          workspaceId,
-          userId,
-          cellType: "html-embed",
-          config: {},
-          name: input.name,
-          isTemplate: false,
-          sourceDocumentId: document.id,
-          createdByKind: "user",
-          trustLevel: "trusted",
-        })
-        .returning();
 
       return serialize(row);
     }),

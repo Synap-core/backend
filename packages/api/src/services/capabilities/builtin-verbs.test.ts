@@ -9,9 +9,6 @@ const h = vi.hoisted(() => ({
     id: string;
     workspaceId: string | null;
   } | null,
-  // Board row returned by the views lookup in output.generate's boardId∈workspace
-  // guard. Null = board not found in the acting workspace.
-  boardRow: { id: "board-1" } as { id: string } | null,
   getWorkspaceMembership: vi.fn(
     async () => ({ role: "owner" }) as { role: string } | null
   ),
@@ -32,16 +29,9 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...(await importOriginal<typeof import("@synap/database")>()),
     db: {
       select: () => ({
-        from: (table: unknown) => ({
+        from: () => ({
           where: () => ({
-            limit: async () =>
-              table === views
-                ? h.boardRow
-                  ? [h.boardRow]
-                  : []
-                : h.channelRow
-                  ? [h.channelRow]
-                  : [],
+            limit: async () => (h.channelRow ? [h.channelRow] : []),
           }),
         }),
       }),
@@ -238,12 +228,10 @@ describe("output.generate handler", () => {
     expect(h.placeArtboardDeck).not.toHaveBeenCalled();
   });
 
-  it("rejects a board that is not in the acting workspace", async () => {
-    h.boardRow = null; // views lookup finds no board in ctx.workspaceId
-    await expect(
-      BUILTIN_VERBS["output.generate"](deckArgs, ctx)
-    ).rejects.toThrow();
-    expect(h.placeArtboardDeck).not.toHaveBeenCalled();
-    h.boardRow = { id: "board-1" }; // restore for any later tests
+  it("hands the acting workspace to the place door, which fences the board to it", async () => {
+    await BUILTIN_VERBS["output.generate"](deckArgs, ctx);
+    expect(h.placeArtboardDeck).toHaveBeenCalledWith(
+      expect.objectContaining({ viewId: BOARD_ID, workspaceId: "ws1" })
+    );
   });
 });

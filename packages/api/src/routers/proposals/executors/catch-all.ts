@@ -114,10 +114,6 @@ const ACKNOWLEDGED_NOOP_KEYS: Record<string, string> = {
   "context/link":
     "DELIBERATE — `context.*` is in DEFAULT_AUTO_APPROVE; same shape as " +
     "bento/arrange. The link is written on the direct path.",
-  "whiteboard/place":
-    "DELIBERATE — whiteboard placement is applied inline by its own REST route; " +
-    'the materializer\'s `case "whiteboard"` explicitly logs "not yet ' +
-    'supported" and skips rather than hard-failing. Approval records the ack.',
 };
 
 /**
