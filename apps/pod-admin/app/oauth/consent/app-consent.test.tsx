@@ -336,18 +336,18 @@ describe("the sheets' choices", () => {
   it("In: All spaces with its hint, and every project included under All", () => {
     const offer = offerOf({
       ...CHAT,
-      permissions: (CHAT.permissions as unknown as Array<Record<string, unknown>>).map(
-        (p) => ({
-          ...p,
-          projects: [
-            {
-              projectId: "p-launch",
-              projectName: "Launch v1",
-              workspaceId: "w-builder",
-            },
-          ],
-        })
-      ),
+      permissions: (
+        CHAT.permissions as unknown as Array<Record<string, unknown>>
+      ).map((p) => ({
+        ...p,
+        projects: [
+          {
+            projectId: "p-launch",
+            projectName: "Launch v1",
+            workspaceId: "w-builder",
+          },
+        ],
+      })),
     } as unknown as App);
     const rows = canRows(offer, "person");
     const all = html(
@@ -382,9 +382,9 @@ describe("the sheets' choices", () => {
   it("In, person has no projects: All (none yet, includes later) and No projects; never a disabled pick", () => {
     const offer = offerOf({
       ...STUDIO,
-      permissions: (STUDIO.permissions as unknown as Array<Record<string, unknown>>).map(
-        (p) => ({ ...p, projects: [] })
-      ),
+      permissions: (
+        STUDIO.permissions as unknown as Array<Record<string, unknown>>
+      ).map((p) => ({ ...p, projects: [] })),
     } as unknown as App);
     const out = html(
       <InChoices
