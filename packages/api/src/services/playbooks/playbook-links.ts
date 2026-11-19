@@ -54,6 +54,9 @@ export function linkRefsOf(
   return out;
 }
 
+/** A ref that is an id (`isUuid` narrows to `string`, which a string ref already is). */
+const isId = (ref: string): boolean => isUuid(ref);
+
 interface LinkedPlaybook {
   id: string;
   name: string;
@@ -74,8 +77,8 @@ export async function resolveLinkedPlaybooks(
 ): Promise<Map<string, LinkedPlaybook>> {
   const out = new Map<string, LinkedPlaybook>();
   if (refs.length === 0) return out;
-  const ids = refs.filter((r) => isUuid(r));
-  const names = refs.filter((r) => !isUuid(r)).map((r) => r.toLowerCase());
+  const ids = refs.filter(isId);
+  const names = refs.filter((r) => !isId(r)).map((r) => r.toLowerCase());
   const space = workspaceId
     ? or(isNull(playbooks.workspaceId), eq(playbooks.workspaceId, workspaceId))
     : isNull(playbooks.workspaceId);
@@ -100,7 +103,7 @@ export async function resolveLinkedPlaybooks(
       )
     );
   for (const ref of refs) {
-    const hits = isUuid(ref)
+    const hits = isId(ref)
       ? rows.filter((r) => r.id === ref)
       : rows.filter((r) => r.name.toLowerCase() === ref.toLowerCase());
     const hit = hits.find((r) => r.workspaceId !== null) ?? hits[0];

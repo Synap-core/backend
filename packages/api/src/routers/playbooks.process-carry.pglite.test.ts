@@ -8,7 +8,9 @@
  *
  * Also pinned here, at the router: archive and a status change re-run the
  * activator pass (only an ACTIVE playbook declares — the applier's own suite
- * covers what the pass then does).
+ * covers what the pass then does); a link (`run_ended`) that would close a
+ * loop is refused at the update door, writing nothing (W8a; the walk itself
+ * is `playbook-links.pglite.test.ts`).
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -191,5 +193,49 @@ describe("what starts it follows the playbook's status", () => {
   it("archive re-runs the activator pass", async () => {
     await caller().archive({ id: PB });
     expect(h.converged).toEqual([PB]);
+  });
+});
+
+describe("a link that closes a loop is refused at the door (W8a)", () => {
+  it("Produce Content following a playbook that follows it is refused; the stored process is unchanged", async () => {
+    // "Review Content" starts when a run of "Produce Content" ends.
+    await q(
+      `insert into playbooks (id, workspace_id, created_by, name, goal_template, status, executor, subject_profile, metadata, version)
+       values ($1,$2,$3,'Review Content','Review {post}','active','is-agent',$4::jsonb,'{}'::jsonb,1)`,
+      [
+        randomUUID(),
+        WS,
+        OWNER,
+        JSON.stringify({
+          profileSlug: "post",
+          activators: [
+            { on: "run_ended", playbook: "Produce Content", mode: "propose" },
+          ],
+        }),
+      ]
+    );
+    const before = await stored();
+    await expect(
+      caller().update({
+        id: PB,
+        activators: [
+          { on: "run_ended", playbook: "Review Content", mode: "propose" },
+        ],
+      })
+    ).rejects.toThrow(
+      /loop: Produce Content starts after Review Content starts after Produce Content/
+    );
+    expect(await stored()).toEqual(before);
+    expect(h.converged).toEqual([]);
+    // A link that does not come back is written.
+    await caller().update({
+      id: PB,
+      activators: [
+        { on: "run_ended", playbook: "Plan Content", mode: "propose" },
+      ],
+    });
+    expect((await stored()).activators).toEqual([
+      { on: "run_ended", playbook: "Plan Content", mode: "propose" },
+    ]);
   });
 });
