@@ -60,9 +60,9 @@ export const sessionCriterionSchema = z
       .enum(CRITERION_ABOUT as readonly [CriterionAbout, ...CriterionAbout[]])
       .optional(),
     /**
-     * The key of the session output this criterion checks (work-model W1,
-     * additive: stored and read back, no reader pairs by it yet). The same
-     * alphabet as a declared slot key.
+     * The key of the session output this criterion checks: THE pairing of a
+     * criterion with an output (`criteriaByOutput`, `@synap-core/types/units`;
+     * work-model W1, W4). The same alphabet as a declared slot key.
      */
     outputKey: z
       .string()
@@ -80,6 +80,15 @@ export const sessionCriterionSchema = z
         code: "custom",
         message: incoherent,
         path: ["checkKind"],
+      });
+    }
+    // A criterion about HOW the work is done checks no output (W4).
+    if (c.about === "method" && c.outputKey) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          'A criterion about the method names no output: drop outputKey or set about to "result"',
+        path: ["outputKey"],
       });
     }
     if (c.check.kind === "capability" && !c.check.capability) {

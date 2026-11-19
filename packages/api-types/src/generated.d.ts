@@ -2777,6 +2777,26 @@ export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
 	/** Criterion check detail, when it names one. */
 	capability?: string;
 	evidenceKey?: string;
+	/**
+	 * A slot's criteria: every criterion naming it by `outputKey` (rule 7), in
+	 * declared order. Absent on an outcome no criterion checks. `verify`,
+	 * `verdict`, `stageKey`, `capability` and `evidenceKey` above read the first
+	 * criterion (and the deciding verdict), as they did when one could.
+	 */
+	criteria?: OutcomeCriterion[];
+}
+/** One criterion under the output it checks. */
+export interface OutcomeCriterion {
+	/** The criterion's key (its evaluations' `criterionKey`). */
+	key: string;
+	statement: string;
+	verify: OutcomeVerify;
+	required: boolean;
+	/** Its current verdict is `pass`. */
+	met: boolean;
+	verdict: OutcomeVerdict | null;
+	state: UnitStateView;
+	stageKey?: string;
 }
 /** What an input asks the person for. */
 export type SessionInputNeed = 

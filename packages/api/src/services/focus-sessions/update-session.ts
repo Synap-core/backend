@@ -81,9 +81,10 @@ import type {
   SlotClearedBy,
   SlotPendingRelay,
 } from "@synap/playbooks";
-import type {
-  ThingBlockerBlocks,
-  ThingBlockerClearedBy,
+import {
+  criteriaNamingNoOutput,
+  type ThingBlockerBlocks,
+  type ThingBlockerClearedBy,
 } from "@synap-core/types/units";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { restatedAskHints, withoutRestatedWhy } from "./ask-text.js";
@@ -1584,6 +1585,23 @@ export function reconcileOwedSince(
     ...rest
   } = item;
   return rest;
+}
+
+/**
+ * The criteria this patch sent whose `outputKey` names no outcome slot of the
+ * session as written (`criteriaNamingNoOutput`): they check nothing until such
+ * a slot exists. One sentence each, never a refusal. A stage's criterion is
+ * left out: its output arrives when its stage is entered. Pure.
+ */
+export function outputKeyWarnings(
+  criteria: readonly SessionCriterion[] | undefined,
+  writtenSlots: unknown
+): string[] {
+  const sent = (criteria ?? []).filter((c) => !c.stageKey);
+  return criteriaNamingNoOutput(sent, writtenSlots).map((key) => {
+    const c = sent.find((x) => x.key === key)!;
+    return `Criterion "${key}": outputKey "${c.outputKey}" names no output of this session, so it checks nothing yet. Declare that output, or use the key of one it has.`;
+  });
 }
 
 /**
@@ -3154,13 +3172,19 @@ export async function updateFocusSession(
     ...(params.expectedOutputs ?? []),
     ...(params.addOutput ? [params.addOutput] : []),
   ];
-  const warnings = mutatesOutputs
-    ? [
-        ...droppedAskWarnings(declaredOutputs, outputsAfter),
-        ...restatedAskHints(declaredOutputs),
-        ...(unblocksAdvice ? [unblocksAdvice] : []),
-      ]
-    : [];
+  const warnings = [
+    ...(mutatesOutputs
+      ? [
+          ...droppedAskWarnings(declaredOutputs, outputsAfter),
+          ...restatedAskHints(declaredOutputs),
+          ...(unblocksAdvice ? [unblocksAdvice] : []),
+        ]
+      : []),
+    ...outputKeyWarnings(
+      criteriaChange ? params.criteria : undefined,
+      (reboundSession ?? followedSession ?? updated).expectedOutputs
+    ),
+  ];
 
   // The ask AS POSED, durably (`slot-asked-event.ts`) — diffed on the same
   // locked base, so only asks this patch posed are recorded.

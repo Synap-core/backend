@@ -32,7 +32,7 @@ import {
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { isTrackClosed } from "@synap-core/types/units";
+import { isTrackClosed, nameSharedKeyOutputs } from "@synap-core/types/units";
 import { resolveTrackStatusLabel } from "@synap-core/types/vocabulary";
 import {
   registerProposalExecutor,
@@ -1004,15 +1004,36 @@ export function registerFocusSessionExecutors(): void {
         // nothing. Parsed with the SAME strict schema the doors use, because
         // the payload may predate a schema change: a bad list is dropped and
         // REPORTED on `refusals`, never thrown over the rest of the patch.
-        if (innerData.criteria !== undefined) {
-          const criteriaRefusals: string[] = [];
-          const criteria = parseProposedCriteria(
-            innerData.criteria,
-            sessionId,
-            criteriaRefusals
-          );
-          if (criteriaRefusals.length === 0) set.criteria = criteria;
-          outputRefusals.push(...criteriaRefusals);
+        const criteriaRefusals: string[] = [];
+        const sentCriteria =
+          innerData.criteria !== undefined
+            ? parseProposedCriteria(
+                innerData.criteria,
+                sessionId,
+                criteriaRefusals
+              )
+            : undefined;
+        outputRefusals.push(...criteriaRefusals);
+        // A criterion sharing a slot's key names it (`outputKey`, W4), against
+        // the slots as this patch left them: the criteria it sent, or the
+        // stored ones when it changed only the slots.
+        const [after] = await db
+          .select({
+            expectedOutputs: focusSessions.expectedOutputs,
+            criteria: focusSessions.criteria,
+          })
+          .from(focusSessions)
+          .where(eq(focusSessions.id, sessionId))
+          .limit(1);
+        if (sentCriteria && criteriaRefusals.length === 0) {
+          set.criteria = [
+            ...nameSharedKeyOutputs(sentCriteria, after?.expectedOutputs),
+          ];
+        } else if (after && Array.isArray(after.criteria)) {
+          const stored = after.criteria as unknown[];
+          const named = nameSharedKeyOutputs(stored, after.expectedOutputs);
+          if (named !== stored)
+            set.criteria = [...named] as typeof set.criteria;
         }
 
         // Roster append. Carried by BOTH proposing doors (`update-session.ts`

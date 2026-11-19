@@ -159,6 +159,38 @@ describe("a criterion's outputKey survives the write door and the reader (W1)", 
     expect("outputKey" in read[1]!).toBe(false);
   });
 
+  it("W4: old-style input (a criterion and an output under one key) is stored naming that output", async () => {
+    const goal = `Ship ${randomUUID()}`;
+    const res = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      projectId: PROJECT,
+      goal,
+      templateId: null,
+      expectedOutputs: [{ kind: "document", label: "Wave plan", key: "plan" }],
+      criteria: [
+        {
+          key: "plan",
+          statement: "The plan is sound",
+          check: { kind: "judge" },
+        },
+        {
+          key: "fast",
+          statement: "It is fast",
+          check: { kind: "judge" },
+        },
+      ],
+    } as Parameters<typeof createFocusSession>[0]);
+    expect(res.status).toBe("created");
+    const raw = await storedCriteria(goal);
+    const read = readCriteria(typeof raw === "string" ? JSON.parse(raw) : raw);
+    expect(read.map((c) => [c.key, c.outputKey])).toEqual([
+      ["plan", "plan"],
+      // CONTROL — a criterion that shares no output's key names none.
+      ["fast", undefined],
+    ]);
+  });
+
   it("a malformed outputKey is refused in words, and nothing is written", async () => {
     const goal = `Ship ${randomUUID()}`;
     const err = await createFocusSession({

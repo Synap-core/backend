@@ -81,6 +81,7 @@ import {
   type SessionCriterion,
 } from "@synap/playbooks";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
+import { nameSharedKeyOutputs } from "@synap-core/types/units";
 import { paramOwedSlots, PARAM_SLOT_CIRCUMSTANCE } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -494,7 +495,8 @@ export async function followPlaybook(
         .update(focusSessions)
         .set({
           playbookId: playbook.id,
-          criteria: nextCriteria,
+          // A criterion sharing a slot's key names it (`outputKey`, W4).
+          criteria: [...nameSharedKeyOutputs(nextCriteria, nextOutputs)],
           expectedOutputs: nextOutputs,
           // Only when NAMED. Absent leaves the column exactly as it was.
           ...(stageKey !== null ? { currentStage: stageKey } : {}),

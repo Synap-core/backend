@@ -371,6 +371,7 @@ describe("an agent's close is checked against what the session owes", () => {
           key: "sign-off",
           statement: "Founder sign-off",
           check: { kind: "judge" },
+          outputKey: "sign-off",
         },
       ],
       outputs: [

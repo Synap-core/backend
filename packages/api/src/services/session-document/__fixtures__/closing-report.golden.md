@@ -10,10 +10,17 @@ Two files changed.
 ::::synap-section{id="close-definition-of-done" owner="ai" author="system:closing-report" writtenAt="2026-09-19T00:00:00.000Z" sessionState="closed" status="failing"}
 ## Definition of done
 
+**Theme toggle**
+
 | Criterion | Result | Checked by | Why |
 | --- | --- | --- | --- |
 | Typecheck passes | Passed | Evidence | 0 errors |
 | Copy \| reads well | Failed | Judge (model-x) | Too long and vague |
+
+**Other criteria**
+
+| Criterion | Result | Checked by | Why |
+| --- | --- | --- | --- |
 | Docs updated (optional) | Not checked | — | — |
 ::::
 

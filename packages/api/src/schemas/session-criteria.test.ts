@@ -66,6 +66,16 @@ describe("sessionCriterionSchema", () => {
     }
   });
 
+  it("refuses a criterion about the method that names an output (W4)", () => {
+    const method = { ...ok, about: "method", outputKey: "pr-backend" };
+    expect(sessionCriterionSchema.safeParse(method).success).toBe(false);
+    expect(
+      sessionCriterionSchema.safeParse({ ...method, about: "result" }).success
+    ).toBe(true);
+    const { outputKey: _o, ...noOutput } = method;
+    expect(sessionCriterionSchema.safeParse(noOutput).success).toBe(true);
+  });
+
   it("refuses an unknown kind and a non-slug key", () => {
     expect(
       sessionCriterionSchema.safeParse({ ...ok, check: { kind: "vibes" } })

@@ -102,8 +102,8 @@ export interface EvaluateSessionParams {
   /**
    * Restrict to the criteria a fact is ABOUT: a criterion whose key, or whose
    * evidence key, is listed. The event re-check (`dev-loop/recheck-criteria.ts`)
-   * passes the outcome keys a fact just moved, so a merge re-grades the
-   * criteria on that PR and never the rest of the session.
+   * passes the criteria about the outcome a fact just moved, so a merge
+   * re-grades the criteria on that PR and never the rest of the session.
    */
   criterionKeys?: ReadonlyArray<string>;
   /**
@@ -186,22 +186,24 @@ export function capabilityVerdict(
 
 /**
  * The outcome a criterion checks, as a capability parameter: the session's
- * slot with the criterion's key, `{ outcome: {key, kind, label, ref?} }`, or
- * nothing when there is none. Pure.
+ * slot the criterion names by `outputKey`, `{ outcome: {key, kind, label,
+ * ref?} }`, or nothing when it names none the session holds. Pure.
  */
 export function outcomeParameter(
   expectedOutputs: unknown,
-  criterionKey: string
+  criterion: Pick<SessionCriterion, "outputKey">
 ): { outcome?: { key: string; kind: string; label: string; ref?: unknown } } {
+  const outputKey = criterion.outputKey;
+  if (!outputKey) return {};
   const slots = Array.isArray(expectedOutputs)
     ? (expectedOutputs as ExpectedOutput[])
     : [];
-  const index = deriveSlotKeys(slots).indexOf(criterionKey);
+  const index = deriveSlotKeys(slots).indexOf(outputKey);
   const slot = index === -1 ? undefined : slots[index];
   if (!slot) return {};
   return {
     outcome: {
-      key: criterionKey,
+      key: outputKey,
       kind: slot.kind,
       label: slot.label,
       ...(slot.ref ? { ref: slot.ref } : {}),
@@ -324,10 +326,10 @@ export async function evaluateSession(
         parameters: {
           sessionId,
           criterionKey: c.key,
-          // The outcome this criterion checks (same key), with its `ref`, so
-          // a verb that reads the world (a GitHub PR read) can find WHAT to
-          // check without a second lookup (plan v5 T2).
-          ...outcomeParameter(session.expectedOutputs, c.key),
+          // The outcome this criterion checks (`outputKey`), with its `ref`,
+          // so a verb that reads the world (a GitHub PR read) can find WHAT
+          // to check without a second lookup (plan v5 T2).
+          ...outcomeParameter(session.expectedOutputs, c),
         },
         workspaceId: session.workspaceId,
         userId,
@@ -400,11 +402,27 @@ export async function evaluateSession(
         try {
           const judge = (m: string) =>
             judgeSessionCriteria(svc.endpoint, svc.serviceApiKey, {
-              criteria: group.map((c) => ({
-                key: c.key,
-                statement: c.statement,
-                ...(c.check.hint ? { hint: c.check.hint } : {}),
-              })),
+              criteria: group.map((c) => {
+                // The output it checks, so the judge grades that output.
+                const { outcome } = outcomeParameter(
+                  session.expectedOutputs,
+                  c
+                );
+                return {
+                  key: c.key,
+                  statement: c.statement,
+                  ...(c.check.hint ? { hint: c.check.hint } : {}),
+                  ...(outcome
+                    ? {
+                        output: {
+                          key: outcome.key,
+                          kind: outcome.kind,
+                          label: outcome.label,
+                        },
+                      }
+                    : {}),
+                };
+              }),
               material: m,
               ...(typeof modelId === "string" && modelId
                 ? { excludeModel: modelId }
