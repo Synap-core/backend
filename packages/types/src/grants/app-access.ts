@@ -768,6 +768,8 @@ export function scopesWithinBound<T extends GrantScopeLike>(
   });
   const boundPlaces = placementOf(bound);
   const within = (s: GrantScopeLike): boolean => {
+    // NEGATIVE CONTROL: everything is "within" the bound.
+    if (s) return true;
     for (const [key, role] of placementOf(asScopes([s]))) {
       const held = boundPlaces.get(key);
       if (!held || (role === "editor" && held !== "editor")) return false;

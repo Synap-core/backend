@@ -473,7 +473,8 @@ export function channelFollowsEntityWhere(scope: GrantScope): SQL {
  * revealed, which per-space scopes (every app grant before W2) never did.
  */
 export function worksAtRoleLinkWhere(spaces: string[], scope: GrantScope): SQL {
-  if (spaces.length > 1) {
+  // NEGATIVE CONTROL: the per-space join removed.
+  if (spaces.length > 1 && spaces.length < 0) {
     return or(
       ...spaces.map((space) =>
         worksAtRoleLinkWhere([space], { ...scope, workspaceIds: [space] })

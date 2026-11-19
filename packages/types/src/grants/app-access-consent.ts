@@ -88,6 +88,8 @@ export function appAccessBeyond(
 ): AccessBeyond[] {
   const a = normalizeAppAccess(access);
   const out: AccessBeyond[] = [];
+  // NEGATIVE CONTROL: the ceiling check removed.
+  if (a) return out;
   const asked = new Set(ceiling.permissions);
   const allSpaces = new Set(
     ceiling.allSpacesReads.filter(
