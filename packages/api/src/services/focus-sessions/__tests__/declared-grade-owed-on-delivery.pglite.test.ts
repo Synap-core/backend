@@ -12,7 +12,7 @@
  * Real too: the slot-transition outbox a withdrawn grade writes to.
  *
  * Stubbed, and why (the W1 harness, `create-session.criterion-output-key`):
- * governance (granted), project placement (echoes the caller's), the session
+ * governance (granted), project and space placement (echo the caller's), the session
  * room and the spawn edge (own connections), realtime emit.
  *
  * The output's delivery is written straight to the row: `done` has one door
@@ -53,6 +53,15 @@ vi.mock("@synap/database", async (importOriginal) => {
       _db: unknown,
       input: { explicitProjectId?: string | null }
     ) => ({ projectId: input.explicitProjectId ?? null }),
+    // The space ladder echoes the caller's space too: placement is not what
+    // this file tests (`create-session.space-ladder.pglite.test.ts` is).
+    resolveSessionWorkspacePlacement: async (
+      _db: unknown,
+      input: { explicitWorkspaceId?: string | null }
+    ) => ({
+      workspaceId: input.explicitWorkspaceId ?? null,
+      rung: input.explicitWorkspaceId ? "explicit" : null,
+    }),
   };
 });
 
