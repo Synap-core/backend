@@ -41792,6 +41792,46 @@
                           "minLength": 1,
                           "maxLength": 200
                         },
+                        "unblocksTarget": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "stage": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["stage"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "output": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["output"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "criterion": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["criterion"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
                         "owedSince": { "type": "string" },
                         "attestedBy": { "type": "string" },
                         "attestedAt": { "type": "string" },
@@ -41838,6 +41878,7 @@
                           ]
                         },
                         "criterionKey": { "type": "string" },
+                        "outputKey": { "type": "string" },
                         "paramName": { "type": "string" },
                         "answer": {
                           "type": "object",
@@ -45973,6 +46014,46 @@
                           "minLength": 1,
                           "maxLength": 200
                         },
+                        "unblocksTarget": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "stage": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["stage"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "output": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["output"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "criterion": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["criterion"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
                         "owedSince": { "type": "string" },
                         "attestedBy": { "type": "string" },
                         "attestedAt": { "type": "string" },
@@ -46019,6 +46100,7 @@
                           ]
                         },
                         "criterionKey": { "type": "string" },
+                        "outputKey": { "type": "string" },
                         "paramName": { "type": "string" },
                         "answer": {
                           "type": "object",
