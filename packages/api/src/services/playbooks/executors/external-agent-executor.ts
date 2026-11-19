@@ -523,7 +523,7 @@ export async function startAgentTask(p: {
   // rules this playbook follows (its guidance, stamped on the run's
   // snapshot) and the current stage. Not fenced like the goal: every part
   // of it is person-approved pod content, not the person's free words.
-  const { contextSkill, guidance } = await loadRunMethodParts({
+  const { contextSkill, guidance, learned } = await loadRunMethodParts({
     playbookId: p.playbookId ?? undefined,
     userId: p.userId,
     runId: p.runId,
@@ -533,6 +533,7 @@ export async function startAgentTask(p: {
   const method = renderPlaybookMethod({
     contextSkill,
     guidance,
+    learned,
     stage: p.stage,
   });
 

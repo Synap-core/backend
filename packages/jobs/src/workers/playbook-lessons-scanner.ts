@@ -27,12 +27,21 @@
  * came from, and the overriding person's own words — that the projected
  * scorecard summarises away.
  *
- * ── WHAT IT DELIBERATELY DOES NOT COVER ─────────────────────────────────────
- * Lessons live on STAGES, so only a criterion that belongs to a stage can teach
- * one. A PLAYBOOK-LEVEL criterion (no `stageKey`) has no stage to attribute the
- * lesson to, and a playbook with no stages has nowhere to put one; both are
- * SKIPPED rather than attributed to an arbitrary stage. Honest
- * under-convergence, stated here so nobody reads silence as coverage.
+ * ── WHERE A LESSON LIVES ────────────────────────────────────────────────────
+ * A criterion that belongs to a stage teaches that stage (`stages[].lessons`).
+ * A PLAYBOOK-LEVEL criterion (no `stageKey`), and every criterion of a
+ * playbook with no stages, teaches the playbook itself
+ * (`metadata.lessons`, plan W8 D7a), never an arbitrary stage.
+ *
+ * ── WHAT WORKED ─────────────────────────────────────────────────────────────
+ * The runs teach what to do as well as what went wrong (founder: "the
+ * playbook is the inherent system coming from what others did"). From the
+ * SUCCESSFUL runs (`successfulRunIds`: every required criterion passed), the
+ * tools and skills they recorded using (`loadRunsUsedParts`, the
+ * `session --used-->` edges) that at least `MIN_FINDING_OCCURRENCES` of them
+ * used become `metadata.whatWorked`, replaced whole on every revision. It is
+ * counted, not written by the IS. It rides in the same proposal; a person
+ * approves it like the lessons.
  *
  * ── IS FAILURE IS A SKIP, NEVER A DEGRADED PROPOSAL ─────────────────────────
  * If any stage's revision call fails, the whole playbook is skipped and logged.
@@ -58,7 +67,14 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
-import { readCriteria, readStageLessons } from "@synap/playbooks";
+import {
+  MAX_WHAT_WORKED_PARTS,
+  readCriteria,
+  readPlaybookLessons,
+  readStageLessons,
+  readWhatWorked,
+  type WhatWorked,
+} from "@synap/playbooks";
 import {
   getDefaultActiveService,
   requestRevisedLessons,
@@ -69,6 +85,9 @@ import {
   loadPlaybookScorecardRows,
   projectPlaybookScorecard,
   findOverrides,
+  loadRunsUsedParts,
+  successfulRunIds,
+  type RunUsedPart,
   type PlaybookScorecard,
   type ScorecardEvaluationRow,
   type ScorecardSessionRow,
@@ -235,6 +254,65 @@ export function planStageRevisions(
   return out;
 }
 
+/** The key a playbook-level revision carries in place of a stage key. */
+export const PLAYBOOK_LEVEL_KEY = "";
+
+/**
+ * The PLAYBOOK-level revision: the findings whose criterion no stage owns (a
+ * playbook-level criterion, or any criterion of a stageless playbook), to be
+ * reconciled into `metadata.lessons`. `null` ⇒ nothing to revise.
+ */
+export function planPlaybookRevision(
+  playbook: { name: string; stages: StoredStage[]; metadata: unknown },
+  card: PlaybookScorecard,
+  overrideRationales: Map<string, string>
+): StageRevision | null {
+  if (card.runs.evaluated < MIN_EVALUATED_SESSIONS) return null;
+  const stageOf = criterionStageMap(playbook.stages);
+  const findings = [...findingsForPlaybook(card, overrideRationales)]
+    .filter(([criterionKey]) => !stageOf.has(criterionKey))
+    .flatMap(([, list]) => list);
+  if (findings.length === 0) return null;
+  return {
+    stageKey: PLAYBOOK_LEVEL_KEY,
+    stageName: playbook.name,
+    existingLessons: readPlaybookLessons(playbook.metadata),
+    findings: findings
+      .sort((a, b) => b.occurrences - a.occurrences)
+      .slice(0, MAX_FINDINGS_PER_STAGE),
+  };
+}
+
+/**
+ * What the successful runs used: each tool or skill that at least
+ * `MIN_FINDING_OCCURRENCES` of them recorded, most used first, capped. `null`
+ * when fewer than `MIN_EVALUATED_SESSIONS` runs succeeded (too few to say)
+ * or nothing was used often enough.
+ */
+export function distilWhatWorked(
+  successIds: readonly string[],
+  used: ReadonlyMap<string, readonly RunUsedPart[]>
+): WhatWorked | null {
+  if (successIds.length < MIN_EVALUATED_SESSIONS) return null;
+  const counts = new Map<
+    string,
+    { kind: RunUsedPart["kind"]; name: string; runs: number }
+  >();
+  for (const id of successIds) {
+    for (const part of used.get(id) ?? []) {
+      const key = `${part.kind}:${part.id}`;
+      const c = counts.get(key) ?? { kind: part.kind, name: part.name, runs: 0 };
+      c.runs += 1;
+      counts.set(key, c);
+    }
+  }
+  const parts = [...counts.values()]
+    .filter((c) => c.runs >= MIN_FINDING_OCCURRENCES)
+    .sort((a, b) => b.runs - a.runs || (a.name < b.name ? -1 : 1))
+    .slice(0, MAX_WHAT_WORKED_PARTS);
+  return parts.length > 0 ? { runs: successIds.length, parts } : null;
+}
+
 /**
  * The new `stages` array: every revised stage's `lessons` REPLACED, every other
  * stage byte-identical. Spread, never rebuilt — `playbooks.stages` is a loose
@@ -262,15 +340,30 @@ export function applyRevisedLessons(
 export function draftRationale(
   playbookName: string,
   revisions: StageRevision[],
-  card: PlaybookScorecard
+  card: PlaybookScorecard,
+  whatWorked: WhatWorked | null = null
 ): string {
-  const stageNames = revisions.map((r) => r.stageName).join(", ");
-  const total = revisions.reduce((n, r) => n + r.findings.length, 0);
-  return (
-    `Across ${card.runs.evaluated} graded runs of "${playbookName}", ${total} ` +
-    `recurring problem${total === 1 ? "" : "s"} showed up in ${stageNames}. ` +
-    `These stage lessons are the rewritten guidance — review and edit before approving.`
-  );
+  const parts: string[] = [];
+  if (revisions.length > 0) {
+    const where = revisions
+      .map((r) =>
+        r.stageKey === PLAYBOOK_LEVEL_KEY ? "the playbook as a whole" : r.stageName
+      )
+      .join(", ");
+    const total = revisions.reduce((n, r) => n + r.findings.length, 0);
+    parts.push(
+      `Across ${card.runs.evaluated} graded runs of "${playbookName}", ${total} ` +
+        `recurring problem${total === 1 ? "" : "s"} showed up in ${where}. ` +
+        `These lessons are the rewritten guidance — review and edit before approving.`
+    );
+  }
+  if (whatWorked) {
+    parts.push(
+      `${whatWorked.runs} runs of "${playbookName}" met every required criterion; ` +
+        `the tools and skills most of them used are listed as what worked.`
+    );
+  }
+  return parts.join(" ");
 }
 
 // ── The scan (DB + IS injected, so the whole pass is testable) ──────────────
@@ -280,13 +373,23 @@ export interface LessonsScanPlaybook {
   name: string;
   workspaceId: string | null;
   stages: StoredStage[];
+  /** Where the playbook-level lessons and what worked live. */
+  metadata: Record<string, unknown>;
   /** The human whose runs are the evidence — sessions are owner-private. */
   userId: string;
 }
 
 export interface PlaybookLessonsProposalData {
-  /** Read by the `playbook/update` executor's REPLAYED set. */
-  data: { id: string; stages: StoredStage[] };
+  /**
+   * Read by the `playbook/update` executor's REPLAYED set: only the keys
+   * present are written. `metadata` carries only `lessons` / `whatWorked`;
+   * the update door merges it over the stored bag.
+   */
+  data: {
+    id: string;
+    stages?: StoredStage[];
+    metadata?: { lessons?: string[]; whatWorked?: WhatWorked | null };
+  };
   rationale: string;
   /** Lineage: the graded sessions this revision was derived from. */
   sourceSessionIds: string[];
@@ -302,6 +405,14 @@ export interface PlaybookLessonsProposalData {
       after: string[];
       findings: StageLessonFinding[];
     }>;
+    /** The playbook-level lessons, when they were revised. */
+    playbook?: {
+      before: string[];
+      after: string[];
+      findings: StageLessonFinding[];
+    };
+    /** What the successful runs used, when it changed. */
+    whatWorked?: { before: WhatWorked | null; after: WhatWorked };
   };
 }
 
@@ -322,6 +433,8 @@ export interface PlaybookLessonsScanDeps {
     sessions: ScorecardSessionRow[];
     evaluations: ScorecardEvaluationRow[];
   }>;
+  /** What each run recorded using (`loadRunsUsedParts`). */
+  loadUsedParts(sessionIds: string[]): Promise<Map<string, RunUsedPart[]>>;
   /** True ⇒ an open revision already exists for this playbook; skip it. */
   hasOpenRevision(playbookId: string): Promise<boolean>;
   /** Throws when the IS cannot answer — the caller skips the playbook. */
@@ -346,8 +459,6 @@ export async function runPlaybookLessonsScan(
 
   for (const playbook of candidates) {
     try {
-      if (playbook.stages.length === 0) continue;
-
       const { sessions, evaluations } = await deps.loadRows(
         playbook.id,
         playbook.userId,
@@ -378,12 +489,36 @@ export async function runPlaybookLessonsScan(
         }
       }
 
-      const revisions = planStageRevisions(
+      const stageRevisions = planStageRevisions(
         playbook.stages,
         card,
         overrideRationales
       );
-      if (revisions.length === 0) continue;
+      const playbookRevision = planPlaybookRevision(
+        playbook,
+        card,
+        overrideRationales
+      );
+      const revisions = playbookRevision
+        ? [...stageRevisions, playbookRevision]
+        : stageRevisions;
+
+      // What worked: counted from the successful runs' recorded tools and
+      // skills, never asked of the IS.
+      const successIds = successfulRunIds(mine, evaluations);
+      const whatWorkedBefore = readWhatWorked(playbook.metadata);
+      const whatWorked =
+        successIds.length >= MIN_EVALUATED_SESSIONS
+          ? distilWhatWorked(
+              successIds,
+              await deps.loadUsedParts(successIds)
+            )
+          : null;
+      const workedChanged =
+        whatWorked !== null &&
+        JSON.stringify(whatWorked) !== JSON.stringify(whatWorkedBefore);
+
+      if (revisions.length === 0 && !workedChanged) continue;
 
       // SUPERSEDE, checked AFTER the thresholds and BEFORE the IS is paid: a
       // second open edit to the same `stages` array would silently clobber the
@@ -437,35 +572,67 @@ export async function runPlaybookLessonsScan(
       if (isFailed) continue;
 
       // Nothing actually changed ⇒ nothing to review.
-      const changed = revisions.some(
-        (r) =>
-          JSON.stringify(revised.get(r.stageKey) ?? []) !==
-          JSON.stringify(r.existingLessons)
-      );
-      if (!changed) continue;
+      const changedLessons = (r: StageRevision) =>
+        JSON.stringify(revised.get(r.stageKey) ?? []) !==
+        JSON.stringify(r.existingLessons);
+      const stagesChanged = stageRevisions.some(changedLessons);
+      const playbookChanged =
+        playbookRevision !== null && changedLessons(playbookRevision);
+      if (!stagesChanged && !playbookChanged && !workedChanged) continue;
 
       const sourceSessionIds = [
-        ...new Set(closedRows.map((e) => e.sessionId)),
+        ...new Set([
+          ...closedRows.map((e) => e.sessionId),
+          ...(workedChanged ? successIds : []),
+        ]),
       ].slice(0, 20);
 
+      const metadata: NonNullable<
+        PlaybookLessonsProposalData["data"]["metadata"]
+      > = {
+        ...(playbookChanged
+          ? { lessons: revised.get(PLAYBOOK_LEVEL_KEY) ?? [] }
+          : {}),
+        ...(workedChanged ? { whatWorked } : {}),
+      };
       const data: PlaybookLessonsProposalData = {
         data: {
           id: playbook.id,
-          stages: applyRevisedLessons(playbook.stages, revised),
+          ...(stagesChanged
+            ? { stages: applyRevisedLessons(playbook.stages, revised) }
+            : {}),
+          ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
         },
-        rationale: draftRationale(playbook.name, revisions, card),
+        rationale: draftRationale(
+          playbook.name,
+          revisions,
+          card,
+          workedChanged ? whatWorked : null
+        ),
         sourceSessionIds,
         lessonsRevision: true,
-        summary: `Revise stage lessons for "${playbook.name}"`,
+        summary: `Revise what earlier runs taught "${playbook.name}"`,
         evidence: {
           evaluatedRuns: card.runs.evaluated,
           windowDays: WINDOW_DAYS,
-          stages: revisions.map((r) => ({
+          stages: stageRevisions.map((r) => ({
             stageKey: r.stageKey,
             before: r.existingLessons,
             after: revised.get(r.stageKey) ?? [],
             findings: r.findings,
           })),
+          ...(playbookRevision && playbookChanged
+            ? {
+                playbook: {
+                  before: playbookRevision.existingLessons,
+                  after: revised.get(PLAYBOOK_LEVEL_KEY) ?? [],
+                  findings: playbookRevision.findings,
+                },
+              }
+            : {}),
+          ...(workedChanged && whatWorked
+            ? { whatWorked: { before: whatWorkedBefore, after: whatWorked } }
+            : {}),
         },
       };
       filed.push(await deps.fileProposal(playbook, data));
@@ -520,6 +687,7 @@ async function loadCandidatePlaybooks(
       name: playbooks.name,
       workspaceId: playbooks.workspaceId,
       stages: playbooks.stages,
+      metadata: playbooks.metadata,
       status: playbooks.status,
     })
     .from(playbooks)
@@ -541,6 +709,10 @@ async function loadCandidatePlaybooks(
         name: row.name,
         workspaceId: row.workspaceId ?? null,
         stages: Array.isArray(row.stages) ? (row.stages as StoredStage[]) : [],
+        metadata:
+          row.metadata && typeof row.metadata === "object"
+            ? (row.metadata as Record<string, unknown>)
+            : {},
         userId: String(p.userId),
       },
     ];
@@ -563,6 +735,8 @@ export const playbookLessonsDbDeps: PlaybookLessonsScanDeps = {
       userId,
       closedAfter,
     }),
+
+  loadUsedParts: (sessionIds) => loadRunsUsedParts(db, sessionIds),
 
   /**
    * ANY pending `playbook/update` for this playbook counts, not only one this
@@ -630,8 +804,10 @@ export const playbookLessonsDbDeps: PlaybookLessonsScanDeps = {
         playbookId: playbook.id,
         proposalId: proposal.id,
         stages: data.evidence.stages.length,
+        playbookLevel: data.evidence.playbook !== undefined,
+        whatWorked: data.evidence.whatWorked !== undefined,
       },
-      "playbook-lessons-scanner: filed stage-lessons revision proposal"
+      "playbook-lessons-scanner: filed a lessons revision proposal"
     );
     return proposal.id;
   },

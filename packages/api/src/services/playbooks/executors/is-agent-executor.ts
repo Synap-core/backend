@@ -94,7 +94,7 @@ export class IsAgentExecutor implements Executor {
     // section).
     // A TRIAL run (the rule lab) renders its drafts in place, read from its
     // own session's stamp, and its kickoff says to answer with the draft.
-    const { contextSkill, guidance, trial } = await loadRunMethodParts({
+    const { contextSkill, guidance, learned, trial } = await loadRunMethodParts({
       playbookId: ctx.playbookId,
       userId: ctx.userId,
       runId: runIdOf(ctx.input),
@@ -106,6 +106,7 @@ export class IsAgentExecutor implements Executor {
     const kickoff = renderPlaybookMethod({
       contextSkill,
       guidance,
+      learned,
       body: trial ? `${base}\n\n${TRIAL_KICKOFF_NOTE}` : base,
       stage,
     });

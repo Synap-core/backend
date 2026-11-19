@@ -67,6 +67,9 @@ import {
   events,
   channels,
   projects,
+  links,
+  tools,
+  skills,
 } from "@synap/database/schema";
 import {
   handlePlaybookLessonsScan,
@@ -252,6 +255,9 @@ beforeAll(async () => {
       events,
       channels,
       projects,
+      links,
+      tools,
+      skills,
     ]
       .map((t) => ddlFor(t as PgTable))
       .join("\n")
@@ -260,7 +266,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    `truncate focus_sessions, session_evaluations, proposals, playbooks, events;`
+    `truncate focus_sessions, session_evaluations, proposals, playbooks, events, links, tools, skills;`
   );
 });
 
@@ -418,5 +424,67 @@ describe("lessons scanner — the real DB tier", () => {
       })
     ).toEqual([]);
     expect(await proposalRows()).toEqual([]);
+  });
+});
+
+describe("what worked (W8 D7a) — the real used edges", () => {
+  async function used(sessionId: string, toType: "tool" | "skill", toId: string) {
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_by, created_at)
+       values ($1, 'session', $2, $3, $4, 'used', $5, now())`,
+      [randomUUID(), sessionId, toType, toId, OWNER]
+    );
+  }
+
+  it("proposes the tool and skill most successful runs recorded, never applies it", async () => {
+    const pb = await playbook({ name: "Verified Wave" });
+    const tool = randomUUID();
+    const skill = randomUUID();
+    await q(
+      `insert into tools (id, created_by, name, kind, created_at, updated_at) values ($1, $2, 'web.read', 'read', now(), now())`,
+      [tool, OWNER]
+    );
+    await q(
+      `insert into skills (id, user_id, slug, kind, scope, name, body, approved, status, created_at)
+       values ($1, $2, 'creative-director', 'instruction', 'pod', 'Creative director', 'b', true, 'active', now())`,
+      [skill, OWNER]
+    );
+    const runs = [
+      await run({ playbookId: pb, verdict: "pass" }),
+      await run({ playbookId: pb, verdict: "pass" }),
+      await run({ playbookId: pb, verdict: "pass" }),
+      await run({ playbookId: pb, verdict: "fail" }),
+    ];
+    for (const id of runs) await used(id, "tool", tool);
+    await used(runs[0]!, "skill", skill);
+    await used(runs[1]!, "skill", skill);
+
+    const revise = vi.fn(async () => ["never asked"]);
+    expect(await scan(revise)).toHaveLength(1);
+    expect(revise).not.toHaveBeenCalled();
+    const [row] = await proposalRows();
+    const data = row!.data as {
+      data: { id: string; stages?: unknown; metadata?: Record<string, unknown> };
+      sourceSessionIds: string[];
+    };
+    expect(data.data.stages).toBeUndefined();
+    expect(data.data.metadata).toEqual({
+      whatWorked: {
+        runs: 3,
+        parts: [
+          { kind: "tool", name: "web.read", runs: 3 },
+          { kind: "skill", name: "creative-director", runs: 2 },
+        ],
+      },
+    });
+    expect(data.sourceSessionIds).toEqual(
+      expect.arrayContaining(runs.slice(0, 3))
+    );
+    // A proposal, never a write: the playbook row is untouched.
+    const { rows } = await q<{ metadata: unknown }>(
+      `select metadata from playbooks where id = $1`,
+      [pb]
+    );
+    expect(rows[0]!.metadata).not.toHaveProperty("whatWorked");
   });
 });

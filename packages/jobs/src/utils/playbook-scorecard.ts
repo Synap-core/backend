@@ -35,6 +35,9 @@ import {
   focusSessions,
   sessionEvaluations,
   events,
+  links,
+  tools,
+  skills,
 } from "@synap/database";
 import type { db as Db } from "@synap/database";
 import {
@@ -232,6 +235,111 @@ export function projectPlaybookScorecard(
     overrides: overrides.length,
     criteria: [...scores.values()],
   };
+}
+
+/**
+ * The SUCCESSFUL runs (plan W8 D7a, "how others did it"): closed sessions
+ * whose every REQUIRED criterion's current verdict is `pass`. A run that
+ * declared no required criterion, or left one unmeasured, is not counted:
+ * success is graded, never assumed. Pure, over the same rows the scorecard
+ * reads.
+ */
+export function successfulRunIds(
+  sessions: readonly ScorecardSessionRow[],
+  evaluations: readonly ScorecardEvaluationRow[]
+): string[] {
+  const bySession = new Map<string, ScorecardEvaluationRow[]>();
+  for (const r of evaluations) {
+    bySession.set(r.sessionId, [...(bySession.get(r.sessionId) ?? []), r]);
+  }
+  return sessions
+    .filter((s) => {
+      if (s.status !== "closed") return false;
+      const required = readCriteria(s.criteria).filter(isCriterionRequired);
+      if (required.length === 0) return false;
+      const current = new Map(
+        latestEvaluationPerCriterion(bySession.get(s.id) ?? []).map((r) => [
+          r.criterionKey,
+          r.verdict,
+        ])
+      );
+      return required.every((c) => current.get(c.key) === "pass");
+    })
+    .map((s) => s.id);
+}
+
+/** A tool or skill a run recorded using (`session --used--> tool|skill`). */
+export interface RunUsedPart {
+  kind: "tool" | "skill";
+  id: string;
+  name: string;
+}
+
+/**
+ * What each run USED, from the `session --used--> tool|skill` edges the IS
+ * tool-wrapper and `runs.capture` write at the moment of use (the RECORDED
+ * part of `readSessionUsage`). Named by the tool's or skill's own row; an
+ * edge whose target no longer exists is left out. A run with no edge maps to
+ * `[]`. THROWS on a failed read.
+ */
+export async function loadRunsUsedParts(
+  database: typeof Db,
+  sessionIds: readonly string[]
+): Promise<Map<string, RunUsedPart[]>> {
+  const out = new Map<string, RunUsedPart[]>(
+    sessionIds.map((id) => [id, []])
+  );
+  if (sessionIds.length === 0) return out;
+  const edges = await database
+    .select({ fromId: links.fromId, toType: links.toType, toId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "session"),
+        inArray(links.fromId, [...sessionIds]),
+        eq(links.linkType, "used"),
+        inArray(links.toType, ["tool", "skill"])
+      )
+    );
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const idsOf = (kind: string) => [
+    ...new Set(
+      edges
+        .filter((e) => e.toType === kind && UUID.test(e.toId))
+        .map((e) => e.toId)
+    ),
+  ];
+  const toolIds = idsOf("tool");
+  const skillIds = idsOf("skill");
+  const names = new Map<string, string>();
+  if (toolIds.length > 0) {
+    for (const t of await database
+      .select({ id: tools.id, name: tools.name })
+      .from(tools)
+      .where(inArray(tools.id, toolIds))) {
+      names.set(`tool:${t.id}`, t.name);
+    }
+  }
+  if (skillIds.length > 0) {
+    for (const s of await database
+      .select({ id: skills.id, slug: skills.slug, name: skills.name })
+      .from(skills)
+      .where(inArray(skills.id, skillIds))) {
+      // The slug is what `synap_load_skill` takes; the name when it has none.
+      names.set(`skill:${s.id}`, s.slug ?? s.name);
+    }
+  }
+  for (const e of edges) {
+    const kind = e.toType as RunUsedPart["kind"];
+    const name = names.get(`${kind}:${e.toId}`);
+    if (!name) continue;
+    const list = out.get(e.fromId) ?? [];
+    if (!list.some((p) => p.kind === kind && p.id === e.toId)) {
+      list.push({ kind, id: e.toId, name });
+    }
+    out.set(e.fromId, list);
+  }
+  return out;
 }
 
 /**

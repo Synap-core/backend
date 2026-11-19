@@ -28,7 +28,12 @@ import {
   desc,
   drizzleSql,
 } from "@synap/database";
-import { readStageLessons, type PlaybookStage } from "@synap/playbooks";
+import {
+  readPlaybookLessons,
+  readStageLessons,
+  readWhatWorked,
+  type PlaybookStage,
+} from "@synap/playbooks";
 import {
   guidanceSnapshotOf,
   guidanceUnavailableText,
@@ -77,16 +82,43 @@ export function buildStageSection(stage: PlaybookStage): string {
   return lines.join("\n");
 }
 
+/** The heading of what earlier runs of the whole playbook taught. */
+export const PLAYBOOK_LEARNED_HEADING =
+  "## What earlier runs of this playbook taught";
+
+/**
+ * The playbook-level learning (plan W8 D7a), from `playbooks.metadata`: the
+ * lessons no stage can hold and the tools and skills its successful runs
+ * used. Both were proposed by the lessons scanner and approved by a person.
+ * "" when there is none.
+ */
+export function buildLearnedSection(metadata: unknown): string {
+  const lessons = readPlaybookLessons(metadata);
+  const worked = readWhatWorked(metadata);
+  if (lessons.length === 0 && !worked) return "";
+  const lines = [PLAYBOOK_LEARNED_HEADING, ...lessons.map((l) => `- ${l}`)];
+  if (worked) {
+    lines.push(
+      `Successful runs used: ${worked.parts
+        .map((p) => `${p.name} (${p.kind}, ${p.runs} of ${worked.runs} runs)`)
+        .join(", ")}`
+    );
+  }
+  return lines.join("\n");
+}
+
 /**
  * THE renderer. Sections, in order, each omitted when empty: the context
  * skill ("how to run this playbook"), the rules this playbook follows (the
- * rendered guidance section, {@link loadMethodGuidance}), the `body` (the
+ * rendered guidance section, {@link loadMethodGuidance}), what earlier runs
+ * of the whole playbook taught ({@link buildLearnedSection}), the `body` (the
  * executor's goal block; the MCP doors pass none, the agent already holds its
  * goal), the current stage. Joined by one blank line.
  */
 export function renderPlaybookMethod(input: {
   contextSkill?: string | null;
   guidance?: string | null;
+  learned?: string | null;
   body?: string | null;
   stage?: PlaybookStage | null;
 }): string {
@@ -94,6 +126,7 @@ export function renderPlaybookMethod(input: {
   return [
     howTo ? `${PLAYBOOK_HOW_TO_HEADING}\n${howTo}` : "",
     input.guidance?.trim() ?? "",
+    input.learned?.trim() ?? "",
     input.body ?? "",
     input.stage ? buildStageSection(input.stage) : "",
   ]
@@ -204,13 +237,16 @@ export async function loadRunMethodParts(input: {
 }): Promise<{
   contextSkill: string | null;
   guidance: string;
+  /** What earlier runs of the playbook taught (`buildLearnedSection`). */
+  learned: string;
   /** The run is a trial: its kickoff says so (`TRIAL_KICKOFF_NOTE`). */
   trial: boolean;
 }> {
   if (!input.playbookId) {
-    return { contextSkill: null, guidance: "", trial: false };
+    return { contextSkill: null, guidance: "", learned: "", trial: false };
   }
   let contextSkill: string | null = null;
+  let learned = "";
   try {
     contextSkill = await loadPlaybookContextSkill(input.playbookId);
   } catch (err) {
@@ -219,6 +255,15 @@ export async function loadRunMethodParts(input: {
     input.warn(
       { err, playbookId: input.playbookId },
       "context skill lookup failed (non-fatal)"
+    );
+  }
+  try {
+    learned = await loadPlaybookLearned(input.playbookId);
+  } catch (err) {
+    // Same rule as the context skill: logged, and the run goes on without it.
+    input.warn(
+      { err, playbookId: input.playbookId },
+      "what earlier runs taught could not be read (non-fatal)"
     );
   }
   // A trial's drafts come from its OWN session's stamp, written by the
@@ -273,7 +318,23 @@ export async function loadRunMethodParts(input: {
       );
     }
   }
-  return { contextSkill, guidance: guidance.text, trial: trial !== null };
+  return {
+    contextSkill,
+    guidance: guidance.text,
+    learned,
+    trial: trial !== null,
+  };
+}
+
+/** The playbook-level learning section, read by id. THROWS on a failed read. */
+export async function loadPlaybookLearned(playbookId: string): Promise<string> {
+  const db = await getDb();
+  const [row] = await db
+    .select({ metadata: playbooks.metadata })
+    .from(playbooks)
+    .where(eq(playbooks.id, playbookId))
+    .limit(1);
+  return buildLearnedSection(row?.metadata);
 }
 
 /** What a binding door hands the agent: the method, or why it could not. */
@@ -308,7 +369,11 @@ export async function loadBoundPlaybookMethod(input: {
   try {
     const db = await getDb();
     const [playbook] = await db
-      .select({ name: playbooks.name, stages: playbooks.stages })
+      .select({
+        name: playbooks.name,
+        stages: playbooks.stages,
+        metadata: playbooks.metadata,
+      })
       .from(playbooks)
       .where(eq(playbooks.id, input.playbookId))
       .limit(1);
@@ -345,6 +410,7 @@ export async function loadBoundPlaybookMethod(input: {
       text: renderPlaybookMethod({
         contextSkill,
         guidance: guidance.text,
+        learned: buildLearnedSection(playbook.metadata),
         stage,
       }),
     };

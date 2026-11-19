@@ -30,6 +30,11 @@
  *   - inbox           → `readSessionInbox` (`session-inbox.ts`), the one
  *                        "addressed to this session" predicate the change
  *                        feed's `session_message` reads too
+ *   - how others did it → the playbook scorecard (`loadPlaybookScorecardRows`
+ *                        + `projectPlaybookScorecard` + `compactScorecard`)
+ *                        and its successful runs (`successfulRunIds`) with
+ *                        what each used (`loadRunsUsedParts`), the lessons
+ *                        scanner's own derivations (plan W8 D7a)
  *
  * ── A FAILED READ IS NOT AN EMPTY ONE ──────────────────────────────────────
  * Each part that needs a query is a {@link PacketSection}: `ok` with a total and
@@ -118,6 +123,14 @@ import {
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
 import type { SessionCriterion } from "@synap/playbooks";
+import {
+  compactScorecard,
+  loadPlaybookScorecardRows,
+  loadRunsUsedParts,
+  projectPlaybookScorecard,
+  successfulRunIds,
+  type CompactPlaybookScorecard,
+} from "@synap/jobs/utils/playbook-scorecard.js";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
 import { readCapturePart } from "@synap-core/types/capture";
 import type {
@@ -696,6 +709,95 @@ export type NextMoveInbox =
     }
   | { status: "unavailable"; reason: string };
 
+/** At most this many earlier successful runs ride in the packet. */
+export const PACKET_PRECEDENTS_MAX = 3;
+/** At most this many tools and skills are named per earlier run. */
+export const PACKET_PRECEDENT_USED_MAX = 5;
+
+/** One earlier successful run of the same playbook (plan W8 D7a). */
+export interface PacketPrecedentItem {
+  sessionId: string;
+  /** `resolveSessionTitle`, as every session name. */
+  title: string;
+  closedAt: string | null;
+  /** The tools and skills it recorded using (`session --used-->`). */
+  used: string[];
+}
+
+/**
+ * HOW OTHERS DID IT — the playbook this session follows, as the reader's own
+ * earlier runs of it went: its compact scorecard (`null` = no closed run yet)
+ * and its newest successful runs (every required criterion passed), each with
+ * what it used. A failed read is `unavailable`, never "no precedent".
+ */
+export type PacketHowOthersDidIt =
+  | {
+      status: "ok";
+      playbookId: string;
+      scorecard: CompactPlaybookScorecard | null;
+      precedents: PacketSection<PacketPrecedentItem>;
+    }
+  | { status: "unavailable"; reason: string };
+
+/**
+ * Read {@link PacketHowOthersDidIt} for `row`; `null` when it follows no
+ * playbook. The runs are the READER's (sessions are owner-private, so the
+ * scorecard is one person's), this session left out. THROWS on a failed read.
+ */
+export async function readHowOthersDidIt(
+  database: typeof db,
+  row: Pick<SessionRow, "id" | "playbookId">,
+  userId: string
+): Promise<PacketHowOthersDidIt | null> {
+  if (!row.playbookId) return null;
+  const { sessions, evaluations } = await loadPlaybookScorecardRows(database, {
+    playbookIds: [row.playbookId],
+    userId,
+  });
+  const others = sessions.filter((s) => s.id !== row.id);
+  // Instantiated runs only, as the lessons scanner reads them: a session
+  // attached late did not run under the playbook.
+  const successIds = successfulRunIds(
+    others.filter((s) => !s.attached),
+    evaluations
+  );
+  const recent =
+    successIds.length === 0
+      ? []
+      : await database
+          .select({
+            id: focusSessions.id,
+            title: focusSessions.title,
+            goal: focusSessions.goal,
+            closedAt: focusSessions.closedAt,
+          })
+          .from(focusSessions)
+          .where(inArray(focusSessions.id, successIds))
+          .orderBy(desc(focusSessions.closedAt), asc(focusSessions.id))
+          .limit(PACKET_PRECEDENTS_MAX);
+  const used = await loadRunsUsedParts(
+    database,
+    recent.map((r) => r.id)
+  );
+  return {
+    status: "ok",
+    playbookId: row.playbookId,
+    scorecard: compactScorecard(projectPlaybookScorecard(others, evaluations)),
+    precedents: {
+      status: "ok",
+      total: successIds.length,
+      items: recent.map((r) => ({
+        sessionId: r.id,
+        title: resolveSessionTitle(r),
+        closedAt: toIso(r.closedAt),
+        used: (used.get(r.id) ?? [])
+          .map((p) => p.name)
+          .slice(0, PACKET_PRECEDENT_USED_MAX),
+      })),
+    },
+  };
+}
+
 export interface ContinuationPacket {
   version: 1;
   session: {
@@ -872,6 +974,11 @@ export interface ContinuationPacket {
    * A FAILED read is `unavailable`, never "nothing beside it".
    */
   siblings: PacketSiblings | { status: "unavailable"; reason: string } | null;
+  /**
+   * How the reader's earlier runs of the same playbook went (see
+   * {@link PacketHowOthersDidIt}). `null` = the session follows no playbook.
+   */
+  howOthersDidIt: PacketHowOthersDidIt | null;
   /**
    * The PRs and branches this session recorded as outcomes, declaration
    * order (see {@link PacketWorkUnitItem}). Derived from the row itself — an
@@ -3097,6 +3204,14 @@ export async function projectContinuationPacket(
   // The person's notification facts (`session-notify.ts`), read beside the
   // sections below; each failure is its own `unavailable`.
   // Who works each step (slice 3), read beside the sections below.
+  // How others did it (plan W8 D7a), read beside the sections below.
+  const howOthersRead = readHowOthersDidIt(database, row, ctx.userId).catch(
+    unavailable(
+      row.id,
+      "howOthersDidIt",
+      "How earlier runs of this playbook went could not be read."
+    )
+  );
   const stageRunsRead = readStageRuns(database, row.id).catch(
     unavailable(
       row.id,
@@ -3544,6 +3659,7 @@ export async function projectContinuationPacket(
     priorStages,
     goal,
     siblings,
+    howOthersDidIt: await howOthersRead,
     workUnits,
     waitingOn,
     alreadyDone,
