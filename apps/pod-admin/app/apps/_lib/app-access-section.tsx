@@ -127,11 +127,23 @@ export function AppAccessSection({
         podWideKinds={[]}
         names={names}
         onSave={save}
-        isDisabled={saving || locked}
+        isDisabled={saving}
+        readOnly={locked}
       />
       <p className="max-w-2xl text-pretty text-xs text-foreground/65">
         {locked ? t("page.projectsLocked") : t("page.narrowOnly")}
       </p>
+      {locked ? (
+        // A door, not a dead end: the app's own site, where it connects again.
+        <a
+          href={`https://${pod.domain}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="self-start text-sm text-foreground/85 underline underline-offset-2"
+        >
+          {t("page.reconnect", { name: appName })}
+        </a>
+      ) : null}
       <ConfirmModal
         isOpen={pending !== null}
         onClose={() => setPending(null)}

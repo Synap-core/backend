@@ -73,8 +73,8 @@ export function KindsGroupRow({
   const showPodWide = podWide.length > 0 && draft.read.spaces !== "all";
   return (
     <li className="flex flex-col py-1" data-object={row.key}>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <div className="flex min-h-10 min-w-0 flex-1 basis-40 flex-col justify-center">
+      <div className="flex items-center justify-between gap-x-3">
+        <div className="flex min-h-10 min-w-0 flex-1 flex-col justify-center">
           <span className="text-sm font-medium text-foreground/90">
             {row.label}
           </span>

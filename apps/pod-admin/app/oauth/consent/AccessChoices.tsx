@@ -150,13 +150,13 @@ function CanObjectRow({
   ];
   return (
     <li className="flex flex-col py-1" data-object={row.key}>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+      <div className="flex items-center justify-between gap-x-3">
         <button
           type="button"
           aria-expanded={open}
           aria-controls={`${id}-detail`}
           onClick={() => setOpen((o) => !o)}
-          className={`-mx-1 flex min-h-10 min-w-0 flex-1 basis-40 items-center gap-1.5 rounded-md px-1 text-left hover:bg-foreground/[0.04] ${FOCUS}`}
+          className={`-mx-1 flex min-h-10 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 text-left hover:bg-foreground/[0.04] ${FOCUS}`}
         >
           <ChevronRight
             aria-hidden

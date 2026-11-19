@@ -41,8 +41,9 @@ export const en = {
   "can.records":
     "{n, plural, one {records (# kind)} other {records (# kinds)}}",
   "can.more": "{n, plural, one {# more} other {# more}}",
-  "can.notDecide": "Not allowed to {what}",
-  "can.onlyPicked": "{names}: only in spaces you pick",
+  "can.notDecide": "{what}: off (it asked)",
+  "can.onlyPicked":
+    "Not included with every space: {names}. Pick spaces to include them.",
   "list.and": " and ",
   "list.or": ", or ",
   "place.in": "in {name}",
@@ -184,7 +185,8 @@ export const en = {
   "page.narrowOnly":
     "A change applies now: its current access stops, and the next one carries only what you left. You can take things away here; to give more, it asks again.",
   "page.projectsLocked":
-    "It also reaches projects, which this page can’t change yet. To change its access, connect it again from the app.",
+    "It also reaches projects, which this page can’t change yet. To change its access, connect it again from the app, or revoke it below.",
+  "page.reconnect": "Open {name} to connect it again",
   "page.saved": "Access changed",
   "page.saveFailed": "Couldn’t change its access",
   "page.unsaved": "You have unsaved changes.",
@@ -228,8 +230,9 @@ export const fr: Catalog<typeof en> = {
   "can.records":
     "{n, plural, one {des fiches (# type)} other {des fiches (# types)}}",
   "can.more": "{n, plural, one {# autre} other {# autres}}",
-  "can.notDecide": "Non autorisé : {what}",
-  "can.onlyPicked": "{names} : seulement dans les espaces choisis",
+  "can.notDecide": "{what} : désactivé (demandé)",
+  "can.onlyPicked":
+    "Pas inclus avec tous les espaces : {names}. Choisissez des espaces pour les inclure.",
   "list.and": " et ",
   "list.or": ", ou ",
   "place.in": "dans {name}",
@@ -376,7 +379,8 @@ export const fr: Catalog<typeof en> = {
   "page.narrowOnly":
     "Une modification s’applique tout de suite : son accès actuel s’arrête, et le suivant ne contient que ce que vous avez laissé. Vous pouvez retirer des accès ici ; pour en donner plus, il redemande.",
   "page.projectsLocked":
-    "Il atteint aussi des projets, que cette page ne peut pas encore modifier. Pour changer son accès, reconnectez-le depuis l’app.",
+    "Il atteint aussi des projets, que cette page ne peut pas encore modifier. Pour changer son accès, reconnectez-le depuis l’app, ou révoquez-le plus bas.",
+  "page.reconnect": "Ouvrir {name} pour le reconnecter",
   "page.saved": "Accès modifié",
   "page.saveFailed": "Impossible de modifier son accès",
   "page.unsaved": "Vous avez des modifications non enregistrées.",

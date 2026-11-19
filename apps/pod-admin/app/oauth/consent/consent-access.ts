@@ -796,7 +796,7 @@ export function decisionsOff(
 ): string[] {
   return rows
     .filter((r) => r.decisions && rowLevel(draft, r) === "off")
-    .map((r) => midSentence(r.label));
+    .map((r) => r.label);
 }
 
 /** The draft holds a permission of the write tier (a change or a decision). */

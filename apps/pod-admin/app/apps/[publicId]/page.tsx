@@ -270,17 +270,26 @@ function AppDetail({
     <div className="mt-6">
       <PageHeader
         title={
-          pod ? (
-            // A pod app is its DOMAIN; the name is only what it calls itself.
+          // The consent's naming rule: a Synap app goes by its name; any
+          // other app by its DOMAIN (its name is only what it calls itself).
+          pod && !pod.verified ? (
             <HostName host={pod.domain} />
           ) : (
             <span className="break-words">{app.name}</span>
           )
         }
         description={
-          pod
-            ? `Calls itself \u201c${app.name}\u201d · ${tierLabel(pod.verified)}`
-            : app.description
+          pod ? (
+            pod.verified ? (
+              <>
+                <HostName host={pod.domain} /> · {tierLabel(true)}
+              </>
+            ) : (
+              `Calls itself \u201c${app.name}\u201d · ${tierLabel(false)}`
+            )
+          ) : (
+            app.description
+          )
         }
         actions={
           <Chip
