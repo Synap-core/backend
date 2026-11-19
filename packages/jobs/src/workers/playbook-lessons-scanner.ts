@@ -117,8 +117,12 @@ export const MIN_EVALUATED_SESSIONS = 3;
  * wrong, two is a pattern the stage should have warned about.
  */
 export const MIN_FINDING_OCCURRENCES = 2;
-/** Evidence lookback. A lesson learned from runs older than this is stale. */
-export const WINDOW_DAYS = PLAYBOOK_LEARNING_WINDOW_DAYS;
+/**
+ * Evidence lookback. A lesson learned from runs older than this is stale.
+ * Re-exported, never copied into a top-level const: a module that mocks the
+ * scorecard util would then fail at import, not where the window is read.
+ */
+export { PLAYBOOK_LEARNING_WINDOW_DAYS as WINDOW_DAYS };
 /** Playbooks examined per pass. */
 const SCAN_LIMIT = 200;
 /** Findings sent to the IS for one stage (its request schema caps at 12). */
@@ -464,7 +468,7 @@ export async function runPlaybookLessonsScan(
   deps: PlaybookLessonsScanDeps
 ): Promise<string[]> {
   const closedAfter = new Date(
-    deps.now().getTime() - WINDOW_DAYS * 24 * 60 * 60 * 1000
+    deps.now().getTime() - PLAYBOOK_LEARNING_WINDOW_DAYS * 24 * 60 * 60 * 1000
   );
   const candidates = await deps.loadCandidates(closedAfter);
   const filed: string[] = [];
@@ -626,7 +630,7 @@ export async function runPlaybookLessonsScan(
         summary: `Revise what earlier runs taught "${playbook.name}"`,
         evidence: {
           evaluatedRuns: card.runs.evaluated,
-          windowDays: WINDOW_DAYS,
+          windowDays: PLAYBOOK_LEARNING_WINDOW_DAYS,
           stages: stageRevisions.map((r) => ({
             stageKey: r.stageKey,
             before: r.existingLessons,
