@@ -64,6 +64,7 @@ import {
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 import {
+  owedOutputHint,
   readStageOutcomes,
   type StageOutcomesInput,
 } from "../focus-sessions/stage-outputs-approved.js";
@@ -474,7 +475,28 @@ export function checkGateFailing(
   input: StageOutcomesInput & { stages: unknown },
   fromStage: string
 ): string[] {
-  return readStageOutcomes(input.stages, fromStage, input).unmet;
+  return checkGateHold(input, fromStage).failing;
+}
+
+/**
+ * {@link checkGateFailing}, with the hold's `reason` when the stage left owes
+ * an OUTPUT: the gate's pause carries it (`metadata.checkGate.reason`, the
+ * hold), and the session's nudge repeats it, so the agent reads which slot to
+ * deliver and how (`owedOutputHint`). Pure.
+ */
+export function checkGateHold(
+  input: StageOutcomesInput & { stages: unknown },
+  fromStage: string
+): CheckMeasure {
+  const stage = readStageOutcomes(input.stages, fromStage, input);
+  if (stage.unmetOutputs.length === 0) return { failing: stage.unmet };
+  return {
+    failing: stage.unmet,
+    reason: [
+      `The check of "${fromStage}" did not pass: ${stage.unmet.join(", ")}.`,
+      ...stage.unmetOutputs.map(owedOutputHint),
+    ].join(" "),
+  };
 }
 
 // The gate's two stored literals live in `@synap-core/types/focus-sessions`,
@@ -584,17 +606,15 @@ export function sessionGateSubject(
         sessionId: params.sessionId,
         playbookId: params.playbookId ?? null,
       });
-      return {
-        failing: checkGateFailing(
-          {
-            stages: proc?.stages ?? [],
-            expectedOutputs: row?.expectedOutputs ?? [],
-            criteria: result.criteria,
-            evaluations: result.evaluations,
-          },
-          fromStage
-        ),
-      };
+      return checkGateHold(
+        {
+          stages: proc?.stages ?? [],
+          expectedOutputs: row?.expectedOutputs ?? [],
+          criteria: result.criteria,
+          evaluations: result.evaluations,
+        },
+        fromStage
+      );
     },
     proposal: {
       targetType: STAGE_GATE_TARGET_TYPE,

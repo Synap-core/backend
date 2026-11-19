@@ -34,7 +34,10 @@ import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import { createHash } from "node:crypto";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  CHECK_GATE_METADATA_KEY,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import {
   attachSessionVerdicts,
   loadSessionEvaluationSummary,
@@ -97,6 +100,13 @@ export interface SessionNudges {
     current: string | null;
     stages: string[];
   };
+  /**
+   * A CHECK gate holds the session (`metadata.checkGate`, `stage-gate.ts`):
+   * the stage it judged, what holds it, and the gate's own reason — for an
+   * owed output, which slot to deliver and how (W6). It resumes by itself
+   * once that is met.
+   */
+  heldByCheck?: { stageKey: string; fromStage: string; failing: string[] };
   /** Outputs handed to the person (`owner: 'human'`) still pending. */
   owedByPerson?: number;
   /**
@@ -202,6 +212,39 @@ export function computeSessionNudges(input: {
         `Closed at stage "${cur}", not the last ("${stages[stages.length - 1]}") — advance currentStage as the work moves.`
       );
     }
+  }
+
+  // A check gate's hold: its reason names the slot to deliver and how.
+  const held = (session.metadata as Record<string, unknown> | null)?.[
+    CHECK_GATE_METADATA_KEY
+  ] as
+    | {
+        stageKey?: unknown;
+        fromStage?: unknown;
+        failing?: unknown;
+        reason?: unknown;
+      }
+    | undefined;
+  if (
+    phase === "update" &&
+    typeof held?.stageKey === "string" &&
+    typeof held.fromStage === "string"
+  ) {
+    const failing = Array.isArray(held.failing)
+      ? held.failing.filter((k): k is string => typeof k === "string")
+      : [];
+    out.heldByCheck = {
+      stageKey: held.stageKey,
+      fromStage: held.fromStage,
+      failing,
+    };
+    out.hints.push(
+      `${
+        typeof held.reason === "string" && held.reason
+          ? held.reason
+          : `The check of "${held.fromStage}" did not pass: ${failing.join(", ")}.`
+      } The session resumes at "${held.stageKey}" by itself once that is met.`
+    );
   }
 
   // Answered and back with the agent, not yet delivered or claimed — the same

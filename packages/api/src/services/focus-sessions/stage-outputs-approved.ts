@@ -61,6 +61,11 @@ export interface StageOutcomes {
    * declared key, else its label).
    */
   unmet: string[];
+  /**
+   * The OUTPUTS among `unmet` (never a criterion's fact), with their kind:
+   * what a held gate tells the agent to deliver ({@link owedOutputHint}).
+   */
+  unmetOutputs: Array<{ key: string; kind: string | null }>;
   /** Every required outcome met, and at least one outcome met. */
   met: boolean;
 }
@@ -76,7 +81,9 @@ export function readStageOutcomes(
   stageKey: string | null,
   input: StageOutcomesInput
 ): StageOutcomes {
-  if (!stageKey) return { outcomes: [], unmet: [], met: false };
+  if (!stageKey) {
+    return { outcomes: [], unmet: [], unmetOutputs: [], met: false };
+  }
   const { outcomes } = projectSessionOutcomes({
     expectedOutputs: input.expectedOutputs,
     criteria: (input.criteria ?? []) as OutcomeCriterionLike[],
@@ -84,7 +91,7 @@ export function readStageOutcomes(
     sessionTerminal: false,
   });
   const picked = new Set<SessionOutcome>();
-  const missing: string[] = [];
+  const missing: Array<{ key: string; kind: string | null }> = [];
   for (const o of declaredStageOutputs(stages, stageKey)) {
     const key = (o as { key?: unknown }).key;
     const label = normalizeExpectedLabel(o?.label);
@@ -101,7 +108,10 @@ export function readStageOutcomes(
         : undefined);
     if (found) picked.add(found);
     else if ((o as { optional?: unknown }).optional !== true) {
-      missing.push(typeof key === "string" && key ? key : (o?.label ?? ""));
+      missing.push({
+        key: typeof key === "string" && key ? key : (o?.label ?? ""),
+        kind: typeof o?.kind === "string" ? o.kind : null,
+      });
     }
   }
   for (const x of outcomes) {
@@ -109,12 +119,32 @@ export function readStageOutcomes(
     else if (x.criteria?.some((c) => c.stageKey === stageKey)) picked.add(x);
   }
   const list = [...picked];
-  const unmet = [...unmetRequiredOutcomes(list), ...missing];
+  const held = new Set(unmetRequiredOutcomes(list));
+  const unmetOutputs = [
+    ...list
+      .filter((x) => held.has(x.key) && x.source !== "criterion")
+      .map((x) => ({ key: x.key, kind: x.kind ?? null })),
+    ...missing,
+  ];
+  const unmet = [...held, ...missing.map((m) => m.key)];
   return {
     outcomes: list,
     unmet,
+    unmetOutputs,
     met: unmet.length === 0 && list.some((x) => x.met),
   };
+}
+
+/**
+ * How the agent delivers an output a stage still owes — the line a held check
+ * gate carries (its hold reason, and the session's nudge). An agent that
+ * recorded its pull request as a NEW outcome (`pr-<repo>-<n>`) still owes the
+ * slot the stage declared: nothing pairs the two but the slot's own key. PURE.
+ */
+export function owedOutputHint(o: { key: string; kind: string | null }): string {
+  return o.kind === "pull_request"
+    ? `Output "${o.key}" is owed: complete it with your PR's url (completeOutput "${o.key}" with ref.url), or name it as the outputKey of your PR criterion.`
+    : `Output "${o.key}" is owed: complete it with its evidence (completeOutput "${o.key}" with its ref), or name it as the outputKey of the criterion that checks it.`;
 }
 
 /**

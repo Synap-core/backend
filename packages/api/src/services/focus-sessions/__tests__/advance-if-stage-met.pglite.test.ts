@@ -149,6 +149,7 @@ import {
   stageMetAdvanceInput,
 } from "../advance-if-stage-met.js";
 import { gradeCriterionAsOwner } from "../evaluations/evaluate.js";
+import { loadSessionNudges } from "../session-nudges.js";
 import {
   satisfyClaimsByEvidence,
   satisfyOutputsByRef,
@@ -680,5 +681,78 @@ describe("a check gate reads the same outcomes", () => {
     expect(s.status).toBe("active");
     expect(s.current_stage).toBe("ship");
     expect(s.metadata).not.toHaveProperty("checkGate");
+  });
+});
+
+describe("a held check gate tells the agent how to get out", () => {
+  it("a PR recorded under its own key leaves the declared slot owed: the hold and the nudge name it and say how", async () => {
+    const stages = [
+      {
+        key: "pr-opened",
+        name: "PR opened",
+        expectedOutputs: [{ kind: "pull_request", label: "Pull request" }],
+      },
+      { key: "checks", name: "Checks", gate: { kind: "check" } },
+    ];
+    const id = await runAt({
+      stage: "pr-opened",
+      stages,
+      outputs: [
+        {
+          key: "pull-request",
+          kind: "pull_request",
+          label: "Pull request",
+          status: "pending",
+        },
+        // The work-units convention: the PR as a NEW outcome.
+        {
+          key: "pr-backend-7",
+          kind: "pull_request",
+          label: "backend#7",
+          status: "done",
+          ref: { url: "https://github.com/Synap-core/backend/pull/7" },
+        },
+      ],
+    });
+    const res = await updateFocusSession({
+      sessionId: id,
+      userId: USER,
+      agentUserId: AGENT,
+      currentStage: "checks",
+      expectedStage: "pr-opened",
+    });
+    expect(res.status).toBe("updated");
+    const s = await sessionOf(id);
+    expect(s.status).toBe("paused");
+    const how =
+      'Output "pull-request" is owed: complete it with your PR\'s url (completeOutput "pull-request" with ref.url), or name it as the outputKey of your PR criterion.';
+    const gate = s.metadata.checkGate as { failing: string[]; reason: string };
+    expect(gate.failing).toEqual(["pull-request"]);
+    expect(gate.reason).toContain(how);
+    // What the update_session reply carries (the ONE nudge loader its door calls).
+    const row = await (
+      h.db as {
+        query: {
+          focusSessions: {
+            findFirst: (q: unknown) => Promise<Record<string, unknown>>;
+          };
+        };
+      }
+    ).query.focusSessions.findFirst({
+      where: (f: { id: unknown }, { eq }: { eq: (a: unknown, b: unknown) => unknown }) =>
+        eq(f.id, id),
+    });
+    const nudges = await loadSessionNudges({
+      session: row as never,
+      phase: "update",
+      userId: USER,
+      agentUserId: AGENT,
+    });
+    expect(nudges).toMatchObject({
+      heldByCheck: { stageKey: "checks", fromStage: "pr-opened" },
+    });
+    expect(
+      (nudges as { hints: string[] }).hints.some((x) => x.includes(how))
+    ).toBe(true);
   });
 });
