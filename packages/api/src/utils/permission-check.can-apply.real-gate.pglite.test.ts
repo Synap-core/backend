@@ -91,7 +91,6 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { checkPermissionOrPropose } from "./permission-check.js";
 
-
 const OWNER = randomUUID();
 const AGENT = randomUUID();
 

@@ -10,7 +10,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
 
 const h = vi.hoisted(() => ({
-  playbook: async (_c: string, _p: Record<string, unknown>): Promise<void> => {},
+  playbook: async (
+    _c: string,
+    _p: Record<string, unknown>
+  ): Promise<void> => {},
   seen: [] as Array<{ changeType: string; payload: Record<string, unknown> }>,
 }));
 

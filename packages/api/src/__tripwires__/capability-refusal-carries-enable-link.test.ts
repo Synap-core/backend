@@ -262,10 +262,7 @@ describe("TRIPWIRE: capability refusals carry an enable-link", () => {
     const deny =
       'return {\n  kind: "deny",\n  reason: r.message,\n  reasonCode: r.reasonCode,\n}';
     expect(
-      isRecipeFilingRefusal(
-        deny,
-        `const r = filingRefusalOf(err);\n${deny}`
-      )
+      isRecipeFilingRefusal(deny, `const r = filingRefusalOf(err);\n${deny}`)
     ).toBe(true);
     expect(
       isRecipeFilingRefusal(

@@ -210,10 +210,7 @@ export function isCheckedProposalKind(
 
 /** The fields the approval reads: the envelope's inner `data`, else the flat payload. */
 function payloadOf(data: Record<string, unknown>): Record<string, unknown> {
-  return (isNestedEnvelope(data) ? data.data : data) as Record<
-    string,
-    unknown
-  >;
+  return (isNestedEnvelope(data) ? data.data : data) as Record<string, unknown>;
 }
 
 /**

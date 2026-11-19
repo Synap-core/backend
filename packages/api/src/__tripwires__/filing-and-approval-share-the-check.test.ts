@@ -536,7 +536,10 @@ describe("filing and approval share the check", () => {
     }
 
     it("createPendingProposalRow asks it before the row is inserted", () => {
-      const row = namedFunction(parse(PERMISSION_CHECK), "createPendingProposalRow");
+      const row = namedFunction(
+        parse(PERMISSION_CHECK),
+        "createPendingProposalRow"
+      );
       const check = firstCallAt(row, "proposalCannotApply");
       const insert = firstCallAt(row, "insertPendingProposal");
       expect(insert).toBeGreaterThan(0);
@@ -545,8 +548,7 @@ describe("filing and approval share the check", () => {
     });
 
     it("a caller that files with `canApplyAsked` asked the check itself first (createProposal, createEventBackedProposal)", () => {
-      const skips: Array<{ fn: FnNode | null; at: number; where: string }> =
-        [];
+      const skips: Array<{ fn: FnNode | null; at: number; where: string }> = [];
       for (const file of sources(API_SRC)) {
         const text = readFileSync(file, "utf8");
         if (!text.includes("canApplyAsked")) continue;
@@ -558,9 +560,7 @@ describe("filing and approval share the check", () => {
             ["createPendingProposalRow", "createPendingProposal"].includes(
               calleeName(n) ?? ""
             ) &&
-            n.arguments
-              .slice(1)
-              .some((a) => /canApplyAsked/.test(a.getText()))
+            n.arguments.slice(1).some((a) => /canApplyAsked/.test(a.getText()))
           )
             skips.push({
               fn: inner,

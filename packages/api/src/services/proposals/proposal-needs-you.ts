@@ -138,8 +138,7 @@ export async function classifyPendingProposals(
         sessionClass: session?.sessionClass ?? null,
         snoozedUntil: snoozedUntilOf.get(row.id) ?? null,
         blocksOpenPr: sessionId !== null && blocking.has(sessionId),
-        held: cannotApplyYet({ status: row.status, data: row.data }, now)
-          ?.held,
+        held: cannotApplyYet({ status: row.status, data: row.data }, now)?.held,
       },
       now
     );

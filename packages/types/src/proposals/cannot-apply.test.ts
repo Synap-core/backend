@@ -57,10 +57,7 @@ describe("cannotApplyYet: a held message, as the pod reads it", () => {
       cannotApplyYet(heldSend({ errorClass: "linkedin_limit", until }), NOW)
     ).toEqual({ reason: "daily_limit", held: true, until });
     expect(
-      cannotApplyYet(
-        heldSend({ errorClass: "linkedin_limit", until: AT }),
-        NOW
-      )
+      cannotApplyYet(heldSend({ errorClass: "linkedin_limit", until: AT }), NOW)
     ).toBeNull();
   });
 

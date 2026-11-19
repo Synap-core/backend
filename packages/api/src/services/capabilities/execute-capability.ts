@@ -1035,7 +1035,9 @@ export async function executeCapability(input: {
             ? { idempotencyKey: input.idempotencyKey }
             : {}),
           // What a pod app asked, for the approval screen (intent actions).
-          ...(input.intentRequest ? { intentRequest: input.intentRequest } : {}),
+          ...(input.intentRequest
+            ? { intentRequest: input.intentRequest }
+            : {}),
         },
         // WHY this needs a human, persisted onto `proposals.governance_reason`.
         // Previously never passed here: `createPendingProposal` has forwarded
