@@ -1112,7 +1112,7 @@ export function ReconsentCallout({
       className="flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
     >
       <Info
-        className="mt-0.5 h-4 w-4 shrink-0 text-foreground/75"
+        className="mt-0.5 h-4 w-4 shrink-0 text-foreground/80"
         aria-hidden
       />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -1123,7 +1123,7 @@ export function ReconsentCallout({
                 n: moved.length + (fresh.length > 0 ? 1 : 0),
               })}
             </p>
-            <p className="text-pretty text-xs leading-relaxed text-foreground/75">
+            <p className="text-pretty text-xs leading-relaxed text-foreground/80">
               {t("reconsent.body", { name: appName })}
             </p>
             <ul className="flex flex-col gap-2">
@@ -1185,7 +1185,7 @@ export function ReconsentCallout({
           <div className="flex flex-col gap-2" data-new-asks>
             <p
               id={moved.length > 0 ? undefined : `${id}-t`}
-              className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/75"
+              className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/80"
             >
               <Sparkles className="h-3 w-3 text-primary" aria-hidden />
               {t("reconsent.new")}
@@ -1200,9 +1200,9 @@ export function ReconsentCallout({
                     </span>
                   </span>
                   {c.reason ? (
-                    <span className="text-pretty text-xs leading-relaxed text-foreground/75">
+                    <span className="text-pretty text-xs leading-relaxed text-foreground/80">
                       {/* The developer's words, as text: why it asks. */}
-                      <span className="text-foreground/65">
+                      <span className="text-foreground/80">
                         {t("reason.prefix")}{" "}
                       </span>
                       {c.reason}
