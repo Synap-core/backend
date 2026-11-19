@@ -543,9 +543,7 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
       required: c.required !== false,
       met: verdict?.verdict === "pass",
       verdict,
-      state: resolveUnitState(
-        criterionState(c, verdict, gradeOwed.has(c.key))
-      ),
+      state: resolveUnitState(criterionState(c, verdict, gradeOwed.has(c.key))),
       ...(c.stageKey ? { stageKey: c.stageKey } : {}),
     };
   };
@@ -609,8 +607,7 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
     const counted = checks.some((x) => x.view.required)
       ? checks.filter((x) => x.view.required)
       : checks;
-    const checksPass =
-      counted.length > 0 && counted.every((x) => x.view.met);
+    const checksPass = counted.length > 0 && counted.every((x) => x.view.met);
     // The verdict that decides: a failing check, else (all passing) the
     // latest pass, else the first check still short of a pass.
     const deciding = checksPass
