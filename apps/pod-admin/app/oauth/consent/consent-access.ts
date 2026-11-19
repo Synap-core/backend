@@ -262,9 +262,9 @@ function templateSpaces(
  *  - In: "All spaces" (with every project, decision fc37f740 Q1) when it asks
  *    to read anything pod-wide; else its template spaces, else every space
  *    its reads are offered in (as today's first consent); no projects;
- *  - It changes things in: its template spaces, else the one place there is
- *    when there is exactly one, else nothing (ui-composition §13: a default
- *    only when declared or the only valid option). Allow then says why.
+ *  - It changes things in: its template spaces, else nothing (ui-composition
+ *    §13: a default only when declared; the W3d contract's
+ *    `suggestedSpaceIds`, [] = tick nothing). Allow then says why.
  */
 export function firstDraft(offer: ConsentOffer): ConsentDraft {
   const permissions = new Set<string>();
@@ -277,13 +277,6 @@ export function firstDraft(offer: ConsentOffer): ConsentDraft {
   const fromTemplates = templateSpaces(reads.spaces, offer.templates);
   const writes = writeChoices(offer);
   const writeTemplates = templateSpaces(writes.spaces, offer.templates);
-  const onlyWritePlace =
-    writes.spaces.length + writes.projects.length === 1
-      ? {
-          spaces: writes.spaces.map((s) => s.workspaceId),
-          projects: writes.projects.map((p) => p.projectId),
-        }
-      : null;
   return {
     permissions,
     read: reads.everywhere
@@ -298,7 +291,7 @@ export function firstDraft(offer: ConsentOffer): ConsentDraft {
     write:
       writeTemplates.length > 0
         ? { spaces: writeTemplates, projects: [] }
-        : (onlyWritePlace ?? { spaces: [], projects: [] }),
+        : { spaces: [], projects: [] },
   };
 }
 
@@ -321,13 +314,18 @@ export function draftOf(access: AppAccess): ConsentDraft {
 /**
  * What Allow sends, as AppAccess v2, filtered to the offer: only offered
  * permissions, in offer order; only offered places. "All spaces" includes
- * every project (decision fc37f740 Q1). A write place is never "all".
+ * every project (decision fc37f740 Q1). A write place is never "all". Under
+ * "All spaces", a read with no pod-wide form (W3d contract `allSpaces:
+ * false`) is not sent: it holds only in picked spaces, and the In choice
+ * names it (`notEverywhere`), so the server never refuses Allow for it.
  */
 export function toAccess(draft: ConsentDraft, offer: ConsentOffer): AppAccess {
+  const reads = readChoices(offer);
+  const everywhere = draft.read.spaces === "all" && reads.everywhere;
   const permissions = offer.items
     .filter((i) => givable(i) && draft.permissions.has(i.permission))
+    .filter((i) => !everywhere || isWriteTier(i.permission) || i.podWide)
     .map((i) => i.permission);
-  const reads = readChoices(offer);
   const writes = writeChoices(offer);
   const within = (ids: readonly string[], allowed: readonly string[]) =>
     ids.filter((id, n) => allowed.includes(id) && ids.indexOf(id) === n);
@@ -802,12 +800,19 @@ export function showsUnion(draft: ConsentDraft): boolean {
  */
 export function notEverywhere(
   draft: ConsentDraft,
-  rows: readonly CanRow[]
+  rows: readonly CanRow[],
+  offer?: ConsentOffer
 ): string[] {
   if (draft.read.spaces !== "all") return [];
+  // The offer says which reads may go everywhere (the server's `podWide`,
+  // the contract's `allSpaces`); without it, the grammar's own rule.
+  const everywhere = (p: string) => {
+    const item = offer?.items.find((i) => i.permission === p);
+    return item ? item.podWide : isPodWideReadPermission(p);
+  };
   const out: string[] = [];
   for (const p of draft.permissions) {
-    if (isWriteTier(p) || isPodWideReadPermission(p)) continue;
+    if (isWriteTier(p) || everywhere(p)) continue;
     const row = rows
       .flatMap((r): ConsentObject[] => [r, ...r.members])
       .find((r) => r.key !== ALSO_SEE && rowPermissions(r).includes(p));
@@ -1133,4 +1138,199 @@ export function sameDraft(a: ConsentDraft, b: ConsentDraft): boolean {
     sameIds(a.write.spaces, b.write.spaces) &&
     sameIds(a.write.projects, b.write.projects)
   );
+}
+
+// ─── The W3d consent contract (pod document be6caecc, v1) ────────────────────
+//
+// `getOAuthConsentContext().app.access` (and, for the app page,
+// `apps.accessOffer`): the asked permissions, the places the person may give,
+// what the connection holds now, the re-consent and the short ask, all with
+// names. Typed here from the contract until the backend's generated types
+// carry it; `contractOf` reads it at run time, so an older pod (no `access`)
+// keeps today's offer.
+
+export interface NamedSpace {
+  id: string;
+  name: string;
+  templateSlug: string | null;
+}
+export interface NamedProject {
+  id: string;
+  name: string;
+  workspaceId: string | null;
+}
+export interface NamedAppAccess {
+  version: 2;
+  permissions: string[];
+  read: { spaces: "all" | NamedSpace[]; projects: "all" | NamedProject[] };
+  write: { spaces: NamedSpace[]; projects: NamedProject[] };
+}
+export interface ContractAsked {
+  permission: string;
+  tier: "read" | "write";
+  reason: string | null;
+  kindGroup: KindGroup | null;
+  /** May be given with read.spaces "all" (declared pod-wide). */
+  allSpaces: boolean;
+  /** false: the person can give it nowhere (the can't-give fold). */
+  offerable: boolean;
+}
+export interface ContractPlace {
+  kind: "space" | "pod" | "project";
+  id: string | null;
+  name: string;
+}
+export interface ContractReconsent {
+  reason: "widens" | "narrows" | "unplaceable" | "too-large";
+  was: Array<{ permission: string; place: ContractPlace }>;
+  proposed: NamedAppAccess;
+}
+export interface ContractAsk {
+  title: string;
+  adds: Array<{
+    permission: string;
+    tier: "read" | "write";
+    reason: string | null;
+    kindGroup: KindGroup | null;
+  }>;
+  needsWritePlace: boolean;
+  unavailable: string[];
+  connectionPublicId: string | null;
+}
+export interface ConsentContract {
+  asked: { permissions: ContractAsked[]; templates: string[] };
+  places: {
+    read: { allSpaces: boolean; spaces: NamedSpace[]; projects: NamedProject[] };
+    write: {
+      spaces: NamedSpace[];
+      projects: NamedProject[];
+      suggestedSpaceIds: string[];
+    };
+  };
+  current: NamedAppAccess | null;
+  reconsent: ContractReconsent | null;
+  ask: ContractAsk | null;
+}
+
+/** The contract's block on an app, when this pod sends it. */
+export function contractOf(app: object | null | undefined): ConsentContract | null {
+  const access = (app as { access?: unknown } | null | undefined)?.access;
+  if (!access || typeof access !== "object") return null;
+  const c = access as Partial<ConsentContract>;
+  return c.asked && c.places ? (access as ConsentContract) : null;
+}
+
+/**
+ * The contract as this model's offer: each asked permission in its tier's
+ * places (reads in `places.read`, the rest in `places.write`), pod-wide when
+ * `allSpaces`; one the person can give nowhere has no place (can't give).
+ */
+export function offerOfContract(c: ConsentContract): ConsentOffer {
+  const space = (s: NamedSpace): OfferedSpace => ({
+    workspaceId: s.id,
+    workspaceName: s.name,
+    templateSlug: s.templateSlug,
+  });
+  const project = (p: NamedProject): OfferedProject => ({
+    projectId: p.id,
+    projectName: p.name,
+    workspaceId: p.workspaceId,
+  });
+  return {
+    items: c.asked.permissions.map((a) => {
+      const tier = a.tier === "read" ? c.places.read : c.places.write;
+      return {
+        permission: a.permission,
+        reason: trimmed(a.reason),
+        kindGroup: a.kindGroup,
+        spaces: a.offerable ? tier.spaces.map(space) : [],
+        projects: a.offerable ? tier.projects.map(project) : [],
+        podWide: a.offerable && a.tier === "read" && a.allSpaces,
+      };
+    }),
+    templates: [...c.asked.templates],
+    projectsOffered: true,
+  };
+}
+
+/** A named access as ids (what is sent back). */
+export function accessOfNamed(a: NamedAppAccess): AppAccess {
+  return {
+    version: APP_ACCESS_VERSION,
+    permissions: [...a.permissions],
+    read: {
+      spaces: a.read.spaces === "all" ? "all" : a.read.spaces.map((s) => s.id),
+      projects:
+        a.read.projects === "all" ? "all" : a.read.projects.map((p) => p.id),
+    },
+    write: {
+      spaces: a.write.spaces.map((s) => s.id),
+      projects: a.write.projects.map((p) => p.id),
+    },
+  };
+}
+
+/** The names a named access carries, beside the offer's. */
+export function namesOfNamed(
+  a: NamedAppAccess | null | undefined
+): Record<string, string> {
+  const names: Record<string, string> = {};
+  if (!a) return names;
+  const add = (list: ReadonlyArray<{ id: string; name: string }> | "all") => {
+    if (list !== "all") for (const x of list) names[x.id] = x.name;
+  };
+  add(a.read.spaces);
+  add(a.read.projects);
+  add(a.write.spaces);
+  add(a.write.projects);
+  return names;
+}
+
+/** What the connection held, as today's pairs (a project place has none). */
+export function wasPairs(
+  r: ContractReconsent
+): Array<{ permission: string; workspaceId: string | null }> {
+  return r.was
+    .filter((w) => w.place.kind !== "project")
+    .map((w) => ({
+      permission: w.permission,
+      workspaceId: w.place.kind === "pod" ? null : w.place.id,
+    }));
+}
+
+/**
+ * What the contract says the connection holds: its current access, or the
+ * re-consent's proposed form with what changes (now / was, from `was`).
+ */
+export function heldOfContract(c: ConsentContract): HeldAccess {
+  if (c.reconsent) {
+    const was = wasPairs(c.reconsent);
+    const local = heldAccessOf(was);
+    return {
+      kind: "reconsent",
+      proposed: accessOfNamed(c.reconsent.proposed),
+      widens: local.kind === "reconsent" ? local.widens : [],
+      narrows: local.kind === "reconsent" ? local.narrows : [],
+    };
+  }
+  if (c.current) return { kind: "access", access: accessOfNamed(c.current) };
+  return { kind: "none" };
+}
+
+/**
+ * The draft a contract consent starts with: the re-consent's proposed form,
+ * the current access, or a first draft whose write places are the server's
+ * `suggestedSpaceIds` (spaces made from a declared template; [] = none).
+ */
+export function contractDraft(
+  c: ConsentContract,
+  offer: ConsentOffer
+): ConsentDraft {
+  if (c.reconsent) return draftOf(accessOfNamed(c.reconsent.proposed));
+  if (c.current) return draftOf(accessOfNamed(c.current));
+  const first = firstDraft(offer);
+  return {
+    ...first,
+    write: { spaces: [...c.places.write.suggestedSpaceIds], projects: [] },
+  };
 }

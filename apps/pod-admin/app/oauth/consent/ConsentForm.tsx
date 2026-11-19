@@ -51,6 +51,14 @@ import {
   allowNew,
   canRows,
   cantGive,
+  contractDraft,
+  contractOf,
+  firstDraft,
+  heldOfContract,
+  namesOfNamed,
+  offerOfContract,
+  toAccess,
+  wasPairs,
   draftBlockedReason,
   draftHeadline,
   givable,
@@ -67,6 +75,7 @@ import {
   type ReconsentChange,
 } from "./consent-access";
 import { AccessLines } from "./AccessLines";
+import type { AppAccess } from "@synap-core/types/grants";
 import { consentT } from "./copy";
 import { AskConsent, askCount } from "./AskConsent";
 
@@ -204,27 +213,36 @@ export function ConsentForm({
         : null,
     [offered, spaceHint]
   );
-  const offer = useMemo(() => (app ? offerOf(app) : null), [app]);
+  // The W3d contract (`app.access`) when this pod sends it; else today's offer.
+  const contract = useMemo(() => contractOf(app), [app]);
+  const offer = useMemo(
+    () => (app ? (contract ? offerOfContract(contract) : offerOf(app)) : null),
+    [app, contract]
+  );
   const [draft, setDraft] = useState<ConsentDraft | null>(null);
   useEffect(() => {
     if (app && offer) {
       // A re-consent starts from what the connection holds, a first consent
       // from the app's declared defaults (`firstDraft`).
-      setDraft(reconsentDraft(heldAccessOf(app.approved), offer));
+      setDraft(
+        contract
+          ? contractDraft(contract, offer)
+          : reconsentDraft(heldAccessOf(app.approved), offer)
+      );
     }
-  }, [app, offer]);
+  }, [app, offer, contract]);
   // A re-consent says what changes first; its title and buttons follow.
   const confirming = useMemo(
     () =>
       !!app &&
       !!offer &&
       reconsentChanges(
-        heldAccessOf(app.approved),
+        contract ? heldOfContract(contract) : heldAccessOf(app.approved),
         offer,
         canRows(offer, app.actsAs.kind),
-        app.approved
+        contract?.reconsent ? wasPairs(contract.reconsent) : app.approved
       ).length > 0,
-    [app, offer]
+    [app, offer, contract]
   );
   // An app Synap has not checked is named by its domain, never by the name
   // it gives itself (its `client_name` is its own words).
@@ -238,8 +256,7 @@ export function ConsentForm({
   // which an approval ADDS to what the app holds.
   const ask = app?.ask ?? null;
   // What Allow sends on today's wire: the draft lowered to (permission,
-  // space) pairs, within the offer (`toApprovedPairs`). The W3d contract
-  // takes the AppAccess v2 itself (`toAccess`).
+  // space) pairs, within the offer (`toApprovedPairs`).
   const approved = ask
     ? ask.pairs.map(({ permission, workspaceId }) => ({
         permission,
@@ -248,6 +265,30 @@ export function ConsentForm({
     : offer && draft
       ? toApprovedPairs(draft, offer)
       : [];
+  // With the W3d contract: the full consent sends the AppAccess v2 itself
+  // (`approved` is then ignored); the short ask sends its first write place
+  // only when the server asks for one (Q4).
+  const [askWrite, setAskWrite] = useState<ConsentDraft | null>(null);
+  const askWriteDraft =
+    contract?.ask?.needsWritePlace && offer
+      ? (askWrite ?? {
+          ...firstDraft(offer),
+          write: {
+            spaces: [...contract.places.write.suggestedSpaceIds],
+            projects: [],
+          },
+        })
+      : null;
+  const v2: { access?: AppAccess; askWritePlace?: AppAccess["write"] } =
+    contract && offer
+      ? contract.ask
+        ? askWriteDraft
+          ? { askWritePlace: askWriteDraft.write }
+          : {}
+        : draft
+          ? { access: toAccess(draft, offer) }
+          : {}
+      : {};
 
   const act = useCallback(
     (approve: boolean) => {
@@ -257,6 +298,9 @@ export function ConsentForm({
           ...params,
           approve,
           ...(app ? { approved } : {}),
+          // Spread, not written inline: the generated input type gains these
+          // fields with W3d's PR; until then an older pod ignores them.
+          ...v2,
           // An app sign-in is approved for exactly what this screen showed.
           appSignInFingerprint: context.data?.appSignIn?.fingerprint,
         },
@@ -288,7 +332,7 @@ export function ConsentForm({
         }
       );
     },
-    [decide, params, app, approved, context.data]
+    [decide, params, app, approved, v2, context.data]
   );
 
   const busy = step.kind === "working";
@@ -421,6 +465,11 @@ export function ConsentForm({
               <AskConsent
                 app={app}
                 appName={appName}
+                writePlace={
+                  askWriteDraft
+                    ? { draft: askWriteDraft, onChange: setAskWrite }
+                    : null
+                }
                 ask={ask}
                 busy={busy}
                 step={step}
@@ -811,17 +860,40 @@ export type ConsentApp = NonNullable<
 
 /** The consent's own copy of the app's offer and rows, derived once per app. */
 export function useConsentModel(app: ConsentApp) {
-  const offer = useMemo(() => offerOf(app), [app]);
+  // The W3d contract when this pod sends it (`app.access`), else today's
+  // per-permission offer: one model either way.
+  const contract = useMemo(() => contractOf(app), [app]);
+  const offer = useMemo(
+    () => (contract ? offerOfContract(contract) : offerOf(app)),
+    [app, contract]
+  );
   const rows = useMemo(
     () => canRows(offer, app.actsAs.kind),
     [offer, app.actsAs.kind]
   );
-  const held = useMemo(() => heldAccessOf(app.approved), [app.approved]);
-  const changes = useMemo(
-    () => reconsentChanges(held, offer, rows, app.approved),
-    [held, offer, rows, app.approved]
+  const held = useMemo(
+    () => (contract ? heldOfContract(contract) : heldAccessOf(app.approved)),
+    [app.approved, contract]
   );
-  return { offer, rows, held, changes };
+  const changes = useMemo(
+    () =>
+      reconsentChanges(
+        held,
+        offer,
+        rows,
+        contract?.reconsent ? wasPairs(contract.reconsent) : app.approved
+      ),
+    [held, offer, rows, app.approved, contract]
+  );
+  const names = useMemo(
+    () => ({
+      ...namesOfNamed(contract?.current),
+      ...namesOfNamed(contract?.reconsent?.proposed),
+      ...placeNames(offer),
+    }),
+    [contract, offer]
+  );
+  return { contract, offer, rows, held, changes, names };
 }
 
 /**
@@ -863,7 +935,7 @@ export function AppConsent({
   defaultOpen?: "can" | "in" | "write" | null;
 }) {
   const t = consentT();
-  const { offer, rows, held, changes } = useConsentModel(app);
+  const { offer, rows, held, changes, names } = useConsentModel(app);
   const groupId = useId();
   const confirming = changes.length > 0;
   const changed = changes.some((c) => c.mark !== "new");
@@ -897,7 +969,7 @@ export function AppConsent({
         rows={rows}
         actsAs={app.actsAs.kind}
         podWideKinds={app.podWideKinds}
-        names={placeNames(offer)}
+        names={names}
         onChange={onDraft}
         isDisabled={busy}
         defaultOpen={defaultOpen}
