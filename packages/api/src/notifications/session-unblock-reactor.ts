@@ -50,6 +50,14 @@
  * alone: a session can legitimately be blocked again later and unblocked again,
  * and that second unblocking is real news.
  *
+ * AN ANSWER MOVES WHAT IT NAMES (work-model W5). A slot handed to the person
+ * may say, as data, the one thing of its session the answer moves
+ * (`unblocksTarget`, `SlotUnblocksTarget`); the answer door puts it on the
+ * `slot_answered` event. This reactor moves it through the existing doors
+ * ({@link answerTargetMove}): a criterion the person grades is graded pass by
+ * their deed, an output they owe is attested, a stage's check gate is checked
+ * again. A refusal moves nothing. Advancing a stage is not done here.
+ *
  * NEVER THROWS: `emitSideEffects` isolates a failing reactor, but a swallowed
  * failure here would leave no evidence that nobody was told their work can
  * resume — so failures are logged.
@@ -68,6 +76,12 @@ import {
   projects,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { isDeclinedValue } from "@synap-core/types/ask";
+import {
+  isDeliverableDelivered,
+  type DeliverableFacts,
+} from "@synap-core/types/units";
+import { readCriteria, type SessionCriterion } from "@synap/playbooks";
 import {
   DEPENDENCY_LINK_TYPE,
   REPLACES_LINK_TYPE,
@@ -87,6 +101,7 @@ import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_CLOSE_ACTION,
 } from "../services/focus-sessions/close-event.js";
+import { FOCUS_SESSION_SLOT_ANSWER_ACTION } from "../services/focus-sessions/lifecycle-events.js";
 import {
   getSessionEdgesFor,
   openBlockerIds,
@@ -158,15 +173,160 @@ function endsGoal(payload: SideEffectPayload): boolean {
   );
 }
 
+/** What a person's answer moves (`SlotUnblocksTarget`), decided. */
+export type AnswerTargetMove =
+  | { kind: "grade"; criterionKey: string }
+  | { kind: "attest"; outputLabel: string }
+  | { kind: "check_stage"; stageKey: string };
+
+/** The ask modes whose answer is a DEED the person did, not words. */
+const DEED_ASK_MODES: readonly unknown[] = ["act", "provide"];
+
+const targetKey = (v: unknown): string | null =>
+  typeof v === "string" && v.trim() !== "" ? v.trim() : null;
+
+/**
+ * THE rule for what an answer moves, pure. `null` = nothing moves:
+ *   - a refusal (`declined`) moves nothing;
+ *   - `{criterion}`: a criterion of the session the PERSON grades
+ *     (`check.kind: "human"`), answered by a deed (an `act` / `provide` ask):
+ *     graded pass, as a deed meets a criterion under its own key
+ *     (`criterionMetBy`). Words, a choice or a machine check move nothing;
+ *   - `{output}`: the slot carrying that stored `key` (never a grade slot),
+ *     still the person's and not delivered: attested through the attest
+ *     door. The agent's own output is never delivered by the person's answer;
+ *   - `{stage}`: that stage's check gate is checked again.
+ */
+export function answerTargetMove(input: {
+  target: unknown;
+  value: unknown;
+  askMode: unknown;
+  criteria: readonly SessionCriterion[];
+  outputs: readonly unknown[];
+}): AnswerTargetMove | null {
+  const t = input.target;
+  if (!t || typeof t !== "object" || Array.isArray(t)) return null;
+  if (isDeclinedValue(input.value)) return null;
+  const target = t as Record<string, unknown>;
+  const named = ["stage", "output", "criterion"].filter((k) => k in target);
+  if (named.length !== 1) return null;
+  const stage = targetKey(target.stage);
+  if (stage) return { kind: "check_stage", stageKey: stage };
+  const criterionKey = targetKey(target.criterion);
+  if (criterionKey) {
+    const criterion = input.criteria.find((c) => c.key === criterionKey);
+    if (criterion?.check.kind !== "human") return null;
+    return DEED_ASK_MODES.includes(input.askMode)
+      ? { kind: "grade", criterionKey }
+      : null;
+  }
+  const outputKey = targetKey(target.output);
+  if (!outputKey) return null;
+  for (const raw of input.outputs) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const o = raw as DeliverableFacts & { key?: unknown; label?: unknown };
+    if (o.key !== outputKey || o.kind === "criterion") continue;
+    if (o.owner !== "human" || typeof o.label !== "string") return null;
+    return isDeliverableDelivered(o)
+      ? null
+      : { kind: "attest", outputLabel: o.label };
+  }
+  return null;
+}
+
+/** The `slot_answered` event whose slot named what its answer moves. */
+function answerNamesTarget(payload: SideEffectPayload): boolean {
+  return (
+    payload.subjectType === FOCUS_SESSION_SUBJECT_TYPE &&
+    payload.action === FOCUS_SESSION_SLOT_ANSWER_ACTION &&
+    !!payload.data?.unblocksTarget
+  );
+}
+
+/** Move what the answer named, through the existing doors. Never throws. */
+async function answerMoved(payload: SideEffectPayload): Promise<void> {
+  const sessionId =
+    (payload.data?.sessionId as string | undefined) ?? payload.subjectId;
+  if (!sessionId) return;
+  try {
+    const [session] = await db
+      .select({
+        id: focusSessions.id,
+        userId: focusSessions.userId,
+        criteria: focusSessions.criteria,
+        expectedOutputs: focusSessions.expectedOutputs,
+      })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .limit(1);
+    if (!session) return;
+    const snapshot = payload.data?.askSnapshot as { mode?: unknown } | null;
+    const move = answerTargetMove({
+      target: payload.data?.unblocksTarget,
+      value: payload.data?.value,
+      askMode: snapshot?.mode,
+      criteria: readCriteria(session.criteria),
+      outputs: Array.isArray(session.expectedOutputs)
+        ? session.expectedOutputs
+        : [],
+    });
+    if (!move) return;
+    const label = String(payload.data?.expectedLabel ?? "");
+    if (move.kind === "grade") {
+      const { gradeCriterionAfterAct } =
+        await import("../services/focus-sessions/evaluations/evaluate.js");
+      await gradeCriterionAfterAct({
+        sessionId,
+        userId: session.userId,
+        criterionKey: move.criterionKey,
+        verdict: "pass",
+        rationale: `Met by the person's answer to "${label}".`,
+      });
+    } else if (move.kind === "attest") {
+      const { attestExpectedOutput } =
+        await import("../services/focus-sessions/satisfy-expected-output.js");
+      const out = await attestExpectedOutput({
+        sessionId,
+        userId: session.userId,
+        expectedLabel: move.outputLabel,
+      });
+      if (out.status !== "attested") {
+        logger.warn(
+          { sessionId, output: move.outputLabel, status: out.status },
+          "the output an answer named was not attested"
+        );
+      }
+    } else {
+      const { resumeCheckGateIfMet } =
+        await import("../services/focus-sessions/evaluations/evaluate.js");
+      await resumeCheckGateIfMet({
+        sessionId,
+        userId: session.userId,
+        onlyStage: move.stageKey,
+      });
+    }
+  } catch (error) {
+    logger.error(
+      { error, sessionId },
+      "Failed to move what a person's answer named"
+    );
+  }
+}
+
 export const sessionUnblockNotifyReactor: Reactor = {
   id: "session-unblock-notify",
   match: (payload) =>
     (payload.subjectType === FOCUS_SESSION_SUBJECT_TYPE &&
       payload.action === FOCUS_SESSION_CLOSE_ACTION) ||
-    endsGoal(payload),
+    endsGoal(payload) ||
+    answerNamesTarget(payload),
   async handler(payload) {
     if (payload.subjectType === "track") {
       await goalEnded(payload);
+      return;
+    }
+    if (payload.action === FOCUS_SESSION_SLOT_ANSWER_ACTION) {
+      await answerMoved(payload);
       return;
     }
     const closedId =

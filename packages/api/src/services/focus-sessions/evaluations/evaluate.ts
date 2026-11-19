@@ -668,6 +668,12 @@ export async function resumeCheckGateIfMet(params: {
   sessionId: string;
   userId: string;
   summary?: SessionEvaluationSummary;
+  /**
+   * Only a gate on this stage (the stage it judged, or the one it holds the
+   * run before): an answer that names a stage moves that stage, never another
+   * (`SlotUnblocksTarget`, work-model W5). Absent: whatever gate holds it.
+   */
+  onlyStage?: string;
 }): Promise<boolean> {
   const session = await db.query.focusSessions.findFirst({
     where: and(
@@ -682,6 +688,13 @@ export async function resumeCheckGateIfMet(params: {
     !session ||
     session.status !== "paused" ||
     typeof gate?.fromStage !== "string"
+  ) {
+    return false;
+  }
+  if (
+    params.onlyStage !== undefined &&
+    gate.fromStage !== params.onlyStage &&
+    gate.stageKey !== params.onlyStage
   ) {
     return false;
   }

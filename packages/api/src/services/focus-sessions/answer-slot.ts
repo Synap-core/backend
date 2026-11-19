@@ -514,5 +514,8 @@ function slotAnsweredEventData(
     ...(answer.relayedBy ? { relayedBy: answer.relayedBy } : {}),
     ...(answer.confirmedAt ? { confirmedAt: answer.confirmedAt } : {}),
     ...(slot.decisionId ? { decisionId: slot.decisionId } : {}),
+    // What the answer moves, as data (`SlotUnblocksTarget`), read from the
+    // slot as it was asked: the hand-back clears it from the stored slot.
+    ...(slot.unblocksTarget ? { unblocksTarget: slot.unblocksTarget } : {}),
   };
 }

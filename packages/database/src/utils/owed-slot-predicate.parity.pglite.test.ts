@@ -22,6 +22,12 @@
  *     `declined`) is never decided, even with a `decisionId` (an ask opened
  *     for a decision carries one before anyone answers).
  *
+ * The third block is a GRADE read in its session (work-model W5): a
+ * criterion's grade slot naming the output it checks (`outputKey`) is owed
+ * only once a slot of the same list with that stored `key` is delivered
+ * (`isOwedByYouIn`). Each row is a whole `expected_outputs` list in which only
+ * the grade can be owed, so "the list owes the person" IS the grade's answer.
+ *
  * The SQL and the TypeScript rule cannot be one declaration (Postgres runs
  * the one, Node the other), which is why this parity test exists at all.
  *
@@ -42,7 +48,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { sql as drizzleSql } from "drizzle-orm";
 import { OWED_SLOT_CLAUSES, owedSlotExistsIn } from "./owed-slot-predicate.js";
-import { deliverableOwedBy } from "@synap-core/types/units";
+import { deliverableOwedBy, isOwedByYouIn } from "@synap-core/types/units";
 
 const STAMP = "2026-09-08T13:00:00.000Z";
 /** An answer as the answer door stores it (trimmed to what the rule reads). */
@@ -273,6 +279,141 @@ describe("owed-slot SQL === deliverableOwedBy(slot) === 'you'", () => {
         rulesOut,
         slot,
         owed: deliverableOwedBy(slot as never) === "you",
+      });
+    }
+  });
+});
+
+/** A grade slot as `fileCriterionSlot` files it, naming its output. */
+const GRADE = {
+  kind: "criterion",
+  label: "Check: the copy reads well",
+  criterionKey: "copy-reads-well",
+  owner: "human",
+  status: "pending",
+  outputKey: "landing-copy",
+};
+/** The output it grades, the agent's, not yet delivered. */
+const COPY = { key: "landing-copy", label: "Landing copy", owner: "agent" };
+
+const GRADE_ROWS: ReadonlyArray<{
+  rulesOut: string;
+  slots: Array<Record<string, unknown>>;
+}> = [
+  {
+    rulesOut: "a grade owed before its output is delivered",
+    slots: [GRADE, COPY],
+  },
+  {
+    rulesOut: "a grade kept waiting once its output is done",
+    slots: [GRADE, { ...COPY, status: "done" }],
+  },
+  {
+    rulesOut: "an output decided by the person's answer read as undelivered",
+    slots: [
+      GRADE,
+      {
+        ...COPY,
+        owner: "human",
+        decisionId: "d-1",
+        answer: DECIDED_CHOOSE,
+      },
+    ],
+  },
+  {
+    rulesOut: "an output with a REFUSED answer read as delivered",
+    slots: [GRADE, { ...COPY, decisionId: "d-1", answer: REFUSED_CHOOSE }],
+  },
+  {
+    rulesOut: "a grade with no outputKey held back (old data)",
+    slots: [{ ...GRADE, outputKey: undefined }, COPY],
+  },
+  {
+    rulesOut: "an empty outputKey read as naming an output",
+    slots: [{ ...GRADE, outputKey: "" }, COPY],
+  },
+  {
+    rulesOut: "a non-string outputKey matched as text",
+    slots: [{ ...GRADE, outputKey: 7 }, { ...COPY, key: "7" }],
+  },
+  {
+    rulesOut: "a numeric output key matched as text",
+    slots: [{ ...GRADE, outputKey: "7" }, { ...COPY, key: 7 }],
+  },
+  {
+    rulesOut: "a grade held back by an output nobody declared",
+    slots: [{ ...GRADE, outputKey: "missing" }, COPY],
+  },
+  {
+    rulesOut: "an output matched by label instead of its stored key",
+    slots: [GRADE, { label: "landing-copy", owner: "agent" }],
+  },
+  {
+    rulesOut: "a grade waiting on another grade",
+    slots: [GRADE, { ...GRADE, key: "landing-copy", owner: "agent" }],
+  },
+  {
+    rulesOut: "a non-grade slot held back by an outputKey",
+    slots: [{ ...GRADE, kind: "text", criterionKey: undefined }, COPY],
+  },
+  {
+    rulesOut: "a retired output read as delivered (the grade still waits)",
+    slots: [GRADE, { ...COPY, retiredAt: STAMP }],
+  },
+  {
+    rulesOut: "a done grade owed",
+    slots: [{ ...GRADE, status: "done" }, { ...COPY, status: "done" }],
+  },
+  {
+    rulesOut: "a scalar in the list breaks the read",
+    slots: [GRADE, "landing-copy", { ...COPY, status: "done" }],
+  },
+];
+
+async function sqlListOwed(slots: unknown[]): Promise<boolean> {
+  const q = dialect.sqlToQuery(
+    owedSlotExistsIn(drizzleSql`${JSON.stringify(slots)}::jsonb`)
+  );
+  const res = await client.query<{ owed: boolean }>(
+    `select ${q.sql} as owed`,
+    q.params as unknown[]
+  );
+  return res.rows[0]!.owed;
+}
+
+const tsListOwed = (slots: unknown[]): boolean =>
+  slots.some(
+    (s) =>
+      !!s &&
+      typeof s === "object" &&
+      isOwedByYouIn(s as never, slots)
+  );
+
+describe("a criterion's grade is owed once its output is delivered", () => {
+  it("SQL: not owed while the output is pending, owed once it is done", async () => {
+    // Pins the right answer on the SQL side, not only sameness.
+    expect(await sqlListOwed([GRADE, COPY])).toBe(false);
+    expect(await sqlListOwed([GRADE, { ...COPY, status: "done" }])).toBe(true);
+    // Old data: a grade naming no output is owed as before.
+    expect(await sqlListOwed([{ ...GRADE, outputKey: undefined }, COPY])).toBe(
+      true
+    );
+  });
+
+  it("TS: the same three answers", () => {
+    expect(tsListOwed([GRADE, COPY])).toBe(false);
+    expect(tsListOwed([GRADE, { ...COPY, status: "done" }])).toBe(true);
+    expect(tsListOwed([{ ...GRADE, outputKey: undefined }, COPY])).toBe(true);
+  });
+
+  it("agrees on every discriminating list", async () => {
+    const answers = GRADE_ROWS.map((r) => tsListOwed(r.slots));
+    expect(answers.filter(Boolean).length).toBeGreaterThanOrEqual(3);
+    expect(answers.filter((a) => !a).length).toBeGreaterThanOrEqual(3);
+    for (const { rulesOut, slots } of GRADE_ROWS) {
+      expect({ rulesOut, owed: await sqlListOwed(slots) }).toEqual({
+        rulesOut,
+        owed: tsListOwed(slots),
       });
     }
   });

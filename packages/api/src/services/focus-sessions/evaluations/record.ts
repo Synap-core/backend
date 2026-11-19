@@ -323,7 +323,9 @@ export async function escalateFailingCriteria(params: {
     if (attempts < MAX_NON_HUMAN_ATTEMPTS) continue;
     if (latest.get(criterion.key) === "pass") continue;
     // After any commit: the owed-slot door takes its own row lock.
-    if (await fileCriterionSlot(session.id, criterion)) {
+    if (
+      await fileCriterionSlot(session.id, criterion, criterionSlotWhy(criterion))
+    ) {
       escalated.push({ criterion, attempts });
     }
   }
@@ -398,10 +400,56 @@ export function criterionVerdictOf(
   return v === "pass" || v === "fail" ? v : null;
 }
 
-/** File the human-owned slot for an escalated criterion; idempotent by label. */
+/**
+ * FILE THE GRADES DECLARED UP FRONT (work-model W5): every required
+ * criterion the PERSON grades (`check.kind: "human"`) that names the output
+ * it checks (`outputKey`) gets its grade slot now, idempotent by label. The
+ * slot is not owed while that output is not delivered
+ * (`isGradeAwaitingOutput`, `@synap-core/types/units`): it neither counts in
+ * needs-you nor parks the run before there is work to grade, and it comes
+ * due the moment the output is. A human criterion that names no output files
+ * nothing here: it is graded on the scorecard, as before. Returns the keys
+ * whose slot was filed now. Never throws on a missing session (`[]`).
+ */
+export async function fileDeclaredGradeSlots(
+  sessionId: string
+): Promise<string[]> {
+  const session = await db.query.focusSessions.findFirst({
+    where: eq(focusSessions.id, sessionId),
+    columns: { criteria: true },
+  });
+  if (!session) return [];
+  const filed: string[] = [];
+  for (const criterion of readCriteria(session.criteria)) {
+    if (!isCriterionRequired(criterion)) continue;
+    if (criterion.check.kind !== "human" || !criterion.outputKey) continue;
+    if (
+      await fileCriterionSlot(
+        sessionId,
+        criterion,
+        declaredGradeWhy(criterion)
+      )
+    ) {
+      filed.push(criterion.key);
+    }
+  }
+  return filed;
+}
+
+/** WHY the person grades a criterion declared up front (statement clipped). */
+export function declaredGradeWhy(criterion: SessionCriterion): string {
+  const statement =
+    criterion.statement.length > CRITERION_WHY_STATEMENT_MAX
+      ? `${criterion.statement.slice(0, CRITERION_WHY_STATEMENT_MAX - 1)}…`
+      : criterion.statement;
+  return `You grade this one: mark "${statement}" pass or fail.`;
+}
+
+/** File the human-owned slot for a criterion's grade; idempotent by label. */
 async function fileCriterionSlot(
   sessionId: string,
-  criterion: SessionCriterion
+  criterion: SessionCriterion,
+  why: string
 ): Promise<boolean> {
   const label = criterionSlotLabel(criterion);
   const wanted = normalizeExpectedLabel(label);
@@ -419,10 +467,13 @@ async function fileCriterionSlot(
         // the criterion — that would fork this file's label format into every
         // UI. Slots filed before this field existed carry none.
         criterionKey: criterion.key,
+        // The output the criterion checks: until it is delivered the grade
+        // is not owed (`isGradeAwaitingOutput`). Absent = owed at once.
+        ...(criterion.outputKey ? { outputKey: criterion.outputKey } : {}),
         status: "pending",
         owner: "human",
         blockedReason: "decision",
-        why: criterionSlotWhy(criterion),
+        why,
         // HOW the person answers it — pass or fail, rendered by every surface
         // from the generic ask. Answering it reaches THIS module's grade door
         // (`answerSessionSlot` → `gradeCriterionAsOwner`), never a second one.

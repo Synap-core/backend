@@ -216,7 +216,8 @@ export function computeSessionNudges(input: {
     );
   }
 
-  const owed = readSlots(session.expectedOutputs).filter(isOwedSlot).length;
+  const slots = readSlots(session.expectedOutputs);
+  const owed = slots.filter((s) => isOwedSlot(s, slots)).length;
   if (owed > 0) {
     out.owedByPerson = owed;
     out.hints.push(
@@ -288,7 +289,7 @@ export function mayBeReadyToClose(session: NudgeSessionLike): boolean {
   return (
     slots.some((s) => s?.retiredAt == null) &&
     !slots.some((s) => isOpenAgentSlot(s)) &&
-    !slots.some(isOwedSlot)
+    !slots.some((s) => isOwedSlot(s, slots))
   );
 }
 

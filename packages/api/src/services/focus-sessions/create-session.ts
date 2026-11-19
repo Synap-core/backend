@@ -1452,6 +1452,15 @@ export async function createFocusSession(
     });
   }
 
+  // GRADES DECLARED UP FRONT (W5): a criterion the person grades that names
+  // its output gets its grade slot now, owed once that output is delivered.
+  // After the commit, through the slot door's own lock.
+  if (sessionCriteria.some((c) => c.check.kind === "human" && c.outputKey)) {
+    const { fileDeclaredGradeSlots } =
+      await import("./evaluations/record.js");
+    await fileDeclaredGradeSlots(sessionOut.id);
+  }
+
   // Parent lineage: `child --spawned_from--> parent` (+ the suspend note on the
   // parent). AFTER the session exists, and never inside the transaction — a bad
   // parent handle must not roll back a legitimate session. The producer owns the

@@ -49,7 +49,11 @@ export function stampAskLater(
 ):
   | { status: "ok"; outputs: ExpectedOutput[]; label: string }
   | { status: "not_owed" } {
-  const index = findSlotIndex(outputs, ref, (s) => !!s && isOwedSlot(s));
+  const index = findSlotIndex(
+    outputs,
+    ref,
+    (s) => !!s && isOwedSlot(s, outputs)
+  );
   if (index === -1) return { status: "not_owed" };
   const slot = outputs[index]!;
   const next = { ...slot };
@@ -189,7 +193,11 @@ export function askLaterReturnSlot(
   label: string,
   laterUntil: string
 ): ExpectedOutput | null {
-  const index = findSlotIndex(outputs, label, (s) => !!s && isOwedSlot(s));
+  const index = findSlotIndex(
+    outputs,
+    label,
+    (s) => !!s && isOwedSlot(s, outputs)
+  );
   if (index === -1) return null;
   const slot = outputs[index]!;
   return slot.laterUntil === laterUntil ? slot : null;
