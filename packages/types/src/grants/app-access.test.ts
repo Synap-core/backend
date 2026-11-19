@@ -611,21 +611,64 @@ describe("appAccessWithin — v2 against v2, place by place", () => {
       )
     );
 
-  it("equals the pair comparison whenever both sides lift (exhaustive)", () => {
-    const u = universe([R_NOTE, W_NOTE]);
+  /** A placement as place → role. */
+  const placedMap = (scopes: readonly Scope[]) =>
+    new Map(placement(scopes).map((e) => e.split("=") as [string, string]));
+  /** Every placement of `a` is in `b`, with the same role or editor there. */
+  const placedWithin = (
+    a: ReadonlyMap<string, string>,
+    b: ReadonlyMap<string, string>
+  ) =>
+    [...a].every(([w, r]) => b.get(w) === r || b.get(w) === "editor");
+
+  // W3c: a lift compares by meaning, so the v2 form of an ask may hold a
+  // space read through its pod-wide read; v2 against v2 then answers on
+  // that form. What must hold is soundness: "within" never lets an approval
+  // permit, or place the app, beyond its ask. Where both lifts are exact by
+  // key (every lift before W3c), it is still the pair comparison exactly.
+  it("is sound whenever both sides lift, and the pair comparison on exact lifts (exhaustive)", () => {
+    // Each subset once: its lift, whether the lift is exact by key, and what
+    // its grants permit and where they place the app.
+    const rows = [...subsets(universe([R_NOTE, W_NOTE, R_ALL_KINDS]))].flatMap(
+      (pairs) => {
+        const r = liftApprovedRequests(pairs);
+        if (!("access" in r)) return [];
+        const grants = grantScopesForAccess(r.access);
+        return [
+          {
+            pairs,
+            access: r.access,
+            exact: !keyLiftRefuses(pairs),
+            placed: placedMap(grants),
+            permits: new Set(permitsTable(grants, ASKED)),
+          },
+        ];
+      }
+    );
     let compared = 0;
-    for (const approved of subsets(u))
-      for (const asked of subsets(u)) {
-        const a = liftApprovedRequests(approved);
-        const b = liftApprovedRequests(asked);
-        if (!("access" in a) || !("access" in b)) continue;
+    let exact = 0;
+    let within = 0;
+    for (const a of rows)
+      for (const b of rows) {
         compared += 1;
-        expect(
-          appAccessWithin(a.access, b.access),
-          JSON.stringify({ approved, asked })
-        ).toBe(legacyWithin(approved, asked));
+        const answer = appAccessWithin(a.access, b.access);
+        const ctx = () => JSON.stringify({ approved: a.pairs, asked: b.pairs });
+        if (answer) {
+          within += 1;
+          for (const p of a.permits)
+            if (!b.permits.has(p)) expect.fail(`${ctx()} permits ${p}`);
+          if (!placedWithin(a.placed, b.placed))
+            expect.fail(`${ctx()} places the app beyond the ask`);
+        }
+        if (a.exact && b.exact) {
+          exact += 1;
+          if (answer !== legacyWithin(a.pairs, b.pairs))
+            expect.fail(`${ctx()} differs from the pair comparison`);
+        }
       }
     expect(compared).toBeGreaterThan(100);
+    expect(exact).toBeGreaterThan(100);
+    expect(within).toBeGreaterThan(100);
   });
 
   // Rules out: a pod-wide ask covering a read in one space (a membership).
