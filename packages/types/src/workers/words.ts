@@ -16,13 +16,14 @@
  */
 import { cronWords } from "../automations/cron-recurrence.js";
 import { withArticle } from "../automations/stored-rule-words.js";
+import { isUuid } from "../property-render/structured-value.js";
 import type { UnitStateInput } from "../units/state.js";
 import {
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
 } from "../vocabulary/index.js";
-import type { WorkerActivatorTrigger } from "./index.js";
+import type { WorkerActivatorTrigger, WorkerRunOutcome } from "./index.js";
 
 /** The fields of an enabled worker (`workers.list`) the words read. */
 export interface TriggerWorker {
@@ -33,6 +34,9 @@ export interface TriggerWorker {
     status?: string;
     cron?: string;
     min?: number;
+    /** `run_ended`: the linked playbook, as declared (a name or an id). */
+    playbook?: string;
+    outcome?: WorkerRunOutcome;
   } | null;
 }
 
@@ -66,6 +70,18 @@ export function workerWhen(w: TriggerWorker): string | null {
       // Through `cronWords`, never the raw expression (D3): an expression it
       // cannot phrase says so in words instead of leaking `*/15 * * * *`.
       return a.cron ? (cronWords(a.cron) ?? CUSTOM_SCHEDULE) : null;
+    case "run_ended": {
+      // An id says nothing to a person: "another playbook" instead.
+      const name = a.playbook?.trim();
+      const which = name && !isUuid(name) ? name : "another playbook";
+      const end =
+        a.outcome === "done"
+          ? "is done"
+          : a.outcome === "not_done"
+            ? "ends not done"
+            : "ends";
+      return `When a run of ${which} ${end}`;
+    }
     default:
       return null;
   }

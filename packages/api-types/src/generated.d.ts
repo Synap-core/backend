@@ -4434,6 +4434,8 @@ export interface WorkspaceIntentSettings {
 	 * one of `produces`; absent = none declared (a library never has one).
 	 */
 	primary?: string;
+	/** The kinds of `produces` that are helpers (`SpaceKindAs`); absent = none. */
+	helpers?: string[];
 	source: "template";
 }
 export interface WorkspaceSettings {
@@ -12127,6 +12129,7 @@ declare const PROCESS_AUTOMATION_ROLES: readonly [
 	"schedule",
 	"flow",
 	"activator",
+	"link",
 	"member"
 ];
 export type ProcessAutomationRole = (typeof PROCESS_AUTOMATION_ROLES)[number] | (string & {});
@@ -13332,7 +13335,7 @@ declare const TRIGGER_SUBJECT_CATEGORIES: readonly [
 	"inbox_item"
 ];
 export type TriggerSubjectCategory = (typeof TRIGGER_SUBJECT_CATEGORIES)[number];
-export type ActionVerb = "approved" | "completed" | "created" | "deleted" | "received" | "rejected" | "transitioned" | "updated";
+export type ActionVerb = "approved" | "closed" | "completed" | "created" | "deleted" | "received" | "rejected" | "transitioned" | "updated";
 export type ConditionOperator = "changed_to" | "contains" | "greater_than" | "is" | "is_false" | "is_not" | "is_true" | "is_within" | "less_than" | "starts_with";
 export interface ConditionRow {
 	id: string;
@@ -15800,11 +15803,21 @@ export interface PlaybookActivator {
 	 * `count` — at least `min` things sit in `status` (always per_moment).
 	 * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
 	 * `manual` — a button, never by itself: compiles no rule.
+	 * `run_ended` — a LINK: a run of the playbook named in `playbook` ended;
+	 *   the new run works on the same subject.
 	 * Mirror of `WorkerActivator` (`@synap-core/types/workers`); this package
 	 * is dependency-free, the pod's zod schema (`playbook-process.ts`) is
 	 * `satisfies` both.
 	 */
-	on: "count" | "created" | "enters_status" | "manual" | "schedule";
+	on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
+	/**
+	 * Required for `run_ended`, and only it: the playbook whose run ending
+	 * starts this one, by name (the catalog's spelling) or id, in the same
+	 * space or pod-wide.
+	 */
+	playbook?: string;
+	/** `run_ended` only: `done` or `not_done` (`WORKER_RUN_OUTCOMES`); absent = any end. */
+	outcome?: "done" | "not_done";
 	/** Required for `enters_status` / `count`; optional for `schedule`. */
 	status?: string;
 	/** Required for `schedule`. */
@@ -40214,6 +40227,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						onApproved: string | null;
 						subjectStatus: string | null;
 					}[];
+					startsAfter: {
+						outcome: "done" | "not_done" | null;
+						playbookId: string;
+						playbookName: string;
+					}[];
 					undeclaredStatuses: string[];
 					version: number;
 					workers: {
@@ -40231,6 +40249,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileSlug: string;
 				property: string;
 				space: {
+					helpers: string[];
 					primaryOutput: string | null;
 					produces: string[];
 				} | null;
@@ -47349,6 +47368,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string;
 					name: string;
 					produces: {
+						as?: "helper" | undefined;
 						beingWorked: number | null;
 						columns: {
 							category: "active" | "done" | "lost" | "open" | "paused" | null;
@@ -50185,11 +50205,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
 					mode?: "propose" | "run" | undefined;
-					on: "count" | "created" | "enters_status" | "manual" | "schedule";
+					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 					only?: {
 						in: string[];
 						property: string;
 					} | undefined;
+					outcome?: "done" | "not_done" | undefined;
+					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
 					unless?: {
@@ -50816,11 +50838,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						maxPendingApprovals?: number | undefined;
 						min?: number | undefined;
 						mode?: "propose" | "run" | undefined;
-						on: "count" | "created" | "enters_status" | "manual" | "schedule";
+						on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 						only?: {
 							in: string[];
 							property: string;
 						} | undefined;
+						outcome?: "done" | "not_done" | undefined;
+						playbook?: string | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
 						status?: string | undefined;
 						unless?: {
@@ -51616,11 +51640,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
 					mode?: "propose" | "run" | undefined;
-					on: "count" | "created" | "enters_status" | "manual" | "schedule";
+					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 					only?: {
 						in: string[];
 						property: string;
 					} | undefined;
+					outcome?: "done" | "not_done" | undefined;
+					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
 					unless?: {
@@ -52243,11 +52269,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						maxPendingApprovals?: number | undefined;
 						min?: number | undefined;
 						mode?: "propose" | "run" | undefined;
-						on: "count" | "created" | "enters_status" | "manual" | "schedule";
+						on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 						only?: {
 							in: string[];
 							property: string;
 						} | undefined;
+						outcome?: "done" | "not_done" | undefined;
+						playbook?: string | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
 						status?: string | undefined;
 						unless?: {
@@ -62320,7 +62348,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
 					mode: "propose" | "run";
-					on: "count" | "created" | "enters_status" | "manual" | "schedule";
+					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
+					outcome?: "done" | "not_done" | undefined;
+					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
 				} | null;
@@ -63004,11 +63034,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							maxPendingApprovals?: number | undefined;
 							min?: number | undefined;
 							mode?: "propose" | "run" | undefined;
-							on: "count" | "created" | "enters_status" | "manual" | "schedule";
+							on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 							only?: {
 								in: string[];
 								property: string;
 							} | undefined;
+							outcome?: "done" | "not_done" | undefined;
+							playbook?: string | undefined;
 							size?: "per_moment" | "per_thing" | undefined;
 							status?: string | undefined;
 							unless?: {
@@ -63631,11 +63663,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								maxPendingApprovals?: number | undefined;
 								min?: number | undefined;
 								mode?: "propose" | "run" | undefined;
-								on: "count" | "created" | "enters_status" | "manual" | "schedule";
+								on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 								only?: {
 									in: string[];
 									property: string;
 								} | undefined;
+								outcome?: "done" | "not_done" | undefined;
+								playbook?: string | undefined;
 								size?: "per_moment" | "per_thing" | undefined;
 								status?: string | undefined;
 								unless?: {
@@ -63716,6 +63750,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						primary?: string | undefined;
 						produces?: {
+							as?: "helper" | "output" | undefined;
 							profile: string;
 						}[] | undefined;
 					} | undefined;
@@ -64040,6 +64075,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						primary?: string | undefined;
 						produces?: {
+							as?: "helper" | "output" | undefined;
 							profile: string;
 						}[] | undefined;
 					} | undefined;

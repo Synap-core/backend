@@ -11,6 +11,7 @@
  */
 
 import type {
+  SpaceKindAs,
   WorkspaceDefaultSource,
   WorkspaceLayoutDefinition,
   WorkspaceSettings,
@@ -33,7 +34,8 @@ export interface LifecycleAuthoring {
  */
 export interface WorkspaceIntentDefinition {
   label: string;
-  produces?: { profile: string }[];
+  /** Each kind the space works; `as` (default `output`): see `SpaceKindAs`. */
+  produces?: { profile: string; as?: SpaceKindAs }[];
   /** The ONE output the space produces: one of `produces` (decision 3). */
   primary?: string;
 }

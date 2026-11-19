@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
     close: () => Promise<void>;
   },
+  /** The close events emitted (`emitSideEffects`), for what a link reads. */
+  emitted: [] as Array<{ subjectId?: string; data?: Record<string, unknown> }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -58,7 +60,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 vi.mock("@synap/events", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  emitSideEffects: async () => undefined,
+  emitSideEffects: async (p: {
+    subjectId?: string;
+    data?: Record<string, unknown>;
+  }) => {
+    h.emitted.push(p);
+  },
 }));
 vi.mock("@synap/jobs", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -262,6 +269,24 @@ describe("an agent's close is checked against what the session owes", () => {
     const body = await mcpClose({ sessionId: id });
     expect(body.status).toBe("closed");
     expect((await rowOf(id)).status).toBe("closed");
+    // What a playbook link reads off the close event: done, a real run.
+    expect(h.emitted.find((e) => e.subjectId === id)?.data).toMatchObject({
+      closedAs: "done",
+      attached: false,
+    });
+  });
+
+  it("a session only ATTACHED to its playbook says so on its close event", async () => {
+    const id = await seed({});
+    await q(
+      `update focus_sessions set metadata = '{"followedVia":"attach"}'::jsonb where id = $1`,
+      [id]
+    );
+    expect((await mcpClose({ sessionId: id })).status).toBe("closed");
+    expect(h.emitted.find((e) => e.subjectId === id)?.data).toMatchObject({
+      closedAs: "done",
+      attached: true,
+    });
   });
 
   it("an optional criterion does not hold the close", async () => {
@@ -411,6 +436,11 @@ describe("an agent's close is checked against what the session owes", () => {
     expect((body.warnings as string[]).join(" ")).toContain(
       "Merged as part of #510 instead"
     );
+    // Closed, but NOT done: a link that waits for a done run does not fire.
+    expect(h.emitted.find((e) => e.subjectId === id)?.data).toMatchObject({
+      status: "closed",
+      closedAs: "not_done",
+    });
   });
 
   it("a blank `reason` is no reason", async () => {

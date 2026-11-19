@@ -20,7 +20,12 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { WORKER_SCOPES, WORKER_SIZES } from "@synap-core/types/workers";
+import {
+  WORKER_ACTIVATOR_TRIGGERS,
+  WORKER_RUN_OUTCOMES,
+  WORKER_SCOPES,
+  WORKER_SIZES,
+} from "@synap-core/types/workers";
 import {
   RUN_HEALTH_STATES,
   RUN_MARKS,
@@ -38,10 +43,12 @@ import {
 } from "../schemas/worker-enable.js";
 
 const activatorWire = z.object({
-  on: z.enum(["created", "enters_status", "count", "schedule", "manual"]),
+  on: z.enum(WORKER_ACTIVATOR_TRIGGERS),
   status: z.string().optional(),
   cron: z.string().optional(),
   min: z.number().optional(),
+  playbook: z.string().optional(),
+  outcome: z.enum(WORKER_RUN_OUTCOMES).optional(),
   size: z.enum(WORKER_SIZES).optional(),
   mode: z.enum(["run", "propose"]),
   maxPendingApprovals: z.number().optional(),

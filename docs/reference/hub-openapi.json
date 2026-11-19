@@ -19954,7 +19954,8 @@
                                           "enters_status",
                                           "count",
                                           "schedule",
-                                          "manual"
+                                          "manual",
+                                          "run_ended"
                                         ]
                                       },
                                       "status": {
@@ -19971,6 +19972,15 @@
                                         "type": "integer",
                                         "minimum": 2,
                                         "maximum": 10000
+                                      },
+                                      "playbook": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "outcome": {
+                                        "type": "string",
+                                        "enum": ["done", "not_done"]
                                       },
                                       "size": {
                                         "type": "string",
@@ -20060,7 +20070,8 @@
                                       "enters_status",
                                       "count",
                                       "schedule",
-                                      "manual"
+                                      "manual",
+                                      "run_ended"
                                     ]
                                   },
                                   "status": {
@@ -20077,6 +20088,15 @@
                                     "type": "integer",
                                     "minimum": 2,
                                     "maximum": 10000
+                                  },
+                                  "playbook": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": ["done", "not_done"]
                                   },
                                   "size": {
                                     "type": "string",
@@ -25263,7 +25283,8 @@
                                           "enters_status",
                                           "count",
                                           "schedule",
-                                          "manual"
+                                          "manual",
+                                          "run_ended"
                                         ]
                                       },
                                       "status": {
@@ -25280,6 +25301,15 @@
                                         "type": "integer",
                                         "minimum": 2,
                                         "maximum": 10000
+                                      },
+                                      "playbook": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "outcome": {
+                                        "type": "string",
+                                        "enum": ["done", "not_done"]
                                       },
                                       "size": {
                                         "type": "string",
@@ -25369,7 +25399,8 @@
                                       "enters_status",
                                       "count",
                                       "schedule",
-                                      "manual"
+                                      "manual",
+                                      "run_ended"
                                     ]
                                   },
                                   "status": {
@@ -25386,6 +25417,15 @@
                                     "type": "integer",
                                     "minimum": 2,
                                     "maximum": 10000
+                                  },
+                                  "playbook": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": ["done", "not_done"]
                                   },
                                   "size": {
                                     "type": "string",
@@ -32585,7 +32625,8 @@
                                 "enters_status",
                                 "count",
                                 "schedule",
-                                "manual"
+                                "manual",
+                                "run_ended"
                               ]
                             },
                             "status": {
@@ -32602,6 +32643,15 @@
                               "type": "integer",
                               "minimum": 2,
                               "maximum": 10000
+                            },
+                            "playbook": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "outcome": {
+                              "type": "string",
+                              "enum": ["done", "not_done"]
                             },
                             "size": {
                               "type": "string",
@@ -51977,6 +52027,25 @@
                             },
                             "required": ["open", "onOlderVersion"]
                           },
+                          "startsAfter": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "playbookId": { "type": "string" },
+                                "playbookName": { "type": "string" },
+                                "outcome": {
+                                  "type": ["string", "null"],
+                                  "enum": ["done", "not_done", null]
+                                }
+                              },
+                              "required": [
+                                "playbookId",
+                                "playbookName",
+                                "outcome"
+                              ]
+                            }
+                          },
                           "workers": {
                             "type": "array",
                             "items": {
@@ -52019,6 +52088,7 @@
                           "owns",
                           "undeclaredStatuses",
                           "runs",
+                          "startsAfter",
                           "workers"
                         ]
                       }
@@ -52030,9 +52100,13 @@
                         "produces": {
                           "type": "array",
                           "items": { "type": "string" }
+                        },
+                        "helpers": {
+                          "type": "array",
+                          "items": { "type": "string" }
                         }
                       },
-                      "required": ["primaryOutput", "produces"]
+                      "required": ["primaryOutput", "produces", "helpers"]
                     },
                     "totals": {
                       "type": "object",
@@ -54311,7 +54385,8 @@
                               "received",
                               "completed",
                               "approved",
-                              "rejected"
+                              "rejected",
+                              "closed"
                             ]
                           },
                           "conditions": {
@@ -54694,7 +54769,8 @@
                               "received",
                               "completed",
                               "approved",
-                              "rejected"
+                              "rejected",
+                              "closed"
                             ]
                           },
                           "conditions": {
