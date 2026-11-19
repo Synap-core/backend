@@ -21,6 +21,7 @@ const read = (rel: string) =>
 const CONSENT = "app/oauth/consent/ConsentForm.tsx";
 const CONSENT_PAGE = "app/oauth/consent/page.tsx";
 const CHOICES = "app/oauth/consent/AccessChoices.tsx";
+const PAYLOAD = "app/oauth/consent/allow-payload.ts";
 const CONNECTIONS = "app/my-connections/page.tsx";
 const APP_PAGE = "app/apps/[publicId]/page.tsx";
 
@@ -59,9 +60,12 @@ describe("pod-app surfaces", () => {
   it("consent: the draft starts from the shared rule and Allow sends it within the offer; the width is the model's", () => {
     const src = read(CONSENT);
     expect(src).toMatch(
-      /reconsentDraft\(heldAccessOf\(app\.approved\), offer\)/
+      /reconsentDraft\(heldAccessOf\(app\.approved\), offer,/
     );
-    expect(src).toMatch(/toApprovedPairs\(draft, offer\)/);
+    // What Allow sends comes from ONE pure rule (tested in allow-payload.test).
+    expect(src).toMatch(/allowPayload\(\{/);
+    expect(src).toMatch(/\.\.\.payload,/);
+    expect(read(PAYLOAD)).toMatch(/toApprovedPairs\(draft, offer\)/);
     expect(src).toMatch(/width=\{consentWidth\(params\.clientId\)\}/);
   });
 
@@ -76,8 +80,10 @@ describe("pod-app surfaces", () => {
       "toggleKind(draft, row, kind)",
       "toggleAllKinds(draft, row)",
       "setReadSpacesMode(draft, offer,",
-      "toggleReadSpace(draft, s.workspaceId)",
-      "toggleReadProject(draft, p.projectId)",
+      "toggleReadSpace(draft, sid)",
+      "toggleReadProject(draft, pid)",
+      "setKindLevel(draft, row, kind, level)",
+      "setPermission(draft, p.permission, on)",
       'toggleWritePlace(draft, "space", s.workspaceId)',
       'toggleWritePlace(draft, "project", p.projectId)',
     ]) {

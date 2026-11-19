@@ -45,6 +45,12 @@ export interface ChoiceSheetProps {
   children: ReactNode;
   /** The sheet's own buttons (Done, or Cancel / Save). */
   footer: ReactNode;
+  /**
+   * The live access sentence, announced from INSIDE the sheet: an open
+   * overlay hides the page behind it from assistive tech (react-aria), so the
+   * page's own live headline would go silent while the person changes things.
+   */
+  live?: string;
 }
 
 /** The door: a small flat button, one per line. */
@@ -103,6 +109,11 @@ export function ChoiceSheet(props: ChoiceSheetProps) {
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
                 {props.children}
+                {props.live ? (
+                  <p className="sr-only" aria-live="polite">
+                    {props.live}
+                  </p>
+                ) : null}
               </div>
               <div className="flex justify-end gap-2 border-t border-foreground/10 px-4 py-3">
                 {props.footer}
@@ -133,7 +144,14 @@ export function ChoiceSheet(props: ChoiceSheetProps) {
           <DrawerHeader className="text-sm font-medium text-foreground">
             {props.title}
           </DrawerHeader>
-          <DrawerBody className="px-4">{props.children}</DrawerBody>
+          <DrawerBody className="px-4">
+            {props.children}
+            {props.live ? (
+              <p className="sr-only" aria-live="polite">
+                {props.live}
+              </p>
+            ) : null}
+          </DrawerBody>
           <DrawerFooter className="border-t border-foreground/10 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             {props.footer}
           </DrawerFooter>

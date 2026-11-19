@@ -54,7 +54,7 @@ describe("the app page's access lines", () => {
     expect(out.match(/>Change</g)).toHaveLength(3);
     expect(out).toContain('href="/open/workspace/w-content"');
     expect(out).toMatch(/Content OS\.<\/p>/);
-    expect(out).toContain("A change applies at its next request.");
+    expect(out).toContain("A change applies now");
     expect(out).toMatch(/View<\/span> documents/);
   });
 

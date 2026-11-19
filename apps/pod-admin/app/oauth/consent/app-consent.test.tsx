@@ -236,7 +236,7 @@ describe("re-consent", () => {
   it("says what changes first, each with now / was and one narrowing door; Confirm / Not now; lines marked Changed", () => {
     const out = consent(app);
     expect(out).toContain("data-reconsent");
-    expect(out).toMatch(/things? to confirm/);
+    expect(out).toMatch(/changes? to confirm/);
     expect(out).toContain("was in Content OS");
     expect(out).toMatch(/>Turn [a-z]+ off</);
     expect(out).toContain("Everything else stays as you allowed it.");
@@ -247,8 +247,8 @@ describe("re-consent", () => {
 
   it("what it newly asks is listed with its reason, and its switch starts off", () => {
     const out = consent(app);
-    expect(out).toContain("New since you last allowed");
-    expect(out).toContain("entity.post.create");
+    expect(out).toMatch(/new requests? since you last allowed/);
+    expect(out).toContain("Create posts");
     expect(out).toContain("To draft your posts.");
     expect(out).toMatch(/Allow the new ones/);
     expect(out).not.toMatch(/<input[^>]*role="switch"[^>]*checked/);
@@ -328,7 +328,7 @@ describe("the sheets' choices", () => {
     expect(out).toContain("Records: access");
     expect(out).toContain("To answer a run, as you.");
     expect(out).toContain("session.update");
-    expect(out).toContain("Set any of these to Off. It can only ask again.");
+    expect(out).toContain("Turn off anything you don’t want.");
     // The decision row is its own, Off.
     expect(out).toContain("Let it decide for you");
   });

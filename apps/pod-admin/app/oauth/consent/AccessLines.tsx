@@ -6,25 +6,35 @@
  * the re-consent and the app page draw them; only the sheet's footer differs:
  *
  *  - `consent`: every choice edits the draft at once (the headline above
- *    follows it), and the sheet closes with Done;
+ *    follows it, and is announced inside the open sheet too), and the sheet
+ *    closes with Done;
  *  - `page`: the sheet edits a copy; Cancel drops it, Save hands it to the
- *    page (which saves it and shows a receipt with Undo). A space or project
+ *    page. Closing it with unsaved edits asks first. A space or project
  *    named on the page is a door to it (ui-composition §3); on the consent
  *    names stay text, since leaving would abandon the authorization.
  *
- * "It changes things in" is OMITTED while nothing is at Edit or On.
+ * Every place is named through ONE builder (`readParts` / `writeParts`):
+ * never a bare id. "It changes things in" is OMITTED while nothing is at
+ * Edit or On.
  */
 
 import { Fragment, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Button } from "@heroui/react";
 import {
+  andList,
   canSummary,
+  decisionsOff,
   needsWritePlace,
+  notEverywhere,
+  readParts,
   sameDraft,
+  writeParts,
   type CanRow,
   type ConsentDraft,
   type ConsentOffer,
+  partWords,
+  type PlacePart,
 } from "./consent-access";
 import type { ActsAs } from "./consent-model";
 import { CanChoices, InChoices, WriteChoices } from "./AccessChoices";
@@ -34,7 +44,7 @@ import { consentT } from "./copy";
 type Line = "can" | "in" | "write";
 
 /** "A", "A and B", "A, B and C", over nodes (a name may be a door). */
-function joinNodes(nodes: readonly ReactNode[], last = " and "): ReactNode {
+function joinNodes(nodes: readonly ReactNode[], last: string): ReactNode {
   return nodes.map((n, i) => (
     <Fragment key={i}>
       {i === 0 ? null : i === nodes.length - 1 ? last : ", "}
@@ -44,21 +54,12 @@ function joinNodes(nodes: readonly ReactNode[], last = " and "): ReactNode {
 }
 
 /** A place's name, and on the app page a door to it. */
-function PlaceName({
-  kind,
-  id,
-  name,
-  door,
-}: {
-  kind: "workspace" | "project";
-  id: string;
-  name: string;
-  door: boolean;
-}) {
-  if (!door) return <>{name}</>;
+function PlaceName({ part, door }: { part: PlacePart; door: boolean }) {
+  const name = partWords(part);
+  if (!door || part.gone) return <>{name}</>;
   return (
     <Link
-      href={`/open/${kind}/${encodeURIComponent(id)}`}
+      href={`/open/${part.kind}/${encodeURIComponent(part.id)}`}
       className="underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground"
     >
       {name}
@@ -77,6 +78,8 @@ export interface AccessLinesProps {
   actsAs: ActsAs;
   podWideKinds: readonly string[];
   names: Readonly<Record<string, string>>;
+  /** The live access sentence, announced inside an open sheet. */
+  live?: string;
   /** The consent: each choice, at once. */
   onChange?: (next: ConsentDraft) => void;
   /** The page: a sheet's Save. */
@@ -91,48 +94,72 @@ export function AccessLines(props: AccessLinesProps) {
   const t = consentT();
   const { draft, mode } = props;
   const [open, setOpen] = useState<Line | null>(props.defaultOpen ?? null);
-  // The app page edits a copy until Save.
+  // The app page edits a copy until Save; closing it dirty asks first.
   const [editing, setEditing] = useState<ConsentDraft>(draft);
+  const [discarding, setDiscarding] = useState(false);
   const shown = mode === "page" && open ? editing : draft;
+  const dirty = mode === "page" && open !== null && !sameDraft(editing, draft);
   const edit = (next: ConsentDraft) =>
     mode === "page" ? setEditing(next) : props.onChange?.(next);
   const openLine = (line: Line, isOpen: boolean) => {
-    if (isOpen) setEditing(draft);
-    setOpen(isOpen ? line : null);
+    if (isOpen) {
+      setEditing(draft);
+      setDiscarding(false);
+      setOpen(line);
+      return;
+    }
+    if (dirty) {
+      setDiscarding(true);
+      return;
+    }
+    setOpen(null);
+  };
+  const close = () => {
+    setDiscarding(false);
+    setOpen(null);
   };
   const door = mode === "page";
 
   const footer =
     mode === "page" ? (
-      <>
-        <Button
-          size="sm"
-          variant="light"
-          className="min-h-10"
-          onPress={() => setOpen(null)}
-        >
-          {t("sheet.cancel")}
-        </Button>
-        <Button
-          size="sm"
-          color="primary"
-          className="min-h-10"
-          isDisabled={sameDraft(editing, draft)}
-          onPress={() => {
-            props.onSave?.(editing);
-            setOpen(null);
-          }}
-        >
-          {t("sheet.save")}
-        </Button>
-      </>
+      discarding ? (
+        <div className="flex w-full flex-wrap items-center justify-end gap-2">
+          <span role="alert" className="mr-auto text-xs text-foreground/80">
+            {t("page.unsaved")}
+          </span>
+          <Button
+            size="sm"
+            variant="light"
+            className="min-h-10"
+            onPress={() => setDiscarding(false)}
+          >
+            {t("page.keepEditing")}
+          </Button>
+          <Button size="sm" color="danger" variant="flat" className="min-h-10" onPress={close}>
+            {t("page.discard")}
+          </Button>
+        </div>
+      ) : (
+        <>
+          <Button size="sm" variant="light" className="min-h-10" onPress={close}>
+            {t("sheet.cancel")}
+          </Button>
+          <Button
+            size="sm"
+            color="primary"
+            className="min-h-10"
+            isDisabled={!dirty}
+            onPress={() => {
+              props.onSave?.(editing);
+              close();
+            }}
+          >
+            {t("sheet.save")}
+          </Button>
+        </>
+      )
     ) : (
-      <Button
-        size="sm"
-        color="primary"
-        className="min-h-10"
-        onPress={() => setOpen(null)}
-      >
+      <Button size="sm" color="primary" className="min-h-10" onPress={close}>
         {t("sheet.done")}
       </Button>
     );
@@ -149,73 +176,53 @@ export function AccessLines(props: AccessLinesProps) {
     onOpenChange: (o: boolean) => openLine(line, o),
     isDisabled: props.isDisabled,
     footer,
+    live: props.live,
     children,
   });
 
-  // It can: one entry per level given.
+  // It can: one entry per level given; what holds only in picked spaces
+  // under All, and the decisions left off, are said beside it.
   const can = canSummary(draft, props.rows);
   const levelWord = {
     view: t("level.view"),
     edit: t("level.edit"),
     on: t("level.on"),
   };
+  const onlyPicked = notEverywhere(draft, props.rows, props.offer);
+  const notDecide = decisionsOff(draft, props.rows);
 
   // In: every place, or the picked spaces "or" projects.
-  const read = draft.read;
+  const read = readParts(draft, props.names);
+  const and = t("list.and");
   const inAnswer: ReactNode =
-    read.spaces === "all"
+    read === "all"
       ? t("in.every")
       : (() => {
-          const spaces = read.spaces.map((id) => (
-            <PlaceName
-              key={id}
-              kind="workspace"
-              id={id}
-              door={door}
-              name={props.names[id] ?? id}
-            />
-          ));
-          const projects =
-            read.projects === "all"
-              ? [<Fragment key="all">{t("in.allProjects")}</Fragment>]
-              : read.projects.map((id) => (
-                  <PlaceName
-                    key={id}
-                    kind="project"
-                    id={id}
-                    door={door}
-                    name={props.names[id] ?? id}
-                  />
-                ));
-          const parts = [spaces, projects]
-            .filter((p) => p.length > 0)
-            .map((p) => joinNodes(p));
-          return parts.length === 0
+          const groups: ReactNode[] = [];
+          if (read.spaces.length > 0)
+            groups.push(
+              joinNodes(
+                read.spaces.map((p) => <PlaceName key={p.id} part={p} door={door} />),
+                and
+              )
+            );
+          if (read.projects === "all") groups.push(t("in.everyProject"));
+          else if (read.projects.length > 0)
+            groups.push(
+              joinNodes(
+                read.projects.map((p) => <PlaceName key={p.id} part={p} door={door} />),
+                and
+              )
+            );
+          return groups.length === 0
             ? t("in.nowhere")
-            : joinNodes(parts, ", or ");
+            : joinNodes(groups, t("list.or"));
         })();
 
   // It changes things in.
-  const writes = [
-    ...draft.write.spaces.map((id) => (
-      <PlaceName
-        key={id}
-        kind="workspace"
-        id={id}
-        door={door}
-        name={props.names[id] ?? id}
-      />
-    )),
-    ...draft.write.projects.map((id) => (
-      <PlaceName
-        key={id}
-        kind="project"
-        id={id}
-        door={door}
-        name={props.names[id] ?? id}
-      />
-    )),
-  ];
+  const writes = writeParts(draft, props.names).map((p) => (
+    <PlaceName key={p.id} part={p} door={door} />
+  ));
   const writeLine = needsWritePlace(draft);
 
   return (
@@ -249,6 +256,16 @@ export function AccessLines(props: AccessLinesProps) {
             </span>
           ))
         )}
+        {notDecide.map((what) => (
+          <span key={what} className="text-xs text-foreground/65">
+            {t("can.notDecide", { what })}
+          </span>
+        ))}
+        {onlyPicked.length > 0 ? (
+          <span className="text-xs text-foreground/65">
+            {t("can.onlyPicked", { names: andList(onlyPicked) })}
+          </span>
+        ) : null}
       </ConsentLine>
       <ConsentLine
         line="in"
@@ -288,7 +305,7 @@ export function AccessLines(props: AccessLinesProps) {
           )}
         >
           {writes.length > 0 ? (
-            <span>{joinNodes(writes)}</span>
+            <span>{joinNodes(writes, and)}</span>
           ) : (
             <>
               <strong className="font-medium">{t("write.pickWhere")}</strong>

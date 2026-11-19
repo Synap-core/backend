@@ -5,16 +5,15 @@
  * lines as the consent ("It can", "In", "It changes things in"), each a
  * door showing its value. A line's sheet edits a copy; Save applies it.
  *
- * Today the page reads only what the app HOLDS, so a sheet offers only that
- * (`heldOffer`) and a save can only take away, through the narrow door
- * (`apps.narrow`, no new consent). Without an Undo yet, a save that takes
- * something away is confirmed first, as the per-space list did. Widening
- * within what it asked (decision fc37f740 Q2) and the receipt's Undo come
- * with the W3d update door.
+ * The truth is `pod_app.access` (W3d) when the pod sends it, else the lift
+ * of its pairs. The page only takes away, through the narrow door
+ * (`apps.narrow`, pairs): a save that takes something away is confirmed
+ * first. Pairs cannot carry a project, so while the access names one the
+ * lines are read-only and say why (a save would drop it). Widening within
+ * the ask (Q2) and the receipt's Undo come with `apps.updateAccess`.
  *
- * A connection whose pairs do not fit one v2 access (`heldAccessOf` says
- * "reconsent") is not drawn here: the page keeps its per-space list and says
- * it is confirmed at the next sign-in (Q3).
+ * A connection whose pairs do not fit one v2 access, with no `access`, is
+ * not drawn here: the page keeps its per-space list (Q3).
  */
 
 import { useMemo, useState } from "react";
@@ -22,16 +21,28 @@ import { addToast } from "@heroui/react";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { AccessLines } from "../../oauth/consent/AccessLines";
 import {
+  accessOfNamed,
   canRows,
   draftHeadline,
   draftOf,
   heldAccessOf,
+  namesOfNamed,
   placeNames,
   toApprovedPairs,
   type ConsentDraft,
 } from "../../oauth/consent/consent-access";
 import { consentT } from "../../oauth/consent/copy";
-import { heldOffer, type PodAppInfo } from "./pod-app-view";
+import {
+  accessNamesProject,
+  heldOffer,
+  heldOfferOfAccess,
+  type PodAppInfo,
+} from "./pod-app-view";
+
+/** The section draws this connection: it has a v2 access, or pairs that fit one. */
+export function drawsAccessLines(pod: PodAppInfo): boolean {
+  return !!pod.access || heldAccessOf(pod.approved).kind === "access";
+}
 
 export function AppAccessSection({
   pod,
@@ -39,6 +50,7 @@ export function AppAccessSection({
   onNarrow,
 }: {
   pod: PodAppInfo;
+  /** A Synap app by its name, any other app by its domain (as the consent). */
   appName: string;
   /** Keep only these pairs (`PATCH /api/apps`, `narrow`); the page reloads. */
   onNarrow: (
@@ -46,17 +58,29 @@ export function AppAccessSection({
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
 }) {
   const t = consentT();
-  const offer = useMemo(() => heldOffer(pod.approved), [pod.approved]);
-  const held = useMemo(() => heldAccessOf(pod.approved), [pod.approved]);
+  const named = pod.access ?? null;
+  const offer = useMemo(
+    () => (named ? heldOfferOfAccess(named) : heldOffer(pod.approved)),
+    [named, pod.approved]
+  );
+  const draft = useMemo<ConsentDraft | null>(() => {
+    if (named) return draftOf(accessOfNamed(named));
+    const held = heldAccessOf(pod.approved);
+    return held.kind === "access" ? draftOf(held.access) : null;
+  }, [named, pod.approved]);
+  const names = useMemo(
+    () => ({ ...namesOfNamed(named), ...placeNames(offer) }),
+    [named, offer]
+  );
   // A Synap app decides as the person; any other app acts as its own agent.
   const actsAs = pod.verified ? "person" : "agent";
   const rows = useMemo(() => canRows(offer, actsAs), [offer, actsAs]);
+  const locked = !!named && accessNamesProject(named);
   const [pending, setPending] = useState<{
     keep: Array<{ permission: string; workspaceId: string | null }>;
   } | null>(null);
   const [saving, setSaving] = useState(false);
-  if (held.kind !== "access") return null;
-  const draft = draftOf(held.access);
+  if (!draft) return null;
 
   function save(next: ConsentDraft) {
     const keep = toApprovedPairs(next, offer);
@@ -90,7 +114,7 @@ export function AppAccessSection({
         {t("page.heading")}
       </h2>
       <p className="text-pretty text-sm leading-relaxed text-foreground/85">
-        {draftHeadline(draft, offer)}
+        {draftHeadline(draft, offer, rows, names)}
       </p>
       <AccessLines
         mode="page"
@@ -101,12 +125,12 @@ export function AppAccessSection({
         rows={rows}
         actsAs={actsAs}
         podWideKinds={[]}
-        names={placeNames(offer)}
+        names={names}
         onSave={save}
-        isDisabled={saving}
+        isDisabled={saving || locked}
       />
       <p className="max-w-2xl text-pretty text-xs text-foreground/65">
-        {t("page.narrowOnly")}
+        {locked ? t("page.projectsLocked") : t("page.narrowOnly")}
       </p>
       <ConfirmModal
         isOpen={pending !== null}
@@ -114,7 +138,8 @@ export function AppAccessSection({
         onConfirm={() => void applyPending()}
         title={t("page.confirmTitle", { name: appName })}
         consequence={<p>{t("page.confirmBody", { name: appName })}</p>}
-        confirmLabel={t("sheet.save")}
+        confirmLabel={t("page.takeAway")}
+        confirmColor="danger"
         isPending={saving}
       />
     </section>

@@ -65,8 +65,10 @@ import {
   writeModeConfirm,
   type PodAppInfo,
 } from "../_lib/pod-app-view";
-import { AppAccessSection } from "../_lib/app-access-section";
-import { heldAccessOf } from "../../oauth/consent/consent-access";
+import {
+  AppAccessSection,
+  drawsAccessLines,
+} from "../_lib/app-access-section";
 import { consentT } from "../../oauth/consent/copy";
 
 type LoadState = "loading" | "ready" | "missing" | "error";
@@ -503,7 +505,7 @@ function PodAppSettings({
   const keep = drop ? keepWithout(pod.approved, drop) : null;
   // Its pairs fit one access (design A): the three lines. Otherwise the
   // per-space list stays, and the new form is confirmed at its next sign-in.
-  const fits = heldAccessOf(pod.approved).kind === "access";
+  const fits = drawsAccessLines(pod);
   const t = consentT();
 
   async function confirmDrop() {
@@ -565,7 +567,8 @@ function PodAppSettings({
       {fits ? (
         <AppAccessSection
           pod={pod}
-          appName={pod.domain}
+          // A Synap app by its name, any other app by its domain (as the consent).
+          appName={pod.verified ? app.name : pod.domain}
           onNarrow={async (approved) => {
             const r = await patchApp({
               publicId: app.public_id,
@@ -578,6 +581,8 @@ function PodAppSettings({
         />
       ) : (
         <section className="mt-6" aria-labelledby="pod-reach">
+          {/* Only pairs that do not fit one access have something to confirm. */}
+          {pod.approved.length > 0 ? (
           <div
             role="note"
             className="mb-3 flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
@@ -595,6 +600,7 @@ function PodAppSettings({
               </p>
             </div>
           </div>
+          ) : null}
           <h2
             id="pod-reach"
             className="mb-2 text-sm font-medium text-foreground"

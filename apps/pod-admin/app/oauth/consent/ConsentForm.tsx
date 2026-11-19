@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
 import { ReceiverShell } from "../../_lib/receiver-shell";
@@ -13,7 +20,6 @@ import {
   CardBody,
   CardHeader,
   Chip,
-  Skeleton,
   Spinner,
   Switch,
 } from "@heroui/react";
@@ -34,6 +40,7 @@ import Link from "next/link";
 import {
   FIRST_PARTY_CLIENT_NAMES,
   buildObjectActionTitle,
+  humanizeToken,
   resolveOAuthScopeLabel,
 } from "@synap-core/types/vocabulary";
 import { SIGNED_IN_APPS_COPY } from "@synap-core/types/sign-in";
@@ -51,17 +58,16 @@ import {
   allowNew,
   canRows,
   cantGive,
+  heldPermissionsOf,
   contractDraft,
   contractOf,
   firstDraft,
   heldOfContract,
   namesOfNamed,
   offerOfContract,
-  toAccess,
   wasPairs,
   draftBlockedReason,
   draftHeadline,
-  givable,
   heldAccessOf,
   newAllowed,
   offerOf,
@@ -69,15 +75,14 @@ import {
   reconsentChanges,
   reconsentDraft,
   setPermission,
-  toApprovedPairs,
   type CantGive,
   type ConsentDraft,
   type ReconsentChange,
 } from "./consent-access";
 import { AccessLines } from "./AccessLines";
-import type { AppAccess } from "@synap-core/types/grants";
 import { consentT } from "./copy";
-import { AskConsent, askCount } from "./AskConsent";
+import { AskConsent, askCurrentOf, askViewOf } from "./AskConsent";
+import { allowPayload, showsErrorScreen } from "./allow-payload";
 
 export interface ConsentParams {
   clientId: string;
@@ -216,18 +221,26 @@ export function ConsentForm({
   // The W3d contract (`app.access`) when this pod sends it; else today's offer.
   const contract = useMemo(() => contractOf(app), [app]);
   const offer = useMemo(
-    () => (app ? (contract ? offerOfContract(contract) : offerOf(app)) : null),
-    [app, contract]
+    () =>
+      app
+        ? contract
+          ? offerOfContract(contract, spaceHint)
+          : offerOf(app)
+        : null,
+    [app, contract, spaceHint]
   );
   const [draft, setDraft] = useState<ConsentDraft | null>(null);
   useEffect(() => {
     if (app && offer) {
       // A re-consent starts from what the connection holds, a first consent
-      // from the app's declared defaults (`firstDraft`).
+      // from the app's declared defaults (`firstDraft`, writes only for an
+      // app Synap checked).
       setDraft(
         contract
-          ? contractDraft(contract, offer)
-          : reconsentDraft(heldAccessOf(app.approved), offer)
+          ? contractDraft(contract, offer, { verified: app.verified })
+          : reconsentDraft(heldAccessOf(app.approved), offer, {
+              verified: app.verified,
+            })
       );
     }
   }, [app, offer, contract]);
@@ -240,7 +253,8 @@ export function ConsentForm({
         contract ? heldOfContract(contract) : heldAccessOf(app.approved),
         offer,
         canRows(offer, app.actsAs.kind),
-        contract?.reconsent ? wasPairs(contract.reconsent) : app.approved
+        contract?.reconsent ? wasPairs(contract.reconsent) : app.approved,
+        contract ? heldPermissionsOf(contract) : undefined
       ).length > 0,
     [app, offer, contract]
   );
@@ -252,43 +266,36 @@ export function ConsentForm({
       : app.domain
     : "";
   const t = consentT();
-  // The short consent: exactly the pairs the server resolved from the ask,
-  // which an approval ADDS to what the app holds.
+  // The short ask: the contract's (v1.1: only when the connection names a
+  // project) when the pod sends it, else today's pairs.
   const ask = app?.ask ?? null;
-  // What Allow sends on today's wire: the draft lowered to (permission,
-  // space) pairs, within the offer (`toApprovedPairs`).
-  const approved = ask
-    ? ask.pairs.map(({ permission, workspaceId }) => ({
-        permission,
-        workspaceId,
-      }))
-    : offer && draft
-      ? toApprovedPairs(draft, offer)
-      : [];
-  // With the W3d contract: the full consent sends the AppAccess v2 itself
-  // (`approved` is then ignored); the short ask sends its first write place
-  // only when the server asks for one (Q4).
+  const askView = app && offer ? askViewOf({ ask, contract, offer }) : null;
+  // Q4: the first write place a short ask needs. It starts on the ask's own
+  // spaces, else the server's suggestion for an app Synap checked.
   const [askWrite, setAskWrite] = useState<ConsentDraft | null>(null);
   const askWriteDraft =
-    contract?.ask?.needsWritePlace && offer
+    askView?.needsWritePlace && offer && app
       ? (askWrite ?? {
-          ...firstDraft(offer),
+          ...firstDraft(offer, { verified: app.verified }),
           write: {
-            spaces: [...contract.places.write.suggestedSpaceIds],
+            spaces:
+              askView.askedSpaceIds.length > 0
+                ? [...askView.askedSpaceIds]
+                : app.verified
+                  ? [...(contract?.places.write.suggestedSpaceIds ?? [])]
+                  : [],
             projects: [],
           },
         })
       : null;
-  const v2: { access?: AppAccess; askWritePlace?: AppAccess["write"] } =
-    contract && offer
-      ? contract.ask
-        ? askWriteDraft
-          ? { askWritePlace: askWriteDraft.write }
-          : {}
-        : draft
-          ? { access: toAccess(draft, offer) }
-          : {}
-      : {};
+  // What Allow sends, from ONE pure rule (`allowPayload`, tested).
+  const payload = allowPayload({
+    app,
+    contract,
+    offer,
+    draft,
+    askWrite: askWriteDraft,
+  });
 
   const act = useCallback(
     (approve: boolean) => {
@@ -297,10 +304,10 @@ export function ConsentForm({
         {
           ...params,
           approve,
-          ...(app ? { approved } : {}),
-          // Spread, not written inline: the generated input type gains these
-          // fields with W3d's PR; until then an older pod ignores them.
-          ...v2,
+          // Spread, not written inline: the generated input type gains
+          // `access` / `askWritePlace` with W3d's PR (#1197); until then an
+          // older pod ignores them.
+          ...payload,
           // An app sign-in is approved for exactly what this screen showed.
           appSignInFingerprint: context.data?.appSignIn?.fingerprint,
         },
@@ -332,7 +339,7 @@ export function ConsentForm({
         }
       );
     },
-    [decide, params, app, approved, v2, context.data]
+    [decide, params, payload, context.data]
   );
 
   const busy = step.kind === "working";
@@ -377,7 +384,11 @@ export function ConsentForm({
         </span>
         <div className="flex flex-col gap-1">
           <p className="text-xs font-semibold uppercase tracking-[0.06em] text-foreground/65">
-            {firstParty ? "Sign-in request" : "Connection request"}
+            {firstParty
+              ? "Sign-in request"
+              : app && (askView || confirming)
+                ? t("eyebrow.access")
+                : t("eyebrow.connection")}
           </p>
           {firstParty ? (
             <>
@@ -400,8 +411,8 @@ export function ConsentForm({
               podHost={podHost}
               identity={identity}
               title={
-                ask
-                  ? t("ask.title", { name: appName, n: askCount(ask) })
+                askView
+                  ? t("ask.title", { name: appName, n: askView.lines.length })
                   : t(confirming ? "title.confirm" : "title.connect", {
                       name: appName,
                     })
@@ -461,27 +472,36 @@ export function ConsentForm({
                 />
               ))}
 
-            {context.data && app && ask && step.kind !== "denied" && (
-              <AskConsent
-                app={app}
-                appName={appName}
-                writePlace={
-                  askWriteDraft
-                    ? { draft: askWriteDraft, onChange: setAskWrite }
-                    : null
-                }
-                ask={ask}
-                busy={busy}
-                step={step}
-                onDecide={act}
-              />
-            )}
+            {context.data &&
+              app &&
+              offer &&
+              askView &&
+              step.kind !== "denied" && (
+                <AskConsent
+                  appName={appName}
+                  view={askView}
+                  offer={offer}
+                  current={askCurrentOf(app, contract)}
+                  names={{
+                    ...namesOfNamed(contract?.current),
+                    ...placeNames(offer),
+                  }}
+                  writePlace={
+                    askWriteDraft
+                      ? { draft: askWriteDraft, onChange: setAskWrite }
+                      : null
+                  }
+                  busy={busy}
+                  step={step}
+                  onDecide={act}
+                />
+              )}
 
             {context.data &&
               app &&
               offer &&
               draft &&
-              !ask &&
+              !askView &&
               step.kind !== "denied" && (
                 <AppConsent
                   app={app}
@@ -499,6 +519,7 @@ export function ConsentForm({
                     canRows(offer, app.actsAs.kind)
                   )}
                   onDecide={act}
+                  spaceHint={spaceHint}
                 />
               )}
 
@@ -662,7 +683,7 @@ export function ConsentForm({
                     Declined
                   </p>
                   <p className="max-w-[18rem] text-xs text-foreground/65">
-                    {ask || (app && app.approved.length > 0)
+                    {askView || (app && app.approved.length > 0)
                       ? "Nothing was added; what it already has stays. You can close this tab."
                       : "Nothing was connected. You can close this tab."}
                   </p>
@@ -670,7 +691,7 @@ export function ConsentForm({
               </div>
             )}
 
-            {step.kind === "error" && !(app && !ask) && (
+            {showsErrorScreen(step, app) && (
               <div className="flex flex-col gap-4">
                 <Problem
                   title="Couldn't complete the authorization"
@@ -859,13 +880,13 @@ export type ConsentApp = NonNullable<
 >;
 
 /** The consent's own copy of the app's offer and rows, derived once per app. */
-export function useConsentModel(app: ConsentApp) {
+export function useConsentModel(app: ConsentApp, spaceHint?: string) {
   // The W3d contract when this pod sends it (`app.access`), else today's
   // per-permission offer: one model either way.
   const contract = useMemo(() => contractOf(app), [app]);
   const offer = useMemo(
-    () => (contract ? offerOfContract(contract) : offerOf(app)),
-    [app, contract]
+    () => (contract ? offerOfContract(contract, spaceHint) : offerOf(app)),
+    [app, contract, spaceHint]
   );
   const rows = useMemo(
     () => canRows(offer, app.actsAs.kind),
@@ -881,7 +902,9 @@ export function useConsentModel(app: ConsentApp) {
         held,
         offer,
         rows,
-        contract?.reconsent ? wasPairs(contract.reconsent) : app.approved
+        contract?.reconsent ? wasPairs(contract.reconsent) : app.approved,
+        // What the connection already holds is never a "new" ask (C4).
+        contract ? heldPermissionsOf(contract) : undefined
       ),
     [held, offer, rows, app.approved, contract]
   );
@@ -917,8 +940,11 @@ export function AppConsent({
   blockedReason,
   onDecide,
   defaultOpen,
+  spaceHint,
 }: {
   app: ConsentApp;
+  /** The launch's space, listed first (order only, never sent). */
+  spaceHint?: string;
   /** What the app calls itself: the domain for an app Synap has not checked. */
   appName: string;
   registeredAt: Date | string;
@@ -935,11 +961,22 @@ export function AppConsent({
   defaultOpen?: "can" | "in" | "write" | null;
 }) {
   const t = consentT();
-  const { offer, rows, held, changes, names } = useConsentModel(app);
+  const { offer, rows, held, changes, names } = useConsentModel(
+    app,
+    spaceHint
+  );
   const groupId = useId();
   const confirming = changes.length > 0;
-  const changed = changes.some((c) => c.mark !== "new");
+  const moved = changes.filter((c) => c.mark !== "new");
+  // "It can" changed only when the person changed it here: a narrowing door
+  // pressed, or the new asks switched on (P4). "In" changes with the new form.
+  const canChanged =
+    moved.some(
+      (c) => c.mark === "wider" && !draft.permissions.has(c.permission)
+    ) ||
+    changes.some((c) => c.mark === "new" && draft.permissions.has(c.permission));
   const cannot = cantGive(offer, app.ignoredScopes);
+  const headline = draftHeadline(draft, offer, rows, names);
   const failed = step.kind === "error" ? step.message : null;
   return (
     <>
@@ -958,7 +995,7 @@ export function AppConsent({
         aria-live="polite"
         className="text-pretty text-sm leading-relaxed text-foreground/90"
       >
-        {draftHeadline(draft, offer)}
+        {headline}
       </p>
       <AccessLines
         mode="consent"
@@ -970,27 +1007,31 @@ export function AppConsent({
         actsAs={app.actsAs.kind}
         podWideKinds={app.podWideKinds}
         names={names}
+        live={headline}
         onChange={onDraft}
         isDisabled={busy}
         defaultOpen={defaultOpen}
-        marks={
-          changed
-            ? {
-                can: { text: t("mark.changed"), tone: "primary" },
-                in:
-                  held.kind === "reconsent"
-                    ? { text: t("mark.changed"), tone: "primary" }
-                    : null,
-              }
-            : undefined
-        }
+        marks={{
+          can: canChanged ? { text: t("mark.changed"), tone: "primary" } : null,
+          in:
+            held.kind === "reconsent" && moved.length > 0
+              ? { text: t("mark.changed"), tone: "primary" }
+              : null,
+        }}
       />
-      {cannot.length > 0 ? <CantGiveFold items={cannot} /> : null}
-      {offer.items.some((i) => !givable(i)) ? (
-        <CreateSpace
-          templates={app.templates}
-          domain={app.domain}
-          onCreated={onSpaceCreated}
+      {cannot.length > 0 ? (
+        <CantGiveFold
+          items={cannot}
+          create={
+            // Only what no space can hold is fixed by creating one (U5).
+            cannot.some((c) => c.why === "noSpace") ? (
+              <CreateSpace
+                templates={app.templates}
+                domain={app.domain}
+                onCreated={onSpaceCreated}
+              />
+            ) : null
+          }
         />
       ) : null}
       <div className="flex flex-col gap-1">
@@ -1080,14 +1121,6 @@ export function AppConsent({
   );
 }
 
-/**
- * A re-consent's changes (design A): the connection's earlier choices do not
- * fit one AppAccess v2 exactly, so each widened permission is said as "now /
- * was" with ONE door that narrows it, and what the app newly asks is listed
- * with the one switch that turns it on (off at rest: the pod keeps what the
- * person approved, not what they were asked, so a past "no" looks exactly
- * like a new ask). Neutral info tone, never a warning.
- */
 export function ReconsentCallout({
   appName,
   changes,
@@ -1104,28 +1137,28 @@ export function ReconsentCallout({
   const t = consentT();
   const id = useId();
   const moved = changes.filter((c) => c.mark !== "new");
+  const wider = moved.filter((c) => c.mark === "wider");
   const fresh = changes.filter((c) => c.mark === "new");
+  const ink = "text-foreground/80";
   return (
     <section
       aria-labelledby={`${id}-t`}
       data-reconsent
       className="flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
     >
-      <Info
-        className="mt-0.5 h-4 w-4 shrink-0 text-foreground/80"
-        aria-hidden
-      />
+      <Info className={`mt-0.5 h-4 w-4 shrink-0 ${ink}`} aria-hidden />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         {moved.length > 0 ? (
           <>
+            {/* The count is what is drawn below (U3). */}
             <p id={`${id}-t`} className="text-sm font-medium text-foreground">
-              {t("reconsent.title", {
-                n: moved.length + (fresh.length > 0 ? 1 : 0),
-              })}
+              {t("reconsent.title", { n: moved.length })}
             </p>
-            <p className="text-pretty text-xs leading-relaxed text-foreground/80">
-              {t("reconsent.body", { name: appName })}
-            </p>
+            {wider.length > 0 ? (
+              <p className={`text-pretty text-xs leading-relaxed ${ink}`}>
+                {t("reconsent.body", { name: appName, n: wider.length })}
+              </p>
+            ) : null}
             <ul className="flex flex-col gap-2">
               {moved.map((c) => {
                 const off =
@@ -1146,19 +1179,20 @@ export function ReconsentCallout({
                         :{" "}
                       </span>
                       <span
-                        className={`text-sm ${off ? "text-foreground/80 line-through" : "text-foreground/90"}`}
+                        className={`text-sm ${off ? `${ink} line-through` : "text-foreground/90"}`}
                       >
-                        {c.what}{" "}
-                        <strong className="font-medium">{c.now}</strong>
+                        <strong className="font-medium">{c.what}</strong>
+                        {": "}
+                        {c.mark === "wider"
+                          ? t("reconsent.nowWas", {
+                              now: c.now,
+                              was: c.was ?? t("reconsent.nowhere"),
+                            })
+                          : c.now}
                       </span>
                       {off ? (
-                        <span className="text-xs text-foreground/80">
+                        <span className={`text-xs ${ink}`}>
                           {t("reconsent.turnedOff")}
-                        </span>
-                      ) : null}
-                      {c.was ? (
-                        <span className="text-xs text-foreground/80">
-                          {t("reconsent.was", { where: c.was })}
                         </span>
                       ) : null}
                       {c.mark === "wider" ? (
@@ -1183,28 +1217,24 @@ export function ReconsentCallout({
         ) : null}
         {fresh.length > 0 ? (
           <div className="flex flex-col gap-2" data-new-asks>
+            {/* Its own heading, with its own count (U3). */}
             <p
               id={moved.length > 0 ? undefined : `${id}-t`}
-              className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/80"
+              className={`flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] ${ink}`}
             >
               <Sparkles className="h-3 w-3 text-primary" aria-hidden />
-              {t("reconsent.new")}
+              {t("reconsent.new", { n: fresh.length })}
             </p>
             <ul className="flex flex-col gap-2">
               {fresh.map((c) => (
                 <li key={c.key} className="flex flex-col gap-0.5">
-                  <span className="text-sm text-foreground/90">
-                    {c.what}{" "}
-                    <span className="font-mono text-xs text-foreground/80">
-                      {c.permission}
-                    </span>
-                  </span>
+                  <span className="text-sm text-foreground/90">{c.what}</span>
                   {c.reason ? (
-                    <span className="text-pretty text-xs leading-relaxed text-foreground/80">
+                    <span
+                      className={`text-pretty text-xs leading-relaxed ${ink}`}
+                    >
                       {/* The developer's words, as text: why it asks. */}
-                      <span className="text-foreground/80">
-                        {t("reason.prefix")}{" "}
-                      </span>
+                      <span>{t("reason.prefix")} </span>
                       {c.reason}
                     </span>
                   ) : null}
@@ -1225,7 +1255,7 @@ export function ReconsentCallout({
           </div>
         ) : null}
         {moved.length > 0 ? (
-          <p className="text-xs text-foreground/80">{t("reconsent.rest")}</p>
+          <p className={`text-xs ${ink}`}>{t("reconsent.rest")}</p>
         ) : null}
       </div>
     </section>
@@ -1234,9 +1264,17 @@ export function ReconsentCallout({
 
 /**
  * What it asked for that cannot be given (design A "Can't grant"): folded,
- * each with its reason and a "Not given" mark. Never a disabled toggle.
+ * each with its reason and a "Not given" mark. Never a disabled toggle. When
+ * some of it is missing only a space, the create-a-space offer sits here,
+ * next to those items (U5).
  */
-function CantGiveFold({ items }: { items: readonly CantGive[] }) {
+function CantGiveFold({
+  items,
+  create,
+}: {
+  items: readonly CantGive[];
+  create: ReactNode;
+}) {
   const t = consentT();
   return (
     <Accordion
@@ -1260,12 +1298,7 @@ function CantGiveFold({ items }: { items: readonly CantGive[] }) {
               className="flex items-center justify-between gap-3 py-2"
             >
               <span className="flex min-w-0 flex-col">
-                <span className="text-sm text-foreground/85">
-                  {i.label}{" "}
-                  <span className="font-mono text-xs text-foreground/65">
-                    {i.permission}
-                  </span>
-                </span>
+                <span className="text-sm text-foreground/85">{i.label}</span>
                 <span className="text-xs text-foreground/65">{i.reason}</span>
               </span>
               <Chip
@@ -1278,18 +1311,13 @@ function CantGiveFold({ items }: { items: readonly CantGive[] }) {
             </li>
           ))}
         </ul>
+        {create}
         <p className="pt-1 text-xs text-foreground/65">{t("cant.rest")}</p>
       </AccordionItem>
     </Accordion>
   );
 }
 
-/**
- * doc 18: a person may have no space to give the app. When the app declares
- * workspace templates (`synap_templates`), offer to create the space from one
- * with the person's OWN session (`workspaces.ensureTemplate`, governed like
- * any create); the offer is then re-read. Otherwise say what is missing.
- */
 function CreateSpace({
   templates,
   domain,
@@ -1299,6 +1327,7 @@ function CreateSpace({
   domain: string;
   onCreated: () => void;
 }) {
+  const t = consentT();
   const ensure = trpc.workspaces.ensureTemplate.useMutation();
   const [note, setNote] = useState<string | null>(null);
   const create = (slug: string) => {
@@ -1314,11 +1343,9 @@ function CreateSpace({
           ) {
             onCreated();
           } else if (r.status === "proposed") {
-            setNote(
-              "Creating the space was sent for review. Approve it, then reload this page."
-            );
+            setNote(t("create.proposed"));
           } else {
-            setNote(`This space can't be created here (${r.status}).`);
+            setNote(t("create.refused"));
           }
         },
         onError: (err) => setNote(err.message),
@@ -1328,53 +1355,34 @@ function CreateSpace({
   if (templates.length === 0) {
     // A state, not an error (rv-ui U9): the screen's neutral hint tone.
     return (
-      <div
-        role="status"
-        className="flex flex-col gap-1 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
-      >
-        <span className="text-sm font-medium text-foreground">
-          No space to give it
-        </span>
-        <span className="text-xs leading-relaxed text-foreground/65">
-          You have no space where you can give this app what it asks for.
-        </span>
-        <span className="text-xs leading-relaxed text-foreground/65">
-          Create a space in Synap (or ask for edit rights in one), then reload
-          this page.
-        </span>
-      </div>
+      <p role="status" className="py-1 text-xs leading-relaxed text-foreground/75">
+        {t("create.none")}
+      </p>
     );
   }
   return (
-    <div className="flex flex-col gap-2 rounded-lg px-4 py-3 ring-1 ring-inset ring-foreground/10">
-      <p className="text-sm text-foreground/80">
-        You have no space where you can give it everything it asks for. Create
-        one it can work in:
-      </p>
+    <div className="flex flex-col gap-2 py-2">
+      <p className="text-xs text-foreground/80">{t("create.offer")}</p>
       <div className="flex flex-wrap gap-2">
         {templates.map((slug) => (
           <Button
             key={slug}
             size="sm"
             variant="flat"
+            className="min-h-10"
             isLoading={ensure.isPending && ensure.variables?.slug === slug}
             isDisabled={ensure.isPending}
             onPress={() => create(slug)}
           >
-            Create a space from &ldquo;{slug}&rdquo;
+            {t("create.from", { name: humanizeToken(slug) })}
           </Button>
         ))}
       </div>
-      {note && <p className="text-xs text-foreground/65">{note}</p>}
+      {note && <p className="text-xs text-foreground/75">{note}</p>}
     </div>
   );
 }
 
-/**
- * A pod app's heading: its tier and DOMAIN first (the domain is proven, the
- * name is its own words), then the question. An app Synap has not checked is
- * asked about by its domain; its self-chosen name is quoted as such.
- */
 export function PodAppHeading({
   domain,
   verified,
@@ -1390,6 +1398,7 @@ export function PodAppHeading({
   identity?: string;
   title: string;
 }) {
+  const t = consentT();
   return (
     <>
       <span className="flex flex-wrap items-center gap-2">
@@ -1405,7 +1414,7 @@ export function PodAppHeading({
             )
           }
         >
-          {verified ? "Synap app" : "Unverified app"}
+          {verified ? t("tier.verified") : t("tier.unverified")}
         </Chip>
         <HostName host={domain} className="text-sm text-foreground/75" />
       </span>
@@ -1414,9 +1423,12 @@ export function PodAppHeading({
       </h1>
       <p className="text-sm leading-relaxed text-foreground/65">
         {/* Self-chosen display text, rendered as text only. */}
-        {verified ? null : <>Calls itself &ldquo;{clientName}&rdquo;. </>}
-        To your pod{podHost ? ` ${podHost}` : ""}
-        {identity ? `, as ${identity}` : ""}.
+        {verified ? null : <>{t("who.callsItself", { name: clientName })} </>}
+        {podHost && identity
+          ? t("who.podAs", { host: podHost, identity })
+          : podHost
+            ? t("who.pod", { host: podHost })
+            : t("who.yourPod")}
       </p>
     </>
   );
@@ -1429,31 +1441,29 @@ function isTransient(err: unknown): boolean {
   return typeof status !== "number" || status >= 500;
 }
 
-/**
- * A pod app's consent while its offer loads: the shape of the real lines
- * (the headline, three lines with a door each, the buttons), so nothing
- * jumps when it arrives. Opacity only; still under reduced motion.
- */
 export function ConsentSkeleton() {
   const t = consentT();
+  // Opacity only (motion-safe): visible on both grounds (P12), still under
+  // reduced motion.
+  const bar = "rounded-md bg-foreground/15 motion-safe:animate-pulse";
   return (
     <div aria-busy="true" className="flex flex-col gap-4">
       <span className="sr-only" role="status">
         {t("loading.label")}
       </span>
-      <Skeleton className="h-4 w-4/5 rounded-md" />
+      <div className={`h-4 w-4/5 ${bar}`} />
       <div className="flex flex-col divide-y divide-foreground/10 rounded-lg ring-1 ring-inset ring-foreground/10">
         {[0, 1, 2].map((i) => (
           <div key={i} className="flex items-center gap-3 px-3 py-3">
-            <Skeleton className="h-3 w-20 rounded-md" />
-            <Skeleton className="h-4 flex-1 rounded-md" />
-            <Skeleton className="h-8 w-16 rounded-full" />
+            <div className={`h-3 w-20 ${bar}`} />
+            <div className={`h-4 flex-1 ${bar}`} />
+            <div className={`h-8 w-16 !rounded-full ${bar}`} />
           </div>
         ))}
       </div>
       <div className="flex gap-2.5">
-        <Skeleton className="h-10 flex-1 rounded-lg" />
-        <Skeleton className="h-10 flex-1 rounded-lg" />
+        <div className={`h-10 flex-1 !rounded-lg ${bar}`} />
+        <div className={`h-10 flex-1 !rounded-lg ${bar}`} />
       </div>
     </div>
   );
