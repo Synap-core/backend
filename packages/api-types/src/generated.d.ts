@@ -9723,6 +9723,36 @@ export interface EffectiveCapabilityRenderer {
 	pages: CapabilityRendererPage[];
 	source: CapabilityRendererSource;
 }
+/**
+ * Renderer bundles (0436, decision c91d26dc): a set of frame cells that draw a
+ * pod's objects plus the ONE host-module set they run on (React, react-dom,
+ * the JSX runtimes, the kit and the tokens CSS, from one build).
+ *
+ * The cells live in `widget_definitions` (`cell:<slug>:<key>`); these two
+ * tables hold what only a bundle has. Written only by `installRendererBundle`
+ * (`packages/api/src/services/renderers/`), read by `renderers.status` /
+ * `renderers.hostModules` and `GET /api/hub/renderers/host-modules`.
+ *
+ * Pod-level: no owner and no space column, so no access-layer rule. The
+ * modules are public build output (React, the kit); which CELLS a caller sees
+ * is decided on `widget_definitions`, through its own grant clause.
+ *
+ * `defaults` is the host fallback for a host with no built-ins (pod admin),
+ * never a `renderer_bindings` row: a binding would beat the desktop's own
+ * adapters (`pickEffectiveRenderer`).
+ *
+ * ONE host-module set per pod: the unique index on `module` admits one
+ * bundle's modules (every set has `react`). The modules' foreign key is
+ * DEFERRABLE INITIALLY DEFERRED in SQL, so an install writes them first and
+ * the bundle row last, in one transaction (Drizzle does not model the
+ * deferral; the migration is the source).
+ */
+/** Which cell a host with no built-in draws, by bundle cell key. */
+export interface RendererBundleDefaultsRow {
+	"entity-card"?: string;
+	"entity-detail"?: string;
+	views?: Record<string, string>;
+}
 declare const GOVERNANCE_CEILING_AXES: [
 	"daily_write_count",
 	"pending_proposal_cap",
@@ -25362,6 +25392,37 @@ export interface ApplyGovConfigChangeResult {
 	ids: string[];
 	subject: SettingsUpdateProposalData["store"];
 }
+/** One installed cell, as the host's registry knows it. */
+export interface InstalledRenderer {
+	key: string;
+	/** `frame` = sandboxed; `direct` = runs in the host's own tree. */
+	runtime: "direct" | "frame";
+	/** The slot the cell is made for (`entity-card`, `entity-detail`, `collection`, …). */
+	contentKind: string | null;
+	/** The view types a view renderer declares. */
+	viewTypes: readonly string[];
+}
+export interface RendererStatus {
+	bundle: {
+		reactVersion: string;
+		setSha256: string;
+		slug: string;
+		version: string;
+	} | null;
+	/** By the bundle's cell KEY; the cell is `cell:<bundle.slug>:<key>`. `{}` with no bundle. */
+	defaults: RendererBundleDefaultsRow;
+	installed: InstalledRenderer[];
+}
+export type RendererHostModulesRead = {
+	notModified: true;
+	setSha256: string;
+} | {
+	kitExports: string[];
+	/** Module name (`react`, `reactDom`, …, `tokensCss`) → its source. */
+	modules: Record<string, string>;
+	notModified: false;
+	setSha256: string;
+};
 /** A column→property routing decision for ONE CSV header. Mirrors the IS plan's
  *  `ColumnMappingProposal` but only the fields ingestion needs. */
 export interface CsvColumnPlan {
@@ -56883,6 +56944,49 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId?: undefined;
 				status: "updated";
 			};
+		}>;
+	}>>;
+	renderers: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		hostModules: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				knownSetSha256?: string | undefined;
+			} | undefined;
+			meta: object;
+			output: RendererHostModulesRead;
+		}>;
+		status: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: RendererStatus;
 		}>;
 	}>>;
 	resourceState: import("@trpc/server").TRPCBuiltRouter<{
