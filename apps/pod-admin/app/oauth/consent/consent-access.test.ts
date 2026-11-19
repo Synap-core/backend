@@ -483,7 +483,7 @@ describe("what the connection holds: re-consent", () => {
     for (const c of wider) {
       expect(c.now).toMatch(/^in /);
       expect(c.was).toMatch(/^in /);
-      expect(c.narrow).toMatch(/^Turn .* off$/);
+      expect(c.narrow).toMatch(/^Turn .* off everywhere$/);
     }
     let d = reconsentDraft(held, offer);
     const first = wider[0]!;
