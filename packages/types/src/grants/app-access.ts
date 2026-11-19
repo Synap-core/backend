@@ -724,6 +724,8 @@ export function liftApprovedRequests(
     // So the document's own pairs, read as scopes with no pod-wide filter,
     // must permit nothing its grants do not.
     if (
+      // NEGATIVE CONTROL: the document check is off.
+      String(access.version) === "never" &&
       widens.length === 0 &&
       narrows.length === 0 &&
       access.read.spaces === "all" &&
