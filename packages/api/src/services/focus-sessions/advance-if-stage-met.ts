@@ -27,9 +27,14 @@
  *   - out of a legacy dev-approval stamp (`plan_approved`, `deploy_approved`):
  *     not a stage of any process;
  *   - a session that is not `active` (a human gate's hold, a pause, a close),
- *     except the release of a check gate above.
- * One step per trigger: a stage whose work was met before it was entered
- * waits for its next grade or settled outcome.
+ *     except the release of a check gate whose own hold is the current one;
+ *   - while the person owes the session something (an `owner: 'human'` slot
+ *     still open): their open ask holds the step (lead default, W6 review).
+ * ONE STEP PER FACT: the trigger must be work of the stage judged (the slot
+ * settled, or the criterion graded, is one of its outcomes). A retried job or
+ * a second trigger for the same fact finds the session already on the next
+ * stage, where that work is not, and does nothing; a stage whose work was met
+ * before it was entered waits for a fact of its own.
  *
  * THE CASCADE. The subject move names the session, so an `enters_status`
  * activator it fires counts the session's own automation chain (the trigger
@@ -51,6 +56,7 @@ import {
   readCriteria,
   resolveStageGate,
   stageOnApproved,
+  type ExpectedOutput,
 } from "@synap/playbooks";
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import {
@@ -66,6 +72,7 @@ import {
   type AdvanceSessionStageResult,
   type StageAdvanceSession,
 } from "./advance-stage.js";
+import { isOwedSlot } from "./owed-outputs.js";
 import { readStageOutcomes } from "./stage-outputs-approved.js";
 import { readReachedMoveTarget } from "./stage-subject-status.js";
 
@@ -94,7 +101,9 @@ const LEGACY_STAMPS = new Set<string>(Object.values(DEV_GATE_LEGACY_STAGES));
  * every case that holds it). Read only.
  */
 export async function planStageWorkStep(
-  sessionId: string
+  sessionId: string,
+  /** The fact that fired the rule: a settled slot, or graded criteria. */
+  trigger: { slotKey?: string | null; criterionKeys?: readonly string[] }
 ): Promise<StageWorkStep | null> {
   const [s] = await db
     .select({
@@ -125,6 +134,14 @@ export async function planStageWorkStep(
     typeof held?.fromStage === "string" &&
     held.stageKey === s.currentStage;
   if (s.status !== "active" && !resume) return null;
+  const slots = Array.isArray(s.expectedOutputs)
+    ? (s.expectedOutputs as ExpectedOutput[])
+    : [];
+  if (!resume && slots.some((o) => !!o && isOwedSlot(o))) return null;
+  if (resume) {
+    const { heldByCheckGate } = await import("./evaluations/evaluate.js");
+    if (!(await heldByCheckGate(s.id, s.currentStage))) return null;
+  }
 
   const proc = await loadSessionProcess({
     sessionId: s.id,
@@ -156,6 +173,16 @@ export async function planStageWorkStep(
   // A resume needs nothing held (the gate's own rule); an advance needs the
   // stage's work met (a stage with no outcome never advances by itself).
   if (resume ? stage.unmet.length > 0 : !stage.met) return null;
+  // One step per fact: the fact must be this stage's work.
+  const graded = new Set(trigger.criterionKeys ?? []);
+  const ofThisStage = stage.outcomes.some(
+    (o) =>
+      (!!trigger.slotKey &&
+        (o.key === trigger.slotKey || o.slotLabel === trigger.slotKey)) ||
+      graded.has(o.key) ||
+      !!o.criteria?.some((c) => graded.has(c.key))
+  );
+  if (!ofThisStage) return null;
 
   // The subject moves this step makes: the entered stage's status, and a
   // check gate's reach of the judged stage's `onApproved` first.
@@ -258,56 +285,103 @@ export function stageMetSay(step: StageWorkStep): {
 }
 
 /**
- * A GRADE fired the rule (a pass recorded by an evaluation or by the person,
+ * A GRADE fired the rule (passes recorded by an evaluation or by the person,
  * the check gate's own release already tried): take the step if the stage is
- * now met, and log it as the rule's row, with the grade as its source. Never
- * throws — the grade stands either way.
+ * now met and the graded criteria are its work, and log it as the rule's row,
+ * with the grade as its source. Never throws — the grade stands either way.
  */
 export async function advanceOnGrade(input: {
   sessionId: string;
-  /** The criterion just graded, for the log row's source. */
-  criterionKey?: string | null;
+  /** The criteria that just passed. */
+  criterionKeys: readonly string[];
 }): Promise<boolean> {
+  let step: StageWorkStep | null = null;
+  let out: ReactionEffectOutcome = { status: "unchanged" };
   try {
     if (!(await isReactionEnabled(STAGE_MET_REACTION_ID))) return false;
-    const step = await planStageWorkStep(input.sessionId);
+    step = await planStageWorkStep(input.sessionId, {
+      criterionKeys: input.criterionKeys,
+    });
     if (!step || step.kind !== "advance") return false;
-    const out = stageMetAdvanceOutcome(
+    out = stageMetAdvanceOutcome(
       await advanceSessionStage(stageMetAdvanceInput(step, null))
     );
-    if (out.status === "unchanged" || out.status === "proposed") return false;
-    const say = stageMetSay(step);
-    const applied = out.status === "applied";
-    const row: ReactionLogEntry = {
-      reactionId: STAGE_MET_REACTION_ID,
-      outcome: applied ? "applied" : "skipped",
-      code: out.status,
-      ...(out.status === "applied"
-        ? {
-            reason: say.applied,
-            detail: `${step.fromStage} -> ${step.toStage}`,
-          }
-        : {
-            reason: reactionReason(out.status, say.name),
-            detail: out.detail,
-          }),
-      userId: step.session.userId,
-      sourceTransitionId: null,
-      source: `grade:${step.session.id}/${input.criterionKey ?? "*"}`,
-      target: `focus_session:${step.session.id}`,
-      to: step.toStage,
-      chainId: null,
-      depth: null,
-      sessionId: step.session.id,
-      workspaceId: step.session.workspaceId,
-    };
-    await recordReactionOutcomes(db, [row]);
-    return applied;
   } catch (err) {
     logger.warn(
       { err, sessionId: input.sessionId },
       "the step did not advance after a grade — the grade stands"
     );
+    await appendGradeLog(input, null, {
+      outcome: "skipped",
+      code: "failed",
+      reason: reactionReason("failed", null),
+      detail: err instanceof Error ? err.message : String(err),
+    });
     return false;
+  }
+  if (!step || out.status === "unchanged") return false;
+  const say = stageMetSay(step);
+  await appendGradeLog(
+    input,
+    step,
+    out.status === "applied"
+      ? {
+          outcome: "applied",
+          code: "applied",
+          reason: say.applied,
+          detail: `${step.fromStage} -> ${step.toStage}`,
+        }
+      : {
+          outcome: "skipped",
+          code: out.status,
+          reason: reactionReason(
+            out.status === "moved_meanwhile" ? "moved_meanwhile" : "refused",
+            say.name
+          ),
+          detail: "detail" in out ? out.detail : null,
+        }
+  );
+  return out.status === "applied";
+}
+
+/** The rule's log row for a grade-fired step; a failed append is logged, never thrown. */
+async function appendGradeLog(
+  input: { sessionId: string; criterionKeys: readonly string[] },
+  step: StageWorkStep | null,
+  row: Pick<ReactionLogEntry, "outcome" | "code" | "reason" | "detail">
+): Promise<void> {
+  try {
+    const owner =
+      step?.session.userId ??
+      (
+        await db
+          .select({ userId: focusSessions.userId })
+          .from(focusSessions)
+          .where(eq(focusSessions.id, input.sessionId))
+          .limit(1)
+      )[0]?.userId;
+    if (!owner) return;
+    await recordReactionOutcomes(db, [
+      {
+        reactionId: STAGE_MET_REACTION_ID,
+        ...row,
+        userId: owner,
+        sourceTransitionId: null,
+        source: `grade:${input.sessionId}/${input.criterionKeys.join(",") || "*"}`,
+        target: `focus_session:${input.sessionId}`,
+        to: step?.toStage ?? null,
+        chainId: null,
+        depth: null,
+        sessionId: input.sessionId,
+        workspaceId: step?.session.workspaceId ?? null,
+      },
+    ]);
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: input.sessionId, outcome: row.outcome },
+      row.outcome === "applied"
+        ? "the step advanced, but its log row was not appended"
+        : "the step's log row was not appended"
+    );
   }
 }

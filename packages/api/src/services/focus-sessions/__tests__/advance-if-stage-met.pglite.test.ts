@@ -142,6 +142,7 @@ vi.mock("../../../utils/split-brain-service.js", async (importOriginal) => ({
 }));
 
 import { pgliteAllTablesDdl } from "../../../__tests__/pglite-ddl.js";
+import { db as pgDb, setSessionStatus } from "@synap/database";
 import { updateFocusSession } from "../update-session.js";
 import { advanceSessionStage } from "../advance-stage.js";
 import {
@@ -241,9 +242,9 @@ async function runAt(input: {
   const id = randomUUID();
   await q(
     `insert into focus_sessions
-       (id, user_id, title, goal, status, origin, playbook_id, subject_entity_id, current_stage, expected_outputs, criteria, metadata, agent_ids, started_at, created_at, updated_at)
+       (id, user_id, title, goal, status, origin, playbook_id, subject_entity_id, current_stage, expected_outputs, criteria, metadata, stages, agent_ids, started_at, created_at, updated_at)
      values ($1, $2, 'Ship the thing', 'Ship the thing', $3, 'playbook', $4, $5, $6,
-             $7::jsonb, $8::jsonb, $9::jsonb, '{}', now(), now(), now())`,
+             $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, '{}', now(), now(), now())`,
     [
       id,
       USER,
@@ -254,6 +255,7 @@ async function runAt(input: {
       JSON.stringify(input.outputs ?? []),
       JSON.stringify(input.criteria ?? []),
       JSON.stringify(input.metadata ?? {}),
+      JSON.stringify(stages),
     ]
   );
   await q(
@@ -663,25 +665,182 @@ describe("the cascade stays bounded", () => {
 });
 
 describe("a check gate reads the same outcomes", () => {
+  const stages = [
+    STAGES[0]!,
+    { key: "ship", name: "Ship", gate: { kind: "check" } },
+  ];
+
   it("held on an output its stage declares, it is released when the output is delivered", async () => {
-    const stages = [
-      STAGES[0]!,
-      { key: "ship", name: "Ship", gate: { kind: "check" } },
-    ];
-    const id = await runAt({
-      stage: "ship",
-      outputs: [spec()],
-      stages,
-      status: "paused",
-      metadata: {
-        checkGate: { stageKey: "ship", fromStage: "build", failing: ["spec"] },
-      },
-    });
+    const id = await runAt({ stage: "build", outputs: [spec()], stages });
+    // Into the gated stage before the Spec is delivered: the gate holds it.
+    await updateFocusSession({ sessionId: id, userId: USER, currentStage: "ship" });
+    const held = await sessionOf(id);
+    expect(held.status).toBe("paused");
+    expect(held.metadata).toHaveProperty("checkGate");
     await deliver(id);
     const s = await sessionOf(id);
     expect(s.status).toBe("active");
     expect(s.current_stage).toBe("ship");
     expect(s.metadata).not.toHaveProperty("checkGate");
+  });
+
+  it("a session a PERSON paused, with a stale gate record, is never released by its outcomes", async () => {
+    const id = await runAt({
+      stage: "ship",
+      outputs: [spec()],
+      stages,
+      metadata: {
+        checkGate: { stageKey: "ship", fromStage: "build", failing: ["spec"] },
+      },
+    });
+    await setSessionStatus(pgDb as never, {
+      sessionId: id,
+      from: "active",
+      to: "paused",
+      actor: { kind: "human", userId: USER },
+      hold: { on: "person", ref: `person:${USER}`, reason: "I look first" },
+    });
+    await deliver(id);
+    expect((await sessionOf(id)).status).toBe("paused");
+    expect(await logOf(id)).toEqual([]);
+  });
+});
+
+describe("one step per fact", () => {
+  // Build → Review → Publish; Review's own criterion was graded before the
+  // run reached it, so Review is met the moment it is entered.
+  const stages = [
+    STAGES[0]!,
+    { key: "review", name: "Review" },
+    { key: "publish", name: "Publish" },
+  ];
+  const criteria = [
+    {
+      key: "reviewed",
+      statement: "Reviewed",
+      check: { kind: "human" },
+      stageKey: "review",
+    },
+  ];
+
+  it("a retried job and a next stage already met: one step, one log row", async () => {
+    const id = await runAt({ stage: "build", outputs: [spec()], stages, criteria });
+    // Graded while the run is on Build: not Build's work, nothing moves.
+    await gradeCriterionAsOwner({
+      sessionId: id,
+      userId: USER,
+      criterionKey: "reviewed",
+      verdict: "pass",
+    });
+    expect((await sessionOf(id)).current_stage).toBe("build");
+    await deliver(id);
+    // The same slot move again (a pg-boss retry): Review is met, but the Spec
+    // is not Review's work.
+    await react(id);
+    const s = await sessionOf(id);
+    expect(s.current_stage).toBe("review");
+    expect(s.stage_history.map((e) => e.stageKey)).toEqual(["review"]);
+    expect((await logOf(id)).map((r) => r.data.code)).toEqual(["applied"]);
+  });
+
+  it("a stage with no outputs and no criteria never moves, whatever settles", async () => {
+    const id = await runAt({
+      stage: "plan",
+      outputs: [spec()],
+      stages: [
+        { key: "plan", name: "Plan" },
+        { key: "do", name: "Do" },
+      ],
+    });
+    await deliver(id);
+    expect((await sessionOf(id)).current_stage).toBe("plan");
+  });
+
+  it("an open ask of the person holds the step (lead default)", async () => {
+    const id = await runAt({
+      stage: "build",
+      outputs: [
+        spec(),
+        {
+          key: "go-ahead",
+          kind: "decision",
+          label: "Go ahead?",
+          owner: "human",
+          status: "pending",
+          blockedReason: "decision",
+          ask: { mode: "confirm", prompt: "Go ahead?" },
+          owedSince: new Date().toISOString(),
+        },
+      ],
+    });
+    await deliver(id);
+    expect((await sessionOf(id)).current_stage).toBe("build");
+  });
+});
+
+describe("the plan and the write: the write re-checks", () => {
+  it("a session paused, or closed, between the plan and the write is not moved", async () => {
+    for (const to of ["paused", "closed"] as const) {
+      const id = await runAt({
+        stage: "build",
+        outputs: [spec({ status: "done" })],
+      });
+      const step = await planStageWorkStep(id, { slotKey: "spec" });
+      expect(step).toMatchObject({ kind: "advance", toStage: "review" });
+      await setSessionStatus(pgDb as never, {
+        sessionId: id,
+        from: "active",
+        to,
+        actor: { kind: "human", userId: USER },
+        ...(to === "paused"
+          ? { hold: { on: "person", ref: `person:${USER}`, reason: "wait" } }
+          : {}),
+      });
+      const late = await advanceSessionStage(stageMetAdvanceInput(step!, null));
+      expect(late).toMatchObject({
+        changed: false,
+        stale: { expectedStage: "build", currentStage: "build", status: to },
+      });
+      expect((await sessionOf(id)).current_stage).toBe("build");
+    }
+  });
+
+  it("the subject-first race: a manual advance between the plan and the write moves the subject once", async () => {
+    const post = await seedPost("Briefed");
+    const id = await runAt({
+      stage: "build",
+      outputs: [spec({ status: "done" })],
+      subject: post,
+    });
+    const step = await planStageWorkStep(id, { slotKey: "spec" });
+    expect(step).toMatchObject({ kind: "advance", toStage: "review" });
+    await updateFocusSession({
+      sessionId: id,
+      userId: USER,
+      currentStage: "review",
+      expectedStage: "build",
+    });
+    const late = await advanceSessionStage(stageMetAdvanceInput(step!, null));
+    expect(late).toMatchObject({ changed: false, stale: { currentStage: "review" } });
+    expect((await movesOf(post)).map((m) => m.to)).toEqual(["Scripted"]);
+    expect((await sessionOf(id)).stage_history.map((e) => e.stageKey)).toEqual([
+      "review",
+    ]);
+  });
+});
+
+describe("an agent moving the step back names the stage it read", () => {
+  it("refused without expectedStage; nothing written", async () => {
+    const id = await runAt({ stage: "review" });
+    const res = await updateFocusSession({
+      sessionId: id,
+      userId: USER,
+      agentUserId: AGENT,
+      currentStage: "build",
+    });
+    expect(res.status).toBe("denied");
+    expect((res as { reason: string }).reason).toContain("needs expectedStage");
+    expect((await sessionOf(id)).current_stage).toBe("review");
   });
 });
 
@@ -868,7 +1027,9 @@ describe("Ship a change walks shape → merge with its real definition (no deadl
             ref: { url: PR },
           },
         ] as never,
-        completeOutput: (slot.key ?? slot.label) as string,
+        // A run in flight on the old definition carries the unkeyed label
+        // slot: completed by its label, as the slot doors match it.
+        completeOutput: slot.label as string,
         criteria: [
           ...(current as never[]),
           {

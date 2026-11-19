@@ -14,15 +14,15 @@
  * reading: an output a required criterion checks is met only when that
  * criterion passes (D4 a), a retired one is neither met nor owed.
  *
- * AT A STEP, ONLY THE CRITERIA OF THAT STEP AND THE STEPS BEFORE IT COUNT
- * (their `stageKey`). The projection is read over that narrower list, never
- * re-derived: a criterion of a LATER step (a merge check on the pull request
- * the PR step declares) decides the output at its own step, and a criterion
- * with no step is the session's, decided at its close. Counting either here
- * would hold a step on work that comes after it: Ship a change's PR output,
- * named by its merge criterion, held `pr-opened ⇒ checks` until the merge,
- * which comes after checks. The session check gate counted only its step's
- * criteria before W6; this keeps that, and adds the outputs.
+ * AT A STEP, A LATER STEP'S CRITERION NEVER COUNTS (lead default on D4 a's
+ * reading, W6 review): the criteria counted are those of the step judged, of
+ * the steps before it in the process's order, and those with no step (their
+ * `stageKey` unset). The projection is read over that narrower list, never
+ * re-derived. A later step's criterion (a merge check on the pull request
+ * the PR step declares) decides the output at its own step: counted here it
+ * held `pr-opened ⇒ checks` until the merge, which comes after checks. Only
+ * what "this step is met" means changes: the session's verdict and its close
+ * stay stage-blind, as W4 decided.
  *
  * A LEAF (no database, no door): the status writer, the slot merge
  * (`stage-slots.ts`) and the gate all read it, and none must load the update
@@ -80,8 +80,8 @@ export interface StageOutcomes {
     kind: string | null;
     /**
      * The required criteria that name it but do not count at this step (a
-     * later step's, or the session's): the doors leave such an output to
-     * them, so completing it does not meet it here.
+     * later step's): the doors leave such an output to them, so completing it
+     * does not meet it here.
      */
     decidedLater: string[];
   }>;
@@ -107,9 +107,7 @@ export function readStageOutcomes(
   const order = stageKeysOf(stages);
   const at = order.indexOf(stageKey);
   const scope = new Set(at >= 0 ? order.slice(0, at + 1) : [stageKey]);
-  const counted = all.filter(
-    (c) => typeof c.stageKey === "string" && scope.has(c.stageKey)
-  );
+  const counted = all.filter((c) => !c.stageKey || scope.has(c.stageKey));
   const { outcomes } = projectSessionOutcomes({
     expectedOutputs: input.expectedOutputs,
     criteria: counted,

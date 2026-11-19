@@ -2470,6 +2470,33 @@ export async function updateFocusSession(
     if (undeclared) return { status: "denied", reason: undeclared.reason };
   }
 
+  // BACK OVER A STEP THAT MOVED BY ITSELF (W6): a step advances on its own
+  // once its work is met, so an agent moving the session BACK without saying
+  // which stage it read could undo that move unseen. Refused unless the
+  // agent names `expectedStage` (then the compare-and-set decides).
+  if (
+    agentUserId &&
+    params.currentStage !== undefined &&
+    params.expectedStage === undefined &&
+    existing.currentStage
+  ) {
+    const { loadSessionProcess } =
+      await import("@synap/jobs/utils/session-process.js");
+    const proc = await loadSessionProcess({
+      sessionId: existing.id,
+      playbookId: existing.playbookId,
+    });
+    const order = (proc?.stages ?? []).map((st) => st?.key);
+    const from = order.indexOf(existing.currentStage);
+    const to = order.indexOf(params.currentStage);
+    if (from >= 0 && to >= 0 && to < from) {
+      return {
+        status: "denied",
+        reason: `Moving the step back (from "${existing.currentStage}" to "${params.currentStage}") needs expectedStage: the stage you read. A step moves on by itself once its work is met.`,
+      };
+    }
+  }
+
   // TRACK FILING (adopt into a step) — resolved BEFORE the membrane for the
   // same reason as the floors above: a track the caller cannot see, a stage it
   // did not pin or a cross-project filing is refused to the caller, never

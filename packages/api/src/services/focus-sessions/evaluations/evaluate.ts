@@ -35,6 +35,7 @@ import {
   and,
   eq,
   drizzleSql,
+  listHolds,
   setSessionStatus,
 } from "@synap/database";
 import {
@@ -504,12 +505,12 @@ export async function evaluateSession(
     summary: after,
   });
   // A pass may complete the stage's work: the step moves on by itself (W6).
-  const passed = results.find(
-    (r) => r.status === "recorded" && r.verdict === "pass"
-  );
-  if (!resumed && passed) {
+  const passed = results
+    .filter((r) => r.status === "recorded" && r.verdict === "pass")
+    .map((r) => r.key);
+  if (!resumed && passed.length > 0) {
     const { advanceOnGrade } = await import("../advance-if-stage-met.js");
-    await advanceOnGrade({ sessionId, criterionKey: passed.key });
+    await advanceOnGrade({ sessionId, criterionKeys: passed });
   }
   return { status: "evaluated", results, resumed, ...after };
 }
@@ -637,7 +638,7 @@ export async function gradeCriterionAsOwner(params: {
     const { advanceOnGrade } = await import("../advance-if-stage-met.js");
     await advanceOnGrade({
       sessionId: params.sessionId,
-      criterionKey: params.criterionKey,
+      criterionKeys: [params.criterionKey],
     });
   }
   return { out, resumed };
@@ -681,12 +682,32 @@ export async function gradeCriterionAfterAct(params: {
 }
 
 /**
+ * Is the session's CURRENT hold the check gate's own (`check:<stageKey>`,
+ * the hold `applyCheckGate` records)? `metadata.checkGate` outlives the hold
+ * it explains (an `onFail` return keeps it, a person's resume leaves it), so
+ * only the hold says the gate is what holds the session now: a session a
+ * person paused, or a run that stopped to wait on them, is never released
+ * by its outcomes.
+ */
+export async function heldByCheckGate(
+  sessionId: string,
+  stageKey: string
+): Promise<boolean> {
+  const [hold] = await listHolds(db, {
+    subjects: [{ subjectType: "focus_session", subjectId: sessionId }],
+  });
+  return hold?.hold.ref === `check:${stageKey}`;
+}
+
+/**
  * The RESUME half of a `check` stage gate (services/playbooks/stage-gate.ts):
  * a session paused by a check gate goes back to `active` once every required
- * criterion of the stage it left passes. Called after every evaluation and every
- * human grade — re-running the check IS the resume, no proposal involved.
- * Guarded on `status = 'paused'` so a session a person paused for another reason
- * (no `checkGate` record) is never resumed by it. Resuming writes the judged
+ * outcome of the stage it left is met (`checkGateFailing`). Called after every
+ * evaluation and every human grade, and by the step rule when an outcome
+ * settles (W6) — re-running the check IS the resume, no proposal involved.
+ * Guarded on `status = 'paused'` AND the gate's own hold being the current one
+ * ({@link heldByCheckGate}), so a session paused for another reason is never
+ * resumed by it, even with a stale `checkGate` record. Resuming writes the judged
  * stage's `onApproved`, then the gated stage's `subjectStatus` (the pass the
  * advance door was waiting for).
  */
@@ -707,7 +728,9 @@ export async function resumeCheckGateIfMet(params: {
   if (
     !session ||
     session.status !== "paused" ||
-    typeof gate?.fromStage !== "string"
+    typeof gate?.fromStage !== "string" ||
+    typeof gate.stageKey !== "string" ||
+    !(await heldByCheckGate(session.id, gate.stageKey))
   ) {
     return false;
   }

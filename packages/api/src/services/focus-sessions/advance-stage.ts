@@ -167,7 +167,13 @@ export interface AdvanceSessionStageInput {
   /**
    * The step advances BY ITSELF (W6, `advance-if-stage-met.ts`): nobody
    * asked, so the subject moves as the `system` — never as the session's
-   * owner, who decided nothing — with the move that caused it.
+   * owner, who decided nothing — with the move that caused it. Such a move
+   * also needs the session `active` (its compare-and-set holds the status
+   * too: a person's pause or a close between the plan and the write wins),
+   * and writes the COLUMN FIRST, under that compare-and-set, then the
+   * subject: two triggers racing for one step write it once, and only the
+   * one that wrote it reports `changed` (its log row is the only one). The
+   * follow that the subject's move fires finds the stage already there.
    */
   bySystem?: { cause?: TransitionCause | null };
 }
@@ -179,7 +185,12 @@ export interface AdvanceSessionStageResult {
    * The `expectedStage` no longer held: the session's step moved meanwhile.
    * Nothing was written; re-read it and decide again.
    */
-  stale?: { expectedStage: string | null; currentStage: string | null };
+  stale?: {
+    expectedStage: string | null;
+    currentStage: string | null;
+    /** Set when the session stood in another status than `active` (`bySystem`). */
+    status?: string;
+  };
   /** True when the stage entered declares a gate (human or check). */
   gated: boolean;
   /**
@@ -302,13 +313,23 @@ export async function advanceSessionStage(
   // COMPARE-AND-SET (W6): read before the subject leads, so a stale mover
   // moves nothing; the column write below holds it again.
   if (input.expectedStage !== undefined && input.stageWrite === "door") {
-    const stale = await staleStage(session.id, input.expectedStage);
+    const stale = await staleStage(
+      session.id,
+      input.expectedStage,
+      !!input.bySystem
+    );
     if (stale) return { ...UNCHANGED, stale };
   }
 
   // STEP = STATUS (see the header): the subject moves, the run follows it.
+  // Not for a step that advanced by itself: its column is written first
+  // (`bySystem`).
   let subjectFirst: StageSubjectStatusOutcome | undefined;
-  if (input.stageWrite === "door" && !input.skipSubjectWrite) {
+  if (
+    input.stageWrite === "door" &&
+    !input.skipSubjectWrite &&
+    !input.bySystem
+  ) {
     subjectFirst = await moveSubjectFirst(input);
     if (
       (subjectFirst?.status === "written" ||
@@ -351,12 +372,17 @@ export async function advanceSessionStage(
           eq(focusSessions.id, session.id),
           input.expectedStage === undefined
             ? undefined
-            : sessionStageIs(input.expectedStage)
+            : sessionStageIs(input.expectedStage),
+          input.bySystem ? eq(focusSessions.status, "active") : undefined
         )
       )
       .returning({ id: focusSessions.id });
     if (written.length === 0 && input.expectedStage !== undefined) {
-      const stale = await staleStage(session.id, input.expectedStage);
+      const stale = await staleStage(
+        session.id,
+        input.expectedStage,
+        !!input.bySystem
+      );
       return { ...UNCHANGED, ...(stale ? { stale } : {}) };
     }
   } else {
@@ -521,19 +547,28 @@ function subjectMover(input: AdvanceSessionStageInput): {
   };
 }
 
-/** The stage the session stands on, when it is not `expected`; else null. */
+/**
+ * Where the session stands when it is not where the mover read it (`expected`
+ * stage, and `active` for the system's move); else null.
+ */
 async function staleStage(
   sessionId: string,
-  expected: string | null
+  expected: string | null,
+  needsActive: boolean
 ): Promise<AdvanceSessionStageResult["stale"] | null> {
   const [row] = await db
-    .select({ currentStage: focusSessions.currentStage })
+    .select({
+      currentStage: focusSessions.currentStage,
+      status: focusSessions.status,
+    })
     .from(focusSessions)
     .where(eq(focusSessions.id, sessionId))
     .limit(1);
-  const currentStage = row?.currentStage ?? null;
-  return row && currentStage !== expected
-    ? { expectedStage: expected, currentStage }
+  if (!row) return null;
+  const currentStage = row.currentStage ?? null;
+  if (currentStage !== expected) return { expectedStage: expected, currentStage };
+  return needsActive && row.status !== "active"
+    ? { expectedStage: expected, currentStage, status: row.status as string }
     : null;
 }
 

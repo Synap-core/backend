@@ -30,7 +30,9 @@ export const advanceStageReactionEffect: ReactionEffect = {
   key: "advance_stage",
   async plan(t) {
     if (t.subjectType !== "slot" || !t.sessionId) return [];
-    const step = await planStageWorkStep(t.sessionId);
+    const slotKey = (t as { slotKey?: unknown }).slotKey;
+    if (typeof slotKey !== "string" || !slotKey) return [];
+    const step = await planStageWorkStep(t.sessionId, { slotKey });
     if (!step) return [];
     return [
       {

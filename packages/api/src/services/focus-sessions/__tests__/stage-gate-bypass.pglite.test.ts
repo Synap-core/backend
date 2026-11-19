@@ -470,6 +470,8 @@ describe("(b) advancing A → C checks every gated stage in between", () => {
       userId: USER,
       agentUserId: AGENT,
       currentStage: "discover",
+      // W6: an agent's move back names the stage it read.
+      expectedStage: "ship",
     });
     expect(res.status).toBe("updated");
     expect((await readRow(sessionId)).current_stage).toBe("discover");
