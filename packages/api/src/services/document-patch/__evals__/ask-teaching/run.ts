@@ -22,8 +22,12 @@ if (!file) {
   console.error("usage: run.ts <outputs.json>");
   process.exit(2);
 }
-const outputs = JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
+const outputs = JSON.parse(readFileSync(file, "utf8")) as Record<
+  string,
+  string
+>;
 const { verdicts, passed, total } = checkAll(prompts, outputs);
-for (const v of verdicts) console.log(`${v.pass ? "PASS" : "FAIL"} ${v.id}: ${v.reason}`);
+for (const v of verdicts)
+  console.log(`${v.pass ? "PASS" : "FAIL"} ${v.id}: ${v.reason}`);
 console.log(`${passed}/${total} passed`);
 process.exit(passed === total ? 0 : 1);

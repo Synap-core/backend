@@ -16,7 +16,7 @@ import type { DocumentPatchOp } from "./patch-ops.js";
 
 /** The one line (kept equal to the tool descriptions' teaching by a tripwire). */
 export const ASK_NUDGE =
-  "This reads like a question for the person: an ask block lets them answer on the card (synap_load_skill(\"reports/rich-documents\")).";
+  'This reads like a question for the person: an ask block lets them answer on the card (synap_load_skill("reports/rich-documents")).';
 
 /** A heading that says "this part is for the person to decide or answer". */
 const QUESTION_HEADING =
@@ -33,10 +33,7 @@ export function findProseQuestion(markdown: string): string | null {
     const line = raw.trim();
     const fenceOpen = /^(`{3,}|~{3,})/.exec(line);
     if (fence) {
-      if (
-        line.length >= fence.length &&
-        line === fence[0]!.repeat(line.length)
-      )
+      if (line.length >= fence.length && line === fence[0]!.repeat(line.length))
         fence = null;
       continue;
     }

@@ -25,7 +25,8 @@ const ASK = (key: string) =>
 
 const GOOD_ASK = (id: string) => `# Doc\n\nContext.\n\n${ASK(id)}\n`;
 const GOOD_PLAIN = "# Doc\n\nWhat happened, plainly.\n\n- Done: the thing\n";
-const PROSE_Q = "# Doc\n\n## Open questions\n\n- Which option do you prefer for the rollout?\n";
+const PROSE_Q =
+  "# Doc\n\n## Open questions\n\n- Which option do you prefer for the rollout?\n";
 
 describe("ask-teaching eval checker", () => {
   it("the fixture is half asks, half not", () => {
@@ -47,7 +48,8 @@ describe("ask-teaching eval checker", () => {
 
   it("fails an asking prompt with a broken block", () => {
     const p = prompts.find((x) => x.expectAsk)!;
-    const broken = ":::synap-ask\n```json\n{\"ask\":{\"mode\":\"choose\",\"options\":[]}}\n```\nQ?\n:::\n";
+    const broken =
+      ':::synap-ask\n```json\n{"ask":{"mode":"choose","options":[]}}\n```\nQ?\n:::\n';
     const v = checkOutput(p, broken);
     expect(v.pass).toBe(false);
     expect(v.reason).toMatch(/validate/);

@@ -23,10 +23,7 @@ export interface EvalVerdict {
 
 const ASK_OPEN = /^[ \t]*:{3,}synap-ask\b/gm;
 
-export function checkOutput(
-  prompt: EvalPrompt,
-  output: string
-): EvalVerdict {
+export function checkOutput(prompt: EvalPrompt, output: string): EvalVerdict {
   const blocks = (output.match(ASK_OPEN) ?? []).length;
   const plan = planAskDefinitions([output]);
   const valid = plan.ok ? plan.plans.length : 0;
@@ -37,7 +34,8 @@ export function checkOutput(
     reason,
   });
   if (prompt.expectAsk) {
-    if (blocks === 0) return fail("needed the person's input but wrote no ask block");
+    if (blocks === 0)
+      return fail("needed the person's input but wrote no ask block");
     if (!plan.ok) return fail(`ask block does not validate: ${plan.message}`);
     if (valid === 0) return fail("ask block is a reference, not a definition");
     if (valid > 3) return fail(`${valid} asks in one document (too many)`);
@@ -45,7 +43,8 @@ export function checkOutput(
     return { id: prompt.id, pass: true, reason: "one valid ask block" };
   }
   if (blocks > 0) return fail("added an ask nothing needed");
-  if (prose) return fail(`question in prose with nothing to decide: "${prose}"`);
+  if (prose)
+    return fail(`question in prose with nothing to decide: "${prose}"`);
   return { id: prompt.id, pass: true, reason: "no ask, no prose question" };
 }
 

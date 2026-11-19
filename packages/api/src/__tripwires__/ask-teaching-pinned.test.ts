@@ -16,10 +16,13 @@ import { ASK_NUDGE } from "../services/document-patch/ask-nudge.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const LINE =
-  "Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).";
+  'Needs the person\'s decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill("system/synap/document-embeds")).';
 
 const manifest = JSON.parse(
-  readFileSync(resolve(here, "../routers/mcp/tools/mcp-tools.manifest.json"), "utf8")
+  readFileSync(
+    resolve(here, "../routers/mcp/tools/mcp-tools.manifest.json"),
+    "utf8"
+  )
 ) as { tools: Array<{ name: string; description: string }> };
 const skill = readFileSync(
   resolve(here, "../../../../skills/synap/document-embeds.md"),
@@ -37,11 +40,16 @@ describe("tripwire: document tools teach asks, pinned to the skill", () => {
     expect(skill).toContain("### Asking the person: a `synap-ask` block");
   });
   it("the skill's examples are valid question definitions", () => {
-    const section = skill.split("### Asking the person")[1]!.split("### Charts")[0]!;
+    const section = skill
+      .split("### Asking the person")[1]!
+      .split("### Charts")[0]!;
     const fence = /````\n([\s\S]*?)\n````/.exec(section)![1]!;
     const plan = planAskDefinitions([fence]);
     expect(plan.ok).toBe(true);
-    expect(plan.ok && plan.plans.map((p) => p.ask.mode)).toEqual(["confirm", "choose"]);
+    expect(plan.ok && plan.plans.map((p) => p.ask.mode)).toEqual([
+      "confirm",
+      "choose",
+    ]);
   });
   it("the nudge names the pod skill", () => {
     expect(ASK_NUDGE).toContain("reports/rich-documents");
