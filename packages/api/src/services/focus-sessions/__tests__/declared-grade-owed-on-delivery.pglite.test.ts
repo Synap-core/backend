@@ -9,6 +9,8 @@
  * (`updateExpectedOutputsLocked`) on PGlite; the owed rule in TypeScript
  * (`isOwedSlot`) and in SQL (`owedSlotWhere`) over the stored row.
  *
+ * Real too: the slot-transition outbox a withdrawn grade writes to.
+ *
  * Stubbed, and why (the W1 harness, `create-session.criterion-output-key`):
  * governance (granted), project placement (echoes the caller's), the session
  * room and the spawn edge (own connections), realtime emit.
@@ -78,6 +80,7 @@ import {
   db,
   eq,
   focusSessions,
+  lifecycleTransitionOutbox,
   links,
   playbooks,
   proposals,
@@ -154,7 +157,14 @@ async function sqlOwes(id: string): Promise<boolean> {
 }
 
 beforeAll(async () => {
-  for (const t of [focusSessions, proposals, links, playbooks]) {
+  // The outbox: a withdrawn grade slot owes its slot transition.
+  for (const t of [
+    focusSessions,
+    proposals,
+    links,
+    playbooks,
+    lifecycleTransitionOutbox,
+  ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
 }, 120_000);
