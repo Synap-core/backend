@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * `/rules/[id]` — one rule in the console. The page is `AutomationObject`, the
- * same body `/open/automation/:id` draws in the receiver card; this route only
- * supplies the console frame (crumb back to Rules) and the run drawer its run
+ * `/automations/[id]` — one automation in the console. The page is
+ * `AutomationObject`, the same body `/open/automation/:id` draws in the
+ * receiver card; this route only supplies the console frame (crumb back to
+ * Automations) and the run drawer its run
  * rows open, as a template's do. A rule the POD applies (`builtin:…`,
  * `declared:…`) is no automation: it draws `PodRuleObject`.
  */
@@ -18,8 +19,8 @@ import { isReactionRuleId } from "../_lib/reaction-rule-rows";
 import { PodRuleObject } from "../_lib/pod-rule-object";
 
 const FRAME = consoleFrame({
-  label: navLabel("rules"),
-  href: navHref("rules"),
+  label: navLabel("automations"),
+  href: navHref("automations"),
 });
 
 export default function RulePage() {

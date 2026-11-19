@@ -128,13 +128,13 @@ function AgentWhy({
   const widen = useWidenCell();
   const revoke = trpc.governanceRules.revoke.useMutation({
     onSuccess: () => {
-      addToast({ title: "Rule revoked", color: "default" });
+      addToast({ title: "Approval taken back", color: "default" });
       setRevokeId(null);
       onChanged();
     },
     onError: (err) =>
       addToast({
-        title: "Revoke failed",
+        title: "Couldn’t take it back",
         description: err.message,
         color: "danger",
       }),
@@ -170,7 +170,6 @@ function AgentWhy({
       : outcome?.glyph === "person"
         ? User
         : Check;
-  const ruleLink = ruleHref(column.workspaceId);
 
   return (
     <div className="flex flex-col gap-4">
@@ -225,17 +224,15 @@ function AgentWhy({
                 )}
               {p.answer.ruleId && (
                 <div className="flex items-center gap-2 pl-6 pt-1">
-                  {ruleLink && (
-                    <Button
-                      as={Link}
-                      href={ruleLink}
-                      size="sm"
-                      variant="flat"
-                      radius="md"
-                    >
-                      Open rule
-                    </Button>
-                  )}
+                  <Button
+                    as={Link}
+                    href={ruleHref(p.answer.ruleId)}
+                    size="sm"
+                    variant="flat"
+                    radius="md"
+                  >
+                    Open approval
+                  </Button>
                   <Button
                     size="sm"
                     variant="light"
@@ -243,7 +240,7 @@ function AgentWhy({
                     radius="md"
                     onPress={() => setRevokeId(p.answer.ruleId)}
                   >
-                    Revoke
+                    Take back
                   </Button>
                 </div>
               )}
@@ -302,9 +299,9 @@ function AgentWhy({
         isOpen={revokeId !== null}
         onClose={() => setRevokeId(null)}
         onConfirm={() => revokeId && revoke.mutate({ id: revokeId })}
-        title="Revoke this rule?"
-        consequence="The agent asks first again for everything this rule allowed, in every cell it decided. You can widen it again later."
-        confirmLabel="Revoke rule"
+        title="Take back this approval?"
+        consequence="The agent asks first again for everything this approval allowed, in every cell it decided. You can widen it again later."
+        confirmLabel="Take back"
         isPending={revoke.isPending}
       />
     </div>

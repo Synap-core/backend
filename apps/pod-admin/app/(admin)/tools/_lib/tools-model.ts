@@ -10,8 +10,8 @@
  *   • Instructions — skills of kind `instruction` (`skills.list`).
  *   • Code — skills of kind `code`, `declarative` or `builtin` that back NO
  *     capability action: an action's skill is reached through its capability.
- * Rules are skills too (`metadata.rule`) and are left out: they have their own
- * page (Rules).
+ * Rules are skills too (`isRuleSkill`: category `rule`, `metadata.rule`, or a
+ * `rules/` slug) and are left out: they have their own page (Rules).
  *
  * Search is client-side over the loaded tools: name, slug, description and
  * action labels. The type filter and the view live in the URL (`?type=`,
@@ -21,6 +21,7 @@
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { formatRelative } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
+import { isRuleSkill } from "../../../../lib/rule-skill";
 import { toolsT } from "./copy";
 import type { CardLike, CompositionLike } from "./installed-model";
 import {
@@ -108,17 +109,11 @@ export interface SkillLike {
   scope?: string | null;
   workspaceId?: string | null;
   metadata?: unknown;
+  category?: string | null;
 }
 
-/** A rule is a skill whose `metadata.rule` is set: the Rules page lists it. */
-export function isRuleSkill(skill: Pick<SkillLike, "metadata">): boolean {
-  const m = skill.metadata;
-  return (
-    typeof m === "object" &&
-    m !== null &&
-    (m as Record<string, unknown>).rule != null
-  );
-}
+/** A rule is listed under Rules, never here (`lib/rule-skill.ts`, the one predicate). */
+export { isRuleSkill };
 
 const CODE_KINDS: ReadonlySet<string> = new Set([
   "code",

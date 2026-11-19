@@ -1,5 +1,5 @@
 /**
- * The pure half of `/rules`: which filter a rule falls in, how it reads as a
+ * The pure half of `/automations`: which filter a rule falls in, how it reads as a
  * row, and the one act its row offers. The page only fetches and draws.
  *
  * A rule's HEALTH joins two reads: the `automations` row (status, lifetime

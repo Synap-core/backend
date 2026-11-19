@@ -12,6 +12,7 @@ import {
   TYPE_GROUP_CAP,
   agentOnlyRows,
   agentsAndWorkHref,
+  ruleHref,
   cellAriaLabel,
   columnGroups,
   combineWidenOutcomes,
@@ -444,14 +445,16 @@ describe("one agent's grid (Agents & work leads with the agents)", () => {
     expect(agentOnlyRows(MATRIX, "gone")).toBeNull();
   });
 
-  it("links to the list, one agent's grid and the whole grid", () => {
-    const base = "/governance/agents";
+  it("links to Approvals' list, one agent's grid and the whole grid", () => {
+    const base = "/approvals";
     expect(agentsAndWorkHref(base)).toBe(base);
     expect(agentsAndWorkHref(base, { agentUserId: "a b" })).toBe(
-      "/governance/agents?agent=a%20b"
+      "/approvals?view=grid&agent=a%20b"
     );
-    expect(agentsAndWorkHref(base, "grid")).toBe(
-      "/governance/agents?view=grid"
-    );
+    expect(agentsAndWorkHref(base, "grid")).toBe("/approvals?view=grid");
+  });
+
+  it("sends an approval's door to its own row on Approvals", () => {
+    expect(ruleHref("r 1")).toBe("/approvals?focus=r%201");
   });
 });

@@ -264,7 +264,7 @@ function ActionCardView({
         <div className="flex flex-wrap gap-2">
           <Button
             as={Link}
-            href={navHref("rules")}
+            href={navHref("automations")}
             size="sm"
             radius="md"
             variant="flat"
