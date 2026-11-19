@@ -463,7 +463,11 @@ describe("flow.of — a kind (finding-like)", () => {
     const f = await read({ profileSlug: "finding", workspaceId: WS });
     const close = f.flows.find((p) => p.id === ids.close)!;
     expect(close.startsAfter).toEqual([
-      { playbookId: ids.fix, playbookName: "Fix a finding", outcome: "delivered" },
+      {
+        playbookId: ids.fix,
+        playbookName: "Fix a finding",
+        outcome: "delivered",
+      },
     ]);
     expect(f.flows.find((p) => p.id === ids.fix)!.startsAfter).toEqual([]);
     // The wire carries it (the Hub schema parses it).

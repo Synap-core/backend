@@ -1389,13 +1389,17 @@ describe("a LINK: when a run of another playbook ends (W8a)", () => {
       activator: { ...LINK, playbook: "Repurpose" } as never,
       linked: new Map([["Repurpose", { id: PB, name: "Repurpose" }]]),
     });
-    expect(self).toMatchObject({ error: expect.stringContaining("its own run") });
+    expect(self).toMatchObject({
+      error: expect.stringContaining("its own run"),
+    });
     const scoped = activatorRuleDecl({
       ...base,
       activator: LINK as never,
       linked: new Map([["Ship a change", SHIP]]),
       scope: { projectId: "proj-1" },
     });
-    expect(scoped).toMatchObject({ error: expect.stringContaining("space-wide") });
+    expect(scoped).toMatchObject({
+      error: expect.stringContaining("space-wide"),
+    });
   });
 });

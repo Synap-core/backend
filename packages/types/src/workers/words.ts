@@ -73,8 +73,7 @@ export function workerWhen(w: TriggerWorker): string | null {
     case "run_ended": {
       // An id says nothing to a person: "another playbook" instead.
       const name = a.playbook?.trim();
-      const which =
-        name && !isUuid(name) ? name : "another playbook";
+      const which = name && !isUuid(name) ? name : "another playbook";
       const end =
         a.outcome === "delivered"
           ? "is delivered"

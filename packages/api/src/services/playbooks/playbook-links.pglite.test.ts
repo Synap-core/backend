@@ -160,7 +160,12 @@ describe("findPlaybookLinkCycle — the write-time loop guard", () => {
       workspaceId: WS,
       activators: [{ on: "run_ended", playbook: "Recap", mode: "propose" }],
     });
-    expect(cycle).toEqual(["Ship a change", "Recap", "Announce", "Ship a change"]);
+    expect(cycle).toEqual([
+      "Ship a change",
+      "Recap",
+      "Announce",
+      "Ship a change",
+    ]);
     expect(playbookLinkCycleMessage(cycle!)).toContain(
       "Ship a change starts after Recap starts after Announce starts after Ship a change"
     );

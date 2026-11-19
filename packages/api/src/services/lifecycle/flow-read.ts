@@ -158,7 +158,12 @@ export async function readSpaceOutputs(
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
   const intent = (row?.settings as { intent?: unknown } | null)?.intent as
-    | { primary?: unknown; produces?: unknown; helpers?: unknown; feeds?: unknown }
+    | {
+        primary?: unknown;
+        produces?: unknown;
+        helpers?: unknown;
+        feeds?: unknown;
+      }
     | null
     | undefined;
   const raw = intent?.primary;

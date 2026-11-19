@@ -1003,17 +1003,17 @@ export function playbookActivatorSentence(
               actionVerb: trigger.actionVerb,
             }
           : {
-            triggerType: "event",
-            subjectCategory: "entity",
-            profileSlug: input.profileSlug,
-            actionVerb: trigger.actionVerb,
-            // Only a role says so: a kind's sentence stays byte-identical to the
-            // one every activator compiled before roles could be subjects (so its
-            // seed hash does not move and no installed rule is rewritten).
-            ...(input.on === "created" && input.profileKind === "role"
-              ? { profileKind: "role" as const }
-              : {}),
-          },
+              triggerType: "event",
+              subjectCategory: "entity",
+              profileSlug: input.profileSlug,
+              actionVerb: trigger.actionVerb,
+              // Only a role says so: a kind's sentence stays byte-identical to the
+              // one every activator compiled before roles could be subjects (so its
+              // seed hash does not move and no installed rule is rewritten).
+              ...(input.on === "created" && input.profileKind === "role"
+                ? { profileKind: "role" as const }
+                : {}),
+            },
     conditions: trigger.conditions,
     actions: [
       {
@@ -1064,8 +1064,7 @@ function activatorTriggerShape(
                 id: "link-outcome",
                 key: "status",
                 operator: (t.outcome === "delivered" ? "is" : "is_not") as
-                  | "is"
-                  | "is_not",
+                  "is" | "is_not",
                 value: "closed",
               },
             ]

@@ -16,10 +16,7 @@ import {
   WAITING_ON_REASONS,
   type ThingBlocker,
 } from "@synap-core/types/units";
-import {
-  WORKER_RUN_OUTCOMES,
-  WORKER_SCOPES,
-} from "@synap-core/types/workers";
+import { WORKER_RUN_OUTCOMES, WORKER_SCOPES } from "@synap-core/types/workers";
 
 const STAGE_CATEGORIES = [
   "backlog",

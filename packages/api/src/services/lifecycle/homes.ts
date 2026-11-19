@@ -937,7 +937,9 @@ export async function readHome(
       // What the template says each kind is to the space (W8a).
       .map((p) => ({
         ...p,
-        ...(i.helpers.includes(p.profileSlug) ? { role: "helper" as const } : {}),
+        ...(i.helpers.includes(p.profileSlug)
+          ? { role: "helper" as const }
+          : {}),
         ...(i.feeds[p.profileSlug] ? { feeds: i.feeds[p.profileSlug] } : {}),
       }));
     return {

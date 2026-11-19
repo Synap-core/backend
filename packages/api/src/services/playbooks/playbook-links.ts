@@ -43,9 +43,7 @@ import { readPlaybookProcess } from "../../schemas/playbook-process.js";
 import { LINK_ROLE } from "./playbook-automation-links.js";
 
 /** The refs of a playbook's declared links, in order, each once. */
-export function linkRefsOf(
-  activators: readonly PlaybookActivator[]
-): string[] {
+export function linkRefsOf(activators: readonly PlaybookActivator[]): string[] {
   const out: string[] = [];
   for (const a of activators) {
     const ref = a.on === "run_ended" ? a.playbook?.trim() : undefined;
@@ -223,7 +221,10 @@ export async function readPlaybookLinksInto(
       triggerConfig: automations.triggerConfig,
     })
     .from(playbookAutomations)
-    .innerJoin(automations, eq(automations.id, playbookAutomations.automationId))
+    .innerJoin(
+      automations,
+      eq(automations.id, playbookAutomations.automationId)
+    )
     .where(
       and(
         inArray(playbookAutomations.playbookId, [...playbookIds]),
@@ -256,7 +257,11 @@ export async function readPlaybookLinksInto(
     const name = names.get(p.playbookId);
     if (name === undefined) continue;
     const list = out.get(p.into) ?? [];
-    list.push({ playbookId: p.playbookId, playbookName: name, outcome: p.outcome });
+    list.push({
+      playbookId: p.playbookId,
+      playbookName: name,
+      outcome: p.outcome,
+    });
     out.set(p.into, list);
   }
   return out;

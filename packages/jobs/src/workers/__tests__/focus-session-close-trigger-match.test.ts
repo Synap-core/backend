@@ -110,12 +110,12 @@ describe("a playbook link fires on the close of the followed playbook's run", ()
       mode: "propose",
     });
     return toBackendTrigger(sentence.trigger!, sentence.conditions)
-      .triggerConfig as { eventPattern: string; filters: Record<string, unknown> };
+      .triggerConfig as {
+      eventPattern: string;
+      filters: Record<string, unknown>;
+    };
   };
-  const fires = (
-    t: ReturnType<typeof link>,
-    data: Record<string, unknown>
-  ) =>
+  const fires = (t: ReturnType<typeof link>, data: Record<string, unknown>) =>
     matchPattern(FOCUS_SESSION_CLOSED_EVENT_TYPE, t.eventPattern) &&
     matchFilters(data, t.filters) &&
     matchTriggerSpecificFilters(

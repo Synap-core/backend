@@ -844,7 +844,8 @@ export interface PlaybookActivator {
    * is dependency-free, the pod's zod schema (`playbook-process.ts`) is
    * `satisfies` both.
    */
-  on: "created" | "enters_status" | "count" | "schedule" | "manual" | "run_ended";
+  on:
+    "created" | "enters_status" | "count" | "schedule" | "manual" | "run_ended";
   /**
    * Required for `run_ended`, and only it: the playbook whose run ending
    * starts this one, by name (the catalog's spelling) or id, in the same
