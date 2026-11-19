@@ -345,7 +345,9 @@ export async function appSignInGrant(
 ): Promise<AppSignInGrant | "not_for_you"> {
   const { appApprovalOf, grantsForPairs, ownerAccessFloor } =
     await import("../../services/app-connect.js");
-  const approval = appApprovalOf(app);
+  // The stored v2 only (no lift per request): a row with none keeps its
+  // pairs, whose reach a lift would only restate.
+  const approval = appApprovalOf(app, { lift: false });
   if (!approval.access) {
     const reach = await appSignInReach(app, personUserId);
     if (reach === "not_for_you") return reach;
@@ -420,6 +422,10 @@ export async function appSignInGrant(
   };
 }
 
+/** `narrowKeyGrant`'s memo: (stored, reach) → kept scopes, oldest out first. */
+const NARROW_MEMO = new Map<string, KeyGrant["scopes"][number][]>();
+const NARROW_MEMO_MAX = 512;
+
 /** A scope's structure, order-free: equal keys mean the same scope. */
 function scopeKey(scope: {
   permissions: readonly string[];
@@ -458,11 +464,23 @@ export function narrowKeyGrant(
   let kept: KeyGrant["scopes"][number][];
   if (live.every((s) => reachKeys.has(scopeKey(s)))) kept = live;
   else {
-    try {
-      kept = scopesWithinBound(live, reach.scopes);
-    } catch (err) {
-      if (!(err instanceof LiftTooLargeError)) throw err;
-      kept = live.filter((s) => reachKeys.has(scopeKey(s)));
+    // Pure in its two inputs, and asked on every request of the token: the
+    // answer is kept per (stored, reach) pair, a bounded memo.
+    const memoKey = `${live.map(scopeKey).sort().join(";")}#${[...reachKeys].sort().join(";")}`;
+    const memo = NARROW_MEMO.get(memoKey);
+    if (memo) kept = memo;
+    else {
+      try {
+        kept = scopesWithinBound(live, reach.scopes);
+      } catch (err) {
+        if (!(err instanceof LiftTooLargeError)) throw err;
+        kept = live.filter((s) => reachKeys.has(scopeKey(s)));
+      }
+      if (NARROW_MEMO.size >= NARROW_MEMO_MAX) {
+        const oldest = NARROW_MEMO.keys().next().value;
+        if (oldest !== undefined) NARROW_MEMO.delete(oldest);
+      }
+      NARROW_MEMO.set(memoKey, kept);
     }
   }
   return {

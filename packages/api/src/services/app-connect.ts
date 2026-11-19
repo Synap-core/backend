@@ -828,15 +828,27 @@ export interface AppApproval {
  * first and derives the pairs, `AppRepository.setApprovedAccess`); a row
  * written before W3d with no valid v2 reads as the lift of its pairs.
  */
-export function appApprovalOf(app: {
-  approvedRequests: readonly AppApprovedRequest[] | null;
-  approvedAccess?: unknown;
-}): AppApproval {
+export function appApprovalOf(
+  app: {
+    approvedRequests: readonly AppApprovedRequest[] | null;
+    approvedAccess?: unknown;
+  },
+  options: {
+    /**
+     * false: a row with no stored v2 reads `access: null` (its pairs) without
+     * lifting them. For the per-request path (`appSignInGrant`): a lift is
+     * lossless, so the pairs give the same reach, and a lift per request
+     * would cost up to `LIFT_PROBE_BUDGET` evaluations.
+     */
+    lift?: boolean;
+  } = {}
+): AppApproval {
   if (app.approvedRequests === null || app.approvedRequests === undefined)
     return { access: null, pairs: [], approved: false };
   const pairs = [...app.approvedRequests];
   const stored = parseAppAccess(app.approvedAccess ?? null);
   if (stored) return { access: stored, pairs, approved: true };
+  if (options.lift === false) return { access: null, pairs, approved: true };
   const lifted = liftApprovedRequests(pairs, { examples: false });
   return {
     access: "access" in lifted ? lifted.access : null,
