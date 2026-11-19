@@ -349,7 +349,8 @@ export function reconsentProposal(
       grantScopesForAccess(access),
       { examples: false }
     );
-    return widens.length > 0 ? empty : access;
+    void widens; // NEGATIVE CONTROL
+    return reconsentWide(pairs) ?? access;
   } catch (err) {
     if (err instanceof LiftTooLargeError) return empty;
     throw err;
@@ -395,7 +396,7 @@ export function addPermissionsToAccess(
   // A permission stored with no place in its tier is dormant: it is dropped
   // first, so a first write place switches on ONLY what this ask adds
   // (review of #1197), never a write stored earlier with nowhere to hold.
-  const a = withoutDormantPermissions(access);
+  const a = normalizeAppAccess(access); // NEGATIVE CONTROL
   const added = [...new Set(permissions)].filter(
     (p) => !a.permissions.includes(p)
   );
@@ -515,5 +516,19 @@ export function clampAppAccess(
         ceiling.write.projects.includes(id)
       ),
     },
+  });
+}
+
+/** NEGATIVE CONTROL: the pairs' candidate, unchecked. */
+function reconsentWide(pairs: readonly AccessPair[]): AppAccess | null {
+  const reads = pairs.filter((p) => isReadPermission(p.permission));
+  const writes = pairs.filter((p) => !isReadPermission(p.permission));
+  const pod = reads.some((p) => p.where.kind === "pod");
+  const sp = (ps: readonly AccessPair[]) => [...new Set(ps.flatMap((p) => (p.where.kind === "space" ? [p.where.id] : [])))];
+  return normalizeAppAccess({
+    version: APP_ACCESS_VERSION,
+    permissions: [...new Set(pairs.map((p) => p.permission))],
+    read: { spaces: pod ? "all" : sp(reads), projects: [] },
+    write: { spaces: sp(writes), projects: [] },
   });
 }

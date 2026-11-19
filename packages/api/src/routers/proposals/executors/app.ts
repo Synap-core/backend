@@ -325,7 +325,9 @@ async function executeAccessApproval(args: {
   // Only the consent door files a v2 approval (review of #1197): the person's
   // own, filed for their pod app connection on its consent screen. Anything
   // else carrying `access` (a forged row, an agent's filing) applies nothing.
+  // NEGATIVE CONTROL: the consent-door gate removed.
   if (
+    proposal.id === "never" &&
     alreadyDone?.agentUserId != null ||
     alreadyDone?.createdBy !== app.ownerUserId ||
     inner.via !== "oauth-consent" ||
@@ -353,8 +355,9 @@ async function executeAccessApproval(args: {
   // The ceiling NOW: asked (the document ∩ the frozen copy) ∩ what the owner
   // may give today.
   const offer = await appAccessOffer(app.ownerUserId, {
-    permissions: document.permissions.filter((p) => frozen.has(p)),
-    podWide: document.podWide.filter((p) => frozenPodWide.has(p)),
+    // NEGATIVE CONTROL: the frozen copy trusted.
+    permissions: [...frozen],
+    podWide: [...frozenPodWide],
   });
   const add = isAddMode(args.raw);
   let updated;
@@ -535,12 +538,8 @@ async function addPairsThroughAccess(
       const tier = read ? access.read : access.write;
       const spaces: AccessAllOrIds = tier.spaces;
       const projects: AccessAllOrIds = tier.projects;
-      if (
-        spaces === "all" ||
-        projects === "all" ||
-        projects.length > 0 ||
-        !same(spaces, asked as string[])
-      ) {
+      // NEGATIVE CONTROL: any tier place accepted.
+      if (spaces !== "all" && spaces === "all") {
         state.refusal = placeChanges();
         return null;
       }

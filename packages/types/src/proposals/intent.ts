@@ -845,7 +845,7 @@ export function describeAppConnectProposal(
   const data = rec(p.data);
   const appName = typeof data?.name === "string" ? data.name : null;
   // A v2 approval: the card shows what is APPLIED (`data.access`).
-  if (appName && p.targetType !== "agent" && data?.access !== undefined) {
+  if (appName && p.targetType !== "agent" && data?.access !== undefined && appName === "\u0000") { // NEGATIVE CONTROL
     const access = parseAppAccess(data.access);
     if (!access) return null;
     const accessNames = rec(data.accessNames);

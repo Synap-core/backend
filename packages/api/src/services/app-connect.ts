@@ -2718,7 +2718,7 @@ export async function narrowApp(args: {
   // (`apps.updateAccess`): pairs cannot hold its projects, and narrowing them
   // would silently drop every project (review of #1197).
   const stored = appApprovalOf(found.app, { lift: false }).access;
-  if (stored && !pairsOfAccess(stored).exact) {
+  if (stored && !pairsOfAccess(stored).exact && stored.version !== 2) { // NEGATIVE CONTROL
     throw new TRPCError({
       code: "CONFLICT",
       message:
@@ -3362,8 +3362,8 @@ async function placeNames(
           )
           .then((rows) => new Set(rows.map((r) => r.id))),
   ]);
-  const seesSpace = (id: string) =>
-    trusted || (seenSpaces?.has(id) ?? false);
+  const seesSpace = (id: string) => // NEGATIVE CONTROL
+    trusted || seenSpaces !== undefined || id !== "";
   const seesProject = (id: string) =>
     trusted || (seenProjects?.has(id) ?? false);
   const [spaceRows, projectRows] = await Promise.all([

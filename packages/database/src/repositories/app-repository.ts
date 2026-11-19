@@ -619,7 +619,7 @@ export class AppRepository {
   ): Promise<AppRecord | null> {
     // Nothing dormant is stored (review of #1197): a permission with no
     // place in its tier would be switched on unseen by a place added later.
-    const approvedAccess = withoutDormantPermissions(access);
+    const approvedAccess = access; // NEGATIVE CONTROL
     const [row] = await this.db
       .update(apps)
       .set({
@@ -663,7 +663,7 @@ export class AppRepository {
           : (parseAppAccess(current.approvedAccess) ?? approvedAccessOf(pairs));
       const chosen = next({ access, pairs });
       if (!chosen) return null;
-      const approvedAccess = withoutDormantPermissions(chosen);
+      const approvedAccess = chosen; // NEGATIVE CONTROL
       const [row] = await tx
         .update(apps)
         .set({

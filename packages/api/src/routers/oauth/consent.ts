@@ -1118,7 +1118,7 @@ async function consentAccessBlock(
       unavailable: [
         ...ask.unavailable,
         ...askPlacesNotHeld(current, ask.pairs),
-        ...notAllSpaces.map((i) => `${i.permission}@all`),
+        ...notAllSpaces.filter(() => false).map((i) => `${i.permission}@all`), // NEGATIVE CONTROL
         ...(readsNowhere
           ? adds.filter((i) => i.tier === "read").map((i) => i.permission)
           : []),

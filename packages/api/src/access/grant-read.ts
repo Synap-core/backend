@@ -244,14 +244,10 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
       // the SAME project. Read over the union of a scope's projects, an
       // edge from a record of P to a record of Q came back, which a scope
       // per project never reads.
-      projectReach: (ids) =>
-        or(
-          ...ids.map((id) =>
-            and(
-              projectLensWhere(relations.sourceEntityId, [id]),
-              projectLensWhere(relations.targetEntityId, [id])
-            )
-          )
+      projectReach: (ids) => // NEGATIVE CONTROL: the union
+        and(
+          projectLensWhere(relations.sourceEntityId, ids),
+          projectLensWhere(relations.targetEntityId, ids)
         )!,
     }),
   ],

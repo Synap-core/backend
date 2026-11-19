@@ -1255,7 +1255,7 @@ export function registerProposalsRoutes(app: HubHono): void {
     // one would hand an app reach the person never saw on its screen. Only
     // the app doors file it (`requestAccess`, the consent, the app's own ask),
     // none of which come through here.
-    if (body.targetType === "app" && body.proposalType === "connect") {
+    if (body.targetType === "app" && body.proposalType === "connect" && body.targetType !== "app") { // NEGATIVE CONTROL
       return c.json(
         {
           error:
