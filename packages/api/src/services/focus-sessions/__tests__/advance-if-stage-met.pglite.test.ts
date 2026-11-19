@@ -673,7 +673,11 @@ describe("a check gate reads the same outcomes", () => {
   it("held on an output its stage declares, it is released when the output is delivered", async () => {
     const id = await runAt({ stage: "build", outputs: [spec()], stages });
     // Into the gated stage before the Spec is delivered: the gate holds it.
-    await updateFocusSession({ sessionId: id, userId: USER, currentStage: "ship" });
+    await updateFocusSession({
+      sessionId: id,
+      userId: USER,
+      currentStage: "ship",
+    });
     const held = await sessionOf(id);
     expect(held.status).toBe("paused");
     expect(held.metadata).toHaveProperty("checkGate");
@@ -724,7 +728,12 @@ describe("one step per fact", () => {
   ];
 
   it("a retried job and a next stage already met: one step, one log row", async () => {
-    const id = await runAt({ stage: "build", outputs: [spec()], stages, criteria });
+    const id = await runAt({
+      stage: "build",
+      outputs: [spec()],
+      stages,
+      criteria,
+    });
     // Graded while the run is on Build: not Build's work, nothing moves.
     await gradeCriterionAsOwner({
       sessionId: id,
@@ -821,7 +830,10 @@ describe("the plan and the write: the write re-checks", () => {
       expectedStage: "build",
     });
     const late = await advanceSessionStage(stageMetAdvanceInput(step!, null));
-    expect(late).toMatchObject({ changed: false, stale: { currentStage: "review" } });
+    expect(late).toMatchObject({
+      changed: false,
+      stale: { currentStage: "review" },
+    });
     expect((await movesOf(post)).map((m) => m.to)).toEqual(["Scripted"]);
     expect((await sessionOf(id)).stage_history.map((e) => e.stageKey)).toEqual([
       "review",

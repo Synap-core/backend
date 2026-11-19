@@ -2825,7 +2825,7 @@ export const tools = {
             expectedStage: {
               type: ["string", "null"],
               description:
-                "With `currentStage`: the stage you read (required to move back). A step moves on by itself once its work is met: if it moved, status='conflict' and nothing is written.",
+                "With `currentStage`: the stage you read; required to move back. If it moved: status='conflict' and nothing is written.",
             },
             stageRunner: {
               description:

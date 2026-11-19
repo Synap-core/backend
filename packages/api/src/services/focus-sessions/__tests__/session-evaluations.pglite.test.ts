@@ -709,12 +709,18 @@ describe("session evaluations", () => {
       fromStage: "build",
       failing: ["typecheck"],
     };
-    const onShip = await seed({ criteria: staged, metadata: { checkGate: gate } });
+    const onShip = await seed({
+      criteria: staged,
+      metadata: { checkGate: gate },
+    });
     await holdOnCheckGate(onShip, "ship");
     await q(`update focus_sessions set current_stage = 'ship' where id = $1`, [
       onShip,
     ]);
-    const movedOn = await seed({ criteria: staged, metadata: { checkGate: gate } });
+    const movedOn = await seed({
+      criteria: staged,
+      metadata: { checkGate: gate },
+    });
     await holdOnCheckGate(movedOn, "ship");
     await q(`update focus_sessions set current_stage = 'later' where id = $1`, [
       movedOn,

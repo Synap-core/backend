@@ -566,7 +566,8 @@ async function staleStage(
     .limit(1);
   if (!row) return null;
   const currentStage = row.currentStage ?? null;
-  if (currentStage !== expected) return { expectedStage: expected, currentStage };
+  if (currentStage !== expected)
+    return { expectedStage: expected, currentStage };
   return needsActive && row.status !== "active"
     ? { expectedStage: expected, currentStage, status: row.status as string }
     : null;
