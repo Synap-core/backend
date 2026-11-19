@@ -80,6 +80,16 @@ export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
     "a document patch op (an `ops[]` entry of update_document) setting a living document's scope, not a tool",
   set_refresher:
     "a document patch op (an `ops[]` entry of update_document) binding a living document's refresher, not a tool",
+  create_design:
+    "a design op (an `ops[]` entry of the builtin verb design.apply, run through run_capability) making a new design, not a tool",
+  update_frame:
+    "a design op (an `ops[]` entry of the builtin verb design.apply) renaming, moving or resizing a frame, not a tool",
+  update_block:
+    "a design op (an `ops[]` entry of the builtin verb design.apply) setting a block's props, not a tool",
+  set_span:
+    "a design op (an `ops[]` entry of the builtin verb design.apply) setting a block's column span at one width class, not a tool",
+  set_hide:
+    "a design op (an `ops[]` entry of the builtin verb design.apply) hiding a block at one width class, not a tool",
   search_web:
     "an ABSTRACT INTENT (routing axis over the verb catalog), not a tool — the concrete verb is vendor-keyed, e.g. `exa_search`; agents search with the builtin web.search through run_capability",
   update_run:

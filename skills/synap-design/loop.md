@@ -151,10 +151,11 @@ there: say so, and fall back to section 2.
   - grid: `set_span {id, class: compact|medium|expanded, span}` (whole columns, 1 to 4 / 8 / 12; `null`
     clears), `set_hide {id, class, hide}`.
   - whole pages: `replace_page {frameId, page}` (a generated page), `replace_board {board}`.
-- A refusal changes nothing and names the op's index, why (an unknown component, a prop value that is
-  not a token step, a span wider than the grid, a block a slot does not take) and the catalog hash.
-  Fix that op and send the batch again. A design changed since you read it is refused too: read it
-  again. A stored design the catalog cannot fully place is refused until you pass `acceptDrops: true`.
+- `status: "refused"` changes nothing and names the op's index (`opIndex`), why (`reasons`: an unknown
+  component, a prop value that is not a token step, a span wider than the grid, a block a slot does
+  not take) and the catalog hash. Fix that op and send the batch again. `status: "conflict"`: the
+  design changed since you read it (`updatedAt` is its time now): read it again. A stored design the
+  catalog cannot fully place is refused until you pass `acceptDrops: true`.
 - The answer is `applied`, `created`, `proposed` (a person reviews it: success, do not retry) or
   `revised`: a design past its review (`approved` and after) is never written; the change becomes a
   new design in `draft` (`revisedFrom` names the old one).

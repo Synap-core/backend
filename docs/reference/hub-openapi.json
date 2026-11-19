@@ -6943,6 +6943,73 @@
           "revokedAt"
         ]
       },
+      "DesignCatalog": {
+        "type": "object",
+        "properties": {
+          "kitId": { "type": "string" },
+          "hash": { "type": "string" },
+          "components": { "type": "object", "additionalProperties": {} },
+          "layout": { "type": "object", "additionalProperties": {} },
+          "grid": { "type": "object", "additionalProperties": {} },
+          "frames": {},
+          "generatedAt": { "type": "string" }
+        },
+        "required": ["kitId", "hash", "components", "layout", "grid"]
+      },
+      "ApplyDesignReply": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "created",
+              "revised",
+              "proposed",
+              "refused",
+              "conflict"
+            ]
+          }
+        },
+        "required": ["status"],
+        "additionalProperties": {}
+      },
+      "ApplyDesignRequest": {
+        "type": "object",
+        "properties": {
+          "designId": { "type": "string", "format": "uuid" },
+          "baseUpdatedAt": { "type": "string", "minLength": 1 },
+          "ops": {
+            "type": "array",
+            "items": { "type": "object", "additionalProperties": {} },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "acceptDrops": { "type": "boolean" }
+        },
+        "required": ["ops"],
+        "additionalProperties": false
+      },
+      "DesignRead": {
+        "type": "object",
+        "properties": {
+          "design": { "type": "object", "additionalProperties": {} },
+          "board": {},
+          "frames": { "type": "array", "items": {} },
+          "migrated": { "type": "boolean" },
+          "dropped": { "type": "array", "items": {} },
+          "droppedText": { "type": "array", "items": { "type": "string" } },
+          "catalog": { "type": "object", "additionalProperties": {} }
+        },
+        "required": [
+          "design",
+          "frames",
+          "migrated",
+          "dropped",
+          "droppedText",
+          "catalog"
+        ]
+      },
       "Skill": {
         "type": "object",
         "properties": {
@@ -53171,6 +53238,203 @@
                     "projectId"
                   ]
                 }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/catalog": {
+      "get": {
+        "tags": ["Designs"],
+        "summary": "The design catalog the pod checks designs against",
+        "description": "The installed `design` capability's catalog snapshot: the kit (`kitId`, `hash`), its components and their props, the canvas blocks (`layout`), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets. 412 when no catalog is installed (never an empty catalog).",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "The catalog",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DesignCatalog" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "No catalog installed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/apply": {
+      "post": {
+        "tags": ["Designs"],
+        "summary": "Change a design (or create one) through typed ops",
+        "description": "The ops of design.apply, applied in order, all or nothing, checked against the installed catalog. `designId` + `baseUpdatedAt` (the `updatedAt` GET /designs/:id returned) change a design; no `designId` and a first op `create_design` make one. The write goes through the entity door with the caller's own governance and the key's grant (`entity.ui-design.update` / `.create`). 200 applied / created / revised (a design past its review becomes a new draft revision) / proposed (`status` says which), 409 `DESIGN_CHANGED` changed since it was read (`updatedAt` is its time now), 422 `DESIGN_OP_REFUSED` (`opIndex`, `reasons`, `catalogHash`), 403 the grant does not allow it, 412 no catalog installed.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ApplyDesignRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied, created, revised or proposed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApplyDesignReply" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApplyDesignReply" }
+              }
+            }
+          },
+          "412": {
+            "description": "No catalog installed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApplyDesignReply" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/{id}": {
+      "get": {
+        "tags": ["Designs"],
+        "summary": "Read one design",
+        "description": "design.read: the design (status, `updatedAt` to send back as `baseUpdatedAt`, appId, whether it may be edited), its board, an outline per frame (width class, columns, block ids and types) and what the installed catalog cannot place (`dropped`). Read through the key's grant: a design it does not reach is a 404.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DesignRead" }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Not a canvas yet",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Unreadable board",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },

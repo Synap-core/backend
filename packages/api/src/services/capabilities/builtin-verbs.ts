@@ -4947,9 +4947,13 @@ const pdfInfoHandler: BuiltinVerbHandler = async (params, ctx) => {
 //   design.apply    WRITE, SELF-GATED (`SELF_GATED_BUILTIN_VERBS`): the entity
 //                   door is the one gate, so one proposal carries the entity
 //                   diff; under `mustPropose` it is told `forcePropose`.
-// A refusal (an op the catalog refuses, a design changed since it was read,
-// no catalog installed) is a `VerbRefusal`: a definite not-run whose sentence
-// names the op, the reason and the catalog hash.
+// A refused batch (an op the catalog refuses) and a design changed since it
+// was read are ANSWERS, returned as the result (`status: "refused"` with the
+// op index, the reasons and the catalog hash; `status: "conflict"` with the
+// design's current `updatedAt`): the caller fixes the op or reads again. As a
+// thrown refusal they reached a REST caller as a redacted 500 and lost the
+// op index. What the door cannot do at all (no catalog installed, no such
+// design, a grant that does not allow it) is a `VerbRefusal`.
 
 const designReadParams = z.object({ designId: z.string().uuid() });
 const designCatalogParams = z.object({});
@@ -5007,7 +5011,7 @@ const designApplyHandler: BuiltinVerbHandler = async (params, ctx) => {
   // Same as entity.update: the entity door keys its AI ladder on the agent,
   // so an unforwarded actor would be judged on the operator path.
   const agentUserId = getActingAgentUserId() ?? ctx.agentUserId ?? null;
-  const reply = await designDoorRefusals(() =>
+  return designDoorRefusals(() =>
     applyDesign(
       {
         userId: ctx.userId,
@@ -5019,11 +5023,6 @@ const designApplyHandler: BuiltinVerbHandler = async (params, ctx) => {
       input
     )
   );
-  if (reply.status === "refused")
-    throw new VerbRefusal(reply.message, "validation", "DESIGN_OP_REFUSED");
-  if (reply.status === "conflict")
-    throw new VerbRefusal(reply.message, "conflict", "DESIGN_CHANGED");
-  return reply;
 };
 
 /**

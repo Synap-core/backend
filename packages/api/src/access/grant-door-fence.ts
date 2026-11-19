@@ -948,6 +948,14 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // runs: `scopedDb`, subject `playbook`); flows without `playbook.read`
   // and the workers (no seam) come back `withheld`. Same as MCP `synap_get_flow`.
   [/^\/flow\/?$/, FLOW_OF],
+  // THE DESIGN DOOR (Hub `rest/designs.ts`, the service behind design.read and
+  // design.catalog). One design is read through `entityReadVisibleWhere`
+  // (`accessScopeWhere`, the key's grant ANDed: a design it does not reach is
+  // a 404). The catalog is the installed `design` capability's snapshot (no
+  // person's row): given to a key that reads some kind, the designs it
+  // validates. Admitted when one live scope grants `entity.<some kind>.read`.
+  [/^\/designs\/catalog\/?$/, NARROWED("entity", [])],
+  [route("/designs/:id"), NARROWED("entity", [])],
   // THE PROCESS READ (one playbook whole, or a space's process cards): see
   // `PROCESS_READ` for the subjects it composes.
   [route("/playbooks/:id/process"), PROCESS_READ],

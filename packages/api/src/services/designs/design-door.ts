@@ -3,15 +3,19 @@
  * (a `ui-design` whose `design-json` is a board), validated against the
  * catalog snapshot the installed `design` capability carries. Plan 0fc746f4
  * §2.6. Behind the builtin verbs `design.read`, `design.catalog` and
- * `design.apply` (`capabilities/builtin-verbs.ts`); the Design app saves
- * through the same `design.apply` (op `replace_board` / `replace_page`), so a
- * person's save and an agent's change pass one parser.
+ * `design.apply` (`capabilities/builtin-verbs.ts`), and behind the Hub
+ * routes `GET /designs/catalog`, `GET /designs/:id` and `POST /designs/apply`
+ * (`routers/hub-protocol/rest/designs.ts`), which the Design app calls with
+ * the person's app token (ops `replace_board` / `replace_page` for a save), so
+ * a person's save and an agent's change pass one parser.
  *
  * GOVERNANCE: every write goes through the governed entity door
- * (`entitiesRouter.create` / `.update`, `checkPermissionOrPropose`) as the
- * acting agent, so an agent's change is reviewed as the ENTITY diff, never a
- * generic capability run. `design.apply` is self-gated: when the outer gate
- * asked for review (`mustPropose`) the entity door is told `forcePropose`.
+ * (`entitiesRouter.create` / `.update`, `checkPermissionOrPropose`, whose rung
+ * 0 checks the calling key's grant) as the caller: the acting agent when there
+ * is one, else the person. An agent's change is reviewed as the ENTITY diff,
+ * never a generic capability run. `design.apply` is self-gated: when the outer
+ * gate asked for review (`mustPropose`) the entity door is told `forcePropose`;
+ * the Hub routes never set it.
  *
  * What this door never does: move a design's status (the lifecycle door,
  * `expectedStatus`, does); write a design that is past its review (the change
