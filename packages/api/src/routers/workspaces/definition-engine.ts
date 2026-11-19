@@ -536,29 +536,30 @@ export const definitionEngineProcedures = {
              */
             playbooks: z
               .array(
-                playbookDefinitionSchema.extend({
-                  /**
-                   * Workspace templates author grants as BARE NAMES
-                   * (`grants: [exa_search, entity.create]`) — the same form the
-                   * Hub door already accepts (`PackagePostWorkspaceBody
-                   * .playbooks[].grants: string[]`). Requiring only the
-                   * `{kind, ref}` object form made this door REJECT the whole
-                   * mutation for any template carrying playbook grants, so a
-                   * browser install 400'd outright. Accept both shapes here;
-                   * `buildPostWorkspaceBodyFromDefinition` narrows them.
-                   */
-                  grants: z
-                    .array(
-                      z.union([
-                        z.string(),
-                        z.object({
-                          kind: z.enum(["tool", "skill", "command"]),
-                          ref: z.string(),
-                        }),
-                      ])
-                    )
-                    .optional(),
-                })
+                playbookDefinitionSchema
+                  .extend({
+                    /**
+                     * Workspace templates author grants as BARE NAMES
+                     * (`grants: [exa_search, entity.create]`) — the same form the
+                     * Hub door already accepts (`PackagePostWorkspaceBody
+                     * .playbooks[].grants: string[]`). Requiring only the
+                     * `{kind, ref}` object form made this door REJECT the whole
+                     * mutation for any template carrying playbook grants, so a
+                     * browser install 400'd outright. Accept both shapes here;
+                     * `buildPostWorkspaceBodyFromDefinition` narrows them.
+                     */
+                    grants: z
+                      .array(
+                        z.union([
+                          z.string(),
+                          z.object({
+                            kind: z.enum(["tool", "skill", "command"]),
+                            ref: z.string(),
+                          }),
+                        ])
+                      )
+                      .optional(),
+                  })
                   // A package names kinds and relations, never this pod's ids.
                   .superRefine(refusePodLocalPlaybookRefs)
               )

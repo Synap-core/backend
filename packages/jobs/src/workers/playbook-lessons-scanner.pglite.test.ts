@@ -428,7 +428,11 @@ describe("lessons scanner — the real DB tier", () => {
 });
 
 describe("what worked — the real used edges", () => {
-  async function used(sessionId: string, toType: "tool" | "skill", toId: string) {
+  async function used(
+    sessionId: string,
+    toType: "tool" | "skill",
+    toId: string
+  ) {
     await q(
       `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_by, created_at)
        values ($1, 'session', $2, $3, $4, 'used', $5, now())`,
@@ -464,7 +468,11 @@ describe("what worked — the real used edges", () => {
     expect(revise).not.toHaveBeenCalled();
     const [row] = await proposalRows();
     const data = row!.data as {
-      data: { id: string; stages?: unknown; metadata?: Record<string, unknown> };
+      data: {
+        id: string;
+        stages?: unknown;
+        metadata?: Record<string, unknown>;
+      };
       sourceSessionIds: string[];
     };
     expect(data.data.stages).toBeUndefined();

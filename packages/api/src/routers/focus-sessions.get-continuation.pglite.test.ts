@@ -1309,7 +1309,11 @@ describe("focusSessions.get returns the continuation packet", () => {
         check: { kind: "judge" },
       },
     ]);
-    const earlier = async (title: string, verdict: "pass" | "fail", daysAgo: number) => {
+    const earlier = async (
+      title: string,
+      verdict: "pass" | "fail",
+      daysAgo: number
+    ) => {
       const id = randomUUID();
       await q(
         `insert into focus_sessions (id, user_id, goal, title, status, playbook_id, criteria, expected_outputs, metadata, created_at, updated_at, closed_at)
@@ -1349,8 +1353,16 @@ describe("focusSessions.get returns the continuation packet", () => {
         total: 2,
         // Newest first; the failed run is no precedent.
         items: [
-          expect.objectContaining({ sessionId: newer, title: "Ship v2", used: ["web.read"] }),
-          expect.objectContaining({ sessionId: older, title: "Ship v1", used: [] }),
+          expect.objectContaining({
+            sessionId: newer,
+            title: "Ship v2",
+            used: ["web.read"],
+          }),
+          expect.objectContaining({
+            sessionId: older,
+            title: "Ship v1",
+            used: [],
+          }),
         ],
       },
     });

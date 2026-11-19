@@ -294,9 +294,7 @@ export async function loadRunsUsedParts(
   database: typeof Db,
   sessionIds: readonly string[]
 ): Promise<Map<string, RunUsedPart[]>> {
-  const out = new Map<string, RunUsedPart[]>(
-    sessionIds.map((id) => [id, []])
-  );
+  const out = new Map<string, RunUsedPart[]>(sessionIds.map((id) => [id, []]));
   if (sessionIds.length === 0) return out;
   const edges = await database
     .select({ fromId: links.fromId, toType: links.toType, toId: links.toId })

@@ -110,7 +110,9 @@ describe("parseGuidanceRef / validators", () => {
       type: "entity",
       id: id.toLowerCase(),
     });
-    expect(validateGuidanceDeclaration({ ref: "subject:uses_brand" })).toBeNull();
+    expect(
+      validateGuidanceDeclaration({ ref: "subject:uses_brand" })
+    ).toBeNull();
     // `where` filters a kind's rows only.
     expect(
       validateGuidanceDeclaration({ ref: "subject:x", where: { a: ["b"] } })
@@ -124,7 +126,9 @@ describe("parseGuidanceRef / validators", () => {
       })
     ).toMatch(/cannot travel in a package or the catalog/);
     expect(podLocalGuidanceProblem({ ref: "subject:uses_brand" })).toBeNull();
-    expect(podLocalGuidanceProblem({ ref: "kind:brand-voice-guide" })).toBeNull();
+    expect(
+      podLocalGuidanceProblem({ ref: "kind:brand-voice-guide" })
+    ).toBeNull();
     expect(podLocalGuidanceProblem({ ref: "skill:x" })).toBeNull();
   });
 

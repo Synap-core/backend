@@ -15,10 +15,7 @@ const RECORD = "2c0f1a3e-0000-4000-8000-000000000001";
 const base = { name: "Ship the CRM app", goalTemplate: "Ship it" };
 const podLocal = {
   ...base,
-  guidance: [
-    { ref: "subject:uses_brand" },
-    { ref: `entity:${RECORD}` },
-  ],
+  guidance: [{ ref: "subject:uses_brand" }, { ref: `entity:${RECORD}` }],
   subjectProfile: { profileSlug: "app", entityId: RECORD },
 };
 
@@ -87,8 +84,8 @@ describe("pod-local playbook refs", () => {
     // What a package door then reads of it passes (the row's null schedule
     // and channel are the exporter's own business, not this check's).
     const { schedule: _s, channelSpec: _c, ...portable } = out;
-    expect(
-      packagePlaybookDefinitionSchema.safeParse(portable).success
-    ).toBe(true);
+    expect(packagePlaybookDefinitionSchema.safeParse(portable).success).toBe(
+      true
+    );
   });
 });

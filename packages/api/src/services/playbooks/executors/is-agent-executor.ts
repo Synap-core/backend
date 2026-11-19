@@ -94,13 +94,15 @@ export class IsAgentExecutor implements Executor {
     // section).
     // A TRIAL run (the rule lab) renders its drafts in place, read from its
     // own session's stamp, and its kickoff says to answer with the draft.
-    const { contextSkill, guidance, learned, trial } = await loadRunMethodParts({
-      playbookId: ctx.playbookId,
-      userId: ctx.userId,
-      runId: runIdOf(ctx.input),
-      sessionId: ctx.sessionId,
-      warn: (obj, msg) => logger.warn(obj, `is-agent: ${msg}`),
-    });
+    const { contextSkill, guidance, learned, trial } = await loadRunMethodParts(
+      {
+        playbookId: ctx.playbookId,
+        userId: ctx.userId,
+        runId: runIdOf(ctx.input),
+        sessionId: ctx.sessionId,
+        warn: (obj, msg) => logger.warn(obj, `is-agent: ${msg}`),
+      }
+    );
 
     // THE method renderer, shared with the MCP binding doors.
     const kickoff = renderPlaybookMethod({

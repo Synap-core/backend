@@ -306,7 +306,11 @@ export function distilWhatWorked(
   for (const id of successIds) {
     for (const part of used.get(id) ?? []) {
       const key = `${part.kind}:${part.id}`;
-      const c = counts.get(key) ?? { kind: part.kind, name: part.name, runs: 0 };
+      const c = counts.get(key) ?? {
+        kind: part.kind,
+        name: part.name,
+        runs: 0,
+      };
       c.runs += 1;
       counts.set(key, c);
     }
@@ -364,7 +368,9 @@ export function draftRationale(
   if (revisions.length > 0) {
     const where = revisions
       .map((r) =>
-        r.stageKey === PLAYBOOK_LEVEL_KEY ? "the playbook as a whole" : r.stageName
+        r.stageKey === PLAYBOOK_LEVEL_KEY
+          ? "the playbook as a whole"
+          : r.stageName
       )
       .join(", ");
     const total = revisions.reduce((n, r) => n + r.findings.length, 0);
@@ -526,10 +532,7 @@ export async function runPlaybookLessonsScan(
       const whatWorkedBefore = readWhatWorked(playbook.metadata);
       const whatWorked =
         successIds.length >= MIN_EVALUATED_SESSIONS
-          ? distilWhatWorked(
-              successIds,
-              await deps.loadUsedParts(successIds)
-            )
+          ? distilWhatWorked(successIds, await deps.loadUsedParts(successIds))
           : null;
       const workedChanged =
         whatWorked !== null && !sameParts(whatWorked, whatWorkedBefore);

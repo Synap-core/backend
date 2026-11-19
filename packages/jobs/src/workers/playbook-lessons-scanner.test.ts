@@ -363,14 +363,18 @@ describe("what worked: the tools and skills of the successful runs", () => {
         { kind: "skill", name: "skill-k1", runs: 2 },
       ],
     };
-    expect(data.data).toEqual({ id: PLAYBOOK_ID, metadata: { whatWorked: worked } });
+    expect(data.data).toEqual({
+      id: PLAYBOOK_ID,
+      metadata: { whatWorked: worked },
+    });
     expect(data.evidence.whatWorked).toEqual({ before: null, after: worked });
     expect(data.sourceSessionIds).toEqual(["s1", "s2", "s3"]);
   });
 
   it("NEGATIVE: a failed run's tools are not what worked, and what they used is not even read", async () => {
-    const loadUsedParts = vi.fn(async (ids: string[]) =>
-      new Map(ids.map((id) => [id, USED.get(id) ?? []]))
+    const loadUsedParts = vi.fn(
+      async (ids: string[]) =>
+        new Map(ids.map((id) => [id, USED.get(id) ?? []]))
     );
     const { deps } = makeDeps({
       // s1 fails its required criterion: 2 successful runs, under the floor.

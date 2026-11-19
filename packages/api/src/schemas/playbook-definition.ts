@@ -329,7 +329,11 @@ export function refusePodLocalPlaybookRefs(
     pb.guidance.forEach((item, i) => {
       const problem = podLocalGuidanceProblem(item);
       if (problem) {
-        ctx.addIssue({ code: "custom", path: ["guidance", i], message: problem });
+        ctx.addIssue({
+          code: "custom",
+          path: ["guidance", i],
+          message: problem,
+        });
       }
     });
   }

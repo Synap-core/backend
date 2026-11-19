@@ -73,12 +73,9 @@ beforeAll(async () => {
 }, 120_000);
 
 const write = (subjectProfile: Record<string, unknown>) =>
-  assertPlaybookDefinitionWritable(
-    db as never,
-    { subjectProfile },
-    undefined,
-    { userId: USER }
-  );
+  assertPlaybookDefinitionWritable(db as never, { subjectProfile }, undefined, {
+    userId: USER,
+  });
 
 describe("a playbook dedicated to one record — the write door", () => {
   it("accepts a record of the kind the writer can read", async () => {
