@@ -128,6 +128,7 @@ export async function loadBindingFacts(input: {
       .limit(1);
     if (row) {
       subject = {
+        id: input.subjectEntityId.toLowerCase(),
         kind: row.kind ?? null,
         properties: (row.properties as Record<string, unknown> | null) ?? {},
       };

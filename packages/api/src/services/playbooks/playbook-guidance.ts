@@ -18,6 +18,14 @@
  *     visible to the reader. An agent-authored skill is born unapproved, so it
  *     never reaches a prompt without a person's OK (the context skill's rule,
  *     `loadPlaybookContextSkill`).
+ *   - a subject ref (`subject:<relation>`): the entities linked to the RUN'S
+ *     subject by that relation type (either direction, the relation readers'
+ *     own visibility), each under the same trust line as a kind's rows: its
+ *     lifecycle category is `done`, it is not deleted, the reader may read it,
+ *     a listing shows it. A run with no subject names the item as missing.
+ *   - an entity ref (`entity:<id>`, pod-local playbooks only): that one
+ *     entity, under the same trust line.
+ * An unresolved ref is named as missing with why, never dropped.
  * Only a TRIAL override (slice 1b's rule lab) renders a draft, in place of a
  * current version it names, and the run records it as `replaces`.
  */
@@ -28,8 +36,10 @@ import {
   playbooks,
   playbookRuns,
   profiles,
+  relations,
   skills,
   and,
+  desc,
   eq,
   inArray,
   isNull,
@@ -52,12 +62,17 @@ import {
 } from "@synap-core/types/guidance";
 import { resolvePropertyLabel } from "@synap-core/types/property-render";
 import { spaceSkillSlugCandidates } from "@synap-core/types/space-brief";
+import { AccessContext, scopedDb } from "../../access/index.js";
+import { readDependencyRelations } from "../links/dependency-relation-read.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 
-/** Whose eyes the rules are read with: the run's acting user. */
+/** Whose eyes the rules are read with, and what the run is about. */
 export interface GuidanceLens {
+  /** The run's acting user. */
   userId: string;
+  /** The run's subject: what `subject:<relation>` refs resolve on. */
+  subjectEntityId?: string | null;
 }
 
 /**
@@ -69,6 +84,9 @@ export type GuidanceOverride = Readonly<Record<string, string>>;
 
 /** At most this many current versions of one kind are read. */
 const MAX_ROWS_PER_KIND = 50;
+
+/** At most this many edges of one relation type are read off the subject. */
+const MAX_SUBJECT_LINKS = 20;
 
 /** The property an ordered kind sorts its rows by. */
 const ORDER_PROPERTY = "order";
@@ -108,6 +126,20 @@ function matchesWhere(
   });
 }
 
+const columns = {
+  id: entities.id,
+  title: entities.title,
+  version: entities.version,
+  properties: entities.properties,
+};
+
+type EntityColumns = {
+  id: string;
+  title: string | null;
+  version: number;
+  properties: unknown;
+};
+
 async function resolveKind(
   database: Db,
   declaration: GuidanceDeclaration,
@@ -137,32 +169,8 @@ async function resolveKind(
         "this kind declares no lifecycle, so no version of it is approved",
     };
   }
-  // The kind's properties in the ONE total order (`getEffectiveProperties`
-  // sorts layer, then display order, then slug): a field's position is its
-  // index there. The lifecycle property and `order` are not rendered.
-  const props = await resolver.getEffectiveProperties(profileIds[0]!);
-  const declared = new Map(
-    props
-      .map((p, position) => ({ p, position }))
-      .filter(({ p }) => !p.isLifecycle && p.slug !== ORDER_PROPERTY)
-      .map(({ p, position }) => [
-        p.slug,
-        { label: resolvePropertyLabel(p), position },
-      ])
-  );
-
-  const floor = accessScopeWhere({
-    workspaceIdColumn: entities.workspaceId,
-    entityIdColumn: entities.id,
-    ownerColumn: entities.userId,
-    userId: lens.userId,
-  });
-  const columns = {
-    id: entities.id,
-    title: entities.title,
-    version: entities.version,
-    properties: entities.properties,
-  };
+  const declared = await declaredFieldsOf(resolver, profileIds[0]!);
+  const floor = entityFloor(lens);
   const current = await database
     .select(columns)
     .from(entities)
@@ -206,26 +214,199 @@ async function resolveKind(
     const e = draft ?? cur;
     const properties = (e.properties ?? {}) as Record<string, unknown>;
     if (!matchesWhere(properties, declaration.where)) continue;
-    const fields: GuidanceField[] = [];
-    for (const [key, raw] of Object.entries(properties)) {
-      const def = declared.get(key);
-      const value = def ? textOf(raw) : null;
-      if (def && value) {
-        fields.push({ key, label: def.label, value, position: def.position });
-      }
-    }
     rows.push({
-      id: e.id,
-      title: e.title ?? "",
-      version: String(e.version),
-      order: orderOf(properties[ORDER_PROPERTY]),
-      fields,
+      ...rowOf(e, declared),
       ...(draft ? { replaces: cur.id } : {}),
     });
   }
   return rows.length > 0
     ? { declaration, rows }
     : { declaration, rows, missingReason: "no approved version yet" };
+}
+
+type DeclaredFields = Map<string, { label: string; position: number }>;
+
+/**
+ * A kind's rendered properties in the ONE total order
+ * (`getEffectiveProperties` sorts layer, then display order, then slug): a
+ * field's position is its index there. The lifecycle property and `order`
+ * are not rendered.
+ */
+async function declaredFieldsOf(
+  resolver: ProfileResolutionService,
+  profileId: string
+): Promise<DeclaredFields> {
+  const props = await resolver.getEffectiveProperties(profileId);
+  return new Map(
+    props
+      .map((p, position) => ({ p, position }))
+      .filter(({ p }) => !p.isLifecycle && p.slug !== ORDER_PROPERTY)
+      .map(({ p, position }) => [
+        p.slug,
+        { label: resolvePropertyLabel(p), position },
+      ])
+  );
+}
+
+/** The reader's entity floor (`accessScopeWhere`). */
+function entityFloor(lens: GuidanceLens) {
+  return accessScopeWhere({
+    workspaceIdColumn: entities.workspaceId,
+    entityIdColumn: entities.id,
+    ownerColumn: entities.userId,
+    userId: lens.userId,
+  });
+}
+
+function rowOf(e: EntityColumns, declared: DeclaredFields): GuidanceRow {
+  const properties = (e.properties ?? {}) as Record<string, unknown>;
+  const fields: GuidanceField[] = [];
+  for (const [key, raw] of Object.entries(properties)) {
+    const def = declared.get(key);
+    const value = def ? textOf(raw) : null;
+    if (def && value) {
+      fields.push({ key, label: def.label, value, position: def.position });
+    }
+  }
+  return {
+    id: e.id,
+    title: e.title ?? "",
+    version: String(e.version),
+    order: orderOf(properties[ORDER_PROPERTY]),
+    fields,
+  };
+}
+
+/**
+ * Named entities as rows, under the kind refs' trust line: visible to the
+ * reader, listable, not deleted, and in their kind's approved (`done`)
+ * category. `seen` counts the ids the reader can read at all, so the caller
+ * can tell "not approved" from "not there".
+ */
+async function approvedRowsOf(
+  database: Db,
+  ids: readonly string[],
+  lens: GuidanceLens
+): Promise<{ rows: GuidanceRow[]; seen: number }> {
+  if (ids.length === 0) return { rows: [], seen: 0 };
+  const found = await database
+    .select({
+      ...columns,
+      profileId: entities.profileId,
+      statusCategory: entities.statusCategory,
+    })
+    .from(entities)
+    .where(
+      and(
+        inArray(entities.id, [...ids]),
+        isNull(entities.deletedAt),
+        entityFloor(lens),
+        listableEntityWhere()
+      )
+    )
+    .orderBy(entities.id);
+  const approved = found.filter((e) => e.statusCategory === "done");
+  const resolver = new ProfileResolutionService(database as never);
+  const fieldsByKind = new Map<string, DeclaredFields>();
+  const rows: GuidanceRow[] = [];
+  for (const e of approved) {
+    const kind = e.profileId;
+    let declared = kind ? fieldsByKind.get(kind) : new Map();
+    if (!declared && kind) {
+      declared = await declaredFieldsOf(resolver, kind);
+      fieldsByKind.set(kind, declared);
+    }
+    rows.push(rowOf(e, declared ?? new Map()));
+  }
+  return { rows, seen: found.length };
+}
+
+const NOT_APPROVED =
+  "it is not approved: only a record in its kind's approved status renders";
+
+async function resolveEntityRef(
+  database: Db,
+  declaration: GuidanceDeclaration,
+  id: string,
+  lens: GuidanceLens
+): Promise<ResolvedGuidance> {
+  const { rows, seen } = await approvedRowsOf(database, [id], lens);
+  if (rows.length > 0) return { declaration, rows };
+  return {
+    declaration,
+    rows,
+    missingReason:
+      seen > 0 ? NOT_APPROVED : "no record you can read has this id",
+  };
+}
+
+/**
+ * `subject:<relation>`: the entities the run's subject is linked to by that
+ * relation type, in either direction. The edges come through the relation
+ * readers' own visibility (`scopedDb` on `relations`, plus dependency
+ * relations, which live on `links`); the far ends through the trust line.
+ */
+async function resolveSubjectRef(
+  database: Db,
+  declaration: GuidanceDeclaration,
+  relation: string,
+  lens: GuidanceLens
+): Promise<ResolvedGuidance> {
+  const subjectId = lens.subjectEntityId;
+  if (!subjectId) {
+    return {
+      declaration,
+      rows: [],
+      missingReason: "this run has no subject, so nothing is linked to it",
+    };
+  }
+  const access = AccessContext.from({ userId: lens.userId });
+  const edges = await scopedDb(access).findMany<typeof relations.$inferSelect>(
+    relations,
+    {
+      where: and(
+        or(
+          eq(relations.sourceEntityId, subjectId),
+          eq(relations.targetEntityId, subjectId)
+        ),
+        eq(relations.type, relation)
+      ),
+      orderBy: [desc(relations.createdAt)],
+      limit: MAX_SUBJECT_LINKS,
+    }
+  );
+  const dependencies = await readDependencyRelations({
+    access,
+    touching: { entityIds: [subjectId], mode: "either" },
+    type: relation,
+    limit: MAX_SUBJECT_LINKS,
+  });
+  const linked = [
+    ...new Set(
+      [...edges, ...dependencies]
+        .map((r) =>
+          r.sourceEntityId === subjectId ? r.targetEntityId : r.sourceEntityId
+        )
+        .filter((id): id is string => !!id && id !== subjectId)
+    ),
+  ];
+  if (linked.length === 0) {
+    return {
+      declaration,
+      rows: [],
+      missingReason: `nothing is linked to this run's subject by ${relation}`,
+    };
+  }
+  const { rows, seen } = await approvedRowsOf(database, linked, lens);
+  if (rows.length > 0) return { declaration, rows };
+  return {
+    declaration,
+    rows,
+    missingReason:
+      seen > 0
+        ? `${seen} linked by ${relation}, none approved: only a record in its kind's approved status renders`
+        : `nothing you can read is linked to this run's subject by ${relation}`,
+  };
 }
 
 async function resolveSkill(
@@ -308,11 +489,24 @@ export async function resolveGuidance(
       });
       continue;
     }
-    out.push(
-      ref.type === "kind"
-        ? await resolveKind(database, declaration, ref.slug, lens, override)
-        : await resolveSkill(database, declaration, ref.slug, lens)
-    );
+    switch (ref.type) {
+      case "kind":
+        out.push(
+          await resolveKind(database, declaration, ref.slug, lens, override)
+        );
+        break;
+      case "skill":
+        out.push(await resolveSkill(database, declaration, ref.slug, lens));
+        break;
+      case "subject":
+        out.push(
+          await resolveSubjectRef(database, declaration, ref.slug, lens)
+        );
+        break;
+      case "entity":
+        out.push(await resolveEntityRef(database, declaration, ref.id, lens));
+        break;
+    }
   }
   return out;
 }

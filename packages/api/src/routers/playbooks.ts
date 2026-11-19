@@ -141,6 +141,7 @@ import {
   explainPinnedIdRejection,
   parsePinnedEntityIds,
   isPinnedStrategy,
+  dedicatedSubjectId,
   subjectProfileSlug,
 } from "../services/playbooks/pinned-subject.js";
 import { loadVisibleEntitiesById } from "../services/playbooks/pinned-subject-query.js";
@@ -1400,6 +1401,21 @@ async function assertSubjectProfileResolves(
   if (typeof slug !== "string" || slug.length === 0) return;
   // Throws TRPCError NOT_FOUND naming the slug and pointing at list_profiles.
   await assertKnownProfileSlug(db, slug);
+  // A playbook dedicated to one record (D10a) names a record that exists.
+  const dedicated = dedicatedSubjectId(subjectProfile);
+  if (dedicated) {
+    const [row] = await db
+      .select({ id: entities.id })
+      .from(entities)
+      .where(and(eq(entities.id, dedicated), isNull(entities.deletedAt)))
+      .limit(1);
+    if (!row) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `subjectProfile.entityId ${dedicated} names no record of this pod`,
+      });
+    }
+  }
 }
 
 /**
@@ -1569,6 +1585,9 @@ export async function matchPlaybooks(
   const forStrip = input.purpose === "entity-actions";
   const applicable = rows.filter((r) => {
     const row = r as Playbook;
+    // A playbook dedicated to one record is offered for that record only.
+    const dedicated = dedicatedSubjectId(row.subjectProfile);
+    if (dedicated && dedicated !== input.entityId?.toLowerCase()) return false;
     if (entityProperties) {
       const verdict = evaluateSubjectFilter(
         subjectFilterOf(row),

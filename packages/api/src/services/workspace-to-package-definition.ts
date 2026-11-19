@@ -33,7 +33,10 @@
 
 import { parseProfilePresentation } from "@synap-core/types/presentation";
 import { readSpaceBrief } from "@synap-core/types/space-brief";
-import type { GuidanceDeclaration } from "@synap-core/types/guidance";
+import {
+  podLocalGuidanceProblem,
+  type GuidanceDeclaration,
+} from "@synap-core/types/guidance";
 import { RULE_CATEGORY, readRuleMetadata } from "./rules/index.js";
 import {
   getDb,
@@ -747,8 +750,19 @@ export function playbookRowToPackagePlaybook(
   const criteria = (p.criteria as Array<Record<string, unknown>> | null) ?? [];
   const expectedOutputs =
     (p.expectedOutputs as Array<Record<string, unknown>> | null) ?? [];
-  // Refs, never ids: the rules a playbook follows travel as declared.
-  const guidance = (p.guidance as GuidanceDeclaration[] | null) ?? [];
+  // Refs, never ids: the rules a playbook follows travel as declared, minus
+  // a pod-local `entity:<id>` ref (an id means nothing on another pod; the
+  // install door refuses it), as the brief's anchors drop their ids.
+  const guidance = ((p.guidance as GuidanceDeclaration[] | null) ?? []).filter(
+    (g) => podLocalGuidanceProblem(g) === null
+  );
+  // Likewise the one record a playbook is dedicated to.
+  const subjectProfile =
+    p.subjectProfile && typeof p.subjectProfile === "object"
+      ? (({ entityId: _id, ...rest }) => rest)(
+          p.subjectProfile as Record<string, unknown>
+        )
+      : p.subjectProfile;
   // Never export another package's source-link: the installing pod stamps
   // its own. Every other metadata key (e.g. the propose-only governance
   // marker) travels.
@@ -772,7 +786,7 @@ export function playbookRowToPackagePlaybook(
       PackageDefinition["playbooks"]
     >[number]["channelSpec"],
     schedule: p.schedule as { cron: string } | null,
-    subjectProfile: p.subjectProfile as
+    subjectProfile: subjectProfile as
       { profileSlug: string; filter?: Record<string, unknown> } | undefined,
     grants,
     status: p.status as "draft" | "active" | "paused" | undefined,

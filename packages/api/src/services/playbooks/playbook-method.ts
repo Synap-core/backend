@@ -151,12 +151,14 @@ export async function loadMethodGuidance(
   playbookId: string,
   userId: string,
   /** A trial's drafts, rendered in place of the current versions they name. */
-  override?: GuidanceOverride
+  override?: GuidanceOverride,
+  /** The run's subject: what `subject:<relation>` refs resolve on. */
+  subjectEntityId?: string | null
 ): Promise<{ text: string; snapshot: GuidanceSnapshot }> {
   try {
     const { rendered } = await loadPlaybookGuidance(
       playbookId,
-      { userId },
+      { userId, subjectEntityId },
       override
     );
     return { text: rendered.text, snapshot: guidanceSnapshotOf(rendered) };
@@ -193,6 +195,11 @@ export async function loadRunMethodParts(input: {
    * renders its drafts in place of the current versions they name.
    */
   sessionId?: string | null;
+  /**
+   * The run's subject, when the caller holds it; otherwise it is read off
+   * the session. `subject:<relation>` refs resolve on it.
+   */
+  subjectEntityId?: string | null;
   warn: (obj: Record<string, unknown>, msg: string) => void;
 }): Promise<{
   contextSkill: string | null;
@@ -218,17 +225,23 @@ export async function loadRunMethodParts(input: {
   // runner: never from the executor's input. An unreadable session renders
   // no rules and says so: a trial must never quietly render the current
   // versions (the lab would compare the current text with itself).
+  // The same read gives the run's subject, which `subject:` refs resolve on.
   let trial: TrialSessionStamp | null = null;
+  let subjectEntityId: string | null = input.subjectEntityId ?? null;
   let sessionUnread: string | null = null;
   if (input.sessionId) {
     try {
       const db = await getDb();
       const [row] = await db
-        .select({ metadata: focusSessions.metadata })
+        .select({
+          metadata: focusSessions.metadata,
+          subjectEntityId: focusSessions.subjectEntityId,
+        })
         .from(focusSessions)
         .where(eq(focusSessions.id, input.sessionId))
         .limit(1);
       trial = trialStampOf(row?.metadata);
+      subjectEntityId ??= row?.subjectEntityId ?? null;
     } catch (err) {
       sessionUnread = err instanceof Error ? err.message : String(err);
       input.warn(
@@ -247,7 +260,8 @@ export async function loadRunMethodParts(input: {
     : await loadMethodGuidance(
         input.playbookId,
         input.userId,
-        trial?.guidanceOverride
+        trial?.guidanceOverride,
+        subjectEntityId
       );
   if (input.runId) {
     try {
@@ -288,6 +302,8 @@ export async function loadBoundPlaybookMethod(input: {
   stages?: unknown;
   /** The reader: the guidance renders what THEY may read. */
   userId: string;
+  /** The session's subject: what `subject:<relation>` refs resolve on. */
+  subjectEntityId?: string | null;
 }): Promise<BoundPlaybookMethod> {
   try {
     const db = await getDb();
@@ -315,7 +331,12 @@ export async function loadBoundPlaybookMethod(input: {
       ? (stages.find((s) => s?.key === input.stageKey) ?? null)
       : null;
     const contextSkill = await loadPlaybookContextSkill(input.playbookId);
-    const guidance = await loadMethodGuidance(input.playbookId, input.userId);
+    const guidance = await loadMethodGuidance(
+      input.playbookId,
+      input.userId,
+      undefined,
+      input.subjectEntityId
+    );
     return {
       status: "ok",
       playbookId: input.playbookId,

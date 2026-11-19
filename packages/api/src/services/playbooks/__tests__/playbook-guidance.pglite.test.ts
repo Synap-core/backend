@@ -623,3 +623,155 @@ describe("a TRIAL run (the rule lab, slice 1b)", () => {
     expect(await readTrialDraft({ metadata: {}, channelId })).toBeNull();
   });
 });
+
+describe("one object (plan W8, D10a): subject:<relation> and entity:<id> refs", () => {
+  const CLIENT_KIND = randomUUID();
+  const CLIENT = randomUUID();
+  const OTHER_CLIENT = randomUUID();
+  const ONE_OBJECT = randomUUID();
+  const ONE_OBJECT_GUIDANCE = [
+    { ref: "subject:uses_voice", label: "This client's voice" },
+    { ref: `entity:${APPROVED_VOICE}` },
+    { ref: `entity:${DRAFT_VOICE}` },
+  ];
+
+  beforeAll(async () => {
+    await kind(CLIENT_KIND, "client", [{ slug: "client-name" }]);
+    for (const id of [CLIENT, OTHER_CLIENT]) {
+      await entity({
+        id,
+        profileId: CLIENT_KIND,
+        type: "client",
+        title: id === CLIENT ? "Jane's studio" : "Other studio",
+        status: null,
+        category: null,
+        properties: {},
+      });
+    }
+    // Jane's studio uses the approved voice (forward edge) and the draft
+    // (reverse edge); the legal voice hangs off it by ANOTHER relation.
+    const legal = (
+      await q<{ id: string }>(
+        `select id from entities where title = 'Legal voice' limit 1`
+      )
+    ).rows[0]!.id;
+    for (const [source, target, type] of [
+      [CLIENT, APPROVED_VOICE, "uses_voice"],
+      [DRAFT_VOICE, CLIENT, "uses_voice"],
+      [CLIENT, legal, "mentions"],
+    ] as const) {
+      await q(
+        `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, created_at)
+         values ($1, $2, null, $3, $4, $5, now())`,
+        [randomUUID(), USER, source, target, type]
+      );
+    }
+    await q(
+      `insert into playbooks
+         (id, workspace_id, created_by, name, goal_template, executor, stages, criteria, expected_outputs, params, guidance, version, status, created_at, updated_at)
+       values ($1, null, $2, 'Write for one client', 'Write it', 'is-agent',
+               '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $3::jsonb, 1, 'active', now(), now())`,
+      [ONE_OBJECT, USER, JSON.stringify(ONE_OBJECT_GUIDANCE)]
+    );
+  });
+
+  it("subject:<relation> renders the approved record linked to the run's subject, never the draft or another relation", async () => {
+    const { rendered } = await loadPlaybookGuidance(ONE_OBJECT, {
+      userId: USER,
+      subjectEntityId: CLIENT,
+    });
+    expect(rendered.text).toContain("### This client's voice · Outreach voice");
+    expect(rendered.used[0]).toMatchObject({
+      ref: "subject:uses_voice",
+      rows: [{ id: APPROVED_VOICE, version: "1" }],
+    });
+    expect(rendered.text).not.toContain(SAID.draft);
+    expect(rendered.text).not.toContain(SAID.legal);
+  });
+
+  it("is resolved on EACH run's subject: another subject with no link is named as missing", async () => {
+    const { rendered } = await loadPlaybookGuidance(ONE_OBJECT, {
+      userId: USER,
+      subjectEntityId: OTHER_CLIENT,
+    });
+    expect(rendered.used.map((u) => u.ref)).not.toContain("subject:uses_voice");
+    expect(rendered.missing).toContainEqual({
+      ref: "subject:uses_voice",
+      label: "This client's voice",
+      reason: "nothing is linked to this run's subject by uses_voice",
+    });
+  });
+
+  it("NEGATIVE: a run with no subject names the ref as missing, never drops it", async () => {
+    const { rendered } = await loadPlaybookGuidance(ONE_OBJECT, {
+      userId: USER,
+    });
+    expect(rendered.missing).toContainEqual(
+      expect.objectContaining({
+        ref: "subject:uses_voice",
+        reason: "this run has no subject, so nothing is linked to it",
+      })
+    );
+    expect(rendered.text).toContain("Not available:");
+  });
+
+  it("entity:<id> renders that one approved record; a draft is named as not approved; another reader cannot read it", async () => {
+    const { rendered } = await loadPlaybookGuidance(ONE_OBJECT, {
+      userId: USER,
+      subjectEntityId: CLIENT,
+    });
+    expect(rendered.used.map((u) => u.ref)).toContain(
+      `entity:${APPROVED_VOICE}`
+    );
+    expect(rendered.missing).toContainEqual(
+      expect.objectContaining({
+        ref: `entity:${DRAFT_VOICE}`,
+        reason: expect.stringMatching(/not approved/),
+      })
+    );
+    const theirs = await loadPlaybookGuidance(ONE_OBJECT, {
+      userId: STRANGER,
+      subjectEntityId: CLIENT,
+    });
+    expect(theirs.rendered.text).not.toContain(SAID.approved);
+    expect(theirs.rendered.missing).toContainEqual(
+      expect.objectContaining({
+        ref: `entity:${APPROVED_VOICE}`,
+        reason: "no record you can read has this id",
+      })
+    );
+  });
+
+  it("the MCP bind door resolves subject refs on the session's subject", async () => {
+    const bound = await loadBoundPlaybookMethod({
+      playbookId: ONE_OBJECT,
+      stageKey: null,
+      stages: [],
+      userId: USER,
+      subjectEntityId: CLIENT,
+    });
+    if (bound.status !== "ok") throw new Error(bound.error);
+    expect(bound.text).toContain("### This client's voice · Outreach voice");
+  });
+
+  it("the IS kickoff reads the subject off the run's session", async () => {
+    const sessionId = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, channel_id, subject_entity_id, metadata, created_at, updated_at)
+       values ($1, $2, 'Write for Jane', 'active', $3, $4, '{}'::jsonb, now(), now())`,
+      [sessionId, USER, randomUUID(), CLIENT]
+    );
+    h.kickoffs.length = 0;
+    await new IsAgentExecutor().run({
+      workspaceId: WS,
+      userId: USER,
+      playbookId: ONE_OBJECT,
+      sessionId,
+      channelId: randomUUID(),
+      goal: "Write for Jane.",
+      capabilities: [],
+      input: {},
+    });
+    expect(h.kickoffs[0]).toContain("### This client's voice · Outreach voice");
+  });
+});

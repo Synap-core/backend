@@ -421,3 +421,48 @@ describe("the reply line stays one lean line", () => {
     );
   });
 });
+
+describe("a playbook dedicated to one record (subjectProfile.entityId, plan W8 D10a)", () => {
+  const APP = "aaaaaaaa-0000-4000-8000-000000000001";
+  const OTHER_APP = "aaaaaaaa-0000-4000-8000-000000000002";
+  const app = (id: string) => ({ id, kind: "app", properties: {} });
+
+  it("binds on its record, ahead of the kind's general playbook", () => {
+    const general = pb({ subjectProfile: { profileSlug: "app" } });
+    const dedicated = pb({
+      name: "Ship the CRM app",
+      subjectProfile: { profileSlug: "app", entityId: APP },
+    });
+    const d = resolveBindingRung(at({ subject: app(APP) }), [
+      general,
+      dedicated,
+    ]);
+    expect(d).toMatchObject({ kind: "bind", playbookId: dedicated.id });
+  });
+
+  it("NEGATIVE: never binds another record of the same kind", () => {
+    const general = pb({ subjectProfile: { profileSlug: "app" } });
+    const dedicated = pb({
+      subjectProfile: { profileSlug: "app", entityId: APP },
+    });
+    const d = resolveBindingRung(at({ subject: app(OTHER_APP) }), [
+      general,
+      dedicated,
+    ]);
+    expect(d).toMatchObject({ kind: "bind", playbookId: general.id });
+  });
+
+  it("NEGATIVE: a parent's dedicated playbook does not pass to a child about another record", () => {
+    const dedicated = pb({
+      subjectProfile: { profileSlug: "app", entityId: APP },
+    });
+    const d = resolveBindingRung(
+      at({
+        subject: app(OTHER_APP),
+        parent: { id: "p1", playbookId: dedicated.id, currentStage: null },
+      }),
+      [dedicated]
+    );
+    expect(d.kind).not.toBe("bind");
+  });
+});

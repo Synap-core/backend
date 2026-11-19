@@ -42,7 +42,10 @@ import { resolveWorkspaceExtends } from "../../services/workspace-composition.js
 import type { LayerTwoBody } from "../../services/template-apply/index.js";
 import { applyDefinitionSeeds } from "../../services/definition-seeds.js";
 import { workspacePrimarySurfaceSchema } from "../../schemas/workspace-primary-surface.js";
-import { playbookDefinitionSchema } from "../../schemas/playbook-definition.js";
+import {
+  playbookDefinitionSchema,
+  refusePodLocalPlaybookRefs,
+} from "../../schemas/playbook-definition.js";
 import { templateDocumentsSchema } from "../../schemas/template-document.js";
 import {
   buildPostWorkspaceBodyFromDefinition,
@@ -556,6 +559,8 @@ export const definitionEngineProcedures = {
                     )
                     .optional(),
                 })
+                  // A package names kinds and relations, never this pod's ids.
+                  .superRefine(refusePodLocalPlaybookRefs)
               )
               .optional(),
             /** Automation templates (event/cron/manual triggers for playbook runs) */

@@ -741,6 +741,7 @@ export async function executeGenerateRun(
       userId: input.userId,
       runId,
       sessionId: null,
+      subjectEntityId: subjectId,
       warn: (obj, msg) => logger.warn(obj, `generate: ${msg}`),
     });
     // Past outcomes, when the landing asks for them. A FAILED read is not

@@ -2,12 +2,17 @@
  * `@synap-core/types/guidance` — the rules a PLAYBOOK follows (design
  * b199a3a4, Question 1, slice 1a).
  *
- * A playbook declares `guidance`: an ordered list of REFERENCES, never ids, so
- * the same declaration is portable across pods and works verbatim in a catalog
+ * A playbook declares `guidance`: an ordered list of REFERENCES, so the same
+ * declaration is portable across pods and works verbatim in a catalog
  * manifest:
  *   - `kind:<profileSlug>` — the current (person-approved) entities of a kind,
  *     e.g. `kind:brand-voice-guide`, `kind:outreach-angle`;
- *   - `skill:<slug>` — an approved, active skill, e.g. `skill:creative-director`.
+ *   - `skill:<slug>` — an approved, active skill, e.g. `skill:creative-director`;
+ *   - `subject:<relation slug>` — the approved entities linked to the RUN'S
+ *     SUBJECT by that relation, resolved at run time ("the brand guide linked
+ *     to this client"): one object, still portable (plan W8, decision D10a);
+ *   - `entity:<id>` — one approved entity of THIS pod. Pod-local only: a
+ *     package or catalog manifest refuses it ({@link podLocalGuidanceProblem}).
  *
  * The internal name is `guidance`, never `rule`: "rule" already names two other
  * objects in Synap (a rule-loop skill, a governance rule).
@@ -22,6 +27,7 @@
 import { canonicalJson, cyrb53 } from "../brand-kit/index.js";
 import { estimateSkillTokens, isSpaceSkillSlug } from "../space-brief/index.js";
 import { humanizeToken } from "../vocabulary/index.js";
+import { isUuid } from "../property-render/structured-value.js";
 
 /** The section heading, as the method renders it. */
 export const GUIDANCE_HEADING = "## Rules this playbook follows";
@@ -47,11 +53,14 @@ export const GUIDANCE_ORDERED_SENTENCE =
 /** A profile (kind) slug: the pod's own grammar for kind slugs. */
 const KIND_SLUG = /^[a-z0-9][a-z0-9_-]{0,99}$/;
 
+/** A relation type slug: the playbook stage's `relationToSubject` grammar. */
+const RELATION_SLUG = /^[a-z][a-z0-9_-]{0,79}$/;
+
 // ─── Declaration ─────────────────────────────────────────────────────────────
 
 /** One declared item, as a playbook (or a catalog manifest) stores it. */
 export interface GuidanceDeclaration {
-  /** `kind:<profileSlug>` or `skill:<slug>`. */
+  /** `kind:<slug>`, `skill:<slug>`, `subject:<relation slug>` or `entity:<id>`. */
   ref: string;
   /** What the section calls it ("Voice"). Default: the kind or skill name. */
   label?: string;
@@ -66,18 +75,40 @@ export interface GuidanceDeclaration {
 }
 
 export type GuidanceRef =
-  { type: "kind"; slug: string } | { type: "skill"; slug: string };
+  | { type: "kind"; slug: string }
+  | { type: "skill"; slug: string }
+  /** `slug` is the relation type slug, resolved on the run's subject. */
+  | { type: "subject"; slug: string }
+  | { type: "entity"; id: string };
 
-/** Parse a ref; `null` when it is not `kind:<slug>` or `skill:<slug>`. */
+/** Parse a ref; `null` when it is none of the four ref forms. */
 export function parseGuidanceRef(ref: unknown): GuidanceRef | null {
   if (typeof ref !== "string") return null;
   const at = ref.indexOf(":");
   if (at <= 0) return null;
   const type = ref.slice(0, at);
-  const slug = ref.slice(at + 1);
-  if (type === "kind" && KIND_SLUG.test(slug)) return { type, slug };
-  if (type === "skill" && isSpaceSkillSlug(slug)) return { type, slug };
+  const rest = ref.slice(at + 1);
+  if (type === "kind" && KIND_SLUG.test(rest)) return { type, slug: rest };
+  if (type === "skill" && isSpaceSkillSlug(rest)) return { type, slug: rest };
+  if (type === "subject" && RELATION_SLUG.test(rest)) {
+    return { type, slug: rest };
+  }
+  if (type === "entity" && isUuid(rest)) {
+    return { type, id: rest.toLowerCase() };
+  }
   return null;
+}
+
+/**
+ * Why a declared item cannot travel in a package or the catalog, or `null`.
+ * An `entity:<id>` names one record of one pod: on another pod the id means
+ * nothing, so a package install and the catalog refuse it. `subject:` stays
+ * portable: it is resolved on each run's own subject.
+ */
+export function podLocalGuidanceProblem(item: unknown): string | null {
+  const ref = parseGuidanceRef((item as { ref?: unknown } | null)?.ref);
+  if (ref?.type !== "entity") return null;
+  return `\`${(item as { ref: string }).ref}\` names one record of one pod, so it cannot travel in a package or the catalog: name its kind (kind:<slug>) or how it links to the run's subject (subject:<relation slug>)`;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -97,7 +128,7 @@ export function validateGuidanceDeclaration(item: unknown): string | null {
   }
   const ref = parseGuidanceRef(item.ref);
   if (!ref) {
-    return `\`${String(item.ref ?? "")}\` is not a guidance ref: write kind:<kind slug> (kind:brand-voice-guide) or skill:<skill slug> (skill:creative-director). A ref names a kind or a skill, never an id`;
+    return `\`${String(item.ref ?? "")}\` is not a guidance ref: write kind:<kind slug> (kind:brand-voice-guide), skill:<skill slug> (skill:creative-director), subject:<relation slug> (subject:uses_brand, what the run's subject links to) or entity:<record id> (one record of this pod, never in a package)`;
   }
   for (const [key, max] of [
     ["label", LABEL_MAX],
@@ -284,9 +315,14 @@ function labelOf(item: ResolvedGuidance, rows: GuidanceRow[]): string {
   const declared = item.declaration.label?.trim();
   if (declared) return declared;
   const ref = parseGuidanceRef(item.declaration.ref);
-  if (ref?.type === "skill" && rows.length === 1 && rows[0]!.title) {
+  if (
+    (ref?.type === "skill" || ref?.type === "entity") &&
+    rows.length === 1 &&
+    rows[0]!.title
+  ) {
     return rows[0]!.title;
   }
+  if (ref?.type === "entity") return "Record";
   return humanize(ref?.slug ?? item.declaration.ref);
 }
 

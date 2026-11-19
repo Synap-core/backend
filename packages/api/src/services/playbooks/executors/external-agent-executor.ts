@@ -527,6 +527,7 @@ export async function startAgentTask(p: {
     playbookId: p.playbookId ?? undefined,
     userId: p.userId,
     runId: p.runId,
+    subjectEntityId: p.subject?.id ?? null,
     warn: (obj, msg) => logger.warn(obj, `external-agent: ${msg}`),
   });
   const method = renderPlaybookMethod({

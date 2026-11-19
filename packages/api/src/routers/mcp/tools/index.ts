@@ -583,7 +583,7 @@ const PLAYBOOK_TRIGGERS_PROPERTY = {
 const PLAYBOOK_GUIDANCE_PROPERTY = {
   type: "array",
   description:
-    "Rules every run follows, in order: [{ ref: 'kind:<slug>'|'skill:<slug>', label?, when?, where?: { <prop>: [values] } }]. Person-approved versions only.",
+    "Rules every run follows, in order: [{ ref: 'kind:<slug>'|'skill:<slug>'|'subject:<relation slug>' (what the run's subject links to)|'entity:<id>' (one record, this pod only), label?, when?, where?: { <prop>: [values] } }]. Person-approved versions only.",
   items: { type: "object" },
 };
 
