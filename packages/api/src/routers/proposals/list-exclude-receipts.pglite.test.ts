@@ -53,8 +53,16 @@ function ddlFor(table: PgTable): string {
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
 const ROWS = [
-  { status: "auto_approved", targetType: "entity", proposalType: "entity.update" },
-  { status: "auto_approved", targetType: "document", proposalType: "document.create" },
+  {
+    status: "auto_approved",
+    targetType: "entity",
+    proposalType: "entity.update",
+  },
+  {
+    status: "auto_approved",
+    targetType: "document",
+    proposalType: "document.create",
+  },
   { status: "pending", targetType: "entity", proposalType: "update" },
   { status: "approval_failed", targetType: "entity", proposalType: "update" },
   { status: "approved", targetType: "entity", proposalType: "entity.update" },
@@ -65,7 +73,12 @@ const ROWS = [
 const list = (input: Record<string, unknown>) =>
   proposalsRouter
     .createCaller({ db, authenticated: true, userId: VIEWER } as never)
-    .list({ workspaceId: WS, status: "all", limit: 50, ...input } as never) as Promise<{
+    .list({
+      workspaceId: WS,
+      status: "all",
+      limit: 50,
+      ...input,
+    } as never) as Promise<{
     items: Array<{ id: string }>;
   }>;
 
@@ -98,7 +111,16 @@ beforeAll(async () => {
     await q(
       `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, status, data, agent_user_id, created_by, created_at, updated_at)
        values ($1, $2, $3, $4, $5, $6, '{}'::jsonb, $7, $7, now() - ($8 || ' minutes')::interval, now())`,
-      [row.id, WS, row.targetType, randomUUID(), row.proposalType, row.status, AGENT, String(minute)]
+      [
+        row.id,
+        WS,
+        row.targetType,
+        randomUUID(),
+        row.proposalType,
+        row.status,
+        AGENT,
+        String(minute),
+      ]
     );
   }
 }, 120_000);
@@ -121,7 +143,10 @@ describe("proposals.list — excludeReceipts", () => {
   });
 
   it("the validated list keeps the person's own approvals when receipts leave", async () => {
-    const { items } = await list({ status: "validated", excludeReceipts: true });
+    const { items } = await list({
+      status: "validated",
+      excludeReceipts: true,
+    });
     expect(items.map((r) => r.id)).toEqual(
       ROWS.filter((r) => r.status === "approved").map((r) => r.id)
     );
