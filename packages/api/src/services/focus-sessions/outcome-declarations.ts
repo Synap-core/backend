@@ -13,9 +13,10 @@
  *                           proves it — `satisfyClaimsByEvidence`); by the
  *                           person when `owner: "human"`.
  *   + `verify` judge/capability/human, or evidence with an `evidenceKey`, on a
- *     deliverable → ALSO a criterion under the SAME key. The projection folds a
- *     slot and a criterion sharing a key into ONE outcome (rule 7), and the
- *     evidence verdict then leaves the slot to that criterion's evaluator.
+ *     deliverable → ALSO a criterion under the same key that NAMES the slot
+ *     (`outputKey`). The projection folds a slot and the criteria naming it
+ *     into ONE outcome (rule 7), and the evidence verdict then leaves the slot
+ *     to that criterion's evaluator.
  *
  * `expectedOutputs` / `criteria` / `addOutput` / `completeOutput` stay as
  * DEPRECATED aliases over the same storage — every door keeps accepting them.
@@ -110,11 +111,15 @@ function needsCriterion(o: OutcomeDeclaration): boolean {
   return o.verify.kind !== "evidence" || !!o.verify.evidenceKey;
 }
 
-function criterionOf(o: OutcomeDeclaration): SessionCriterion {
+function criterionOf(
+  o: OutcomeDeclaration,
+  checks?: { outputKey: string }
+): SessionCriterion {
   const verify = o.verify ?? { kind: "judge" as const };
   return {
     key: outcomeKeyOf(o),
     statement: o.label,
+    ...(checks ? { outputKey: checks.outputKey } : {}),
     ...(o.required !== undefined ? { required: o.required } : {}),
     check: {
       kind: verify.kind,
@@ -213,7 +218,9 @@ function splitDeclared(outcomes: readonly OutcomeDeclaration[]): {
       continue;
     }
     expectedOutputs.push(slotOf(o));
-    if (needsCriterion(o)) criteria.push(criterionOf(o));
+    if (needsCriterion(o)) {
+      criteria.push(criterionOf(o, { outputKey: outcomeKeyOf(o) }));
+    }
   }
   return { expectedOutputs, criteria };
 }

@@ -5,6 +5,7 @@
  * Each refusal row rules out one way a start nobody can end, or a destroy
  * nobody asked for, would get through.
  */
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   describeComputeDuration,
@@ -39,11 +40,27 @@ describe("readComputeRun — a start", () => {
       ttlMinutes: 120,
       maxSpendCents: 300,
       releaseVerb: "cloud_delete",
+      podRegistrationCodeHash: null,
     });
     // A string of digits is a whole number (an agent's JSON may quote it).
     expect(
       readComputeRun(provision(), { ttlMinutes: "60", maxSpendCents: "10" })
     ).toMatchObject({ kind: "start", ttlMinutes: 60, maxSpendCents: 10 });
+  });
+
+  it("a start carrying a pod registration code records the code's sha256, never the code (plan a640c5bb B1)", () => {
+    const code = "spr_" + "a2".repeat(20);
+    const run = readComputeRun(provision(), {
+      ttlMinutes: 120,
+      maxSpendCents: 50,
+      options: { user_data: `#cloud-config\nSYNAP_REGISTER_TOKEN='${code}'` },
+    });
+    expect(run).toMatchObject({
+      kind: "start",
+      // sha256 hex, the digest the Control Plane stores for the same code.
+      podRegistrationCodeHash: createHash("sha256").update(code).digest("hex"),
+    });
+    expect(JSON.stringify(run)).not.toContain(code);
   });
 
   it.each([
@@ -152,9 +169,22 @@ describe("the review card's words", () => {
       describeComputeStart("Hetzner Cloud", {
         ttlMinutes: 150,
         maxSpendCents: 1234,
+        podRegistrationCodeHash: null,
       })
     ).toBe(
       "Start a cloud machine (Hetzner Cloud) for 2 h 30 min, spending at most 12.34 in the provider's currency. It is destroyed automatically after 2 h 30 min."
+    );
+  });
+
+  it("a new pod's server is kept once it registers, and the card says so", () => {
+    expect(
+      describeComputeStart("Hetzner Cloud", {
+        ttlMinutes: 120,
+        maxSpendCents: 50,
+        podRegistrationCodeHash: "ab".repeat(32),
+      })
+    ).toBe(
+      "Start a server for a new pod (Hetzner Cloud), spending at most 0.50 in the provider's currency until it registers. Once it registers as your pod it is kept, and the provider bills it until you delete it; if it has not registered after 2 h, it is destroyed automatically."
     );
   });
 

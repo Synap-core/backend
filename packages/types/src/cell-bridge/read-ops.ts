@@ -55,6 +55,14 @@ export const CELL_BRIDGE_READ_OPS = {
   // host makes): a space package's overview. The page may only bound
   // Happened (`since`, an ISO instant); the host stamps the space and project.
   "lens.page": ["since"],
+  // One object by id, read by the procedure its own page reads:
+  // `focusSessions.getLean`, `playbooks.process`, `playbooks.scorecard`,
+  // `projects.get` with its pillars (`projectPillarsAnswer`).
+  "sessions.get": ["id"],
+  "playbook.process": ["playbookId"],
+  "playbook.scorecard": ["playbookId"],
+  // `id`, not `projectId`: naming one project is not a lens; the pod floors it.
+  "project.pillars": ["id"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 export type CellBridgeReadOp = keyof typeof CELL_BRIDGE_READ_OPS;
@@ -87,6 +95,36 @@ export function cellBridgeReadRefusal(
 ): string | null {
   if (!CELL_BRIDGE_SPACE_READ_OPS.has(op) || lens.workspaceId) return null;
   return `"${op}" reads one space, and this page is not in a space`;
+}
+
+/**
+ * The `project.pillars` answer: the three pillar fields of a `projects.get`
+ * read made with `include: ["pillars"]` (`mainGoal`, `pillars`, `rootHealth`;
+ * a part that failed is `{ status: "unavailable" }`). An ALLOWLIST: the
+ * project row itself is not part of this op. Every host answers through it.
+ * An answer without the three fields was not a pillars read: it throws, so the
+ * page gets an error, never an empty project.
+ */
+export function projectPillarsAnswer(answer: unknown): {
+  mainGoal: unknown;
+  pillars: unknown;
+  rootHealth: unknown;
+} {
+  const read = answer as Record<string, unknown> | null;
+  if (
+    !read ||
+    typeof read !== "object" ||
+    !("mainGoal" in read) ||
+    !("pillars" in read) ||
+    !("rootHealth" in read)
+  ) {
+    throw new Error("The project's pillars could not be read.");
+  }
+  return {
+    mainGoal: read.mainGoal,
+    pillars: read.pillars,
+    rootHealth: read.rootHealth,
+  };
 }
 
 /** A param value a host forwards: a primitive, nothing nested. */

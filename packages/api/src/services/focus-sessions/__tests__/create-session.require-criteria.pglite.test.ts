@@ -53,6 +53,15 @@ vi.mock("@synap/database", async (importOriginal) => {
       _db: unknown,
       input: { explicitProjectId?: string | null }
     ) => ({ projectId: input.explicitProjectId ?? null }),
+    // The space ladder echoes the caller's space too: placement is not what
+    // this file tests (`create-session.space-ladder.pglite.test.ts` is).
+    resolveSessionWorkspacePlacement: async (
+      _db: unknown,
+      input: { explicitWorkspaceId?: string | null }
+    ) => ({
+      workspaceId: input.explicitWorkspaceId ?? null,
+      rung: input.explicitWorkspaceId ? "explicit" : null,
+    }),
   };
 });
 

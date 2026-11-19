@@ -1698,7 +1698,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBySessionIds (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots.",
+      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, a session's space comes from its playbook, subject, parent session, project or your focus. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBySessionIds (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1717,11 +1717,11 @@
           },
           "workspaceId": {
             "type": "string",
-            "description": "Workspace ID the session belongs to. Optional — provide this OR projectId (at least one is required)."
+            "description": "Pin the session to a space. Usually omit it (see the description)."
           },
           "projectId": {
             "type": "string",
-            "description": "Project ID the session belongs to. Optional — provide this OR workspaceId (at least one is required). A project-scoped session needs no workspace membership."
+            "description": "Project ID the session belongs to; needs no workspace membership."
           },
           "trackId": {
             "type": "string",
@@ -2669,7 +2669,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Re-find a focus session — read-only. `outcomes` is what it must yield and needs: `outcomes.outcomes[]` (key, label, verify, met + metBy, state, evidence) and `outcomes.inputs[]` (what the person must give, each pointing at the outcome it blocks); `status:'unavailable'` means the read failed, not empty. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, goal = the goal it serves with end state, criteria marks and KPI, siblings = the goal's (else project's) other sessions running in parallel / done before / next, workUnits = the PRs and branches it recorded (prState = open/merged/closed + checks + deployed, from the dev events the pod recorded; absent = none recorded), run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user. `detail`: 'full' (default) is everything above, ~10k tokens; 'lean' (use it on a wake, ~2-3k tokens) is the outcomes (key, label, kind, met, state) and the inputs they wait on, `continuation.nextMove`, what is asked of the person (`userMustDecide`, `openRoomQuestions`), `workUnits`, `room` (the last 3 messages and the `unread` posts other sessions addressed to this one) and `gates` with only THIS session's deploys; 'deploys' reads the deploys a person approved on ANY of your sessions (`deploys[]`, newest first), optionally only those whose commit starts with `commitSha` — the answer to \"is commit X approved to ship?\" that lean leaves out.",
+      "description": "Re-find a focus session — read-only. `outcomes` is what it must yield and needs: `outcomes.outcomes[]` (key, label, verify, met + metBy, state, evidence) and `outcomes.inputs[]` (what the person must give, each pointing at the outcome it blocks); `status:'unavailable'` means the read failed, not empty. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, goal = the goal it serves with end state, criteria marks and KPI, siblings = the goal's (else project's) other sessions running in parallel / done before / next, workUnits = the PRs and branches it recorded (prState = open/merged/closed + checks + deployed, from the dev events the pod recorded; absent = none recorded), precedents = your earlier successful runs of this playbook and its scorecard, run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user. `detail`: 'full' (default) is everything above, ~10k tokens; 'lean' (use it on a wake, ~2-3k tokens) is the outcomes (key, label, kind, met, state) and the inputs they wait on, `continuation.nextMove`, what is asked of the person (`userMustDecide`, `openRoomQuestions`), `workUnits`, `room` (the last 3 messages and the `unread` posts other sessions addressed to this one) and `gates` with only THIS session's deploys; 'deploys' reads the deploys a person approved on ANY of your sessions (`deploys[]`, newest first), optionally only those whose commit starts with `commitSha` — the answer to \"is commit X approved to ship?\" that lean leaves out.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3044,7 +3044,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "How a kind's or role's work flows in a space, in ONE read — read-only. `states` in declared order, each with the flow stage(s) that own it (`owners`: playbook, stage, gate, executor; [] = no flow moves things there; two = a conflict to fix), its count and `cards` (who works each, `next` step + the stage owning it); `unclassified` things; `flows` (active playbooks working it: stages with the status each owns, workers, open runs and `onOlderVersion`); `space.primaryOutput`; `withheld` = parts your grant does not reach (not 'none'). A role (e.g. lead) reads people and companies together; each card names its kind. Use it to see where things stand and which flow to run next, instead of reading the board and the playbooks apart.",
+      "description": "How a kind's or role's work flows in a space, in ONE read — read-only. `states` in declared order, each with the flow stage(s) that own it (`owners`: playbook, stage, gate, executor; [] = no flow moves things there; two = a conflict to fix), its count and `cards` (who works each, `next` step + the stage owning it); `unclassified` things; `flows` (active playbooks working it: stages with the status each owns, workers, open runs and `onOlderVersion`, `startsAfter` = the playbooks whose run end starts it); `space.primaryOutput` (and `helpers`: kinds worked here that are not an output); `withheld` = parts your grant does not reach (not 'none'). A role (e.g. lead) reads people and companies together; each card names its kind. Use it to see where things stand and which flow to run next, instead of reading the board and the playbooks apart.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3935,7 +3935,8 @@
                     "enters_status",
                     "count",
                     "schedule",
-                    "manual"
+                    "manual",
+                    "run_ended"
                   ]
                 },
                 "status": {
@@ -3952,6 +3953,15 @@
                   "type": "integer",
                   "minimum": 2,
                   "maximum": 10000
+                },
+                "playbook": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "outcome": {
+                  "type": "string",
+                  "enum": ["done", "not_done"]
                 },
                 "size": {
                   "type": "string",
@@ -4011,7 +4021,7 @@
               "required": ["on"],
               "additionalProperties": false
             },
-            "description": "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition."
+            "description": "Workers: when the process starts on its subject (`run_ended` = a link: when a run of `playbook` ends). Mode 'propose' (default) or 'run' (only when cheap and safe). Grammar: skill system/synap/processes. Needs subjectProfileSlug; each compiles to a governed rule the owner can pause."
           },
           "humanOnlyStatuses": {
             "maxItems": 50,
@@ -4189,7 +4199,7 @@
           },
           "guidance": {
             "type": "array",
-            "description": "Rules every run follows, in order: [{ ref: 'kind:<slug>'|'skill:<slug>', label?, when?, where?: { <prop>: [values] } }]. Person-approved versions only.",
+            "description": "Rules every run follows, in order: [{ ref: 'kind:<slug>'|'skill:<slug>'|'subject:<relation>', label?, when?, where?: {<prop>: [values]} }]. Person-approved only.",
             "items": {
               "type": "object"
             }
@@ -4593,7 +4603,7 @@
           },
           "guidance": {
             "type": "array",
-            "description": "Rules every run follows, in order: [{ ref: 'kind:<slug>'|'skill:<slug>', label?, when?, where?: { <prop>: [values] } }]. Person-approved versions only.",
+            "description": "Rules every run follows, in order: [{ ref: 'kind:<slug>'|'skill:<slug>'|'subject:<relation>', label?, when?, where?: {<prop>: [values]} }]. Person-approved only.",
             "items": {
               "type": "object"
             }
@@ -4643,7 +4653,8 @@
                     "enters_status",
                     "count",
                     "schedule",
-                    "manual"
+                    "manual",
+                    "run_ended"
                   ]
                 },
                 "status": {
@@ -4660,6 +4671,15 @@
                   "type": "integer",
                   "minimum": 2,
                   "maximum": 10000
+                },
+                "playbook": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "outcome": {
+                  "type": "string",
+                  "enum": ["done", "not_done"]
                 },
                 "size": {
                   "type": "string",
@@ -4719,7 +4739,7 @@
               "required": ["on"],
               "additionalProperties": false
             },
-            "description": "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition."
+            "description": "Workers: when the process starts on its subject (`run_ended` = a link: when a run of `playbook` ends). Mode 'propose' (default) or 'run' (only when cheap and safe). Grammar: skill system/synap/processes. Needs subjectProfileSlug; each compiles to a governed rule the owner can pause."
           },
           "humanOnlyStatuses": {
             "maxItems": 50,
@@ -8568,7 +8588,8 @@
                           "received",
                           "completed",
                           "approved",
-                          "rejected"
+                          "rejected",
+                          "closed"
                         ]
                       },
                       "conditions": {
@@ -8817,7 +8838,8 @@
                           "received",
                           "completed",
                           "approved",
-                          "rejected"
+                          "rejected",
+                          "closed"
                         ]
                       },
                       "conditions": {

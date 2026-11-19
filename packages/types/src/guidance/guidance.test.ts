@@ -5,6 +5,7 @@ import {
   GUIDANCE_ORDERED_SENTENCE,
   MAX_GUIDANCE_ITEMS,
   parseGuidanceRef,
+  podLocalGuidanceProblem,
   renderGuidance,
   validateGuidanceDeclaration,
   validateGuidanceList,
@@ -95,7 +96,40 @@ describe("parseGuidanceRef / validators", () => {
     expect(parseGuidanceRef("entity:2c0f1a3e")).toBeNull();
     expect(parseGuidanceRef("kind:Brand Voice")).toBeNull();
     expect(parseGuidanceRef("brand-voice-guide")).toBeNull();
+    expect(parseGuidanceRef("subject:Uses Brand")).toBeNull();
     expect(parseGuidanceRef(42)).toBeNull();
+  });
+
+  it("accepts a subject relation and one record id", () => {
+    expect(parseGuidanceRef("subject:uses_brand")).toEqual({
+      type: "subject",
+      slug: "uses_brand",
+    });
+    const id = "2C0F1A3E-0000-4000-8000-000000000001";
+    expect(parseGuidanceRef(`entity:${id}`)).toEqual({
+      type: "entity",
+      id: id.toLowerCase(),
+    });
+    expect(
+      validateGuidanceDeclaration({ ref: "subject:uses_brand" })
+    ).toBeNull();
+    // `where` filters a kind's rows only.
+    expect(
+      validateGuidanceDeclaration({ ref: "subject:x", where: { a: ["b"] } })
+    ).toMatch(/only a kind/);
+  });
+
+  it("names an entity ref as pod-local; every other ref travels", () => {
+    expect(
+      podLocalGuidanceProblem({
+        ref: "entity:2c0f1a3e-0000-4000-8000-000000000001",
+      })
+    ).toMatch(/cannot travel in a package or the catalog/);
+    expect(podLocalGuidanceProblem({ ref: "subject:uses_brand" })).toBeNull();
+    expect(
+      podLocalGuidanceProblem({ ref: "kind:brand-voice-guide" })
+    ).toBeNull();
+    expect(podLocalGuidanceProblem({ ref: "skill:x" })).toBeNull();
   });
 
   it("refuses unknown keys, a where on a skill and an empty where list", () => {

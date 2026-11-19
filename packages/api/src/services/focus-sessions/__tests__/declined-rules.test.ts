@@ -32,7 +32,11 @@ const DECLINED = { type: "declined" as const, reason: "not this one" };
 
 describe("a refusal meets no criterion", () => {
   const criteria = [
-    { key: "contract-signed", check: { kind: "human" as const } },
+    {
+      key: "contract-signed",
+      check: { kind: "human" as const },
+      outputKey: "contract-signed",
+    },
   ];
   const task = (mode: "act" | "provide") =>
     ({

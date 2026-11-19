@@ -61,6 +61,7 @@ const actionVerbSchema = z.enum([
   "completed",
   "approved",
   "rejected",
+  "closed",
 ]);
 
 // The WIRE half of `TriggerSubjectCategory`. Kept as its own literal list —

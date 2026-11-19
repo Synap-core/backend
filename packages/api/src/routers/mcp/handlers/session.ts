@@ -556,7 +556,7 @@ export const sessionHandlers: McpHandlerMap = {
       userId,
       apiKeyScopes,
       agentUserId,
-      lensWorkspaceId,
+      confinedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // MCP tool schemas are ADVISORY — nothing validates the args server-side,
@@ -669,12 +669,12 @@ export const sessionHandlers: McpHandlerMap = {
     try {
       result = await createFocusSession({
         userId,
-        // The ambient lens (`?workspaceId=`, or the agent's workspace focus) is
-        // resolved and access-checked by the adapter; an EXPLICIT arg still wins.
-        // Same precedence as `synap_create_rule` (`rule.ts`). Without it a start
-        // ignored the focus its own captures were placed by (plan A2-a).
-        workspaceId:
-          (args.workspaceId as string | undefined) ?? lensWorkspaceId,
+        // Only what the caller PINNED is explicit: its `workspaceId` (or the
+        // connector's `?workspaceId=`), confined to a bound service key's
+        // space. The agent's workspace focus is NOT folded in here: it is the
+        // last rung of the space ladder (`resolveSessionWorkspacePlacement`,
+        // W3 D1 a), below the playbook, subject, parent and project home.
+        workspaceId: confinedWorkspaceId,
         projectId: args.projectId as string | undefined,
         trackId:
           typeof args.trackId === "string" && args.trackId.trim()
@@ -807,6 +807,7 @@ export const sessionHandlers: McpHandlerMap = {
             stageKey: result.session.currentStage ?? null,
             stages: result.session.stages,
             userId,
+            subjectEntityId: result.session.subjectEntityId ?? null,
           })
         : undefined;
     // Recall runs in the background right after a start; this says so, and
@@ -2049,6 +2050,7 @@ export const sessionHandlers: McpHandlerMap = {
                   stageKey: result.session.currentStage ?? null,
                   stages: result.session.stages,
                   userId,
+                  subjectEntityId: result.session.subjectEntityId ?? null,
                 }),
               }
             : {}),

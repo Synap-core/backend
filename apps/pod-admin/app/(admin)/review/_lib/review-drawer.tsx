@@ -283,7 +283,6 @@ function ReviewDetail({
           showHeading={false}
           showContext={!open.sentence}
           story={story}
-          identity={viewer.identity}
           barClassName={DECISION_BAR_PIN}
         />
       )}

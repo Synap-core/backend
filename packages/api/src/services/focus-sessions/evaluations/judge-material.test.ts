@@ -14,7 +14,11 @@ const h = vi.hoisted(() => ({
   judgeCalls: [] as Array<{
     material: string;
     excludeModel?: string;
-    criteria: Array<{ key: string; hint?: string }>;
+    criteria: Array<{
+      key: string;
+      hint?: string;
+      output?: { key: string; kind: string; label: string };
+    }>;
   }>,
   isCap: 16_000,
   outputs: [] as Array<Record<string, unknown>>,
@@ -252,6 +256,38 @@ describe("judge rung — material is the work, not the labels", () => {
       key: "mapped",
       status: "skipped",
     });
+  });
+});
+
+describe("judge rung — a criterion is judged on the output it names (W4)", () => {
+  it("sends the output a criterion names by outputKey, and none for one that names no output", async () => {
+    h.criteria = [
+      {
+        key: "mapped",
+        statement: "The current state is mapped with file:line evidence",
+        check: { kind: "judge" },
+        outputKey: "current-state-audit",
+      },
+      {
+        // Shares the slot's key but names no output: judged on the whole work.
+        key: "current-state-audit",
+        statement: "The audit is readable",
+        check: { kind: "judge" },
+      },
+    ];
+    await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    expect(h.judgeCalls).toHaveLength(1);
+    expect(h.judgeCalls[0]!.criteria.map((c) => [c.key, c.output])).toEqual([
+      [
+        "mapped",
+        {
+          key: "current-state-audit",
+          kind: "document",
+          label: "Current-state audit",
+        },
+      ],
+      ["current-state-audit", undefined],
+    ]);
   });
 });
 

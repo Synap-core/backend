@@ -3572,10 +3572,12 @@ async function startTrackSession(
   // Dynamic: `create-session.ts` imports this module (resolveTrackFiling).
   const { createFocusSession } =
     await import("../focus-sessions/create-session.js");
+  // No space named: the session space ladder places it in the project's home
+  // (`project_home`) when the actor may start work there, never through a
+  // join proposal.
   const result = await createFocusSession({
     userId: actor.userId,
     agentUserId: actor.agentUserId ?? undefined,
-    workspaceId: project.workspaceId ?? null,
     projectId: track.projectId,
     trackId: track.id,
     title: input.title?.trim() || null,
@@ -3689,8 +3691,10 @@ export async function startStageSession(input: {
 
   // PER-STEP DOMAIN (W2a): the stage names a workspace TEMPLATE; work it in a
   // live workspace of that template the caller can write to (one the project
-  // already uses wins). None ⇒ the project's home, REPORTED, never silent.
-  let sessionWorkspaceId: string | null = project.workspaceId ?? null;
+  // already uses wins). None ⇒ the project's home through the session space
+  // ladder (`project_home`, only where the actor may start work), REPORTED,
+  // never silent.
+  let sessionWorkspaceId: string | null = null;
   let domainWorkspaceId: string | null = null;
   let domainFallback:
     { wanted: string; reason: StageDomainFallbackReason } | undefined;

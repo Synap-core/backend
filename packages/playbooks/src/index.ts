@@ -837,11 +837,22 @@ export interface PlaybookActivator {
    * `count` — at least `min` things sit in `status` (always per_moment).
    * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
    * `manual` — a button, never by itself: compiles no rule.
+   * `run_ended` — a LINK: a run of the playbook named in `playbook` ended;
+   *   the new run works on the same subject.
    * Mirror of `WorkerActivator` (`@synap-core/types/workers`); this package
    * is dependency-free, the pod's zod schema (`playbook-process.ts`) is
    * `satisfies` both.
    */
-  on: "created" | "enters_status" | "count" | "schedule" | "manual";
+  on:
+    "created" | "enters_status" | "count" | "schedule" | "manual" | "run_ended";
+  /**
+   * Required for `run_ended`, and only it: the playbook whose run ending
+   * starts this one, by name (the catalog's spelling) or id, in the same
+   * space or pod-wide.
+   */
+  playbook?: string;
+  /** `run_ended` only: `done` or `not_done` (`WORKER_RUN_OUTCOMES`); absent = any end. */
+  outcome?: "done" | "not_done";
   /** Required for `enters_status` / `count`; optional for `schedule`. */
   status?: string;
   /** Required for `schedule`. */
@@ -1878,6 +1889,8 @@ export interface SessionCriterion {
   checkKind?: CriterionCheckMeaning;
   /** R7 — about the result (absent = result) or the method. */
   about?: CriterionAbout;
+  /** The key of the session output this criterion checks (absent = none named). */
+  outputKey?: string;
 }
 
 function optionalString(v: unknown): string | undefined {
@@ -1909,6 +1922,7 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
     const evidenceKey = optionalString(check!.evidenceKey);
     const hint = optionalString(check!.hint);
     const stageKey = optionalString(e.stageKey);
+    const outputKey = optionalString(e.outputKey);
     // Closed sets: an unknown meaning or `about` is dropped (the criterion is
     // kept) — the reader stays tolerant, the write doors are strict.
     const checkKind = (CRITERION_CHECK_MEANINGS as readonly unknown[]).includes(
@@ -1933,6 +1947,7 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
       ...(stageKey ? { stageKey } : {}),
       ...(checkKind ? { checkKind } : {}),
       ...(about ? { about } : {}),
+      ...(outputKey ? { outputKey } : {}),
     });
   }
   return out;
@@ -1976,7 +1991,73 @@ export const STAGE_LESSON_MAX_CHARS = 200;
  * so a legacy stage with no `lessons` reads as `[]`.
  */
 export function readStageLessons(stage: unknown): string[] {
-  const raw = (stage as { lessons?: unknown } | null | undefined)?.lessons;
+  return readLessonLines(
+    (stage as { lessons?: unknown } | null | undefined)?.lessons
+  );
+}
+
+/**
+ * The PLAYBOOK-level lessons (`playbooks.metadata.lessons`):
+ * what earlier runs taught when no stage can hold it (a playbook with no
+ * stages, or a criterion of the whole playbook). Same bound and the same
+ * whole-list revision as a stage's.
+ */
+export function readPlaybookLessons(metadata: unknown): string[] {
+  return readLessonLines(
+    (metadata as { lessons?: unknown } | null | undefined)?.lessons
+  );
+}
+
+/** One tool or skill the successful runs of a playbook used. */
+export interface WhatWorkedPart {
+  kind: "tool" | "skill";
+  name: string;
+  /** How many of the successful runs used it. */
+  runs: number;
+}
+
+/**
+ * What the successful runs of a playbook used (`playbooks.metadata.whatWorked`,
+ * distilled by the lessons scanner from the runs' recorded
+ * `session --used--> tool|skill` edges and approved by a person.
+ */
+export interface WhatWorked {
+  /** The successful runs it was read from. */
+  runs: number;
+  parts: WhatWorkedPart[];
+}
+
+/** At most this many parts are kept. */
+export const MAX_WHAT_WORKED_PARTS = 8;
+
+/** Tolerant read of `metadata.whatWorked`; `null` when absent or empty. */
+export function readWhatWorked(metadata: unknown): WhatWorked | null {
+  const raw = (metadata as { whatWorked?: unknown } | null | undefined)
+    ?.whatWorked as { runs?: unknown; parts?: unknown } | undefined;
+  if (!raw || typeof raw !== "object" || !Array.isArray(raw.parts)) return null;
+  const runs = typeof raw.runs === "number" && raw.runs > 0 ? raw.runs : 0;
+  const parts: WhatWorkedPart[] = [];
+  for (const p of raw.parts) {
+    if (parts.length >= MAX_WHAT_WORKED_PARTS) break;
+    const part = p as Partial<WhatWorkedPart> | null;
+    if (
+      (part?.kind === "tool" || part?.kind === "skill") &&
+      typeof part.name === "string" &&
+      part.name.trim() &&
+      typeof part.runs === "number" &&
+      part.runs > 0
+    ) {
+      parts.push({
+        kind: part.kind,
+        name: part.name.trim().slice(0, STAGE_LESSON_MAX_CHARS),
+        runs: part.runs,
+      });
+    }
+  }
+  return runs > 0 && parts.length > 0 ? { runs, parts } : null;
+}
+
+function readLessonLines(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const out: string[] = [];
   const seen = new Set<string>();

@@ -49,7 +49,10 @@ import {
   readPlaybookParams,
 } from "@synap/playbooks";
 import { evaluateSubjectFilter } from "../playbooks/subject-filter.js";
-import { isPinnedStrategy } from "../playbooks/pinned-subject.js";
+import {
+  dedicatedSubjectId,
+  isPinnedStrategy,
+} from "../playbooks/pinned-subject.js";
 
 export type BindingRung = "explicit" | "subject" | "parent" | "main-red";
 
@@ -74,6 +77,8 @@ export interface BindingSituation {
    */
   workspaceId: string | null;
   subject?: {
+    /** The subject's id: a playbook dedicated to one record binds on it. */
+    id?: string | null;
     /** The subject's kind (profile slug). */
     kind: string | null;
     properties: Record<string, unknown>;
@@ -149,6 +154,8 @@ function subjectFits(
   subject: BindingSituation["subject"]
 ): boolean {
   const kind = declaredSubjectKind(p);
+  const dedicated = dedicatedSubjectId(p.subjectProfile);
+  if (dedicated && dedicated !== (subject?.id ?? null)) return false;
   return kind == null || kind === (subject?.kind ?? null);
 }
 
@@ -158,6 +165,8 @@ function coversSubject(
   subject: NonNullable<BindingSituation["subject"]>
 ): boolean {
   if (declaredSubjectKind(p) !== subject.kind) return false;
+  const dedicated = dedicatedSubjectId(p.subjectProfile);
+  if (dedicated && dedicated !== (subject.id ?? null)) return false;
   const filter = (p.subjectProfile as { filter?: unknown } | null)?.filter;
   if (evaluateSubjectFilter(filter, subject.properties) !== "pass") {
     return false;
@@ -192,7 +201,12 @@ export function resolveBindingRung(
   let restrictTo: Set<string> | null = null;
   let subjectOffer: Extract<BindingDecision, { kind: "offer" }> | null = null;
   if (subject?.kind) {
-    const fit = live.filter((p) => coversSubject(p, subject));
+    const covering = live.filter((p) => coversSubject(p, subject));
+    // A playbook dedicated to THIS record outranks the kind's general ones.
+    const dedicated = covering.filter(
+      (p) => dedicatedSubjectId(p.subjectProfile) != null
+    );
+    const fit = dedicated.length > 0 ? dedicated : covering;
     const ownSpace = fit.filter((p) => ws != null && p.workspaceId === ws);
     const tier = ownSpace.length > 0 ? ownSpace : fit;
     if (tier.length === 1) {

@@ -41,7 +41,10 @@ export type HowOften =
   | { kind: "event"; activatorKey: string }
   | { kind: "until_done" };
 
-/** The activator triggers that are "something happens". */
+/**
+ * The activator triggers that are "something happens". Not `run_ended`: a
+ * link between playbooks runs space-wide, never enabled for one goal.
+ */
 const EVENT_TRIGGERS: ReadonlySet<WorkerActivator["on"]> = new Set([
   "created",
   "enters_status",

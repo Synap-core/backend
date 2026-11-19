@@ -162,8 +162,8 @@ const TASK_PROFILE = randomUUID();
 const OTHER = randomUUID(); // active, no subject
 const GRANT_PROFILE = randomUUID();
 const GRANTING = randomUUID(); // active, runs on a grant-kind, GRANTS a tool
-// A space the user owns, a project whose home is that space, and a project
-// with no home space (pod-personal).
+// A space the user is an owner-member of, a project whose home is that space,
+// and a project with no home space (pod-personal).
 const SPACE = randomUUID();
 const HOMED_PROJECT = randomUUID();
 const HOMELESS_PROJECT = randomUUID();
@@ -284,6 +284,10 @@ beforeAll(async () => {
     [SPACE, USER]
   );
   await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+    [randomUUID(), SPACE, USER]
+  );
+  await q(
     `insert into projects (id, user_id, workspace_id, name, created_at, updated_at) values ($1, $3, $2, 'Homed', now(), now()), ($4, $3, null, 'Homeless', now(), now())`,
     [HOMED_PROJECT, SPACE, USER, HOMELESS_PROJECT]
   );
@@ -365,18 +369,19 @@ describe("at start: a fact binds through the follow door", () => {
   });
 });
 
-describe("a project session with no space of its own reads its project's home space", () => {
-  it("a lane in a project inherits its parent's space playbook", async () => {
+describe("binding reads the space the session space ladder placed (W3)", () => {
+  it("a lane in a project sits in its parent's space and inherits its space playbook", async () => {
     const parent = await start({
       projectId: HOMED_PROJECT,
       templateId: IN_SPACE,
     });
-    expect(parent.session.workspaceId ?? null).toBeNull();
+    expect(parent.session.workspaceId).toBe(SPACE);
     expect((await rowOf(parent.session.id)).playbook_id).toBe(IN_SPACE);
     const child = await start({
       projectId: HOMED_PROJECT,
       parentSessionId: parent.session.id,
     });
+    expect(child.session.workspaceId).toBe(SPACE);
     const row = await rowOf(child.session.id);
     expect(row.playbook_id).toBe(IN_SPACE);
     expect(row.metadata.boundBy).toMatchObject({ rung: "parent" });
@@ -392,16 +397,13 @@ describe("a project session with no space of its own reads its project's home sp
     expect(row.metadata.boundBy).toMatchObject({ rung: "main-red" });
   });
 
-  it("a project with no home space still never binds another space's playbook", async () => {
-    const parent = await start({
-      projectId: HOMED_PROJECT,
-      templateId: IN_SPACE,
-    });
-    const child = await start({
+  it("a session the ladder leaves in no space never binds a space's playbook", async () => {
+    const res = await start({
       projectId: HOMELESS_PROJECT,
-      parentSessionId: parent.session.id,
+      title: "main red: backend Full suite @abcdef12",
     });
-    expect((await rowOf(child.session.id)).playbook_id).toBeNull();
+    expect(res.session.workspaceId ?? null).toBeNull();
+    expect((await rowOf(res.session.id)).playbook_id).toBeNull();
   });
 });
 

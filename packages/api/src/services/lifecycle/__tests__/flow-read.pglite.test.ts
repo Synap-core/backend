@@ -15,7 +15,11 @@
  *  - a flow of another space, or an archived one, listed in this space;
  *  - a role read losing the kind of each thing (people and companies), or a
  *    role card's blocker not reading what the ROLE's step requires;
- *  - the space's primary output not read from its settings;
+ *  - the space's primary output and its helper kinds not read from its
+ *    settings;
+ *  - a live link between playbooks (a `link` automation, `run_ended`) not
+ *    drawn as the followed playbook on the flow it starts, or a link whose
+ *    automation is no longer active still drawn;
  *  - a card's `blocker` not the one `statusOf` returns for the thing (a
  *    person's owed slot, an agent's slot that declares `blocks`), one read per
  *    card instead of one for the board, a card with nothing blocking it not
@@ -233,7 +237,12 @@ beforeAll(async () => {
       WS,
       "Builder",
       {
-        intent: { label: "Product", produces: ["finding"], primary: "finding" },
+        intent: {
+          label: "Product",
+          produces: ["finding", "note"],
+          primary: "finding",
+          helpers: ["note"],
+        },
       },
     ],
     [WS2, "Other", {}],
@@ -359,6 +368,37 @@ beforeAll(async () => {
     workspaceId: null,
     stages: [{ key: "qualify", name: "Qualify", subjectStatus: "qualified" }],
   });
+
+  // A LINK: "Close a finding" starts when a run of "Fix a finding" is done —
+  // its compiled rule, linked with role `link`. A second link whose
+  // automation was archived (the rule retired) is not drawn.
+  for (const [status, closedAs] of [
+    ["active", "done"],
+    ["archived", "not_done"],
+  ] as const) {
+    const filters = {
+      playbookId: ids.fix,
+      userId: USER,
+      attached: false,
+      closedAs,
+    };
+    const automationId = randomUUID();
+    await q(
+      `insert into automations (id, name, status, trigger_type, trigger_config) values ($1,'link',$2,'event',$3::jsonb)`,
+      [
+        automationId,
+        status,
+        JSON.stringify({
+          eventPattern: "focus_session.closed.completed",
+          filters,
+        }),
+      ]
+    );
+    await q(
+      `insert into playbook_automations (id, playbook_id, automation_id, role) values (gen_random_uuid(),$1,$2,'link')`,
+      [ids.close, automationId]
+    );
+  }
 });
 
 describe("flow.of — a kind (finding-like)", () => {
@@ -424,14 +464,34 @@ describe("flow.of — a kind (finding-like)", () => {
     expect(f.withheld).toEqual([]);
   });
 
-  it("reads the space's primary output from its settings", async () => {
+  it("draws a live link as the playbook whose run end starts the flow", async () => {
+    const f = await read({ profileSlug: "finding", workspaceId: WS });
+    const close = f.flows.find((p) => p.id === ids.close)!;
+    expect(close.startsAfter).toEqual([
+      {
+        playbookId: ids.fix,
+        playbookName: "Fix a finding",
+        outcome: "done",
+      },
+    ]);
+    expect(f.flows.find((p) => p.id === ids.fix)!.startsAfter).toEqual([]);
+    // The wire carries it (the Hub schema parses it).
+    expect(flowOfSchema.parse(f).flows).toHaveLength(f.flows.length);
+  });
+
+  it("reads the space's primary output and its helper kinds from its settings", async () => {
     const f = await read({ profileSlug: "finding", workspaceId: WS });
     expect(f.space).toEqual({
       primaryOutput: "finding",
-      produces: ["finding"],
+      produces: ["finding", "note"],
+      helpers: ["note"],
     });
     const other = await read({ profileSlug: "finding", workspaceId: WS2 });
-    expect(other.space).toEqual({ primaryOutput: null, produces: [] });
+    expect(other.space).toEqual({
+      primaryOutput: null,
+      produces: [],
+      helpers: [],
+    });
     expect(other.flows.map((p) => p.name).sort()).toEqual([
       "Close a finding",
       "Elsewhere",

@@ -1040,6 +1040,8 @@ export async function executeCapability(input: {
                 ttlMinutes: compute.ttlMinutes,
                 maxSpendCents: compute.maxSpendCents,
                 releaseVerb: compute.releaseVerb,
+                // A new pod's server: kept once it registers (plan B1).
+                ...(compute.podRegistrationCodeHash ? { podServer: true } : {}),
               },
             }
           : {}),

@@ -181,6 +181,7 @@ import {
   mergeExpectedOutputs,
   fileableExpectedOutputs,
   droppedAskWarnings,
+  outputKeyWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
 import { restatedAskHints } from "../../../services/focus-sessions/ask-text.js";
@@ -2988,7 +2989,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               ),
               ...outcomeWarnings,
             ]
-          : outcomeWarnings;
+          : [...outcomeWarnings];
+      // A criterion whose outputKey names no output of this session.
+      warnings.push(
+        ...outputKeyWarnings(
+          patch.criteria as SessionCriterion[] | undefined,
+          updated.expectedOutputs
+        )
+      );
 
       return c.json({
         ...updated,

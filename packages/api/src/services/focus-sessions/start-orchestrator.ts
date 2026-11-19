@@ -51,8 +51,10 @@ import {
   getRequestGrant,
   links,
   users,
+  readWorkspacePlacementRung,
   setSessionStatus,
   workUnitActorOf,
+  type SessionWorkspaceRung,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
@@ -139,6 +141,8 @@ type ChildRow = {
   goal: string;
   status: string;
   workspaceId: string | null;
+  /** The space-ladder rung that placed it (`readWorkspacePlacementRung`). */
+  workspaceRung: SessionWorkspaceRung | null;
   projectId: string | null;
   trackId: string | null;
 };
@@ -155,6 +159,7 @@ async function loadOwnedSessions(
       goal: focusSessions.goal,
       status: focusSessions.status,
       workspaceId: focusSessions.workspaceId,
+      metadata: focusSessions.metadata,
       projectId: focusSessions.projectId,
       trackId: focusSessions.trackId,
     })
@@ -165,7 +170,12 @@ async function loadOwnedSessions(
         eq(focusSessions.userId, ownerId)
       )
     );
-  return new Map(rows.map((r) => [r.id, r as ChildRow]));
+  return new Map(
+    rows.map(({ metadata, ...r }) => [
+      r.id,
+      { ...r, workspaceRung: readWorkspacePlacementRung(metadata) } as ChildRow,
+    ])
+  );
 }
 
 /** The one value every row shares, else null. */
@@ -177,24 +187,34 @@ function shared<T>(rows: readonly ChildRow[], pick: (r: ChildRow) => T | null) {
 /**
  * Where the orchestrator is filed: the goal every picked session shares, else
  * their shared project, else their shared space; with none shared, the first
- * picked session's project (or space). Never a goal it does not share.
+ * picked session's project (or space). Never a goal it does not share. A
+ * copied space carries the rung that placed the sessions it came from (when
+ * they share one), so the orchestrator keeps their reach.
  */
 export function orchestratorPlacement(rows: readonly ChildRow[]): {
   trackId: string | null;
   projectId: string | null;
   workspaceId: string | null;
+  workspaceRung: SessionWorkspaceRung | null;
 } {
   const trackId = shared(rows, (r) => r.trackId);
   const projectId = shared(rows, (r) => r.projectId);
   const workspaceId = shared(rows, (r) => r.workspaceId);
   if (trackId || projectId || workspaceId) {
-    return { trackId, projectId, workspaceId };
+    return {
+      trackId,
+      projectId,
+      workspaceId,
+      workspaceRung: workspaceId ? shared(rows, (r) => r.workspaceRung) : null,
+    };
   }
   const first = rows[0];
+  const firstSpace = first?.projectId ? null : (first?.workspaceId ?? null);
   return {
     trackId: null,
     projectId: first?.projectId ?? null,
-    workspaceId: first?.projectId ? null : (first?.workspaceId ?? null),
+    workspaceId: firstSpace,
+    workspaceRung: firstSpace ? (first?.workspaceRung ?? null) : null,
   };
 }
 
@@ -471,7 +491,12 @@ export async function applyOrchestration(p: {
     proposedSessionId: p.orchestratorSessionId,
     ...(placement.trackId ? { trackId: placement.trackId } : {}),
     ...(placement.projectId ? { projectId: placement.projectId } : {}),
-    ...(placement.workspaceId ? { workspaceId: placement.workspaceId } : {}),
+    ...(placement.workspaceId
+      ? {
+          workspaceId: placement.workspaceId,
+          workspaceRung: placement.workspaceRung,
+        }
+      : {}),
     title: p.title,
     goal: p.brief,
     expectedOutputs: orchestratorSlots(open.length),

@@ -44,7 +44,6 @@ import {
   insertPendingProposal,
   SupersedesRefusedError,
   SUPERSEDED_BY_KEY,
-  SUPERSEDED_REASON,
   type InsertPendingProposalInput,
 } from "./insert-pending-proposal.js";
 import { runWithSupersedes } from "./request-write-context.js";
@@ -166,7 +165,9 @@ describe("supersedes: a filing that replaces a failed proposal", () => {
     const old = await rowOf(failed);
     expect(old.status).toBe("withdrawn");
     expect(old.data[SUPERSEDED_BY_KEY]).toBe(filed.proposal.id);
-    expect(old.data.withdrawReason).toBe(SUPERSEDED_REASON);
+    // Why it ended is `ended.reason`; no sentence stored as if its author
+    // wrote it (finding 156068a6).
+    expect(old.data).not.toHaveProperty("withdrawReason");
     // An end with no person names none and claims no review time (decision
     // F2): readers date it by its updatedAt, which is now.
     expect(old.reviewed_by).toBeNull();

@@ -5,7 +5,10 @@ import {
   describeToolRun,
   describeVerbRun,
   describeVerbRunProposal,
+  findPodRegistrationCode,
   hasVerbRunHeading,
+  maskPodRegistrationCodes,
+  POD_REGISTRATION_CODE_MASK,
   toolRunActionLabel,
   toolRunEdits,
 } from "./capability-run.js";
@@ -145,6 +148,27 @@ describe("describeToolRun", () => {
     expect(byKey.get("pin")).not.toHaveProperty("value");
     expect(byKey.get("city")?.value).toBe("Paris");
     expect(JSON.stringify(run)).not.toContain("tok_live_123");
+  });
+
+  it("never shows a pod registration code, wherever the agent put it (plan a640c5bb B1)", () => {
+    const code = "spr_" + "a2".repeat(20);
+    const run = describeToolRun({
+      verbId: "hetzner_create_server",
+      parameters: {
+        name: "alpha",
+        options: {
+          user_data: `#cloud-config\nSYNAP_REGISTER_TOKEN='${code}'\n`,
+          labels: [
+            `fetch https://api.synap.live/installer/user-data?token=${code}`,
+          ],
+        },
+      },
+      isSecretName,
+    });
+    expect(JSON.stringify(run)).not.toContain(code);
+    expect(JSON.stringify(run)).toContain(POD_REGISTRATION_CODE_MASK);
+    const byKey = new Map(run!.parameters.map((p) => [p.key, p]));
+    expect(byKey.get("name")?.value).toBe("alpha");
   });
 
   it("leaves the agent's reasoning to the review's own line", () => {
@@ -310,5 +334,41 @@ describe("toolRunEdits: what a person changed before approving", () => {
       )
     ).toEqual([]);
     expect(toolRunEdits(null, { isSecretName })).toEqual([]);
+  });
+});
+
+describe("pod registration codes (plan a640c5bb B1)", () => {
+  const code = "spr_" + "q7".repeat(20);
+
+  it("finds a code anywhere in the arguments, and nothing else", () => {
+    expect(
+      findPodRegistrationCode({ a: 1, b: { c: [`x token=${code}&y`] } })
+    ).toBe(code);
+    expect(findPodRegistrationCode({ text: "spr_short", n: 3 })).toBeNull();
+    expect(findPodRegistrationCode(`xspr_${"a2".repeat(20)}`)).toBeNull();
+  });
+
+  it("masks every code and leaves the rest as it was", () => {
+    expect(
+      maskPodRegistrationCodes({ s: `A='${code}' B='${code}'`, n: 2 })
+    ).toEqual({
+      s: `A='${POD_REGISTRATION_CODE_MASK}' B='${POD_REGISTRATION_CODE_MASK}'`,
+      n: 2,
+    });
+  });
+
+  it("an edit to an argument carrying a code is read without the code", () => {
+    const edits = toolRunEdits(
+      [
+        {
+          at: "2026-11-18T10:00:00.000Z",
+          by: "user-1",
+          before: { parameters: { script: `T=${code}` } },
+          patch: { parameters: { script: `T=${code} # edited` } },
+        },
+      ],
+      { isSecretName }
+    );
+    expect(JSON.stringify(edits)).not.toContain(code);
   });
 });

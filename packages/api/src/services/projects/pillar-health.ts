@@ -25,6 +25,8 @@
  *   indicator  the things of declared-lifecycle kinds in the project AND the
  *              space, per kind (`readScopeMoves`), plus a kind the
  *              space declares as an output (`readSpaceOutputs`) with none yet.
+ *              A HELPER kind (`settings.intent.helpers`) is not the
+ *              pillar's output: left out of it, never listed empty.
  *              No such kind ⇒ `declared: false`, never an invented one.
  *
  * Health is derived on every read, never stored. A project the caller cannot
@@ -197,23 +199,31 @@ async function readAdvancingGoals(
   }));
 }
 
+/** What a space declares about its kinds, as the indicator reads it. */
+interface DeclaredKinds {
+  /** Output kinds with a declared lifecycle (listed even with no things). */
+  outputs: readonly string[];
+  /** Helper kinds: never the pillar's output. */
+  helpers: readonly string[];
+}
+
 /**
  * The kinds a space DECLARES as its outputs (`settings.intent`) that carry a
  * declared lifecycle — listed in the indicator with zero things when the
- * project has none of them yet.
+ * project has none of them yet — and the kinds it declares helpers.
  */
 async function readDeclaredOutputKinds(
   userId: string,
   workspaceId: string
-): Promise<string[]> {
-  const { primaryOutput, produces } = await readSpaceOutputs(
+): Promise<DeclaredKinds> {
+  const { primaryOutput, produces, helpers } = await readSpaceOutputs(
     userId,
     workspaceId
   );
   const slugs = [
     ...new Set([...(primaryOutput ? [primaryOutput] : []), ...produces]),
-  ];
-  if (slugs.length === 0) return [];
+  ].filter((s) => !helpers.includes(s));
+  if (slugs.length === 0) return { outputs: [], helpers };
   const rows = await db
     .select({ slug: profiles.slug })
     .from(profiles)
@@ -224,19 +234,25 @@ async function readDeclaredOutputKinds(
         drizzleSql`${profiles.id} IN (${declaredLifecycleProfilesStatement()})`
       )
     );
-  return [...new Set(rows.map((r) => r.slug))];
+  return { outputs: [...new Set(rows.map((r) => r.slug))], helpers };
 }
 
-function indicatorOf(
+/**
+ * A pillar's indicator: its things per kind, and each declared output with
+ * none yet. A helper kind is not the pillar's output (see the header). PURE.
+ */
+export function indicatorOf(
   kinds: readonly ScopeKindRollup[],
-  declaredOutputs: readonly string[]
+  declared: DeclaredKinds
 ): PillarIndicator {
-  const out = kinds.map((k) => ({
-    kind: k.kind,
-    byCategory: fullCounts(k.byCategory),
-    stuck: k.stuck,
-  }));
-  for (const kind of declaredOutputs) {
+  const out = kinds
+    .filter((k) => !declared.helpers.includes(k.kind))
+    .map((k) => ({
+      kind: k.kind,
+      byCategory: fullCounts(k.byCategory),
+      stuck: k.stuck,
+    }));
+  for (const kind of declared.outputs) {
     if (out.some((k) => k.kind === kind)) continue;
     out.push({ kind, byCategory: fullCounts({}), stuck: 0 });
   }
@@ -262,7 +278,7 @@ async function readPillar(
   const primary = advancing.filter(
     (a) => a.primary && goalInPillarRollup(a.goal)
   );
-  const [scope, work, declaredOutputs] = await Promise.all([
+  const [scope, work, declared] = await Promise.all([
     // The LEAN scope read (moves + things per kind), project AND space.
     readScopeMoves({ userId, projectId, workspaceId: space.id }),
     // Down PRIMARY parent edges only: a sub-goal with two parents counts in
@@ -287,7 +303,7 @@ async function readPillar(
       ),
       sessions: work.sessions,
     },
-    indicator: indicatorOf(scope.kinds, declaredOutputs),
+    indicator: indicatorOf(scope.kinds, declared),
     goals,
   };
 }

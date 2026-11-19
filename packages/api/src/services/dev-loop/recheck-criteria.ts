@@ -3,8 +3,9 @@
  * PR merged, an automation posting evidence), the criteria ABOUT that outcome
  * are graded again, instead of waiting for someone to call evaluate_session.
  *
- * "About" = the criterion shares the outcome's key, or (an `evidence` check)
- * names it as its evidence key. Nothing else on the session is re-graded.
+ * "About" = the criterion checks the outcome (`outputKey`), or (an `evidence`
+ * check) names it as its evidence key. Nothing else on the session is
+ * re-graded.
  *
  * Through the ONE grading door, `evaluateSession`, narrowed to:
  *   - `evidence` checks, with the fact posted as the evidence;
@@ -40,7 +41,7 @@ export function criteriaAboutOutcome(
 ) {
   return criteria.filter(
     (c) =>
-      c.key === outcomeKey ||
+      c.outputKey === outcomeKey ||
       (c.check.kind === "evidence" && c.check.evidenceKey === outcomeKey)
   );
 }
@@ -81,6 +82,6 @@ export async function recheckCriteriaForOutcome(input: {
     agentUserId: input.agentUserId ?? null,
     evidence,
     kinds: [...EVENT_GRADED_KINDS],
-    criterionKeys: [input.outcomeKey],
+    criterionKeys: about.map((c) => c.key),
   });
 }

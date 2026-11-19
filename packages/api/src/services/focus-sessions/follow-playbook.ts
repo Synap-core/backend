@@ -81,6 +81,7 @@ import {
   type SessionCriterion,
 } from "@synap/playbooks";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
+import { nameSharedKeyOutputs } from "@synap-core/types/units";
 import { paramOwedSlots, PARAM_SLOT_CIRCUMSTANCE } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -109,14 +110,19 @@ import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "follow-playbook" });
 
-/** Where the follow receipt lives on `focus_sessions.metadata`. */
-export const FOLLOWED_AT_METADATA_KEY = "followedAt";
-/** How the session came to follow its playbook — `"attach"` is this door. */
-export const FOLLOWED_VIA_METADATA_KEY = "followedVia";
-/** Stamped on release; the `followedAt` stays, because it happened. */
-export const UNFOLLOWED_AT_METADATA_KEY = "unfollowedAt";
-/** The only value this door writes for {@link FOLLOWED_VIA_METADATA_KEY}. */
-export const FOLLOWED_VIA_ATTACH = "attach";
+// The follow receipt's keys live in a leaf (the close door reads them).
+import {
+  FOLLOWED_AT_METADATA_KEY,
+  FOLLOWED_VIA_ATTACH,
+  FOLLOWED_VIA_METADATA_KEY,
+  UNFOLLOWED_AT_METADATA_KEY,
+} from "./follow-markers.js";
+export {
+  FOLLOWED_AT_METADATA_KEY,
+  FOLLOWED_VIA_ATTACH,
+  FOLLOWED_VIA_METADATA_KEY,
+  UNFOLLOWED_AT_METADATA_KEY,
+};
 
 /**
  * What the door DID, as the UIs must render it.
@@ -489,7 +495,8 @@ export async function followPlaybook(
         .update(focusSessions)
         .set({
           playbookId: playbook.id,
-          criteria: nextCriteria,
+          // A criterion sharing a slot's key names it (`outputKey`, W4).
+          criteria: [...nameSharedKeyOutputs(nextCriteria, nextOutputs)],
           expectedOutputs: nextOutputs,
           // Only when NAMED. Absent leaves the column exactly as it was.
           ...(stageKey !== null ? { currentStage: stageKey } : {}),

@@ -58,7 +58,7 @@ describe("worker skip reasons", () => {
   it("every worker skip reason is an automation skip reason (one run-row vocabulary)", () => {
     const automation = new Set<string>(Object.values(AUTOMATION_SKIP_REASONS));
     const worker = Object.values(WORKER_SKIP_REASONS);
-    expect(worker.length).toBe(6);
+    expect(worker.length).toBe(7);
     for (const r of worker) expect(automation.has(r)).toBe(true);
   });
 

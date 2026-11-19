@@ -596,6 +596,14 @@ export interface SpaceBriefSeed {
   fields: Partial<Record<string, string>>;
 }
 
+/**
+ * What a kind is to its space: an `output` (the default) or a `helper`,
+ * worked here to serve an output without being one (a story for a feature).
+ * The primary output is never a helper.
+ */
+export const SPACE_KIND_AS = ["output", "helper"] as const;
+export type SpaceKindAs = (typeof SPACE_KIND_AS)[number];
+
 /** `settings.intent` — what a space produces, as its template declared it. */
 export interface WorkspaceIntentSettings {
   /** The purpose word shown first ("Product · Dev"). */
@@ -607,6 +615,8 @@ export interface WorkspaceIntentSettings {
    * one of `produces`; absent = none declared (a library never has one).
    */
   primary?: string;
+  /** The kinds of `produces` that are helpers (`SpaceKindAs`); absent = none. */
+  helpers?: string[];
   source: "template";
 }
 

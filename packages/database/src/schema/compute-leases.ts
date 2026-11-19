@@ -11,6 +11,10 @@
  * so it runs with no second review, recorded here and on the start's
  * proposal (`data.computeRelease`).
  *
+ * A start that carries a pod registration code (a new pod's server, 0432)
+ * ends `kept` once that code registered at the Control Plane: the server is
+ * the person's pod now, and the TTL destroy no longer applies.
+ *
  * `maxSpendCents` is the DECLARED maximum, never a measured spend; the
  * `compute_spend_daily_cents` ceiling (0430) sums it per UTC day.
  */
@@ -32,6 +36,8 @@ export const COMPUTE_LEASE_STATES = [
   "released",
   "not_started",
   "unknown",
+  /** A new pod's server that registered: never released at its TTL (0432). */
+  "kept",
 ] as const;
 export type ComputeLeaseState = (typeof COMPUTE_LEASE_STATES)[number];
 
@@ -55,6 +61,13 @@ export const computeLeases = pgTable(
     connectionSelector: jsonb("connection_selector"),
     /** The provider's id of the machine, from the start's result. */
     resourceId: text("resource_id"),
+    /**
+     * sha256 (hex) of the pod registration code the start carried, when it
+     * started a person's new pod server (0432, plan a640c5bb B1). The sweeper
+     * asks the Control Plane whether that code registered: registered = the
+     * lease is `kept`, never destroyed.
+     */
+    registrationCodeHash: text("registration_code_hash"),
     ttlMinutes: integer("ttl_minutes").notNull(),
     maxSpendCents: integer("max_spend_cents").notNull(),
     state: text("state")
