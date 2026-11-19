@@ -3961,7 +3961,7 @@
                 },
                 "outcome": {
                   "type": "string",
-                  "enum": ["delivered", "dropped"]
+                  "enum": ["done", "not_done"]
                 },
                 "size": {
                   "type": "string",
@@ -4021,7 +4021,7 @@
               "required": ["on"],
               "additionalProperties": false
             },
-            "description": "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual' | 'run_ended' (a link: playbook = the playbook, by name or id, whose run ending starts this one on the same subject; outcome?: 'delivered' | 'dropped'), status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition. A chain of links that loops is refused."
+            "description": "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual' | 'run_ended' (a link: playbook = the playbook, by name or id, whose run ending starts this one on the same subject; outcome?: 'done' | 'not_done': not_done = closed with required work open, cancelled or failed; only the owner's own runs, never a session merely attached), status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition. A chain of links that loops is refused."
           },
           "humanOnlyStatuses": {
             "maxItems": 50,
@@ -4679,7 +4679,7 @@
                 },
                 "outcome": {
                   "type": "string",
-                  "enum": ["delivered", "dropped"]
+                  "enum": ["done", "not_done"]
                 },
                 "size": {
                   "type": "string",
@@ -4739,7 +4739,7 @@
               "required": ["on"],
               "additionalProperties": false
             },
-            "description": "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual' | 'run_ended' (a link: playbook = the playbook, by name or id, whose run ending starts this one on the same subject; outcome?: 'delivered' | 'dropped'), status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition. A chain of links that loops is refused."
+            "description": "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual' | 'run_ended' (a link: playbook = the playbook, by name or id, whose run ending starts this one on the same subject; outcome?: 'done' | 'not_done': not_done = closed with required work open, cancelled or failed; only the owner's own runs, never a session merely attached), status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition. A chain of links that loops is refused."
           },
           "humanOnlyStatuses": {
             "maxItems": 50,

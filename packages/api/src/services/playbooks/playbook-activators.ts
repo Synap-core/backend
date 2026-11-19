@@ -242,10 +242,13 @@ export async function rulesOfSeedTemplate(
  */
 export async function rulesOfSeedTemplates(
   templates: readonly string[]
-): Promise<Map<string, Array<{ id: string; meta: RuleMetadata; userId?: string }>>> {
-  const out = new Map<string, Array<{ id: string; meta: RuleMetadata; userId?: string }>>(
-    templates.map((t) => [t, []])
-  );
+): Promise<
+  Map<string, Array<{ id: string; meta: RuleMetadata; userId?: string }>>
+> {
+  const out = new Map<
+    string,
+    Array<{ id: string; meta: RuleMetadata; userId?: string }>
+  >(templates.map((t) => [t, []]));
   if (templates.length === 0) return out;
   const rows = await db
     .select({
@@ -755,7 +758,9 @@ async function applyOnce(input: {
   const resolved = await resolveLinkedPlaybooks(
     [
       ...linkRefsOf(declared),
-      ...declared.flatMap((a) => (a.on === "run_ended" && pinOf(a) ? [pinOf(a)!] : [])),
+      ...declared.flatMap((a) =>
+        a.on === "run_ended" && pinOf(a) ? [pinOf(a)!] : []
+      ),
     ],
     pb.workspaceId
   );

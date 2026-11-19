@@ -19980,7 +19980,7 @@
                                       },
                                       "outcome": {
                                         "type": "string",
-                                        "enum": ["delivered", "dropped"]
+                                        "enum": ["done", "not_done"]
                                       },
                                       "size": {
                                         "type": "string",
@@ -20092,7 +20092,7 @@
                                   },
                                   "outcome": {
                                     "type": "string",
-                                    "enum": ["delivered", "dropped"]
+                                    "enum": ["done", "not_done"]
                                   },
                                   "size": {
                                     "type": "string",
@@ -25305,7 +25305,7 @@
                                       },
                                       "outcome": {
                                         "type": "string",
-                                        "enum": ["delivered", "dropped"]
+                                        "enum": ["done", "not_done"]
                                       },
                                       "size": {
                                         "type": "string",
@@ -25417,7 +25417,7 @@
                                   },
                                   "outcome": {
                                     "type": "string",
-                                    "enum": ["delivered", "dropped"]
+                                    "enum": ["done", "not_done"]
                                   },
                                   "size": {
                                     "type": "string",
@@ -32643,7 +32643,7 @@
                             },
                             "outcome": {
                               "type": "string",
-                              "enum": ["delivered", "dropped"]
+                              "enum": ["done", "not_done"]
                             },
                             "size": {
                               "type": "string",
@@ -52027,7 +52027,7 @@
                                 "playbookName": { "type": "string" },
                                 "outcome": {
                                   "type": ["string", "null"],
-                                  "enum": ["delivered", "dropped", null]
+                                  "enum": ["done", "not_done", null]
                                 }
                               },
                               "required": [
@@ -52095,18 +52095,9 @@
                         "helpers": {
                           "type": "array",
                           "items": { "type": "string" }
-                        },
-                        "feeds": {
-                          "type": "object",
-                          "additionalProperties": { "type": "string" }
                         }
                       },
-                      "required": [
-                        "primaryOutput",
-                        "produces",
-                        "helpers",
-                        "feeds"
-                      ]
+                      "required": ["primaryOutput", "produces", "helpers"]
                     },
                     "totals": {
                       "type": "object",

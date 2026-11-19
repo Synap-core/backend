@@ -1282,9 +1282,10 @@ describe("playbookActivatorSentence — a declared activator as a rule", () => {
       closedAs: "not_done",
     });
     // It reads back as the sentence it was written from.
-    expect(
-      triggerToSentence("event", link().triggerConfig)
-    ).toMatchObject({ subjectCategory: "focus_session", actionVerb: "closed" });
+    expect(triggerToSentence("event", link().triggerConfig)).toMatchObject({
+      subjectCategory: "focus_session",
+      actionVerb: "closed",
+    });
   });
 });
 

@@ -1404,7 +1404,10 @@ describe("a LINK: when a run of another playbook ends", () => {
       "pb-ship"
     );
     // The name now resolves to another playbook; the pinned one still exists.
-    linkable.rows.set("Ship a change", { id: "pb-other", name: "Ship a change" });
+    linkable.rows.set("Ship a change", {
+      id: "pb-other",
+      name: "Ship a change",
+    });
     linkable.rows.set("pb-ship", SHIP);
     vi.mocked(createRuleGoverned).mockClear();
     const again = await run();
@@ -1419,13 +1422,17 @@ describe("a LINK: when a run of another playbook ends", () => {
       linked: new Map([["Repurpose", { id: PB, name: "Repurpose" }]]),
       ownerUserId: "user-1",
     });
-    expect(self).toMatchObject({ error: expect.stringContaining("its own run") });
+    expect(self).toMatchObject({
+      error: expect.stringContaining("its own run"),
+    });
     const ownerless = activatorRuleDecl({
       ...base,
       activator: LINK as never,
       linked: new Map([["Ship a change", SHIP]]),
     });
-    expect(ownerless).toMatchObject({ error: expect.stringContaining("owner") });
+    expect(ownerless).toMatchObject({
+      error: expect.stringContaining("owner"),
+    });
     const scoped = activatorRuleDecl({
       ...base,
       activator: LINK as never,
@@ -1433,6 +1440,8 @@ describe("a LINK: when a run of another playbook ends", () => {
       ownerUserId: "user-1",
       scope: { projectId: "proj-1" },
     });
-    expect(scoped).toMatchObject({ error: expect.stringContaining("space-wide") });
+    expect(scoped).toMatchObject({
+      error: expect.stringContaining("space-wide"),
+    });
   });
 });

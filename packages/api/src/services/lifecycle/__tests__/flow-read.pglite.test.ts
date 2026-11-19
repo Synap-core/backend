@@ -376,7 +376,12 @@ beforeAll(async () => {
     ["active", "done"],
     ["archived", "not_done"],
   ] as const) {
-    const filters = { playbookId: ids.fix, userId: USER, attached: false, closedAs };
+    const filters = {
+      playbookId: ids.fix,
+      userId: USER,
+      attached: false,
+      closedAs,
+    };
     const automationId = randomUUID();
     await q(
       `insert into automations (id, name, status, trigger_type, trigger_config) values ($1,'link',$2,'event',$3::jsonb)`,

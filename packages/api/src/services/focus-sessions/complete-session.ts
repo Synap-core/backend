@@ -1128,7 +1128,8 @@ export async function completeFocusSession(
     // How the run ended, as a playbook link reads it (`run_ended`): `done`
     // only when it closed with no required work left open; and whether the
     // session was only ATTACHED to its playbook, not run under it.
-    closedAs: updated.status === "closed" && !closedNotDone ? "done" : "not_done",
+    closedAs:
+      updated.status === "closed" && !closedNotDone ? "done" : "not_done",
     attached:
       (updated.metadata as Record<string, unknown> | null)?.[
         FOLLOWED_VIA_METADATA_KEY

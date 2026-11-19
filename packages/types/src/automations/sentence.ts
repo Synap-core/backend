@@ -1059,8 +1059,18 @@ function activatorTriggerShape(
           operator: "is",
           value: t.afterPlaybookId,
         },
-        { id: "link-owner", key: "userId", operator: "is", value: t.ownerUserId },
-        { id: "link-attached", key: "attached", operator: "is_false", value: "" },
+        {
+          id: "link-owner",
+          key: "userId",
+          operator: "is",
+          value: t.ownerUserId,
+        },
+        {
+          id: "link-attached",
+          key: "attached",
+          operator: "is_false",
+          value: "",
+        },
         ...(t.outcome
           ? [
               {

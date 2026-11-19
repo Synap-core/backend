@@ -92,10 +92,9 @@ async function linkablePlaybooks(
  * The ONE name rule: an id names itself; a name matches case-insensitively,
  * the space's own playbook before a pod-wide one, then the oldest.
  */
-function pick<T extends { id: string; name: string; workspaceId: string | null }>(
-  ref: string,
-  rows: readonly T[]
-): T | undefined {
+function pick<
+  T extends { id: string; name: string; workspaceId: string | null },
+>(ref: string, rows: readonly T[]): T | undefined {
   const name = ref.toLowerCase();
   const hits = isUuid(ref)
     ? rows.filter((r) => r.id === ref)
@@ -115,7 +114,9 @@ export async function resolveLinkedPlaybooks(
   const out = new Map<string, PlaybookNode>();
   if (refs.length === 0) return out;
   const ids = refs.filter((r) => isUuid(r));
-  const names = refs.filter((r) => !ids.includes(r)).map((r) => r.toLowerCase());
+  const names = refs
+    .filter((r) => !ids.includes(r))
+    .map((r) => r.toLowerCase());
   const rows = await linkablePlaybooks(
     workspaceId,
     or(
@@ -182,7 +183,9 @@ export async function findPlaybookLinkCycle(self: {
         (n) => n.workspaceId === null || n.workspaceId === from.workspaceId
       )
     )?.id ?? (ref === self.id ? SELF : undefined);
-  const next = new Map<string, Set<string>>(nodes.map((n) => [n.id, new Set()]));
+  const next = new Map<string, Set<string>>(
+    nodes.map((n) => [n.id, new Set()])
+  );
   for (const n of nodes) {
     for (const ref of linkRefsOf(
       readPlaybookProcess(n.subjectProfile).activators
@@ -237,8 +240,7 @@ export function linkOfTrigger(
   const playbookId = filters?.playbookId;
   if (typeof playbookId !== "string" || !playbookId) return null;
   const closedAs = filters?.closedAs;
-  const outcome =
-    WORKER_RUN_OUTCOMES.find((o) => o === closedAs) ?? null;
+  const outcome = WORKER_RUN_OUTCOMES.find((o) => o === closedAs) ?? null;
   return { playbookId, outcome };
 }
 
@@ -260,7 +262,10 @@ export async function readPlaybookLinksInto(
       triggerConfig: automations.triggerConfig,
     })
     .from(playbookAutomations)
-    .innerJoin(automations, eq(automations.id, playbookAutomations.automationId))
+    .innerJoin(
+      automations,
+      eq(automations.id, playbookAutomations.automationId)
+    )
     .where(
       and(
         inArray(playbookAutomations.playbookId, [...playbookIds]),

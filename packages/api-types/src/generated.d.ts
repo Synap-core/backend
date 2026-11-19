@@ -4434,13 +4434,8 @@ export interface WorkspaceIntentSettings {
 	 * one of `produces`; absent = none declared (a library never has one).
 	 */
 	primary?: string;
-	/**
-	 * The slugs of `produces` that are HELPER kinds (`SpaceKindRole`): worked
-	 * here, not an output. Absent = every kind is produced.
-	 */
+	/** The kinds of `produces` that are helpers (`SpaceKindAs`); absent = none. */
 	helpers?: string[];
-	/** A kind of `produces` → the kind of `produces` it feeds. Absent = none. */
-	feeds?: Record<string, string>;
 	source: "template";
 }
 export interface WorkspaceSettings {
@@ -15808,9 +15803,8 @@ export interface PlaybookActivator {
 	 * `count` — at least `min` things sit in `status` (always per_moment).
 	 * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
 	 * `manual` — a button, never by itself: compiles no rule.
-	 * `run_ended` — a run of the playbook named in `playbook` ended (a LINK:
-	 *   a feature shipped → its announcement); the new run works on the same
-	 *   subject.
+	 * `run_ended` — a LINK: a run of the playbook named in `playbook` ended;
+	 *   the new run works on the same subject.
 	 * Mirror of `WorkerActivator` (`@synap-core/types/workers`); this package
 	 * is dependency-free, the pod's zod schema (`playbook-process.ts`) is
 	 * `satisfies` both.
@@ -15822,11 +15816,8 @@ export interface PlaybookActivator {
 	 * space or pod-wide.
 	 */
 	playbook?: string;
-	/**
-	 * `run_ended` only: `delivered` (the run closed done) or `dropped`
-	 * (cancelled or failed). Absent = any end.
-	 */
-	outcome?: "delivered" | "dropped";
+	/** `run_ended` only: `done` or `not_done` (`WORKER_RUN_OUTCOMES`); absent = any end. */
+	outcome?: "done" | "not_done";
 	/** Required for `enters_status` / `count`; optional for `schedule`. */
 	status?: string;
 	/** Required for `schedule`. */
@@ -40197,7 +40188,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						subjectStatus: string | null;
 					}[];
 					startsAfter: {
-						outcome: "delivered" | "dropped" | null;
+						outcome: "done" | "not_done" | null;
 						playbookId: string;
 						playbookName: string;
 					}[];
@@ -40218,7 +40209,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileSlug: string;
 				property: string;
 				space: {
-					feeds: Record<string, string>;
 					helpers: string[];
 					primaryOutput: string | null;
 					produces: string[];
@@ -47338,6 +47328,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string;
 					name: string;
 					produces: {
+						as?: "helper" | undefined;
 						beingWorked: number | null;
 						columns: {
 							category: "active" | "done" | "lost" | "open" | "paused" | null;
@@ -50179,7 +50170,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						in: string[];
 						property: string;
 					} | undefined;
-					outcome?: "delivered" | "dropped" | undefined;
+					outcome?: "done" | "not_done" | undefined;
 					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
@@ -50812,7 +50803,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							in: string[];
 							property: string;
 						} | undefined;
-						outcome?: "delivered" | "dropped" | undefined;
+						outcome?: "done" | "not_done" | undefined;
 						playbook?: string | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
 						status?: string | undefined;
@@ -51613,7 +51604,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						in: string[];
 						property: string;
 					} | undefined;
-					outcome?: "delivered" | "dropped" | undefined;
+					outcome?: "done" | "not_done" | undefined;
 					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
@@ -52242,7 +52233,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							in: string[];
 							property: string;
 						} | undefined;
-						outcome?: "delivered" | "dropped" | undefined;
+						outcome?: "done" | "not_done" | undefined;
 						playbook?: string | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
 						status?: string | undefined;
@@ -62316,7 +62307,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					min?: number | undefined;
 					mode: "propose" | "run";
 					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
-					outcome?: "delivered" | "dropped" | undefined;
+					outcome?: "done" | "not_done" | undefined;
 					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
@@ -63006,7 +62997,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								in: string[];
 								property: string;
 							} | undefined;
-							outcome?: "delivered" | "dropped" | undefined;
+							outcome?: "done" | "not_done" | undefined;
 							playbook?: string | undefined;
 							size?: "per_moment" | "per_thing" | undefined;
 							status?: string | undefined;
@@ -63635,7 +63626,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									in: string[];
 									property: string;
 								} | undefined;
-								outcome?: "delivered" | "dropped" | undefined;
+								outcome?: "done" | "not_done" | undefined;
 								playbook?: string | undefined;
 								size?: "per_moment" | "per_thing" | undefined;
 								status?: string | undefined;
@@ -63716,9 +63707,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						primary?: string | undefined;
 						produces?: {
-							feeds?: string | undefined;
+							as?: "helper" | "output" | undefined;
 							profile: string;
-							role?: "helper" | "produced" | undefined;
 						}[] | undefined;
 					} | undefined;
 					rules?: unknown[] | undefined;
@@ -64042,9 +64032,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						primary?: string | undefined;
 						produces?: {
-							feeds?: string | undefined;
+							as?: "helper" | "output" | undefined;
 							profile: string;
-							role?: "helper" | "produced" | undefined;
 						}[] | undefined;
 					} | undefined;
 					playbooks?: Record<string, unknown>[] | undefined;

@@ -99,7 +99,12 @@ export interface StoredSpaceIntent {
  */
 export function readStoredIntent(settings: unknown): StoredSpaceIntent | null {
   const intent = (settings as { intent?: unknown } | null)?.intent as
-    | { label?: unknown; produces?: unknown; primary?: unknown; helpers?: unknown }
+    | {
+        label?: unknown;
+        produces?: unknown;
+        primary?: unknown;
+        helpers?: unknown;
+      }
     | null
     | undefined;
   if (!intent || typeof intent.label !== "string" || !intent.label.trim())

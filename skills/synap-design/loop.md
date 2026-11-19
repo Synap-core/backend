@@ -69,14 +69,46 @@ design on read (a page becomes one frame) and every save writes 3.
   "format": "synap-board/2",
   "frames": [
     {
-      "id": "f1", "name": "Home", "x": 0, "y": 0, "w": 1440, "h": 900,
+      "id": "f1",
+      "name": "Home",
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
       "page": {
         "root": { "props": {} },
         "content": [
-          { "type": "Stack", "props": { "id": "s1", "gap": "space-300", "padding": "space-400", "children": [
-            { "type": "Heading", "props": { "id": "h1", "text": "Welcome back", "level": "title" } },
-            { "type": "SpatialButton", "props": { "id": "b1", "variant": "primary", "children": [
-              { "type": "Text", "props": { "id": "t1", "text": "Continue" } } ] } } ] } }
+          {
+            "type": "Stack",
+            "props": {
+              "id": "s1",
+              "gap": "space-300",
+              "padding": "space-400",
+              "children": [
+                {
+                  "type": "Heading",
+                  "props": {
+                    "id": "h1",
+                    "text": "Welcome back",
+                    "level": "title"
+                  }
+                },
+                {
+                  "type": "SpatialButton",
+                  "props": {
+                    "id": "b1",
+                    "variant": "primary",
+                    "children": [
+                      {
+                        "type": "Text",
+                        "props": { "id": "t1", "text": "Continue" }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
         ]
       }
     }

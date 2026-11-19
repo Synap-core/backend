@@ -247,14 +247,16 @@ describe("a loop of links is refused at the update door", () => {
     // Produce Content follows "Edit Content", which follows it back; then it
     // is archived (out of every walk) and later made active again.
     await other("Edit Content", "Produce Content");
-    await q(`update playbooks set status = 'archived', subject_profile = $1::jsonb where id = $2`, [
-      JSON.stringify({ ...PROCESS, activators: link("Edit Content") }),
-      PB,
-    ]);
+    await q(
+      `update playbooks set status = 'archived', subject_profile = $1::jsonb where id = $2`,
+      [JSON.stringify({ ...PROCESS, activators: link("Edit Content") }), PB]
+    );
     await expect(caller().update({ id: PB, status: "active" })).rejects.toThrow(
       /loop: Produce Content → Edit Content → Produce Content/
     );
-    const { rows } = await q(`select status from playbooks where id = $1`, [PB]);
+    const { rows } = await q(`select status from playbooks where id = $1`, [
+      PB,
+    ]);
     expect((rows[0] as { status: string }).status).toBe("archived");
   });
 });

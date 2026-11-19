@@ -313,7 +313,10 @@ describe("settings.intent — projected by the create and reconcile writers", ()
     expect(
       projectTemplateIntent({
         label: "Product",
-        produces: [{ profile: "devplane_feature" }, { profile: "note", as: "sidekick" }],
+        produces: [
+          { profile: "devplane_feature" },
+          { profile: "note", as: "sidekick" },
+        ],
       })
     ).toEqual({
       label: "Product",
