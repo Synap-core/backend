@@ -16,11 +16,10 @@
  *     re-converges activators on every boot).
  *   - {@link findPlaybookLinkCycle}: the write-time loop guard. A chain of
  *     links that comes back to the playbook being written is refused at the
- *     write door. At run time the automation matcher's chain guard
- *     (`MAX_CHAIN_DEPTH`, and a rule never fires twice in one chain) stops a
- *     loop that slipped through, e.g. one made later by a rename: the close
- *     event carries the session, whose stamped chain context the matcher
- *     re-derives.
+ *     write door. A loop that slips past it (a rename, an install) is
+ *     stopped at run time where a link starts a run (`@synap/jobs`
+ *     `utils/link-lineage.ts`, read by `steps/playbook-run.ts`): a playbook
+ *     already in the chain of link-started runs is not started again.
  */
 import {
   and,

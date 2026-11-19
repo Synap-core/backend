@@ -197,6 +197,18 @@ export function effectiveWorkerSize(
  * hash, and the convergence UPDATES the same rule in place. The pod's
  * `activatorKey` (`schemas/playbook-process.ts`) is this function.
  */
+/** Is this activator key a `run_ended` link's (`workerActivatorKey`)? */
+export function isLinkActivatorKey(key: string | null | undefined): boolean {
+  return typeof key === "string" && key.startsWith("run_ended:");
+}
+
+/**
+ * How many link-started runs back a link looks for the playbook it would
+ * start (the run-time loop guard, `@synap/jobs` `utils/link-lineage.ts`). A
+ * chain this long is refused too: no real chain of playbooks is.
+ */
+export const LINK_CHAIN_MAX = 32;
+
 export function workerActivatorKey(a: {
   on: string;
   status?: string | null;
@@ -329,6 +341,12 @@ export const WORKER_SKIP_REASONS = {
   unlessProperty: "unless_property",
   /** The thing's property holds none of the activator's `only` values (see {@link skippedByOnly}). */
   onlyValues: "only_values",
+  /**
+   * A `run_ended` link would start a playbook already in the chain of
+   * link-started runs that led here (a loop), or the chain is longer than
+   * {@link LINK_CHAIN_MAX}.
+   */
+  linkLoop: "link_loop",
 } as const;
 export type WorkerSkipReason =
   (typeof WORKER_SKIP_REASONS)[keyof typeof WORKER_SKIP_REASONS];
