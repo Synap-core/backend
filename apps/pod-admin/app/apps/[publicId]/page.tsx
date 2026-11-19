@@ -37,7 +37,7 @@ import {
   Switch,
   addToast,
 } from "@heroui/react";
-import { ArrowLeft, Ban, Minus, Trash2 } from "lucide-react";
+import { ArrowLeft, Ban, Info, Minus, Trash2 } from "lucide-react";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { CopyButton } from "../../_lib/copy-button";
 import { HostName } from "../../_lib/host-name";
@@ -65,6 +65,9 @@ import {
   writeModeConfirm,
   type PodAppInfo,
 } from "../_lib/pod-app-view";
+import { AppAccessSection } from "../_lib/app-access-section";
+import { heldAccessOf } from "../../oauth/consent/consent-access";
+import { consentT } from "../../oauth/consent/copy";
 
 type LoadState = "loading" | "ready" | "missing" | "error";
 
@@ -498,6 +501,10 @@ function PodAppSettings({
   const onConfirm = writeModeConfirm(true, pod);
   const spaces = approvalBySpace(pod.approved);
   const keep = drop ? keepWithout(pod.approved, drop) : null;
+  // Its pairs fit one access (design A): the three lines. Otherwise the
+  // per-space list stays, and the new form is confirmed at its next sign-in.
+  const fits = heldAccessOf(pod.approved).kind === "access";
+  const t = consentT();
 
   async function confirmDrop() {
     if (!keep) return;
@@ -555,7 +562,36 @@ function PodAppSettings({
 
   return (
     <>
+      {fits ? (
+        <AppAccessSection
+          pod={pod}
+          appName={pod.domain}
+          onNarrow={async (approved) => {
+            const r = await patchApp({
+              publicId: app.public_id,
+              action: "narrow",
+              approved,
+            });
+            if (r.ok) onChanged();
+            return r.ok ? { ok: true } : { ok: false, error: r.error };
+          }}
+        />
+      ) : (
       <section className="mt-6" aria-labelledby="pod-reach">
+        <div
+          role="note"
+          className="mb-3 flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
+        >
+          <Info className="mt-0.5 h-4 w-4 shrink-0 text-foreground/75" aria-hidden />
+          <div className="flex flex-col gap-0.5">
+            <p className="text-sm font-medium text-foreground">
+              {t("page.confirmLaterTitle")}
+            </p>
+            <p className="text-pretty text-xs text-foreground/75">
+              {t("page.confirmLater")}
+            </p>
+          </div>
+        </div>
         <h2 id="pod-reach" className="mb-2 text-sm font-medium text-foreground">
           What it may touch
         </h2>
@@ -640,6 +676,7 @@ function PodAppSettings({
           To remove everything, revoke it.
         </p>
       </section>
+      )}
 
       <section className="mt-6" aria-labelledby="pod-writes">
         <h2
