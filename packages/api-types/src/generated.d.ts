@@ -22872,6 +22872,10 @@ export type ReactionDo =
  | {
 	effect: "reach_stage_status";
 }
+/** Advance the session to its next stage (the one advance door, W6). */
+ | {
+	effect: "advance_stage";
+}
 /**
  * Roll the parent up (decision D5): when every non-lost part is done and
  * at least one is, the parent moves to `to`, else to its next status
@@ -26872,6 +26876,18 @@ export type AnswerExpectedOutputResult = {
 	/** `true` ⇒ the slot was the person's and is now back with the agent. */
 	handedBack: boolean;
 	kind: string;
+	/**
+	 * A NO to an orchestrator's `plan-approval` (decision D-O2): the
+	 * orchestrator was closed (`cancelled`, "Plan declined") through the
+	 * one close door, or why not. The held sessions resume either way (the
+	 * answer ends their wait). Absent for every other answer.
+	 */
+	planDeclined?: {
+		closed: true;
+	} | {
+		closed: false;
+		error: string;
+	};
 	session: {
 		agentIds: string[];
 		channelId: string | null;

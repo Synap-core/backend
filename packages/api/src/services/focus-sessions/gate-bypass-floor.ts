@@ -29,9 +29,9 @@
  * agent enters the stage and files the named proposal there, and the approval
  * executor moves the run on (`stageAfterDevGate`). So for an agent, LEAVING
  * such a stage forward is the bypass, as is jumping over it; and the legacy
- * stamps that executor writes when no stage names the gate
- * (`DEV_GATE_LEGACY_STAGES`, read by the polling CLI as "you may proceed") are
- * never an agent's to set.
+ * stamps that executor once wrote when no stage named the gate
+ * (`DEV_GATE_LEGACY_STAGES`; since W6 it records the approval and leaves the
+ * stage) are never an agent's to set.
  *
  * A CHECK gate the move would certainly hold on is refused here too, before
  * anything is written (db6a5e17): a required criterion of the stage being
@@ -98,7 +98,7 @@ export async function refuseAgentGateBypass(
 
   if (!movesStage) return null;
   if ((Object.values(DEV_GATE_LEGACY_STAGES) as string[]).includes(toStage!)) {
-    return `"${toStage}" is the stamp a person's dev approval writes — an agent cannot set it. Nothing was changed. File the approval and wait for the person to approve it.`;
+    return `"${toStage}" is the stamp a person's dev approval once wrote — an agent cannot set it. Nothing was changed. File the approval and wait for the person to approve it.`;
   }
   const { leaving, skipped } = await gatedStagesPassed(session, toStage!);
   if (leaving) {
