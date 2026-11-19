@@ -61,7 +61,7 @@ export const SETTINGS_MIRROR_CREATED_BY_PREFIX = "system:settings-mirror:";
 export const MACHINE_CREATED_BY_PREFIX = "system:";
 
 /**
- * A rule 0434 made from a capability grant's retired `exec_mode` (decision D2:
+ * A rule 0435 made from a capability grant's `exec_mode` (decision D2:
  * an approval row is the only verdict, a grant means "may use"). Format:
  * `system:grant-exec-mode:<grant id>`, so each row names the grant it came
  * from. Written by that migration's SQL only.

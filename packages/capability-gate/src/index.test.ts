@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * stays absolute regardless of the row.
  *
  * `findCapabilityGrantMock` still answers with an ACTIVE AUTO GRANT (the
- * shape the gate read before 0434) and is asserted never called: run against
+ * shape the gate read before 0435) and is asserted never called: run against
  * the gate before D2, the "ask first" and "no row" cases below go red,
  * because that gate let the grant's exec mode run them.
  *

@@ -504,7 +504,7 @@ async function applyToolMerge(
     }
     result.updated["vault_grants(cloned+revoked)"] = grants.length;
     // The approval rows naming the loser by id (a grant's "runs without
-    // asking" since 0434) follow the grant onto the survivor.
+    // asking" since 0435) follow the grant onto the survivor.
     const rules = await tx<Row[]>`
       UPDATE governance_rules SET target_pattern = ${survivorId}
        WHERE target_kind = 'capability' AND target_pattern = ${loserId}

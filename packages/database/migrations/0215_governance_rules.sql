@@ -8,7 +8,7 @@
 -- agent, or 'any'), a scope (one workspace, or pod-wide), and a target
 -- (an action pattern, an entity profile, or a capability id). `verdict` was
 -- 'auto' | 'propose' here; 0381 added 'deny' (a person's "Never", founder
--- decision G3), and since 0434 a capability row is the ONLY answer to "may
+-- decision G3), and since 0435 a capability row is the ONLY answer to "may
 -- this tool run without asking?" (decision D2). [Comment corrected 2026-11-19;
 -- the SQL below is unchanged.]
 

@@ -1,4 +1,5 @@
--- 0434 — one approval store: a grant's exec_mode becomes an approval row
+-- 0435 — one approval store: a grant's exec_mode becomes an approval row
+-- (the EXPAND step; the column itself is dropped by a later contract step)
 -- (founder decisions D2 and D3, 19 Nov 2026, document b387ca45).
 --
 -- Until now two stores each answered "may this tool run without asking?": a
@@ -92,5 +93,19 @@ BEGIN
   END IF;
 END $$;
 
-ALTER TABLE "vault_grants" DROP COLUMN IF EXISTS "exec_mode";
-DROP TYPE IF EXISTS grant_exec_mode;
+-- EXPAND, not contract (migrations are forward-only, check-migrations-
+-- forward-only.mjs): the column stays until a release that no longer reads
+-- it has shipped; its contract step (`-- synap:contract-of 0435_…`) drops it
+-- and the `grant_exec_mode` type. Until then a grant written by code that no
+-- longer sets it takes the default, so the default becomes 'propose': the
+-- value that means "no verdict" (it behaves as no grant) if the release
+-- before this one runs again after a rollback.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'vault_grants' AND column_name = 'exec_mode'
+  ) THEN
+    ALTER TABLE "vault_grants" ALTER COLUMN "exec_mode" SET DEFAULT 'propose';
+  END IF;
+END $$;

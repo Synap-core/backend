@@ -1,16 +1,16 @@
--- 0434 DRY RUN — READ ONLY. What migration 0434 (a grant's exec_mode becomes
+-- 0435 DRY RUN — READ ONLY. What migration 0435 (a grant's exec_mode becomes
 -- an approval row, decisions D2/D3, document b387ca45) would do on THIS pod,
--- and which agent × action decisions it would change. Run it BEFORE 0434,
+-- and which agent × action decisions it would change. Run it BEFORE 0435,
 -- inside a read-only transaction:
 --
 --   BEGIN TRANSACTION READ ONLY;
---   \i packages/database/scripts/0434-dry-run.sql
+--   \i packages/database/scripts/0435-dry-run.sql
 --   ROLLBACK;
 --
 -- One result set: (section, item, n). Sections:
 --   1-grants        live and total grants, by kind and exec_mode
---   2-outcome       what 0434 does with each live tool/skill/command grant
---   3-row           each row 0434 would write (n = 1 per row)
+--   2-outcome       what 0435 does with each live tool/skill/command grant
+--   3-row           each row 0435 would write (n = 1 per row)
 --   4-change-*      decisions that change, each a named, explained class:
 --     ask-first     an auto grant whose agent × action is covered by a stored
 --                   "ask first" row of equal or higher rank: it RAN (the row
@@ -20,7 +20,7 @@
 --                   session pre-approval beside the install's seeded grant):
 --                   they DISAGREE and the grant lookup's ORDER BY tied, so
 --                   which one decided was arbitrary (ran or asked). After
---                   0434 the AUTO one wins: it RUNS (its auto row; the
+--                   0435 the AUTO one wins: it RUNS (its auto row; the
 --                   propose grant makes no row). One line per pair, with
 --                   the agent and the space it concerns
 --     never         an auto grant a "Never" could cover is not carried over:
@@ -43,7 +43,7 @@
 --                   gateCapabilityExecution passes channelCapabilities today
 --                   (verified at backend 684311a5)
 --
--- Matching mirrors 0434 and `resolveGovernanceRule`: a grant matches a
+-- Matching mirrors 0435 and `resolveGovernanceRule`: a grant matches a
 -- redeemer when granted_to / workspace_id is NULL or equal; a row's reach is
 -- principal (agent 2, class 1, any 0) + scope (workspace 2, pod 0) + target
 -- (the action 3, its tool 2).
@@ -145,7 +145,7 @@ SELECT '4-change-ambiguous',
          || coalesce(a.verb_name, a."grantable_id")
          || ' agent=' || coalesce(a."granted_to", p."granted_to", 'anyone')
          || ' space=' || coalesce(a."workspace_id"::text, p."workspace_id"::text, 'pod')
-         || ' -> after 0434: auto (runs)',
+         || ' -> after 0435: auto (runs)',
        1
   FROM live a JOIN live p
     ON p."grantable_type" = a."grantable_type"

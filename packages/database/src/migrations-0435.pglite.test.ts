@@ -1,7 +1,8 @@
 /**
- * REAL-POSTGRES (PGlite) test for migration 0434 — one approval store
+ * REAL-POSTGRES (PGlite) test for migration 0435 — one approval store
  * (founder decisions D2 and D3, 19 Nov 2026, document b387ca45): a capability
- * grant's `exec_mode` becomes an approval row, then the column is retired.
+ * grant's `exec_mode` becomes an approval row (the EXPAND step: the column
+ * stays, no longer read, until its contract step drops it after a release).
  *
  * It proves, through the REAL resolver (`resolveGovernanceRule`, the read the
  * capability gate makes):
@@ -10,12 +11,13 @@
  *   - a propose grant makes no row (it behaved like no grant), a dry-run grant
  *     makes an "ask first" row, a capped grant and an auto grant a "Never"
  *     could cover make none, a secret / revoked / expired grant makes none;
- *   - the file runs twice with one set of rows, and drops the column and type;
+ *   - the file runs twice with one set of rows; it keeps the column (forward
+ *     only) with the default 'propose', the value that decides nothing;
  *   - after it, a stored "ask first" on the same reach as an auto row wins
  *     (the stricter verdict takes a tool run's tie, whatever the age), and a
  *     row naming the TOOL covers each of its actions below a row naming one;
- *   - the baseline and the boot coherence list no longer carry the column;
- *   - the read-only dry run (`scripts/0434-dry-run.sql`, the report run on a
+ *   - the boot coherence list no longer requires the column;
+ *   - the read-only dry run (`scripts/0435-dry-run.sql`, the report run on a
  *     real pod before the migration) classifies every grant and names
  *     exactly the rows the migration then writes.
  */
@@ -32,10 +34,9 @@ import { GRANT_EXEC_MODE_CREATED_BY_PREFIX } from "./utils/governance-rule-prove
 const HERE = dirname(fileURLToPath(import.meta.url));
 const read = (f: string) =>
   readFileSync(resolve(HERE, "../migrations", f), "utf8");
-const M0434 = read("0434_grant_exec_mode_to_approval_rows.sql");
-const BASELINE = read("0000_baseline_schema.sql");
+const M0435 = read("0435_grant_exec_mode_to_approval_rows.sql");
 const DRY_RUN = readFileSync(
-  resolve(HERE, "../scripts/0434-dry-run.sql"),
+  resolve(HERE, "../scripts/0435-dry-run.sql"),
   "utf8"
 );
 
@@ -75,7 +76,7 @@ let dryRun: Array<{ section: string; item: string; n: number }> = [];
 
 beforeAll(async () => {
   pg = new PGlite();
-  // The tables as they stood before 0434 (the columns the migration and the
+  // The tables as they stood before 0435 (the columns the migration and the
   // resolver read).
   await pg.exec(`
     CREATE TABLE users (
@@ -192,8 +193,8 @@ beforeAll(async () => {
     await pg.query<{ section: string; item: string; n: number }>(DRY_RUN)
   ).rows;
   await pg.exec("ROLLBACK");
-  await pg.exec(M0434);
-  await pg.exec(M0434);
+  await pg.exec(M0435);
+  await pg.exec(M0435);
   db = drizzle(pg);
 }, 60_000);
 
@@ -221,7 +222,7 @@ async function verdict(
   return match?.verdict;
 }
 
-describe("migration 0434 — a grant's exec_mode becomes an approval row", () => {
+describe("migration 0435 — a grant's exec_mode becomes an approval row", () => {
   it("writes one row per auto or dry-run grant it may carry over, once", async () => {
     const { rows } = await pg.query<{
       created_by: string;
@@ -278,16 +279,23 @@ describe("migration 0434 — a grant's exec_mode becomes an approval row", () =>
     ]);
   });
 
-  it("drops the column and its type", async () => {
-    const col = await pg.query(
-      `SELECT 1 FROM information_schema.columns
+  it("keeps the column (expand), defaulting to 'propose', which decides nothing", async () => {
+    const { rows } = await pg.query<{ column_default: string | null }>(
+      `SELECT column_default FROM information_schema.columns
         WHERE table_name = 'vault_grants' AND column_name = 'exec_mode'`
     );
-    expect(col.rows).toHaveLength(0);
-    const type = await pg.query(
-      `SELECT 1 FROM pg_type WHERE typname = 'grant_exec_mode'`
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.column_default).toMatch(/^'propose'/);
+    // A grant written now, by code that no longer sets the column.
+    await pg.exec(`
+      INSERT INTO vault_grants (grantable_type, grantable_id, workspace_id, created_by)
+      VALUES ('tool', '${T_MAIL}', '${WS2}', '${PERSON}');
+    `);
+    const { rows: fresh } = await pg.query<{ exec_mode: string }>(
+      `SELECT exec_mode FROM vault_grants WHERE workspace_id = $1 AND granted_to IS NULL`,
+      [WS2]
     );
-    expect(type.rows).toHaveLength(0);
+    expect(fresh).toEqual([{ exec_mode: "propose" }]);
   });
 
   it("preserves auto: the grant's agent runs in the grant's space, and nobody else gains", async () => {
@@ -319,7 +327,7 @@ describe("migration 0434 — a grant's exec_mode becomes an approval row", () =>
   });
 });
 
-describe("after 0434 — the approval row is the one answer", () => {
+describe("after 0435 — the approval row is the one answer", () => {
   it("an 'ask first' on the same reach as an auto row wins the tie, older or newer", async () => {
     await pg.exec(`
       INSERT INTO governance_rules (principal_kind, agent_user_id, scope_kind,
@@ -404,11 +412,11 @@ describe("after 0434 — the approval row is the one answer", () => {
     expect(bySection("4-change-dry-run").map(([i]) => i.split(" ")[0])).toEqual(
       [G.dryRun]
     );
-    // The session pre-approval and the install's grant disagree; after 0434
+    // The session pre-approval and the install's grant disagree; after 0435
     // the auto one decides (asserted through the resolver below).
     expect(bySection("4-change-ambiguous")).toEqual([
       [
-        `${G.autoAgentSpace} (auto) and ${G.installBeside} (propose) on mail_send agent=${AGENT_A} space=${WS1} -> after 0434: auto (runs)`,
+        `${G.autoAgentSpace} (auto) and ${G.installBeside} (propose) on mail_send agent=${AGENT_A} space=${WS1} -> after 0435: auto (runs)`,
         1,
       ],
     ]);
@@ -435,9 +443,7 @@ describe("after 0434 — the approval row is the one answer", () => {
     }
   });
 
-  it("the baseline and the boot coherence list no longer carry the column", () => {
-    expect(BASELINE).not.toContain("exec_mode");
-    expect(BASELINE).not.toContain("grant_exec_mode");
+  it("the boot coherence list no longer requires the column", () => {
     expect(REQUIRED_COLUMNS).not.toContainEqual(
       expect.objectContaining({ table: "vault_grants", column: "exec_mode" })
     );

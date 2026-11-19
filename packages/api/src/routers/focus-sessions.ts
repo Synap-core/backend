@@ -2877,7 +2877,7 @@ export const focusSessionsRouter = router({
       // capability grant says the agent MAY USE it, and the approval row
       // (`governance_rules`, the ONE store the capability gate reads for "runs
       // without asking", decision D2) says it runs without asking — the
-      // verdict the grant's `exec_mode = 'auto'` carried before 0434. Both
+      // verdict the grant's `exec_mode = 'auto'` carried before 0435. Both
       // are scoped to the session's workspace (and the specific agent when one
       // was named). Session-grants are 'session' scope (unlimited within the
       // session window). The canonical wildcard firewall runs here too — a

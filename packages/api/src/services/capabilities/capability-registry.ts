@@ -1977,7 +1977,7 @@ export interface CapabilityGrantRow {
   /**
    * How the grant's agent (or anyone, for a grant naming no agent) runs this
    * capability in the grant's space: the approval row's verdict (`auto`,
-   * `propose`, `deny`), never a column of the grant (decision D2, 0434).
+   * `propose`, `deny`), never a column of the grant (decision D2, 0435).
    * `propose` when no row names it. Secrets: always `auto` (a grant to read a
    * secret has no approval row).
    */

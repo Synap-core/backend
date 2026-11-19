@@ -346,7 +346,7 @@ export async function retireCapabilityShadows(input: {
         )
       );
     // The auto approval rows naming a removed part by its id (a grant's, since
-    // 0434) would match nothing again; take them back with the grants so the
+    // 0435) would match nothing again; take them back with the grants so the
     // approvals list does not keep a dead "runs on its own".
     await tx
       .update(governanceRules)

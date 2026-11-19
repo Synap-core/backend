@@ -136,7 +136,7 @@ export type GrantSubjectKind = GrantableKind | "secret";
 
 /**
  * How a capability runs for an agent — the governance / execMode axis. The
- * same axis as `Capability.governance`. Since decision D2 (migration 0434) a
+ * same axis as `Capability.governance`. Since decision D2 (migration 0435) a
  * grant carries none: an approval row (`governance_rules`) is the only
  * "runs without asking", and a verb's effective mode is read from it.
  *   - `auto`    — run the capability directly.

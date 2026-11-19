@@ -1828,7 +1828,7 @@ export async function createCapabilityFromDefinition(
 // ── Verb-catalog derivation (the capability-matrix axis) ──────────────────────
 //
 // A verb's governance default in the catalog (`govDefault`): `propose`, what
-// the gate applies to a tool run no approval row names. (Before 0434 the
+// the gate applies to a tool run no approval row names. (Before 0435 the
 // applier also seeded it as each grant's exec_mode; a grant now carries none.)
 export const GRANT_DEFAULT_EXEC_MODE = "propose" as const;
 
@@ -2003,7 +2003,7 @@ export function deriveToolVerbs(
 // null) is satisfied. It writes no approval row: with none, a run asks first,
 // the conservative default for a side-effecting tool/skill, until a person
 // writes an "auto" approval row (decision D2: the grant's exec_mode, always
-// "propose" here, was retired by 0434).
+// "propose" here, is no longer read or written since 0435).
 export async function issueCapabilityGrant(
   grantableType: "tool" | "skill",
   grantableId: string,

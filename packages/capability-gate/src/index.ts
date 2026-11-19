@@ -13,7 +13,8 @@
  *       ranked rows (a "Never" refuses; an "auto" runs; an "ask first" or no
  *       row asks). A capability grant (`vault_grants`) means only "may use"
  *       (scope, expiry, uses): the gate never reads it, and its retired
- *       `exec_mode` became approval rows (migration 0434).
+ *       `exec_mode` became approval rows (migration 0435; the column is no
+ *       longer read, and its contract step drops it).
  *
  * It does DB READS (the tool/skill row when not passed in, the approval rows)
  * but performs NO writes. A grant's use-count is consumed separately at the
@@ -235,7 +236,7 @@ export type GateCapabilityDecision =
   | { decision: "deny"; reason: string; reasonCode?: string }
   /**
    * No longer produced: it came only from a grant's `dry-run` exec mode,
-   * retired by 0434 (decision D2). Kept so the callers' preview branches
+   * no longer read since 0435 (decision D2). Kept so the callers' preview branches
    * (13 of them across api and jobs) are retired in their own change.
    */
   | { decision: "dry-run" };
@@ -273,7 +274,7 @@ export type GateCapabilityDecision =
  * against the old id alone stops matching after a reinstall. Rules are ALSO
  * matchable by the capability's stable VERB NAME (`tools.name`/`skills.name`,
  * = `verbId`), which survives a reinstall — author "always approve this
- * action" rows against the verb name. The rows 0434 made from grants name the
+ * action" rows against the verb name. The rows 0435 made from grants name the
  * row id, exactly what each grant matched.
  */
 /**
@@ -577,7 +578,7 @@ async function decideCapabilityExecution(
   //       row or no row proposes. A grant is not read: it means "may use",
   //       never "without asking".
   //       CHANNEL RUNG 7 IS NOT APPLIED to an auto row: an auto rule never met
-  //       it before 0434, and with `can_act = false` on nearly every agent
+  //       it before 0435, and with `can_act = false` on nearly every agent
   //       membership (founder's pod, 19 Nov 2026: 4001 memberships in 2060
   //       channels) applying it would stop auto rules in most rooms. Kept as
   //       before by the lead's default (W1, D2 review); the founder decides

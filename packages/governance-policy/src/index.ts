@@ -1425,7 +1425,7 @@ export interface AgentPolicyInput {
    * The run's exec mode from its APPROVAL ROW (decision D2, document b387ca45:
    * a `governance_rules` capability row is the ONLY answer to "may this run
    * without asking?"; a grant means only "may use", and the grant's
-   * `exec_mode` column was retired by migration 0434). `gateCapabilityExecution`
+   * `exec_mode` column is no longer read since migration 0435). `gateCapabilityExecution`
    * passes `auto` when the best-ranked row for this agent says auto; an "ask
    * first" row or no row never reaches the policy (the gate proposes first).
    * When present it takes precedence over capabilityGovernance in rung 2.7, so

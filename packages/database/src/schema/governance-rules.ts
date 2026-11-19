@@ -15,7 +15,7 @@
  * capability gate) ranks matching rows by specificity — agent > class > any,
  * workspace > pod, exact action > profile or tool > glob > `*` — and takes
  * the top-ranked active row. For a tool run (target `capability`) it is the
- * ONLY answer to "may this run without asking?" (decision D2, 0434): a grant
+ * ONLY answer to "may this run without asking?" (decision D2, 0435): a grant
  * means only "may use".
  */
 

@@ -9,7 +9,7 @@
  *   - a session pre-approval (`focusSessions.grantCapability`) writes, per
  *     granted part, "this agent (or anyone, when none is named) × this action
  *     × this space → auto", the verdict its grant's `exec_mode = 'auto'`
- *     carried before 0434;
+ *     carried before 0435;
  *   - revoking a grant (`capabilityGrants.revoke`, a retired part) takes back
  *     the auto rows on exactly that grant's agent × action × space, so a
  *     revoked pre-approval asks again, as it did when the grant held the mode.
