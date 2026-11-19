@@ -190,15 +190,27 @@ function keyLiftRefuses(approved: readonly Pair[]): boolean {
 
 describe("liftApprovedRequests — never wider, never narrower (exhaustive)", () => {
   for (const [label, perms, subsumption] of [
-    ["reads, one not pod-wide, and a write", [R_NOTE, R_TASK, R_TRACK, W_NOTE], false],
+    [
+      "reads, one not pod-wide, and a write",
+      [R_NOTE, R_TASK, R_TRACK, W_NOTE],
+      false,
+    ],
     ["two writes and a read", [R_NOTE, W_NOTE, W_TASK], false],
     // Wildcards and subsumption (review of #1183, W3c): `*` is a write and
     // holds where `write` says, so the tiers never mix through it;
     // `entity.read` beside `entity.note.read` adds nothing.
-    ["wildcards: entity.read, entity.note.read and *", [R_ALL_KINDS, R_NOTE, FULL], true],
+    [
+      "wildcards: entity.read, entity.note.read and *",
+      [R_ALL_KINDS, R_NOTE, FULL],
+      true,
+    ],
     // Pod-wide reads beside the same reads per space (synap-chat's shape),
     // where the app also writes, and where it does not.
-    ["pod-wide and per-space reads beside a write: entity.read, entity.note.read, entity.note.create", [R_ALL_KINDS, R_NOTE, W_NOTE], true],
+    [
+      "pod-wide and per-space reads beside a write: entity.read, entity.note.read, entity.note.create",
+      [R_ALL_KINDS, R_NOTE, W_NOTE],
+      true,
+    ],
   ] as const) {
     it(`every subset of ${label} × {A, B, pod}: same permits, same placement`, () => {
       let lifted = 0;
@@ -279,10 +291,7 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
         { permission: R_NOTE, workspaceId: A },
         { permission: W_NOTE, workspaceId: A },
       ],
-      [
-        { permissions: [R_NOTE] },
-        { permissions: [W_NOTE], workspaceIds: [A] },
-      ],
+      [{ permissions: [R_NOTE] }, { permissions: [W_NOTE], workspaceIds: [A] }],
     ],
   ] as const)("now lifts: %s", (_label, approved, grants) => {
     expect(keyLiftRefuses(approved)).toBe(true);
@@ -443,9 +452,15 @@ describe("liftApprovedRequests — table", () => {
   it("synap-chat's shape re-consents: it reads at two widths", () => {
     const kinds = Array.from({ length: 29 }, (_, i) => `kind${i}`);
     const podReads = [
-      ...["playbook", "session", "proposal", "automation", "view", "channel", "project"].map(
-        (s) => `${s}.read`
-      ),
+      ...[
+        "playbook",
+        "session",
+        "proposal",
+        "automation",
+        "view",
+        "channel",
+        "project",
+      ].map((s) => `${s}.read`),
       ...kinds.map((k) => `entity.${k}.read`),
     ];
     const perSpace = [
@@ -618,8 +633,7 @@ describe("appAccessWithin — v2 against v2, place by place", () => {
   const placedWithin = (
     a: ReadonlyMap<string, string>,
     b: ReadonlyMap<string, string>
-  ) =>
-    [...a].every(([w, r]) => b.get(w) === r || b.get(w) === "editor");
+  ) => [...a].every(([w, r]) => b.get(w) === r || b.get(w) === "editor");
 
   // W3c: a lift compares by meaning, so the v2 form of an ask may hold a
   // space read through its pod-wide read; v2 against v2 then answers on

@@ -505,13 +505,15 @@ describe("backfillAppAccess — dry run, then apply", () => {
       ),
       subsumed: await insertApp(
         "Subsumed",
-        FIXTURES["subsumption: every-kind reads per space beside a kind's read"]!
-          .pairs
+        FIXTURES[
+          "subsumption: every-kind reads per space beside a kind's read"
+        ]!.pairs
       ),
       podBesideWrite: await insertApp(
         "Pod beside write",
-        FIXTURES["a pod-wide read beside the same read in a space it writes in"]!
-          .pairs
+        FIXTURES[
+          "a pod-wide read beside the same read in a space it writes in"
+        ]!.pairs
       ),
       none: await insertApp("Not approved", null),
     };

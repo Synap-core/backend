@@ -1029,7 +1029,11 @@ describe("synap_requests[].kinds: one entry, many kinds, granted per kind (F4)",
       body: JSON.stringify(
         doc({
           synap_requests: [
-            { permission: "entity.read", kinds: ["note", "task"], scope: "pod" },
+            {
+              permission: "entity.read",
+              kinds: ["note", "task"],
+              scope: "pod",
+            },
           ],
         })
       ),

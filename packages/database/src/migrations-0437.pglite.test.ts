@@ -37,9 +37,7 @@ const BASELINE_OAUTH = BASELINE.slice(
 
 /** The oauth block as a pod that booted before 0437 has it. */
 const PRE_0437 = BASELINE_OAUTH.split("\n")
-  .filter(
-    (l) => !l.includes("0437") && !l.includes('"requested_kind_groups"')
-  )
+  .filter((l) => !l.includes("0437") && !l.includes('"requested_kind_groups"'))
   .join("\n");
 
 async function columnsOf(pg: PGlite, table: string): Promise<string[]> {

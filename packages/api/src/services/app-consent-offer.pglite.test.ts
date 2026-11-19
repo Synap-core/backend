@@ -192,12 +192,10 @@ describe("oauthAppOffer — spaces, and with options projects and kinds groups",
     const offer = await oauthAppOffer(OWNER, permissions);
     for (const item of offer)
       expect(Object.keys(item).sort()).toEqual(["permission", "workspaces"]);
-    expect(offer.map((o) => o.workspaces.map((w) => w.workspaceName))).toEqual(
-      [
-        ["Edit", "Own", "View"],
-        ["Edit", "Own"],
-      ]
-    );
+    expect(offer.map((o) => o.workspaces.map((w) => w.workspaceName))).toEqual([
+      ["Edit", "Own", "View"],
+      ["Edit", "Own"],
+    ]);
   });
 
   it("with projects: a read offers every visible project, a write only the writable ones", async () => {

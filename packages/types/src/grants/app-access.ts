@@ -469,7 +469,11 @@ function permitDiffs(
   };
   const gained = new Map<string, AccessPair>();
   const lost = new Map<string, AccessPair>();
-  const note = (into: Map<string, AccessPair>, permission: string, i: number) => {
+  const note = (
+    into: Map<string, AccessPair>,
+    permission: string,
+    i: number
+  ) => {
     if (into.size >= SAMPLE) return;
     const pair = { permission, where: whereOfProbe(places[i]!) };
     into.set(accessPairKey(pair), pair);
