@@ -141,7 +141,10 @@ export function readStageOutcomes(
  * recorded its pull request as a NEW outcome (`pr-<repo>-<n>`) still owes the
  * slot the stage declared: nothing pairs the two but the slot's own key. PURE.
  */
-export function owedOutputHint(o: { key: string; kind: string | null }): string {
+export function owedOutputHint(o: {
+  key: string;
+  kind: string | null;
+}): string {
   return o.kind === "pull_request"
     ? `Output "${o.key}" is owed: complete it with your PR's url (completeOutput "${o.key}" with ref.url), or name it as the outputKey of your PR criterion.`
     : `Output "${o.key}" is owed: complete it with its evidence (completeOutput "${o.key}" with its ref), or name it as the outputKey of the criterion that checks it.`;

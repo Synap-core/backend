@@ -739,8 +739,10 @@ describe("a held check gate tells the agent how to get out", () => {
         };
       }
     ).query.focusSessions.findFirst({
-      where: (f: { id: unknown }, { eq }: { eq: (a: unknown, b: unknown) => unknown }) =>
-        eq(f.id, id),
+      where: (
+        f: { id: unknown },
+        { eq }: { eq: (a: unknown, b: unknown) => unknown }
+      ) => eq(f.id, id),
     });
     const nudges = await loadSessionNudges({
       session: row as never,
