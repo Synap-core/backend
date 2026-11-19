@@ -782,13 +782,21 @@ describe("Ship a change walks shape → merge with its real definition (no deadl
   };
   const PR = "https://github.com/Synap-core/backend/pull/7";
 
-  async function shipAChange(): Promise<{ stages: Stage[]; criteria: unknown[] }> {
-    const { getWorkspaceTemplate } = (await import(/* @vite-ignore */ CATALOG)) as {
-      getWorkspaceTemplate: (slug: string) => { playbooks?: unknown[] } | undefined;
+  async function shipAChange(): Promise<{
+    stages: Stage[];
+    criteria: unknown[];
+  }> {
+    const { getWorkspaceTemplate } = (await import(
+      /* @vite-ignore */ CATALOG
+    )) as {
+      getWorkspaceTemplate: (
+        slug: string
+      ) => { playbooks?: unknown[] } | undefined;
     };
-    const pb = (getWorkspaceTemplate("builder-workspace")?.playbooks ?? []).find(
-      (p) => (p as { name?: string }).name === "Ship a change"
-    ) as { stages: Stage[]; criteria?: unknown[] } | undefined;
+    const pb = (
+      getWorkspaceTemplate("builder-workspace")?.playbooks ?? []
+    ).find((p) => (p as { name?: string }).name === "Ship a change") as
+      { stages: Stage[]; criteria?: unknown[] } | undefined;
     expect(pb, "Ship a change is not in the catalog sibling").toBeDefined();
     return { stages: pb!.stages, criteria: collectPlaybookCriteria(pb!) };
   }
@@ -894,10 +902,11 @@ describe("Ship a change walks shape → merge with its real definition (no deadl
           }
         : st
     );
-    const criteria = (real.criteria as Array<Record<string, unknown>>).map((c) =>
-      c.key === "pr-opened" || c.key === "merged"
-        ? { ...c, outputKey: "pull-request" }
-        : c
+    const criteria = (real.criteria as Array<Record<string, unknown>>).map(
+      (c) =>
+        c.key === "pr-opened" || c.key === "merged"
+          ? { ...c, outputKey: "pull-request" }
+          : c
     );
     const id = await walk({ stages, criteria }, async (sid) => {
       const slot = await prSlotOf(sid);
