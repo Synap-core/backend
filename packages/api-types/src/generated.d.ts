@@ -19914,6 +19914,51 @@ export interface OpenBlocker extends DependencyNodeRef {
 	/** Its display name, when the reader may see it. */
 	title?: string | null;
 }
+export interface CriterionScore {
+	key: string;
+	statement: string;
+	required: boolean;
+	/** Closed sessions that declared this criterion. */
+	sessions: number;
+	passed: number;
+	failed: number;
+	unmeasured: number;
+	/** passed / (passed + failed); null when nothing was measured. */
+	passRate: number | null;
+	overrides: number;
+}
+export interface PlaybookScorecard {
+	runs: {
+		attached: number;
+		closed: number;
+		/** Closed sessions with at least one evaluation row. */
+		evaluated: number;
+		/**
+		 * The split of `total` by HOW the session came to be a run of this
+		 * playbook. `instantiated + attached === total`, always — both numbers are
+		 * surfaced so a reader can see what the criteria scores are made of.
+		 * A criterion's pass rate above counts BOTH populations; the lessons
+		 * scanner re-projects over instantiated rows alone before proposing an
+		 * edit to the playbook (see {@link ScorecardSessionRow.attached}).
+		 */
+		instantiated: number;
+		reopened: number;
+		total: number;
+	};
+	escalations: number;
+	overrides: number;
+	criteria: CriterionScore[];
+}
+/** A compact scorecard for a CATALOG row — a few numbers, never the full table. */
+export interface CompactPlaybookScorecard {
+	closedRuns: number;
+	evaluatedRuns: number;
+	reopenedRuns: number;
+	overrides: number;
+	escalations: number;
+	/** Pass rate per criterion key; `null` = nothing measured yet. */
+	passRate: Record<string, number | null>;
+}
 /** The identity a card needs: the kind slug, its display name, its icon. */
 export interface EntityProfileRef {
 	/** Profile slug (`entities.type` mirrors it when the profile row is absent). */
@@ -20784,6 +20829,30 @@ export interface ContinuationNextMove {
 	/** The person or thing a `waiting_on` move waits on, when the reader may read it. */
 	entityId?: string;
 }
+/** One earlier successful run of the same playbook (plan W8 D7a). */
+export interface PacketPrecedentItem {
+	sessionId: string;
+	/** `resolveSessionTitle`, as every session name. */
+	title: string;
+	closedAt: string | null;
+	/** The tools and skills it recorded using (`session --used-->`). */
+	used: string[];
+}
+/**
+ * HOW OTHERS DID IT — the playbook this session follows, as the reader's own
+ * earlier runs of it went: its compact scorecard (`null` = no closed run yet)
+ * and its newest successful runs (every required criterion passed), each with
+ * what it used. A failed read is `unavailable`, never "no precedent".
+ */
+export type PacketHowOthersDidIt = {
+	playbookId: string;
+	precedents: PacketSection<PacketPrecedentItem>;
+	scorecard: CompactPlaybookScorecard | null;
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export interface ContinuationPacket {
 	version: 1;
 	session: {
@@ -20982,6 +21051,11 @@ export interface ContinuationPacket {
 		reason: string;
 		status: "unavailable";
 	} | null;
+	/**
+	 * How the reader's earlier runs of the same playbook went (see
+	 * {@link PacketHowOthersDidIt}). `null` = the session follows no playbook.
+	 */
+	howOthersDidIt: PacketHowOthersDidIt | null;
 	/**
 	 * The PRs and branches this session recorded as outcomes, declaration
 	 * order (see {@link PacketWorkUnitItem}). Derived from the row itself — an
@@ -27006,41 +27080,6 @@ export interface RunnerOffer {
  * waits for the person to accept it (decision 3), so it has not started yet.
  */
 export type AlreadyRunningReason = "draft_awaiting_acceptance" | "live_run";
-export interface CriterionScore {
-	key: string;
-	statement: string;
-	required: boolean;
-	/** Closed sessions that declared this criterion. */
-	sessions: number;
-	passed: number;
-	failed: number;
-	unmeasured: number;
-	/** passed / (passed + failed); null when nothing was measured. */
-	passRate: number | null;
-	overrides: number;
-}
-export interface PlaybookScorecard {
-	runs: {
-		attached: number;
-		closed: number;
-		/** Closed sessions with at least one evaluation row. */
-		evaluated: number;
-		/**
-		 * The split of `total` by HOW the session came to be a run of this
-		 * playbook. `instantiated + attached === total`, always — both numbers are
-		 * surfaced so a reader can see what the criteria scores are made of.
-		 * A criterion's pass rate above counts BOTH populations; the lessons
-		 * scanner re-projects over instantiated rows alone before proposing an
-		 * edit to the playbook (see {@link ScorecardSessionRow.attached}).
-		 */
-		instantiated: number;
-		reopened: number;
-		total: number;
-	};
-	escalations: number;
-	overrides: number;
-	criteria: CriterionScore[];
-}
 /** What the run door answers for a one-shot run. */
 export interface GeneratedRunAnswer {
 	runId: string;
@@ -50789,6 +50828,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
+					entityId?: string | undefined;
 				} | undefined;
 				tools?: string[] | undefined;
 			};
@@ -52215,6 +52255,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
+					entityId?: string | undefined;
 				} | undefined;
 				tools?: string[] | undefined;
 			};
@@ -63602,6 +63643,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 							}[] | undefined;
 							humanOnlyStatuses?: string[] | undefined;
+							entityId?: string | undefined;
 						} | undefined;
 						tools?: string[] | undefined;
 					}[] | undefined;

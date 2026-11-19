@@ -20040,6 +20040,10 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
+                                },
+                                "entityId": {
+                                  "type": "string",
+                                  "format": "uuid"
                                 }
                               },
                               "additionalProperties": {}
@@ -25345,6 +25349,10 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
+                                },
+                                "entityId": {
+                                  "type": "string",
+                                  "format": "uuid"
                                 }
                               },
                               "additionalProperties": {}
@@ -32660,7 +32668,8 @@
                           "maxLength": 200
                         },
                         "maxItems": 50
-                      }
+                      },
+                      "entityId": { "type": "string", "format": "uuid" }
                     },
                     "additionalProperties": {},
                     "description": "The kind this playbook runs ON, e.g. { profileSlug: 'crm-lead' }. A profileSlug that resolves to no profile is refused."
