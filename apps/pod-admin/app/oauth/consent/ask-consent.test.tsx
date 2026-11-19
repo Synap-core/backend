@@ -24,13 +24,25 @@ import {
 } from "./consent-access";
 import type { Step } from "./ConsentForm";
 
-const CONTENT = { workspaceId: "ws-content", workspaceName: "Content OS", templateSlug: null };
-const BUILDER = { workspaceId: "ws-builder", workspaceName: "Builder", templateSlug: null };
+const CONTENT = {
+  workspaceId: "ws-content",
+  workspaceName: "Content OS",
+  templateSlug: null,
+};
+const BUILDER = {
+  workspaceId: "ws-builder",
+  workspaceName: "Builder",
+  templateSlug: null,
+};
 
 const ASK: ConsentAsk = {
   title: "Content Studio asks to read notes in Content OS",
   pairs: [
-    { permission: "entity.note.read", workspaceId: "ws-content", workspaceName: "Content OS" },
+    {
+      permission: "entity.note.read",
+      workspaceId: "ws-content",
+      workspaceName: "Content OS",
+    },
   ],
   unavailable: [],
   connectionPublicId: "app_123",
@@ -40,9 +52,21 @@ const APP: ConsentAppWire & {
   approved: Array<{ permission: string; workspaceId: string | null }>;
 } = {
   permissions: [
-    { permission: "entity.post.read", workspaces: [CONTENT, BUILDER], reason: null },
-    { permission: "entity.note.read", workspaces: [CONTENT], reason: "To quote your notes in a post." },
-    { permission: "entity.task.update", workspaces: [CONTENT, BUILDER], reason: null },
+    {
+      permission: "entity.post.read",
+      workspaces: [CONTENT, BUILDER],
+      reason: null,
+    },
+    {
+      permission: "entity.note.read",
+      workspaces: [CONTENT],
+      reason: "To quote your notes in a post.",
+    },
+    {
+      permission: "entity.task.update",
+      workspaces: [CONTENT, BUILDER],
+      reason: null,
+    },
   ],
   podWide: [],
   templates: [],
@@ -51,7 +75,11 @@ const APP: ConsentAppWire & {
 
 const html = (
   ask: ConsentAsk | null,
-  opts: { contract?: ConsentContract | null; step?: Step; writePlace?: ConsentDraft | null } = {}
+  opts: {
+    contract?: ConsentContract | null;
+    step?: Step;
+    writePlace?: ConsentDraft | null;
+  } = {}
 ) => {
   const offer = offerOf(APP);
   const view = askViewOf({ ask, contract: opts.contract ?? null, offer })!;
@@ -69,7 +97,11 @@ const html = (
         busy={false}
         step={opts.step ?? { kind: "idle" }}
         onDecide={() => {}}
-        writePlace={opts.writePlace ? { draft: opts.writePlace, onChange: () => {} } : null}
+        writePlace={
+          opts.writePlace
+            ? { draft: opts.writePlace, onChange: () => {} }
+            : null
+        }
       />
     </Card>
   );
@@ -102,7 +134,9 @@ describe("the short consent", () => {
 
   it("links the app's page only once it is connected", () => {
     expect(html(ASK)).toContain('href="/apps/app_123"');
-    expect(html({ ...ASK, connectionPublicId: null })).not.toContain('href="/apps/');
+    expect(html({ ...ASK, connectionPublicId: null })).not.toContain(
+      'href="/apps/'
+    );
   });
 
   it("today's ask: a part no space can hold is left out, Allow still works", () => {
@@ -121,13 +155,25 @@ describe("the short consent", () => {
       current: {
         version: 2,
         permissions: ["entity.post.read"],
-        read: { spaces: [{ id: "ws-content", name: "Content OS", templateSlug: null }], projects: [{ id: "p-l", name: "Launch", workspaceId: null }] },
+        read: {
+          spaces: [
+            { id: "ws-content", name: "Content OS", templateSlug: null },
+          ],
+          projects: [{ id: "p-l", name: "Launch", workspaceId: null }],
+        },
         write: { spaces: [], projects: [] },
       },
       reconsent: null,
       ask: {
         title: "",
-        adds: [{ permission: "entity.task.read", tier: "read", reason: "To list tasks.", kindGroup: null }],
+        adds: [
+          {
+            permission: "entity.task.read",
+            tier: "read",
+            reason: "To list tasks.",
+            kindGroup: null,
+          },
+        ],
         needsWritePlace: false,
         unavailable: ["entity.deal.read"],
         connectionPublicId: "app_9",
@@ -136,14 +182,19 @@ describe("the short consent", () => {
     const out = html(ASK, { contract });
     expect(out).toContain("Read tasks");
     expect(out).not.toContain("Read notes");
-    expect(out).toContain("Content OS, or Launch".replace("Launch", "project Launch"));
+    expect(out).toContain(
+      "Content OS, or Launch".replace("Launch", "project Launch")
+    );
     expect(out).toContain("connect it again to choose its places");
     expect(allow(out)).toContain("disabled");
   });
 
   it("U4/Q4: no write place yet: the ask's own space is pre-ticked and tagged Asked, only places within In, and no “never changes where it works”", () => {
     const offer = offerOf(APP);
-    const draft = { ...firstDraft(offer), write: { spaces: ["ws-content"], projects: [] } };
+    const draft = {
+      ...firstDraft(offer),
+      write: { spaces: ["ws-content"], projects: [] },
+    };
     const out = html(ASK, { writePlace: draft });
     expect(out).toContain("Pick where it can make this change");
     expect(out).toContain("Only places it can already look in are listed.");
@@ -151,7 +202,9 @@ describe("the short consent", () => {
     expect(out).not.toContain("Builder");
     expect(out).not.toContain("never changes where it works");
     expect(allow(out)).not.toContain("disabled");
-    const none = html(ASK, { writePlace: { ...draft, write: { spaces: [], projects: [] } } });
+    const none = html(ASK, {
+      writePlace: { ...draft, write: { spaces: [], projects: [] } },
+    });
     expect(none).toContain("Pick at least one place for it.");
     expect(allow(none)).toContain("disabled");
   });

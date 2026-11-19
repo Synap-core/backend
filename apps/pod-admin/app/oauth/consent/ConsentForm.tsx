@@ -691,7 +691,7 @@ export function ConsentForm({
               </div>
             )}
 
-            {showsErrorScreen(step, app) && (
+            {step.kind === "error" && showsErrorScreen(step, app) && (
               <div className="flex flex-col gap-4">
                 <Problem
                   title="Couldn't complete the authorization"
