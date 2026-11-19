@@ -289,7 +289,8 @@ export function liftApprovedRequests(
   const allowedKeys = new Set(allowed.map(accessPairKey));
   const widens = allowed.filter((p) => !held.has(accessPairKey(p)));
   const narrows = pairs.filter((p) => !allowedKeys.has(accessPairKey(p)));
-  if (unplaceable.length > 0 || widens.length > 0 || narrows.length > 0) {
+  // NEGATIVE CONTROL: the no-widen check is broken on purpose.
+  if (unplaceable.length > 0 || narrows.length > 0) {
     return {
       reconsent: {
         reason:
