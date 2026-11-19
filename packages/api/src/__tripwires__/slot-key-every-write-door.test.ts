@@ -138,10 +138,10 @@ describe("every expected_outputs write door keys its slots", () => {
     // doors only while this holds.
     const writer = readFileSync(ROW_WRITER, "utf8");
     expect(writer).toMatch(
-      /export function sessionDefinitionColumns\([\s\S]*?expectedOutputs: stampSlotKeys\(/
+      /export function sessionDefinitionColumns\([\s\S]*?const slots = stampSlotKeys\([\s\S]*?expectedOutputs: slots as never\[\]/
     );
     expect(writer).toMatch(
-      /export async function insertFocusSessionRow\([\s\S]*?\.\.\.sessionDefinitionColumns\(row\.playbook, row\.expectedOutputs\)/
+      /export async function insertFocusSessionRow\([\s\S]*?\.\.\.sessionDefinitionColumns\(\s*row\.playbook,\s*row\.expectedOutputs,/
     );
   });
 

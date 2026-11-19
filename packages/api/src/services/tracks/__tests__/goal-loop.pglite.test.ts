@@ -358,6 +358,7 @@ describe("runGoalLoop — proposes the next run", () => {
         check: { kind: "judge" },
         outputKey: "deck",
         about: "result",
+        acceptance: null,
       })
     ).toEqual({
       key: "k",
