@@ -20,7 +20,9 @@
  *     stamped);
  *   - a session the SPACE LADDER placed losing the project-wide reach it had
  *     with no space (LADDER_FIN, W3 decision D2 a: its own space AND its
- *     project's), or its room losing it;
+ *     project's), or its room losing it; a session the agent's FOCUS placed
+ *     gaining it (FOCUS_FIN: before the ladder the focus was the session's
+ *     own pin, one space);
  *   - a grant that holds only `channel.read` writing (the permission still
  *     decides, the space only places it);
  *   - the read half drifting from the write half (parity row);
@@ -93,6 +95,7 @@ const S = {
   ownContent: randomUUID(), // own space CONTENT         → CONTENT
   explicitFin: randomUUID(), // pinned FINANCE, in P_USES → FINANCE only
   ladderFin: randomUUID(), // ladder put it in FINANCE, P_USES → FINANCE + CONTENT
+  focusFin: randomUUID(), // the focus put it in FINANCE, P_USES → FINANCE only
 };
 const ROOM = {
   pUses: randomUUID(),
@@ -197,6 +200,7 @@ beforeAll(async () => {
   await session(S.ownFin, FINANCE, P_USES);
   await session(S.ownContent, CONTENT, null);
   await session(S.explicitFin, FINANCE, P_USES, null, placed("explicit"));
+  await session(S.focusFin, FINANCE, P_USES, null, placed("focus"));
   await session(
     S.ladderFin,
     FINANCE,
@@ -313,6 +317,12 @@ describe("WRITE — an app granted session.update on Content OS", () => {
     );
   });
 
+  it("D2 a — nor one the agent's FOCUS placed in Finance (it was a pin before)", async () => {
+    expect(await updateDenied(S.focusFin, grant)).toMatch(
+      /grant does not allow "session\.update" in workspace/
+    );
+  });
+
   it("the space only PLACES the write: a grant that only reads there writes nothing", async () => {
     const readOnly = APP({
       permissions: ["session.read", "channel.read"],
@@ -390,6 +400,7 @@ describe("READ — the same rule, as the grant read clauses", () => {
         S.qOnly,
         S.orphan,
         S.explicitFin,
+        S.focusFin,
         S.ladderFin,
       ]) {
         const r = await row(id);

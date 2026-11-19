@@ -23,6 +23,7 @@ import {
   resolveSessionProjectPlacement,
   resolveSessionWorkspacePlacement,
   workspacePlacementPatch,
+  type SessionWorkspaceRung,
   startedByAgentPatch,
   insertFocusSessionRow,
   sessionDefinitionColumns,
@@ -30,8 +31,10 @@ import {
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
+  gateAdmitsWorkspace,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
+import { applySessionWorkspaceMove } from "./move-session-workspace.js";
 import { canUserSeeChannel } from "../../utils/channel-visibility.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { TRPCError } from "@trpc/server";
@@ -211,6 +214,12 @@ export interface CreateFocusSessionParams {
    * rung answers it stays null, a personal resource the membrane auto-grants.
    */
   workspaceId?: string | null;
+  /**
+   * With a `workspaceId` copied from another session: the rung that placed
+   * that session (`readWorkspacePlacementRung`), so the new one keeps its
+   * reach. Absent ⇒ the space is the caller's own pin (`explicit`).
+   */
+  workspaceRung?: SessionWorkspaceRung | null;
   projectId?: string | null;
   /**
    * The TRACK (`project_tracks`, 0272) this session is born inside — the
@@ -809,8 +818,8 @@ export async function createFocusSession(
   // compares it.
   const workspacePlacement = await resolveSessionWorkspacePlacement(db, {
     userId,
-    agentUserId,
     explicitWorkspaceId,
+    explicitRung: params.workspaceRung ?? null,
     playbookId: playbook?.id ?? null,
     subjectEntityId,
     parentSessionId,
@@ -818,6 +827,16 @@ export async function createFocusSession(
     focusWorkspaceId: agentUserId
       ? () => getAgentFocusWorkspaceId(agentUserId)
       : undefined,
+    // The membrane's own membership check: a space it would not admit this
+    // start in is skipped, never turned into a join proposal or a denial.
+    mayPlaceIn: (candidate) =>
+      gateAdmitsWorkspace({
+        userId,
+        agentUserId,
+        workspaceId: candidate,
+        subjectType: "focus_session",
+        action: "create",
+      }),
   });
   const workspaceId = workspacePlacement.workspaceId;
 
@@ -1237,6 +1256,7 @@ export async function createFocusSession(
         .select({
           title: focusSessions.title,
           metadata: focusSessions.metadata,
+          workspaceId: focusSessions.workspaceId,
         })
         .from(focusSessions)
         .where(eq(focusSessions.id, adoptId))
@@ -1263,7 +1283,8 @@ export async function createFocusSession(
           // from the NEW goal (still `derived`, so the titler may improve it).
           // A title a person or agent chose is never touched.
           title: title ?? (adoptKeepsTitle ? undefined : derivedTitle),
-          workspaceId: workspaceId ?? undefined,
+          // Its space moves through THE move below (room and outputs with it).
+          workspaceId: undefined,
           projectId: projectId ?? undefined,
           subjectEntityId: subjectEntityId ?? undefined,
           ...(playbook ? { origin: "playbook" as const } : {}),
@@ -1297,6 +1318,21 @@ export async function createFocusSession(
         )
         .returning();
       session = adopted;
+      // The start placed it elsewhere than the receipt's first write did:
+      // re-home the session, its room and its outputs together.
+      if (adopted && workspaceId && adoptee?.workspaceId !== workspaceId) {
+        await applySessionWorkspaceMove(tx, {
+          sessionId: adopted.id,
+          channelId: adopted.channelId,
+          workspaceId,
+          rung: workspacePlacement.rung ?? "explicit",
+        });
+        [session] = await tx
+          .select()
+          .from(focusSessions)
+          .where(eq(focusSessions.id, adopted.id))
+          .limit(1);
+      }
     }
     // Not adopting — or the auto-opened row went away since the lookup.
     const adopted = !!session;
@@ -1600,7 +1636,6 @@ export async function createFocusSession(
           phase: "start",
           title: sessionOut.title ?? null,
           workspaceId: sessionOut.workspaceId ?? null,
-          projectId: sessionOut.projectId ?? null,
           subjectEntityId: sessionOut.subjectEntityId ?? null,
           parentSessionId,
         });

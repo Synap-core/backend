@@ -61,6 +61,7 @@ import {
   focusSessions,
   documents as documentsTable,
   documentVersions,
+  readWorkspacePlacementRung,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createHash } from "crypto";
@@ -581,6 +582,8 @@ export async function rerunSession(args: {
     ensureIntakeSession({
       userId: args.userId,
       workspaceId: parent.workspaceId,
+      // The parent's space is copied: its rung comes with it (its reach).
+      workspaceRung: readWorkspacePlacementRung(parent.metadata),
       projectId: parent.projectId,
       agentUserId: args.agentUserId ?? null,
       door:

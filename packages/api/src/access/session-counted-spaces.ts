@@ -10,11 +10,12 @@
  *     (`project_use_workspace`, `utils/project-workspace.ts`);
  *   - a session with neither counts in no space: a key pinned to spaces never
  *     reaches it;
- *   - a session the SPACE LADDER placed (W3, decision D2 a: its
- *     `metadata.workspacePlacement.rung` is not `explicit`) counts in its own
- *     space AND, when it is filed in a project, in every space the project
- *     uses: it had no space before the ladder, and no app loses a session it
- *     reached then. A space the caller pinned keeps the one-space rule.
+ *   - a session the SPACE LADDER placed by a rung that stands in for "no
+ *     space" (W3, decision D2 a: `PROJECT_REACH_RUNGS` — playbook, subject,
+ *     parent, project home) counts in its own space AND, when it is filed in
+ *     a project, in every space the project uses: it had no space before the
+ *     ladder, and no app loses a session it reached then. A space the caller
+ *     pinned, or the agent's focus, keeps the one-space rule.
  *
  * Why: 36 of the founder's 50 open sessions were project-only, and every door
  * that bounds a pinned key by the session's own space (`permits`,
@@ -50,6 +51,8 @@ import {
   inArray,
   isNull,
   or,
+  PROJECT_REACH_RUNGS,
+  readWorkspacePlacementRung,
   SESSION_WORKSPACE_PLACEMENT_KEY,
   type KeyGrant,
   type SQL,
@@ -75,25 +78,21 @@ export interface SessionPlace {
   metadata: unknown;
 }
 
-/** Did the space ladder (not the caller) place this session in its space? */
-export function sessionPlacedByLadder(metadata: unknown): boolean {
-  const placement =
-    metadata && typeof metadata === "object"
-      ? (metadata as Record<string, unknown>)[SESSION_WORKSPACE_PLACEMENT_KEY]
-      : undefined;
-  const rung =
-    placement && typeof placement === "object"
-      ? (placement as Record<string, unknown>).rung
-      : undefined;
-  return typeof rung === "string" && rung !== "explicit";
+/** Did a rung that stands in for "no space" place this session (D2 a)? */
+export function sessionKeepsProjectReach(metadata: unknown): boolean {
+  const rung = readWorkspacePlacementRung(metadata);
+  return rung !== null && PROJECT_REACH_RUNGS.includes(rung);
 }
 
-/** Does this session count beyond its own space (project-only, or ladder-placed)? */
-function countsInProjectSpaces(session: SessionPlace): boolean {
-  return (
-    !!session.projectId &&
-    (!session.workspaceId || sessionPlacedByLadder(session.metadata))
-  );
+/**
+ * The project whose spaces this session counts in beyond its own (a
+ * project-only session, or one that keeps its project's reach), else null.
+ */
+function reachProjectId(session: SessionPlace): string | null {
+  return session.projectId &&
+    (!session.workspaceId || sessionKeepsProjectReach(session.metadata))
+    ? session.projectId
+    : null;
 }
 
 /**
@@ -140,16 +139,17 @@ export async function sessionCountedSpaceIds(
   session: SessionPlace
 ): Promise<string[]> {
   const own = session.workspaceId ? [session.workspaceId] : [];
-  if (!countsInProjectSpaces(session)) return own;
-  const spaces = await projectCountedSpaceIds(session.projectId!);
+  const projectId = reachProjectId(session);
+  if (!projectId) return own;
+  const spaces = await projectCountedSpaceIds(projectId);
   return [...own, ...spaces.filter((id) => !own.includes(id))];
 }
 
 /**
  * The space a write door checks the calling key's grant in, for a write on
- * this session: its own space; for a project-only or ladder-placed session
- * under a grant, the first space it counts in (its own first) where the grant
- * permits this very write (else its own space, null for a project-only one,
+ * this session: its own space; for a project-only session, or one that keeps
+ * its project's reach, under a grant, the first space it counts in (its own
+ * first) where the grant permits this very write (else its own space, null for a project-only one,
  * so the gate refuses it as before). `write` is exactly what the door's gate
  * checks, minus the space. Without a grant (a signed-in person) or for a
  * session that counts only in its own space, nothing is read.
@@ -159,7 +159,7 @@ export async function sessionGrantWorkspaceId(
   write: Omit<GrantWriteInput, "workspaceId">,
   grant: KeyGrant | undefined = getRequestGrant()
 ): Promise<string | null> {
-  if (!grant || !countsInProjectSpaces(session)) {
+  if (!grant || !reachProjectId(session)) {
     return session.workspaceId;
   }
   for (const workspaceId of await sessionCountedSpaceIds(session)) {
@@ -207,19 +207,22 @@ export function projectCountsInSpacesWhere(
   );
 }
 
-/** SQL twin of {@link sessionPlacedByLadder} (never NULL). */
-export function sessionPlacedByLadderSql(): SQL {
-  return drizzleSql`coalesce((${focusSessions.metadata} -> ${SESSION_WORKSPACE_PLACEMENT_KEY} ->> 'rung') <> 'explicit', false)`;
+/** SQL twin of {@link sessionKeepsProjectReach} (never NULL). */
+export function sessionKeepsProjectReachSql(): SQL {
+  return drizzleSql`coalesce((${focusSessions.metadata} -> ${SESSION_WORKSPACE_PLACEMENT_KEY} ->> 'rung') in (${drizzleSql.join(
+    PROJECT_REACH_RUNGS.map((r) => drizzleSql`${r}`),
+    drizzleSql`, `
+  )}), false)`;
 }
 
 /**
- * READ half: a project-only or ladder-placed session whose project counts in
- * one of `spaces` (a session counts in its own space through the grant's
- * plain space read).
+ * READ half: a project-only session, or one that keeps its project's reach,
+ * whose project counts in one of `spaces` (a session counts in its own space
+ * through the grant's plain space read).
  */
 export function sessionCountsInSpacesWhere(spaces: string[]): SQL {
   return and(
-    or(isNull(focusSessions.workspaceId), sessionPlacedByLadderSql()),
+    or(isNull(focusSessions.workspaceId), sessionKeepsProjectReachSql()),
     projectCountsInSpacesWhere(focusSessions.projectId, spaces)
   )!;
 }
@@ -231,8 +234,8 @@ export function sessionCountsInSpacesWhere(spaces: string[]): SQL {
  * AND the session's `channel_id` pointing back, the pair
  * `session-visibility.ts` explains (each alone is forgeable; a BORROWED
  * channel is never reached through its session) — and in the session's own
- * space (pod-wide for a project-only session; the session's space for a
- * ladder-placed one, as the mint and a move keep it).
+ * space (pod-wide for a project-only session; the session's space for one
+ * that keeps its project's reach, as the mint and a move keep it).
  */
 export function sessionRoomCountsInSpacesWhere(spaces: string[]): SQL {
   return and(

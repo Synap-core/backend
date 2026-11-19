@@ -1,15 +1,14 @@
 /**
  * `resolveSessionWorkspacePlacement` — the space a NEW session sits in, read
  * from its chain (work-model plan 8daa514b, W3; founder decisions D1 a, D9 a).
- *
- * WHY: a session's space defaulted to null and every agent was told to omit
- * it, so 35% of work sessions (70% in the week of 18 Nov 2026) had no space:
- * they counted at pod level, never in the space they worked for, and a space's
- * pillar read "stale" while its work ran outside it.
+ * Without it a session's space defaulted to null: it counted at pod level,
+ * never in the space it worked for.
  *
  * The ladder, first rung that answers wins:
  *   1. explicit — what the caller passed. Always wins, never checked here
- *      (the governance membrane decides it, as before);
+ *      (the governance membrane decides it, as before). A caller that copies
+ *      another session's space passes that session's rung with it
+ *      (`explicitRung`), so the copy keeps the source's reach;
  *   2. playbook — the space of the playbook the session follows;
  *   3. subject — the space of the entity the session is about (its own, or
  *      the space a pod-wide record was filed for);
@@ -19,12 +18,12 @@
  *   6. focus — the acting agent's declared workspace focus, last: a hint,
  *      not a home.
  *
- * A DERIVED rung (2–6) counts only when the actor (the agent when there is
- * one, else the person) is a member of that space with a role that may write
- * there, and the space is not archived. Otherwise the next rung answers. So
- * the ladder never turns a start into a `workspace.join` proposal or a denial
- * the caller did not ask for: a space the actor cannot write is skipped, the
- * same rule the MCP lens applies (`routers/mcp/adapter.ts`).
+ * A DERIVED rung (2–6) counts only for a live (not archived) space the
+ * caller's own write check admits (`mayPlaceIn`): the governance gate's check
+ * for a governed start (`gateAdmitsWorkspace`, `permission-check.ts`), the
+ * membership rule for an ungated run (`workspaceMemberMayWrite`). Otherwise
+ * the next rung answers, so the ladder never turns a start into a
+ * `workspace.join` proposal or a denial the caller did not ask for.
  *
  * Runs before `checkPermissionOrPropose`: the space is the session's
  * governance home. No rung infers: each reads a fact the caller already holds.
@@ -38,8 +37,8 @@ import { entities } from "../schema/entities.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { playbooks } from "../schema/playbooks.js";
 import { projects } from "../schema/projects.js";
-import { workspaceMembers, workspaces } from "../schema/workspaces.js";
-import { hasRolePermission, type UserRole } from "./permissions.js";
+import { workspaces } from "../schema/workspaces.js";
+import { verifyPermission } from "./permissions.js";
 
 export const SESSION_WORKSPACE_RUNGS = [
   "explicit",
@@ -52,19 +51,54 @@ export const SESSION_WORKSPACE_RUNGS = [
 export type SessionWorkspaceRung = (typeof SESSION_WORKSPACE_RUNGS)[number];
 
 /**
+ * The rungs that stand in for "no space" (decision D2 a): before the ladder a
+ * session they place had no space, and counted in every space its project
+ * uses for an app grant. It keeps that reach. `explicit` and `focus` place a
+ * session where the caller (or its declared focus) put it, as before the
+ * ladder: one space.
+ */
+export const PROJECT_REACH_RUNGS: readonly SessionWorkspaceRung[] = [
+  "playbook",
+  "subject",
+  "parent",
+  "project_home",
+];
+
+/**
  * `focus_sessions.metadata` key: which rung placed the session
  * (`{ rung }`). Server-owned. Read by the app-grant reach rule
- * (`access/session-counted-spaces.ts`, decision D2 a): a session the LADDER
- * placed keeps the project-wide reach it had when it had no space.
+ * (`access/session-counted-spaces.ts`) and carried by every door that copies
+ * a session's space into a new session.
  */
 export const SESSION_WORKSPACE_PLACEMENT_KEY = "workspacePlacement";
+
+/** The rung stamped on a session's metadata, or null (none, or malformed). */
+export function readWorkspacePlacementRung(
+  metadata: unknown
+): SessionWorkspaceRung | null {
+  const placement =
+    metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>)[SESSION_WORKSPACE_PLACEMENT_KEY]
+      : undefined;
+  const rung =
+    placement && typeof placement === "object"
+      ? (placement as Record<string, unknown>).rung
+      : undefined;
+  return typeof rung === "string" &&
+    (SESSION_WORKSPACE_RUNGS as readonly string[]).includes(rung)
+    ? (rung as SessionWorkspaceRung)
+    : null;
+}
 
 export interface SessionWorkspaceContext {
   /** The session's owner. Floors the parent rung. */
   userId: string;
-  /** The agent acting, if any: the membership is checked for it. */
-  agentUserId?: string | null;
   explicitWorkspaceId?: string | null;
+  /**
+   * With `explicitWorkspaceId` copied from another session: the rung that
+   * placed that session (`readWorkspacePlacementRung`). Absent ⇒ `explicit`.
+   */
+  explicitRung?: SessionWorkspaceRung | null;
   playbookId?: string | null;
   /** Already floored by the caller (the subject must be visible to it). */
   subjectEntityId?: string | null;
@@ -76,6 +110,8 @@ export interface SessionWorkspaceContext {
    * read happens only when every rung above it is empty.
    */
   focusWorkspaceId?: () => Promise<string | null>;
+  /** The caller's own write check for a candidate space (see the module doc). */
+  mayPlaceIn: (workspaceId: string) => Promise<boolean>;
 }
 
 export interface SessionWorkspacePlacement {
@@ -94,25 +130,32 @@ export function workspacePlacementPatch(
     : {};
 }
 
-/** Can `actorId` write in `workspaceId` (a member, a writing role, not archived)? */
-async function actorCanWriteIn(
+/**
+ * The membership rule an ungated run is placed by: `actorId` is a member of
+ * `workspaceId` whose role may write — `verifyPermission`, the rule the
+ * governance gate's own check starts from.
+ */
+export async function workspaceMemberMayWrite(
   db: Db,
   actorId: string,
   workspaceId: string
 ): Promise<boolean> {
+  const result = await verifyPermission({
+    db,
+    userId: actorId,
+    workspace: { id: workspaceId },
+    requiredPermission: "write",
+  });
+  return result.allowed;
+}
+
+async function isLiveWorkspace(db: Db, workspaceId: string): Promise<boolean> {
   const [row] = await db
-    .select({ role: workspaceMembers.role })
-    .from(workspaceMembers)
-    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
-    .where(
-      and(
-        eq(workspaceMembers.workspaceId, workspaceId),
-        eq(workspaceMembers.userId, actorId),
-        isNull(workspaces.archivedAt)
-      )
-    )
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(and(eq(workspaces.id, workspaceId), isNull(workspaces.archivedAt)))
     .limit(1);
-  return !!row && hasRolePermission(row.role as UserRole, "write");
+  return !!row;
 }
 
 export async function resolveSessionWorkspacePlacement(
@@ -120,9 +163,11 @@ export async function resolveSessionWorkspacePlacement(
   ctx: SessionWorkspaceContext
 ): Promise<SessionWorkspacePlacement> {
   if (ctx.explicitWorkspaceId) {
-    return { workspaceId: ctx.explicitWorkspaceId, rung: "explicit" };
+    return {
+      workspaceId: ctx.explicitWorkspaceId,
+      rung: ctx.explicitRung ?? "explicit",
+    };
   }
-  const actorId = ctx.agentUserId || ctx.userId;
 
   const rungs: Array<[SessionWorkspaceRung, () => Promise<string | null>]> = [
     [
@@ -181,12 +226,19 @@ export async function resolveSessionWorkspacePlacement(
         return row?.workspaceId ?? null;
       },
     ],
-    ["focus", async () => (ctx.focusWorkspaceId ? ctx.focusWorkspaceId() : null)],
+    [
+      "focus",
+      async () => (ctx.focusWorkspaceId ? ctx.focusWorkspaceId() : null),
+    ],
   ];
 
   for (const [rung, read] of rungs) {
     const workspaceId = await read();
-    if (workspaceId && (await actorCanWriteIn(db, actorId, workspaceId))) {
+    if (
+      workspaceId &&
+      (await isLiveWorkspace(db, workspaceId)) &&
+      (await ctx.mayPlaceIn(workspaceId))
+    ) {
       return { workspaceId, rung };
     }
   }
@@ -195,8 +247,9 @@ export async function resolveSessionWorkspacePlacement(
 
 /**
  * The stamp for a start approved from a proposal: the rung the proposing door
- * recorded (`data.workspacePlacement`), when it names one and the proposal
- * carries a space. Anything else in the payload stamps nothing.
+ * recorded (`data.workspacePlacement`, pinned against revision by
+ * `PINNED_PLACEMENT_FIELDS`), when it names one and the proposal carries a
+ * space. Anything else in the payload stamps nothing.
  */
 export function workspacePlacementPatchFromProposal(
   rung: unknown,

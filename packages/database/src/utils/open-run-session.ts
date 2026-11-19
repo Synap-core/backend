@@ -5,8 +5,10 @@ import { recordSessionSpawn } from "./session-spawn.js";
 import { resolveSessionProjectPlacement } from "./resolve-session-project.js";
 import {
   resolveSessionWorkspacePlacement,
+  workspaceMemberMayWrite,
   workspacePlacementPatch,
   type SessionWorkspacePlacement,
+  type SessionWorkspaceRung,
 } from "./resolve-session-workspace.js";
 import { insertFocusSessionRow } from "./insert-focus-session.js";
 import { isUniqueViolation } from "./pg-errors.js";
@@ -35,6 +37,11 @@ export interface OpenRunSessionInput {
    * `keepCallerWorkspace` is set.
    */
   workspaceId?: string | null;
+  /**
+   * With `workspaceId` copied from another session (a rerun's parent): the
+   * rung that placed that session, so the run keeps its reach.
+   */
+  workspaceRung?: SessionWorkspaceRung | null;
   /**
    * A write RECEIPT (the session the gate auto-opens for an agent's writes)
    * keeps exactly the caller's space, null included: runs follow the ladder,
@@ -94,6 +101,65 @@ export interface OpenRunSessionResult {
   sessionId: string;
   /** True when an existing active channel session was reused, not created. */
   reused: boolean;
+}
+
+/** What decides where a new run session is placed. */
+export type RunSessionPlacementInput = Pick<
+  OpenRunSessionInput,
+  | "userId"
+  | "agentUserId"
+  | "workspaceId"
+  | "workspaceRung"
+  | "keepCallerWorkspace"
+  | "projectId"
+  | "parentSessionId"
+  | "channelId"
+  | "subjectEntityId"
+>;
+
+/**
+ * Where `openRunSession` would place a NEW session: its project (the project
+ * ladder) and its space (the space ladder). Exported so a door that looks for
+ * a session to REUSE first (`ensureIntakeSession`) matches on the placement a
+ * mint would get, not on the raw input.
+ */
+export async function resolveRunSessionPlacement(
+  database: typeof db,
+  input: RunSessionPlacementInput
+): Promise<{ projectId: string | null; workspace: SessionWorkspacePlacement }> {
+  // PROJECT LENS — derived, not waited for. The ladder is consulted with the
+  // context this door ALREADY holds: the caller's explicit pin (rung 1, still
+  // wins), the session this run was pushed from (rung 2), the channel it binds
+  // (rung 3), and the entity it is about (rung 4). No AI rung, no fallback — a
+  // `NONE` placement writes NULL, which is the correct answer, not a gap.
+  const { projectId } = await resolveSessionProjectPlacement(database, {
+    userId: input.userId,
+    explicitProjectId: input.projectId ?? null,
+    parentSessionId: input.parentSessionId ?? null,
+    channelId: input.channelId ?? null,
+    subjectEntityId: input.subjectEntityId ?? null,
+  });
+
+  // SPACE — a run sits in a space read from its chain like every session
+  // (`resolve-session-workspace.ts`): the caller's pin, else the subject's,
+  // the parent's, the project's home. No playbook rung (a playbook run comes
+  // through `instantiateSessionRow`, always in the playbook's space) and no
+  // focus rung (an automation acts on no agent's focus). A run is not gated,
+  // so a rung counts by the membership rule (`workspaceMemberMayWrite`).
+  const actorId = input.agentUserId || input.userId;
+  const workspace: SessionWorkspacePlacement = input.keepCallerWorkspace
+    ? { workspaceId: input.workspaceId ?? null, rung: null }
+    : await resolveSessionWorkspacePlacement(database, {
+        userId: input.userId,
+        explicitWorkspaceId: input.workspaceId ?? null,
+        explicitRung: input.workspaceRung ?? null,
+        subjectEntityId: input.subjectEntityId ?? null,
+        parentSessionId: input.parentSessionId ?? null,
+        projectId,
+        mayPlaceIn: (workspaceId) =>
+          workspaceMemberMayWrite(database, actorId, workspaceId),
+      });
+  return { projectId, workspace };
 }
 
 /**
@@ -179,40 +245,13 @@ export async function openRunSession(
     return { sessionId: reusedId, reused: true };
   }
 
-  // PROJECT LENS — derived, not waited for. `openRunSession` used to write
-  // `input.projectId ?? null` and nothing upstream ever passed one, which is why
-  // only 10% of sessions carried a project. The ladder is consulted with the
-  // context this door ALREADY holds: the caller's explicit pin (rung 1, still
-  // wins), the session this run was pushed from (rung 2), the channel it binds
-  // (rung 3), and the entity it is about (rung 4). No AI rung, no fallback — a
-  // `NONE` placement writes NULL, which is the correct answer, not a gap.
-  //
-  // Deliberately AFTER the reuse early-return above: a reused channel session
-  // already has its own placement and must never be re-filed by a later run.
-  const placement = await resolveSessionProjectPlacement(database, {
-    userId: input.userId,
-    explicitProjectId: input.projectId ?? null,
-    parentSessionId: input.parentSessionId ?? null,
-    channelId: input.channelId ?? null,
-    subjectEntityId: input.subjectEntityId ?? null,
-  });
-
-  // SPACE — a run sits in a space read from its chain like every session
-  // (`resolve-session-workspace.ts`): the caller's pin, else the subject's,
-  // the parent's, the project's home. No playbook rung (a playbook run comes
-  // through `instantiateSessionRow`, always in the playbook's space) and no
-  // focus rung (an automation acts on no agent's focus).
-  const workspacePlacement: SessionWorkspacePlacement =
-    input.keepCallerWorkspace
-      ? { workspaceId: input.workspaceId ?? null, rung: null }
-      : await resolveSessionWorkspacePlacement(database, {
-          userId: input.userId,
-          agentUserId: input.agentUserId ?? null,
-          explicitWorkspaceId: input.workspaceId ?? null,
-          subjectEntityId: input.subjectEntityId ?? null,
-          parentSessionId: input.parentSessionId ?? null,
-          projectId: placement.projectId,
-        });
+  // PLACEMENT — project and space (`resolveRunSessionPlacement`). The project
+  // used to be `input.projectId ?? null`, and nothing upstream ever passed one
+  // (10% of sessions carried a project). Deliberately AFTER the reuse
+  // early-return above: a reused channel session already has its own placement
+  // and must never be re-filed by a later run.
+  const placement = await resolveRunSessionPlacement(database, input);
+  const workspacePlacement = placement.workspace;
 
   // The probe marker (D8) is the row writer's: stamped on every birth.
   const metadata: Record<string, unknown> = {

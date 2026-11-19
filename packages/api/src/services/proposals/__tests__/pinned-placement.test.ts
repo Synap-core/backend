@@ -106,4 +106,30 @@ describe("a revise cannot change where a pending write lands or who it is shared
       resolvedHomeWorkspaceId: X,
     });
   });
+
+  it("refuses planting or changing the space-ladder rung of a session start (W3)", () => {
+    const start = {
+      targetType: "focus_session",
+      changeType: "create",
+      data: { id: "s-1", goal: "Ship it", workspacePlacement: "explicit" },
+    } as Record<string, unknown>;
+    expect(() =>
+      computeRevisedEnvelope({
+        envelope: start,
+        actorId: "u1",
+        patch: { kind: "inner", fields: { workspacePlacement: "subject" } },
+      })
+    ).toThrow(/workspacePlacement/);
+    expect(() =>
+      computeRevisedEnvelope({
+        envelope: {
+          targetType: "focus_session",
+          changeType: "create",
+          data: { id: "s-2", goal: "Ship it" },
+        },
+        actorId: "u1",
+        patch: { kind: "inner", fields: { workspacePlacement: "project_home" } },
+      })
+    ).toThrow(/workspacePlacement/);
+  });
 });

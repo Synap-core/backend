@@ -12,7 +12,10 @@
  * Rows rule out: a rung skipped or out of order; a derived space the actor
  * cannot write reaching the membrane (that is the `workspace.join` proposal
  * instead of the start, or a denial); the focus beating a fact; an explicit
- * space second-guessed; a placed session without its provenance stamp.
+ * space second-guessed; a placed session without its provenance stamp; a
+ * copied space losing its source's rung; a move keeping a ladder stamp; an
+ * adopted receipt re-homed without its room; an intake retry minting a
+ * second room beside a placed first one.
  *
  * Cannot see: the real membrane's per-space governance (whether a space
  * proposes session starts); production constraints (no FKs here).
@@ -27,6 +30,8 @@ const h = vi.hoisted(() => ({
   },
   db: null as unknown,
   membrane: [] as Array<{ workspaceId?: string; agentUserId?: string }>,
+  /** The auto-opened receipt `findClientSession` hands the adoption, if any. */
+  adoptee: null as null | { id: string },
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -37,6 +42,9 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   h.db = drizzle(client, { schema });
+  const realOpenRunSession = actual.openRunSession as (
+    input: Record<string, unknown>
+  ) => Promise<unknown>;
   return {
     ...actual,
     db: h.db,
@@ -44,6 +52,11 @@ vi.mock("@synap/database", async (importOriginal) => {
       linked: false,
       suspendedIntentRecorded: false,
     }),
+    // The run door, real, on this PGlite (it defaults to its own pool).
+    openRunSession: (input: Record<string, unknown>) =>
+      realOpenRunSession({ ...input, database: h.db }),
+    // The receipt lookup reads the package's own pool: the row is handed in.
+    findClientSession: async () => h.adoptee,
   };
 });
 vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
@@ -79,6 +92,8 @@ import {
   resolveSessionWorkspacePlacement,
 } from "@synap/database";
 import { createFocusSession } from "../create-session.js";
+import { applySessionWorkspaceMove } from "../move-session-workspace.js";
+import { ensureIntakeSession } from "../../intake/ensure-intake-session.js";
 
 const PERSON = randomUUID();
 const AGENT = randomUUID(); // member of BUILDER, CONTENT, BRAND (viewer), ARCHIVED
@@ -108,9 +123,13 @@ function ddlFor(table: PgTable): string {
     const t = c.getSQLType();
     const type = t.endsWith("[]") ? t : BASIC.test(t) ? t : "text";
     const def =
-      c.name === "created_at" || c.name === "updated_at"
+      c.name === "created_at" ||
+      c.name === "updated_at" ||
+      c.name === "started_at"
         ? " default now()"
-        : "";
+        : c.name === "status" && cfg.name === "focus_sessions"
+          ? " default 'active'"
+          : "";
     return `"${c.name}" ${type}${c.primary ? " primary key default gen_random_uuid()" : ""}${def}`;
   });
   return `create table if not exists "${cfg.name}" (${cols.join(", ")});`;
@@ -457,5 +476,109 @@ describe("runs follow the ladder, receipts keep the caller's space (D9 a)", () =
     const row = await runRow(sessionId);
     expect(row.workspace_id).toBeNull();
     expect(row.metadata?.workspacePlacement).toBeUndefined();
+  });
+});
+
+describe("a copied space keeps its source's rung; a move restamps it", () => {
+  it("a start that copies a session's space carries that session's rung", async () => {
+    const row = await sessionRow(
+      await start({
+        agentUserId: AGENT,
+        workspaceId: CONTENT,
+        workspaceRung: "parent",
+      })
+    );
+    expect(row.workspace_id).toBe(CONTENT);
+    expect(row.metadata?.workspacePlacement).toEqual({ rung: "parent" });
+  });
+
+  it("a deliberate move stamps `explicit`; a move to no space drops the stamp", async () => {
+    const res = await start({
+      agentUserId: AGENT,
+      projectId: PROJECT.builderHome,
+    });
+    const id = (res as { session: { id: string } }).session.id;
+    const move = (workspaceId: string | null) =>
+      (h.db as { transaction: (f: (tx: never) => Promise<void>) => Promise<void> })
+        .transaction((tx) =>
+          applySessionWorkspaceMove(tx, {
+            sessionId: id,
+            channelId: null,
+            workspaceId,
+          })
+        );
+    await move(CONTENT);
+    expect((await sessionRow(res)).metadata?.workspacePlacement).toEqual({
+      rung: "explicit",
+    });
+    await move(null);
+    const row = await sessionRow(res);
+    expect(row.workspace_id).toBeNull();
+    expect(row.metadata?.workspacePlacement).toBeUndefined();
+  });
+});
+
+describe("an adopted receipt is re-homed through the move", () => {
+  it("its room follows it into the space the start placed it in", async () => {
+    const receipt = randomUUID();
+    const room = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, channel_id, goal, status, expected_outputs, metadata)
+       values ($1, $2, null, $3, 'Writes', 'active', '[]'::jsonb, '{"kind":"agent-proposal-package","autoOpened":true}'::jsonb)`,
+      [receipt, PERSON, room]
+    );
+    await q(
+      `insert into channels (id, user_id, workspace_id, channel_type, scope, status, title, context_object_type, context_object_id)
+       values ($1, $2, null, 'group', 'pod', 'active', 'Room', 'focus_session', $3)`,
+      [room, PERSON, receipt]
+    );
+    h.adoptee = { id: receipt };
+    try {
+      const res = await start({
+        agentUserId: AGENT,
+        projectId: PROJECT.builderHome,
+        clientKey: `agent:${AGENT}|conv:${randomUUID()}`,
+      });
+      expect((res as { session: { id: string } }).session.id).toBe(receipt);
+    } finally {
+      h.adoptee = null;
+    }
+    const row = (
+      await q(`select workspace_id, metadata from focus_sessions where id = $1`, [
+        receipt,
+      ])
+    ).rows[0] as { workspace_id: string; metadata: Record<string, unknown> };
+    expect(row.workspace_id).toBe(BUILDER);
+    expect(row.metadata.workspacePlacement).toEqual({ rung: "project_home" });
+    expect(
+      (await q(`select workspace_id, scope from channels where id = $1`, [room]))
+        .rows[0]
+    ).toEqual({ workspace_id: BUILDER, scope: "workspace" });
+  });
+});
+
+describe("an intake retry reuses the room a mint placed (real ladder)", () => {
+  it("the same correlation key, placed by the project's home, lands in one room", async () => {
+    const key = `capture:${randomUUID()}`;
+    const ask = () =>
+      ensureIntakeSession({
+        userId: PERSON,
+        agentUserId: AGENT,
+        projectId: PROJECT.builderHome,
+        door: "capture",
+        goal: "Capture · a note",
+        correlationKey: key,
+      });
+    const first = await ask();
+    expect(first.status).toBe("minted");
+    const placed = (
+      await q(`select workspace_id from focus_sessions where id = $1`, [
+        first.sessionId,
+      ])
+    ).rows[0] as { workspace_id: string | null };
+    expect(placed.workspace_id).toBe(BUILDER);
+    const second = await ask();
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(second).toMatchObject({ status: "minted", reused: true });
   });
 });

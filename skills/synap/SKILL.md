@@ -637,7 +637,7 @@ What each word means (workspace, project, goal, step, work): `concepts` — the 
 
 **Writes:** name the kind (profile slug) and, when known, the roles as facets. Omit `workspaceId` unless you are deliberately pinning a domain — the server places the write from installed profile metadata. Never invent a workspace name. Focus sticks for the session; an explicit `workspaceId` / `projectId` on one call overrides it for that call.
 
-**Sessions:** "omit `workspaceId`" is the rule for records. A session is placed by its chain: the `workspaceId` you pin, else the space of the playbook it follows, of its subject, of its parent session, of its project's home, then your workspace focus. A rung counts only for a space you can write in, so a start never turns into a request to join a space.
+**Sessions:** "omit `workspaceId`" is the rule for records. Unless you pin `workspaceId`, a session's space comes from its playbook, subject, parent session, project or your focus (in that order; only a space you can work in counts, so a start never turns into a request to join a space).
 
 **Empty domains:** a workspace holding 0 entities is a scaffold — prefer an active one unless the user names it (`orient` lists active domains; `detail:'full'` shows every one).
 

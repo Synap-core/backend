@@ -34,7 +34,6 @@ import {
   isNull,
   projects,
   AGENT_PROPOSAL_PACKAGE_MARKER,
-  workspacePlacementPatch,
 } from "@synap/database";
 import {
   applySessionWorkspaceMove,
@@ -81,7 +80,9 @@ export async function backfillSessionSpaces(opts: {
   };
 
   for (const row of rows) {
-    const workspaceId = row.homeWorkspaceId!;
+    const workspaceId = row.homeWorkspaceId;
+    // The query asked for a home; the narrowing says so to the compiler.
+    if (workspaceId === null) continue;
     if (
       (row.metadata as Record<string, unknown> | null)?.kind ===
       AGENT_PROPOSAL_PACKAGE_MARKER
@@ -111,15 +112,8 @@ export async function backfillSessionSpaces(opts: {
           sessionId: row.id,
           channelId: row.channelId,
           workspaceId,
+          rung: "project_home",
         });
-        await tx
-          .update(focusSessions)
-          .set({
-            metadata: drizzleSql`coalesce(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
-              workspacePlacementPatch({ workspaceId, rung: "project_home" })
-            )}::jsonb`,
-          })
-          .where(eq(focusSessions.id, row.id));
         return true;
       });
       if (!moved) continue;
