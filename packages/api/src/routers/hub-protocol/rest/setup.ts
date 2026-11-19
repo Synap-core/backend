@@ -1142,8 +1142,7 @@ export function registerSetupRoutes(app: HubHono): void {
         const withinGrant = surfaceCallerGrants.some((g) => {
           const spaces = wholeSpacesBeyondPodWideReads(g);
           return (
-            spaces === "anywhere" ||
-            (spaces !== null && spaces.includes(ws.id))
+            spaces === "anywhere" || (spaces !== null && spaces.includes(ws.id))
           );
         });
         if (

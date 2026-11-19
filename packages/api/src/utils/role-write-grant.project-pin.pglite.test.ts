@@ -45,10 +45,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { type KeyGrant } from "@synap/database";
 import type { GrantScope } from "@synap/governance-policy/grants";
-import {
-  allSchemaTables,
-  pgliteSchemaDdl,
-} from "../__tests__/pglite-ddl.js";
+import { allSchemaTables, pgliteSchemaDdl } from "../__tests__/pglite-ddl.js";
 import { roleRowInKeyReach, roleWriteGrantSpace } from "./role-write-grant.js";
 
 const ALICE = randomUUID();
@@ -69,9 +66,10 @@ const grant = (...scopes: GrantScope[]): KeyGrant => ({
 
 beforeAll(async () => {
   await h.client!.exec(pgliteSchemaDdl(allSchemaTables()));
-  await q(`insert into users (id, email, user_type) values ($1,'a@x','human')`, [
-    ALICE,
-  ]);
+  await q(
+    `insert into users (id, email, user_type) values ($1,'a@x','human')`,
+    [ALICE]
+  );
   await q(
     `insert into workspaces (id, name, owner_id, settings) values ($1,'CRM',$2,'{}'::jsonb)`,
     [CRM, ALICE]
