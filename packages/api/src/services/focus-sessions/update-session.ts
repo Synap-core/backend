@@ -3033,12 +3033,10 @@ export async function updateFocusSession(
     before: undoBefore,
     after: updated,
   });
-  // GRADES DECLARED UP FRONT (W5): a written criteria change that declares a
-  // grade naming its output files that grade's slot (idempotent by label).
-  if (
-    criteriaChange &&
-    params.criteria?.some((c) => c.check.kind === "human" && c.outputKey)
-  ) {
+  // GRADES DECLARED UP FRONT (W5): a written criteria change keeps the grade
+  // slots in step: a grade naming its output is filed, a re-pointed one
+  // follows, one whose criterion was removed is withdrawn.
+  if (criteriaChange) {
     const { fileDeclaredGradeSlots } =
       await import("./evaluations/record.js");
     await fileDeclaredGradeSlots(sessionId);
