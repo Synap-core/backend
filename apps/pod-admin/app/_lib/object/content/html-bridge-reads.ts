@@ -261,13 +261,17 @@ export async function readForPage(
         { identifier: required(op, "an identifier", str(p.identifier)) },
         ws ? { context: { workspaceId: ws } } : undefined
       );
-    case "propertyDefs.list":
+    case "propertyDefs.list": {
       // Fields are read in a space (the procedure needs one): a page in no
-      // space gets the pod's refusal as its error.
+      // space gets the pod's refusal as its error. With a profileId, that
+      // kind's fields; without one, every field the space can see (the board
+      // adapter asks with no input).
+      const profileId = str(p.profileId);
       return client.propertyDefs.list.query(
-        { profileIds: [required(op, "a profileId", str(p.profileId))] },
+        profileId ? { profileIds: [profileId] } : undefined,
         ws ? { context: { workspaceId: ws } } : undefined
       );
+    }
     case "lifecycle.get":
       return client.lifecycle.get.query({
         profileSlug: required(op, "a profileSlug", str(p.profileSlug)),

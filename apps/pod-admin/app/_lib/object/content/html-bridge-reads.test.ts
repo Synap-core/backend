@@ -446,12 +446,18 @@ describe("the page bridge — through the console's own client", () => {
 
   it("a view adapter read missing its id asks the pod nothing", async () => {
     const { calls, posted, send } = wired(SPACE);
-    await send(query("propertyDefs.list", {}));
     await send(query("profiles.get", {}, "q2"));
     expect(calls).toEqual([]);
     expect(posted.map((p) => p.message.error)).toEqual([
-      '"propertyDefs.list" needs a profileId.',
       '"profiles.get" needs an identifier.',
+    ]);
+  });
+
+  it("fields with no profileId are every field the space can see (the board asks with no input)", async () => {
+    const { calls, send } = wired(SPACE);
+    await send(query("propertyDefs.list", {}));
+    expect(calls.map(([path, input]) => [path, input])).toEqual([
+      ["propertyDefs.list", undefined],
     ]);
   });
 
