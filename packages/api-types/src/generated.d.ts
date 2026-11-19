@@ -19132,7 +19132,7 @@ export interface OAuthAppConsent {
 	 * N kinds"), as in `permissions`.
 	 */
 	podWide: Array<{
-		kindGroup: OAuthAppKindGroup | null;
+		kindGroup?: OAuthAppKindGroup | null;
 		permission: string;
 		reason: string | null;
 	}>;

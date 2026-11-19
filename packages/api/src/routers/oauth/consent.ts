@@ -695,7 +695,7 @@ export interface OAuthAppConsent {
   podWide: Array<{
     permission: string;
     reason: string | null;
-    kindGroup: OAuthAppKindGroup | null;
+    kindGroup?: OAuthAppKindGroup | null;
   }>;
   /** What this person approved for this app before (re-consent pre-ticks it). */
   approved: AppApprovedRequest[];
