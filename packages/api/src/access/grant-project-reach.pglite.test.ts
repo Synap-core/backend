@@ -897,7 +897,8 @@ describe("a FILING proposal is never decided by a project pin (W1 review N1)", (
     } as never;
     const refused = await runWithGrant(
       grantOfScope({
-        permissions: ["proposal.approve", "entity.read"],
+        // It sees the project and reads the record, but may not write it.
+        permissions: ["proposal.approve", "project.read", "entity.read"],
         workspaceIds: [W],
       }),
       () => approveProjectFiling(args, false)
