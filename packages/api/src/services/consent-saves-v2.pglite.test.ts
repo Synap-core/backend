@@ -115,6 +115,7 @@ import { apiKeyService } from "./api-keys.js";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { applyProposalApproval } from "../routers/proposals/apply-approval.js";
 import { registerProposalsRoutes } from "../routers/hub-protocol/rest/proposals.js";
+import { ACCESS_DOORS } from "./proposals/proposal-class.js";
 import type {
   HubHono,
   HubVariables,
@@ -814,7 +815,8 @@ describe("R1 — a forged v2 app/connect applies nothing (review of #1197, must-
     });
   });
 
-  it("the generic Hub door refuses to file one", async () => {
+  /** POST /proposals at the generic Hub door, as an agent's key would. */
+  async function fileAtHub(body: Record<string, unknown>) {
     const hub: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
     hub.use("*", async (c, next) => {
       c.set("userId", OWNER);
@@ -826,7 +828,15 @@ describe("R1 — a forged v2 app/connect applies nothing (review of #1197, must-
     const res = await hub.request("/proposals", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(body),
+    });
+    const json = (await res.json().catch(() => ({}))) as { code?: string };
+    return { status: res.status, code: json.code ?? null };
+  }
+
+  it("the generic Hub door refuses to file one", async () => {
+    expect(
+      await fileAtHub({
         targetType: "app",
         targetId: (await row())!.id,
         proposalType: "connect",
@@ -834,12 +844,35 @@ describe("R1 — a forged v2 app/connect applies nothing (review of #1197, must-
           access: wide,
           askedAccess: { permissions: [UNASKED], podWide: [] },
         },
-      }),
+      })
+    ).toEqual({ status: 403, code: "CREDENTIAL_PROPOSAL_NOT_FILED_HERE" });
+  });
+
+  // Every class whose approval changes who may act (`ACCESS_DOORS`): its
+  // executor applies what the row carries, so it is filed only by its own door.
+  it.each([...ACCESS_DOORS])(
+    "the generic Hub door refuses every credential-class proposal: %s",
+    async (pair) => {
+      const [targetType, ...rest] = pair.split("/");
+      expect(
+        await fileAtHub({
+          targetType,
+          targetId: randomUUID(),
+          proposalType: rest.join("/"),
+          data: { keyId: randomUUID(), requests: [], asked: [] },
+        })
+      ).toEqual({ status: 403, code: "CREDENTIAL_PROPOSAL_NOT_FILED_HERE" });
+    }
+  );
+
+  it("CONTROL — a proposal of another class is not refused by that rule", async () => {
+    const out = await fileAtHub({
+      targetType: "entity",
+      targetId: randomUUID(),
+      proposalType: "update",
+      data: { title: "x" },
     });
-    expect(res.status).toBe(403);
-    expect(((await res.json()) as { code: string }).code).toBe(
-      "APP_CONNECT_NOT_FILED_HERE"
-    );
+    expect(out.code).not.toBe("CREDENTIAL_PROPOSAL_NOT_FILED_HERE");
   });
 
   it.each([

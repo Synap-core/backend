@@ -59,6 +59,7 @@ import {
   identityResolutionByRefInput,
   identityResolutionInput,
 } from "../../proposals/executors/identity-resolution.js";
+import { ACCESS_DOORS } from "../../../services/proposals/proposal-class.js";
 
 /** Page size when the caller names none — matches the historical tRPC default,
  *  so an existing caller that sends no `limit` sees byte-identical membership. */
@@ -1250,17 +1251,21 @@ export function registerProposalsRoutes(app: HubHono): void {
         400
       );
     }
-    // An app's access is never filed from caller data (review of #1197): the
-    // `app/connect` executor applies what the proposal carries, so a forged
-    // one would hand an app reach the person never saw on its screen. Only
-    // the app doors file it (`requestAccess`, the consent, the app's own ask),
-    // none of which come through here.
-    if (body.targetType === "app" && body.proposalType === "connect") {
+    // A proposal whose approval changes WHO MAY ACT (a credential, a
+    // membership, a role, an exposure: `ACCESS_DOORS`) is never filed from
+    // caller data (review of #1197). Its executor applies what the row
+    // carries (`app/connect`'s access, `agent/connect`'s key and requests),
+    // so a row filed here could name one principal on its card and act on
+    // another, or skip the asking door's own rules (frozen ask, no nagging).
+    // Each is filed by its own door (`requestAccess`, the consent, the app's
+    // and the AI's ask, `requestWorkspaceJoin`, the membership and key
+    // routers), none of which comes through here.
+    if (ACCESS_DOORS.has(`${body.targetType}/${body.proposalType}`)) {
       return c.json(
         {
           error:
-            "An app's access is asked through the app's own door (connect it, or ask from the app), never filed as a proposal.",
-          code: "APP_CONNECT_NOT_FILED_HERE",
+            "A change to who may act is asked through its own door, never filed as a proposal here.",
+          code: "CREDENTIAL_PROPOSAL_NOT_FILED_HERE",
         },
         403
       );
