@@ -226,7 +226,7 @@ describe("It can: rows and levels", () => {
     const d = firstDraft(offer);
     const said = canSummary(d, rows);
     expect(said[0]).toEqual({ level: "view", text: expect.stringMatching(/^records \(3 kinds\)/) });
-    expect(said.find((s) => s.level === "edit")!.text).toMatch(/sessions/i);
+    expect(said.find((s) => s.level === "edit")!.text).toMatch(/jobs/i);
     expect(said.some((s) => s.level === "on")).toBe(false);
   });
 
@@ -285,7 +285,7 @@ describe("why Allow waits", () => {
     expect(draftBlockedReason(firstDraft(offerOf({ permissions: [{ permission: "x.read", workspaces: [] }], podWide: [], templates: [] })), offerOf({ permissions: [{ permission: "x.read", workspaces: [] }], podWide: [], templates: [] }), [])).toBe("You have no space to give it yet.");
     const none = { ...firstDraft(offer), permissions: new Set<string>() };
     expect(draftBlockedReason(none, offer, rows)).toBe("Turn on at least one thing it asks for.");
-    expect(draftBlockedReason(firstDraft(offer), offer, rows)).toBe("Pick where it can make changes, or set Sessions to View.");
+    expect(draftBlockedReason(firstDraft(offer), offer, rows)).toBe("Pick where it can make changes, or set Jobs to View.");
     const placed = toggleWritePlace(firstDraft(offer), "space", "w-builder");
     expect(draftBlockedReason(placed, offer, rows)).toBeNull();
     const nowhere = setReadSpacesMode(placed, offer, "pick");
