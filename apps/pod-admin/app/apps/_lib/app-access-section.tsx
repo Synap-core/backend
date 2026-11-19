@@ -106,7 +106,7 @@ export function AppAccessSection({
         isDisabled={saving}
       />
       <p className="max-w-2xl text-pretty text-xs text-foreground/65">
-        {t("page.applies")} {t("page.narrowOnly")}
+        {t("page.narrowOnly")}
       </p>
       <ConfirmModal
         isOpen={pending !== null}

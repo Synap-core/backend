@@ -120,7 +120,7 @@ export const en = {
   "page.applies":
     "A change applies at its next request. It can never get more than it asked for; to give more, it asks again.",
   "page.narrowOnly":
-    "You can take things away here. To give more, it asks again.",
+    "A change applies at its next request. You can take things away here; to give more, it asks again.",
   "page.saved": "Access changed",
   "page.saveFailed": "Couldn’t change its access",
   "page.undone": "Change undone",
@@ -262,7 +262,7 @@ export const fr: Catalog<typeof en> = {
   "page.applies":
     "Une modification s’applique à sa prochaine requête. Il ne peut jamais obtenir plus que ce qu’il a demandé ; pour donner plus, il redemande.",
   "page.narrowOnly":
-    "Vous pouvez retirer des accès ici. Pour en donner plus, il redemande.",
+    "Une modification s’applique à sa prochaine requête. Vous pouvez retirer des accès ici ; pour en donner plus, il redemande.",
   "page.saved": "Accès modifié",
   "page.saveFailed": "Impossible de modifier son accès",
   "page.undone": "Modification annulée",
