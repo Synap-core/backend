@@ -484,10 +484,16 @@ describe("POST /apps/:id/key — mint after approval", () => {
     const res = await post(app, `/apps/${PUBLIC_ID}/key`, {});
 
     expect(res.status).toBe(200);
-    expect((state.grantArgs as { grants: unknown }).grants).toEqual([
-      { permissions: ["entity.person.create"], workspaceIds: [WORKSPACE_ID] },
-      { permissions: ["entity.note.read"], workspaceIds: [FINANCE] },
-    ]);
+    // Since W2 the pairs lift to v2: reads in their spaces, writes in theirs
+    // (reads listed first). Still never the cross product.
+    const grants = (state.grantArgs as { grants: unknown[] }).grants;
+    expect(grants).toHaveLength(2);
+    expect(grants).toEqual(
+      expect.arrayContaining([
+        { permissions: ["entity.person.create"], workspaceIds: [WORKSPACE_ID] },
+        { permissions: ["entity.note.read"], workspaceIds: [FINANCE] },
+      ])
+    );
     // "Key issued" on the app's timeline — never the plaintext.
     expect(recorded()).toEqual([`app.issue_key@${PUBLIC_ID}`]);
     expect(JSON.stringify(state.events)).not.toContain(
