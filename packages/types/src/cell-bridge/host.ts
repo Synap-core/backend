@@ -66,7 +66,8 @@ export const CELL_BRIDGE_MAX_IN_FLIGHT = 8;
 
 const MAX_ERROR_CHARS = 300;
 
-function errorText(err: unknown): string {
+/** A thrown read's message for the page: its own words, capped; never empty. */
+export function cellBridgeErrorText(err: unknown): string {
   const message =
     err instanceof Error && err.message.trim()
       ? err.message.trim()
@@ -154,7 +155,11 @@ export function createCellBridgeHost(options: CellBridgeHostOptions) {
       );
       reply(cellBridgeAnswer(msg.id, data));
     } catch (err) {
-      reply({ type: "synap:query:result", id: msg.id, error: errorText(err) });
+      reply({
+        type: "synap:query:result",
+        id: msg.id,
+        error: cellBridgeErrorText(err),
+      });
     } finally {
       inFlight -= 1;
     }

@@ -105,6 +105,10 @@
       "types": "./dist/cell-bridge/index.d.ts",
       "import": "./dist/cell-bridge/index.js"
     },
+    "./renderer-resolution": {
+      "types": "./dist/renderer-resolution/index.d.ts",
+      "import": "./dist/renderer-resolution/index.js"
+    },
     "./presentation": {
       "types": "./dist/presentation/index.d.ts",
       "import": "./dist/presentation/index.js"
