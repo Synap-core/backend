@@ -990,7 +990,10 @@ describe("synap_requests[].kinds: one entry, many kinds, granted per kind (F4)",
       "entity.task.read",
       "entity.note.create",
     ]);
-    expect(v.requestedPodWide).toEqual(["entity.note.read", "entity.task.read"]);
+    expect(v.requestedPodWide).toEqual([
+      "entity.note.read",
+      "entity.task.read",
+    ]);
     expect(v.requestedReasons["entity.task.read"]).toBe(
       "To answer from your records"
     );
@@ -1030,9 +1033,15 @@ describe("synap_requests[].kinds: one entry, many kinds, granted per kind (F4)",
   });
 
   it.each([
-    ["kinds that is not an array", { permission: "entity.read", kinds: "note" }],
+    [
+      "kinds that is not an array",
+      { permission: "entity.read", kinds: "note" },
+    ],
     ["an empty kinds list", { permission: "entity.read", kinds: [] }],
-    ["a kind that is not a slug", { permission: "entity.read", kinds: ["No te"] }],
+    [
+      "a kind that is not a slug",
+      { permission: "entity.read", kinds: ["No te"] },
+    ],
     ["a kind that is not a string", { permission: "entity.read", kinds: [3] }],
     [
       "kinds on a kind-specific permission",

@@ -74,7 +74,11 @@ describe("migration 0434 — apps.approved_access", { timeout: 60_000 }, () => {
        VALUES ('u-1', 'app_1', 'Studio', $1::jsonb)`,
       [
         JSON.stringify([
-          { permission: "entity.note.read", workspaceId: "w-1", scope: "space" },
+          {
+            permission: "entity.note.read",
+            workspaceId: "w-1",
+            scope: "space",
+          },
         ]),
       ]
     );

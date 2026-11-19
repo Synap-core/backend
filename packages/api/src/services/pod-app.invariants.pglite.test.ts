@@ -679,7 +679,9 @@ describe("I2 — the key is exactly the consented subset; narrowing works, widen
     const before = await liveGrantsOf(record.id);
     expect(before).toHaveLength(1);
     expect(before[0]!.permissions).toEqual([READ]);
-    expect([...before[0]!.workspaceIds!].sort()).toEqual([BRAND, SHARED].sort());
+    expect([...before[0]!.workspaceIds!].sort()).toEqual(
+      [BRAND, SHARED].sort()
+    );
     // The same person consents again, ticking less (no /token call).
     await consent([{ permission: READ, workspaceId: BRAND }]);
     expect(await liveGrantsOf(record.id)).toEqual([

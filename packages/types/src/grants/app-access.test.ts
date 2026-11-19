@@ -153,9 +153,9 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
         const result = liftApprovedRequests(approved);
         if ("access" in result) {
           lifted += 1;
-          expect(grantScopesForAccess(result.access).length).toBeLessThanOrEqual(
-            4
-          );
+          expect(
+            grantScopesForAccess(result.access).length
+          ).toBeLessThanOrEqual(4);
         } else {
           reconsent += 1;
           // Never over-eager: the naive v2 really would change a permit,
@@ -329,9 +329,18 @@ describe("grantScopesForAccess — v2 with projects (no lift makes one yet)", ()
       const inAOnly = { ...req, workspaceId: A, projectIds: ["Q"] };
       const inPOnly = { ...req, workspaceId: B, projectIds: ["P"] };
       const inNeither = { ...req, workspaceId: B, projectIds: ["Q"] };
-      expect(scopes.some((s) => permits(s, inAOnly)), permission).toBe(true);
-      expect(scopes.some((s) => permits(s, inPOnly)), permission).toBe(true);
-      expect(scopes.some((s) => permits(s, inNeither)), permission).toBe(false);
+      expect(
+        scopes.some((s) => permits(s, inAOnly)),
+        permission
+      ).toBe(true);
+      expect(
+        scopes.some((s) => permits(s, inPOnly)),
+        permission
+      ).toBe(true);
+      expect(
+        scopes.some((s) => permits(s, inNeither)),
+        permission
+      ).toBe(false);
     }
   });
 
@@ -464,7 +473,10 @@ describe("parseAppAccess — a stored v2, or nothing", () => {
     ["null", null],
     ["another version", { ...ok, version: 3 }],
     ["writes that say all", { ...ok, write: { spaces: "all", projects: [] } }],
-    ["write projects that say all", { ...ok, write: { spaces: [], projects: "all" } }],
+    [
+      "write projects that say all",
+      { ...ok, write: { spaces: [], projects: "all" } },
+    ],
     ["a blank id", { ...ok, read: { spaces: [""], projects: [] } }],
     ["a missing tier", { version: 2, permissions: [R_NOTE], read: ok.read }],
     ["permissions that are not strings", { ...ok, permissions: [1] }],
@@ -493,9 +505,9 @@ describe("expandAppAccess", () => {
 
 describe("permissionsForKinds (F4)", () => {
   it("spells one per-kind permission per kind, each once", () => {
-    expect(permissionsForKinds("entity.read", ["note", "task", "note"])).toEqual(
-      ["entity.note.read", "entity.task.read"]
-    );
+    expect(
+      permissionsForKinds("entity.read", ["note", "task", "note"])
+    ).toEqual(["entity.note.read", "entity.task.read"]);
     expect(permissionsForKinds("entity.create", ["deal"])).toEqual([
       "entity.deal.create",
     ]);

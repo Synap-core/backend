@@ -78,7 +78,9 @@ function ddlFor(table: PgTable): string {
     const t = c.getSQLType();
     const type = t.endsWith("[]") ? t : BASIC.test(t) ? t : "text";
     const def =
-      c.name === "created_at" || c.name === "updated_at" ? " default now()" : "";
+      c.name === "created_at" || c.name === "updated_at"
+        ? " default now()"
+        : "";
     return `"${c.name}" ${type}${c.primary ? " primary key default gen_random_uuid()" : ""}${def}`;
   });
   return `create table if not exists "${cfg.name}" (${cols.join(", ")});`;
@@ -141,7 +143,10 @@ const FIXTURES: Record<string, { pairs: Pair[]; lifts: boolean }> = {
   },
   "CRM: reads in every space, writes in one": {
     pairs: [
-      ...inEach(["entity.person.read", "entity.company.read"], [CONTENT, BRAND]),
+      ...inEach(
+        ["entity.person.read", "entity.company.read"],
+        [CONTENT, BRAND]
+      ),
       ...inEach(["entity.person.create"], [CONTENT]),
     ],
     lifts: true,
@@ -218,7 +223,10 @@ describe("grantsForApp — the stored v2, never a stale one", () => {
 
   it("reads the stored v2 when it says what the pairs say", () => {
     expect(
-      grantsForApp({ approvedRequests: pairs, approvedAccess: v2([BRAND, CONTENT]) })
+      grantsForApp({
+        approvedRequests: pairs,
+        approvedAccess: v2([BRAND, CONTENT]),
+      })
     ).toEqual([
       { permissions: ["entity.post.read"], workspaceIds: [BRAND, CONTENT] },
     ]);
@@ -249,14 +257,17 @@ describe("grantsForApp — the stored v2, never a stale one", () => {
   it("a re-consent row keeps today's per-space grants", () => {
     const { pairs: mixed } =
       FIXTURES["Content Studio by template: each space its own kinds"]!;
-    expect(grantsForApp({ approvedRequests: mixed, approvedAccess: null })).toEqual(
-      grantsForPairs(mixed)
-    );
+    expect(
+      grantsForApp({ approvedRequests: mixed, approvedAccess: null })
+    ).toEqual(grantsForPairs(mixed));
   });
 });
 
 describe("appRequestsWithin — v2 against v2", () => {
-  const asked = inEach(["entity.post.read", "entity.post.create"], [CONTENT, BRAND]);
+  const asked = inEach(
+    ["entity.post.read", "entity.post.create"],
+    [CONTENT, BRAND]
+  );
 
   it("approved ⊆ asked, as pairs or as v2, the same answer", () => {
     const approved = inEach(["entity.post.read"], [CONTENT, BRAND]);
@@ -378,13 +389,15 @@ describe("backfillAppAccess — dry run, then apply", () => {
     ids = {
       studio: await insertApp(
         "Studio",
-        FIXTURES["Content Studio: the same reads and writes in each template space"]!
-          .pairs
+        FIXTURES[
+          "Content Studio: the same reads and writes in each template space"
+        ]!.pairs
       ),
       chat: await insertApp(
         "Chat",
-        FIXTURES["synap-chat today: pod-wide reads AND the same reads per space"]!
-          .pairs
+        FIXTURES[
+          "synap-chat today: pod-wide reads AND the same reads per space"
+        ]!.pairs
       ),
       byTemplate: await insertApp(
         "By template",
@@ -412,9 +425,9 @@ describe("backfillAppAccess — dry run, then apply", () => {
       written: 0,
       reconsent: { total: 4, widens: 2, narrows: 1, unplaceable: 1 },
     });
-    expect(
-      report.rows.find((r) => r.appId === ids.studio)?.outcome
-    ).toBe("would-lift");
+    expect(report.rows.find((r) => r.appId === ids.studio)?.outcome).toBe(
+      "would-lift"
+    );
     expect(
       report.rows.find((r) => r.appId === ids.byTemplate)?.example
     ).toMatch(/^would allow entity\.(post|asset)\.(read|create) in space:/);
@@ -429,7 +442,13 @@ describe("backfillAppAccess — dry run, then apply", () => {
       read: { spaces: [CONTENT, BRAND, ECOSYSTEM] },
       write: { spaces: [CONTENT, BRAND, ECOSYSTEM] },
     });
-    for (const id of [ids.chat, ids.byTemplate, ids.forged, ids.narrows, ids.none])
+    for (const id of [
+      ids.chat,
+      ids.byTemplate,
+      ids.forged,
+      ids.narrows,
+      ids.none,
+    ])
       expect(await accessOf(id)).toBeNull();
     const again = await backfillAppAccess({ apply: true });
     expect(again).toMatchObject({ liftable: 1, already: 1, written: 0 });

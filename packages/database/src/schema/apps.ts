@@ -8,7 +8,8 @@
  *
  * `approved_requests` is what the app ASKED for and a human APPROVED
  * (`[{ permission, workspaceId }]`); it is the exact list the key issue turns
- * into grants — ONE per workspace, never their cross product
+ * into grants — never their cross product: its lossless v2 lift when it has
+ * one (`approved_access`, at most four scopes), else one per workspace
  * (`grantsForApprovedRequests`, services/app-connect.ts; client_id = public_id).
  * It is written ONLY by the `app/connect` approval executor — never at register
  * time, so a proposal with no plaintext and a key minted only on demand means

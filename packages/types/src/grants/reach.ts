@@ -83,7 +83,9 @@ export function projectsPlace(ids: readonly string[]): Place {
   const out: string[] = [];
   for (const id of ids) {
     if (typeof id !== "string" || id.trim() === "")
-      throw new PlaceError("A project id is blank: a place names real projects.");
+      throw new PlaceError(
+        "A project id is blank: a place names real projects."
+      );
     if (!out.includes(id)) out.push(id);
   }
   const [first, ...rest] = out;

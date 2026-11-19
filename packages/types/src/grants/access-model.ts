@@ -218,8 +218,7 @@ export function accessModelOfParts(
       .filter(
         (p, _i, all) =>
           !all.some(
-            (o) =>
-              o !== p && placeCovers(o, p) && placeKey(o) !== placeKey(p)
+            (o) => o !== p && placeCovers(o, p) && placeKey(o) !== placeKey(p)
           )
       )
   );

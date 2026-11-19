@@ -214,8 +214,7 @@ export interface Reconsent {
 }
 
 export type LiftResult =
-  | { readonly access: AppAccess }
-  | { readonly reconsent: Reconsent };
+  { readonly access: AppAccess } | { readonly reconsent: Reconsent };
 
 /**
  * The v2 form a connection's pairs suggest, before it is checked: the same
@@ -344,9 +343,7 @@ const sameSet = (a: readonly string[], b: readonly string[]) =>
  * "every project" pin, and a pod read would be wider (fail closed; W3).
  * The key still acts only within the person's floor (grant ∩ floor).
  */
-export function grantScopesForAccess(
-  access: AppAccess
-): AppAccessGrantScope[] {
+export function grantScopesForAccess(access: AppAccess): AppAccessGrantScope[] {
   const reads = access.permissions.filter(isReadPermission);
   const writes = access.permissions.filter((p) => !isReadPermission(p));
   const out: AppAccessGrantScope[] = [];

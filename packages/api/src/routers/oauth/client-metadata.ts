@@ -421,10 +421,7 @@ export function validateClientMetadataDocument(
           "each synap_requests entry must be an object"
         );
       }
-      const { permission, reason, scope, kinds } = r as Record<
-        string,
-        unknown
-      >;
+      const { permission, reason, scope, kinds } = r as Record<string, unknown>;
       if (typeof permission !== "string") {
         throw new ClientMetadataError(
           "each synap_requests entry needs a permission string"

@@ -104,7 +104,6 @@ describe("accessModel — per tier, where", () => {
     ]);
     expect(d.tiers.change).toEqual([]);
   });
-
 });
 
 describe("accessModel — projects (app permissions W2)", () => {
@@ -138,7 +137,10 @@ describe("accessModel — projects (app permissions W2)", () => {
   // Rules out: a space and a project merged into one place (F3: a union).
   it("a space and a project are named apart", () => {
     expect(
-      sayP([g(["entity.note.read"], ["s"]), pg(["entity.note.create"], ["acme"])])
+      sayP([
+        g(["entity.note.read"], ["s"]),
+        pg(["entity.note.create"], ["acme"]),
+      ])
     ).toBe(
       `Reads ${plural("note")} in Sales; changes ${plural("note")} in project Acme.`
     );
@@ -146,7 +148,10 @@ describe("accessModel — projects (app permissions W2)", () => {
 
   it("projects that reach the same things read as one place", () => {
     expect(
-      sayP([pg(["entity.note.read"], ["acme"]), pg(["entity.note.read"], ["beta"])])
+      sayP([
+        pg(["entity.note.read"], ["acme"]),
+        pg(["entity.note.read"], ["beta"]),
+      ])
     ).toBe(`Reads ${plural("note")} in projects Acme and Beta.`);
   });
 

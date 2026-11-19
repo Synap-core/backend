@@ -58,7 +58,10 @@ describe("parsePlace", () => {
     for (const holder of ["app", "key", "agent"] as const)
       expect(
         parsePlace(
-          { permissions: ["entity.note.update"], projectIds: ["p2", "p1", "p2"] },
+          {
+            permissions: ["entity.note.update"],
+            projectIds: ["p2", "p1", "p2"],
+          },
           holder
         )
       ).toEqual({ kind: "projects", ids: ["p2", "p1"] });
@@ -77,7 +80,10 @@ describe("parsePlace", () => {
       parsePlace({ permissions: [], projectIds: [""] }, "key")
     ).toThrow(PlaceError);
     expect(
-      placeBeyondPodWideReads({ permissions: ["entity.note.read"], projectIds: ["p"] })
+      placeBeyondPodWideReads({
+        permissions: ["entity.note.read"],
+        projectIds: ["p"],
+      })
     ).toEqual({ kind: "projects", ids: ["p"] });
   });
 
@@ -231,7 +237,9 @@ describe("place algebra", () => {
     expect(joinPlaces(projects("p"), { kind: "unbounded" })).toEqual({
       kind: "unbounded",
     });
-    expect(meetPlaces(projects("p", "q"), projects("q"))).toEqual(projects("q"));
+    expect(meetPlaces(projects("p", "q"), projects("q"))).toEqual(
+      projects("q")
+    );
     expect(meetPlaces(projects("p"), projects("q"))).toBeNull();
     expect(meetPlaces(spaces("a"), projects("p"))).toEqual(projects("p"));
     expect(meetPlaces({ kind: "pod" }, projects("p"))).toEqual(projects("p"));
