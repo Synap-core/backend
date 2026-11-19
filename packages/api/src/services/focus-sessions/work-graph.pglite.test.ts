@@ -157,6 +157,13 @@ const S = {
   unrelated: randomUUID(), // WAVE's session outside the wave
 };
 const WAVE = "user-wave";
+// SERVES: a session working for two goals, one the person cannot see.
+const SERVER = "user-serves";
+const SV_PROJECT = randomUUID();
+const SV_TRACK = randomUUID(); // SERVER's goal; the session serves it
+const HIDDEN_PROJECT = randomUUID(); // OTHER's project
+const HIDDEN_TRACK = randomUUID(); // OTHER's goal; the session "serves" it too
+const SV_SESSION = randomUUID();
 const PROJECT = randomUUID();
 const TRACK = randomUUID();
 const PR_URL = "https://github.com/Synap-core/backend/pull/7";
@@ -469,6 +476,24 @@ beforeAll(async () => {
     ]
   );
 
+  // SERVES.
+  await q(
+    `insert into projects (id, name, user_id) values ($1, 'p', $2), ($3, 'p', $4)`,
+    [SV_PROJECT, SERVER, HIDDEN_PROJECT, OTHER]
+  );
+  await q(
+    `insert into project_tracks (id, project_id, user_id, name, status) values
+       ($1, $2, $3, 'Serve the goal', 'active'), ($4, $5, $6, 'Hidden goal', 'active')`,
+    [SV_TRACK, SV_PROJECT, SERVER, HIDDEN_TRACK, HIDDEN_PROJECT, OTHER]
+  );
+  await session(SV_SESSION, SERVER, "active", { hoursAgo: 1 });
+  await q(
+    `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at) values
+       ($1, 'session', $2, 'track', $3, 'serves', '{"criterionKey":"c1"}'::jsonb, now()),
+       ($4, 'session', $2, 'track', $5, 'serves', '{}'::jsonb, now())`,
+    [randomUUID(), SV_SESSION, SV_TRACK, randomUUID(), HIDDEN_TRACK]
+  );
+
   // BIG: one more than the ceiling of OPEN work, plus 3 recently closed.
   await q(
     `insert into focus_sessions (id, user_id, goal, status, expected_outputs, agent_ids, metadata, started_at, created_at, updated_at)
@@ -718,6 +743,18 @@ describe("buildWorkGraph — PRs, holds and goals", () => {
     // USER holds none of WAVE's sessions, so no goal of theirs either.
     const theirs = await graph(USER);
     expect(theirs.goals).toEqual([]);
+  });
+
+  it("draws the goals a session serves, never one the reader cannot see", async () => {
+    const g = await graph(SERVER);
+    expect(g.edges.filter((e) => e.kind === "serves")).toEqual([
+      { kind: "serves", from: SV_SESSION, to: SV_TRACK, criterionKey: "c1" },
+    ]);
+    // The goal at the far end is read with the others, under the track floor:
+    // the hidden goal is neither drawn nor named.
+    expect(g.goals.map((x) => x.id)).toEqual([SV_TRACK]);
+    expect(JSON.stringify(g)).not.toContain(HIDDEN_TRACK);
+    expect(g.sections.serves).toEqual({ status: "ok" });
   });
 });
 

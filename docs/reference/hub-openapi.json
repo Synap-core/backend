@@ -44541,14 +44541,16 @@
                               "orchestrated_by",
                               "waits_on_output",
                               "triggered",
-                              "updated"
+                              "updated",
+                              "serves"
                             ]
                           },
                           "from": { "type": "string" },
                           "to": { "type": "string" },
                           "entityId": { "type": "string" },
                           "count": { "type": "number" },
-                          "lastAt": { "type": ["string", "null"] }
+                          "lastAt": { "type": ["string", "null"] },
+                          "criterionKey": { "type": "string" }
                         },
                         "required": ["kind", "from", "to"]
                       }
@@ -44734,6 +44736,17 @@
                             "reason": { "type": "string" }
                           },
                           "required": ["status"]
+                        },
+                        "serves": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
                         }
                       },
                       "required": [
@@ -44744,7 +44757,8 @@
                         "farEnds",
                         "pullRequests",
                         "holds",
-                        "goals"
+                        "goals",
+                        "serves"
                       ]
                     },
                     "window": {

@@ -10,7 +10,11 @@
  *     (`withPullRequestStates` → `foldPullRequestState`), once for every node;
  *   - holds: `listHolds`, the current hold of each paused session;
  *   - goals: `project_tracks` under its VisibilityRule (visible iff its project
- *     is), as `getTrack` / `listTracks` read it.
+ *     is), as `getTrack` / `listTracks` read it;
+ *   - serves: the `session --serves--> track` edges the dependency door wrote
+ *     (`services/links/dependency-links.ts`). The goal at the far end is read
+ *     through `readGraphGoals`, so an edge to a goal the reader cannot see is
+ *     never drawn (`work-graph.ts`).
  *
  * Every function here THROWS on a failed read (or, for PRs, says
  * `unavailable`): the graph settles each one into its `sections` entry, so a
@@ -20,7 +24,10 @@
 import {
   and,
   db,
+  drizzleSql,
+  eq,
   inArray,
+  links,
   listHolds,
   projectTracks,
   type CurrentHold,
@@ -224,5 +231,50 @@ export async function readGraphGoals(
       category: st.category,
       position: st.position,
     })),
+  }));
+}
+
+/** One `session --serves--> track` edge: the session works for that goal. */
+export interface WorkGraphServes {
+  sessionId: string;
+  trackId: string;
+  /** The goal's criterion the session works, when the edge names one. */
+  criterionKey: string | null;
+}
+
+/**
+ * The goals these sessions serve (`session --serves--> track`, written by THE
+ * dependency door), one row per edge. No floor of its own: the caller draws
+ * an edge only when it holds the session AND reads the goal through
+ * `readGraphGoals` (the track floor), so a goal the reader cannot see is
+ * never named.
+ */
+export async function readGraphServes(
+  sessionIds: readonly string[]
+): Promise<WorkGraphServes[]> {
+  if (sessionIds.length === 0) return [];
+  // The literal (not the `SERVES_LINK_TYPE` constant) keeps this reader
+  // visible to the `links-type-ssot` tripwire's typed-reader scan.
+  const rows = await db
+    .select({
+      sessionId: links.fromId,
+      trackId: links.toId,
+      criterionKey: drizzleSql<
+        string | null
+      >`${links.metadata}->>'criterionKey'`,
+    })
+    .from(links)
+    .where(
+      and(
+        eq(links.linkType, "serves"),
+        eq(links.fromType, "session"),
+        eq(links.toType, "track"),
+        inArray(links.fromId, [...sessionIds])
+      )
+    );
+  return rows.map((r) => ({
+    sessionId: r.sessionId,
+    trackId: r.trackId,
+    criterionKey: r.criterionKey ?? null,
   }));
 }

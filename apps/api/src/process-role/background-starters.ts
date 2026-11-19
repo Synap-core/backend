@@ -377,6 +377,10 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
       // that `uses` a playbook) hands its outputs to that step and moves the
       // run on (`stage-child.ts`).
       api.registerStageChildReactor();
+      // Same close event: a lane closed done hands its delivered outputs to
+      // its parent's slots of the same key, as refs; the parent never closes
+      // by it (`lane-rollup.ts`).
+      api.registerLaneRollupReactor();
       // Same seam, entity writes: a `proposed` decision opens ONE owed ask
       // slot for the person; a decision resolved elsewhere retires it.
       api.registerDecisionAskReactor();

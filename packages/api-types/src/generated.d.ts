@@ -12816,6 +12816,16 @@ export interface WorkReleaseRead {
 	/** Present only when the caller's grant narrowed the read. */
 	narrowed?: WorkReleaseNarrowing;
 }
+declare const WORK_GRAPH_EDGE_KINDS: readonly [
+	"blocked_by",
+	"spawned_from",
+	"orchestrated_by",
+	"waits_on_output",
+	"triggered",
+	"updated",
+	"serves"
+];
+export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 declare const REACTION_OUTCOMES: readonly [
 	"applied",
 	"proposed",
@@ -26328,15 +26338,6 @@ export interface WorkGraphGoal {
 	/** The method's stages in order, each placed against `currentStage`; `[]` = stageless. */
 	stages: WorkGraphGoalStage[];
 }
-declare const WORK_GRAPH_EDGE_KINDS: readonly [
-	"blocked_by",
-	"spawned_from",
-	"orchestrated_by",
-	"waits_on_output",
-	"triggered",
-	"updated"
-];
-export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 export interface WorkGraphEdge {
 	kind: WorkGraphEdgeKind;
 	from: string;
@@ -26347,6 +26348,8 @@ export interface WorkGraphEdge {
 	count?: number;
 	/** `triggered` / `updated`: the latest of them, ISO. */
 	lastAt?: string | null;
+	/** `serves`: the goal's criterion the session works, when it names one. */
+	criterionKey?: string;
 }
 export type WorkGraphSection = {
 	status: "ok";
@@ -26370,8 +26373,14 @@ export interface WorkGraphSections {
 	pullRequests: WorkGraphSection;
 	/** The standing holds of the nodes. */
 	holds: WorkGraphSection;
-	/** The goals the nodes are filed into. */
+	/** The goals the nodes are filed into or serve. */
 	goals: WorkGraphSection;
+	/**
+	 * Declared `serves` edges (session → the goal it works for). `unavailable`
+	 * also when the goals at their far end could not be read: no edge is drawn
+	 * to a goal the read does not return.
+	 */
+	serves: WorkGraphSection;
 }
 export interface WorkGraphWindow {
 	/** ISO: settled work is in the window from this instant on. */
