@@ -22,6 +22,7 @@
  * a module frame with a type writes.
  */
 
+import { isUuid } from "../property-render/structured-value.js";
 import { CELL_BRIDGE_WRITE_REFUSED } from "./protocol.js";
 
 /**
@@ -109,7 +110,6 @@ export const CELL_BRIDGE_MAX_PROPERTIES_CHARS = 32 * 1024;
 export const CELL_BRIDGE_MAX_WRITE_STRING = 500;
 const MAX_DEPTH = 12;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLUG64 = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const FORBIDDEN_KEYS = new Set(["__proto__", "constructor"]);
 
@@ -221,7 +221,7 @@ export function pickBridgeWritePayload<Op extends CellBridgeWriteOp>(
     const value = given[field];
     switch (rule) {
       case "uuid!":
-        if (typeof value !== "string" || !UUID.test(value))
+        if (!isUuid(value))
           return { ok: false, error: `${field} must be an id.` };
         out[field] = value;
         break;

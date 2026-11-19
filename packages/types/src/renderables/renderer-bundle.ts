@@ -13,7 +13,10 @@
  * (`checkCellSource`, the same rule a single frame cell is defined under).
  */
 
-import { CELL_FRAME_MAX_BYTES, htmlByteLength } from "../cell-bridge/frame.js";
+import {
+  CELL_FRAME_MAX_BYTES,
+  htmlByteLength,
+} from "../cell-bridge/frame-size.js";
 import { checkCellSource } from "./cell-source-checks.js";
 
 /** The bundle API this version of the contract reads. */

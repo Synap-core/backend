@@ -15,8 +15,7 @@ import { frameExternalOrigins } from "./external-origins.js";
  */
 export const CELL_FRAME_SANDBOX = "allow-scripts";
 
-/** The largest page a host runs: 2 MB (the desktop's `SANDBOXED_PREVIEW_MAX_BYTES`). */
-export const CELL_FRAME_MAX_BYTES = 2 * 1024 * 1024;
+export { CELL_FRAME_MAX_BYTES, htmlByteLength } from "./frame-size.js";
 
 /**
  * THE frame policy (decision R3, 3 Nov 2026: one policy everywhere, the
@@ -206,19 +205,4 @@ export function wrapHtmlForFrame(
   if (!doctype) return head + html;
   const lead = doctype[1]!;
   return lead + head + html.slice(lead.length);
-}
-
-/** The page's size in bytes, as the cap measures it (UTF-8). */
-export function htmlByteLength(html: string): number {
-  let bytes = 0;
-  for (let i = 0; i < html.length; i += 1) {
-    const code = html.charCodeAt(i);
-    if (code < 0x80) bytes += 1;
-    else if (code < 0x800) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff) {
-      bytes += 4;
-      i += 1;
-    } else bytes += 3;
-  }
-  return bytes;
 }
