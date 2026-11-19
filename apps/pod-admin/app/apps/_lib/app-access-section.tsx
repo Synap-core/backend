@@ -71,7 +71,7 @@ export function AppAccessSection({
     setPending({ keep });
   }
 
-  async function confirm() {
+  async function applyPending() {
     if (!pending) return;
     setSaving(true);
     const r = await onNarrow(pending.keep);
@@ -111,7 +111,7 @@ export function AppAccessSection({
       <ConfirmModal
         isOpen={pending !== null}
         onClose={() => setPending(null)}
-        onConfirm={() => void confirm()}
+        onConfirm={() => void applyPending()}
         title={t("page.confirmTitle", { name: appName })}
         consequence={
           <p>{t("page.confirmBody", { name: appName })}</p>
