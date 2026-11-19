@@ -21,7 +21,9 @@
  *     the verdict state (`passing` / `failing` / `incomplete`). NEVER
  *     `failed`: the renderer reads `status="failed"` as "this round did not
  *     run" and collapses the section — a failing contract must stay visible;
- *   - the per-criterion rows are a GFM table (sections cannot nest).
+ *   - the per-criterion rows are a GFM table (sections cannot nest); when
+ *     criteria check outputs (`outputKey`), one table per output under its
+ *     name in bold, in the order the outputs were declared, then the rest.
  *
  * IDEMPOTENT by section id: a re-close (or reopen → close) rewrites the same
  * four ids in place, and a section whose content did not change is not
@@ -51,6 +53,17 @@ import {
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
 import { isCriterionRequired, type SessionCriterion } from "@synap/playbooks";
+import {
+  CRITERION_SLOT_KIND,
+  PARAM_SLOT_KIND,
+} from "@synap-core/types/focus-sessions";
+import {
+  criteriaByOutput,
+  deriveSlotKeys,
+  slotKindOf,
+  slotLabelOf,
+  type SlotFacts,
+} from "@synap-core/types/units";
 import { serializeEmbed } from "@synap-core/markdown-core/embeds";
 import { projectSessionKind } from "../focus-sessions/session-kind.js";
 import { loadSessionEvaluationSummary } from "../focus-sessions/evaluations/record.js";
@@ -88,6 +101,8 @@ export interface ClosingReportInput {
   /** `verificationReport.summary` — the closing summary. */
   summary: string | null;
   criteria: SessionCriterion[];
+  /** The outputs the session declared (outcome slots), in order. */
+  declaredOutputs: Array<{ key: string; label: string }>;
   /** The CURRENT evaluation per criterion (human wins). */
   evaluations: Array<{
     criterionKey: string;
@@ -140,6 +155,48 @@ function evaluatorLabel(e: ClosingReportInput["evaluations"][number]): string {
     : kind;
 }
 
+/** One declared output and the criteria that check it. */
+export interface CriteriaOfOutput {
+  key: string;
+  label: string;
+  criteria: SessionCriterion[];
+}
+
+/**
+ * The criteria under the outputs they check (`criteriaByOutput`, the one
+ * pairing), in the order the outputs were declared; `rest` keeps the
+ * criteria that check none of them, in declared order. Pure.
+ */
+export function groupCriteriaUnderOutputs(
+  criteria: readonly SessionCriterion[],
+  declaredOutputs: ClosingReportInput["declaredOutputs"]
+): { byOutput: CriteriaOfOutput[]; rest: SessionCriterion[] } {
+  const pairs = criteriaByOutput(criteria);
+  const byOutput = declaredOutputs.flatMap((o) => {
+    const checks = pairs.get(o.key) ?? [];
+    return checks.length > 0 ? [{ ...o, criteria: checks }] : [];
+  });
+  const grouped = new Set(byOutput.flatMap((g) => g.criteria));
+  return { byOutput, rest: criteria.filter((c) => !grouped.has(c)) };
+}
+
+/** The outcome slots of a stored `expected_outputs` bag, keyed, in order. */
+export function declaredOutputsOf(
+  raw: unknown
+): ClosingReportInput["declaredOutputs"] {
+  const slots: unknown[] = Array.isArray(raw) ? raw : [];
+  const keys = deriveSlotKeys(slots);
+  return slots.flatMap((entry, i) => {
+    const key = keys[i];
+    // `deriveSlotKeys` keys objects only.
+    if (!key) return [];
+    const slot = entry as SlotFacts;
+    const kind = slotKindOf(slot);
+    if (kind === PARAM_SLOT_KIND || kind === CRITERION_SLOT_KIND) return [];
+    return [{ key, label: slotLabelOf(slot) }];
+  });
+}
+
 /** Pure: the four sections, deterministic for a given input. */
 export function buildClosingReportSections(
   input: ClosingReportInput
@@ -152,20 +209,37 @@ export function buildClosingReportSections(
   ].join("\n");
 
   const byKey = new Map(input.evaluations.map((e) => [e.criterionKey, e]));
+  const table = (criteria: readonly SessionCriterion[]) => [
+    "| Criterion | Result | Checked by | Why |",
+    "| --- | --- | --- | --- |",
+    ...criteria.map((c) => {
+      const e = byKey.get(c.key);
+      const statement = isCriterionRequired(c)
+        ? c.statement
+        : `${c.statement} (optional)`;
+      return `| ${cell(statement)} | ${cell(resolveStatusLabel(e?.verdict ?? "unmeasured"))} | ${cell(e ? evaluatorLabel(e) : "")} | ${cell(e?.rationale ?? "")} |`;
+    }),
+  ];
+  const groups = groupCriteriaUnderOutputs(
+    input.criteria,
+    input.declaredOutputs
+  );
   const doneBody =
     input.criteria.length === 0
       ? "This session declared no criteria."
-      : [
-          "| Criterion | Result | Checked by | Why |",
-          "| --- | --- | --- | --- |",
-          ...input.criteria.map((c) => {
-            const e = byKey.get(c.key);
-            const statement = isCriterionRequired(c)
-              ? c.statement
-              : `${c.statement} (optional)`;
-            return `| ${cell(statement)} | ${cell(resolveStatusLabel(e?.verdict ?? "unmeasured"))} | ${cell(e ? evaluatorLabel(e) : "")} | ${cell(e?.rationale ?? "")} |`;
-          }),
-        ].join("\n");
+      : groups.byOutput.length === 0
+        ? table(input.criteria).join("\n")
+        : [
+            ...groups.byOutput.flatMap((g, i) => [
+              ...(i > 0 ? [""] : []),
+              `**${cell(g.label)}**`,
+              "",
+              ...table(g.criteria),
+            ]),
+            ...(groups.rest.length > 0
+              ? ["", "**Other criteria**", "", ...table(groups.rest)]
+              : []),
+          ].join("\n");
 
   const entities = input.outputs.filter((o) => o.kind === "entity");
   const others = input.outputs.filter((o) => o.kind !== "entity");
@@ -444,7 +518,11 @@ export async function writeClosingReport(
 }
 
 function toClosingReportInput(
-  row: { status: string; verificationReport: unknown },
+  row: {
+    status: string;
+    verificationReport: unknown;
+    expectedOutputs: unknown;
+  },
   summary: Awaited<ReturnType<typeof loadSessionEvaluationSummary>>,
   outputs: ClosingReportInput["outputs"],
   decisions: ClosingReportInput["decisions"]
@@ -454,6 +532,7 @@ function toClosingReportInput(
     status: row.status,
     summary: typeof vr?.summary === "string" ? vr.summary : null,
     criteria: summary.criteria,
+    declaredOutputs: declaredOutputsOf(row.expectedOutputs),
     evaluations: summary.evaluations.map((e) => ({
       criterionKey: e.criterionKey,
       verdict: e.verdict,

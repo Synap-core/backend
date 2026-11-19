@@ -350,6 +350,10 @@ describe("runGoalLoop — proposes the next run", () => {
     expect((data.criteria as Array<{ key: string }>).map((c) => c.key)).toEqual(
       ["pages", "links", "polish"]
     );
+    // W4: carried, they check the goal through this run, not a run output.
+    expect(
+      (data.criteria as Array<{ about?: string }>).map((c) => c.about)
+    ).toEqual(["method", "method", "method"]);
     // The goal's end state rides as the run's brief.
     expect(String(data.goal)).toContain(
       "What done looks like: The new site is live"

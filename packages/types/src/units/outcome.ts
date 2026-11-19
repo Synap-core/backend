@@ -54,8 +54,13 @@
  *     and checked by the person, the decision its evidence. Read-time, through
  *     the same floor the close gate reads, so the two cannot disagree.
  *  7. A criterion's state is its CURRENT verdict (`latestEvaluationPerCriterion`
- *     — a human row beats any later non-human row). A slot and a criterion that
- *     share a key are ONE outcome (the slot names it, the criterion checks it).
+ *     — a human row beats any later non-human row). A criterion that names a
+ *     slot by `outputKey` CHECKS that slot ({@link criteriaByOutput}, the one
+ *     pairing): the slot and its checks are ONE outcome, met when the slot was
+ *     delivered or when every check that counts passes (the required ones, or
+ *     all of them when none is required). The checks are listed under it
+ *     (`checks`). Sharing a key pairs nothing: a criterion with no
+ *     `outputKey`, or one naming no slot, is its own outcome.
  *  8. Evidence joins by KEY first, then by the normalised label; a produced
  *     item that names no outcome is UNATTACHED. (Known edge: two LEGACY slots
  *     sharing one label, neither keyed yet — label evidence lands on the
@@ -261,6 +266,35 @@ export interface OutcomeCriterionLike {
     hint?: string;
   };
   stageKey?: string;
+  /** The key of the slot this criterion checks (rule 7). */
+  outputKey?: string;
+}
+
+/**
+ * THE pairing of criteria with the outputs they check: each criterion's
+ * `outputKey`, grouped by that key, in declared order. Every reader that asks
+ * "is this slot checked by a criterion" reads this map (the projection, the
+ * evidence closers, the close check, a capability's outcome parameter). A
+ * key the session holds no slot for is still a key here; the projection pairs
+ * only with slots it has.
+ */
+export function criteriaByOutput<C extends { outputKey?: string | null }>(
+  criteria: readonly C[]
+): Map<string, C[]> {
+  const out = new Map<string, C[]>();
+  for (const c of criteria) {
+    const key = text(c.outputKey);
+    if (!key) continue;
+    out.set(key, [...(out.get(key) ?? []), c]);
+  }
+  return out;
+}
+
+/** The keys of the slots a criterion checks: {@link criteriaByOutput}'s keys. */
+export function checkedOutputKeys(
+  criteria: readonly { outputKey?: string | null }[]
+): Set<string> {
+  return new Set(criteriaByOutput(criteria).keys());
 }
 
 /**
@@ -333,6 +367,27 @@ export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
   /** Criterion check detail, when it names one. */
   capability?: string;
   evidenceKey?: string;
+  /**
+   * A slot's checks: every criterion naming it by `outputKey` (rule 7), in
+   * declared order. Absent on an outcome no criterion checks. `verify`,
+   * `verdict`, `stageKey`, `capability` and `evidenceKey` above read the first
+   * check (and the deciding verdict), as they did when one criterion could.
+   */
+  checks?: OutcomeCheck[];
+}
+
+/** One criterion under the output it checks. */
+export interface OutcomeCheck {
+  /** The criterion's key (its evaluations' `criterionKey`). */
+  key: string;
+  statement: string;
+  verify: OutcomeVerify;
+  required: boolean;
+  /** Its current verdict is `pass`. */
+  met: boolean;
+  verdict: OutcomeVerdict | null;
+  state: UnitStateView;
+  stageKey?: string;
 }
 
 /** What an input asks the person for. */
@@ -450,7 +505,50 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
   const inputs: SessionInput[] = [];
   /** Criterion keys an OPEN grade input is waiting on. */
   const gradeOwed = new Set<string>();
-  const folded = new Set<string>();
+  /** Keys of the slots that are outcomes (rule 3), for the pairing. */
+  const outcomeSlotKeys = new Set<string>();
+  raw.forEach((entry, i) => {
+    const slot = asSlot(entry);
+    const key = keys[i];
+    if (!slot || !key) return;
+    const kind = slotKindOf(slot);
+    if (kind === CRITERION_SLOT_KIND) {
+      const criterionKey = text(slot.criterionKey);
+      if (
+        criterionKey &&
+        isDeliverableOutstanding(slot) &&
+        slot.owner === "human"
+      ) {
+        gradeOwed.add(criterionKey);
+      }
+    } else if (kind !== PARAM_SLOT_KIND) {
+      outcomeSlotKeys.add(key);
+    }
+  });
+  // (7) Each slot's checks; a criterion naming no slot stays its own outcome.
+  const checksBySlot = new Map<string, OutcomeCriterionLike[]>();
+  /** Criterion key → the slot key it checks. */
+  const checkedSlotOf = new Map<string, string>();
+  for (const [slotKey, list] of criteriaByOutput(criteria)) {
+    if (!outcomeSlotKeys.has(slotKey)) continue;
+    checksBySlot.set(slotKey, list);
+    for (const c of list) checkedSlotOf.set(c.key, slotKey);
+  }
+  const checkView = (c: OutcomeCriterionLike): OutcomeCheck => {
+    const verdict = verdictByKey.get(c.key) ?? null;
+    return {
+      key: c.key,
+      statement: c.statement,
+      verify: c.check.kind,
+      required: c.required !== false,
+      met: verdict?.verdict === "pass",
+      verdict,
+      state: resolveUnitState(
+        criterionState(c, verdict, gradeOwed.has(c.key))
+      ),
+      ...(c.stageKey ? { stageKey: c.stageKey } : {}),
+    };
+  };
 
   raw.forEach((entry, i) => {
     const slot = asSlot(entry);
@@ -489,31 +587,47 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
     // (2) An escalated criterion is that criterion's grade — never an outcome.
     if (kind === CRITERION_SLOT_KIND) {
       const criterionKey = text(slot.criterionKey);
-      if (criterionKey && open) gradeOwed.add(criterionKey);
       inputs.push({
         ...common,
         need: "grade",
+        // The outcome its criterion is: the slot it checks, else its own.
         blocksOutcomeKey:
           criterionKey && criterionByKey.has(criterionKey)
-            ? criterionKey
+            ? (checkedSlotOf.get(criterionKey) ?? criterionKey)
             : null,
         ...(criterionKey ? { criterionKey } : {}),
       });
       return;
     }
 
-    // (3) Every other slot is an outcome.
-    const criterion = criterionByKey.get(key);
-    if (criterion) folded.add(key);
-    const verdict = criterion ? (verdictByKey.get(key) ?? null) : null;
+    // (3) Every other slot is an outcome; (7) its checks fold into it.
+    const checks = (checksBySlot.get(key) ?? []).map((c) => ({
+      c,
+      view: checkView(c),
+    }));
+    const first = checks[0]?.c;
+    const counted = checks.some((x) => x.view.required)
+      ? checks.filter((x) => x.view.required)
+      : checks;
+    const checksPass =
+      counted.length > 0 && counted.every((x) => x.view.met);
+    // The verdict that decides: a failing check, else (all passing) the
+    // latest pass, else the first check still short of a pass.
+    const deciding = checksPass
+      ? [...counted].sort((a, b) =>
+          (b.view.verdict?.at ?? "").localeCompare(a.view.verdict?.at ?? "")
+        )[0]
+      : (counted.find((x) => x.view.verdict?.verdict === "fail") ??
+        counted.find((x) => !x.view.met));
+    const verdict = deciding?.view.verdict ?? null;
     const retired = slot.retiredAt != null;
     const delivered = isDeliverableDelivered(slot);
-    const met = !retired && (delivered || verdict?.verdict === "pass");
+    const met = !retired && (delivered || checksPass);
     const state = resolveUnitState(
-      // A verdict on the folded criterion is the stronger fact; without one
-      // the slot answers by the deliverable rule.
+      // A verdict on its checks is the stronger fact; without one the slot
+      // answers by the deliverable rule.
       verdict && !delivered && !retired
-        ? criterionState(criterion!, verdict, false)
+        ? criterionState(deciding!.c, verdict, false)
         : deliverableUnitInput(slot, {
             sessionTerminal: input.sessionTerminal,
           })
@@ -522,16 +636,16 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
       key,
       label,
       kind,
-      source: criterion ? "slot+criterion" : "slot",
+      source: first ? "slot+criterion" : "slot",
       owner: slotOwner(slot),
-      verify: criterion
-        ? criterion.check.kind
+      verify: first
+        ? first.check.kind
         : slotOwner(slot) === "human"
           ? "human"
           : "evidence",
-      // An OPTIONAL slot never holds a gate; its folded criterion still can.
-      required: criterion
-        ? criterion.required !== false
+      // An OPTIONAL slot never holds a gate; a required check still can.
+      required: first
+        ? checks.some((x) => x.view.required)
         : slot.optional !== true,
       met,
       metBy: !met ? null : delivered ? slotMetBy(slot) : "verdict",
@@ -540,13 +654,14 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
       verdict,
       evidence: [],
       slotLabel,
-      ...(criterion?.stageKey ? { stageKey: criterion.stageKey } : {}),
-      ...(criterion?.check.capability
-        ? { capability: criterion.check.capability }
+      ...(first?.stageKey ? { stageKey: first.stageKey } : {}),
+      ...(first?.check.capability
+        ? { capability: first.check.capability }
         : {}),
-      ...(criterion?.check.evidenceKey
-        ? { evidenceKey: criterion.check.evidenceKey }
+      ...(first?.check.evidenceKey
+        ? { evidenceKey: first.check.evidenceKey }
         : {}),
+      ...(first ? { checks: checks.map((x) => x.view) } : {}),
     });
 
     // (4) Handed to the person on a blocker / with an ask, or asked and
@@ -560,9 +675,9 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
     }
   });
 
-  // Criteria no slot already named, in declared order.
+  // Criteria that check no slot, in declared order.
   for (const c of criteria) {
-    if (folded.has(c.key)) continue;
+    if (checkedSlotOf.has(c.key)) continue;
     const verdict = verdictByKey.get(c.key) ?? null;
     outcomes.push({
       key: c.key,
@@ -586,7 +701,12 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
 
   // (8) Evidence: key first, then the normalised label (first slot wins, the
   // same tie-break every pod slot door uses).
-  const outcomeByKey = new Map(outcomes.map((o) => [o.key, o]));
+  // First holder wins: a slot and an unpaired criterion may share a key, and
+  // a produced item claims the slot.
+  const outcomeByKey = new Map<string, SessionOutcome<P>>();
+  for (const o of outcomes) {
+    if (!outcomeByKey.has(o.key)) outcomeByKey.set(o.key, o);
+  }
   const outcomeByLabel = new Map<string, SessionOutcome<P>>();
   for (const o of outcomes) {
     if (o.source === "criterion") continue;
@@ -634,8 +754,8 @@ export function readInputs(
  * no outcomes passes on being closed).
  *
  * Over criterion-only outcomes this is exactly `computeSessionVerdict`'s
- * "every required criterion's current verdict is pass"; a slot+criterion
- * outcome is also met when its slot was delivered (rule 7).
+ * "every required criterion's current verdict is pass"; a slot with checks is
+ * also met when its slot was delivered (rule 7).
  */
 export function unmetRequiredOutcomes(
   outcomes: ReadonlyArray<

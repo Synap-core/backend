@@ -31,9 +31,13 @@ const T1 = "2026-10-01T11:00:00.000Z";
  *   E. "claimedDone is met"                   (the agent grades itself)
  *   F. "latest row wins"                      (a judge after a human un-grades)
  *   G. "evidence joins by label only"         (a renamed slot loses its proof)
- *   H. "a slot and a criterion sharing a key are two outcomes"
+ *   H. "a slot and the criterion checking it are two outcomes"
  *   I. "an ungraded check on an open session is being worked on" (the AI
  *      spark claims a check nobody is running)
+ *   J. "a criterion sharing a slot's key checks it" (the pre-W4 same-key
+ *      fold: pairing is `outputKey`, never the key)
+ *   K. "one passing check meets the output" (an output's checks all count:
+ *      its kind's and its step's, D4 a)
  */
 interface Row {
   name: string;
@@ -258,7 +262,7 @@ const ROWS: Row[] = [
     inputs: [],
   },
   {
-    name: "a slot and a criterion sharing a key are ONE outcome, graded by the criterion",
+    name: "a slot and the criterion naming it (outputKey) are ONE outcome, graded by the criterion",
     rulesOut: "H",
     slots: [
       { kind: "report", label: "Founder approves", key: "founder-approves" },
@@ -268,6 +272,7 @@ const ROWS: Row[] = [
         key: "founder-approves",
         statement: "Founder approves the plan",
         check: { kind: "human" },
+        outputKey: "founder-approves",
       },
     ],
     evaluations: [
@@ -281,6 +286,62 @@ const ROWS: Row[] = [
     outcomes: [
       { key: "founder-approves", state: "done", met: true, verify: "human" },
     ],
+    inputs: [],
+  },
+  {
+    name: "a criterion sharing a slot's key but naming no output is its own outcome",
+    rulesOut: "J",
+    slots: [{ kind: "report", label: "Plan", key: "plan" }],
+    criteria: [
+      { key: "plan", statement: "The plan is sound", check: { kind: "judge" } },
+    ],
+    evaluations: [
+      {
+        criterionKey: "plan",
+        verdict: "pass",
+        evaluatorKind: "judge",
+        createdAt: T0,
+      },
+    ],
+    outcomes: [
+      { key: "plan", state: "working", met: false, verify: "evidence" },
+      { key: "plan", state: "done", met: true, verify: "judge" },
+    ],
+    inputs: [],
+  },
+  {
+    name: "an output with two checks is met only when both pass",
+    rulesOut: "K",
+    slots: [{ kind: "document", label: "Deck", key: "deck" }],
+    criteria: [
+      {
+        key: "on-brand",
+        statement: "The deck follows the brand guide",
+        check: { kind: "judge" },
+        outputKey: "deck",
+      },
+      {
+        key: "has-pricing",
+        statement: "The deck has a pricing slide",
+        check: { kind: "evidence" },
+        outputKey: "deck",
+      },
+    ],
+    evaluations: [
+      {
+        criterionKey: "on-brand",
+        verdict: "pass",
+        evaluatorKind: "judge",
+        createdAt: T0,
+      },
+      {
+        criterionKey: "has-pricing",
+        verdict: "fail",
+        evaluatorKind: "evidence",
+        createdAt: T1,
+      },
+    ],
+    outcomes: [{ key: "deck", state: "failed", met: false, verify: "judge" }],
     inputs: [],
   },
   {
@@ -401,6 +462,97 @@ describe("evidence and unattached", () => {
     };
     expect(readOutcomes(input).map((o) => o.key)).toEqual(["r"]);
     expect(readInputs(input).map((i) => i.need)).toEqual(["credential"]);
+  });
+});
+
+describe("checks hang on their output (rule 7, W4)", () => {
+  const slots = [
+    { kind: "document", label: "Deck", key: "deck" },
+    {
+      kind: CRITERION_SLOT_KIND,
+      label: "Grade: on brand",
+      key: "grade-on-brand",
+      criterionKey: "on-brand",
+      owner: "human",
+    },
+  ];
+  const criteria: OutcomeCriterionLike[] = [
+    {
+      key: "on-brand",
+      statement: "On brand",
+      check: { kind: "judge" },
+      outputKey: "deck",
+    },
+    {
+      key: "has-pricing",
+      statement: "Has a pricing slide",
+      check: { kind: "evidence" },
+      outputKey: "deck",
+      stageKey: "build",
+    },
+    {
+      key: "orphan",
+      statement: "Names an output the session does not hold",
+      check: { kind: "judge" },
+      outputKey: "nope",
+    },
+  ];
+  const pass = (criterionKey: string): EvaluationRowLike => ({
+    criterionKey,
+    verdict: "pass",
+    evaluatorKind: "judge",
+    createdAt: T0,
+  });
+
+  it("lists every check under its output, in declared order, each with its own state", () => {
+    const view = projectSessionOutcomes({
+      expectedOutputs: slots,
+      criteria,
+      evaluations: [pass("has-pricing")],
+      sessionTerminal: false,
+    });
+    expect(view.outcomes.map((o) => [o.key, o.source])).toEqual([
+      ["deck", "slot+criterion"],
+      ["orphan", "criterion"],
+    ]);
+    const deck = view.outcomes[0]!;
+    expect(deck.met).toBe(false);
+    expect(
+      deck.checks?.map((c) => [c.key, c.met, c.state.state, c.stageKey])
+    ).toEqual([
+      ["on-brand", false, "needs_you", undefined],
+      ["has-pricing", true, "done", "build"],
+    ]);
+    // The grade a person owes on a check blocks the OUTPUT it checks.
+    expect(view.inputs.map((i) => [i.key, i.blocksOutcomeKey])).toEqual([
+      ["grade-on-brand", "deck"],
+    ]);
+  });
+
+  it("met once every check passes, with the latest pass as its verdict", () => {
+    const view = projectSessionOutcomes({
+      expectedOutputs: slots,
+      criteria,
+      evaluations: [
+        pass("on-brand"),
+        { ...pass("has-pricing"), createdAt: T1 },
+      ],
+      sessionTerminal: false,
+    });
+    const deck = view.outcomes[0]!;
+    expect(deck.met).toBe(true);
+    expect(deck.metBy).toBe("verdict");
+    expect(deck.verdict?.at).toBe(T1);
+  });
+
+  it("an optional check never holds the output while a required one counts", () => {
+    const view = projectSessionOutcomes({
+      expectedOutputs: [slots[0]],
+      criteria: [{ ...criteria[0]!, required: false }, criteria[1]!],
+      evaluations: [pass("has-pricing")],
+      sessionTerminal: false,
+    });
+    expect(view.outcomes[0]!.met).toBe(true);
   });
 });
 

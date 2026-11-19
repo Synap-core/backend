@@ -371,7 +371,7 @@ describe("the merge sweeper (dev.pr_merged → the PR outcome is met)", () => {
       userId: USER,
       agentUserId: AGENT,
       kinds: ["evidence", "capability"],
-      criterionKeys: ["pr-backend-304"],
+      criterionKeys: ["merged"],
       evidence: {
         "pr-backend-304": {
           passed: true,
@@ -899,9 +899,10 @@ describe("the pod completes the outcome the merged PR names, outside the key's g
     const checked = await seed([prSlot(1106)], {
       criteria: [
         {
-          key: "pr-backend-1106",
+          key: "merged-1106",
           statement: "Merged",
           check: { kind: "judge" },
+          outputKey: "pr-backend-1106",
         },
       ],
     });
@@ -1023,9 +1024,10 @@ describe("pod default 3 on: a merge meets the outcome in EVERY session that poin
     const checked = await seed([prSlot(1202)], {
       criteria: [
         {
-          key: "pr-backend-1202",
+          key: "green-1202",
           statement: "Merged and green",
           check: { kind: "judge" },
+          outputKey: "pr-backend-1202",
         },
       ],
     });

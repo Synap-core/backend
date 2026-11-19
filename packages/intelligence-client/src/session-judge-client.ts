@@ -12,8 +12,21 @@
 
 import { postSessionIntelligence } from "./session-intelligence-client.js";
 
+/** The output a criterion checks (its `outputKey` slot), named for the judge. */
+export interface JudgeCriterionOutput {
+  key: string;
+  kind: string;
+  label: string;
+}
+
 export interface JudgeCriteriaRequest {
-  criteria: Array<{ key: string; statement: string; hint?: string }>;
+  criteria: Array<{
+    key: string;
+    statement: string;
+    hint?: string;
+    /** Optional: an IS that predates it ignores it (zod strips unknown keys). */
+    output?: JudgeCriterionOutput;
+  }>;
   /** ≤ 16000 chars (`MATERIAL_MAX`, judge-material.ts): the produced work, the room. */
   material: string;
   /** The model that did the work — never allowed to grade it. */

@@ -141,10 +141,14 @@ export function goalNextRunBrief(input: {
   ].join("\n");
 }
 
-/** A goal criterion as a run carries it: the session shape, no judge's decision. */
-function asRunCriterion(c: GoalCriterion): SessionCriterion {
+/**
+ * A goal criterion as a run carries it: the session shape, no judge's
+ * decision, marked `about: "method"` — it checks the goal through this run,
+ * not one of the run's outputs, so it hangs on none (work-model W4).
+ */
+export function asRunCriterion(c: GoalCriterion): SessionCriterion {
   const { acceptance: _decided, ...criterion } = c;
-  return criterion;
+  return { ...criterion, about: "method" };
 }
 
 /**

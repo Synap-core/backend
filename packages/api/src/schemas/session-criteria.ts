@@ -60,9 +60,9 @@ export const sessionCriterionSchema = z
       .enum(CRITERION_ABOUT as readonly [CriterionAbout, ...CriterionAbout[]])
       .optional(),
     /**
-     * The key of the session output this criterion checks (work-model W1,
-     * additive: stored and read back, no reader pairs by it yet). The same
-     * alphabet as a declared slot key.
+     * The key of the session output this criterion checks: THE pairing of a
+     * criterion with an output (`criteriaByOutput`, `@synap-core/types/units`;
+     * work-model W1, W4). The same alphabet as a declared slot key.
      */
     outputKey: z
       .string()

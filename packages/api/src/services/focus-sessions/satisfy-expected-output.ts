@@ -93,6 +93,7 @@ import {
   samePullRequest,
   type PullRequestRef,
 } from "@synap-core/types";
+import { checkedOutputKeys } from "@synap-core/types/units";
 import {
   OUTPUT_REF_KINDS,
   readCriteria,
@@ -654,11 +655,12 @@ export async function attestExpectedOutput(
 /**
  * The criterion a PERSON's task stands for, when doing it IS meeting it (plan
  * aac47c4a, Q7.4): a human-owned slot whose ask is a deed — `act` ("I did
- * this") or `provide` (handed over) — stored under the same key as a declared
- * criterion the PERSON checks (`check.kind: "human"`). That is how an outcome
- * declared `owner: "human"` with a `verify` is stored (`outcome-declarations.ts`:
- * one slot and one criterion under ONE key, folded into one outcome by the
- * projection), so no new field links them.
+ * this") or `provide` (handed over) — checked by a criterion the PERSON
+ * checks (`check.kind: "human"`, `outputKey` = the slot's key). That is how an
+ * outcome declared `owner: "human"` with a `verify` is stored
+ * (`outcome-declarations.ts`: one slot and one criterion naming it, folded
+ * into one outcome by the projection). The first such criterion when several
+ * check the slot.
  * `criterionKey` stays the escalation's server stamp (`evaluations/record.ts`):
  * an escalated criterion slot is graded by its own pass/fail answer, never
  * here. A confirm / choose / form is an answer, not a deed: `null`. A
@@ -671,7 +673,7 @@ export async function attestExpectedOutput(
 export function criterionMetBy(
   outputs: readonly ExpectedOutput[],
   index: number,
-  criteria: readonly Pick<SessionCriterion, "key" | "check">[],
+  criteria: readonly Pick<SessionCriterion, "key" | "check" | "outputKey">[],
   /** The answer that would meet it; absent for an attest ("I did this"). */
   value?: SlotAnswerValue
 ): string | null {
@@ -683,9 +685,11 @@ export function criterionMetBy(
   const mode = effectiveSlotAsk(slot)?.mode;
   if (mode !== "act" && mode !== "provide") return null;
   const key = slotKeyAt(outputs, index);
-  return key && criteria.some((c) => c.key === key && c.check.kind === "human")
-    ? key
-    : null;
+  if (!key) return null;
+  return (
+    criteria.find((c) => c.outputKey === key && c.check.kind === "human")
+      ?.key ?? null
+  );
 }
 
 function slotAttestedEventData(
@@ -825,16 +829,17 @@ export function refEvidence(slot: ExpectedOutput): SlotEvidence | null {
  *   - it is not already done (any door) and not retired;
  *   - it is NOT the person's (`owner: 'human'`): a person's deliverable is
  *     checked by the person (attest / answer), never by what an agent made;
- *   - no CRITERION shares its key: such an outcome is checked by that
- *     criterion's evaluator (`judge` / `capability` / `human` — evaluate_session),
- *     and evidence alone would short-circuit the check it declared;
+ *   - no CRITERION checks it (`outputKey`, `checkedOutputKeys`): such an
+ *     outcome is checked by that criterion's evaluator (`judge` /
+ *     `capability` / `human` — evaluate_session), and evidence alone would
+ *     short-circuit the check it declared;
  *   - there IS evidence: a produced object the output join attributed to the
  *     slot (`evidenceByKey`, keyed by slot key), else the slot's own `ref`.
  */
 export function selectClaimsWithEvidence(
   outputs: readonly ExpectedOutput[],
   evidenceByKey: ReadonlyMap<string, SlotEvidence>,
-  criterionKeys: ReadonlySet<string>
+  checkedKeys: ReadonlySet<string>
 ): Array<{ index: number; evidence: SlotEvidence }> {
   const keys = deriveSlotKeys(outputs);
   const out: Array<{ index: number; evidence: SlotEvidence }> = [];
@@ -844,7 +849,7 @@ export function selectClaimsWithEvidence(
     if (slot.claimedDone !== true) return;
     if (slot.status === "done" || slot.retiredAt != null) return;
     if (slot.owner === "human") return;
-    if (criterionKeys.has(key)) return;
+    if (checkedKeys.has(key)) return;
     const evidence = evidenceByKey.get(key) ?? refEvidence(slot);
     if (evidence) out.push({ index, evidence });
   });
@@ -944,9 +949,7 @@ export async function satisfyClaimsByEvidence(params: {
       evidenceByKey.set(key, { kind: "output", id: output.id });
     }
   }
-  const criterionKeys = new Set(
-    readCriteria(session.criteria).map((c) => c.key)
-  );
+  const checkedKeys = checkedOutputKeys(readCriteria(session.criteria));
 
   const now = params.now ?? new Date();
   return db
@@ -967,7 +970,7 @@ export async function satisfyClaimsByEvidence(params: {
       const picks = selectClaimsWithEvidence(
         current,
         evidenceByKey,
-        criterionKeys
+        checkedKeys
       );
       if (picks.length === 0) return { satisfied: [] };
       const next = stampEvidenced(current, picks, now);
@@ -1016,7 +1019,7 @@ function slotPullRequest(slot: ExpectedOutput): PullRequestRef | null {
  *   - its key is `slotKey` (the one the sweeper resolved), when given;
  *   - it is not already done and not retired;
  *   - it is NOT the person's (`owner: 'human'`);
- *   - no CRITERION shares its key (that criterion's evaluator checks it);
+ *   - no CRITERION checks it (`outputKey`: that criterion's evaluator does);
  *   - its OWN `ref.url` is this pull request: same repo (any case), same
  *     number. A slot with no ref, a ref to another PR or another repo, or
  *     only a conventional key, is never closed here.
@@ -1025,7 +1028,7 @@ function slotPullRequest(slot: ExpectedOutput): PullRequestRef | null {
 export function selectMergedPullRequestSlots(
   outputs: readonly ExpectedOutput[],
   pr: PullRequestRef,
-  criterionKeys: ReadonlySet<string>,
+  checkedKeys: ReadonlySet<string>,
   slotKey?: string
 ): Array<{ index: number; evidence: SlotEvidence }> {
   const keys = deriveSlotKeys(outputs);
@@ -1036,7 +1039,7 @@ export function selectMergedPullRequestSlots(
     if (slotKey !== undefined && key !== slotKey) return;
     if (slot.status === "done" || slot.retiredAt != null) return;
     if (slot.owner === "human") return;
-    if (criterionKeys.has(key)) return;
+    if (checkedKeys.has(key)) return;
     const points = slotPullRequest(slot);
     if (!points || !samePullRequest(points, pr)) return;
     const evidence = refEvidence(slot);
@@ -1080,13 +1083,11 @@ export async function satisfyPullRequestByMerge(params: {
       const current: ExpectedOutput[] = Array.isArray(locked.expectedOutputs)
         ? (locked.expectedOutputs as ExpectedOutput[])
         : [];
-      const criterionKeys = new Set(
-        readCriteria(locked.criteria).map((c) => c.key)
-      );
+      const checkedKeys = checkedOutputKeys(readCriteria(locked.criteria));
       const picks = selectMergedPullRequestSlots(
         current,
         pr,
-        criterionKeys,
+        checkedKeys,
         slotKey
       );
       if (picks.length === 0) return { satisfied: [] };
@@ -1136,8 +1137,8 @@ export interface ChildSlotWanted {
  * is closed only when ALL hold:
  *   - it is one the step expects back (`wanted`), found by label;
  *   - it is not already done, not retired, not the person's (`owner:
- *     'human'`), and no criterion shares its key (that criterion's evaluator
- *     checks it);
+ *     'human'`), and no criterion checks it (`outputKey`: that criterion's
+ *     evaluator does);
  *   - the child's slot of the mapped label is DONE (through one of the
  *     child's own doors) and not retired.
  * The evidence is the child slot's own pointer, else the child session.
@@ -1146,7 +1147,7 @@ export function selectSlotsDeliveredByChild(
   parent: readonly ExpectedOutput[],
   child: readonly ExpectedOutput[],
   wanted: readonly ChildSlotWanted[],
-  criterionKeys: ReadonlySet<string>,
+  checkedKeys: ReadonlySet<string>,
   childSessionId: string
 ): Array<{ index: number; evidence: SlotEvidence; childSlot: ExpectedOutput }> {
   const keys = deriveSlotKeys(parent);
@@ -1162,7 +1163,7 @@ export function selectSlotsDeliveredByChild(
     if (!slot || !key || out.some((o) => o.index === index)) continue;
     if (slot.status === "done" || slot.retiredAt != null) continue;
     if (slot.owner === "human") continue;
-    if (criterionKeys.has(key)) continue;
+    if (checkedKeys.has(key)) continue;
     const childIndex = findSlotIndex(
       child,
       { label: w.childLabel },
@@ -1235,7 +1236,7 @@ export async function satisfyStageSlotsFromChild(params: {
         current,
         childSlots,
         wanted,
-        new Set(readCriteria(locked.criteria).map((c) => c.key)),
+        checkedOutputKeys(readCriteria(locked.criteria)),
         childSessionId
       );
       if (picks.length === 0) return { satisfied: [] };
@@ -1322,14 +1323,14 @@ function slotRefIs(slot: ExpectedOutput, ref: OutcomeRefTarget): boolean {
  *   - its OWN `ref` is that object (`{kind, id}`, same kind, same id);
  *   - it is not already done and not retired;
  *   - it is NOT the person's (`owner: 'human'`): a person checks their own;
- *   - no CRITERION shares its key (that criterion's evaluator checks it).
+ *   - no CRITERION checks it (`outputKey`: that criterion's evaluator does).
  * No claim is needed: the approval is the person's acceptance of the object,
  * and the slot named that object as what it waits for.
  */
 export function selectSlotsMetByRef(
   outputs: readonly ExpectedOutput[],
   ref: OutcomeRefTarget,
-  criterionKeys: ReadonlySet<string>,
+  checkedKeys: ReadonlySet<string>,
   slotKey?: string
 ): Array<{ index: number; key: string }> {
   const keys = deriveSlotKeys(outputs);
@@ -1340,7 +1341,7 @@ export function selectSlotsMetByRef(
     if (slotKey !== undefined && key !== slotKey) return;
     if (slot.status === "done" || slot.retiredAt != null) return;
     if (slot.owner === "human") return;
-    if (criterionKeys.has(key)) return;
+    if (checkedKeys.has(key)) return;
     if (slotRefIs(slot, ref)) out.push({ index, key });
   });
   return out;
@@ -1413,7 +1414,7 @@ export async function satisfyOutputsByRef(params: {
       const picks = selectSlotsMetByRef(
         current,
         ref,
-        new Set(readCriteria(locked.criteria).map((c) => c.key)),
+        checkedOutputKeys(readCriteria(locked.criteria)),
         slotKey
       );
       if (picks.length === 0) return { satisfied: [] };
