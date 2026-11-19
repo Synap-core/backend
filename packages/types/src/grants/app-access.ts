@@ -677,9 +677,17 @@ export function compareAppScopes(
   };
 }
 
+/** A grant scope as any reader holds it (stored scopes carry nulls). */
+export interface GrantScopeLike {
+  readonly permissions: readonly string[];
+  readonly workspaceIds?: readonly string[] | null;
+  readonly projectIds?: readonly string[] | null;
+  readonly entityIds?: readonly string[] | null;
+}
+
 /** The pieces of a scope: one per permission × named place (W3d). */
-function piecesOf(scope: AppAccessGrantScope): AppAccessGrantScope[] {
-  const out: AppAccessGrantScope[] = [];
+function piecesOf<T extends GrantScopeLike>(scope: T): T[] {
+  const out: T[] = [];
   const ws = scope.workspaceIds?.length ? scope.workspaceIds : null;
   const pj = scope.projectIds?.length ? scope.projectIds : null;
   for (const permission of scope.permissions) {
@@ -709,12 +717,21 @@ function piecesOf(scope: AppAccessGrantScope): AppAccessGrantScope[] {
  * both sides (`probesFor`). Throws `LiftTooLargeError` above
  * `LIFT_PROBE_BUDGET` (the caller fails closed).
  */
-export function scopesWithinBound(
-  candidates: readonly AppAccessGrantScope[],
-  bound: readonly AppAccessGrantScope[]
-): AppAccessGrantScope[] {
+export function scopesWithinBound<T extends GrantScopeLike>(
+  candidateScopes: readonly T[],
+  boundScopes: readonly GrantScopeLike[]
+): T[] {
+  // A scope pinned to records is never kept, nor counted in the bound: no
+  // probe names a record, so it would look like it permits nothing (fail
+  // closed; no app holds one).
+  const candidates = candidateScopes.filter((c) => !c.entityIds?.length);
   if (candidates.length === 0) return [];
-  const all = [...candidates, ...bound];
+  const bound = boundScopes.filter(
+    (b) => !b.entityIds?.length
+  ) as unknown as AppAccessGrantScope[];
+  const asScopes = (xs: readonly GrantScopeLike[]) =>
+    xs as unknown as AppAccessGrantScope[];
+  const all = [...asScopes(candidates), ...bound];
   const distinct = [...new Set(all.flatMap((s) => s.permissions))];
   const { permissions, places } = probesFor(distinct, all);
   const cost = costOf(permissions.length, distinct.length, all);
@@ -726,7 +743,7 @@ export function scopesWithinBound(
       row[r] = patternMatches(p, permissions[r]!) ? 1 : 0;
     matches.set(p, row);
   }
-  const limitsAt = (s: AppAccessGrantScope) =>
+  const limitsAt = (s: GrantScopeLike) =>
     places.map((pl) =>
       permits(
         { ...s, permissions: ["*"] },
@@ -750,8 +767,8 @@ export function scopesWithinBound(
     return row;
   });
   const boundPlaces = placementOf(bound);
-  const within = (s: AppAccessGrantScope): boolean => {
-    for (const [key, role] of placementOf([s])) {
+  const within = (s: GrantScopeLike): boolean => {
+    for (const [key, role] of placementOf(asScopes([s]))) {
       const held = boundPlaces.get(key);
       if (!held || (role === "editor" && held !== "editor")) return false;
     }
@@ -763,7 +780,7 @@ export function scopesWithinBound(
     }
     return true;
   };
-  const out: AppAccessGrantScope[] = [];
+  const out: T[] = [];
   for (const c of candidates) {
     if (within(c)) {
       out.push(c);

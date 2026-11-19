@@ -43,10 +43,24 @@ import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import { auditLog } from "../../../utils/audit-log.js";
 import {
+  addedAccessOrThrow,
+  appAccessOffer,
   appApprovalWithinAsked,
   applyApprovedReach,
+  assertAccessWithinCeiling,
   assertOwnerMayGrant,
+  readFrozenAsked,
 } from "../../../services/app-connect.js";
+import {
+  appAccessBeyond,
+  appAccessGivesAnything,
+  expandAppAccess,
+  isReadPermission,
+  pairsOfAccess,
+  parseAppAccess,
+  type AppAccess,
+} from "@synap-core/types/grants";
+import type { AppApprovedRequest } from "@synap/database/schema";
 import {
   APP_CONNECT_ADD_MODE,
   assertAddWithinCeiling,
@@ -68,6 +82,19 @@ export function registerAppExecutors(): void {
           code: "BAD_REQUEST",
           message:
             "App connect proposal is missing the app id — file the request again.",
+        });
+      }
+
+      // A v2 approval (W3d): the person's AppAccess, stored first.
+      if (inner.access !== undefined) {
+        return executeAccessApproval({
+          proposal,
+          userId,
+          input,
+          deps,
+          raw,
+          inner,
+          appId,
         });
       }
 
@@ -152,9 +179,14 @@ export function registerAppExecutors(): void {
       await assertOwnerMayGrant(app.ownerUserId, requests);
 
       // Additive: merged into the approval as it stands now, never a pair
-      // dropped. Otherwise the approval replaces the whole set.
+      // dropped. Otherwise the approval replaces the whole set. A connection
+      // whose stored v2 names what pairs cannot (a project) adds through v2
+      // (W3d): merging pairs and lifting them would drop its projects.
+      const stored = parseAppAccess(app.approvedAccess);
       const updated = add
-        ? await repo.addApprovedRequests(appId, requests)
+        ? stored && !pairsOfAccess(stored).exact
+          ? await addPairsThroughAccess(repo, appId, requests)
+          : await repo.addApprovedRequests(appId, requests)
         : await repo.setApprovedRequests(appId, requests);
       if (!updated) {
         throw new TRPCError({
@@ -210,4 +242,275 @@ export function registerAppExecutors(): void {
       };
     },
   });
+}
+
+type ExecuteArgs = Parameters<
+  Parameters<typeof registerProposalExecutor>[0]["execute"]
+>[0];
+
+/** Did a revise touch what the approval is checked against? */
+function revisedAsked(
+  history: ReadonlyArray<{ patch?: unknown }> | null | undefined
+): boolean {
+  return (history ?? []).some((r) => {
+    const f = (r.patch ?? {}) as Record<string, unknown>;
+    const nested = (f.data ?? {}) as Record<string, unknown>;
+    return ["askedAccess", "asked"].some(
+      (k) => Object.hasOwn(f, k) || Object.hasOwn(nested, k)
+    );
+  });
+}
+
+/**
+ * The v2 half of `app/connect` (app permissions W3d): the proposal carries the
+ * person's `access` (or, `mode: "add"`, the permissions a short ask adds and
+ * Q4's write place) and the frozen `askedAccess`. At approval time the access
+ * is checked AGAIN against `asked ∩ what the owner may give NOW`
+ * (`assertAccessWithinCeiling`, the ceiling re-read: a role dropped since
+ * must not reach the app) and stored FIRST (`setApprovedAccess`, the old pairs
+ * derived from it), then the live keys are re-derived (`applyApprovedReach`).
+ * The identity, revoked and expiry rules are the pairs path's.
+ */
+async function executeAccessApproval(args: {
+  proposal: ExecuteArgs["proposal"];
+  userId: string;
+  input: ExecuteArgs["input"];
+  deps: ExecuteArgs["deps"];
+  raw: Record<string, unknown>;
+  inner: Record<string, unknown>;
+  appId: string;
+}) {
+  const { proposal, userId, input, deps, inner, appId } = args;
+  const [alreadyDone] = await db
+    .select({
+      status: proposals.status,
+      revisionHistory: proposals.revisionHistory,
+      expiresAt: proposals.expiresAt,
+    })
+    .from(proposals)
+    .where(eq(proposals.id, input.proposalId));
+  if (alreadyDone?.status === ProposalStatus.APPROVED) {
+    return { success: true, alreadyApproved: true };
+  }
+  const asked = readFrozenAsked(inner.askedAccess);
+  const proposed = parseAppAccess(inner.access);
+  if (!asked || !proposed || revisedAsked(alreadyDone?.revisionHistory)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "An approval can only narrow what the app asked for. To give it more, ask for access again.",
+    });
+  }
+  const repo = new AppRepository(db);
+  const app = await repo.get(appId);
+  if (!app) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "App not found" });
+  }
+  if (app.ownerUserId !== userId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only the app's owner can approve what it may touch",
+    });
+  }
+  if (app.revokedAt) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "This app was revoked — register it again to ask for access.",
+    });
+  }
+  // The ceiling NOW: what was asked (frozen) ∩ what the owner may give today.
+  const offer = await appAccessOffer(app.ownerUserId, {
+    permissions: asked.permissions,
+    podWide: asked.podWide,
+  });
+  const add = isAddMode(args.raw);
+  let updated;
+  if (add) {
+    if (app.mode !== "oauth") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "Only a pod app can ask for one more thing; this app asks for its whole access again.",
+      });
+    }
+    const expiresAt = alreadyDone?.expiresAt ?? null;
+    if (expiresAt && expiresAt.getTime() < Date.now()) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "This ask expired. The app asks again when it still needs it.",
+      });
+    }
+    const permissions = Array.isArray(inner.addPermissions)
+      ? (inner.addPermissions as unknown[]).filter(
+          (p): p is string => typeof p === "string"
+        )
+      : [];
+    const wp = inner.writePlace as
+      | { spaces?: unknown; projects?: unknown }
+      | undefined;
+    const ids = (v: unknown) =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    const writePlace = wp
+      ? { spaces: ids(wp.spaces), projects: ids(wp.projects) }
+      : null;
+    // Added to the access as it stands NOW (row lock), then checked whole,
+    // inside the lock, before anything is written (the ceiling was read
+    // just before). Beyond it nothing is written, and the refusal is worded
+    // below, with names, by the one check.
+    const state: { refusal: unknown; beyond: AppAccess | null } = {
+      refusal: null,
+      beyond: null,
+    };
+    updated = await repo.updateApprovedAccess(appId, ({ access }) => {
+      if (!access) {
+        state.refusal = new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Connect this app again first: its access must be confirmed before it can ask for more.",
+        });
+        return null;
+      }
+      let next: AppAccess;
+      try {
+        next = addedAccessOrThrow(access, { permissions, writePlace });
+      } catch (err) {
+        state.refusal = err;
+        return null;
+      }
+      if (
+        appAccessBeyond(next, offer.ceiling).length > 0 ||
+        !appAccessGivesAnything(next)
+      ) {
+        state.beyond = next;
+        return null;
+      }
+      return next;
+    });
+    if (state.refusal) throw state.refusal;
+    if (state.beyond) {
+      await assertAccessWithinCeiling(state.beyond, offer.ceiling);
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "This is beyond what the app asked for.",
+      });
+    }
+  } else {
+    await assertAccessWithinCeiling(proposed, offer.ceiling);
+    updated = await repo.setApprovedAccess(appId, proposed);
+  }
+  if (!updated) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Could not record the app's access.",
+    });
+  }
+  const rederivedKeys = await applyApprovedReach(appId);
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    },
+    where: eq(proposals.id, input.proposalId),
+  });
+  await auditLog({
+    subjectType: "app",
+    action: APP_EVENT_ACTIONS.approved,
+    phase: "completed",
+    subjectId: app.id,
+    userId,
+    workspaceId: null,
+    appId: app.publicId,
+    data: {
+      name: app.name,
+      publicId: app.publicId,
+      proposalId: input.proposalId,
+      access: updated.approvedAccess,
+      ...(add ? { mode: APP_CONNECT_ADD_MODE } : {}),
+      rederivedKeys,
+    },
+  });
+  reportApproved(deps, proposal, input.proposalId);
+  deps.emitProposalReviewed(
+    input.proposalId,
+    proposal.workspaceId,
+    "approved",
+    userId
+  );
+  return {
+    success: true,
+    primaryId: appId,
+    effect: {
+      applied: "verified" as const,
+      rows: 1,
+      ids: [appId],
+      subject: "apps",
+    },
+  };
+}
+
+/**
+ * An ask's pairs added to a connection whose v2 access names projects (W3d):
+ * the permissions are added where their tier already holds (the short ask
+ * only adds permissions), a first write lands in the asked spaces (Q4), and
+ * every asked pair must then hold exactly where it was asked (the card said
+ * that place). An ask for a place the connection does not hold is refused:
+ * the person chooses new places on the full consent.
+ */
+async function addPairsThroughAccess(
+  repo: AppRepository,
+  appId: string,
+  requests: readonly AppApprovedRequest[]
+) {
+  const state: { refusal: unknown } = { refusal: null };
+  const row = await repo.updateApprovedAccess(appId, ({ access }) => {
+    if (!access) return null;
+    const permissions = [...new Set(requests.map((r) => r.permission))];
+    const writes = requests.filter((r) => !isReadPermission(r.permission));
+    const firstWrite =
+      writes.length > 0 &&
+      access.write.spaces.length === 0 &&
+      access.write.projects.length === 0;
+    let next: AppAccess;
+    try {
+      next = addedAccessOrThrow(access, {
+        permissions,
+        writePlace: firstWrite
+          ? {
+              spaces: [
+                ...new Set(
+                  writes.flatMap((r) => (r.workspaceId ? [r.workspaceId] : []))
+                ),
+              ],
+              projects: [],
+            }
+          : null,
+      });
+    } catch (err) {
+      state.refusal = err;
+      return null;
+    }
+    const held = new Set(
+      expandAppAccess(next).map((p) =>
+        p.where.kind === "space"
+          ? `${p.permission} ${p.where.id}`
+          : p.where.kind === "pod"
+            ? `${p.permission} null`
+            : ""
+      )
+    );
+    if (requests.some((r) => !held.has(`${r.permission} ${r.workspaceId}`))) {
+      state.refusal = new TRPCError({
+        code: "CONFLICT",
+        message:
+          "This app asks for a place it does not have yet: connect it again to choose its places.",
+        cause: { reasonCode: "ASK_PLACE_CHANGES" },
+      });
+      return null;
+    }
+    return next;
+  });
+  if (state.refusal) throw state.refusal;
+  return row;
 }

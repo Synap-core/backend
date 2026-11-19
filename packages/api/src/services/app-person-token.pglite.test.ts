@@ -1269,10 +1269,12 @@ describe("T5 — never wider than the consent; the app's lifecycle reaches it", 
   // W3a: a sign-in scope pinned to a project (or objects) beside its spaces
   // was read as those whole spaces, so narrowing re-minted it from pairs
   // WITHOUT the pin: a narrower approval widened the token to every row of
-  // Sales. A MIXED token: its unpinned scope is kept (narrowed), its pinned
-  // scopes are dropped, never re-minted.
+  // Sales. W3d narrows BY MEANING (`narrowKeyGrant` → `scopesWithinBound`):
+  // a MIXED token keeps its unpinned scope (narrowed), keeps a project-pinned
+  // scope only WITH its pin and only where the approval still holds it, and
+  // drops an object-pinned one. Never a pinned scope re-minted without it.
   it.each(["project_ids", "entity_ids"])(
-    "narrowing keeps the unpinned scope and drops the one pinned by %s",
+    "narrowing keeps the unpinned scope and never re-mints the one pinned by %s without its pin",
     async (pin) => {
       const t = await signIn(OWNER);
       const keyId = (await keyRow(t)).id;
@@ -1296,13 +1298,29 @@ describe("T5 — never wider than the consent; the app's lifecycle reaches it", 
       try {
         await applyApprovedReach(appId);
         expect((await keyRow(t)).is_active).toBe(true);
-        // Only the unpinned scope's pair survives; nothing of the pinned ones.
-        expect(await livePairs(keyId)).toEqual(["Sales:entity.person.read"]);
-        const pinned = await q<{ n: number }>(
-          `select count(*)::int as n from grants where api_key_id = $1 and revoked_at is null and (project_ids is not null or entity_ids is not null)`,
-          [keyId]
+        const live = (
+          await q<{
+            permissions: string[];
+            workspace_ids: string[] | null;
+            project_ids: string[] | null;
+            entity_ids: string[] | null;
+          }>(
+            `select permissions, workspace_ids, project_ids, entity_ids from grants where api_key_id = $1 and revoked_at is null`,
+            [keyId]
+          )
+        ).rows;
+        // The unpinned scope survives, narrowed: people in Sales, nothing else.
+        const unpinned = live.filter(
+          (g) => !g.project_ids?.length && !g.entity_ids?.length
         );
-        expect(pinned.rows[0]!.n).toBe(0);
+        expect(
+          unpinned.map((g) => [g.permissions, g.workspace_ids])
+        ).toEqual([[["entity.person.read"], [SALES]]]);
+        // An object pin is never kept; a project pin only with its pin, in
+        // Sales only (the approval left).
+        expect(live.filter((g) => g.entity_ids?.length)).toEqual([]);
+        for (const g of live.filter((x) => x.project_ids?.length))
+          expect(g.workspace_ids).toEqual([SALES]);
       } finally {
         await repo.setApprovedRequests(appId, APPROVED);
       }

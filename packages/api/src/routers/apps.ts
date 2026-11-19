@@ -27,6 +27,7 @@
  */
 
 import { presenceInput } from "../utils/presence-input.js";
+import { AppAccessInputSchema } from "../services/app-access-input.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db, AppRepository } from "@synap/database";
@@ -54,6 +55,8 @@ import {
   setAppRedirectUris,
   setAppSignInPolicy,
   setAppWriteMode,
+  appAccessEditor,
+  updateAppAccess,
 } from "../services/app-connect.js";
 import {
   countLiveUnverifiedConnections,
@@ -249,6 +252,39 @@ export const appsRouter = router({
           approved: input.approved,
           actorAgentUserId: ctx.agentUserId,
           actorKeyType: ctx.keyType,
+        })
+      )
+    ),
+
+  /**
+   * The app page's access editor (W3d, contract be6caecc): what the app
+   * asked, the places the person may give per tier, what it holds now, and
+   * why it asks again. Names everywhere.
+   */
+  accessOffer: protectedProcedure
+    .input(z.object({ publicId: PublicId }))
+    .query(({ ctx, input }) =>
+      appAccessEditor({ publicId: input.publicId, ownerUserId: ctx.userId })
+    ),
+
+  /**
+   * The app page edits a pod app's access (W3d): an AppAccess v2, checked
+   * like the consent's Allow. Q2: it may widen within what the app asked,
+   * never beyond. The live token stops at once; the next carries the new
+   * access. The owner's own act, with proof of presence.
+   */
+  updateAccess: credentialProcedure
+    .input(presenceInput)
+    .input(z.object({ publicId: PublicId, access: AppAccessInputSchema }))
+    .mutation(async ({ ctx, input }) =>
+      serializeApp(
+        await updateAppAccess({
+          publicId: input.publicId,
+          ownerUserId: ctx.userId,
+          access: input.access,
+          actorAgentUserId: ctx.agentUserId,
+          actorKeyType: ctx.keyType,
+          presence: ctx.presencePass,
         })
       )
     ),

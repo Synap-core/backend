@@ -39,7 +39,12 @@ import { apps, type AppApprovedRequest } from "@synap/database/schema";
 import {
   AppAccessAskSyntaxError,
   formatAppAccessAskPair,
+  hasReadPlace,
+  hasWritePlace,
   parseSynapAsk,
+  type AppAccess,
+  type NamedAppAccess,
+  type ReconsentView,
 } from "@synap-core/types/grants";
 import {
   assertPermissions,
@@ -48,8 +53,16 @@ import {
 import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 
 import {
+  appAccessOffer,
   connectOAuthApp,
+  connectOAuthAppAccess,
+  currentOAuthAppApproval,
   currentOAuthApproval,
+  nameAppAccess,
+  reconsentViewOf,
+  type AccessAsked,
+  type AccessAskedItem,
+  type AccessPlacesOffer,
   kindGroupIndex,
   oauthAppOffer,
   oauthAppPodWideKinds,
@@ -718,6 +731,8 @@ export interface OAuthAppConsent {
    * them to what it holds; nothing it holds is shown or changed here.
    */
   ask: OAuthAppAsk | null;
+  /** The consent in v2 terms (W3d): what the new screen reads. */
+  access: OAuthAppAccessConsent;
 }
 
 /** What the short consent shows (`OAuthAppConsent.ask`). */
@@ -729,6 +744,37 @@ export interface OAuthAppAsk {
   /** Pairs it asked for that the person cannot give it (`perm@place`). */
   unavailable: string[];
   /** The app's page in pod admin ("See everything it has"), once connected. */
+  connectionPublicId: string | null;
+}
+
+/**
+ * The consent in v2 terms (app permissions W3d, decision fc37f740 design A):
+ * what the app asked, the places the person may give per tier, what it holds
+ * now, why it asks again, and the short ask. Contract: pod document be6caecc
+ * ("W3d consent contract"). Allow sends an `AppAccess` (`access`) or, for the
+ * short ask, nothing but Q4's `askWritePlace`.
+ */
+export interface OAuthAppAccessConsent {
+  asked: { permissions: AccessAskedItem[]; templates: string[] };
+  places: AccessPlacesOffer;
+  /** Already connected: what it holds now (stored v2, or the exact lift of its pairs). */
+  current: NamedAppAccess | null;
+  /** Its old pairs cannot become v2 as they are (Q3): never auto-allow. */
+  reconsent: ReconsentView | null;
+  /** The short consent, v2: null for the full screen. */
+  ask: OAuthAppAccessAsk | null;
+}
+
+/** The short consent in v2 terms: it only adds permissions (Q4 aside). */
+export interface OAuthAppAccessAsk {
+  /** "Content Studio asks to also read notes". */
+  title: string;
+  /** The permissions it adds, as the asked items. */
+  adds: AccessAskedItem[];
+  /** Q4: it has no write place and asks its first write: show the write picker. */
+  needsWritePlace: boolean;
+  /** What it asked that the person cannot give (`perm@place`, or a permission). */
+  unavailable: string[];
   connectionPublicId: string | null;
 }
 
@@ -904,6 +950,83 @@ async function appSignInFor(
   };
 }
 
+/** What the app asked, in v2 terms, read from the request and its document. */
+function accessAskedOf(
+  client: StoredClient,
+  permissions: readonly string[]
+): AccessAsked {
+  return {
+    permissions,
+    podWide: client.requestedPodWide ?? [],
+    reasons: client.requestedReasons ?? {},
+    kindGroups: client.requestedKindGroups ?? [],
+    templates: client.requestedTemplates ?? [],
+  };
+}
+
+/**
+ * The consent's v2 block (W3d): the asked access, the places the person may
+ * give, what the connection holds now and why it must ask again (names
+ * everywhere), and the short ask in v2 terms when the connection holds a v2
+ * access (it then only adds permissions; Q4: a first write needs a place).
+ */
+async function consentAccessBlock(
+  callerUserId: string,
+  client: StoredClient,
+  permissions: readonly string[],
+  ask: { pairs: ResolvedAskPair[]; unavailable: string[] } | null
+): Promise<OAuthAppAccessConsent> {
+  const offer = await appAccessOffer(
+    callerUserId,
+    accessAskedOf(client, permissions)
+  );
+  const approval = await currentOAuthAppApproval(
+    callerUserId,
+    client.clientId
+  );
+  const current = approval?.access ?? null;
+  let accessAsk: OAuthAppAccessAsk | null = null;
+  if (ask && current) {
+    const asked = [...new Set(ask.pairs.map((p) => p.permission))].filter(
+      (p) => !current.permissions.includes(p)
+    );
+    const adds = offer.asked.permissions.filter((i) =>
+      asked.includes(i.permission)
+    );
+    const readsNowhere =
+      !hasReadPlace(current) && adds.some((i) => i.tier === "read");
+    accessAsk = {
+      title: summarizeAppConnectRequest({
+        appName: client.clientName,
+        requests: ask.pairs,
+        mode: "add",
+      }).title,
+      adds,
+      needsWritePlace:
+        adds.some((i) => i.tier === "write") && !hasWritePlace(current),
+      unavailable: [
+        ...ask.unavailable,
+        ...(readsNowhere
+          ? adds.filter((i) => i.tier === "read").map((i) => i.permission)
+          : []),
+      ],
+      connectionPublicId: await connectionPublicId(
+        callerUserId,
+        client.clientId
+      ),
+    };
+  }
+  return {
+    asked: offer.asked,
+    places: offer.places,
+    current: current ? await nameAppAccess(current) : null,
+    reconsent: approval
+      ? await reconsentViewOf(approval, offer.ceiling)
+      : null,
+    ask: accessAsk,
+  };
+}
+
 /**
  * What the consent screen renders. Re-derives everything from the stored client
  * so the screen can never show a name or scope set the pod would not honor.
@@ -985,9 +1108,16 @@ export async function getOAuthConsentContext(
     projects: true,
   });
   const ask = resolveConsentAsk(params.synapAsk, offer);
+  const access = await consentAccessBlock(
+    callerUserId,
+    req.client,
+    permissions,
+    ask
+  );
   return {
     ...base,
     app: {
+      access,
       domain: new URL(req.client.clientId).host,
       verified: isSynapApp(req.client.clientId),
       actsAs: describePodAppActsAs(
@@ -1034,8 +1164,20 @@ export interface OAuthDecisionInput extends AuthorizeParams {
   /**
    * A pod app only: the (permission, space) pairs the person left ticked.
    * Untrusted — `connectOAuthApp` refuses anything beyond the pod's offer.
+   * Ignored when `access` is sent.
    */
   approved?: AppApprovedRequest[];
+  /**
+   * A pod app, the full consent and the re-consent (W3d): the person's v2
+   * access. Untrusted — `connectOAuthAppAccess` refuses anything beyond what
+   * the app asked ∩ what the person may give.
+   */
+  access?: AppAccess;
+  /**
+   * The short consent only (W3d, Q4): where a first write lands, when
+   * `access.ask.needsWritePlace`. Refused otherwise.
+   */
+  askWritePlace?: { spaces: string[]; projects: string[] };
   /** App sign-in only: `appSignIn.fingerprint` of the screen the person saw. */
   appSignInFingerprint?: string | null;
   /** Proof of presence (W3) for this authorization (`presence.challenge` `oauthConsent`). */
@@ -1183,36 +1325,71 @@ export async function decideOAuthAuthorization(
         permissions.filter((p) => !podWide.includes(p))
       )
     );
-    const connected = await connectOAuthApp({
-      ownerUserId: caller.id,
-      oauthClientId: req.client.clientId,
-      name: `${req.client.clientName} (${new URL(req.client.clientId).host})`,
-      permissions,
-      podWide: req.client.requestedPodWide ?? [],
-      approved: input.approved ?? [],
-      ctx,
-      // Checked above, for this authorization (a pod app is never `app`).
-      presenceChecked: "oauth.consent",
-      ...(ask
-        ? {
-            ask: ask.pairs.map(({ permission, workspaceId }) => ({
-              permission,
-              workspaceId,
-            })),
-          }
-        : {}),
-    });
+    const name = `${req.client.clientName} (${new URL(req.client.clientId).host})`;
+    // v2 (W3d): the full consent sends `access`; a short ask on a connection
+    // that holds a v2 access only adds permissions (and Q4's write place).
+    const held = await currentOAuthAppApproval(caller.id, req.client.clientId);
+    const v2Ask = ask !== null && held?.access != null;
+    if (!v2Ask && input.askWritePlace) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "A place for its first change is chosen only when it asks for one.",
+      });
+    }
+    let connected: { appId: string };
+    if (v2Ask || (!ask && input.access)) {
+      connected = await connectOAuthAppAccess({
+        ownerUserId: caller.id,
+        oauthClientId: req.client.clientId,
+        name,
+        asked: accessAskedOf(req.client, permissions),
+        ...(v2Ask
+          ? {
+              add: {
+                permissions: [...new Set(ask!.pairs.map((p) => p.permission))],
+                writePlace: input.askWritePlace ?? null,
+              },
+            }
+          : { access: input.access! }),
+        ctx,
+        presenceChecked: "oauth.consent",
+      });
+    } else {
+      connected = await connectOAuthApp({
+        ownerUserId: caller.id,
+        oauthClientId: req.client.clientId,
+        name,
+        permissions,
+        podWide: req.client.requestedPodWide ?? [],
+        approved: input.approved ?? [],
+        ctx,
+        // Checked above, for this authorization (a pod app is never `app`).
+        presenceChecked: "oauth.consent",
+        ...(ask
+          ? {
+              ask: ask.pairs.map(({ permission, workspaceId }) => ({
+                permission,
+                workspaceId,
+              })),
+            }
+          : {}),
+      });
+    }
     appId = connected.appId;
     // What the connection now holds: after an additive consent, more than
     // what was ticked on this screen.
-    scopes = [
-      ...new Set(
-        (ask
-          ? await currentOAuthApproval(caller.id, req.client.clientId)
-          : (input.approved ?? [])
-        ).map((r) => r.permission)
-      ),
-    ];
+    const now = await currentOAuthAppApproval(caller.id, req.client.clientId);
+    scopes = now?.access
+      ? [...now.access.permissions]
+      : [
+          ...new Set(
+            (ask
+              ? await currentOAuthApproval(caller.id, req.client.clientId)
+              : (input.approved ?? [])
+            ).map((r) => r.permission)
+          ),
+        ];
   }
 
   // An app sign-in records EXACTLY what this person was shown (the same

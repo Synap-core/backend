@@ -465,8 +465,21 @@ export function channelFollowsEntityWhere(scope: GrantScope): SQL {
  * company's lead role never saw who works there (CRM G17). Nothing else is
  * widened: another edge type, an edge stamped in a space, or an end the scope
  * does not read stays out.
+ *
+ * PER SPACE (W3d, review finding 3 of #1196, pod knowledge 0245b542): a scope
+ * naming several spaces is read as one scope per space, so the role and BOTH
+ * ends are read in the SAME space. Read once over the merged list, an edge
+ * whose role is in A and whose ends are read only through B's reach was
+ * revealed, which per-space scopes (every app grant before W2) never did.
  */
 export function worksAtRoleLinkWhere(spaces: string[], scope: GrantScope): SQL {
+  if (spaces.length > 1) {
+    return or(
+      ...spaces.map((space) =>
+        worksAtRoleLinkWhere([space], { ...scope, workspaceIds: [space] })
+      )
+    )!;
+  }
   const entityClause = grantReadClause(entities, scope);
   const readable = (endColumn: AnyPgColumn) =>
     exists(

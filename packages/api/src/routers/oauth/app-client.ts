@@ -19,7 +19,6 @@ import { createHash } from "node:crypto";
 import { and, db, eq, inArray, isNull, type KeyGrant } from "@synap/database";
 import {
   apps,
-  isPodWideReadPermission,
   oauthClients,
   workspaces,
 } from "@synap/database/schema";
@@ -28,11 +27,16 @@ import {
   accessModel,
   assertNeverPlace,
   describeAccess,
+  grantScopesForAccess,
   grantsOfRequests,
-  parsePlace,
+  LiftTooLargeError,
+  normalizeAppAccess,
+  pairsOfAccess,
   parseRequestPlace,
   placeSpaceIds,
+  scopesWithinBound,
   summarizeGrant,
+  type AppAccess,
 } from "@synap-core/types/grants";
 import {
   GRANT_ACTIONS,
@@ -296,37 +300,174 @@ export function appNotForYou(appName: string): string {
 }
 
 /**
+ * What a person may get from an app RIGHT NOW, as the grant scopes a token
+ * carries (W3d): THE reach rule (`appSignInReach`'s three rules) applied to
+ * the connection's v2 access (`appApprovalOf`, the stored v2 is the
+ * authority), so a token reaches the PROJECTS the person chose, not only
+ * spaces. Each tier's places are cut to what its owner could still give
+ * (reads where they read, writes where they still write, projects they still
+ * see or write in) and to the person's own reach (the spaces they read, the
+ * projects they see). All spaces stays the owner's own (a pod-wide read is
+ * never handed to another member). "all" projects is resolved NOW
+ * (`allProjects`: the projects both the owner and the person see), so a
+ * project made later is reached at the next mint.
+ *
+ * A connection whose pairs cannot become v2 (a re-consent, Q3) keeps its
+ * pairs until W5: `appSignInReach` and their per-space grants.
+ */
+export interface AppSignInGrant {
+  /** The grant scopes the token holds now (never mixing spaces and projects). */
+  scopes: GrantInputScope[];
+  /** Its space and pod part as the old pairs (`synap_grant`, the fingerprint). */
+  pairs: AppGrantRequest[];
+  /** The v2 reach, or null for a connection that keeps its pairs. */
+  access: AppAccess | null;
+  /** What "all" projects meant at this read. */
+  allProjects: string[];
+}
+
+/** One grant scope as minted (`GrantInput` without its label). */
+export interface GrantInputScope {
+  permissions: string[];
+  workspaceIds?: string[];
+  projectIds?: string[];
+}
+
+export async function appSignInGrant(
+  app: {
+    ownerUserId: string;
+    approvedRequests: readonly AppGrantRequest[] | null;
+    approvedAccess?: unknown;
+    mode: string;
+    oauthClientId: string | null;
+  },
+  personUserId: string
+): Promise<AppSignInGrant | "not_for_you"> {
+  const { appApprovalOf, grantsForPairs, ownerAccessFloor } =
+    await import("../../services/app-connect.js");
+  const approval = appApprovalOf(app);
+  if (!approval.access) {
+    const reach = await appSignInReach(app, personUserId);
+    if (reach === "not_for_you") return reach;
+    return {
+      scopes: grantsForPairs(reach),
+      pairs: reach,
+      access: null,
+      allProjects: [],
+    };
+  }
+  // 1. WHO: unchanged.
+  if (
+    personUserId !== app.ownerUserId &&
+    !(await isPodAdmin(app.ownerUserId))
+  ) {
+    return "not_for_you";
+  }
+  const a = approval.access;
+  // 3. DECISIONS: never the review verbs for a pod app that is not a Synap app.
+  const decides = app.mode === "oauth" && !isSynapApp(app.oauthClientId ?? "");
+  const permissions = a.permissions.filter(
+    (p) => !decides || !grantsDecision(p)
+  );
+  // 2. WHAT: each tier cut to the owner's floor now and the person's reach.
+  const projects =
+    (a.read.spaces !== "all" &&
+      (a.read.projects === "all" || a.read.projects.length > 0)) ||
+    a.write.projects.length > 0;
+  const owner = await ownerAccessFloor(app.ownerUserId, {
+    projects,
+    writeSpaces: a.write.spaces,
+  });
+  const person =
+    personUserId === app.ownerUserId
+      ? owner
+      : await ownerAccessFloor(personUserId, { projects, writeSpaces: [] });
+  const both = (ids: readonly string[], x: readonly string[], y: readonly string[]) =>
+    ids.filter((id) => x.includes(id) && y.includes(id));
+  const allProjects =
+    a.read.projects === "all"
+      ? both(owner.readProjects, owner.readProjects, person.readProjects)
+      : [];
+  const access = normalizeAppAccess({
+    version: 2,
+    permissions,
+    read: {
+      spaces:
+        a.read.spaces === "all"
+          ? personUserId === app.ownerUserId
+            ? "all"
+            : []
+          : both(a.read.spaces, owner.readSpaces, person.readSpaces),
+      projects:
+        a.read.projects === "all"
+          ? "all"
+          : both(a.read.projects, owner.readProjects, person.readProjects),
+    },
+    write: {
+      spaces: both(a.write.spaces, owner.writeSpaces, person.readSpaces),
+      projects: both(
+        a.write.projects,
+        owner.writeProjects,
+        person.readProjects
+      ),
+    },
+  });
+  return {
+    scopes: grantScopesForAccess(access, { allProjects }),
+    pairs: pairsOfAccess(access).pairs,
+    access,
+    allProjects,
+  };
+}
+
+/** A scope's structure, order-free: equal keys mean the same scope. */
+function scopeKey(scope: {
+  permissions: readonly string[];
+  workspaceIds?: readonly string[] | null;
+  projectIds?: readonly string[] | null;
+  entityIds?: readonly string[] | null;
+}): string {
+  const list = (ids: readonly string[] | null | undefined) =>
+    ids && ids.length > 0 ? [...ids].sort().join(",") : "-";
+  return [
+    [...scope.permissions].sort().join(","),
+    list(scope.workspaceIds),
+    list(scope.projectIds),
+    list(scope.entityIds),
+  ].join("|");
+}
+
+/**
  * A key's grant cut down to `reach` (PR #29 L1): every request a person token
- * makes is bounded by what `appSignInReach` allows NOW, not only by what was
- * attached at mint. Nothing left = one deny-all scope.
+ * makes is bounded by what the reach rule allows NOW (`appSignInGrant`), not
+ * only by what was attached at mint. Compared BY MEANING (W3d, review finding
+ * 4 of #1196): what the stored grant permits that the reach permits too
+ * (`scopesWithinBound`: each stored scope whole, else each of its pieces, one
+ * permission in one place), so a read held through a wider pattern
+ * (`entity.note.read` in A under `entity.read` in A) is kept. A stored scope
+ * that IS a reach scope (the token was minted from this reach) passes as is.
+ * Too large to compare: only the stored scopes that are literally reach
+ * scopes are kept (fail closed). Nothing left = one deny-all scope.
  */
 export function narrowKeyGrant(
   grant: KeyGrant,
-  reach: readonly AppGrantRequest[]
+  reach: { readonly scopes: readonly GrantInputScope[] }
 ): KeyGrant {
-  const ok = new Set(reach.map((r) => `${r.workspaceId} ${r.permission}`));
-  const scopes: KeyGrant["scopes"][number][] = [];
-  for (const scope of grant.scopes) {
-    const place = parsePlace(scope, "app");
-    if (place.kind !== "spaces") {
-      // A scope with no space holds the pod-wide reads: kept only as the
-      // reach's own pod-wide pairs (`workspaceId: null`), never anything else.
-      if (scope.projectIds || scope.entityIds) continue;
-      const permissions = scope.permissions.filter(
-        (p) => isPodWideReadPermission(p) && ok.has(`null ${p}`)
-      );
-      if (permissions.length > 0) scopes.push({ ...scope, permissions });
-      continue;
-    }
-    for (const ws of place.ids) {
-      const permissions = scope.permissions.filter((p) => ok.has(`${ws} ${p}`));
-      if (permissions.length > 0)
-        scopes.push({ ...scope, permissions, workspaceIds: [ws] });
+  const reachKeys = new Set(reach.scopes.map(scopeKey));
+  const live = grant.scopes.filter((s) => s.permissions.length > 0);
+  let kept: KeyGrant["scopes"][number][];
+  if (live.every((s) => reachKeys.has(scopeKey(s)))) kept = live;
+  else {
+    try {
+      kept = scopesWithinBound(live, reach.scopes);
+    } catch (err) {
+      if (!(err instanceof LiftTooLargeError)) throw err;
+      kept = live.filter((s) => reachKeys.has(scopeKey(s)));
     }
   }
   return {
     clientId: grant.clientId,
-    scopes: scopes.length > 0 ? scopes : [{ permissions: [] }],
+    scopes: kept.length > 0 ? kept : [{ permissions: [] }],
   };
 }
 
