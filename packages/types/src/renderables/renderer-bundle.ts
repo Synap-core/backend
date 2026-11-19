@@ -1,0 +1,262 @@
+/**
+ * A RENDERER BUNDLE (decision c91d26dc): a set of frame cells that draw a
+ * pod's objects (an entity card, an entity page, a board…) together with the
+ * ONE host-module set they run on (React, react-dom, the JSX runtimes, the
+ * kit and the tokens CSS, all from one build). A host with no renderers of
+ * its own (pod admin) draws pod content through it, in sandboxed frames
+ * (`@synap-core/types/cell-bridge`, `buildCellModuleFrameSrcdoc`).
+ *
+ * This file is the published definition's shape and its pure check
+ * (`validateRendererBundleDefinition`). The pod re-hashes every source with
+ * node crypto on install; the check here never trusts a declared hash, it
+ * only checks the shape, the sizes, the kit imports and each cell's source
+ * (`checkCellSource`, the same rule a single frame cell is defined under).
+ */
+
+import { CELL_FRAME_MAX_BYTES, htmlByteLength } from "../cell-bridge/frame.js";
+import { checkCellSource } from "./cell-source-checks.js";
+
+/** The bundle API this version of the contract reads. */
+export const RENDERER_BUNDLE_API = 1 as const;
+
+/** The package kind a renderer bundle is published under. */
+export const RENDERER_BUNDLE_KIND = "renderer-bundle" as const;
+
+/** The largest host module (React, the kit…): 4 MB of UTF-8. */
+export const RENDERER_BUNDLE_MAX_MODULE_BYTES = 4 * 1024 * 1024;
+
+/** One host module's source and its declared sha256 (hex). */
+export interface RendererBundleModule {
+  source: string;
+  sha256: string;
+}
+
+/** The host-module set: one build, one React. */
+export interface RendererBundleHostModules {
+  react: RendererBundleModule;
+  reactDom: RendererBundleModule;
+  reactDomClient: RendererBundleModule;
+  jsxRuntime: RendererBundleModule;
+  jsxDevRuntime?: RendererBundleModule;
+  kit?: RendererBundleModule;
+  tokensCss: RendererBundleModule;
+}
+
+/** One frame cell of the bundle (installed as `cell:<slug>:<key>`). */
+export interface RendererBundleCell {
+  key: string;
+  name: string;
+  /** The cell's ES module source. */
+  code: string;
+  sha256: string;
+  /** The slot it draws (`entity-card`, `entity-detail`, `collection`, …). */
+  contentKind: string;
+  /** A view renderer's view types. */
+  viewTypes?: string[];
+  defaultSize?: { w: number; h: number };
+  minSize?: { w: number; h: number };
+  /** The kit names the cell imports: each must be in `kitExports`. */
+  kitImports: string[];
+}
+
+/**
+ * Which cell a host with no built-in draws when nothing is bound. Never a
+ * renderer binding: a binding would beat the desktop's own adapters.
+ */
+export interface RendererBundleDefaults {
+  "entity-card"?: string;
+  "entity-detail"?: string;
+  views?: Record<string, string>;
+}
+
+/** The published definition of a renderer bundle. */
+export interface RendererBundleDefinition {
+  _meta: { slug: string; version: string; kind: typeof RENDERER_BUNDLE_KIND };
+  bundleApi: typeof RENDERER_BUNDLE_API;
+  /** The React version every module was built against. */
+  reactVersion: string;
+  /** sha256 over the whole host-module set. */
+  setSha256: string;
+  /** Every name the kit exports. */
+  kitExports: string[];
+  hostModules: RendererBundleHostModules;
+  cells: RendererBundleCell[];
+  defaults: RendererBundleDefaults;
+}
+
+/** One reason a definition is refused, with where it is. */
+export interface RendererBundleProblem {
+  /** A dotted path into the definition (`cells[2].code`). */
+  path: string;
+  message: string;
+}
+
+const REQUIRED_MODULES = [
+  "react",
+  "reactDom",
+  "reactDomClient",
+  "jsxRuntime",
+  "tokensCss",
+] as const;
+const OPTIONAL_MODULES = ["jsxDevRuntime", "kit"] as const;
+const SHA256 = /^[0-9a-f]{64}$/;
+const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const CELL_KEY = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+const text = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+const isSize = (v: unknown): boolean =>
+  isRecord(v) &&
+  Number.isInteger(v.w) &&
+  Number.isInteger(v.h) &&
+  (v.w as number) > 0 &&
+  (v.h as number) > 0;
+const isStringList = (v: unknown): v is string[] =>
+  Array.isArray(v) && v.every((s) => typeof s === "string" && s.length > 0);
+
+/**
+ * Every reason `definition` cannot be installed, in definition order; empty
+ * when it can. Pure: the same input always gives the same problems.
+ */
+export function validateRendererBundleDefinition(
+  definition: unknown
+): RendererBundleProblem[] {
+  const problems: RendererBundleProblem[] = [];
+  const add = (path: string, message: string) =>
+    problems.push({ path, message });
+  if (!isRecord(definition)) {
+    add("", "The definition is not an object.");
+    return problems;
+  }
+  const d = definition;
+
+  const meta = d._meta;
+  if (!isRecord(meta)) add("_meta", "_meta is missing.");
+  else {
+    if (!text(meta.slug) || !SLUG.test(meta.slug))
+      add(
+        "_meta.slug",
+        "The slug must be lowercase letters, digits and dashes."
+      );
+    if (!text(meta.version)) add("_meta.version", "The version is missing.");
+    if (meta.kind !== RENDERER_BUNDLE_KIND)
+      add("_meta.kind", `The kind must be "${RENDERER_BUNDLE_KIND}".`);
+  }
+  if (d.bundleApi !== RENDERER_BUNDLE_API)
+    add("bundleApi", `This pod reads bundle API ${RENDERER_BUNDLE_API} only.`);
+  if (!text(d.reactVersion))
+    add("reactVersion", "The React version is missing.");
+  if (typeof d.setSha256 !== "string" || !SHA256.test(d.setSha256))
+    add("setSha256", "setSha256 must be a sha256 in hex.");
+  const kitExports = isStringList(d.kitExports) ? new Set(d.kitExports) : null;
+  if (!kitExports) add("kitExports", "kitExports must be a list of names.");
+
+  const modules = d.hostModules;
+  if (!isRecord(modules)) add("hostModules", "hostModules is missing.");
+  else {
+    for (const name of [...REQUIRED_MODULES, ...OPTIONAL_MODULES]) {
+      const m = modules[name];
+      const path = `hostModules.${name}`;
+      if (m === undefined) {
+        if ((REQUIRED_MODULES as readonly string[]).includes(name))
+          add(path, `The ${name} module is missing.`);
+        continue;
+      }
+      if (!isRecord(m) || !text(m.source)) {
+        add(path, `The ${name} module has no source.`);
+        continue;
+      }
+      if (typeof m.sha256 !== "string" || !SHA256.test(m.sha256))
+        add(`${path}.sha256`, "sha256 must be a sha256 in hex.");
+      if (htmlByteLength(m.source) > RENDERER_BUNDLE_MAX_MODULE_BYTES)
+        add(path, `The ${name} module is larger than 4 MB.`);
+    }
+    for (const name of Object.keys(modules)) {
+      if (
+        !(REQUIRED_MODULES as readonly string[]).includes(name) &&
+        !(OPTIONAL_MODULES as readonly string[]).includes(name)
+      )
+        add(`hostModules.${name}`, `"${name}" is not a host module.`);
+    }
+  }
+
+  const keys = new Set<string>();
+  if (!Array.isArray(d.cells) || d.cells.length === 0)
+    add("cells", "A bundle has at least one cell.");
+  else {
+    d.cells.forEach((cell: unknown, i: number) => {
+      const path = `cells[${i}]`;
+      if (!isRecord(cell)) {
+        add(path, "The cell is not an object.");
+        return;
+      }
+      if (!text(cell.key) || !CELL_KEY.test(cell.key))
+        add(
+          `${path}.key`,
+          "The key must be lowercase letters, digits and dashes."
+        );
+      else if (keys.has(cell.key))
+        add(`${path}.key`, `"${cell.key}" is used by another cell.`);
+      else keys.add(cell.key);
+      if (!text(cell.name)) add(`${path}.name`, "The name is missing.");
+      if (!text(cell.contentKind))
+        add(`${path}.contentKind`, "The content kind is missing.");
+      if (typeof cell.sha256 !== "string" || !SHA256.test(cell.sha256))
+        add(`${path}.sha256`, "sha256 must be a sha256 in hex.");
+      if (cell.viewTypes !== undefined && !isStringList(cell.viewTypes))
+        add(`${path}.viewTypes`, "viewTypes must be a list of view types.");
+      if (cell.defaultSize !== undefined && !isSize(cell.defaultSize))
+        add(`${path}.defaultSize`, "defaultSize must be whole w and h.");
+      if (cell.minSize !== undefined && !isSize(cell.minSize))
+        add(`${path}.minSize`, "minSize must be whole w and h.");
+      if (!isStringList(cell.kitImports))
+        add(`${path}.kitImports`, "kitImports must be a list of names.");
+      else if (kitExports) {
+        const unknown = cell.kitImports.filter((n) => !kitExports.has(n));
+        if (unknown.length > 0)
+          add(
+            `${path}.kitImports`,
+            `The kit does not export ${unknown.join(", ")}.`
+          );
+      }
+      if (!text(cell.code)) {
+        add(`${path}.code`, "The cell has no code.");
+        return;
+      }
+      if (htmlByteLength(cell.code) > CELL_FRAME_MAX_BYTES)
+        add(`${path}.code`, "The cell is larger than a frame runs (2 MB).");
+      const check = checkCellSource({ source: cell.code, mechanism: "frame" });
+      for (const r of check.refusals)
+        add(
+          `${path}.code`,
+          r.line ? `Line ${r.line}: ${r.message}` : r.message
+        );
+    });
+  }
+
+  const defaults = d.defaults;
+  if (!isRecord(defaults)) add("defaults", "defaults is missing.");
+  else {
+    const names = (key: unknown, path: string) => {
+      if (key === undefined) return;
+      if (typeof key !== "string" || !keys.has(key))
+        add(path, `"${String(key)}" is not a cell of this bundle.`);
+    };
+    names(defaults["entity-card"], "defaults.entity-card");
+    names(defaults["entity-detail"], "defaults.entity-detail");
+    if (defaults.views !== undefined) {
+      if (!isRecord(defaults.views))
+        add("defaults.views", "views must map a view type to a cell.");
+      else
+        for (const [viewType, key] of Object.entries(defaults.views))
+          names(key, `defaults.views.${viewType}`);
+    }
+    for (const name of Object.keys(defaults)) {
+      if (!["entity-card", "entity-detail", "views"].includes(name))
+        add(`defaults.${name}`, `"${name}" is not a default slot.`);
+    }
+  }
+  return problems;
+}

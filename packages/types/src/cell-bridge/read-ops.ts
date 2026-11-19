@@ -63,6 +63,17 @@ export const CELL_BRIDGE_READ_OPS = {
   "playbook.scorecard": ["playbookId"],
   // `id`, not `projectId`: naming one project is not a lens; the pod floors it.
   "project.pillars": ["id"],
+  // What a view adapter reads to draw (renderer bundles, decision c91d26dc):
+  // a view's definition and its rows (`views.get`, `views.execute`, the
+  // stored query only: no ephemeral filters), a kind (`profiles.get`, by
+  // slug or id), its fields (`propertyDefs.list` of ONE profile: the host
+  // asks `profileIds: [profileId]` in its own space) and its declared
+  // lifecycle (`lifecycle.get`, in the host's space).
+  "views.get": ["id"],
+  "views.execute": ["id"],
+  "profiles.get": ["identifier"],
+  "propertyDefs.list": ["profileId"],
+  "lifecycle.get": ["profileSlug"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 export type CellBridgeReadOp = keyof typeof CELL_BRIDGE_READ_OPS;

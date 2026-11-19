@@ -31,3 +31,4 @@ export * from "./cell-key.js";
 export * from "./chart-geometry.js";
 export * from "./html-page-source.js";
 export * from "./cell-source-checks.js";
+export * from "./renderer-bundle.js";

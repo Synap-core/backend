@@ -30,6 +30,18 @@
  *      test pins that it does. Feed parsers that read `<link>` out of a fetched
  *      feed (`web-read/adapters`) spell none of these and are not scanners.
  *
+ *   5. ONE frame runtime (renderer bundles, decision c91d26dc): the module
+ *      frame's runtime (the classic scripts that mint blob: URLs, build the
+ *      import map, say ready and queue init) is written ONCE, in the leaf
+ *      (`packages/types/src/cell-bridge/`, `frame-scripts.ts`). No string
+ *      literal outside it contains `importmap`, `createObjectURL(new Blob`,
+ *      `__synapOnHostMessage` or `synap:ready`: a host that spelled one
+ *      would be building a second frame runtime. Read from the TypeScript
+ *      AST (string and template literals only), so a host that CALLS
+ *      `URL.createObjectURL(new Blob(...))` in its own code (a download, a
+ *      rendered SVG) is not a frame runtime and is not flagged. It cannot
+ *      see a literal assembled from pieces (`"import" + "map"`).
+ *
  * THE SET IS DERIVED: every non-test `.ts`/`.tsx`/`.js`/`.mjs` file under
  * `apps/` and `packages/` (no `node_modules`, `dist`, `.next`). The test
  * asserts the set reaches pod admin's `html-frame.tsx`, so an emptied scan
@@ -42,6 +54,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import ts from "typescript";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -53,6 +66,59 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
 const LEAF = "packages/types/src/cell-bridge/frame.ts";
+/** The leaf directory: the page frame (`frame.ts`) and the module frame (`module-frame.ts`). */
+const LEAF_DIR = "packages/types/src/cell-bridge/";
+const FRAME_RUNTIME = "packages/types/src/cell-bridge/frame-scripts.ts";
+/** What only the one frame runtime spells, inside a string literal. */
+const RUNTIME_MARKS = [
+  "importmap",
+  "createObjectURL(new Blob",
+  "__synapOnHostMessage",
+  "synap:ready",
+];
+
+/** Every string and template literal text of a source, with its line. */
+function literalTexts(
+  rel: string,
+  src: string
+): Array<{ line: number; text: string }> {
+  const file = ts.createSourceFile(
+    rel,
+    src,
+    ts.ScriptTarget.Latest,
+    false,
+    rel.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+  const out: Array<{ line: number; text: string }> = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isStringLiteral(node) ||
+      ts.isNoSubstitutionTemplateLiteral(node) ||
+      ts.isTemplateHead(node) ||
+      ts.isTemplateMiddle(node) ||
+      ts.isTemplateTail(node)
+    ) {
+      out.push({
+        line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1,
+        text: node.text,
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return out;
+}
+
+/** Where a source spells a frame-runtime mark inside a literal. */
+function runtimeMarks(rel: string, src: string): string[] {
+  // Cheap first: only a file whose text holds a mark is parsed.
+  if (!RUNTIME_MARKS.some((m) => src.includes(m))) return [];
+  return literalTexts(rel, src).flatMap(({ line, text }) =>
+    RUNTIME_MARKS.filter((m) => text.includes(m)).map(
+      (m) => `${rel}:${line}: "${m}"`
+    )
+  );
+}
 const POD_ADMIN_FRAME = "apps/pod-admin/app/_lib/object/content/html-frame.tsx";
 
 const SKIP_DIRS = new Set([
@@ -125,7 +191,7 @@ describe("tripwire: one frame policy, no CDN, taken by every frame host", () => 
     files.map(({ abs, rel }) => [rel, readFileSync(abs, "utf8")])
   );
   const hosts = [...text.keys()].filter(
-    (rel) => rel !== LEAF && FRAME_HOST.test(text.get(rel)!)
+    (rel) => !rel.startsWith(LEAF_DIR) && FRAME_HOST.test(text.get(rel)!)
   );
   const runners = [...text.keys()].filter(
     (rel) => rel !== LEAF && /\bwrapHtmlForFrame\s*\(/.test(text.get(rel)!)
@@ -191,6 +257,27 @@ describe("tripwire: one frame policy, no CDN, taken by every frame host", () => 
     expect(src).toMatch(/\bframeModuleLoads\(/);
     expect(src).toMatch(/\bframeExternalOrigins\(/);
     expect(src).toMatch(/from\s+["']\.\.\/cell-bridge\/network-loads\.js["']/);
+  });
+
+  it("one frame runtime: its marks are spelled in a literal only inside the leaf", () => {
+    // The runtime itself is seen (the scan is not blind), with every mark.
+    const own = runtimeMarks(FRAME_RUNTIME, text.get(FRAME_RUNTIME)!);
+    for (const mark of RUNTIME_MARKS)
+      expect(
+        own.some((hit) => hit.endsWith(`"${mark}"`)),
+        `the leaf's runtime spells ${mark}`
+      ).toBe(true);
+    // A call in a host's own code is not a literal (pod admin's SVG download).
+    expect(
+      runtimeMarks("x.ts", "URL.createObjectURL(new Blob([svg]));")
+    ).toEqual([]);
+    expect(
+      runtimeMarks("x.ts", "const s = `tag.type = 'importmap';`;")
+    ).toEqual(['x.ts:1: "importmap"']);
+    const outside = [...text.keys()]
+      .filter((rel) => !rel.startsWith(LEAF_DIR))
+      .flatMap((rel) => runtimeMarks(rel, text.get(rel)!));
+    expect(outside).toEqual([]);
   });
 
   it("every host that runs a page refuses network code first", () => {
