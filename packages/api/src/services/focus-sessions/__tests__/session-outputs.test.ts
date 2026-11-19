@@ -504,7 +504,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     blockedReason: "credential",
     why: "The Stripe restricted key for the live account",
     unblocks: "Live payments start",
-    unblocksTarget: { stage: "deploy" },
+    unblocksTarget: { output: "deploy" },
     blocks: { entityId: "55555555-5555-4555-8555-555555555555", to: "live" },
     blockerKey: "no_live_key",
     clearedBy: { answer: true },

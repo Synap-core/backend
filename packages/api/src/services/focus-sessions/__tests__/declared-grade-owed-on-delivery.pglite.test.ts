@@ -93,7 +93,9 @@ import {
   links,
   playbooks,
   proposals,
+  sessionEvaluations,
 } from "@synap/database";
+import type { SessionCriterion } from "@synap/playbooks";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { createFocusSession } from "../create-session.js";
 import { isOwedSlot, owedSlotWhere } from "../owed-outputs.js";
@@ -125,6 +127,13 @@ function ddlFor(table: PgTable): string {
 }
 
 const GRADE = {
+  key: "copy-reads-well",
+  statement: "The landing copy reads well",
+  check: { kind: "human" },
+  outputKey: "landing-copy",
+};
+/** The same criterion, as the reader types it. */
+const HUMAN: SessionCriterion = {
   key: "copy-reads-well",
   statement: "The landing copy reads well",
   check: { kind: "human" },
@@ -173,6 +182,8 @@ beforeAll(async () => {
     links,
     playbooks,
     lifecycleTransitionOutbox,
+    // The producer never re-files a grade the person gave: it reads them.
+    sessionEvaluations,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -215,12 +226,13 @@ describe("a grade declared up front is owed once its output is delivered (W5)", 
 
   it("is idempotent: a second run files no second slot and writes nothing", async () => {
     const id = await start([GRADE]);
-    expect(await fileDeclaredGradeSlots(id)).toEqual([]);
+    expect(await fileDeclaredGradeSlots(id)).toEqual({
+      filed: [],
+      outputs: null,
+    });
     const outputs = await outputsOf(id);
     expect(outputs.filter((o) => o.kind === "criterion")).toHaveLength(1);
-    expect(
-      reconcileGradeSlots(outputs, [{ ...GRADE, check: { kind: "human" } }])
-    ).toBeNull();
+    expect(reconcileGradeSlots(outputs, [HUMAN])).toBeNull();
   });
 
   it("a criterion REMOVED later leaves no owed slot: its grade is withdrawn", async () => {
@@ -252,12 +264,61 @@ describe("a grade declared up front is owed once its output is delivered (W5)", 
       { kind: "document", label: "Pricing copy", key: "pricing-copy" },
     ] as ExpectedOutput[];
     const next = reconcileGradeSlots(outputs, [
-      { ...GRADE, check: { kind: "human" }, outputKey: "pricing-copy" },
+      { ...HUMAN, outputKey: "pricing-copy" },
     ]);
     const grade = next!.outputs.find((o) => o.kind === "criterion")!;
     expect(grade.outputKey).toBe("pricing-copy");
     // The old output is done, the new one is not: the grade waits.
     expect(isOwedSlot(grade, next!.outputs)).toBe(false);
+  });
+
+  it("a criterion whose STATEMENT is edited keeps ONE slot, relabelled (review item 2)", async () => {
+    const id = await start([GRADE]);
+    const outputs = await outputsOf(id);
+    const edited = { ...HUMAN, statement: "The landing copy reads clearly" };
+    const next = reconcileGradeSlots(outputs, [edited]);
+    const grades = next!.outputs.filter((o) => o.kind === "criterion");
+    expect(grades).toHaveLength(1);
+    expect(grades[0]).toMatchObject({
+      criterionKey: "copy-reads-well",
+      label: "Check: The landing copy reads clearly",
+    });
+    expect(grades[0]!.retiredAt).toBeUndefined();
+    expect(next!.filed).toEqual([]);
+  });
+
+  it("a criterion moved to a machine check, made optional or naming no output: its grade is withdrawn, not owed (item 7)", async () => {
+    const id = await start([GRADE]);
+    const outputs = (await outputsOf(id)).map((o) =>
+      o.key === "landing-copy" ? { ...o, status: "done" as const } : o
+    );
+    for (const changed of [
+      { ...HUMAN, check: { kind: "judge" as const } },
+      { ...HUMAN, required: false },
+      { ...HUMAN, outputKey: undefined },
+    ] as SessionCriterion[]) {
+      const next = reconcileGradeSlots(outputs, [changed]);
+      const grade = next!.outputs.find((o) => o.kind === "criterion")!;
+      expect(grade.retiredReason).toBe("withdrawn");
+      // The output is done: were the slot left as it was, it would be owed.
+      expect(isOwedSlot(grade, next!.outputs)).toBe(false);
+    }
+  });
+
+  it("never re-files a grade the person already gave; a withdrawn one comes back as itself (item 7)", async () => {
+    const id = await start([GRADE]);
+    const outputs = await outputsOf(id);
+    // Graded: removing then re-adding the criterion files nothing new.
+    const withdrawn = reconcileGradeSlots(outputs, [])!.outputs;
+    expect(
+      reconcileGradeSlots(withdrawn, [HUMAN], new Set(["copy-reads-well"]))
+    ).toBeNull();
+    // Not graded: the same slot comes back, never a second one.
+    const back = reconcileGradeSlots(withdrawn, [HUMAN])!;
+    const grades = back.outputs.filter((o) => o.kind === "criterion");
+    expect(grades).toHaveLength(1);
+    expect(grades[0]!.retiredAt).toBeUndefined();
+    expect(back.filed).toEqual(["copy-reads-well"]);
   });
 
   it("CONTROL: a human criterion that names no output files no grade slot", async () => {

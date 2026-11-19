@@ -590,13 +590,12 @@ export const slotClearedByWireSchema = z.union([
 
 /**
  * `unblocksTarget` on the wire (`SlotUnblocksTarget`): exactly ONE key of the
- * same session — a stage, an output or a criterion. Whether that key exists
- * is read when the answer moves it, never at the parse: a stage or output
- * can be declared after the ask.
+ * same session — an output or a criterion. Whether that key exists is read
+ * when the answer re-checks it, never at the parse: an output can be declared
+ * after the ask.
  */
 const targetKeySchema = z.string().trim().min(1).max(80);
 export const unblocksTargetWireSchema = z.union([
-  z.object({ stage: targetKeySchema }).strict(),
   z.object({ output: targetKeySchema }).strict(),
   z.object({ criterion: targetKeySchema }).strict(),
 ]);
@@ -650,8 +649,8 @@ export const expectedOutputWireSchema = z.object({
     .min(1)
     .max(ASK_LIMITS.unblocksMaxChars)
     .optional(),
-  // The same, as data: the ONE stage, output or criterion of this session the
-  // answer moves (`SlotUnblocksTarget`, work-model W5). Optional; the prose
+  // The same, as data: the ONE output or criterion of this session the
+  // answer re-checks (`SlotUnblocksTarget`, work-model W5). Optional; the prose
   // line above is what the person reads.
   unblocksTarget: unblocksTargetWireSchema.optional(),
   // Server-stamped alongside `owner: 'human'` (see `reconcileOwedSince`). It is
@@ -3035,7 +3034,7 @@ export async function updateFocusSession(
   });
   // GRADES DECLARED UP FRONT (W5): a written criteria change keeps the grade
   // slots in step: a grade naming its output is filed, a re-pointed one
-  // follows, one whose criterion was removed is withdrawn.
+  // follows, one whose criterion was removed is withdrawn. Never throws.
   if (criteriaChange) {
     const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
     await fileDeclaredGradeSlots(sessionId);

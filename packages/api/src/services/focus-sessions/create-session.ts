@@ -1454,10 +1454,14 @@ export async function createFocusSession(
 
   // GRADES DECLARED UP FRONT (W5): a criterion the person grades that names
   // its output gets its grade slot now, owed once that output is delivered.
-  // After the commit, through the slot door's own lock.
+  // After the commit, through the slot door's own lock; it never throws (a
+  // failure is logged), and the reply shows the slots it filed.
   if (sessionCriteria.some((c) => c.check.kind === "human" && c.outputKey)) {
     const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
-    await fileDeclaredGradeSlots(sessionOut.id);
+    const grades = await fileDeclaredGradeSlots(sessionOut.id);
+    if (grades.outputs) {
+      sessionOut = { ...sessionOut, expectedOutputs: grades.outputs };
+    }
   }
 
   // Parent lineage: `child --spawned_from--> parent` (+ the suspend note on the

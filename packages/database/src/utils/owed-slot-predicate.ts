@@ -87,12 +87,14 @@ function slotArray(expectedOutputs: AnyPgColumn | SQL): SQL {
 }
 
 /**
- * SQL boolean over `slot`: a criterion's GRADE slot waiting on the output its
+ * SQL boolean over `slot`: a declared grade slot waiting on the output its
  * criterion checks — `isGradeAwaitingOutput` (`@synap-core/types/units`). The
  * slot is a `criterion` slot naming a non-empty string `outputKey`, and a slot
  * of the same `expected_outputs` (not a grade slot) carries that string `key`
- * and is not delivered (not `done`, not decided by the person's answer). Never
- * NULL: a missing field reads "not waiting", so the grade stays owed.
+ * and is still in the making: not delivered (not `done`, not decided by the
+ * person's answer), not claimed (`claimedDone` is not JSON `true`), not
+ * retired, not optional (JSON `true`). Never NULL: a missing field reads "not
+ * waiting", so the grade stays owed.
  */
 export function gradeAwaitsOutputSql(expectedOutputs: AnyPgColumn | SQL): SQL {
   return drizzleSql`coalesce(slot->>'kind' = 'criterion'
@@ -106,6 +108,9 @@ export function gradeAwaitsOutputSql(expectedOutputs: AnyPgColumn | SQL): SQL {
           AND graded->>'kind' IS DISTINCT FROM 'criterion'
           AND graded->>'status' IS DISTINCT FROM 'done'
           AND ${drizzleSql.raw(decidedByAnswerClause("graded"))}
+          AND graded->'claimedDone' IS DISTINCT FROM 'true'::jsonb
+          AND graded->>'retiredAt' IS NULL
+          AND graded->'optional' IS DISTINCT FROM 'true'::jsonb
       ), false)`;
 }
 

@@ -25,7 +25,8 @@
  * The third block is a GRADE read in its session (work-model W5): a
  * criterion's grade slot naming the output it checks (`outputKey`) is owed
  * only once a slot of the same list with that stored `key` is delivered
- * (`isOwedByYouIn`). Each row is a whole `expected_outputs` list in which only
+ * (`isOwedByYouIn`): delivered, or claimed by the agent, and a retired or
+ * optional output never hides its grade. Each row is a whole `expected_outputs` list in which only
  * the grade can be owed, so "the list owes the person" IS the grade's answer.
  *
  * The SQL and the TypeScript rule cannot be one declaration (Postgres runs
@@ -363,8 +364,28 @@ const GRADE_ROWS: ReadonlyArray<{
     slots: [{ ...GRADE, kind: "text", criterionKey: undefined }, COPY],
   },
   {
-    rulesOut: "a retired output read as delivered (the grade still waits)",
+    rulesOut: "a retired output hides its grade forever",
     slots: [GRADE, { ...COPY, retiredAt: STAMP }],
+  },
+  {
+    rulesOut: "a JSON null retiredAt read as retired (the grade still waits)",
+    slots: [GRADE, { ...COPY, retiredAt: null }],
+  },
+  {
+    rulesOut: "an output the agent CLAIMED keeps its grade hidden",
+    slots: [GRADE, { ...COPY, claimedDone: true }],
+  },
+  {
+    rulesOut: 'a string "true" claim read as a claim',
+    slots: [GRADE, { ...COPY, claimedDone: "true" }],
+  },
+  {
+    rulesOut: "an unfilled optional output hides its grade forever",
+    slots: [GRADE, { ...COPY, optional: true }],
+  },
+  {
+    rulesOut: 'a string "true" optional read as optional',
+    slots: [GRADE, { ...COPY, optional: "true" }],
   },
   {
     rulesOut: "a done grade owed",
@@ -396,19 +417,25 @@ const tsListOwed = (slots: unknown[]): boolean =>
   );
 
 describe("a criterion's grade is owed once its output is delivered", () => {
-  it("SQL: not owed while the output is pending, owed once it is done", async () => {
+  it("SQL: not owed while the output is pending, owed once it is done or claimed", async () => {
     // Pins the right answer on the SQL side, not only sameness.
     expect(await sqlListOwed([GRADE, COPY])).toBe(false);
     expect(await sqlListOwed([GRADE, { ...COPY, status: "done" }])).toBe(true);
+    // An output a required criterion checks never reaches `done` by evidence:
+    // the agent's claim is what makes the grade due (W5 review, item 1).
+    expect(await sqlListOwed([GRADE, { ...COPY, claimedDone: true }])).toBe(
+      true
+    );
     // Old data: a grade naming no output is owed as before.
     expect(await sqlListOwed([{ ...GRADE, outputKey: undefined }, COPY])).toBe(
       true
     );
   });
 
-  it("TS: the same three answers", () => {
+  it("TS: the same answers", () => {
     expect(tsListOwed([GRADE, COPY])).toBe(false);
     expect(tsListOwed([GRADE, { ...COPY, status: "done" }])).toBe(true);
+    expect(tsListOwed([GRADE, { ...COPY, claimedDone: true }])).toBe(true);
     expect(tsListOwed([{ ...GRADE, outputKey: undefined }, COPY])).toBe(true);
   });
 

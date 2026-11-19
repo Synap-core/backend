@@ -65,7 +65,7 @@ const SAMPLE: Required<
   blockedReason: "credential",
   why: "The Stripe restricted key for the live account",
   unblocks: "Live payments start",
-  unblocksTarget: { stage: "deploy" },
+  unblocksTarget: { output: "deploy" },
   ref: { kind: "entity", id: "33333333-3333-3333-3333-333333333333" },
   ask: {
     mode: "choose",

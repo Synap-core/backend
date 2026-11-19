@@ -1,22 +1,26 @@
 /**
- * W5 (work model): an answer moves what its slot NAMES (`unblocksTarget`,
- * `SlotUnblocksTarget`) — the rule (`answerTargetMove`, pure) and the reactor
- * that runs it on `focus_session.slot_answered` through the existing doors
- * (the grade door, the attest door, the check gate's resume). Those doors are
- * mocked: what is under test is which one the answer reaches, with what.
+ * W5 (work model): an answer RE-CHECKS what its slot names (`unblocksTarget`,
+ * `SlotUnblocksTarget`). The agent declares the target, so the reactor never
+ * writes the person's verdict or attestation (W5 review, item 3): the rule
+ * (`answerTargetMove`, pure) and the reactor that runs it on
+ * `focus_session.slot_answered` and `slot_attested` through the existing
+ * re-check doors (the declared-grade producer, the criteria re-check, the
+ * evidence read). Those doors are mocked here: what is under test is which
+ * one the answer reaches, and that the grade and attest doors are NEVER
+ * reached. The real doors run end to end in
+ * `declared-grade-doors.pglite.test.ts`.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const { gradeMock, attestMock, resumeMock, queue } = vi.hoisted(() => ({
-  gradeMock: vi.fn(async (_p: unknown) => ({
-    verdict: "pass",
-    recorded: true,
-    resumed: false,
-  })),
-  attestMock: vi.fn(async (_p: unknown) => ({ status: "attested" })),
-  resumeMock: vi.fn(async (_p: unknown) => false),
-  queue: [] as unknown[][],
-}));
+const { surfaceMock, recheckMock, evidenceMock, gradeMock, attestMock, queue } =
+  vi.hoisted(() => ({
+    surfaceMock: vi.fn(async (_id: unknown) => ({ filed: [], outputs: null })),
+    recheckMock: vi.fn(async (_p: unknown) => ({})),
+    evidenceMock: vi.fn(async (_p: unknown) => ({ satisfied: [] })),
+    gradeMock: vi.fn(async (_p: unknown) => ({})),
+    attestMock: vi.fn(async (_p: unknown) => ({ status: "attested" })),
+    queue: [] as unknown[][],
+  }));
 
 // PARTIAL mock: only `db` is replaced — see the total-mock ratchet tripwire.
 vi.mock("@synap/database", async (importOriginal) => {
@@ -30,19 +34,33 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 vi.mock(
-  "../../services/focus-sessions/evaluations/evaluate.js",
+  "../../services/focus-sessions/evaluations/record.js",
   async (importOriginal) => ({
     ...(await importOriginal<Record<string, unknown>>()),
-    gradeCriterionAfterAct: gradeMock,
-    resumeCheckGateIfMet: resumeMock,
+    fileDeclaredGradeSlots: surfaceMock,
   })
 );
-
+vi.mock(
+  "../../services/dev-loop/session-outcome-door.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    reevaluateCriteria: recheckMock,
+  })
+);
 vi.mock(
   "../../services/focus-sessions/satisfy-expected-output.js",
   async (importOriginal) => ({
     ...(await importOriginal<Record<string, unknown>>()),
+    satisfyClaimsByEvidence: evidenceMock,
     attestExpectedOutput: attestMock,
+  })
+);
+vi.mock(
+  "../../services/focus-sessions/evaluations/evaluate.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    gradeCriterionAfterAct: gradeMock,
+    gradeCriterionAsOwner: gradeMock,
   })
 );
 
@@ -61,85 +79,53 @@ const EVIDENCE_CRITERION = {
   statement: "The tests pass",
   check: { kind: "evidence" as const, evidenceKey: "tests" },
 };
-const OUTPUTS = [
-  { key: "signed-contract", label: "Signed contract", owner: "human" },
-  { key: "deploy", label: "Deploy", owner: "agent" },
-  {
-    key: "done-thing",
-    label: "Done thing",
-    owner: "human",
-    status: "done",
-  },
-];
 
-const move = (
-  target: unknown,
-  askMode: unknown = "act",
-  value: unknown = { type: "text" }
-) =>
+const move = (target: unknown, value: unknown = { type: "text" }) =>
   answerTargetMove({
     target,
     value,
-    askMode,
     criteria: [HUMAN_CRITERION, EVIDENCE_CRITERION],
-    outputs: OUTPUTS,
   });
 
-describe("answerTargetMove — what an answer moves", () => {
-  it("a criterion the person grades, met by their deed: graded", () => {
+describe("answerTargetMove — what an answer re-checks", () => {
+  it("a criterion the person grades: their grade card, never a verdict", () => {
     expect(move({ criterion: "contract-signed" })).toEqual({
-      kind: "grade",
-      criterionKey: "contract-signed",
-    });
-    expect(move({ criterion: "contract-signed" }, "provide")).toEqual({
-      kind: "grade",
+      kind: "surface_grade",
       criterionKey: "contract-signed",
     });
   });
 
-  it("words, a choice or a machine check grade nothing", () => {
-    expect(move({ criterion: "contract-signed" }, "confirm")).toBeNull();
-    expect(move({ criterion: "contract-signed" }, "choose")).toBeNull();
-    expect(move({ criterion: "contract-signed" }, null)).toBeNull();
-    expect(move({ criterion: "tests-pass" })).toBeNull();
-    expect(move({ criterion: "no-such" })).toBeNull();
+  it("a machine-checked criterion: its own check again", () => {
+    expect(move({ criterion: "tests-pass" })).toEqual({
+      kind: "recheck_criterion",
+      criterionKey: "tests-pass",
+    });
   });
 
-  it("an output the person owes is attested; the agent's or a done one is not", () => {
+  it("an output: its claim against its evidence again", () => {
     expect(move({ output: "signed-contract" })).toEqual({
-      kind: "attest",
-      outputLabel: "Signed contract",
-    });
-    expect(move({ output: "deploy" })).toBeNull();
-    expect(move({ output: "done-thing" })).toBeNull();
-    expect(move({ output: "no-such" })).toBeNull();
-  });
-
-  it("a stage is checked again", () => {
-    expect(move({ stage: "review" })).toEqual({
-      kind: "check_stage",
-      stageKey: "review",
+      kind: "recheck_output",
+      outputKey: "signed-contract",
     });
   });
 
-  it("a refusal, no target, or a target naming two things moves nothing", () => {
+  it("a refusal, no target, an unknown criterion, a stage or two things: nothing", () => {
     expect(
-      move({ criterion: "contract-signed" }, "act", {
-        type: "declined",
-        reason: "no",
-      })
+      move({ criterion: "contract-signed" }, { type: "declined", reason: "no" })
     ).toBeNull();
     expect(move(undefined)).toBeNull();
     expect(move("contract-signed")).toBeNull();
-    expect(move({ stage: "review", output: "deploy" })).toBeNull();
-    expect(move({ stage: "  " })).toBeNull();
+    expect(move({ criterion: "no-such" })).toBeNull();
+    expect(move({ stage: "review" })).toBeNull();
+    expect(move({ criterion: "tests-pass", output: "deploy" })).toBeNull();
+    expect(move({ output: "  " })).toBeNull();
   });
 });
 
-function answered(data: Record<string, unknown>) {
+function event(action: string, data: Record<string, unknown>) {
   return {
     subjectType: "focus_session",
-    action: "slot_answered",
+    action,
     subjectId: SESSION,
     userId: OWNER,
     workspaceId: "ws",
@@ -152,90 +138,85 @@ function answered(data: Record<string, unknown>) {
     },
   };
 }
+const answered = (data: Record<string, unknown>) =>
+  event("slot_answered", data);
 
 const SESSION_ROW = {
   id: SESSION,
   userId: OWNER,
   criteria: [HUMAN_CRITERION, EVIDENCE_CRITERION],
-  expectedOutputs: OUTPUTS,
 };
 
-describe("the reactor moves what the answer named, through the existing doors", () => {
+async function run(payload: ReturnType<typeof event>) {
+  queue.push([SESSION_ROW]);
+  await sessionUnblockNotifyReactor.handler(payload as never, {} as never);
+}
+
+describe("the reactor re-checks what the answer named, never deciding for the person", () => {
   beforeEach(() => {
-    gradeMock.mockClear();
-    attestMock.mockClear();
-    resumeMock.mockClear();
+    for (const m of [
+      surfaceMock,
+      recheckMock,
+      evidenceMock,
+      gradeMock,
+      attestMock,
+    ])
+      m.mockClear();
     queue.length = 0;
   });
 
-  it("matches an answer that names a target, and only that answer", () => {
+  // Whatever the target: the grade and attest doors are never reached.
+  afterEach(() => {
+    expect(gradeMock).not.toHaveBeenCalled();
+    expect(attestMock).not.toHaveBeenCalled();
+  });
+
+  it('matches an answer or an "I did this" that names a target, and only those', () => {
+    const named = { unblocksTarget: { criterion: "contract-signed" } };
+    expect(sessionUnblockNotifyReactor.match!(answered(named) as never)).toBe(
+      true
+    );
     expect(
-      sessionUnblockNotifyReactor.match!(
-        answered({ unblocksTarget: { criterion: "contract-signed" } }) as never
-      )
+      sessionUnblockNotifyReactor.match!(event("slot_attested", named) as never)
     ).toBe(true);
     expect(sessionUnblockNotifyReactor.match!(answered({}) as never)).toBe(
       false
     );
   });
 
-  it("a criterion target: graded pass through the grade door, as the owner", async () => {
-    queue.push([SESSION_ROW]);
-    await sessionUnblockNotifyReactor.handler(
-      answered({ unblocksTarget: { criterion: "contract-signed" } }) as never,
-      {} as never
-    );
-    expect(gradeMock).toHaveBeenCalledTimes(1);
-    expect(gradeMock.mock.calls[0]![0]).toMatchObject({
-      sessionId: SESSION,
-      userId: OWNER,
-      criterionKey: "contract-signed",
-      verdict: "pass",
-    });
-    expect(attestMock).not.toHaveBeenCalled();
-    expect(resumeMock).not.toHaveBeenCalled();
+  it("a human criterion target: the grade card is surfaced", async () => {
+    await run(answered({ unblocksTarget: { criterion: "contract-signed" } }));
+    expect(surfaceMock).toHaveBeenCalledWith(SESSION);
   });
 
-  it("an output target: attested through the attest door", async () => {
-    queue.push([SESSION_ROW]);
-    await sessionUnblockNotifyReactor.handler(
-      answered({ unblocksTarget: { output: "signed-contract" } }) as never,
-      {} as never
-    );
-    expect(attestMock).toHaveBeenCalledTimes(1);
-    expect(attestMock.mock.calls[0]![0]).toMatchObject({
+  it("a machine criterion target: its own check runs again, as the owner", async () => {
+    await run(answered({ unblocksTarget: { criterion: "tests-pass" } }));
+    expect(recheckMock.mock.calls[0]![0]).toMatchObject({
       sessionId: SESSION,
       userId: OWNER,
-      expectedLabel: "Signed contract",
-    });
-    expect(gradeMock).not.toHaveBeenCalled();
-  });
-
-  it("a stage target: that stage's check gate is checked again", async () => {
-    queue.push([SESSION_ROW]);
-    await sessionUnblockNotifyReactor.handler(
-      answered({ unblocksTarget: { stage: "review" } }) as never,
-      {} as never
-    );
-    expect(resumeMock).toHaveBeenCalledTimes(1);
-    expect(resumeMock.mock.calls[0]![0]).toMatchObject({
-      sessionId: SESSION,
-      userId: OWNER,
-      onlyStage: "review",
+      agentUserId: null,
+      criterionKeys: ["tests-pass"],
     });
   });
 
-  it("a refusal moves nothing", async () => {
-    queue.push([SESSION_ROW]);
-    await sessionUnblockNotifyReactor.handler(
+  it('an output target, from an "I did this": its claim is read against its evidence', async () => {
+    await run(
+      event("slot_attested", { unblocksTarget: { output: "signed-contract" } })
+    );
+    expect(evidenceMock.mock.calls[0]![0]).toMatchObject({
+      sessionId: SESSION,
+      userId: OWNER,
+    });
+  });
+
+  it("a refusal re-checks nothing", async () => {
+    await run(
       answered({
-        unblocksTarget: { criterion: "contract-signed" },
+        unblocksTarget: { criterion: "tests-pass" },
         value: { type: "declined", reason: "not now" },
-      }) as never,
-      {} as never
+      })
     );
-    expect(gradeMock).not.toHaveBeenCalled();
-    expect(attestMock).not.toHaveBeenCalled();
-    expect(resumeMock).not.toHaveBeenCalled();
+    expect(recheckMock).not.toHaveBeenCalled();
+    expect(surfaceMock).not.toHaveBeenCalled();
   });
 });

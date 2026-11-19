@@ -574,7 +574,7 @@ export async function followPlaybook(
   // GRADES DECLARED UP FRONT (W5): the playbook's criteria merged above may
   // declare grades the person gives on an output; their slots are filed now,
   // owed once that output is delivered. After the commit, through the slot
-  // door's own lock; idempotent.
+  // door's own lock; idempotent; never throws.
   if (addedCriteria > 0) {
     const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
     await fileDeclaredGradeSlots(sessionId);
