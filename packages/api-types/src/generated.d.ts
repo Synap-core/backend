@@ -19274,8 +19274,12 @@ export interface OAuthAppConsent {
 	 * them to what it holds; nothing it holds is shown or changed here.
 	 */
 	ask: OAuthAppAsk | null;
-	/** The consent in v2 terms (W3d): what the new screen reads. */
-	access: OAuthAppAccessConsent;
+	/**
+	 * The consent in v2 terms (W3d): what the new screen reads. Always set by
+	 * the server; optional so a screen or fixture written before W3d still
+	 * types (additive).
+	 */
+	access?: OAuthAppAccessConsent;
 }
 /** What the short consent shows (`OAuthAppConsent.ask`). */
 export interface OAuthAppAsk {
