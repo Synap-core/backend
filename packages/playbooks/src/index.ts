@@ -1980,7 +1980,73 @@ export const STAGE_LESSON_MAX_CHARS = 200;
  * so a legacy stage with no `lessons` reads as `[]`.
  */
 export function readStageLessons(stage: unknown): string[] {
-  const raw = (stage as { lessons?: unknown } | null | undefined)?.lessons;
+  return readLessonLines(
+    (stage as { lessons?: unknown } | null | undefined)?.lessons
+  );
+}
+
+/**
+ * The PLAYBOOK-level lessons (`playbooks.metadata.lessons`):
+ * what earlier runs taught when no stage can hold it (a playbook with no
+ * stages, or a criterion of the whole playbook). Same bound and the same
+ * whole-list revision as a stage's.
+ */
+export function readPlaybookLessons(metadata: unknown): string[] {
+  return readLessonLines(
+    (metadata as { lessons?: unknown } | null | undefined)?.lessons
+  );
+}
+
+/** One tool or skill the successful runs of a playbook used. */
+export interface WhatWorkedPart {
+  kind: "tool" | "skill";
+  name: string;
+  /** How many of the successful runs used it. */
+  runs: number;
+}
+
+/**
+ * What the successful runs of a playbook used (`playbooks.metadata.whatWorked`,
+ * distilled by the lessons scanner from the runs' recorded
+ * `session --used--> tool|skill` edges and approved by a person.
+ */
+export interface WhatWorked {
+  /** The successful runs it was read from. */
+  runs: number;
+  parts: WhatWorkedPart[];
+}
+
+/** At most this many parts are kept. */
+export const MAX_WHAT_WORKED_PARTS = 8;
+
+/** Tolerant read of `metadata.whatWorked`; `null` when absent or empty. */
+export function readWhatWorked(metadata: unknown): WhatWorked | null {
+  const raw = (metadata as { whatWorked?: unknown } | null | undefined)
+    ?.whatWorked as { runs?: unknown; parts?: unknown } | undefined;
+  if (!raw || typeof raw !== "object" || !Array.isArray(raw.parts)) return null;
+  const runs = typeof raw.runs === "number" && raw.runs > 0 ? raw.runs : 0;
+  const parts: WhatWorkedPart[] = [];
+  for (const p of raw.parts) {
+    if (parts.length >= MAX_WHAT_WORKED_PARTS) break;
+    const part = p as Partial<WhatWorkedPart> | null;
+    if (
+      (part?.kind === "tool" || part?.kind === "skill") &&
+      typeof part.name === "string" &&
+      part.name.trim() &&
+      typeof part.runs === "number" &&
+      part.runs > 0
+    ) {
+      parts.push({
+        kind: part.kind,
+        name: part.name.trim().slice(0, STAGE_LESSON_MAX_CHARS),
+        runs: part.runs,
+      });
+    }
+  }
+  return runs > 0 && parts.length > 0 ? { runs, parts } : null;
+}
+
+function readLessonLines(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const out: string[] = [];
   const seen = new Set<string>();

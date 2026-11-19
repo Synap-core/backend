@@ -807,6 +807,7 @@ export const sessionHandlers: McpHandlerMap = {
             stageKey: result.session.currentStage ?? null,
             stages: result.session.stages,
             userId,
+            subjectEntityId: result.session.subjectEntityId ?? null,
           })
         : undefined;
     // Recall runs in the background right after a start; this says so, and
@@ -2048,6 +2049,7 @@ export const sessionHandlers: McpHandlerMap = {
                   stageKey: result.session.currentStage ?? null,
                   stages: result.session.stages,
                   userId,
+                  subjectEntityId: result.session.subjectEntityId ?? null,
                 }),
               }
             : {}),

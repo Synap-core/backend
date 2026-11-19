@@ -193,8 +193,22 @@ export const playbookSubjectProfileSchema = z
     statusProperty: z.string().trim().min(1).max(120).optional(),
     activators: playbookActivatorsSchema.optional(),
     humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
+    /**
+     * The one record of `profileSlug` this playbook is dedicated to: it binds
+     * and runs on that record only, and takes no activator. Pod-local: a package
+     * install and the catalog refuse it.
+     */
+    entityId: z.uuid().optional(),
   })
   .superRefine((sp, ctx) => {
+    if (sp.entityId !== undefined && !sp.profileSlug) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["entityId"],
+        message:
+          "subjectProfile.entityId needs subjectProfile.profileSlug: name the record's kind too",
+      });
+    }
     if (sp.onEnd !== undefined) {
       ctx.addIssue({
         code: "custom",

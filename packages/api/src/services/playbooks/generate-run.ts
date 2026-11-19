@@ -342,7 +342,7 @@ function examplesBlock(
  * them.
  */
 export function buildGeneratePrompt(input: {
-  method: { contextSkill: string | null; guidance: string };
+  method: { contextSkill: string | null; guidance: string; learned?: string };
   goal: string;
   section: string;
   subject: {
@@ -358,6 +358,7 @@ export function buildGeneratePrompt(input: {
   const methodText = renderPlaybookMethod({
     contextSkill: input.method.contextSkill,
     guidance: input.method.guidance,
+    learned: input.method.learned,
   });
   const answer = [
     "## Your answer",
@@ -741,6 +742,7 @@ export async function executeGenerateRun(
       userId: input.userId,
       runId,
       sessionId: null,
+      subjectEntityId: subjectId,
       warn: (obj, msg) => logger.warn(obj, `generate: ${msg}`),
     });
     // Past outcomes, when the landing asks for them. A FAILED read is not
@@ -767,7 +769,11 @@ export async function executeGenerateRun(
       }
     }
     const prompt = buildGeneratePrompt({
-      method: { contextSkill: method.contextSkill, guidance: method.guidance },
+      method: {
+        contextSkill: method.contextSkill,
+        guidance: method.guidance,
+        learned: method.learned,
+      },
       goal,
       section: lands.section,
       subject: {
