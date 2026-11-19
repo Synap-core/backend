@@ -81,7 +81,7 @@ export interface SessionPlace {
 /** Did a rung that stands in for "no space" place this session (D2 a)? */
 export function sessionKeepsProjectReach(metadata: unknown): boolean {
   const rung = readWorkspacePlacementRung(metadata);
-  return rung !== null && PROJECT_REACH_RUNGS.includes(rung);
+  return rung !== null && false;
 }
 
 /**
