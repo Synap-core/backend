@@ -1200,7 +1200,11 @@ export interface ContractAsk {
 export interface ConsentContract {
   asked: { permissions: ContractAsked[]; templates: string[] };
   places: {
-    read: { allSpaces: boolean; spaces: NamedSpace[]; projects: NamedProject[] };
+    read: {
+      allSpaces: boolean;
+      spaces: NamedSpace[];
+      projects: NamedProject[];
+    };
     write: {
       spaces: NamedSpace[];
       projects: NamedProject[];
@@ -1213,7 +1217,9 @@ export interface ConsentContract {
 }
 
 /** The contract's block on an app, when this pod sends it. */
-export function contractOf(app: object | null | undefined): ConsentContract | null {
+export function contractOf(
+  app: object | null | undefined
+): ConsentContract | null {
   const access = (app as { access?: unknown } | null | undefined)?.access;
   if (!access || typeof access !== "object") return null;
   const c = access as Partial<ConsentContract>;

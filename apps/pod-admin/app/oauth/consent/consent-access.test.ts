@@ -497,20 +497,60 @@ describe("what the connection holds: re-consent", () => {
 });
 
 describe("the W3d consent contract (be6caecc v1)", () => {
-  const sp = (id: string, name: string, templateSlug: string | null = null) => ({ id, name, templateSlug });
+  const sp = (
+    id: string,
+    name: string,
+    templateSlug: string | null = null
+  ) => ({ id, name, templateSlug });
   const contract = {
     asked: {
       permissions: [
-        { permission: "entity.task.read", tier: "read" as const, reason: " To show tasks. ", kindGroup: { permission: "entity.read", kinds: ["task"] }, allSpaces: true, offerable: true },
-        { permission: "track.read", tier: "read" as const, reason: null, kindGroup: null, allSpaces: false, offerable: true },
-        { permission: "session.update", tier: "write" as const, reason: null, kindGroup: null, allSpaces: false, offerable: true },
-        { permission: "agent.read", tier: "read" as const, reason: null, kindGroup: null, allSpaces: false, offerable: false },
+        {
+          permission: "entity.task.read",
+          tier: "read" as const,
+          reason: " To show tasks. ",
+          kindGroup: { permission: "entity.read", kinds: ["task"] },
+          allSpaces: true,
+          offerable: true,
+        },
+        {
+          permission: "track.read",
+          tier: "read" as const,
+          reason: null,
+          kindGroup: null,
+          allSpaces: false,
+          offerable: true,
+        },
+        {
+          permission: "session.update",
+          tier: "write" as const,
+          reason: null,
+          kindGroup: null,
+          allSpaces: false,
+          offerable: true,
+        },
+        {
+          permission: "agent.read",
+          tier: "read" as const,
+          reason: null,
+          kindGroup: null,
+          allSpaces: false,
+          offerable: false,
+        },
       ],
       templates: ["content-os"],
     },
     places: {
-      read: { allSpaces: false, spaces: [sp("w-b", "Builder"), sp("w-c", "Content OS", "content-os")], projects: [{ id: "p-l", name: "Launch", workspaceId: "w-b" }] },
-      write: { spaces: [sp("w-c", "Content OS", "content-os")], projects: [], suggestedSpaceIds: ["w-c"] },
+      read: {
+        allSpaces: false,
+        spaces: [sp("w-b", "Builder"), sp("w-c", "Content OS", "content-os")],
+        projects: [{ id: "p-l", name: "Launch", workspaceId: "w-b" }],
+      },
+      write: {
+        spaces: [sp("w-c", "Content OS", "content-os")],
+        projects: [],
+        suggestedSpaceIds: ["w-c"],
+      },
     },
     current: null,
     reconsent: null,
@@ -524,14 +564,23 @@ describe("the W3d consent contract (be6caecc v1)", () => {
 
   it("becomes this model's offer: tier places, pod-wide when allSpaces, nothing for what cannot be given", () => {
     const offer = offerOfContract(contract);
-    expect(offer.items.map((i) => [i.permission, i.podWide, i.spaces.length, i.projects.length])).toEqual([
+    expect(
+      offer.items.map((i) => [
+        i.permission,
+        i.podWide,
+        i.spaces.length,
+        i.projects.length,
+      ])
+    ).toEqual([
       ["entity.task.read", true, 2, 1],
       ["track.read", false, 2, 1],
       ["session.update", false, 1, 0],
       ["agent.read", false, 0, 0],
     ]);
     expect(offer.items[0]!.reason).toBe("To show tasks.");
-    expect(cantGive(offer, []).map((c) => c.permission)).toEqual(["agent.read"]);
+    expect(cantGive(offer, []).map((c) => c.permission)).toEqual([
+      "agent.read",
+    ]);
   });
 
   it("a first draft writes only in the server's suggested spaces; under All a read with no pod-wide form is not sent", () => {
@@ -541,14 +590,19 @@ describe("the W3d consent contract (be6caecc v1)", () => {
     expect(d.write).toEqual({ spaces: ["w-c"], projects: [] });
     const access = toAccess(d, offer);
     expect(access.permissions).toEqual(["entity.task.read", "session.update"]);
-    expect(notEverywhere(d, canRows(offer, "person"), offer)).toEqual(["goals"]);
+    expect(notEverywhere(d, canRows(offer, "person"), offer)).toEqual([
+      "goals",
+    ]);
   });
 
   it("a re-consent drafts the server's proposed form; now / was come from `was`", () => {
     const proposed = {
       version: 2 as const,
       permissions: ["entity.task.read", "track.read"],
-      read: { spaces: [sp("w-b", "Builder"), sp("w-c", "Content OS")], projects: [] },
+      read: {
+        spaces: [sp("w-b", "Builder"), sp("w-c", "Content OS")],
+        projects: [],
+      },
       write: { spaces: [], projects: [] },
     };
     const c = {
@@ -556,8 +610,14 @@ describe("the W3d consent contract (be6caecc v1)", () => {
       reconsent: {
         reason: "widens" as const,
         was: [
-          { permission: "entity.task.read", place: { kind: "space" as const, id: "w-b", name: "Builder" } },
-          { permission: "track.read", place: { kind: "space" as const, id: "w-c", name: "Content OS" } },
+          {
+            permission: "entity.task.read",
+            place: { kind: "space" as const, id: "w-b", name: "Builder" },
+          },
+          {
+            permission: "track.read",
+            place: { kind: "space" as const, id: "w-c", name: "Content OS" },
+          },
         ],
         proposed,
       },
@@ -568,9 +628,19 @@ describe("the W3d consent contract (be6caecc v1)", () => {
     expect(d.read.spaces).toEqual(["w-b", "w-c"]);
     const held = heldOfContract(c);
     expect(held.kind).toBe("reconsent");
-    const changes = reconsentChanges(held, offer, canRows(offer, "person"), wasPairs(c.reconsent));
-    expect(changes.filter((x) => x.mark === "wider").map((x) => x.was)).toEqual(["in Builder", "in Content OS"]);
-    expect(namesOfNamed(proposed)).toEqual({ "w-b": "Builder", "w-c": "Content OS" });
+    const changes = reconsentChanges(
+      held,
+      offer,
+      canRows(offer, "person"),
+      wasPairs(c.reconsent)
+    );
+    expect(changes.filter((x) => x.mark === "wider").map((x) => x.was)).toEqual(
+      ["in Builder", "in Content OS"]
+    );
+    expect(namesOfNamed(proposed)).toEqual({
+      "w-b": "Builder",
+      "w-c": "Content OS",
+    });
   });
 
   it("a connected app's current access is what it holds", () => {
@@ -580,6 +650,9 @@ describe("the W3d consent contract (be6caecc v1)", () => {
       read: { spaces: "all" as const, projects: "all" as const },
       write: { spaces: [], projects: [] },
     };
-    expect(heldOfContract({ ...contract, current })).toEqual({ kind: "access", access: accessOfNamed(current) });
+    expect(heldOfContract({ ...contract, current })).toEqual({
+      kind: "access",
+      access: accessOfNamed(current),
+    });
   });
 });
