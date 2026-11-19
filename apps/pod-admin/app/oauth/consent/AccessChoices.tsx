@@ -112,7 +112,15 @@ function CanObjectRow({
     ? alsoSeeNames(draft, row)
     : row.decisions
       ? decideLine(row, actsAs)
-      : andList(row.permissions.map((p) => permissionLabel(p.permission)));
+      : andList(
+          row.permissions.map((p, i) => {
+            // "Edit jobs and read jobs": one sentence, so later verbs are lower case.
+            const label = permissionLabel(p.permission);
+            return i === 0 || /^[A-Z]{2}/.test(label)
+              ? label
+              : label.charAt(0).toLowerCase() + label.slice(1);
+          })
+        );
   return (
     <li className="flex flex-col py-1" data-object={row.key}>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">

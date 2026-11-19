@@ -701,24 +701,29 @@ export function canSummary(
     edit: [],
     on: [],
   };
-  let more = 0;
+  let also: string[] = [];
   for (const row of rows) {
     const level = rowLevel(draft, row);
     if (level === "off") continue;
     if (row.key === ALSO_SEE) {
-      more = row.members.filter((m) => rowLevel(draft, m) !== "off").length;
+      also = row.members
+        .filter((m) => rowLevel(draft, m) !== "off")
+        .map((m) => midSentence(m.label));
       continue;
     }
     by[level].push(rowNoun(draft, row));
   }
   const out: Array<{ level: Exclude<AccessLevel, "off">; text: string }> = [];
+  // What it also sees is counted beside a named row ("records (29 kinds)
+  // and 9 more"); alone, its first names are said ("documents and links").
+  const more = also.length;
   if (by.view.length > 0 || more > 0) {
     out.push({
       level: "view",
       text:
-        by.view.length === 0
-          ? `${more} ${more === 1 ? "thing" : "things"}`
-          : andList(more > 0 ? [...by.view, `${more} more`] : by.view),
+        by.view.length > 0
+          ? andList(more > 0 ? [...by.view, `${more} more`] : by.view)
+          : andList(more <= 3 ? also : [...also.slice(0, 2), `${more - 2} more`]),
     });
   }
   if (by.edit.length > 0) out.push({ level: "edit", text: andList(by.edit) });

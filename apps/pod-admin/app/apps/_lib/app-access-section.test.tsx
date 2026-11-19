@@ -50,6 +50,7 @@ describe("the app page's access lines", () => {
     expect(out).toContain('href="/open/workspace/w-content"');
     expect(out).toMatch(/Content OS\.<\/p>/);
     expect(out).toContain("A change applies at its next request.");
+    expect(out).toMatch(/View<\/span> documents/);
   });
 
   it("pairs that do not fit one access: nothing here (the page keeps its per-space list)", () => {

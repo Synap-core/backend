@@ -66,9 +66,8 @@ export function KindsGroupRow({
           <Button
             size="sm"
             variant="flat"
-            color="primary"
             radius="full"
-            className="h-7 min-h-7 min-w-0 self-start px-2.5 text-xs"
+            className="h-7 min-h-7 min-w-0 self-start px-2.5 text-xs text-foreground/90"
             aria-expanded={open}
             aria-controls={`${id}-kinds`}
             endContent={

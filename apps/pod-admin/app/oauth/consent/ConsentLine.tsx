@@ -76,7 +76,7 @@ export function ConsentLine({
               aria-hidden
               className="mt-[0.45rem] h-2 w-2 shrink-0 rounded-full bg-primary"
             />
-            <span className="min-w-0">{children}</span>
+            <span className="flex min-w-0 flex-col gap-0.5">{children}</span>
           </span>
         ) : (
           children
