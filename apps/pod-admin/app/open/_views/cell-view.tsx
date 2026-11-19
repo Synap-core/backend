@@ -78,9 +78,9 @@ export function CellView({ id: key }: { id: string }) {
       ? row.description.trim()
       : null;
 
+  const t = openT();
   if (!source && !page) {
     // Neither a module nor a page: a cell only the app draws.
-    const t = openT();
     return (
       <OpenObject
         header={{
@@ -90,7 +90,7 @@ export function CellView({ id: key }: { id: string }) {
           status: { kind: "unknown", label: t("bounce.noWebPage") },
           primaryAction: openInApp,
         }}
-        advanced={{ ids: [{ label: `${noun} key`, value: key }] }}
+        advanced={{ ids: [{ label: t("cell.keyLabel"), value: key }] }}
       />
     );
   }
@@ -104,7 +104,7 @@ export function CellView({ id: key }: { id: string }) {
         summary: description,
         secondaryActions: openInApp,
       }}
-      advanced={{ ids: [{ label: `${noun} key`, value: key }] }}
+      advanced={{ ids: [{ label: t("cell.keyLabel"), value: key }] }}
     >
       {source ? (
         <ModuleCell

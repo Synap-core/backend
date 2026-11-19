@@ -25,16 +25,21 @@ export const en = {
   "toggle.source": "Source",
   fullSize: "Full size",
   "preview.note": "Preview. It reads nothing from your pod until approved.",
-  "renderer.loading": "Drawing this view…",
+  // What is drawn: a view, a record's card or detail, or any other cell.
+  "renderer.loading":
+    "{subject, select, view {Drawing this view…} entity {Drawing this record…} other {Drawing…}}",
   "renderer.notInstalled": "Synap’s renderers aren’t on this pod.",
-  "renderer.managedOnly": "Synap’s renderers come with pods hosted by Synap.",
-  "renderer.failed": "Couldn’t draw this view",
-  "renderer.needsKit": "This view needs parts this pod doesn’t have.",
+  "renderer.failed":
+    "{subject, select, view {Couldn’t draw this view} entity {Couldn’t draw this record} other {Couldn’t draw this}}",
+  "renderer.partly": "Showing the default: couldn’t read this kind’s choice.",
+  "renderer.needsKit": "This needs parts this pod doesn’t have.",
   "renderer.refused.mark": "Not drawn",
-  "renderer.refused.line": "This view can’t run here.",
-  "renderer.stopped": "This view stopped responding.",
+  "renderer.refused.line": "This can’t run here.",
   "renderer.write.proposed": "Sent for review",
   "renderer.write.proposedBody": "The change waits for someone to approve it.",
+  "renderer.write.review": "Review",
+  "renderer.write.failed": "Couldn’t save this change",
+  "renderer.write.failedHint": "Nothing changed. Try again.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -52,21 +57,28 @@ export const fr: Catalog<typeof en> = {
   "toggle.source": "Source",
   fullSize: "Plein écran",
   "preview.note": "Aperçu. Il ne lit rien de votre pod avant l’approbation.",
-  "renderer.loading": "Affichage de cette vue…",
+  "renderer.loading":
+    "{subject, select, view {Affichage de cette vue…} entity {Affichage de cette fiche…} other {Affichage…}}",
   "renderer.notInstalled":
     "Les moteurs d’affichage de Synap ne sont pas sur ce pod.",
-  "renderer.managedOnly":
-    "Les moteurs d’affichage de Synap sont fournis avec les pods hébergés par Synap.",
-  "renderer.failed": "Impossible d’afficher cette vue",
+  "renderer.failed":
+    "{subject, select, view {Impossible d’afficher cette vue} entity {Impossible d’afficher cette fiche} other {Impossible d’afficher cet élément}}",
+  "renderer.partly":
+    "Affichage par défaut : le choix de ce type n’a pas pu être lu.",
   "renderer.needsKit":
-    "Cette vue a besoin d’éléments que ce pod ne possède pas.",
-  "renderer.refused.mark": "Non affichée",
-  "renderer.refused.line": "Cette vue ne peut pas s’exécuter ici.",
-  "renderer.stopped": "Cette vue ne répond plus.",
+    "Cet élément a besoin de parties que ce pod ne possède pas.",
+  "renderer.refused.mark": "Non affiché",
+  "renderer.refused.line": "Cet élément ne peut pas s’exécuter ici.",
   "renderer.write.proposed": "Envoyé pour validation",
   "renderer.write.proposedBody":
     "La modification attend que quelqu’un l’approuve.",
+  "renderer.write.review": "Examiner",
+  "renderer.write.failed": "Impossible d’enregistrer cette modification",
+  "renderer.write.failedHint": "Rien n’a changé. Réessayez.",
 };
+
+/** What a renderer draws, as the words choose (`renderer.loading`, `renderer.failed`). */
+export type RendererWordSubject = "view" | "entity" | "cell";
 
 /** The frame's translator, in the ambient catalog locale. */
 export function frameT() {

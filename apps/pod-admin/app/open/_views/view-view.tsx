@@ -4,9 +4,13 @@
  * `/open/view/:id` — a saved view. When a renderer cell draws its type (the
  * view's own bound cell, else the installed bundle's default for its type,
  * picked by the one resolution in `RenderedObject`), the view itself runs
- * under the header, filling the card, in the module frame. Otherwise this
- * page says which view it is and hands it to the app. `views.get` re-checks
- * access server-side; the frame reads through the same floored doors.
+ * under the header in the module frame, filling the height left (View
+ * template: fill), the card widening to a document's width
+ * (`READS_WIDE_ATTR`), and "Open in app" sits in the header. Otherwise this
+ * page says which view it is and hands it to the app in ONE card; a pod
+ * admin also reads there, in one line, that the renderers are not on this
+ * pod. `views.get` re-checks access server-side; the frame reads through
+ * the same floored doors.
  */
 
 import { humanizeToken } from "@synap-core/types/vocabulary";
@@ -21,8 +25,13 @@ import { openIn } from "../../../lib/open-in";
 import { openT } from "../copy";
 import { describeView, viewKind } from "./view-summary";
 import { ViewPipelineSnapshot } from "./view-pipeline-snapshot";
-import { RenderedObject } from "../../_lib/object/content/rendered-object";
+import {
+  RenderedObject,
+  useDrawsCell,
+} from "../../_lib/object/content/rendered-object";
+import { frameT } from "../../_lib/object/content/frame-copy";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
+import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 
 /** Canvas lenses have no prose description worth showing on the web. */
 const CANVAS_VIEW_TYPES = new Set(["whiteboard", "mindmap"]);
@@ -49,6 +58,16 @@ function viewRender(config: unknown): unknown {
 export function ViewView({ id }: { id: string }) {
   const query = trpc.views.get.useQuery({ id });
   useReauthOnUnauthorized(query.error);
+  const loaded = (query.data as ViewPayload | undefined)?.view;
+  const subject = {
+    kind: "view" as const,
+    viewId: loaded?.id ?? id,
+    viewType: loaded?.type?.trim() ?? "",
+    render: viewRender(loaded?.config),
+  };
+  // Whether a renderer draws it decides what sits around the drawing.
+  const drawn = useDrawsCell(subject, loaded?.workspaceId ?? null);
+  const isPodAdmin = useConsoleRole() === "admin";
 
   if (query.isLoading) return <OpenLoading label="Loading view…" />;
   const data = query.data as ViewPayload | undefined;
@@ -69,8 +88,8 @@ export function ViewView({ id }: { id: string }) {
   // Only a pipeline gets a snapshot: its content is a kind's declared flow,
   // which `flow.of` reads. Every other layout is handed over, never half-drawn.
   const snapshotKind = lens === "pipeline" ? viewKind(view.config) : null;
-  const title = view.name?.trim() || "Untitled view";
-  const identity = (
+  const title = view.name?.trim() || t("view.untitled");
+  const identity = (notInstalled: boolean) => (
     <div className="flex flex-col gap-4">
       {snapshotKind && (
         <ViewPipelineSnapshot
@@ -85,16 +104,22 @@ export function ViewView({ id }: { id: string }) {
         }
         exit={openIn({ kind: "objectInApp", objectKind: "view", id })}
         cta={t("view.handoff.cta")}
+        {...(notInstalled && isPodAdmin
+          ? { note: frameT()("renderer.notInstalled") }
+          : {})}
       />
     </div>
   );
   return (
     <OpenObject
-      width="lg"
+      width="auto"
       header={{
         kind: "view",
         title,
         summary: written ?? describeView(view, t),
+        ...(drawn
+          ? { secondaryActions: <OpenInAppLink type="view" id={id} /> }
+          : {}),
       }}
       facts={[
         ...(lens ? [{ label: "Layout", value: humanizeToken(lens) }] : []),
@@ -112,18 +137,11 @@ export function ViewView({ id }: { id: string }) {
       }}
     >
       <RenderedObject
-        subject={{
-          kind: "view",
-          viewId: view.id ?? id,
-          viewType: lens ?? "",
-          render: viewRender(view.config),
-        }}
+        subject={subject}
         workspaceId={view.workspaceId ?? null}
         title={title}
         fill
-        fallback={identity}
-        notInstalledNote
-        drawnFooter={<OpenInAppLink type="view" id={id} />}
+        fallback={({ notInstalled }) => identity(notInstalled)}
       />
     </OpenObject>
   );

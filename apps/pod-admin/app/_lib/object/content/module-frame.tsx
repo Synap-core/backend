@@ -19,9 +19,15 @@
  * console reads a stored page uses (`readForPage`), stamped with the host's
  * lens; writes go through the pod's governed doors (`writeForFrame`),
  * stamped with the frame's type and view: the pod answers approved,
- * proposed or denied, and a proposed write gets its receipt here. A frame
- * that navigates away (a second `load`) is torn down; the reader can run it
- * again.
+ * proposed or denied. A proposed write gets a receipt with its Review door,
+ * a denied or failed one a failure receipt, and an approved one refreshes
+ * the page's own reads of what it touched. A frame that navigates away (a
+ * second `load`) is torn down; the reader can run it again.
+ *
+ * A frame carries megabytes of srcdoc, so it mounts only when it nears the
+ * viewport (`observeNear`), and starts hidden under its cover (a skeleton of
+ * its first height, or the page's own content for a record) until the cell
+ * says it is ready, then fades in (the `fade` motion preset).
  */
 
 import {
@@ -41,28 +47,40 @@ import {
   type CellFrameLens,
   type CellFrameStatus,
   type CellFrameWorkspaceScope,
+  type CellFrameWriteRequest,
 } from "@synap-core/types/cell-bridge";
 import {
+  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
   type Ref,
+  type RefObject,
 } from "react";
+import { Button } from "@heroui/react";
+import { Maximize2 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { trpc } from "../../../../lib/trpc";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import { showReceipt } from "../../receipt/decision-receipt-toast";
-import { writeForFrame } from "./bridge-writes";
+import { typedDetail, type Receipt } from "../../receipt/decision-receipt";
+import {
+  REFUSED_WRITE_ANSWER,
+  UNREAD_WRITE_ANSWER,
+  writeForFrame,
+} from "./bridge-writes";
 import { readForPage, type BridgeClient } from "./html-bridge-reads";
 import {
   browserFrameLinkEnv,
   handleFrameLink,
   handleFrameOpen,
 } from "./html-frame-links";
-import { NotRun } from "./html-frame";
-import { frameT } from "./frame-copy";
+import { NotRun, useFullSize } from "./html-frame";
+import { EmbedBodyContext } from "./embed-context";
+import { frameT, type RendererWordSubject } from "./frame-copy";
+import { objectPage } from "./markdown-model";
 
 /** What the frame IS: the pod resolves a write's trust from it. */
 export interface ModuleFrameIdentity {
@@ -90,8 +108,13 @@ export function createModuleFrameHost(options: {
   mechanism?: "module" | "page";
   onStatus?: (status: CellFrameStatus) => void;
   onResize?: (height: number) => void;
-  /** The pod sent a write for review: the receipt is the host's. */
-  onProposed?: (result: CellBridgeMutateResult) => void;
+  /** What the pod answered a write the host sent: the receipt is the host's. */
+  onWriteAnswer?: (
+    result: CellBridgeMutateResult,
+    request: CellFrameWriteRequest
+  ) => void;
+  /** A write the pod's door threw on (the frame reads it as denied). */
+  onWriteError?: (err: unknown, request: CellFrameWriteRequest) => void;
 }): (event: CellBridgeEventLike) => Promise<void> {
   const { identity, lens, client } = options;
   const workspaceScope: CellFrameWorkspaceScope = lens.workspaceId
@@ -116,8 +139,14 @@ export function createModuleFrameHost(options: {
     read: (op, params) =>
       readForPage(client, op, params, { workspaceId: lens.workspaceId }),
     write: async (request) => {
-      const result = await writeForFrame(client, request);
-      if (result.status === "proposed") options.onProposed?.(result);
+      let result: CellBridgeMutateResult;
+      try {
+        result = await writeForFrame(client, request);
+      } catch (err) {
+        options.onWriteError?.(err, request);
+        throw err;
+      }
+      options.onWriteAnswer?.(result, request);
       return result;
     },
     on: {
@@ -125,6 +154,98 @@ export function createModuleFrameHost(options: {
       resize: options.onResize,
     },
   });
+}
+
+/** Our own words for a denial: the receipt says the hint, never these. */
+const OWN_DENIALS: ReadonlySet<string> = new Set([
+  UNREAD_WRITE_ANSWER,
+  REFUSED_WRITE_ANSWER,
+]);
+
+/**
+ * The receipt of a frame's write, from what the pod answered (rule
+ * feedback-and-forms §1): sent for review, with its one door to the request;
+ * refused, with the pod's sentence only when the pod typed it. An applied
+ * write gets none: the frame redraws the object itself.
+ */
+export function writeReceipt(result: CellBridgeMutateResult): Receipt | null {
+  const t = frameT();
+  if (result.status === "proposed") {
+    const href = result.proposalId
+      ? objectPage("proposal", result.proposalId)
+      : null;
+    return {
+      title: t("renderer.write.proposed"),
+      description: t("renderer.write.proposedBody"),
+      tone: "default",
+      undo: false,
+      ...(href ? { action: { label: t("renderer.write.review"), href } } : {}),
+    };
+  }
+  if (result.status === "denied") {
+    const typed =
+      result.error && !OWN_DENIALS.has(result.error) ? result.error : null;
+    return {
+      title: t("renderer.write.failed"),
+      description: typed ?? t("renderer.write.failedHint"),
+      tone: "danger",
+      undo: false,
+    };
+  }
+  return null;
+}
+
+/** A write whose door threw: the pod's sentence only when it is typed. */
+export function writeErrorReceipt(err: unknown): Receipt {
+  const t = frameT();
+  return {
+    title: t("renderer.write.failed"),
+    description:
+      typedDetail(err as Parameters<typeof typedDetail>[0]) ??
+      t("renderer.write.failedHint"),
+    tone: "danger",
+    undo: false,
+  };
+}
+
+/** The host's reads an applied write made stale: the page draws them again. */
+export interface StaleReads {
+  entityIds: string[];
+  viewId?: string;
+}
+
+/**
+ * What an APPLIED write touched, among what the host page reads: the
+ * records it wrote (and both ends of a new link), the record the frame
+ * draws, and the view it draws. Anything else answers nothing.
+ */
+export function readsToRefresh(
+  request: CellFrameWriteRequest,
+  result: CellBridgeMutateResult,
+  identity: ModuleFrameIdentity
+): StaleReads {
+  if (result.status !== "approved") return { entityIds: [] };
+  const ids = new Set<string>();
+  switch (request.op) {
+    case "update_entity":
+    case "delete_entity":
+      ids.add(request.payload.id);
+      break;
+    case "create_relation":
+      ids.add(request.payload.sourceEntityId);
+      ids.add(request.payload.targetEntityId);
+      break;
+    case "create_entity": {
+      const id = (result.data as { id?: unknown } | undefined)?.id;
+      if (typeof id === "string") ids.add(id);
+      break;
+    }
+  }
+  if (identity.entityId) ids.add(identity.entityId);
+  return {
+    entityIds: [...ids],
+    ...(identity.viewId ? { viewId: identity.viewId } : {}),
+  };
 }
 
 /** The reader's theme as the frame takes it. */
@@ -152,7 +273,143 @@ export function moduleFrameRefusal(
   };
 }
 
-const INLINE_HEIGHT = 320;
+/**
+ * An inline frame's height before its cell says its own, and its skeleton's:
+ * ONE number, so the frame takes the skeleton's place without a jump.
+ */
+export const FRAME_INITIAL_HEIGHT = 320;
+/** A filling frame (a view's page) never draws shorter than this. */
+const FILL_MIN_HEIGHT = 420;
+/** Under a filling frame: the card's and the page's own bottom padding. */
+const FILL_BOTTOM_GAP = 96;
+/** How near the viewport a frame mounts: about a screen ahead. */
+export const FRAME_NEAR_MARGIN = "600px 0px";
+
+/**
+ * Calls `onNear` once `el` nears the viewport, then stops looking. Without an
+ * observer (a static render, an old browser) it is near at once.
+ */
+export function observeNear(
+  el: Element,
+  onNear: () => void,
+  Observer:
+    typeof IntersectionObserver | undefined = globalThis.IntersectionObserver
+): (() => void) | undefined {
+  if (!Observer) {
+    onNear();
+    return undefined;
+  }
+  const io = new Observer(
+    (entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        io.disconnect();
+        onNear();
+      }
+    },
+    { rootMargin: FRAME_NEAR_MARGIN }
+  );
+  io.observe(el);
+  return () => io.disconnect();
+}
+
+function useNearViewport(ref: RefObject<HTMLElement | null>): boolean {
+  const [near, setNear] = useState(
+    () => typeof globalThis.IntersectionObserver === "undefined"
+  );
+  useEffect(() => {
+    if (near || !ref.current) return;
+    return observeNear(ref.current, () => setNear(true));
+  }, [near, ref]);
+  return near;
+}
+
+/** A filling frame takes the height left under it in the window. */
+function useFillHeight(
+  ref: RefObject<HTMLElement | null>,
+  fill: boolean
+): number | undefined {
+  const [height, setHeight] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (!fill) return;
+    const measure = () => {
+      const el = ref.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      setHeight(
+        Math.max(FILL_MIN_HEIGHT, window.innerHeight - top - FILL_BOTTOM_GAP)
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [fill, ref]);
+  return fill ? (height ?? FILL_MIN_HEIGHT) : undefined;
+}
+
+/**
+ * Focus moves to the area a Retry redraws (rule keyboard-and-focus §4): the
+ * reader who pressed it is not left on a button that is gone.
+ */
+export function useFocusAfterRetry<T extends HTMLElement>(): {
+  ref: RefObject<T | null>;
+  retrying: (retry?: () => void) => (() => void) | undefined;
+} {
+  const ref = useRef<T | null>(null);
+  const pending = useRef(false);
+  useEffect(() => {
+    if (!pending.current || !ref.current) return;
+    pending.current = false;
+    ref.current.focus();
+  });
+  return {
+    ref,
+    retrying: (retry) =>
+      retry
+        ? () => {
+            pending.current = true;
+            retry();
+          }
+        : undefined,
+  };
+}
+
+/**
+ * The loading state, in the frame's shape and at its first height. Outside a
+ * body it is its own status region; inside one, the body's single region
+ * speaks for every frame in it (`EmbedBodyContext`). `announce={false}` is a
+ * frame waiting to come into view: not loading, so never announced.
+ */
+export function RendererSkeleton({
+  fill = false,
+  subject = "cell",
+  announce = true,
+}: {
+  fill?: boolean;
+  subject?: RendererWordSubject;
+  announce?: boolean;
+}) {
+  const t = frameT();
+  const body = useContext(EmbedBodyContext);
+  const ref = useRef<HTMLDivElement | null>(null);
+  // A filling skeleton takes the height its frame will: no jump on swap.
+  const fillHeight = useFillHeight(ref, fill);
+  useEffect(() => {
+    if (!announce || !body) return;
+    return body.busy();
+  }, [announce, body]);
+  const label = t("renderer.loading", { subject });
+  const speaks = announce && !body;
+  return (
+    <div
+      ref={ref}
+      {...(speaks
+        ? { role: "status", "aria-busy": true, "aria-label": label }
+        : { "aria-hidden": true })}
+      style={{ height: fillHeight ?? FRAME_INITIAL_HEIGHT }}
+      className="w-full rounded-lg bg-foreground/[0.05] shimmer-pulse"
+    />
+  );
+}
 
 /** The sandboxed element itself. Presentational: no bridge, no data. */
 export function ModuleSandbox({
@@ -160,15 +417,19 @@ export function ModuleSandbox({
   title,
   frameRef,
   onLoad,
-  fill = false,
   height,
+  full = false,
+  hidden = false,
 }: {
   srcDoc: string;
   title: string;
   frameRef?: Ref<HTMLIFrameElement>;
   onLoad?: () => void;
-  fill?: boolean;
   height?: number;
+  /** Shown full size: it fills the box the browser made full screen. */
+  full?: boolean;
+  /** Starting: laid out but unseen, under its cover, until the cell is ready. */
+  hidden?: boolean;
 }) {
   return (
     <iframe
@@ -179,12 +440,12 @@ export function ModuleSandbox({
       allow=""
       referrerPolicy="no-referrer"
       onLoad={onLoad}
-      style={fill ? undefined : { height: height ?? INLINE_HEIGHT }}
-      className={
-        fill
-          ? "block h-[min(80vh,900px)] min-h-[420px] w-full rounded-lg ring-1 ring-inset ring-foreground/10"
-          : "block max-h-[80vh] w-full rounded-lg ring-1 ring-inset ring-foreground/10"
-      }
+      aria-hidden={hidden || undefined}
+      style={{
+        ...(full ? {} : { height: height ?? FRAME_INITIAL_HEIGHT }),
+        transition: "opacity var(--synap-transition-fade-enter)",
+      }}
+      className={`block w-full ${full ? "h-full" : "rounded-lg ring-1 ring-inset ring-foreground/10"} ${hidden ? "invisible absolute inset-x-0 top-0 opacity-0" : "visible opacity-100"}`}
     />
   );
 }
@@ -193,7 +454,8 @@ export function ModuleSandbox({
  * A module cell running in its frame, with the bridge answering its reads
  * and sending its writes to the pod. A cell that needs code from the network,
  * or a module this pod's bundle does not have (the kit), is not run: the
- * reader is told why, next to the host's door (`refusedAction`).
+ * reader is told why, next to the host's door (`refusedAction`), which also
+ * stays beside a frame that failed or left.
  */
 export function ModuleFrame({
   code,
@@ -205,6 +467,8 @@ export function ModuleFrame({
   title,
   fill = false,
   refusedAction,
+  subject = "cell",
+  cover,
 }: {
   code: string;
   deps?: Record<string, string>;
@@ -214,11 +478,16 @@ export function ModuleFrame({
   /** The lens every read and write is stamped with. */
   workspaceId: string | null;
   title: string;
-  /** Fill its box (a view's page) instead of the cell's own height. */
+  /** Fill the height left under it (a view's page) instead of its own. */
   fill?: boolean;
   refusedAction?: ReactNode;
+  /** What it draws, for its words. */
+  subject?: RendererWordSubject;
+  /** Drawn until the cell is ready (default: the skeleton). */
+  cover?: ReactNode;
 }) {
-  const client = trpc.useUtils().client;
+  const utils = trpc.useUtils();
+  const client = utils.client;
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const loads = useRef(0);
   const [run, setRun] = useState(0);
@@ -231,6 +500,10 @@ export function ModuleFrame({
   const theme = frameTheme(resolvedTheme);
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  const area = useFocusAfterRetry<HTMLDivElement>();
+  const near = useNearViewport(area.ref);
+  const fillHeight = useFillHeight(area.ref, fill);
+  const fullSize = useFullSize();
 
   // Keyed by value: a caller that hands a new but equal array must not
   // rebuild the srcdoc, which would reload (and so tear down) the frame.
@@ -240,11 +513,12 @@ export function ModuleFrame({
     () => moduleFrameRefusal(code, hostModules, JSON.parse(depsKey)),
     [code, hostModules, depsKey]
   );
-  // Built once per cell and run: a theme change is POSTED to the running
-  // frame (`synap:theme`) instead of rebuilding megabytes of srcdoc.
+  // Built once per cell and run, and only once the frame nears the viewport:
+  // a theme change is POSTED to the running frame (`synap:theme`) instead of
+  // rebuilding megabytes of srcdoc.
   const srcDoc = useMemo(
     () =>
-      refusal
+      refusal || !near
         ? ""
         : buildCellModuleFrameSrcdoc({
             code,
@@ -254,59 +528,65 @@ export function ModuleFrame({
             hostModules,
           }),
     // The theme is read through its ref: a change is posted, not rebuilt.
-    [code, hostsKey, hostModules, refusal, run]
+    [code, hostsKey, hostModules, refusal, run, near]
   );
 
   const lensKey = workspaceId ?? "";
   const { typeKey, viewId, entityId, profileSlug } = identity;
+  const live = near && !left && !refusal;
   useEffect(() => {
-    if (left || refusal) return;
+    if (!live) return;
+    const frameIdentity = { typeKey, viewId, entityId, profileSlug };
     const host = createModuleFrameHost({
       frameWindow: () => frameRef.current?.contentWindow ?? null,
       client,
       lens: { workspaceId: lensKey || null },
-      identity: { typeKey, viewId, entityId, profileSlug },
+      identity: frameIdentity,
       theme: () => themeRef.current,
       onStatus: (s) => setStatus(s.state === "ready" ? "ready" : "failed"),
       onResize: (h) => setHeight(h),
-      onProposed: () => {
-        const t = frameT();
-        showReceipt({
-          title: t("renderer.write.proposed"),
-          description: t("renderer.write.proposedBody"),
-          tone: "default",
-          undo: false,
-        });
+      onWriteAnswer: (result, request) => {
+        const receipt = writeReceipt(result);
+        if (receipt) showReceipt(receipt);
+        const stale = readsToRefresh(request, result, frameIdentity);
+        for (const id of stale.entityIds) {
+          void utils.entities.get.invalidate({ id });
+        }
+        if (stale.viewId) {
+          void utils.views.get.invalidate({ id: stale.viewId });
+          void utils.views.execute.invalidate();
+        }
       },
+      onWriteError: (err) => showReceipt(writeErrorReceipt(err)),
     });
     const onMessage = (event: MessageEvent) => void host(event);
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [
+    utils,
     client,
     lensKey,
     typeKey,
     viewId,
     entityId,
     profileSlug,
-    left,
-    refusal,
+    live,
     run,
   ]);
 
   // A frame that never says it mounted is failed, not "still loading".
   useEffect(() => {
-    if (left || refusal || status !== "starting") return;
+    if (!live || status !== "starting") return;
     const timer = setTimeout(
       () => setStatus((s) => (s === "starting" ? "failed" : s)),
       CELL_FRAME_READY_TIMEOUT_MS + CELL_FRAME_MOUNT_TIMEOUT_MS
     );
     return () => clearTimeout(timer);
-  }, [left, refusal, status, run]);
+  }, [live, status, run]);
 
   // The link door and "open this", as for a stored page (`html-frame`).
   useEffect(() => {
-    if (left || refusal) return;
+    if (!live) return;
     const env = browserFrameLinkEnv();
     const onMessage = (event: MessageEvent) => {
       const frame = frameRef.current?.contentWindow ?? null;
@@ -316,7 +596,7 @@ export function ModuleFrame({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [left, refusal, run]);
+  }, [live, run]);
 
   // The reader switched theme: the running frame repaints itself.
   useEffect(() => {
@@ -326,13 +606,13 @@ export function ModuleFrame({
     );
   }, [theme]);
 
-  const again = () => {
+  const again = area.retrying(() => {
     loads.current = 0;
     setStatus("starting");
     setHeight(undefined);
     setLeft(false);
     setRun((n) => n + 1);
-  };
+  });
 
   const t = frameT();
   if (refusal) {
@@ -345,25 +625,72 @@ export function ModuleFrame({
       />
     );
   }
-  if (left)
-    return <ResourceRowError message={t("left.line")} onRetry={again} />;
-  if (status === "failed") {
-    return <ResourceRowError message={t("renderer.failed")} onRetry={again} />;
+  if (left || status === "failed") {
+    return (
+      <div className="flex flex-col items-center gap-1">
+        <ResourceRowError
+          message={left ? t("left.line") : t("renderer.failed", { subject })}
+          onRetry={again}
+        />
+        {refusedAction}
+      </div>
+    );
   }
+  const starting = status !== "ready";
+  const coverNode = cover ?? <RendererSkeleton fill={fill} subject={subject} />;
   return (
-    <ModuleSandbox
-      key={run}
-      frameRef={frameRef}
-      title={title}
-      srcDoc={srcDoc}
-      fill={fill}
-      height={height}
-      onLoad={() => {
-        // The srcdoc's own load is the first; a later one is the frame
-        // leaving for another address.
-        loads.current += 1;
-        if (loads.current > 1) setLeft(true);
-      }}
-    />
+    <div
+      ref={area.ref}
+      tabIndex={-1}
+      role="group"
+      aria-label={title}
+      className="flex flex-col gap-2 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      data-reads-wide={fill ? "" : undefined}
+    >
+      {!fill && !starting && (
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            variant="light"
+            radius="md"
+            startContent={<Maximize2 aria-hidden size={14} />}
+            onPress={fullSize.enter}
+          >
+            {t("fullSize")}
+          </Button>
+        </div>
+      )}
+      {/* The box goes full screen, never the frame: it is neither moved nor
+          remounted, so the cell keeps its state and its bridge. */}
+      <div
+        ref={fullSize.boxRef}
+        className={`relative ${fullSize.isFull ? "h-full w-full bg-background" : ""}`}
+      >
+        {!near ? (
+          (cover ?? (
+            <RendererSkeleton fill={fill} subject={subject} announce={false} />
+          ))
+        ) : (
+          <>
+            {starting && coverNode}
+            <ModuleSandbox
+              key={run}
+              frameRef={frameRef}
+              title={title}
+              srcDoc={srcDoc}
+              height={fill ? fillHeight : height}
+              full={fullSize.isFull}
+              hidden={starting}
+              onLoad={() => {
+                // The srcdoc's own load is the first; a later one is the
+                // frame leaving for another address.
+                loads.current += 1;
+                if (loads.current > 1) setLeft(true);
+              }}
+            />
+          </>
+        )}
+      </div>
+    </div>
   );
 }

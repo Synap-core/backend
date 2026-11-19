@@ -14,15 +14,18 @@
  *                   (`use-host-modules`) → the frame
  *
  * Every state is its own drawing, never folded into another:
- *   loading        a skeleton in the frame's shape ("Drawing this view…")
- *   failed         `ResourceRowError` with Try again; a resolution that
- *                  only partly read (`readFailed`) says so too
- *   not installed  the page's identity card and its "Open in app" (an
- *                  explicit cell also says "Synap's renderers aren't on
- *                  this pod.")
+ *   loading        a view: a skeleton in the frame's shape. A record (its
+ *                  card or detail): the page's OWN content, swapped only
+ *                  once a cell is ready, so a pod with no bundle never sees a
+ *                  skeleton at all
+ *   failed         `ResourceRowError` with Try again, beside the page's door;
+ *                  for a record, its own content with one quiet line
+ *   partly read    the bindings read failed (`readFailed`): one quiet line,
+ *                  "Showing the default", never an error above a drawn cell
+ *   not installed  the page's own content; `fallback` is told, so a view's
+ *                  hand-off card can say it to a pod admin
  *   refused        the cell needs the network or a module the bundle lacks
  *                  (`ModuleFrame`'s own state)
- *   managed-only   the bundle is offered only to pods Synap hosts
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -30,64 +33,71 @@ import type { RendererSubject } from "@synap-core/types/renderer-resolution";
 import { trpc } from "../../../../lib/trpc";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import { StatusPill } from "../../../(admin)/components/status-pill";
-import { frameT } from "./frame-copy";
+import { frameT, type RendererWordSubject } from "./frame-copy";
 import {
   HIDDEN_CODES,
   moduleCellSource,
   type ModuleCellSource,
 } from "./markdown-model";
-import { ModuleFrame, type ModuleFrameIdentity } from "./module-frame";
+import {
+  ModuleFrame,
+  RendererSkeleton,
+  useFocusAfterRetry,
+  type ModuleFrameIdentity,
+} from "./module-frame";
 import { useHostModules } from "./use-host-modules";
 import { useObjectRenderer, type RenderersStatus } from "./use-object-renderer";
 
-/** The loading state, in the frame's shape. */
-export function RendererSkeleton({ fill = false }: { fill?: boolean }) {
-  const t = frameT();
-  return (
-    <div
-      role="status"
-      aria-busy="true"
-      aria-label={t("renderer.loading")}
-      className={`w-full rounded-lg bg-foreground/[0.05] shimmer-pulse ${fill ? "h-[min(80vh,900px)] min-h-[420px]" : "h-40"}`}
-    />
-  );
-}
-
-export type RendererNoticeKind = "notInstalled" | "managedOnly";
+export { RendererSkeleton };
 
 /**
- * Why Synap's renderers are not drawing here: not installed on this pod, or
- * offered only to pods Synap hosts (an install refused with the reason code
- * `renderer_bundle_managed_only`). A mark and one line, beside the door.
+ * Synap's renderers are not on this pod: a mark and one line, beside the
+ * door. For a cell that only a renderer can run (an embedded module cell, a
+ * cell's own page).
  */
-export function RendererNotice({
-  kind,
-  action,
-}: {
-  kind: RendererNoticeKind;
-  action?: ReactNode;
-}) {
+export function RendererNotice({ action }: { action?: ReactNode }) {
   const t = frameT();
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-content2 px-3 py-2">
       <StatusPill kind="unknown" label={t("renderer.refused.mark")} />
       <p className="text-small text-foreground/85">
-        {kind === "managedOnly"
-          ? t("renderer.managedOnly")
-          : t("renderer.notInstalled")}
+        {t("renderer.notInstalled")}
       </p>
       {action}
     </div>
   );
 }
 
-/** The install refusal's reason code → its notice, or null for any other. */
-export function rendererNoticeFor(
-  reasonCode: string | null | undefined
-): RendererNoticeKind | null {
-  if (reasonCode === "renderer_bundle_managed_only") return "managedOnly";
-  if (reasonCode === "renderer_bundle_no_control_plane") return "notInstalled";
-  return null;
+/** The quiet line over the default when the kind's choice could not be read. */
+function PartlyRead() {
+  return (
+    <p className="text-tiny text-foreground/55">
+      {frameT()("renderer.partly")}
+    </p>
+  );
+}
+
+/** An error with Retry, the door beside it; focus returns to it after Retry. */
+function FailedWithDoor({
+  message,
+  retry,
+  door,
+}: {
+  message: string;
+  retry?: () => void;
+  door?: ReactNode;
+}) {
+  const area = useFocusAfterRetry<HTMLDivElement>();
+  return (
+    <div
+      ref={area.ref}
+      tabIndex={-1}
+      className="flex flex-col items-center gap-1 rounded-lg focus:outline-none"
+    >
+      <ResourceRowError message={message} onRetry={area.retrying(retry)} />
+      {door}
+    </div>
+  );
 }
 
 /** A module cell's source + the bundle's host modules → the running frame. */
@@ -98,6 +108,8 @@ export function ModuleCell({
   title,
   fill = false,
   door,
+  subject = "cell",
+  cover,
 }: {
   source: ModuleCellSource;
   identity: ModuleFrameIdentity;
@@ -107,21 +119,25 @@ export function ModuleCell({
   fill?: boolean;
   /** The host's door beside a cell that does not run (its page, the app). */
   door?: ReactNode;
+  subject?: RendererWordSubject;
+  /** Drawn while it loads and starts (default: the skeleton). */
+  cover?: ReactNode;
 }) {
   const modules = useHostModules();
   const t = frameT();
   switch (modules.state) {
     case "loading":
-      return <RendererSkeleton fill={fill} />;
+      return <>{cover ?? <RendererSkeleton fill={fill} subject={subject} />}</>;
     case "failed":
       return (
-        <ResourceRowError
-          message={t("renderer.failed")}
-          onRetry={modules.retry}
+        <FailedWithDoor
+          message={t("renderer.failed", { subject })}
+          retry={modules.retry}
+          door={door}
         />
       );
     case "none":
-      return <RendererNotice kind="notInstalled" action={door} />;
+      return <RendererNotice action={door} />;
     case "ready":
       return (
         <ModuleFrame
@@ -136,6 +152,8 @@ export function ModuleCell({
           title={title}
           fill={fill}
           refusedAction={door}
+          subject={subject}
+          cover={cover}
         />
       );
   }
@@ -154,6 +172,8 @@ export function CellByKey({
   fill,
   fallback,
   footer,
+  subject = "cell",
+  cover,
 }: {
   cellKey: string;
   identity: Omit<ModuleFrameIdentity, "typeKey">;
@@ -161,8 +181,11 @@ export function CellByKey({
   title: string;
   fill?: boolean;
   fallback: ReactNode;
-  /** Under the cell when it runs (the object's own "Open in app"). */
+  /** Under the cell when it runs (the object's own door). */
   footer?: ReactNode;
+  subject?: RendererWordSubject;
+  /** Drawn while it loads and starts (default: the skeleton). */
+  cover?: ReactNode;
 }) {
   const query = trpc.widgetDefinitions.get.useQuery(
     { typeKey: cellKey },
@@ -174,13 +197,16 @@ export function CellByKey({
     const code = query.error.data?.code;
     if (code && HIDDEN_CODES.has(code)) return <>{fallback}</>;
     return (
-      <ResourceRowError
-        message={t("renderer.failed")}
-        onRetry={() => void query.refetch()}
+      <FailedWithDoor
+        message={t("renderer.failed", { subject })}
+        retry={() => void query.refetch()}
+        door={footer}
       />
     );
   }
-  if (query.isLoading) return <RendererSkeleton fill={fill} />;
+  if (query.isLoading) {
+    return <>{cover ?? <RendererSkeleton fill={fill} subject={subject} />}</>;
+  }
   if (!source) return <>{fallback}</>;
   return (
     <div className="flex flex-col gap-2">
@@ -190,7 +216,10 @@ export function CellByKey({
         workspaceId={workspaceId}
         title={title}
         fill={fill}
+        subject={subject}
+        cover={cover}
       />
+      {/* The door stays under the cell in every state it draws. */}
       {footer && <div className="flex justify-end">{footer}</div>}
     </div>
   );
@@ -214,9 +243,30 @@ export function drawableCellKey(
 }
 
 /**
+ * Whether a renderer cell will draw `subject` here (the resolution picked a
+ * frame cell this pod runs). A page reads it to place what sits around the
+ * drawing (its header's door), from the same reads `RenderedObject` makes.
+ */
+export function useDrawsCell(
+  subject: RendererSubject,
+  workspaceId: string | null
+): boolean {
+  const state = useObjectRenderer(subject, { workspaceId });
+  return (
+    state.state === "resolved" &&
+    state.resolution.kind === "cell" &&
+    drawableCellKey(state.resolution.ref, state.status) !== null
+  );
+}
+
+/** What the page's own content is told: whether no bundle is on this pod. */
+export interface FallbackContext {
+  notInstalled: boolean;
+}
+
+/**
  * An object drawn by whichever renderer the one resolution picks, else the
- * page's own `fallback` (its identity card). `notInstalledNote` says so when
- * no bundle is on the pod (a view, which only a renderer can draw).
+ * page's own `fallback` (its identity card, or a record's fields).
  */
 export function RenderedObject({
   subject,
@@ -224,36 +274,53 @@ export function RenderedObject({
   title,
   fill,
   fallback,
-  notInstalledNote = false,
   drawnFooter,
 }: {
   subject: RendererSubject;
   workspaceId: string | null;
   title: string;
   fill?: boolean;
-  fallback: ReactNode;
-  notInstalledNote?: boolean;
-  /** Under a drawn cell (the object's own "Open in app"). */
+  fallback: ReactNode | ((context: FallbackContext) => ReactNode);
+  /** Under a drawn cell (the object's own door). */
   drawnFooter?: ReactNode;
 }) {
   const state = useObjectRenderer(subject, { workspaceId });
   const t = frameT();
-  if (state.state === "loading") return <RendererSkeleton fill={fill} />;
+  const words: RendererWordSubject =
+    subject.kind === "view" ? "view" : "entity";
+  const own = (notInstalled: boolean): ReactNode =>
+    typeof fallback === "function" ? fallback({ notInstalled }) : fallback;
+  // A record's own content is complete without a renderer: it is drawn
+  // while the reads load, and stays when they fail.
+  const record = subject.kind === "entity";
+  if (state.state === "loading") {
+    return record ? (
+      <>{own(false)}</>
+    ) : (
+      <RendererSkeleton fill={fill} subject={words} />
+    );
+  }
   if (state.state === "failed") {
+    if (record) {
+      return (
+        <div className="flex flex-col gap-3">
+          <PartlyRead />
+          {own(false)}
+        </div>
+      );
+    }
     return (
       <div className="flex flex-col gap-3">
-        <ResourceRowError
-          message={t("renderer.failed")}
-          onRetry={state.retry}
+        <FailedWithDoor
+          message={t("renderer.failed", { subject: words })}
+          retry={state.retry}
         />
-        {fallback}
+        {own(false)}
       </div>
     );
   }
   const { resolution, status } = state;
-  const partly = resolution.readFailed ? (
-    <ResourceRowError message={t("renderer.failed")} onRetry={state.retry} />
-  ) : null;
+  const partly = resolution.readFailed ? <PartlyRead /> : null;
   const cellKey =
     resolution.kind === "cell" ? drawableCellKey(resolution.ref, status) : null;
   if (cellKey) {
@@ -261,6 +328,7 @@ export function RenderedObject({
       subject.kind === "view"
         ? { viewId: subject.viewId }
         : { entityId: subject.entityId, profileSlug: subject.profileSlug };
+    const fallbackNode = own(false);
     return (
       <div className="flex flex-col gap-3">
         {partly}
@@ -270,19 +338,20 @@ export function RenderedObject({
           workspaceId={workspaceId}
           title={title}
           fill={fill}
-          fallback={fallback}
+          fallback={fallbackNode}
           footer={drawnFooter}
+          subject={words}
+          {...(record ? { cover: fallbackNode } : {})}
         />
       </div>
     );
   }
+  const node = own(!status.bundle);
+  if (!partly) return <>{node}</>;
   return (
     <div className="flex flex-col gap-3">
       {partly}
-      {notInstalledNote && !status.bundle && (
-        <RendererNotice kind="notInstalled" />
-      )}
-      {fallback}
+      {node}
     </div>
   );
 }

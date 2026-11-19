@@ -277,6 +277,30 @@ describe("content is drawn, never injected", () => {
     );
   });
 
+  it("a body frames at most ONE entity card, and every module frame mounts lazily", () => {
+    // Each module frame carries the renderer bundle (about 3 MB of srcdoc).
+    // A body with twenty record embeds must not mount twenty: the body picks
+    // its framed cards (`entityFrameNodes`, capped by
+    // `MAX_FRAMED_ENTITY_CARDS`), every other card is its identity card, and
+    // each frame mounts only near the viewport (`observeNear`). Behaviour:
+    // `embed-view.test.tsx` ("a body runs at most …"), `module-frame.test.tsx`.
+    const content = ["app", "_lib", "object", "content"];
+    const body = (name: string) =>
+      FILES.find((f) => f.path === join(...content, name))?.body ?? "";
+    const embed = body("embed-view.tsx");
+    expect(embed).toMatch(/export const MAX_FRAMED_ENTITY_CARDS = 1;/);
+    // The card slot is reached only within the cap.
+    expect(embed).toMatch(/if \(!subject \|\| !mayFrame\) return identity;/);
+    const markdown = body("markdown-view.tsx");
+    expect(markdown).toMatch(/entityFrameNodes\(tree\)/);
+    expect(markdown).toMatch(/<EmbedBodyContext\.Provider\b/);
+    expect(markdown).toMatch(/node=\{node\}/);
+    const frame = body("module-frame.tsx");
+    // No srcdoc is built before the frame is near.
+    expect(frame).toMatch(/refusal \|\| !near\s*\?\s*""/);
+    expect(frame).toMatch(/useNearViewport\(/);
+  });
+
   it("draws an image only through the one image door", () => {
     // `app/_lib/media/media-view.tsx` signs on the reader's own floor, draws
     // only allowlisted rasters and never loads an outside address. A second

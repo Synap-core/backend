@@ -20,6 +20,11 @@
  * States: loading · failed (the status read failed: never "nothing to
  * draw") · resolved (a cell, or nothing, each with `readFailed` when the
  * bindings read failed).
+ *
+ * A pod with no frame cell that could draw the subject (a self-hosted pod
+ * with no bundle, a view type no installed cell declares) resolves to
+ * nothing as soon as the status answers: the bindings are not read, and
+ * the page draws its own content with no skeleton.
  */
 
 import {
@@ -156,6 +161,26 @@ export function resolveForPodAdmin(
   });
 }
 
+/**
+ * Whether any installed cell could draw `subject` here: for a view, a frame
+ * cell that declares its type (or the bundle's default for it); for an entity
+ * slot, any frame cell (a binding or an override may name any of them).
+ * False → nothing can resolve to a cell pod admin runs, so nothing is read
+ * further and nothing waits.
+ */
+export function couldDrawHere(
+  status: RenderersStatus,
+  subject: RendererSubject
+): boolean {
+  const frames = status.installed.filter((c) => c.runtime === "frame");
+  if (frames.length === 0) return false;
+  if (subject.kind === "entity") return true;
+  return (
+    frames.some((c) => c.viewTypes.includes(subject.viewType)) ||
+    bundleFallback(status, subject) !== null
+  );
+}
+
 /** A read's state, as `useQuery` hands it. */
 export interface ReadLike {
   isLoading: boolean;
@@ -194,6 +219,14 @@ export function objectRendererState(input: {
   if (input.status.isLoading) return { state: "loading" };
   const status = readRenderersStatus(input.status.data);
   if (!status) return failed;
+  if (!couldDrawHere(status, input.subject)) {
+    return {
+      state: "resolved",
+      resolution: { kind: "none", readFailed: false },
+      status,
+      ...(input.retry ? { retry: input.retry } : {}),
+    };
+  }
   let effective: EffectiveRenderersRead | undefined;
   if (input.subject.kind === "entity" && input.effective) {
     if (input.effective.error) effective = { state: "failed" };
@@ -221,6 +254,10 @@ export function useObjectRenderer(
 ): ObjectRendererState {
   const status = trpc.renderers.status.useQuery(undefined, { retry: false });
   const entity = subject.kind === "entity" ? subject : null;
+  // The bindings are read only when a cell here could draw the entity.
+  const parsed = readRenderersStatus(status.data);
+  const worthReading =
+    entity !== null && parsed !== null && couldDrawHere(parsed, subject);
   const effective = trpc.profiles.getEffectiveRenderers.useQuery(
     {
       profileSlug: entity?.profileSlug ?? "",
@@ -228,7 +265,7 @@ export function useObjectRenderer(
       workspaceId: lens.workspaceId,
       ...(entity ? { subjectId: entity.entityId } : {}),
     },
-    { enabled: entity !== null, retry: false }
+    { enabled: worthReading, retry: false }
   );
   return objectRendererState({
     subject,

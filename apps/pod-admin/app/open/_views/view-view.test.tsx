@@ -56,6 +56,7 @@ vi.mock("../../../lib/trpc", () => ({
 
 import { CELL_MODULE_FRAME_SANDBOX } from "@synap-core/types/cell-bridge";
 import { ViewView } from "./view-view";
+import { ConsoleRoleProvider } from "../../(admin)/components/side-nav-role";
 import { describeView, viewKind, widgetCount } from "./view-summary";
 import { pipelineSnapshot, type FlowLike } from "./view-pipeline-model";
 import { openT } from "../copy";
@@ -136,7 +137,7 @@ describe("/open/view: a view pod admin does not draw", () => {
     answer = view({});
     const out = renderToStaticMarkup(<ViewView id="v1" />);
     expect(out.split("Open view in the app").length - 1).toBe(1);
-    expect(out).not.toContain(">Open in app<");
+    expect(out).not.toContain("Open in app");
   });
 
   it("a generated dashboard counts its widgets and names its kind", () => {
@@ -389,6 +390,8 @@ describe("/open/view: a board the pod's renderer bundle draws", () => {
     expect(out).not.toContain("This view is worked in the Synap app");
     // The way to the app stays, as the object's own link.
     expect(out).toContain("Open in app");
+    // The card reads wide around the drawn view.
+    expect(out).toContain("data-reads-wide");
   });
 
   it("a layout the bundle does not draw keeps its card", () => {
@@ -400,11 +403,33 @@ describe("/open/view: a board the pod's renderer bundle draws", () => {
 });
 
 describe("/open/view: no renderer bundle on this pod", () => {
-  it("keeps the card, and says the renderers are not on this pod", () => {
-    setAmbientCatalogLocale("en");
+  beforeEach(() => setAmbientCatalogLocale("en"));
+
+  it("a pod admin reads it in ONE line inside the hand-off card, never a pill above it", () => {
+    answer = view({ type: "board" });
+    const out = renderToStaticMarkup(
+      <ConsoleRoleProvider role="admin">
+        <ViewView id="v1" />
+      </ConsoleRoleProvider>
+    );
+    const card = out.indexOf("This view is worked in the Synap app");
+    const line = out.indexOf("Synap’s renderers aren’t on this pod.");
+    expect(card).toBeGreaterThan(-1);
+    expect(line).toBeGreaterThan(card);
+    expect(line).toBeLessThan(out.indexOf("Open view in the app"));
+    expect(out).not.toContain("Not drawn");
+  });
+
+  it("a member is not told about the pod's setup", () => {
     answer = view({ type: "board" });
     const out = renderToStaticMarkup(<ViewView id="v1" />);
     expect(out).toContain("This view is worked in the Synap app");
-    expect(out).toContain("Synap’s renderers aren’t on this pod.");
+    expect(out).not.toContain("Synap’s renderers aren’t on this pod.");
+  });
+
+  it('the hand-off is the one door: no second "Open in app" in the header', () => {
+    answer = view({ type: "board" });
+    const out = renderToStaticMarkup(<ViewView id="v1" />);
+    expect(out).not.toContain("Open in app");
   });
 });

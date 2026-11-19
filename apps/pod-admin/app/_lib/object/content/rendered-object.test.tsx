@@ -1,10 +1,12 @@
 /**
  * Every state of an object drawn by a renderer, each its own drawing:
- * loading (a skeleton), failed (an error with Retry, never the empty
- * card), not installed (the page's own card, and a note where a renderer is
- * expected), refused (a cell that needs what the bundle lacks), managed-only,
- * a partial read (`readFailed`), and the cell itself running in the frame.
- * Driven through the real hook, resolution and frame against a fake tRPC.
+ * loading (a skeleton for a view; a record's OWN content, never a skeleton),
+ * failed (an error with Retry, never the empty card), not installed (the
+ * page's own card, told so), refused (a cell that needs what the bundle
+ * lacks), a partial read (`readFailed`: one quiet line), and the cell itself
+ * running in the frame. A pod with no frame cell that could draw the object
+ * draws exactly the page's own content, at once. Driven through the real
+ * hook, resolution and frame against a fake tRPC.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
@@ -52,7 +54,7 @@ import {
   ModuleCell,
   RenderedObject,
   RendererNotice,
-  rendererNoticeFor,
+  type FallbackContext,
 } from "./rendered-object";
 import { forgetHostModules } from "./use-host-modules";
 
@@ -102,19 +104,38 @@ const board: RendererSubject = {
   viewType: "board",
 };
 const FALLBACK = <p>IDENTITY-CARD</p>;
+const told = ({ notInstalled }: FallbackContext) => (
+  <p>IDENTITY-CARD{notInstalled ? " NOT-INSTALLED" : ""}</p>
+);
 
-function draw(subject = board, note = true) {
+function draw(subject = board) {
   return html(
     <RenderedObject
       subject={subject}
       workspaceId="ws-1"
       title="Pipeline"
       fill
-      fallback={FALLBACK}
-      notInstalledNote={note}
+      fallback={told}
     />
   );
 }
+
+const ENTITY = "11111111-1111-4111-8111-111111111111";
+const detail: RendererSubject = {
+  kind: "entity",
+  slot: "entity-detail",
+  entityId: ENTITY,
+  profileSlug: "deal",
+};
+const drawRecord = (subject: RendererSubject = detail) =>
+  html(
+    <RenderedObject
+      subject={subject}
+      workspaceId="ws-1"
+      title="Acme"
+      fallback={FALLBACK}
+    />
+  );
 
 beforeEach(() => {
   forgetHostModules();
@@ -152,11 +173,11 @@ describe("RenderedObject — each state", () => {
     expect(iframes(out)).toHaveLength(0);
   });
 
-  it("not installed: the page's card, with the note where a renderer is expected", () => {
+  it("not installed: the page's card, told so (never a pill above it)", () => {
     reads.status = { data: { bundle: null, defaults: {}, installed: [] } };
     const out = draw();
-    expect(out).toContain("IDENTITY-CARD");
-    expect(out).toContain("Synap’s renderers aren’t on this pod.");
+    expect(out).toContain("IDENTITY-CARD NOT-INSTALLED");
+    expect(out).not.toContain("Not drawn");
     expect(iframes(out)).toHaveLength(0);
     // Not asked for a source it could never run.
     expect(reads.asked).toEqual([]);
@@ -175,15 +196,12 @@ describe("RenderedObject — each state", () => {
         sources: { "entity-detail": "profile" },
       },
     };
-    const out = draw(
-      {
-        kind: "entity",
-        slot: "entity-detail",
-        entityId: "11111111-1111-4111-8111-111111111111",
-        profileSlug: "task",
-      },
-      false
-    );
+    const out = draw({
+      kind: "entity",
+      slot: "entity-detail",
+      entityId: ENTITY,
+      profileSlug: "task",
+    });
     expect(out).toContain("IDENTITY-CARD");
     expect(iframes(out)).toHaveLength(0);
     expect(reads.asked).toEqual([]);
@@ -204,23 +222,54 @@ describe("RenderedObject — each state", () => {
     expect(iframes(out)).toHaveLength(0);
   });
 
-  it("a partial read (the bindings failed) says so, above what it still draws", () => {
+  it("a partial read (the bindings failed) is one quiet line, never an error row", () => {
     reads.effective = { error: { data: { code: "INTERNAL_SERVER_ERROR" } } };
-    const out = html(
-      <RenderedObject
-        subject={{
-          kind: "entity",
-          slot: "entity-card",
-          entityId: "11111111-1111-4111-8111-111111111111",
-          profileSlug: "deal",
-        }}
-        workspaceId="ws-1"
-        title="Acme"
-        fallback={FALLBACK}
-      />
+    const out = drawRecord({ ...detail, slot: "entity-card" });
+    expect(out).toContain(
+      "Showing the default: couldn’t read this kind’s choice."
     );
-    expect(out).toContain("Couldn’t draw this view");
+    expect(out).not.toContain("Couldn’t draw");
+    expect(out).not.toContain("Retry");
     expect(out).toContain("IDENTITY-CARD");
+  });
+});
+
+describe("a record's slot never waits on a renderer that cannot come", () => {
+  it("no frame cell on this pod: exactly the page's own content, at once", () => {
+    reads.status = { data: { bundle: null, defaults: {}, installed: [] } };
+    // The bindings read would still be in flight: nothing waits on it.
+    reads.effective = { isLoading: true };
+    for (const slot of ["entity-detail", "entity-card"] as const) {
+      expect(drawRecord({ ...detail, slot })).toBe("<p>IDENTITY-CARD</p>");
+    }
+  });
+
+  it("while the reads load, a record draws its own content, never a skeleton", () => {
+    reads.status = { isLoading: true };
+    expect(drawRecord()).toBe("<p>IDENTITY-CARD</p>");
+    reads.status = { data: STATUS };
+    reads.effective = { isLoading: true };
+    expect(drawRecord()).toBe("<p>IDENTITY-CARD</p>");
+  });
+
+  it("a view type no installed cell declares is its card at once", () => {
+    const out = draw({ kind: "view", viewId: VIEW, viewType: "calendar" });
+    expect(out).toBe("<p>IDENTITY-CARD</p>");
+  });
+
+  it("a cell that resolves starts hidden under the record's own content", () => {
+    reads.effective = {
+      data: {
+        "entity-detail": { kind: "cell", cellKey: BOARD, props: {} },
+        sources: { "entity-detail": "profile" },
+      },
+    };
+    const out = drawRecord();
+    expect(out).toContain("IDENTITY-CARD");
+    expect(out).not.toContain('aria-busy="true"');
+    const frames = iframes(out);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toContain('aria-hidden="true"');
   });
 });
 
@@ -240,7 +289,7 @@ describe("ModuleCell — refused and not installed", () => {
       />
     );
     expect(iframes(out)).toHaveLength(0);
-    expect(out).toContain("This view needs parts this pod doesn’t have.");
+    expect(out).toContain("This needs parts this pod doesn’t have.");
     expect(out).toContain("DOOR");
   });
 
@@ -259,20 +308,10 @@ describe("ModuleCell — refused and not installed", () => {
   });
 });
 
-describe("managed-only", () => {
-  it("the install refusal's reason code names its notice", () => {
-    expect(rendererNoticeFor("renderer_bundle_managed_only")).toBe(
-      "managedOnly"
-    );
-    expect(rendererNoticeFor("renderer_bundle_no_control_plane")).toBe(
-      "notInstalled"
-    );
-    expect(rendererNoticeFor("something_else")).toBeNull();
-  });
-
-  it("says the renderers come with pods Synap hosts", () => {
-    expect(html(<RendererNotice kind="managedOnly" />)).toContain(
-      "Synap’s renderers come with pods hosted by Synap."
-    );
+describe("RendererNotice", () => {
+  it("says the renderers are not on this pod, beside its door", () => {
+    const out = html(<RendererNotice action={<a href="/x">DOOR</a>} />);
+    expect(out).toContain("Synap’s renderers aren’t on this pod.");
+    expect(out).toContain("DOOR");
   });
 });

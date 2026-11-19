@@ -13,7 +13,13 @@
  * drawn by `MermaidFence` as an inert `<img src=blob:>`.
  */
 
-import { Fragment, useMemo, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import {
   linkObjectIds,
@@ -22,7 +28,9 @@ import {
   resolvePatternMarkers,
   type MdastNode,
 } from "@synap-core/markdown-core";
-import { EmbedBlock } from "./embed-view";
+import { EmbedBlock, entityFrameNodes } from "./embed-view";
+import { EmbedBodyContext, type EmbedBody } from "./embed-context";
+import { frameT } from "./frame-copy";
 import {
   contentHref,
   contentMeasureClass,
@@ -131,6 +139,7 @@ function renderNode(node: MdastNode): ReactNode {
         embed={embed}
         inline={node.type === "textDirective"}
         fallback={children({ children: embed.fallback })}
+        node={node}
       />
     );
   }
@@ -321,11 +330,28 @@ export default function MarkdownView({
     () => linkObjectIds(parseMarkdown(resolvePatternMarkers(source))),
     [source]
   );
+  // The body's frame cap (`entityFrameNodes`) and its ONE status region for
+  // every frame loading in it.
+  const framed = useMemo(() => entityFrameNodes(tree), [tree]);
+  const [loading, setLoading] = useState(0);
+  const busy = useCallback(() => {
+    setLoading((n) => n + 1);
+    return () => setLoading((n) => n - 1);
+  }, []);
+  const body = useMemo<EmbedBody>(
+    () => ({ mayFrameEntity: (node) => framed.has(node), busy }),
+    [framed, busy]
+  );
   return (
-    <div
-      className={`flex min-w-0 ${contentMeasureClass(measure)} flex-col gap-3 break-words text-[14px] leading-relaxed text-foreground/90`}
-    >
-      {children(tree)}
-    </div>
+    <EmbedBodyContext.Provider value={body}>
+      <div
+        className={`flex min-w-0 ${contentMeasureClass(measure)} flex-col gap-3 break-words text-[14px] leading-relaxed text-foreground/90`}
+      >
+        <span role="status" className="sr-only">
+          {loading > 0 ? frameT()("renderer.loading", { subject: "cell" }) : ""}
+        </span>
+        {children(tree)}
+      </div>
+    </EmbedBodyContext.Provider>
   );
 }

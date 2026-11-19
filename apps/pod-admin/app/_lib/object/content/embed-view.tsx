@@ -10,7 +10,11 @@
  *   entity          a card that opens the record's console page; its title
  *                   only when the reader's own read returns it. As a block,
  *                   the entity-card renderer the one resolution picks draws
- *                   it when there is one (`rendered-object`)
+ *                   it when there is one (`rendered-object`), with the
+ *                   record's page as its door under it. Only the first
+ *                   entity block of a body may run its card in a frame
+ *                   (`MAX_FRAMED_ENTITY_CARDS`); the others draw their
+ *                   identity card
  *   view            a chip that opens the view's console page
  *   ask             a session's live question, as the shared answer card
  *   cell-frame      an HTML page cell RUNS, in the isolated frame of
@@ -38,6 +42,7 @@
 
 import { useContext, type ReactNode } from "react";
 import Link from "next/link";
+import { readEmbed, type MdastNode } from "@synap-core/markdown-core";
 import { AlertTriangle, BarChart3, Lock, type LucideIcon } from "lucide-react";
 import type { Embed } from "@synap-core/markdown-core";
 import { CELL_FRAME_MAX_BYTES } from "@synap-core/types/cell-bridge";
@@ -55,7 +60,11 @@ import {
 import { kindIcon } from "../kind-icon";
 import { AskChip, AskEmbed } from "./embed-ask";
 import { ChartSnapshot } from "./embed-chart";
-import { EmbedHostContext, type EmbedHost } from "./embed-context";
+import {
+  EmbedBodyContext,
+  EmbedHostContext,
+  type EmbedHost,
+} from "./embed-context";
 import { HtmlFrame } from "./html-frame";
 import { ModuleCell, RenderedObject } from "./rendered-object";
 import {
@@ -79,6 +88,42 @@ function embedModelOf(embed: Embed): EmbedModel {
     props: embed.props,
     propsError: embed.propsError,
   });
+}
+
+/**
+ * Entity blocks per body that may run their card in a module frame. Each
+ * frame carries the bundle (about 3 MB of srcdoc): a body that embeds twenty
+ * records would mount twenty, so only the first is drawn by its renderer.
+ */
+export const MAX_FRAMED_ENTITY_CARDS = 1;
+
+/**
+ * The entity BLOCK embeds of a body that may frame their card: the first
+ * `MAX_FRAMED_ENTITY_CARDS`, in document order. Inline mentions never frame.
+ */
+export function entityFrameNodes(tree: {
+  children?: readonly MdastNode[];
+}): ReadonlySet<object> {
+  const picked = new Set<object>();
+  const walk = (nodes: readonly MdastNode[] | undefined) => {
+    for (const node of nodes ?? []) {
+      if (picked.size >= MAX_FRAMED_ENTITY_CARDS) return;
+      const embed = readEmbed(node as Parameters<typeof readEmbed>[0]);
+      if (embed) {
+        if (
+          node.type !== "textDirective" &&
+          embed.directive !== "synap-ask" &&
+          embedModelOf(embed).kind === "entity"
+        ) {
+          picked.add(node);
+        }
+        continue;
+      }
+      walk((node as { children?: readonly MdastNode[] }).children);
+    }
+  };
+  walk(tree.children);
+  return picked;
 }
 
 function iconFor(model: EmbedModel): LucideIcon {
@@ -157,11 +202,14 @@ function EntityCardBody({
   words: { noun, label },
   read,
   inline,
+  mayFrame,
 }: {
   model: Extract<EmbedModel, { kind: "entity" }>;
   words: EmbedWords;
   read: EmbedEntityRead;
   inline: boolean;
+  /** Within the body's cap: its renderer may draw it in a frame. */
+  mayFrame: boolean;
 }) {
   const href = objectPage("entity", model.id);
   const Icon = iconFor(model);
@@ -256,9 +304,9 @@ function EntityCardBody({
   );
   // The entity-card slot: a card cell the one resolution picks (the
   // record's own override, its kind's binding, the bundle's default) draws
-  // it; else this identity card.
+  // it, the record's page a door under it; else this identity card.
   const subject = read.state === "ready" ? read.card : undefined;
-  if (!subject) return identity;
+  if (!subject || !mayFrame) return identity;
   return (
     <RenderedObject
       subject={{
@@ -273,6 +321,14 @@ function EntityCardBody({
       workspaceId={subject.workspaceId}
       title={title}
       fallback={identity}
+      drawnFooter={
+        <Link
+          href={href}
+          className={`text-[12.5px] text-foreground/75 ${DOOR}`}
+        >
+          {title}
+        </Link>
+      }
     />
   );
 }
@@ -281,6 +337,7 @@ type EntityCardProps = {
   model: Extract<EmbedModel, { kind: "entity" }>;
   words: EmbedWords;
   inline: boolean;
+  mayFrame: boolean;
 };
 
 function EntityCardRead({
@@ -571,10 +628,12 @@ function Head({
   model,
   words,
   inline,
+  mayFrame = false,
 }: {
   model: EmbedModel;
   words: EmbedWords;
   inline: boolean;
+  mayFrame?: boolean;
 }) {
   switch (model.kind) {
     case "chart-snapshot":
@@ -601,7 +660,14 @@ function Head({
       );
     }
     case "entity":
-      return <EntityCard model={model} words={words} inline={inline} />;
+      return (
+        <EntityCard
+          model={model}
+          words={words}
+          inline={inline}
+          mayFrame={mayFrame}
+        />
+      );
     case "view":
       return (
         <Chip
@@ -635,11 +701,15 @@ export function EmbedBlock({
   embed,
   inline,
   fallback,
+  node,
 }: {
   embed: Embed;
   inline: boolean;
   fallback: ReactNode;
+  /** The embed's node in its body's tree: what the body's frame cap counts. */
+  node?: object;
 }) {
+  const body = useContext(EmbedBodyContext);
   if (embed.directive === "synap-ask") {
     return inline ? (
       <AskChip embed={embed} />
@@ -652,7 +722,12 @@ export function EmbedBlock({
   if (inline) return <Head model={model} words={words} inline />;
   return (
     <div className="flex min-w-0 flex-col gap-2" data-embed={model.kind}>
-      <Head model={model} words={words} inline={false} />
+      <Head
+        model={model}
+        words={words}
+        inline={false}
+        mayFrame={!body || (node !== undefined && body.mayFrameEntity(node))}
+      />
       {embed.fallback.length > 0 && (
         <div className="flex flex-col gap-2 text-foreground/80">{fallback}</div>
       )}

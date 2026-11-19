@@ -42,3 +42,21 @@ export interface EmbedHost {
 }
 
 export const EmbedHostContext = createContext<EmbedHost | null>(null);
+
+/**
+ * What ONE body (a document, a prose field) lends the embeds drawn in it:
+ *   mayFrameEntity  whether this entity embed may run its card in a module
+ *                   frame (the body's cap, `entityFrameNodes`); the others
+ *                   draw their identity card
+ *   busy            a frame is loading: the body's single status region says
+ *                   so while any is (call on mount, the returned function on
+ *                   unmount), so skeletons never announce one by one
+ * Without it (an embed drawn alone) a card may frame and a skeleton is its
+ * own status region.
+ */
+export interface EmbedBody {
+  mayFrameEntity: (node: object) => boolean;
+  busy: () => () => void;
+}
+
+export const EmbedBodyContext = createContext<EmbedBody | null>(null);

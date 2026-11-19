@@ -16,6 +16,7 @@ vi.mock("../../../../lib/trpc", () => ({ trpc: {} }));
 
 import {
   bundleFallback,
+  couldDrawHere,
   objectRendererState,
   readRenderersStatus,
   resolveForPodAdmin,
@@ -171,6 +172,41 @@ describe("objectRendererState — the reads, end to end", () => {
         effective: { isLoading: true, error: null, data: undefined },
       }).state
     ).toBe("loading");
+  });
+
+  it("no frame cell that could draw it: resolved to nothing at once, the bindings never awaited", () => {
+    const none = ok({ bundle: null, defaults: {}, installed: [] });
+    const inFlight = { isLoading: true, error: null, data: undefined };
+    expect(
+      objectRendererState({ subject: card, status: none, effective: inFlight })
+    ).toMatchObject({
+      state: "resolved",
+      resolution: { kind: "none", readFailed: false },
+    });
+    // A view type no installed cell declares, on a pod that has a bundle.
+    expect(
+      objectRendererState({
+        subject: { ...board, viewType: "calendar" },
+        status: ok(WIRE),
+      })
+    ).toMatchObject({ state: "resolved", resolution: { kind: "none" } });
+  });
+
+  it("couldDrawHere: any frame cell for a record; a declaring or default cell for a view", () => {
+    const status = readRenderersStatus(WIRE)!;
+    expect(couldDrawHere(status, card)).toBe(true);
+    expect(couldDrawHere(status, board)).toBe(true);
+    expect(couldDrawHere(status, { ...board, viewType: "calendar" })).toBe(
+      false
+    );
+    const directOnly = readRenderersStatus({
+      bundle: null,
+      defaults: {},
+      installed: [
+        { key: "x", runtime: "direct", contentKind: null, viewTypes: [] },
+      ],
+    })!;
+    expect(couldDrawHere(directOnly, card)).toBe(false);
   });
 
   it("a failed bindings read still resolves, and says it read only part", () => {
