@@ -2106,6 +2106,9 @@ describe("CIMD clients", () => {
         workspaceId: SPACE_ID,
         workspaceName: "Brand",
         scope: "space",
+        // Additive since app permissions W2.
+        projectId: null,
+        place: { kind: "spaces", ids: [SPACE_ID] },
       },
     ]);
     expect(body.synap_user).toEqual({ id: HUMAN_ID, name: "Ada" });

@@ -173,9 +173,12 @@ export async function roleRowInKeyReach(
 ): Promise<boolean> {
   if (
     !grant ||
-    grant.scopes.some(
-      (scope) => placeBeyondPodWideReads(scope)?.kind === "unbounded"
-    )
+    grant.scopes.some((scope) => {
+      // A project pin is not limited to spaces (as before projects were a
+      // place); its projects narrow at `permits` (W1).
+      const kind = placeBeyondPodWideReads(scope)?.kind;
+      return kind === "unbounded" || kind === "projects";
+    })
   )
     return true;
   const spaces = keySpaces(grant);
