@@ -41,6 +41,8 @@ import {
   formatAppAccessAskPair,
   hasReadPlace,
   hasWritePlace,
+  isReadPermission,
+  pairsOfAccess,
   parseSynapAsk,
   type AppAccess,
   type NamedAppAccess,
@@ -950,6 +952,42 @@ async function appSignInFor(
   };
 }
 
+/**
+ * Does a connection's v2 access take a short ask as an ADD of permissions
+ * (W3d)? Only when its access says what no pair can (it names a project):
+ * every other connection keeps the pairs merge, each pair at the place it
+ * was asked (W2/W3c), which design A's "the place does not change" would
+ * otherwise move (`entity.note.read@content-os` landing in Brand).
+ */
+function addsThroughAccess(access: AppAccess | null | undefined): boolean {
+  return !!access && !pairsOfAccess(access).exact;
+}
+
+/**
+ * The asked pairs whose place the connection does not hold (W3d): a short
+ * ask adds permissions where its tier already holds, so an ask for another
+ * place is the full consent's. A first write's place is the person's pick
+ * (Q4), never refused here.
+ */
+function askPlacesNotHeld(
+  access: AppAccess,
+  pairs: ReadonlyArray<{ permission: string; workspaceId: string | null }>
+): string[] {
+  return pairs
+    .filter((p) => {
+      if (isReadPermission(p.permission))
+        return !(
+          access.read.spaces === "all" ||
+          (p.workspaceId !== null && access.read.spaces.includes(p.workspaceId))
+        );
+      if (!hasWritePlace(access)) return false;
+      return !(
+        p.workspaceId !== null && access.write.spaces.includes(p.workspaceId)
+      );
+    })
+    .map((p) => `${p.permission}@${p.workspaceId ?? "pod"}`);
+}
+
 /** What the app asked, in v2 terms, read from the request and its document. */
 function accessAskedOf(
   client: StoredClient,
@@ -986,7 +1024,7 @@ async function consentAccessBlock(
   );
   const current = approval?.access ?? null;
   let accessAsk: OAuthAppAccessAsk | null = null;
-  if (ask && current) {
+  if (ask && current && addsThroughAccess(current)) {
     const asked = [...new Set(ask.pairs.map((p) => p.permission))].filter(
       (p) => !current.permissions.includes(p)
     );
@@ -1006,6 +1044,7 @@ async function consentAccessBlock(
         adds.some((i) => i.tier === "write") && !hasWritePlace(current),
       unavailable: [
         ...ask.unavailable,
+        ...askPlacesNotHeld(current, ask.pairs),
         ...(readsNowhere
           ? adds.filter((i) => i.tier === "read").map((i) => i.permission)
           : []),
@@ -1329,7 +1368,16 @@ export async function decideOAuthAuthorization(
     // v2 (W3d): the full consent sends `access`; a short ask on a connection
     // that holds a v2 access only adds permissions (and Q4's write place).
     const held = await currentOAuthAppApproval(caller.id, req.client.clientId);
-    const v2Ask = ask !== null && held?.access != null;
+    const v2Ask = ask !== null && addsThroughAccess(held?.access);
+    if (v2Ask) {
+      const notHeld = askPlacesNotHeld(held!.access!, ask!.pairs);
+      if (notHeld.length > 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `This app asks for a place it does not have yet (${notHeld.join(", ")}): connect it again to choose its places.`,
+        });
+      }
+    }
     if (!v2Ask && input.askWritePlace) {
       throw new TRPCError({
         code: "BAD_REQUEST",

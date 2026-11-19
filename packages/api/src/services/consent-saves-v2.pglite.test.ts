@@ -163,9 +163,6 @@ function ddlFor(table: PgTable): string {
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params).then((r) => r.rows);
 
-const q = <T>(sql: string, params?: unknown[]) =>
-  h.client!.query<T>(sql, params).then((r) => r.rows);
-
 beforeAll(async () => {
   process.env.PUBLIC_URL = ISSUER;
   process.env.POD_ADMIN_URL = "https://pod-admin.test.synap.live";
@@ -686,10 +683,15 @@ describe("Q — the short ask only adds permissions; a first write needs a place
         write: { spaces: [], projects: [P_SOLO] },
       })
     );
-    // Once it writes somewhere, a place is never chosen again here.
+    // Once it writes somewhere, a place is never chosen again here, and an
+    // ask for a place it does not hold is the full consent's.
     await expectRefusedUnchanged(
       () => allow({ askWritePlace: { spaces: [BRAND], projects: [] } }, ask),
-      /already makes changes somewhere/
+      /does not have yet/
+    );
+    await expectRefusedUnchanged(
+      () => allow({}, { synapAsk: `${NOTE_READ}@${SHARED}` }),
+      /does not have yet/
     );
   });
 });
