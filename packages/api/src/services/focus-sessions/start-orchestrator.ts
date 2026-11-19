@@ -251,10 +251,12 @@ async function pickedOutOfReach(
   const grant = getRequestGrant();
   if (!grant) return null;
   for (const r of rows) {
+    // Its project is read from the stored row `data.id` names
+    // (`grant-write-check.ts`: a non-create write is placed where the row
+    // lives now), so no `projectId` rides here.
     const write = {
       subjectType: "focus_session",
       action: "orchestrate",
-      projectId: r.projectId,
       data: { id: r.id },
     };
     // Where the session COUNTS for a grant: its own space, or for a

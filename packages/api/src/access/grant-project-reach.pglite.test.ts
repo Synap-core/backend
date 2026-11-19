@@ -713,18 +713,28 @@ describe("a non-create write is placed by its STORED row, never the door's proje
     expect(await decide(PROP.sess)).toBeNull();
   });
 
-  it("a mixed-project orchestrate (sessions of P and Q) is refused at the grant rung", async () => {
-    const err = await runWithGrant(grantOfScope(P_KEY), () =>
-      startOrchestrator({
-        userId: ALICE,
-        input: { sessionIds: [SESS.p, SESS.q], brief: "coordinate" },
-      })
-    ).then(
-      () => null,
-      (e: unknown) => e as { code?: string; message: string }
-    );
-    expect(err?.code).toBe("FORBIDDEN");
-    expect(err?.message).toMatch(/grant does not allow/);
+  it("a mixed-project orchestrate is refused: per session (#1138) for a P pin, at the gate's placement for a P+Q pin", async () => {
+    const orchestrate = (scope: GrantScope) =>
+      runWithGrant(grantOfScope(scope), () =>
+        startOrchestrator({
+          userId: ALICE,
+          input: { sessionIds: [SESS.p, SESS.q], brief: "coordinate" },
+        })
+      ).then(
+        () => null,
+        (e: unknown) => e as { code?: string; message: string }
+      );
+    // Pinned to P: SESS.q is out of its reach (`pickedOutOfReach`).
+    const perSession = await orchestrate(P_KEY);
+    expect(perSession?.code).toBe("FORBIDDEN");
+    expect(perSession?.message).toMatch(/cannot orchestrate it/);
+    // Pinned to P and Q: each session is in reach, but the placement's
+    // project (a first-row fallback) is shared by none of them, so it
+    // places nothing for the key: refused at rung 0, not per session.
+    const atGate = await orchestrate({ ...P_KEY, projectIds: [P, Q] });
+    expect(atGate?.code).toBe("FORBIDDEN");
+    expect(atGate?.message).toMatch(/grant does not allow/);
+    expect(atGate?.message).not.toMatch(/cannot orchestrate it/);
     // The same gate input with every session in P passes rung 0.
     expect(
       await denial({
