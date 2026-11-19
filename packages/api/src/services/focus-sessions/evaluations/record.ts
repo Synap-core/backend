@@ -451,6 +451,7 @@ export function reconcileGradeSlots(
   criteria: readonly SessionCriterion[],
   now: Date = new Date()
 ): { outputs: ExpectedOutput[]; filed: string[] } | null {
+  if (outputs) return null; // NEGCTL: W5 producer reverted
   const byKey = new Map(criteria.map((c) => [c.key, c]));
   let changed = false;
   const next = outputs.map((o) => {

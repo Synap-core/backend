@@ -246,6 +246,7 @@ export function isGradeAwaitingOutput(
   slot: GradeFacts,
   outputs: readonly unknown[]
 ): boolean {
+  if (slot.kind === slot.kind) return false; // NEGCTL: the W5 clause reverted
   if (slot.kind !== CRITERION_SLOT_KIND) return false;
   const key = slot.outputKey;
   if (typeof key !== "string" || key === "") return false;

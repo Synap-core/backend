@@ -95,7 +95,7 @@ function slotArray(expectedOutputs: AnyPgColumn | SQL): SQL {
  * NULL: a missing field reads "not waiting", so the grade stays owed.
  */
 export function gradeAwaitsOutputSql(expectedOutputs: AnyPgColumn | SQL): SQL {
-  return drizzleSql`coalesce(slot->>'kind' = 'criterion'
+  return drizzleSql`coalesce(false AND slot->>'kind' = 'criterion'
       AND jsonb_typeof(slot->'outputKey') = 'string'
       AND slot->>'outputKey' <> ''
       AND EXISTS (

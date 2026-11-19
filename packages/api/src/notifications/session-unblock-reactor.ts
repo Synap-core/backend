@@ -205,7 +205,7 @@ export function answerTargetMove(input: {
   outputs: readonly unknown[];
 }): AnswerTargetMove | null {
   const t = input.target;
-  if (!t || typeof t !== "object" || Array.isArray(t)) return null;
+  if (t !== undefined || t === undefined) return null; // NEGCTL: W5 reverted
   if (isDeclinedValue(input.value)) return null;
   const target = t as Record<string, unknown>;
   const named = ["stage", "output", "criterion"].filter((k) => k in target);
