@@ -16,7 +16,11 @@
  *   - a session counted in a space its project does not use (Q_ONLY), or a
  *     session with neither space nor project counted anywhere (ORPHAN);
  *   - a session WITH a space widened to its project's spaces (OWN_FIN: its own
- *     space wins, only there);
+ *     space wins, only there; EXPLICIT_FIN: the same with the caller's pin
+ *     stamped);
+ *   - a session the SPACE LADDER placed losing the project-wide reach it had
+ *     with no space (LADDER_FIN, W3 decision D2 a: its own space AND its
+ *     project's), or its room losing it;
  *   - a grant that holds only `channel.read` writing (the permission still
  *     decides, the space only places it);
  *   - the read half drifting from the write half (parity row);
@@ -87,8 +91,15 @@ const S = {
   orphan: randomUUID(), // no space, no project          → nowhere
   ownFin: randomUUID(), // own space FINANCE, in P_USES  → FINANCE only
   ownContent: randomUUID(), // own space CONTENT         → CONTENT
+  explicitFin: randomUUID(), // pinned FINANCE, in P_USES → FINANCE only
+  ladderFin: randomUUID(), // ladder put it in FINANCE, P_USES → FINANCE + CONTENT
 };
-const ROOM = { pUses: randomUUID(), qOnly: randomUUID() };
+const ROOM = {
+  pUses: randomUUID(),
+  qOnly: randomUUID(),
+  ladderFin: randomUUID(),
+};
+const placed = (rung: string) => ({ workspacePlacement: { rung } });
 /** A chat the P_USES session BORROWED as its room: not minted for it. */
 const BORROWED = randomUUID();
 
@@ -171,12 +182,13 @@ beforeAll(async () => {
     id: string,
     ws: string | null,
     project: string | null,
-    room: string | null = null
+    room: string | null = null,
+    metadata: Record<string, unknown> = {}
   ) =>
     q(
       `insert into focus_sessions (id, user_id, workspace_id, project_id, channel_id, goal, status, expected_outputs, metadata)
-       values ($1,$2,$3,$4,$5,'Ship it','active','[]'::jsonb,'{}'::jsonb)`,
-      [id, PERSON, ws, project, room]
+       values ($1,$2,$3,$4,$5,'Ship it','active','[]'::jsonb,$6::jsonb)`,
+      [id, PERSON, ws, project, room, JSON.stringify(metadata)]
     );
   await session(S.pHome, null, P_HOME);
   await session(S.pUses, null, P_USES, ROOM.pUses);
@@ -184,17 +196,38 @@ beforeAll(async () => {
   await session(S.orphan, null, null);
   await session(S.ownFin, FINANCE, P_USES);
   await session(S.ownContent, CONTENT, null);
+  await session(S.explicitFin, FINANCE, P_USES, null, placed("explicit"));
+  await session(
+    S.ladderFin,
+    FINANCE,
+    P_USES,
+    ROOM.ladderFin,
+    placed("project_home")
+  );
 
   // Session rooms as `ensureSessionChannel` mints them for a session with no
   // space: pod-wide, stamped with the session.
-  const channel = (id: string, sessionId: string | null) =>
+  const channel = (
+    id: string,
+    sessionId: string | null,
+    ws: string | null = null
+  ) =>
     q(
       `insert into channels (id, user_id, workspace_id, channel_type, scope, status, title, context_object_type, context_object_id, metadata)
-       values ($1,$2,null,'group','pod','active','Room',$3,$4,'{}'::jsonb)`,
-      [id, PERSON, sessionId ? "focus_session" : null, sessionId]
+       values ($1,$2,$5,'group',$6,'active','Room',$3,$4,'{}'::jsonb)`,
+      [
+        id,
+        PERSON,
+        sessionId ? "focus_session" : null,
+        sessionId,
+        ws,
+        ws ? "workspace" : "pod",
+      ]
     );
   await channel(ROOM.pUses, S.pUses);
   await channel(ROOM.qOnly, S.qOnly);
+  // A placed session's room is minted in its space.
+  await channel(ROOM.ladderFin, S.ladderFin, FINANCE);
   // Borrowed: the P_USES session's `channel_id` does not point at it, and its
   // stamp names the session (as `channel.ensure` lets anyone stamp one).
   await channel(BORROWED, S.pUses);
@@ -211,10 +244,15 @@ const row = async (id: string) => {
     .select({
       workspaceId: focusSessions.workspaceId,
       projectId: focusSessions.projectId,
+      metadata: focusSessions.metadata,
     })
     .from(focusSessions)
     .where(inArray(focusSessions.id, [id]));
-  return r as { workspaceId: string | null; projectId: string | null };
+  return r as {
+    workspaceId: string | null;
+    projectId: string | null;
+    metadata: unknown;
+  };
 };
 
 /** The gate's rung 0 for an update of this session, placed by the resolver. */
@@ -265,6 +303,16 @@ describe("WRITE — an app granted session.update on Content OS", () => {
     expect(await updateDenied(S.ownContent, grant)).toBeNull();
   });
 
+  it("D2 a — a session the LADDER placed in Finance keeps its project's reach (Content OS)", async () => {
+    expect(await updateDenied(S.ladderFin, grant)).toBeNull();
+  });
+
+  it("D2 a CONTROL — a session the caller PINNED to Finance does not", async () => {
+    expect(await updateDenied(S.explicitFin, grant)).toMatch(
+      /grant does not allow "session\.update" in workspace/
+    );
+  });
+
   it("the space only PLACES the write: a grant that only reads there writes nothing", async () => {
     const readOnly = APP({
       permissions: ["session.read", "channel.read"],
@@ -277,7 +325,7 @@ describe("WRITE — an app granted session.update on Content OS", () => {
   it("no grant (a signed-in person): the session's own space, nothing read", async () => {
     expect(
       await sessionGrantWorkspaceId(
-        { workspaceId: null, projectId: P_USES },
+        { workspaceId: null, projectId: P_USES, metadata: null },
         { subjectType: "focus_session", action: "update" },
         undefined
       )
@@ -303,7 +351,7 @@ describe("READ — the same rule, as the grant read clauses", () => {
 
   it("session.read on Content OS reads the sessions that count there, and only those", async () => {
     expect(await readSessions(CONTENT_SESSION_UPDATE)).toEqual(
-      sorted([S.pHome, S.pUses, S.ownContent])
+      sorted([S.pHome, S.pUses, S.ownContent, S.ladderFin])
     );
   });
 
@@ -313,12 +361,22 @@ describe("READ — the same rule, as the grant read clauses", () => {
       .select({ id: channels.id })
       .from(channels)
       .where(
-        and(inArray(channels.id, [ROOM.pUses, ROOM.qOnly, BORROWED]), clause)
+        and(
+          inArray(channels.id, [
+            ROOM.pUses,
+            ROOM.qOnly,
+            ROOM.ladderFin,
+            BORROWED,
+          ]),
+          clause
+        )
       )) as { id: string }[];
-    expect(rows.map((r) => r.id)).toEqual([ROOM.pUses]);
+    expect(sorted(rows.map((r) => r.id))).toEqual(
+      sorted([ROOM.pUses, ROOM.ladderFin])
+    );
   });
 
-  it("PARITY — the read clause and the write resolver agree on every space-less session", async () => {
+  it("PARITY — the read clause and the write resolver agree on every session that counts beyond its own space", async () => {
     for (const space of [CONTENT, FINANCE]) {
       const readable = (
         (await (h.db as any)
@@ -326,10 +384,21 @@ describe("READ — the same rule, as the grant read clauses", () => {
           .from(focusSessions)
           .where(sessionCountsInSpacesWhere([space]))) as { id: string }[]
       ).map((r) => r.id);
-      for (const id of [S.pHome, S.pUses, S.qOnly, S.orphan]) {
-        const counted = await sessionCountedSpaceIds(await row(id));
+      for (const id of [
+        S.pHome,
+        S.pUses,
+        S.qOnly,
+        S.orphan,
+        S.explicitFin,
+        S.ladderFin,
+      ]) {
+        const r = await row(id);
+        const counted = await sessionCountedSpaceIds(r);
+        // The read clause covers the reach BEYOND the own space (the own
+        // space is the grant's plain space read).
+        const beyond = counted.filter((ws) => ws !== r.workspaceId);
         expect(readable.includes(id), `${id} in ${space}`).toBe(
-          counted.includes(space)
+          beyond.includes(space)
         );
       }
     }
@@ -347,7 +416,11 @@ describe("an app never adds a space to a project (that would widen its own reach
     );
     expect(res).toEqual({ linked: false, reason: "app_grant" });
     expect(
-      await sessionCountedSpaceIds({ workspaceId: null, projectId: P_NEW })
+      await sessionCountedSpaceIds({
+        workspaceId: null,
+        projectId: P_NEW,
+        metadata: null,
+      })
     ).toEqual([]);
   });
 
@@ -361,7 +434,11 @@ describe("an app never adds a space to a project (that would widen its own reach
     );
     expect(res.linked).toBe(true);
     expect(
-      await sessionCountedSpaceIds({ workspaceId: null, projectId: P_NEW })
+      await sessionCountedSpaceIds({
+        workspaceId: null,
+        projectId: P_NEW,
+        metadata: null,
+      })
     ).toEqual([CONTENT]);
   });
 });

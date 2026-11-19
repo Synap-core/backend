@@ -3,6 +3,11 @@ import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { recordSessionSpawn } from "./session-spawn.js";
 import { resolveSessionProjectPlacement } from "./resolve-session-project.js";
+import {
+  resolveSessionWorkspacePlacement,
+  workspacePlacementPatch,
+  type SessionWorkspacePlacement,
+} from "./resolve-session-workspace.js";
 import { insertFocusSessionRow } from "./insert-focus-session.js";
 import { isUniqueViolation } from "./pg-errors.js";
 import { startedByAgentPatch } from "./session-started-by.js";
@@ -24,7 +29,18 @@ export interface OpenRunSessionInput {
    * title is given: every run caller builds its name from what it opened.
    */
   titleSource?: "human" | "agent" | "generated" | "derived";
+  /**
+   * The space the caller pins. Absent, the space ladder places the run from
+   * its chain (subject, parent, project home; W3 decision D9 a) — unless
+   * `keepCallerWorkspace` is set.
+   */
   workspaceId?: string | null;
+  /**
+   * A write RECEIPT (the session the gate auto-opens for an agent's writes)
+   * keeps exactly the caller's space, null included: runs follow the ladder,
+   * receipts do not (decision D9 a).
+   */
+  keepCallerWorkspace?: boolean;
   /** Bind the session to a channel so its feed mirrors to Discord/etc. When set,
    *  an existing active session on the channel is REUSED (see below). */
   channelId?: string | null;
@@ -181,6 +197,23 @@ export async function openRunSession(
     subjectEntityId: input.subjectEntityId ?? null,
   });
 
+  // SPACE — a run sits in a space read from its chain like every session
+  // (`resolve-session-workspace.ts`): the caller's pin, else the subject's,
+  // the parent's, the project's home. No playbook rung (a playbook run comes
+  // through `instantiateSessionRow`, always in the playbook's space) and no
+  // focus rung (an automation acts on no agent's focus).
+  const workspacePlacement: SessionWorkspacePlacement =
+    input.keepCallerWorkspace
+      ? { workspaceId: input.workspaceId ?? null, rung: null }
+      : await resolveSessionWorkspacePlacement(database, {
+          userId: input.userId,
+          agentUserId: input.agentUserId ?? null,
+          explicitWorkspaceId: input.workspaceId ?? null,
+          subjectEntityId: input.subjectEntityId ?? null,
+          parentSessionId: input.parentSessionId ?? null,
+          projectId: placement.projectId,
+        });
+
   // The probe marker (D8) is the row writer's: stamped on every birth.
   const metadata: Record<string, unknown> = {
     source: input.source,
@@ -192,6 +225,7 @@ export async function openRunSession(
     ...(input.title ? { titleSource: input.titleSource ?? "derived" } : {}),
     // The agent authoring the run started it (orient's `handedToYou` leaves it out).
     ...startedByAgentPatch(input.agentUserId),
+    ...workspacePlacementPatch(workspacePlacement),
   };
 
   // THE ONE row writer (`insert-focus-session.ts`): a run session is born by
@@ -201,7 +235,7 @@ export async function openRunSession(
       userId: input.userId,
       title: input.title ?? null,
       goal: input.goal,
-      workspaceId: input.workspaceId ?? null,
+      workspaceId: workspacePlacement.workspaceId,
       channelId,
       projectId: placement.projectId,
       // A goal only with ITS project: a placement that did not keep the
@@ -234,7 +268,7 @@ export async function openRunSession(
         childSessionId: sessionId,
         parentSessionId: input.parentSessionId,
         userId: input.userId,
-        workspaceId: input.workspaceId ?? null,
+        workspaceId: workspacePlacement.workspaceId,
         suspendedIntent: input.suspendedIntent ?? null,
       });
     } catch (err) {

@@ -9,7 +9,12 @@
  *     (`projects.workspace_id`) and each `project --uses--> workspace` edge
  *     (`project_use_workspace`, `utils/project-workspace.ts`);
  *   - a session with neither counts in no space: a key pinned to spaces never
- *     reaches it.
+ *     reaches it;
+ *   - a session the SPACE LADDER placed (W3, decision D2 a: its
+ *     `metadata.workspacePlacement.rung` is not `explicit`) counts in its own
+ *     space AND, when it is filed in a project, in every space the project
+ *     uses: it had no space before the ladder, and no app loses a session it
+ *     reached then. A space the caller pinned keeps the one-space rule.
  *
  * Why: 36 of the founder's 50 open sessions were project-only, and every door
  * that bounds a pinned key by the session's own space (`permits`,
@@ -45,6 +50,7 @@ import {
   inArray,
   isNull,
   or,
+  SESSION_WORKSPACE_PLACEMENT_KEY,
   type KeyGrant,
   type SQL,
 } from "@synap/database";
@@ -61,10 +67,33 @@ import {
   type GrantWriteInput,
 } from "../utils/grant-write-check.js";
 
-/** The two columns of a session the rule reads. */
+/** The three columns of a session the rule reads. */
 export interface SessionPlace {
   workspaceId: string | null;
   projectId: string | null;
+  /** Its `metadata`: the placement stamp says whether the ladder placed it. */
+  metadata: unknown;
+}
+
+/** Did the space ladder (not the caller) place this session in its space? */
+export function sessionPlacedByLadder(metadata: unknown): boolean {
+  const placement =
+    metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>)[SESSION_WORKSPACE_PLACEMENT_KEY]
+      : undefined;
+  const rung =
+    placement && typeof placement === "object"
+      ? (placement as Record<string, unknown>).rung
+      : undefined;
+  return typeof rung === "string" && rung !== "explicit";
+}
+
+/** Does this session count beyond its own space (project-only, or ladder-placed)? */
+function countsInProjectSpaces(session: SessionPlace): boolean {
+  return (
+    !!session.projectId &&
+    (!session.workspaceId || sessionPlacedByLadder(session.metadata))
+  );
 }
 
 /**
@@ -110,33 +139,35 @@ export async function projectCountedSpaceIds(
 export async function sessionCountedSpaceIds(
   session: SessionPlace
 ): Promise<string[]> {
-  if (session.workspaceId) return [session.workspaceId];
-  if (!session.projectId) return [];
-  return projectCountedSpaceIds(session.projectId);
+  const own = session.workspaceId ? [session.workspaceId] : [];
+  if (!countsInProjectSpaces(session)) return own;
+  const spaces = await projectCountedSpaceIds(session.projectId!);
+  return [...own, ...spaces.filter((id) => !own.includes(id))];
 }
 
 /**
  * The space a write door checks the calling key's grant in, for a write on
- * this session: its own space; for a project-only session under a grant, the
- * first space it counts in where the grant permits this very write (null when
- * none does, so the gate refuses it as before). `write` is exactly what the
- * door's gate checks, minus the space. Without a grant (a signed-in person) or
- * for a session with a space, nothing is read.
+ * this session: its own space; for a project-only or ladder-placed session
+ * under a grant, the first space it counts in (its own first) where the grant
+ * permits this very write (else its own space, null for a project-only one,
+ * so the gate refuses it as before). `write` is exactly what the door's gate
+ * checks, minus the space. Without a grant (a signed-in person) or for a
+ * session that counts only in its own space, nothing is read.
  */
 export async function sessionGrantWorkspaceId(
   session: SessionPlace,
   write: Omit<GrantWriteInput, "workspaceId">,
   grant: KeyGrant | undefined = getRequestGrant()
 ): Promise<string | null> {
-  if (session.workspaceId || !session.projectId || !grant) {
+  if (!grant || !countsInProjectSpaces(session)) {
     return session.workspaceId;
   }
-  for (const workspaceId of await projectCountedSpaceIds(session.projectId)) {
+  for (const workspaceId of await sessionCountedSpaceIds(session)) {
     if (!(await grantDeniedKey({ ...write, workspaceId }, grant))) {
       return workspaceId;
     }
   }
-  return null;
+  return session.workspaceId;
 }
 
 /**
@@ -176,25 +207,35 @@ export function projectCountsInSpacesWhere(
   );
 }
 
-/** READ half: a project-only session that counts in one of `spaces`. */
+/** SQL twin of {@link sessionPlacedByLadder} (never NULL). */
+export function sessionPlacedByLadderSql(): SQL {
+  return drizzleSql`coalesce((${focusSessions.metadata} -> ${SESSION_WORKSPACE_PLACEMENT_KEY} ->> 'rung') <> 'explicit', false)`;
+}
+
+/**
+ * READ half: a project-only or ladder-placed session whose project counts in
+ * one of `spaces` (a session counts in its own space through the grant's
+ * plain space read).
+ */
 export function sessionCountsInSpacesWhere(spaces: string[]): SQL {
   return and(
-    isNull(focusSessions.workspaceId),
+    or(isNull(focusSessions.workspaceId), sessionPlacedByLadderSql()),
     projectCountsInSpacesWhere(focusSessions.projectId, spaces)
   )!;
 }
 
 /**
- * READ half for a session's ROOM: a pod-wide channel minted as the room of a
+ * READ half for a session's ROOM: the channel minted as the room of a
  * session that counts in one of `spaces` — the mint's stamp
  * (`context_object_type = 'focus_session'`, `context_object_id` = the session)
  * AND the session's `channel_id` pointing back, the pair
  * `session-visibility.ts` explains (each alone is forgeable; a BORROWED
- * channel is never reached through its session).
+ * channel is never reached through its session) — and in the session's own
+ * space (pod-wide for a project-only session; the session's space for a
+ * ladder-placed one, as the mint and a move keep it).
  */
 export function sessionRoomCountsInSpacesWhere(spaces: string[]): SQL {
   return and(
-    isNull(channels.workspaceId),
     eq(channels.contextObjectType, "focus_session"),
     exists(
       db
@@ -204,6 +245,8 @@ export function sessionRoomCountsInSpacesWhere(spaces: string[]): SQL {
           and(
             eq(focusSessions.id, channels.contextObjectId),
             eq(focusSessions.channelId, channels.id),
+            // uuid on channels, text on focus_sessions.
+            drizzleSql`${channels.workspaceId}::text IS NOT DISTINCT FROM ${focusSessions.workspaceId}`,
             sessionCountsInSpacesWhere(spaces)
           )
         )

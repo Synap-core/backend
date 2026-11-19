@@ -62,10 +62,11 @@ describe("formatGrounding", () => {
     // that ships today, and keep asserting BOTH halves so a future one-sided
     // reword can't quietly drop the write guidance again.
     expect(out).toMatch(/For WRITES pass kind\/profile/);
-    expect(out).toMatch(
-      /omit workspaceId unless you deliberately pin one space/
-    );
+    expect(out).toMatch(/omit workspaceId unless you pin a space/);
     expect(out).toMatch(/For READS omit workspaceId/);
+    // W3 (plan 8daa514b): "omit workspaceId" is for RECORDS; a session is
+    // placed by its chain (playbook, subject, parent, project home, focus).
+    expect(out).toMatch(/a session is placed by its chain/);
   });
 
   it("keeps the projects preamble, but never re-teaches the lens concept", () => {

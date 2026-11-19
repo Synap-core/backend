@@ -20,6 +20,8 @@ What each word means (workspace, project, goal, step, work): `concepts` — the 
 
 **Writes:** name the kind (profile slug) and, when known, the roles as facets. Omit `workspaceId` unless you are deliberately pinning a domain — the server places the write from installed profile metadata. Never invent a workspace name. Focus sticks for the session; an explicit `workspaceId` / `projectId` on one call overrides it for that call.
 
+**Sessions:** "omit `workspaceId`" is the rule for records. A session is placed by its chain: the `workspaceId` you pin, else the space of the playbook it follows, of its subject, of its parent session, of its project's home, then your workspace focus. A rung counts only for a space you can write in, so a start never turns into a request to join a space.
+
 **Empty domains:** a workspace holding 0 entities is a scaffold — prefer an active one unless the user names it (`orient` lists active domains; `detail:'full'` shows every one).
 
 **Where the kinds are:** `orient` names the kinds in use, most-used first; the profile-listing tool lists every kind and role. A kind's property schema (fields, enums, required): over MCP, `get_entity` on any existing entity of that kind returns it as `effectiveProperties`; over HTTP, `GET /api/hub/discover?profileSlugs=<slug>`; CLI `synap discover`. A write that breaks the schema is rejected with the valid fields quoted.

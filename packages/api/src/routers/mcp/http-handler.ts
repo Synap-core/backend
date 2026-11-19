@@ -143,8 +143,8 @@ export function formatGrounding(
   // Concept prose lives in the reflexes + lenses skill; grounding carries the
   // live facts and the one rule a model applies to them.
   const rules =
-    ` For READS omit workspaceId for pod-wide recall.` +
-    ` For WRITES pass kind/profile (+ roles as facets); omit workspaceId unless you deliberately pin one space.`;
+    ` For READS omit workspaceId.` +
+    ` For WRITES pass kind/profile (+ roles as facets); omit workspaceId unless you pin a space; a session is placed by its chain.`;
 
   for (let n = Math.min(ranked.length, GROUNDING_WS_LIMIT); n >= 0; n--) {
     const shown = ranked.slice(0, n);
