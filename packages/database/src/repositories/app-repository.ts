@@ -155,7 +155,7 @@ export function approvedAccessOf(
   approvedRequests: readonly AppApprovedRequest[] | null
 ): AppAccess | null {
   if (approvedRequests === null) return null;
-  const lifted = liftApprovedRequests(approvedRequests);
+  const lifted = liftApprovedRequests(approvedRequests, { examples: false });
   return "access" in lifted ? lifted.access : null;
 }
 

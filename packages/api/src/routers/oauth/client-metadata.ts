@@ -43,7 +43,10 @@ import {
   assertPermissions,
   InvalidPermissionError,
 } from "@synap/governance-policy/grants";
-import { isPodWideReadPermission } from "@synap/database/schema";
+import {
+  isPodWideReadPermission,
+  type RequestedKindGroup,
+} from "@synap/database/schema";
 import {
   KindsRequestError,
   permissionsForKinds,
@@ -140,6 +143,13 @@ export interface ValidatedClientMetadataDocument {
    * named kind (`isPodWideReadPermission`).
    */
   requestedPodWide: string[];
+  /**
+   * The entries that list their kinds (decision 51ad8d1e F4), as declared:
+   * `{permission: "entity.read", kinds: ["note", "task"]}`, kinds each once.
+   * `requestedPermissions` holds them expanded per kind (D4); this keeps the
+   * grouping for the consent's one row "Records: N kinds". Display only.
+   */
+  requestedKindGroups: RequestedKindGroup[];
   /**
    * `synap_requests[].reason` by permission, as display text
    * (`displayReason`); a permission sent with no reason has no entry.
@@ -406,6 +416,8 @@ export function validateClientMetadataDocument(
   const requestedReasons = new Map<string, string>();
   // Each permission's scope as first declared: "space" (default) or "pod".
   const scopeOf = new Map<string, "space" | "pod">();
+  // The entries that list their kinds, as declared (F4).
+  const requestedKindGroups: RequestedKindGroup[] = [];
   if (d.synap_requests !== undefined) {
     if (!Array.isArray(d.synap_requests)) {
       throw new ClientMetadataError("synap_requests must be an array");
@@ -440,7 +452,15 @@ export function validateClientMetadataDocument(
       // `entity.task.read`, each checked and granted per kind (D4), with the
       // entry's reason and scope. Without `kinds`, the entry is one
       // permission, as before.
-      for (const one of entryPermissions(permission, kinds)) {
+      const expanded = entryPermissions(permission, kinds);
+      if (kinds !== undefined) {
+        requestedKindGroups.push({
+          permission: permission.trim(),
+          // `entity.<kind>.<action>` → its kind (`permissionsForKinds`).
+          kinds: expanded.map((p) => p.split(".")[1]!),
+        });
+      }
+      for (const one of expanded) {
         assertAppPermission(one);
         const asked = requestScope(one, scope);
         const before = scopeOf.get(one);
@@ -488,6 +508,7 @@ export function validateClientMetadataDocument(
     requestedPodWide: requestedPermissions.filter(
       (p) => scopeOf.get(p) === "pod"
     ),
+    requestedKindGroups,
     requestedReasons: Object.fromEntries(requestedReasons),
     requestedTemplates,
     clientUri,

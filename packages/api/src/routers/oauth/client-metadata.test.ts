@@ -1001,6 +1001,69 @@ describe("synap_requests[].kinds: one entry, many kinds, granted per kind (F4)",
     expect(() => assertPermissions(v.requestedPermissions)).not.toThrow();
   });
 
+  // W3c: the consent shows "Records: N kinds", which only the grouping can
+  // draw once the permissions are expanded per kind.
+  it("keeps each entry that lists kinds as declared, beside the expanded permissions", () => {
+    const v = asked(
+      {
+        permission: "entity.read",
+        kinds: ["note", "task", "note"],
+        scope: "pod",
+      },
+      { permission: "entity.decision.read", scope: "pod" },
+      { permission: "entity.create", kinds: ["note"] }
+    );
+    expect(v.requestedKindGroups).toEqual([
+      { permission: "entity.read", kinds: ["note", "task"] },
+      { permission: "entity.create", kinds: ["note"] },
+    ]);
+    // An entry with no kinds is no group.
+    expect(
+      asked({ permission: "entity.decision.read" }).requestedKindGroups
+    ).toEqual([]);
+  });
+
+  // Rules out: the grouping lost between the parse and the cache.
+  it("the cached copy keeps the grouping, and a copy without one still reads", async () => {
+    serve({
+      body: JSON.stringify(
+        doc({
+          synap_requests: [
+            {
+              permission: "entity.read",
+              kinds: ["note", "task"],
+              scope: "pod",
+            },
+          ],
+        })
+      ),
+    });
+    const store = memoryStore();
+    const client = await resolveCimdClient(CLIENT_ID, ISSUER, store, {
+      lookup: publicDns,
+    });
+    expect(client.requestedKindGroups).toEqual([
+      { permission: "entity.read", kinds: ["note", "task"] },
+    ]);
+    expect(store.rows.get(CLIENT_ID)!.requestedKindGroups).toEqual([
+      { permission: "entity.read", kinds: ["note", "task"] },
+    ]);
+    // A copy cached before 0437 has no grouping: it still answers.
+    const old = { ...store.rows.get(CLIENT_ID)! };
+    delete old.requestedKindGroups;
+    store.rows.set(CLIENT_ID, old);
+    m.httpsRequest.mockReset();
+    const cached = await resolveCimdClient(CLIENT_ID, ISSUER, store, {
+      lookup: publicDns,
+    });
+    expect(m.httpsRequest).not.toHaveBeenCalled();
+    expect(cached.requestedKindGroups).toBeUndefined();
+    expect(cached.requestedPermissions).toEqual([
+      "entity.note.read",
+      "entity.task.read",
+    ]);
+  });
+
   // Rules out: the cap counting kinds (29 kinds in one entry is one entry).
   it("the 48 cap counts entries, not kinds", () => {
     const kinds = Array.from({ length: 60 }, (_, i) => `kind${i}`);

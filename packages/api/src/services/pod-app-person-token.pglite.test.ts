@@ -1003,7 +1003,10 @@ describe("a pod-wide read: asked in the document, ticked once, held with no spac
 
   it("the consent offers it in its own list, never per space", async () => {
     const ctx = await getOAuthConsentContext(params(DEVPLANE), OWNER);
-    expect(ctx.app?.podWide).toEqual([{ permission: DECISIONS, reason: null }]);
+    // `kindGroup` (W3c): null, its document lists no kinds.
+    expect(ctx.app?.podWide).toEqual([
+      { permission: DECISIONS, reason: null, kindGroup: null },
+    ]);
     expect(ctx.app?.permissions.map((p) => p.permission).sort()).toEqual(
       [CREATE, READ].sort()
     );

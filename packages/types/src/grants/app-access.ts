@@ -20,10 +20,14 @@
  *
  * Until W3 writes it from the consent screen, a v2 access is only ever the
  * LIFT of an app's `approved_requests` pairs (`liftApprovedRequests`), and a
- * lift is LOSSLESS: it is refused (re-consent) unless the v2 form allows
- * exactly the (permission, place) pairs the old rows held, no more and no
- * fewer. So reading v2 or the pairs gives the same grants
- * (`grantScopesForAccess` against the pairs' grants, app-access.test.ts).
+ * lift is LOSSLESS: it is refused (re-consent) unless the grants of the v2
+ * form give the app exactly the reach the old rows give, no more and no
+ * less: the same permits (the engine's `permits`, over the finite probes
+ * that decide it) and the same placement (each space as viewer or editor,
+ * and the pod). Compared by meaning, not by key (W3c): `entity.note.read`
+ * in A beside `entity.read` in A adds nothing. So reading v2 or the pairs
+ * gives the same reach (`grantScopesForAccess` against the pairs' grants,
+ * app-access.test.ts).
  *
  * Pure: no I/O.
  */
@@ -31,8 +35,21 @@
 import { isPodWideReadPermission } from "./pod-wide.js";
 import { permissionWithin } from "./algebra.js";
 import {
+  GRANT_ACTIONS,
+  InvalidPermissionError,
+  parsePermission,
+  patternMatches,
+  permits,
+  QUALIFIED_GRANT_SUBJECTS,
+  type GrantRequest,
+} from "./grammar.js";
+import {
+  assertNeverPlace,
+  parsePlace,
   parseRequestPlace,
   PlaceError,
+  placeProjectIds,
+  placeSpaceIds,
   type PlaceRequestLike,
 } from "./reach.js";
 
@@ -200,10 +217,18 @@ export type ReconsentReason =
   /** The v2 form would allow a pair the rows never held. */
   | "widens"
   /** The v2 form would lose a pair the rows hold (a space read beside "all"). */
-  | "narrows";
+  | "narrows"
+  /**
+   * The rows are too large to compare within `LIFT_PROBE_BUDGET`: the lift
+   * is not attempted (fail closed), and the connection keeps its pairs.
+   */
+  | "too-large";
 
 export interface Reconsent {
-  /** The first reason found, in the order unplaceable, widens, narrows. */
+  /**
+   * The first reason found, in the order unplaceable, too-large, widens,
+   * narrows.
+   */
   readonly reason: ReconsentReason;
   /** What the v2 form would allow that the rows did not (at most 5). */
   readonly widens: readonly AccessPair[];
@@ -269,40 +294,482 @@ export function candidateAccess(pairs: readonly AccessPair[]): AppAccess {
 const SAMPLE = 5;
 
 /**
+ * The grant scopes a connection's PAIRS make, read as what they mean: one
+ * scope per space with the permissions approved there, one per project, and
+ * one unpinned scope for the pod-wide reads. The same scopes as the pre-W2
+ * per-space grants (`grantsForPairs`, app-connect), plus a project pair as
+ * its project's scope (no pair names a project today).
+ */
+export function scopesOfPairs(
+  pairs: readonly AccessPair[]
+): AppAccessGrantScope[] {
+  const bySpace = new Map<string, string[]>();
+  const byProject = new Map<string, string[]>();
+  const pod: string[] = [];
+  const push = (map: Map<string, string[]>, id: string, p: string) => {
+    const list = map.get(id) ?? [];
+    if (!list.includes(p)) list.push(p);
+    map.set(id, list);
+  };
+  for (const { permission, where } of pairs) {
+    switch (where.kind) {
+      case "space":
+        push(bySpace, where.id, permission);
+        break;
+      case "project":
+        push(byProject, where.id, permission);
+        break;
+      case "pod":
+        if (!pod.includes(permission)) pod.push(permission);
+        break;
+      case "all-projects":
+        // No pair says "every project", and no scope pins it (fail closed).
+        break;
+      default:
+        unreachableWhere(where);
+    }
+  }
+  return [
+    ...[...bySpace].map(([id, permissions]) => ({
+      permissions,
+      workspaceIds: [id],
+    })),
+    ...[...byProject].map(([id, permissions]) => ({
+      permissions,
+      projectIds: [id],
+    })),
+    ...(pod.length > 0 ? [{ permissions: pod }] : []),
+  ];
+}
+
+// ── the semantic comparison: what two sets of scopes PERMIT ──────────────
+
+/** A token no permission names: it stands for every unnamed one. */
+const OTHER = "<other>";
+const OTHER_VERB = "<other-verb>";
+const OTHER_SPACE = "<another space>";
+const OTHER_PROJECT = "<another project>";
+
+/** One place a request is asked in (a row's space and/or project). */
+interface PlaceProbe {
+  readonly workspaceId?: string;
+  readonly projectId?: string;
+}
+
+/** The request half of a probe: what is asked, with no place. */
+type PermissionProbe = Pick<GrantRequest, "subject" | "qualifier" | "action">;
+
+/**
+ * The finite set of requests that decides whether two sets of scopes permit
+ * the same thing. A pattern only ever compares a segment with a token it
+ * NAMES (or matches any with `*`), and a scope's limits only compare ids it
+ * NAMES, so every request that swaps an unnamed token for another unnamed
+ * one is answered the same by every scope. The probes are therefore: each
+ * named subject (plus one unnamed), each named kind of a qualified subject
+ * (plus one unnamed, plus "kind unknown"), each grant action, each named
+ * verb (plus one unnamed gate verb); in each named space, no space (the pod),
+ * each named project, and one unnamed space and project. Named first, so a
+ * sample shows a real name before a stand-in.
+ */
+function probesFor(
+  patterns: readonly string[],
+  scopes: readonly AppAccessGrantScope[]
+): {
+  permissions: PermissionProbe[];
+  places: PlaceProbe[];
+} {
+  const subjects: string[] = [];
+  const kinds: string[] = [];
+  const actions: string[] = [...GRANT_ACTIONS];
+  const spaces: string[] = [];
+  const projects: string[] = [];
+  const add = (list: string[], v: string | undefined) => {
+    if (v !== undefined && v !== "*" && !list.includes(v)) list.push(v);
+  };
+  const qualified = QUALIFIED_GRANT_SUBJECTS as readonly string[];
+  // Each distinct pattern parsed once: [subject], [subject, action], or a
+  // qualified [subject, kind] / [subject, kind, action] (`parsePermission`
+  // spells an every-kind `entity.read` as [entity, *, read]).
+  for (const raw of patterns) {
+    const segs = parsePermission(raw);
+    add(subjects, segs[0]);
+    if (qualified.includes(segs[0]!)) {
+      add(kinds, segs[1]);
+      add(actions, segs[2]);
+    } else add(actions, segs[1]);
+  }
+  // The places the scopes name, read through THE parse (`parsePlace`).
+  for (const s of scopes) {
+    const place = parsePlace(s, "app");
+    for (const id of placeSpaceIds(place)) add(spaces, id);
+    for (const id of placeProjectIds(place)) add(projects, id);
+  }
+  subjects.push(OTHER);
+  actions.push(OTHER_VERB);
+  const permissions: PermissionProbe[] = [];
+  for (const subject of subjects)
+    for (const action of actions) {
+      if (!qualified.includes(subject)) {
+        permissions.push({ subject, qualifier: null, action });
+        continue;
+      }
+      for (const qualifier of [...kinds, OTHER, null])
+        permissions.push({ subject, qualifier, action });
+    }
+  const places: PlaceProbe[] = [];
+  for (const workspaceId of [...spaces, undefined, OTHER_SPACE])
+    for (const projectId of [undefined, ...projects, OTHER_PROJECT])
+      places.push({ workspaceId, projectId });
+  return { permissions, places };
+}
+
+function whereOfProbe(place: PlaceProbe): AccessWhere {
+  if (place.workspaceId !== undefined)
+    return { kind: "space", id: place.workspaceId };
+  if (place.projectId !== undefined)
+    return { kind: "project", id: place.projectId };
+  return { kind: "pod" };
+}
+
+/**
+ * The most work one comparison may do, in pattern × probe evaluations
+ * (`probes × (distinct patterns + pattern occurrences)`). Above it the lift
+ * is not attempted and fails CLOSED: a re-consent with reason "too-large",
+ * the connection kept on its pairs. Measured on the shapes of the pod's real
+ * connections (app-access.test.ts): synap-chat as it asks today and Content
+ * Studio's 46 asks in 3 spaces each cost a few tens of thousands, so 200 000
+ * leaves several times their room; one F4 entry at its cap (64 kinds) in a
+ * few spaces fits; 48 such entries (~3 000 kinds) do not, and re-consent.
+ * Every lift runs synchronously on consent, sign-in and token mint, so the
+ * bound is on the work, not on the rows.
+ */
+export const LIFT_PROBE_BUDGET = 200_000;
+
+/** A comparison above `LIFT_PROBE_BUDGET`: not attempted. */
+export class LiftTooLargeError extends Error {
+  constructor(readonly cost: number) {
+    super(
+      `Comparing these grants would take ${cost} evaluations, above the budget of ${LIFT_PROBE_BUDGET}`
+    );
+    this.name = "LiftTooLargeError";
+  }
+}
+
+function costOf(
+  probes: number,
+  distinct: number,
+  scopes: readonly AppAccessGrantScope[]
+): number {
+  const occurrences = scopes.reduce((n, s) => n + s.permissions.length, 0);
+  return probes * (distinct + occurrences);
+}
+
+/**
+ * The work comparing two sets of scopes takes, in the unit of
+ * `LIFT_PROBE_BUDGET`: probes × (distinct patterns + pattern occurrences).
+ */
+export function appScopesCompareCost(
+  before: readonly AppAccessGrantScope[],
+  after: readonly AppAccessGrantScope[]
+): number {
+  const all = [...before, ...after];
+  const distinct = [...new Set(all.flatMap((s) => s.permissions))];
+  return costOf(
+    probesFor(distinct, all).permissions.length,
+    distinct.length,
+    all
+  );
+}
+
+/** What a comparison needs: examples (at most `SAMPLE` each way), or only whether there is a difference. */
+export interface CompareOptions {
+  /**
+   * false: stop at the first difference (a verdict is all the caller needs;
+   * the samples then hold that one difference). Default true.
+   */
+  readonly examples?: boolean;
+}
+
+/**
+ * What `after` permits that `before` does not (`gained`), and the reverse
+ * (`lost`), asked through the engine's own `permits` over the probes of
+ * both. Each difference is shown as the first pattern of the side that
+ * permits it, at the probe's place (each pair once, at most `SAMPLE`).
+ *
+ * `permits(scope, request)` is "a pattern matches the request AND every
+ * limit holds for its place": each DISTINCT pattern is asked once per probe
+ * request (`patternMatches`), each scope's limits once per probe place
+ * (`permits` with `*`), and the two are joined. Exact. Bounded by
+ * `LIFT_PROBE_BUDGET` (throws `LiftTooLargeError` before any work), and with
+ * `examples: false` it stops at the first difference.
+ */
+function permitDiffs(
+  before: readonly AppAccessGrantScope[],
+  after: readonly AppAccessGrantScope[],
+  options: CompareOptions = {}
+): { gained: AccessPair[]; lost: AccessPair[] } {
+  const examples = options.examples !== false;
+  const all = [...before, ...after];
+  const distinct = [...new Set(all.flatMap((s) => s.permissions))];
+  const { permissions, places } = probesFor(distinct, all);
+  const cost = costOf(permissions.length, distinct.length, all);
+  if (cost > LIFT_PROBE_BUDGET) throw new LiftTooLargeError(cost);
+
+  // Each distinct pattern against each probe request, once.
+  const matches = new Map<string, Uint8Array>();
+  for (const p of distinct) {
+    const row = new Uint8Array(permissions.length);
+    for (let r = 0; r < permissions.length; r++)
+      row[r] = patternMatches(p, permissions[r]!) ? 1 : 0;
+    matches.set(p, row);
+  }
+  const side = (scopes: readonly AppAccessGrantScope[]) =>
+    scopes.map((s) => {
+      // Does ANY of the scope's patterns match probe r?
+      const any = new Uint8Array(permissions.length);
+      for (const p of s.permissions) {
+        const row = matches.get(p)!;
+        for (let r = 0; r < row.length; r++) if (row[r]) any[r] = 1;
+      }
+      // The scope's own limits, asked through `permits` (any request: `*`).
+      const at = places.map((pl) =>
+        permits(
+          { ...s, permissions: ["*"] },
+          {
+            subject: OTHER,
+            action: OTHER_VERB,
+            workspaceId: pl.workspaceId ?? null,
+            projectIds: pl.projectId === undefined ? null : [pl.projectId],
+          }
+        )
+      );
+      return { permissions: s.permissions, any, at };
+    });
+  const b = side(before);
+  const a = side(after);
+  const permitted = (scopes: typeof a, r: number, i: number) =>
+    scopes.some((s) => s.any[r] === 1 && s.at[i]);
+  /** The first pattern of `scopes` that permits probe `r` at place `i`. */
+  const giver = (scopes: typeof a, r: number, i: number): string => {
+    for (const s of scopes)
+      if (s.any[r] === 1 && s.at[i]) {
+        const p = s.permissions.find((x) => matches.get(x)![r] === 1);
+        if (p !== undefined) return p;
+      }
+    return "*";
+  };
+  const gained = new Map<string, AccessPair>();
+  const lost = new Map<string, AccessPair>();
+  const note = (
+    into: Map<string, AccessPair>,
+    permission: string,
+    i: number
+  ) => {
+    if (into.size >= SAMPLE) return;
+    const pair = { permission, where: whereOfProbe(places[i]!) };
+    into.set(accessPairKey(pair), pair);
+  };
+  for (let r = 0; r < permissions.length; r++)
+    for (let i = 0; i < places.length; i++) {
+      const now = permitted(a, r, i);
+      const was = permitted(b, r, i);
+      if (now === was) continue;
+      if (now) note(gained, giver(a, r, i), i);
+      else note(lost, giver(b, r, i), i);
+      if (!examples)
+        return { gained: [...gained.values()], lost: [...lost.values()] };
+      if (gained.size >= SAMPLE && lost.size >= SAMPLE)
+        return { gained: [...gained.values()], lost: [...lost.values()] };
+    }
+  return { gained: [...gained.values()], lost: [...lost.values()] };
+}
+
+/**
+ * Where scopes put the app, and as what: each space and project a scope
+ * names, as `viewer` when it holds only reads there and `editor` otherwise,
+ * and `pod` for an unpinned (pod-wide read) scope. The doors that read a
+ * scope's PLACE rather than ask `permits` follow it: the app agent's space
+ * memberships, its RBAC floor (`syncAppAgentMemberships`: a read makes it a
+ * viewer of the space, a write an editor), and the spaces a facet or capture
+ * door narrows to (`grantedWorkspaceIdsOf`). A pod-wide read permits a read
+ * in space A, but it never makes the app a member of A.
+ */
+function placementOf(
+  scopes: readonly AppAccessGrantScope[]
+): Map<string, "viewer" | "editor"> {
+  const out = new Map<string, "viewer" | "editor">();
+  for (const s of scopes) {
+    const role = s.permissions.every(isReadPermission) ? "viewer" : "editor";
+    // Where it stands, read through THE parse. A scope with no space or
+    // project is the pod (a pod-wide read) or, for a document's read off
+    // the pod-wide list, "anywhere": both stand at the pod here; what they
+    // permit there is compared by `permits`.
+    const place = parsePlace(s, "app");
+    let keys: string[];
+    switch (place.kind) {
+      case "spaces":
+        keys = place.ids.map((id) => `space:${id}`);
+        break;
+      case "projects":
+        keys = place.ids.map((id) => `project:${id}`);
+        break;
+      case "pod":
+      case "unbounded":
+        keys = ["pod"];
+        break;
+      default:
+        keys = assertNeverPlace(place);
+    }
+    for (const k of keys) if (out.get(k) !== "editor") out.set(k, role);
+  }
+  return out;
+}
+
+function whereOfPlacementKey(key: string): AccessWhere {
+  if (key === "pod") return { kind: "pod" };
+  const [kind, ...rest] = key.split(":");
+  return { kind: kind as "space" | "project", id: rest.join(":") };
+}
+
+/** Placements of `a` that `b` lacks or holds with a lesser role, as pairs of `a`. */
+function placementBeyond(
+  a: readonly AppAccessGrantScope[],
+  b: readonly AppAccessGrantScope[]
+): AccessPair[] {
+  const pa = placementOf(a);
+  const pb = placementOf(b);
+  const out: AccessPair[] = [];
+  for (const [key, role] of pa) {
+    const other = pb.get(key);
+    if (other === role || other === "editor") continue;
+    const where = whereOfPlacementKey(key);
+    const held = a.find((s) => placementOf([s]).get(key) === role);
+    const permission =
+      held?.permissions.find((p) =>
+        role === "editor" ? !isReadPermission(p) : isReadPermission(p)
+      ) ?? "*";
+    out.push({ permission, where });
+  }
+  return out;
+}
+
+/**
+ * Do two sets of scopes give an app the same reach? The same PERMITS (the
+ * engine's `permits`, over the finite probes that decide it) and the same
+ * PLACEMENT (each space and project as viewer or editor, and the pod). What
+ * the second gives beyond the first is `widens`; what it loses, `narrows`.
+ * Throws `LiftTooLargeError` above `LIFT_PROBE_BUDGET`.
+ */
+export function compareAppScopes(
+  before: readonly AppAccessGrantScope[],
+  after: readonly AppAccessGrantScope[],
+  options: CompareOptions = {}
+): { widens: AccessPair[]; narrows: AccessPair[] } {
+  const { gained, lost } = permitDiffs(before, after, options);
+  const take = (...lists: AccessPair[][]) => {
+    const m = new Map<string, AccessPair>();
+    for (const l of lists) for (const p of l) m.set(accessPairKey(p), p);
+    return [...m.values()];
+  };
+  return {
+    widens: take(gained, placementBeyond(after, before)),
+    narrows: take(lost, placementBeyond(before, after)),
+  };
+}
+
+/**
  * Lift a connection's `approved_requests` pairs into v2, or say why it must
- * ask again. NEVER WIDENS: the lift is returned only when its v2 form allows
- * exactly the (permission, place) pairs the rows held — so the grants it
- * makes (`grantScopesForAccess`) are the grants the pairs make today. A row
- * no app may hold, a pair the v2 form would add ("read notes in Sales" and
- * "read tasks in Finance" would read notes in Finance), or a pair it would
- * lose (a read in one space beside the same kind of read pod-wide) leaves
- * the connection on its pairs: a re-consent, never a silent change.
+ * ask again. NEVER WIDENS, NEVER NARROWS: the lift is returned only when the
+ * grants its v2 form makes (`grantScopesForAccess`) give the app exactly the
+ * reach its pairs give today (`scopesOfPairs`): the same permits, by the
+ * engine's own `permits` over every request that can tell them apart, and
+ * the same placement (each space as viewer or editor, and the pod).
+ *
+ * SEMANTIC, not by key (W3c; review of #1183 found the key comparison
+ * over-eager): a pair the v2 form adds that the pairs already permit
+ * (`entity.note.read` in A beside `entity.read` in A) adds nothing, and a
+ * space read beside the same read pod-wide is kept by the pod-wide read
+ * while the space stays where the app writes. A row no app may hold, a
+ * permit the v2 form would add ("read notes in Sales" and "read tasks in
+ * Finance" would read notes in Finance), a permit it would lose (a read off
+ * the pod-wide list in one space, beside "all"), or a space it would leave
+ * (a space only read in, beside the same read pod-wide: the app stops being
+ * its viewer) leaves the connection on its pairs: a re-consent, never a
+ * silent change.
+ *
+ * The v2 DOCUMENT is held to the same bar as its grants: its own pairs
+ * (`expandAppAccess`) must permit nothing the grants do not, so a stored
+ * `approved_access` never names a read its grants drop. A connection too
+ * large to compare within `LIFT_PROBE_BUDGET` re-consents ("too-large",
+ * fail closed). `options.examples: false` stops at the first difference,
+ * for callers that only need the verdict (the reason is then the first
+ * difference met, and the samples hold it alone).
  */
 export function liftApprovedRequests(
-  requests: readonly PlaceRequestLike[]
+  requests: readonly PlaceRequestLike[],
+  options: CompareOptions = {}
 ): LiftResult {
   const { pairs, unplaceable } = pairsOfRequests(requests);
   const access = candidateAccess(pairs);
-  const held = new Set(pairs.map(accessPairKey));
-  const allowed = expandAppAccess(access);
-  const allowedKeys = new Set(allowed.map(accessPairKey));
-  const widens = allowed.filter((p) => !held.has(accessPairKey(p)));
-  const narrows = pairs.filter((p) => !allowedKeys.has(accessPairKey(p)));
-  if (unplaceable.length > 0 || widens.length > 0 || narrows.length > 0) {
+  const refuse = (
+    reason: ReconsentReason,
+    widens: readonly AccessPair[] = [],
+    narrows: readonly AccessPair[] = []
+  ): LiftResult => ({
+    reconsent: {
+      reason,
+      widens: widens.slice(0, SAMPLE),
+      narrows: narrows.slice(0, SAMPLE),
+      unplaceable: unplaceable.length,
+    },
+  });
+  if (unplaceable.length > 0) return refuse("unplaceable");
+  let widens: AccessPair[];
+  let narrows: AccessPair[];
+  try {
+    const grants = grantScopesForAccess(access);
+    ({ widens, narrows } = compareAppScopes(
+      scopesOfPairs(pairs),
+      grants,
+      options
+    ));
+    // The v2 DOCUMENT must say what its grants say (review of #1196). Reads
+    // with "all" spaces are granted only where they are pod-wide reads
+    // (`grantScopesForAccess`), yet the document lists every read at the pod
+    // (`expandAppAccess`): `entity.*.read` beside `*` in A and a pod-wide
+    // `entity.note.read` would stand in the stored `approved_access` as read
+    // at the pod, a phantom `appAccessWithin` would then approve against.
+    // So the document's own pairs, read as scopes with no pod-wide filter,
+    // must permit nothing its grants do not.
+    if (
+      widens.length === 0 &&
+      narrows.length === 0 &&
+      access.read.spaces === "all" &&
+      access.permissions.some(
+        (p) => isReadPermission(p) && !isPodWideReadPermission(p)
+      )
+    ) {
+      widens = compareAppScopes(
+        grants,
+        scopesOfPairs(expandAppAccess(access)),
+        options
+      ).widens;
+    }
+  } catch (err) {
+    if (err instanceof LiftTooLargeError) return refuse("too-large");
+    // A permission the grammar cannot read is a row no app may hold.
+    if (!(err instanceof InvalidPermissionError)) throw err;
     return {
       reconsent: {
-        reason:
-          unplaceable.length > 0
-            ? "unplaceable"
-            : widens.length > 0
-              ? "widens"
-              : "narrows",
-        widens: widens.slice(0, SAMPLE),
-        narrows: narrows.slice(0, SAMPLE),
-        unplaceable: unplaceable.length,
+        reason: "unplaceable",
+        widens: [],
+        narrows: [],
+        unplaceable: Math.max(1, unplaceable.length),
       },
     };
   }
+  if (widens.length > 0) return refuse("widens", widens, narrows);
+  if (narrows.length > 0) return refuse("narrows", widens, narrows);
   return { access };
 }
 
