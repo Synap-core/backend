@@ -26,6 +26,7 @@
  */
 
 import type { Locale } from "../i18n/index.js";
+import { isProposalUndecided } from "./attention.js";
 import { proposalsT } from "./copy.js";
 
 export const CANNOT_APPLY_YET_REASONS = [
@@ -99,10 +100,7 @@ export function cannotApplyYet(
         return { reason, held: true, until };
     }
   }
-  if (
-    (status === "pending" || status === "approval_failed") &&
-    row.setup?.blocking === true
-  ) {
+  if (isProposalUndecided(status) && row.setup?.blocking === true) {
     return { reason: "needs_setup", held: false, until: null };
   }
   return null;
