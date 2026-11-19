@@ -1082,6 +1082,7 @@ export async function answerGrantWrite(sessionId: string): Promise<{
           .select({
             workspaceId: focusSessions.workspaceId,
             projectId: focusSessions.projectId,
+            metadata: focusSessions.metadata,
           })
           .from(focusSessions)
           .where(eq(focusSessions.id, sessionId))

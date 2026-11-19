@@ -28,6 +28,7 @@ import {
   appendSessionStageHistory,
   startedByAgentPatch,
   insertFocusSessionRow,
+  workspacePlacementPatchFromProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -288,6 +289,11 @@ export function registerFocusSessionExecutors(): void {
             : {}),
           // The proposing agent started it (orient's `handedToYou` leaves it out).
           ...startedByAgentPatch(proposal.agentUserId),
+          // The rung that placed it in its space, as the direct insert stamps it.
+          ...workspacePlacementPatchFromProposal(
+            innerData.workspacePlacement,
+            proposal.workspaceId
+          ),
         };
         // THE ONE row writer (`insert-focus-session.ts`). The fixed id is
         // conflict-safe: a row already at it writes nothing (zero rows).
@@ -1502,7 +1508,13 @@ async function instantiateApprovedPlaybook(args: {
     ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
       ? { goalOverride: innerData.prompt }
       : {}),
-    metadata: startedByAgentPatch(args.startedByAgentId),
+    metadata: {
+      ...startedByAgentPatch(args.startedByAgentId),
+      ...workspacePlacementPatchFromProposal(
+        innerData.workspacePlacement,
+        args.workspaceId
+      ),
+    },
   });
   return row ? [row] : [];
 }

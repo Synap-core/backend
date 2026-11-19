@@ -231,9 +231,10 @@ export async function runGoalLoop(goalId: string): Promise<GoalLoopRunResult> {
   const carried = criteria.filter((c) => decision.carry.includes(c.key));
   const owner = await goalOwnerToAsk(track);
   const templateId = await methodPlaybookFor(track, owner);
+  // No space named: the session space ladder places the run in the project's
+  // home (`project_home`) when the owner may start work there.
   const result = await createFocusSession({
     userId: owner,
-    workspaceId: row.workspaceId,
     projectId: track.projectId,
     trackId: track.id,
     title: goalNextRunTitle(track.name),

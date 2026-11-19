@@ -93,6 +93,7 @@ export * from "./utils/live-run-status.js";
 export * from "./utils/worker-enablement.js";
 export * from "./utils/worker-target-result.js";
 export * from "./utils/resolve-session-project.js";
+export * from "./utils/resolve-session-workspace.js";
 export * from "./utils/session-spawn.js";
 export * from "./utils/resolve-or-create-agent-proposal-session.js";
 export * from "./utils/agent-proposal-session-memo.js";

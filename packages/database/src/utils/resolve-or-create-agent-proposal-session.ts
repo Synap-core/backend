@@ -277,6 +277,8 @@ export async function resolveOrCreateAgentProposalSession(
         userId: input.userId,
         agentUserId: input.agentUserId,
         workspaceId: await receiptWorkspaceId(tx, input.workspaceId),
+        // A receipt keeps the caller's space (W3 decision D9 a).
+        keepCallerWorkspace: true,
         projectId,
         goal,
         title: input.title ?? null,
