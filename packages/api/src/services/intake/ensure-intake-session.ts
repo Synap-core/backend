@@ -278,7 +278,6 @@ export async function ensureIntakeSession(
       const workspaces = Array.from(
         new Set([
           ...(input.reuseWorkspaceIds ?? [input.workspaceId ?? null]),
-          placedWorkspaceId,
         ])
       );
       const [existing] = await db
