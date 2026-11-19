@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { handleFrameLink, type FrameLinkEnv } from "./html-frame-links";
+import { FRAME_OPEN_KINDS } from "@synap-core/types/cell-bridge";
+import {
+  handleFrameLink,
+  handleFrameOpen,
+  type FrameLinkEnv,
+} from "./html-frame-links";
 
 const POD = "https://pod.example.live";
 const CONSOLE = "https://pod-admin.example.live";
@@ -122,5 +127,85 @@ describe("handleFrameLink — only THIS frame can ask the reader's browser to go
       e
     );
     expect(calls).toEqual([`tab ${POD}/open/a`, `here ${CONSOLE}/open/a`]);
+  });
+});
+
+describe("handleFrameOpen — a page asks to open an object, the console decides where", () => {
+  const ID = "44444444-4444-4444-8444-444444444444";
+  const open = (objectKind: string, objectId = ID, extra = {}) => ({
+    type: "synap:surface:open",
+    surface: { kind: "object", objectKind, objectId, ...extra },
+  });
+
+  it("opens the object's console page in the reader's own tab", () => {
+    const { e, calls } = env();
+    const done = handleFrameOpen(
+      { source: FRAME, data: open("session") },
+      FRAME,
+      e
+    );
+    expect(done).toEqual({ action: "here", href: `/open/session/${ID}` });
+    expect(calls).toEqual([`here /open/session/${ID}`]);
+  });
+
+  it("every kind a page may open has a console page (none is a dead door)", () => {
+    for (const kind of FRAME_OPEN_KINDS) {
+      const { e, calls } = env();
+      const done = handleFrameOpen({ source: FRAME, data: open(kind) }, FRAME, e);
+      expect(done?.action, kind).toBe("here");
+      // A console page, never an app link drawn in the reader's tab.
+      expect(calls, kind).toEqual([
+        expect.stringMatching(/^here \/(open\/[a-z]+|proposal)\//),
+      ]);
+    }
+  });
+
+  it("the page names the object, never the address: a url it adds is not followed", () => {
+    const { e, calls } = env();
+    handleFrameOpen(
+      {
+        source: FRAME,
+        data: open("entity", ID, { url: "https://evil.example/" }),
+      },
+      FRAME,
+      e
+    );
+    expect(calls).toEqual([`here /open/entity/${ID}`]);
+  });
+
+  it("only THIS frame may ask, and only for a kind and a uuid", () => {
+    const { e, calls } = env();
+    expect(
+      handleFrameOpen({ source: OTHER, data: open("session") }, FRAME, e)
+    ).toBe(null);
+    expect(
+      handleFrameOpen({ source: FRAME, data: open("session") }, null, e)
+    ).toBe(null);
+    expect(
+      handleFrameOpen({ source: FRAME, data: open("capability") }, FRAME, e)
+    ).toBe(null);
+    expect(
+      handleFrameOpen({ source: FRAME, data: open("session", "../x") }, FRAME, e)
+    ).toBe(null);
+    expect(calls).toEqual([]);
+  });
+
+  it("no recent activation: a page cannot move the reader on its own", () => {
+    const { e, calls } = env({ activated: () => false });
+    expect(
+      handleFrameOpen({ source: FRAME, data: open("session") }, FRAME, e)
+    ).toEqual({ action: "ignore", reason: "not-activated" });
+    expect(calls).toEqual([]);
+  });
+
+  it("a link message is not an open, and an open is not a link", () => {
+    const { e, calls } = env();
+    expect(
+      handleFrameOpen({ source: FRAME, data: link(`${POD}/open/abc`) }, FRAME, e)
+    ).toBe(null);
+    expect(
+      handleFrameLink({ source: FRAME, data: open("session") }, FRAME, e)
+    ).toBe(null);
+    expect(calls).toEqual([]);
   });
 });

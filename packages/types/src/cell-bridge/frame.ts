@@ -91,15 +91,86 @@ export interface CellFrameOptions {
    * for the message may ask for this: otherwise its links go nowhere.
    */
   links?: boolean;
+  /**
+   * The host's design tokens, as CSS (`frameTokensCss`): written as the
+   * frame's first `<style>`, so a page draws with `var(--synap-…)` in the
+   * reader's theme and its own styles still win. The policy names no style
+   * host (decision R3), so a page cannot link a stylesheet: the host hands
+   * the tokens in.
+   */
+  tokens?: string;
 }
 
 /** The block injected ahead of everything the author wrote. */
 export function cellFrameHeadBlock(options: CellFrameOptions = {}): string {
   return (
     `<meta http-equiv="Content-Security-Policy" content="${buildCellFrameCsp()}">` +
+    (options.tokens
+      ? // `<\/` is the same text to CSS, and cannot end the element.
+        `<style data-synap-tokens>${options.tokens.replace(/<\//g, "<\\/")}</style>`
+      : "") +
     `<script>${CELL_BRIDGE_SDK}</script>` +
     (options.links ? `<script>${CELL_FRAME_LINK_DOOR}</script>` : "")
   );
+}
+
+/** The token names a frame receives: the design tokens' own prefix. */
+export const FRAME_TOKEN_PREFIX = "--synap-";
+
+/** The slice of a CSS rule read here (a style rule, or a group of rules). */
+interface FrameTokenRule {
+  readonly style?: ArrayLike<string>;
+  readonly cssRules?: ArrayLike<FrameTokenRule>;
+}
+
+/** The slice of a stylesheet read here. */
+interface FrameTokenSheet {
+  readonly cssRules: ArrayLike<FrameTokenRule>;
+}
+
+/**
+ * The host's design tokens as CSS for a frame (`CellFrameOptions.tokens`):
+ * every `--synap-*` custom property the host's stylesheets declare, with the
+ * value the host computes for it NOW (`computed`, the host element's computed
+ * style). So a page gets the reader's theme (light, dark, a theme overlay)
+ * with no copy of the token files: the values are the ones the host draws
+ * with. Empty when the host declares none.
+ *
+ * A stylesheet the host cannot read (another origin's) declares no token of
+ * ours and is passed over.
+ */
+export function frameTokensCss(
+  sheets: ArrayLike<FrameTokenSheet>,
+  computed: { getPropertyValue(name: string): string }
+): string {
+  const names = new Set<string>();
+  const walk = (rules: ArrayLike<FrameTokenRule>) => {
+    for (let i = 0; i < rules.length; i += 1) {
+      const rule = rules[i]!;
+      if (rule.style) {
+        for (let j = 0; j < rule.style.length; j += 1) {
+          const name = rule.style[j]!;
+          if (name.startsWith(FRAME_TOKEN_PREFIX)) names.add(name);
+        }
+      }
+      if (rule.cssRules) walk(rule.cssRules);
+    }
+  };
+  for (let i = 0; i < sheets.length; i += 1) {
+    let rules: ArrayLike<FrameTokenRule>;
+    try {
+      rules = sheets[i]!.cssRules;
+    } catch {
+      continue;
+    }
+    walk(rules);
+  }
+  const declarations: string[] = [];
+  for (const name of names) {
+    const value = computed.getPropertyValue(name).trim();
+    if (value) declarations.push(`${name}:${value}`);
+  }
+  return declarations.length > 0 ? `:root{${declarations.join(";")}}` : "";
 }
 
 const LEADING_DOCTYPE = /^(\uFEFF?\s*<!doctype[^>]*>)/i;

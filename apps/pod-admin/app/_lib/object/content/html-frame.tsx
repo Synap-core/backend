@@ -25,6 +25,7 @@ import {
   CELL_FRAME_SANDBOX,
   createCellBridgeHost,
   frameNetworkCodeRefusal,
+  frameTokensCss,
   wrapHtmlForFrame,
 } from "@synap-core/types/cell-bridge";
 import {
@@ -43,7 +44,11 @@ import { SectionCard } from "../../../(admin)/components/section-card";
 import { StatusPill } from "../../../(admin)/components/status-pill";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import { readForPage } from "./html-bridge-reads";
-import { browserFrameLinkEnv, handleFrameLink } from "./html-frame-links";
+import {
+  browserFrameLinkEnv,
+  handleFrameLink,
+  handleFrameOpen,
+} from "./html-frame-links";
 import { frameT } from "./frame-copy";
 import { withWidgetCompat } from "./widget-compat";
 import type { PreparedContent } from "./markdown-model";
@@ -158,10 +163,21 @@ export function HtmlFrame({
   // the frame itself, which would load pod admin inside the sandbox.
   // A card written for the widget host gets its `SynapWidget` here (a preview,
   // with no bridge, also gets a sample entity): see `widget-compat`.
+  // `tokens`: the console's own `--synap-*` values, so a page drawn with
+  // `var(--synap-…)` wears the reader's theme (`frameTokensCss`).
   const srcDoc = useMemo(
     () =>
       wrapHtmlForFrame(withWidgetCompat(html, { sample: !bridge }), {
         links: true,
+        // A page's content is read in the browser, never on the server; the
+        // guard keeps a server render from touching `document`.
+        tokens:
+          typeof document === "undefined"
+            ? undefined
+            : frameTokensCss(
+                document.styleSheets,
+                getComputedStyle(document.body)
+              ),
       }),
     [html, bridge]
   );
@@ -177,14 +193,19 @@ export function HtmlFrame({
     return () => window.removeEventListener("message", onMessage);
   }, [client, workspaceId, bridge, left, refusal, run]);
 
-  // The link door: the page asks, the reader's browser follows (or not). It
-  // answers with or without the data bridge: a preview with no bridge has links
-  // too, and an unanswered click would be a dead link.
+  // The link door and the "open this" intent: the page asks, the reader's
+  // browser follows (or not). They answer with or without the data bridge: a
+  // preview with no bridge has links too, and an unanswered click would be a
+  // dead link.
   useEffect(() => {
     if (left || refusal) return;
     const env = browserFrameLinkEnv();
-    const onMessage = (event: MessageEvent) =>
-      void handleFrameLink(event, frameRef.current?.contentWindow ?? null, env);
+    const onMessage = (event: MessageEvent) => {
+      const frame = frameRef.current?.contentWindow ?? null;
+      if (!handleFrameLink(event, frame, env)) {
+        handleFrameOpen(event, frame, env);
+      }
+    };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [left, refusal, run]);

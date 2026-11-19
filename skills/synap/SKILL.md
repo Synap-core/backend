@@ -64,10 +64,11 @@ The ONE glossary; other skills point here. Word = what the user sees; internal =
 | ------------------- | ----------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Space**           | workspace               | which domain: kinds + tools?          | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                                                                                                     |
 | **Project**         | project                 | what am I committed to, with whom?    | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                                                                                                       |
+| **Pillar**          | project-to-space link (`uses`) + purpose | which space carries this project, and why? | a space the project uses, with a purpose; its health is derived from the goals that advance it · not a kind, not the Content OS `pillar` kind or Brand "content pillars" (editorial themes) |
 | **Goal**            | project_tracks          | what goal am I pursuing?              | in ONE project; open while it matters, or its judge closes it with a verdict; criteria say when it is done; work = sessions · grow the newsletter · tools say "track"                                |
 | **Step**            | stage                   | where does this work stand?           | = the subject's status: move the thing, the step follows · legacy: steps of a goal started from a method                                                                                             |
 | **Work**            | focus_session           | what am I doing this sitting?         | one aim · no noun: "Start work"                                                                                                                                                                      |
-| **Template**        | playbook                | how do I reuse it?                    | kind DERIVED, never declared: scope session = work template (a method a session or worker follows), project = goal template (legacy); also space and automation templates                            |
+| **Process**         | playbook                | how do I reuse it?                    | kind DERIVED, never declared: scope session = process (a method a session or worker follows), project = goal process (legacy) · "Template" now names only a space template                           |
 | **Pack**            | suite                   | which templates come together?        | a bundle; depends on space templates, never creates a space                                                                                                                                          |
 | **Rule**            | skill rule              | what do my agents always follow?      | a standing instruction written for agents · "always cite sources" · not an Automation, not Approvals                                                                                                 |
 | **Automation**      | automation              | what runs by itself, when?            | standing · "every Monday…" · not a Rule, not Approvals                                                                                                                                               |
@@ -86,6 +87,7 @@ The ONE glossary; other skills point here. Word = what the user sees; internal =
 | **Role**            | role profile + facet    | which hat does it wear?               | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin                                                                                      |
 | **Thing**           | entity                  | what is being worked on?              | one kind, maybe roles · a post, a lead · never a twin for a hat                                                                                                                                      |
 | **Status**          | lifecycle               | where does it stand?                  | ONE list per kind or role, declared on its profile; category open·active·paused·done·lost · moved only through the door (`expectedStatus`)                                                           |
+| **Health**          | derived read | is this pillar or project moving? | worst-of its goals, with counts (moving · needs attention · not validated yet · stalled · no active goal); never typed in, never an average |
 | **Pipeline**        | pipeline view           | what is in each status?               | computed from a lifecycle, never created · not an object                                                                                                                                             |
 | **Flow**            | `flow.of`               | how does this kind of work run?       | one read of a kind or role: its statuses in order, the stage that owns each, the things in each with who works them and their next step · `synap_get_flow` · not a second status list, not an object |
 | **Blocker**         | slot with `blocks`      | what holds this thing up?             | a slot on a session that names the thing it holds and the status it cannot reach yet; the thing stays in its status, marked, with whose move it is · never a status of its own                       |
@@ -103,7 +105,9 @@ Doors: `start_track`, `start_session`, `create_rule`, `attach_facet`, `update_en
 
 A goal is a TRACK in every tool and field name (`start_track`, `trackId`); say "goal" to the person. A goal on a project: `list_tracks` → none? `start_track` (`name`, `direction`, a `kpi` only if the person names one; no method needed); work in it = `start_session` + `trackId`, as many sessions as it takes. A session's one-line `goal` is its **Aim** to the person. Detail: `from-intent`.
 
-Existing work can be filed into a goal with `update_session` `trackId` (proposed; the session keeps its space). Goal steps are legacy: only a goal started from a goal template has them (`start_stage_session`; never `advance_track` without the user).
+Where a goal goes: `parentGoalId` (a goal of the same project; the first is its main parent) and `pillars: [{workspaceId, primary?}]` (the whole set; one primary: the one you mark, else the first) on `start_track` / `update_track`; a project's one main goal is `mainGoalId` on `update_project`. Rule: `goals/where-work-goes`.
+
+Existing work can be filed into a goal with `update_session` `trackId` (proposed; the session keeps its space). Goals have no stages; steps are legacy: only a goal started from a goal process has them (`start_stage_session`; never `advance_track` without the user).
 
 ---
 
@@ -117,12 +121,13 @@ A process is the life of a **thing**, not a script. A lead, a post or a feature 
 
 ### The nouns
 
-| Noun                | What it is                                                                                                            | Not                                 |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| **Project**         | a commitment, and a lens across spaces                                                                                | a method, a domain                  |
-| **Goal** (optional) | in one project (a _track_ in tools): direction, criteria, the workers it turns on; its judge closes it with a verdict | a list of stages                    |
-| **Thing**           | any entity: one kind, maybe roles, one status per kind or role                                                        | a second entity for a hat           |
-| **Session**         | the unit of work that closes: goal, criteria, room; one thing or a batch                                              | a "run" because it follows a method |
+| Noun                | What it is                                                                                                             | Not                                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| **Project**         | a commitment, and a lens across spaces                                                                                 | a method, a domain                           |
+| **Pillar**          | a space the project uses (the project-to-space link) with a purpose; its health is read from the goals that advance it | an entity kind; the Content OS `pillar` kind |
+| **Goal** (optional) | in one project (a _track_ in tools): direction, criteria, the workers it turns on; its judge closes it with a verdict  | a list of stages                             |
+| **Thing**           | any entity: one kind, maybe roles, one status per kind or role                                                         | a second entity for a hat                    |
+| **Session**         | the unit of work that closes: goal, criteria, room; one thing or a batch                                               | a "run" because it follows a method          |
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
 
@@ -130,7 +135,7 @@ How they relate: a project files things; each kind or role declares one **lifecy
 
 ### Three tenses of a thing
 
-- **Past = history.** Every status change is one transition event: from, to, who, which session, why.
+- **Past = history.** Every status change is one transition event: from, to, who, which session, why, and, when an automation of the pod made it, the move that caused it (`cause`).
 - **Present = status.** One value per kind or role, in its own column.
 - **Future = agenda.** Tasks and events linked to the thing, with an owner. _(Planned, wave 4.)_
 
@@ -147,6 +152,18 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 - A refusal naming the valid options means the value is not in the declared lifecycle: pick one of them.
   Never invent a status, never keep your own stage field.
 
+Things are not the only subjects of the door. A goal, a session, a playbook run, a proposal and an owed slot (an ask or a declared output) move through their own door the same way, and each move is one transition event (`track.…`, `focus_session.…`, `playbook_run.…`, `proposal.…`, `slot.transition.completed`). A hold may wait on any of them moving.
+
+### Automations the pod applies: moves that follow other moves
+
+Some moves follow another move on their own. Each is an **automation** the pod applies ("rule" or "reaction" in code), listed with the person's own automations, marked Built in or Declared on a link, and each can be paused for the whole pod.
+
+- **An outcome is met wherever it was filed** (built in). When a proposal is approved (by a person, or let through by a rule), every open outcome whose `ref` names what it approved is met, in every session of its owner, not only the one it was filed under. A merged pull request does the same for every outcome whose `ref` is that PR.
+- **A run that stops early goes to Needs you** (built in). A run that stops with stages left asks the person "Continue at <stage>?"; its session pauses, held on the person, and resumes when they answer. A run a worker started fails with its reason instead.
+- **A roll-up** (declared on a link). The relation between two kinds may declare `{kind: "rollup", to?, parent?, terminal?, chains?}` (`profile_relations.metadata.reactions`): once every part that is not lost is done, and at least one is, the parent moves to `to`, else to its next status. The thing's page shows the progress ("3 of 5").
+
+Every one acts as the system, on the person's own declaration; it is not the AI. It moves the target through the target's own door from the status it read, so a person's move always wins. A move into done or lost is a proposal unless it says `terminal: "apply"` (the outcome one does: the approval was already the person's call). The target's history names the move that caused it. A move one made sets off others only when it `chains`, never more than 3 deep. One that skips a move logs why. Read the ones around a thing with `statusOf` `include: ["reactions"]`.
+
 ### Where a kind stands: the flow read and the blocker
 
 **`flow.of` is the one read of a kind's flow.** tRPC `flow.of`, Hub `GET /api/hub/flow`, MCP `synap_get_flow`: one function, three doors. Input: `profileSlug` (a kind, or a role, which reads its kinds together), `workspaceId`, optional `projectId`, `trackId`, `firstN` (cards per state, default 10), `window` (days of done and lost, default 30), `properties`. A key bounded by a grant names the space. It returns:
@@ -158,7 +175,7 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 | `flows`  | the playbooks working the kind: stages and the status each owns, open runs, runs on an older version, `undeclaredStatuses`                                                                |
 | the rest | `unclassified` things, the space's `primaryOutput`, totals, `withheld` (what a grant does not reach)                                                                                      |
 
-An app that draws a kind (a board, a thing's page) reads this. It does not rebuild columns from `lifecycle.get` plus a playbook list, and it keeps no stage list of its own. Each card's `blocker` is reserved: card blocker: coming.
+An app that draws a kind (a board, a thing's page) reads this. It does not rebuild columns from `lifecycle.get` plus a playbook list, and it keeps no stage list of its own. Each card carries its `blocker`: the same value `statusOf` returns for the thing, read for the whole board at once; `{status: "unavailable"}` when that read failed, never "not blocked".
 
 **A blocker is a slot, not a status.** A slot that declares `blocks {entityId?, to?}` (with `blockerKey` and `clearedBy`, see `focus-sessions` and `asks`) holds a thing up. One pure function, `deriveThingBlocker`, says how: `{blocked, count, why, ball (whose move), unlocks (the status clearing it lets the thing reach), clearedBy, ref}`. The thing stays in its status; a hold (a paused status) never blocks, because the hold is the status itself. Defaults: an agent's slot blocks only when it declares `blocks` and its session is open and accepted; an undeclared target is the thing's next status. Where it shows today: `statusOf` (`GET /api/hub/orient?statusOf=<id>`) returns `blocker`, and a needs-you row carries `blocks {thing, statusNow, statusNext}`, so the answer is given with its consequence in view.
 
@@ -175,7 +192,7 @@ An app that draws a kind (a board, a thing's page) reads this. It does not rebui
 
 ### Workers
 
-A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. Authoring: `processes`.
+A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. It may also be turned on for one open session (scope `session`: `synap_enable_worker` with `scopeSessionId` instead of `trackId`): its runs start as that session's children, and it files nothing once the session ends. Authoring: `processes`.
 
 ### Agents and their templates
 
@@ -183,7 +200,9 @@ An agent is one connected AI program (its `agent_type` = which program). Its **a
 
 ### Goals (tracks)
 
-A goal is a _track_ in every tool and field name (`start_track`, `trackId`) — say "goal" to the person; a session's one-line `goal` is its **Aim**. A goal holds an owner, a direction, instructions, the workers it turns on, and what done means (criteria, or a number measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why; every move sends `expectedStatus`, the status you read). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two goals. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old goals started from a method; never `advance_track` without the user.
+A goal is a _track_ in every tool and field name (`start_track`, `trackId`) — say "goal" to the person; a session's one-line `goal` is its **Aim**. A goal holds an owner, a direction, instructions, the workers it turns on, and what done means (criteria, or a number measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why; every move sends `expectedStatus`, the status you read). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two goals. Solo users may never need one: workers can run space-wide. Goals have no stages: `start_stage_session` and `add_track_stage` only serve legacy goals started from a method, never start a new one that way; never `advance_track` without the user.
+
+**Where a goal goes** (load `goals/where-work-goes`): a project has ONE main goal (`update_project` `mainGoalId`, a live goal of that project; the person's call). Every other goal names the goal it serves (`parentGoalId` on `start_track` / `update_track`, a goal of the SAME project; the first parent is its main one) and the pillar(s) it advances (`pillars: [{workspaceId, primary?}]`: spaces the project already uses; one primary: the one you mark, else the first; on `update_track` the list is the goal's WHOLE set and replaces the old one). A goal counts fully toward its main pillar only; in the others it is listed. A pillar's health is DERIVED from its goals (worst-of, with counts); never type one in.
 
 **Keep the pod current (every agent, every session)** — three rules, so the next agent picks your step up from the pod alone:
 
@@ -441,11 +460,13 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 
 A **goal** is a _track_ in every tool and field name (`synap_start_track`, `trackId`) — say "goal" to the person, never "track". It lives inside ONE project ("Launch the new site", "Win the first ten clients"); a project runs several. A goal that FINISHES holds an `endState` (what done looks like, a short paragraph in the person's words) and **2 to 5 `criteria`** — binary checks, each with how it is checked: measured (evidence a run posts), judged by a person, handed over, or decided by an outside party. A goal kept open as long as it matters ("keep the newsletter growing") has no criteria: it steers by a `direction` (one line) and, only if the person names a number, a `kpi` `{ label, unit?, target }`. Propose its `workKind` (project, operation, investigation…) and `uncertainty`; the person confirms them. Its judge (the owner unless someone else is named, `synap_set_track_participant`) accepts what runs claim and closes it with a verdict — hitting a number never closes it. Work in it is ordinary sessions filed into it. Definitions: `concepts`.
 
-**Asked to pursue a goal in a project** ("launch the new site in Synap"): `synap_list_tracks` for the project (already running? resume it) → none? Propose the end state and 2–5 criteria in one line each and let the person correct them, then `synap_start_track` with `projectId`, `name`, `endState`, `criteria` (and `workKind`, `uncertainty`) — no method needed. Leave criteria out only when the person describes something to keep doing, not something to finish. Then work: `synap_start_session` with `trackId`, one session per sitting, carrying the criteria it works on (same `key`), as many as it takes.
+**File it where it belongs** (rule: `goals/where-work-goes`). A project has ONE main goal (`synap_update_project` `mainGoalId`, a live goal of that project; the person's call). Every other goal passes `parentGoalId` (a goal of the SAME project; the first parent is its main one) and `pillars: [{ workspaceId, primary? }]` (the spaces of its project it advances; one primary: the one you mark, else the first; each must already be a space the project uses; on `synap_update_track` the list is the goal's WHOLE set and replaces the old one). It counts fully toward its main pillar and is only listed in the others. Health is derived from the goals, never typed in. A pillar is the project-to-space link with a purpose, not a kind and not the Content OS `pillar` kind.
+
+**Asked to pursue a goal in a project** ("launch the new site in Synap"): `synap_list_tracks` for the project (already running? resume it) → none? Propose the end state and 2–5 criteria in one line each and let the person correct them, then `synap_start_track` with `projectId`, `name`, `endState`, `criteria` (and `workKind`, `uncertainty`, `parentGoalId`, `pillars`) — no method needed. Leave criteria out only when the person describes something to keep doing, not something to finish. Then work: `synap_start_session` with `trackId`, one session per sitting, carrying the criteria it works on (same `key`), as many as it takes.
 
 | The user needs…                                  | Do this                                                                                                                                 |
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| a **goal** in an existing project                | `synap_list_tracks` (already running?) → `synap_start_track` (`name`, `endState`, 2–5 `criteria`; lasting: `direction`, optional `kpi`) |
+| a **goal** in an existing project                | `synap_list_tracks` (already running?) → `synap_start_track` (`name`, `endState`, 2–5 `criteria`; lasting: `direction`, optional `kpi`; `parentGoalId`, `pillars`) |
 | one piece of work toward it                      | a **session** born in the goal: `synap_start_session` (or `synap_run_playbook` for a session template) with `trackId`                   |
 | a repeatable way to do that work                 | a session template (`synap_create_playbook`, default scope) run with `trackId` — not a goal method                                      |
 | new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a goal                                                                 |
@@ -453,7 +474,7 @@ A **goal** is a _track_ in every tool and field name (`synap_start_track`, `trac
 
 **A goal steers; its sessions verify.** A session that passes a criterion CLAIMS it; the judge accepts or sends it back — never accept your own claim. Report a lasting goal's number with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. While a goal is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, closing or dropping it ends it. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`, sending `expectedStatus` = the status you read (`conflict` = someone moved it: re-read, decide again); your close is a proposal the person approves. Goal writes are governed: `proposed` is success. Installing a pack onto a project does **not** start goals — start each one.
 
-**Legacy: goals with steps.** A goal started from a goal template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new goal templates; a new goal needs none.
+**Legacy only: goals with steps.** Goals have no stages. A goal started from a goal template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new goal templates; a new goal needs none.
 
 ### 3. Which skill to load next
 
@@ -2008,6 +2029,11 @@ Everything lands as ONE reviewable proposal (or auto-applies when every op is sa
 { "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }
 ```
 
+**TABLE EXAMPLE — a register of many rows of one kind, each linked to an existing record by an exact value** (at most 500 rows per call, one proposal). Column `title` names each row; the other columns are properties. `linkBy` links a row to the existing entity of `profileSlug` whose `property` equals that cell exactly. Cells that match no entity, or several, are not linked and come back in the reply's `table` (`unmatched`, `ambiguous`), by row. Send it with `validate: true` first to see those before anything is written.
+```json
+{ "table": { "profileSlug": "expense", "columns": ["title", "amount", "currency", "receipt"], "rows": [ ["Train Paris to Lyon", 42, "EUR", "R-0012"], ["Hotel Lyon", 120, "EUR", "R-0013"] ], "linkBy": [ { "column": "receipt", "profileSlug": "document", "property": "receipt", "type": "references" } ] } }
+```
+
 ---
 
 ## Worked examples
@@ -2345,7 +2371,7 @@ Note: all hub-protocol writes are governance-gated server-side — a start may c
 - **Say it once.** The `label` is a short key (a few words: "Stripe account"), never the question and never "Decide: …". The `prompt` (confirm) or the options (choose) carry the question. `why` adds only what neither says: the fact that makes it matter, never a repeat of the label or prompt. Give each answer its consequence, and recommend one when you have a view. The person reads this card once and decides.
 - `confirm` — yes/no: `prompt` is the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`. `choose` — 1–8 `options` (`label`, optional `value` and a one-line `description` of the consequence, at most ONE `recommended`; the person can always answer in their own words instead; `allowOther: false` closes that, only for a choice code reads as a value). `form` — a small flat form (never a secret field). `act` — something to DO: an http(s) `url` and up to 7 `steps`. `provide` — a `connection`, `file` or `secret` handed over through the vault (you receive a reference, never the secret in the answer). A secret you asked for comes with a read for you alone, for 60 minutes: redeem the `vault://` ref (`POST /vault/redeem`). If the receipt says no agent can read it, ask for access through `POST /vault/request`.
 - **Which mode.** A DECISION is `confirm` (one yes/no) or `choose` — never `act`. When you have a view, mark exactly ONE answer `recommended` (a choose option, or a confirm's `yes` / `no`): the person's pick vs your recommendation is recorded, and every answered `confirm`/`choose` files a `decision` entity automatically. Recall past decisions first (`synap_ask`) so your recommendation follows the user's past choices. Use `act` ONLY for a physical/world task with `steps` (they answer "I did this"). Always add an `ask`: a human-owned slot with only `blockedReason` + `why` shows a bare "I did this" button. Example: `ask: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}`, or `ask: {"mode":"confirm","prompt":"Publish the post today?","yes":{"description":"Goes live at 9:00","recommended":true},"no":{"description":"Stays a draft"}}`.
-- **How it comes back.** `act` is resolved by "I did this" (attest): the slot is done and you are woken. Every other mode goes through the answer door: the slot comes back to you with `answer.text` (a readable summary) and `answer.value`, the typed pick (`confirm` → `confirmed`, `chip` → the option, `form` → `values`, `provide` → `ref`, `text`). Act on `answer.value`, not the prose. A plain reply in the room answers a typed slot only when the ask takes text (`choose` with `allowOther`); otherwise it answers your question and the slot stays owed.
+- **How it comes back.** `act` is resolved by "I did this" (attest): the slot is done and you are woken. Every other mode goes through the answer door: the slot comes back to you with `answer.text` (a readable summary) and `answer.value`, the typed pick (`confirm` → `confirmed`, `chip` → the option, `form` → `values`, `provide` → `ref`, `text`, `declined` → the person REFUSED, with an optional `reason`). Act on `answer.value`, not the prose. A refusal grants nothing and keeps the blocker: never ask the same again (it is refused `ask_refused`); re-plan, ask something new, `retireOutput` the slot, or close `failed`. A plain reply in the room answers a typed slot only when the ask takes text (`choose` with `allowOther`); otherwise it answers your question and the slot stays owed.
 - **Then wait — don't end your turn.** After an ask, call `wait_for_answer` with the `sessionId` (when your tools list it; an in-app agent has no such tool, the answer wakes it): it returns the moment the person answers (`status: 'answered'`, `answers[]` with `text` and the typed `value`) or after `timeoutSeconds` (default 50, max 90; Codex: 55 or less) with `status: 'timeout'` and `nextSince` — call again with `since = nextSince` to keep waiting. Without `since` you get only answers you have not picked up yet. Your read marks the answer "Picked up" for the person. If you must stop, the answer stays on the slot for your next turn.
 - **Changing it.** Send a new `ask` to re-ask; `ask: null` clears it (an ask on a slot you own is dropped). An answer given against the old one is refused `ask_changed:` (409) and the person is shown the current ask; `ask_invalid:` means the answer did not fit it. Re-blocking a slot clears its previous answer.
 - **"Ask about it".** The person can open a thread about a slot in the session room; you get a turn with the slot, its `why` and ask in context (marked CHANGED if the ask moved since they opened it). Explain what you need and what each answer leads to, fix the ask if it was wrong, and never answer for them — their follow-ups in that thread never hand the slot back.
@@ -2407,6 +2433,10 @@ A status move (a kind's own lifecycle, or a role's) emits ONE event, `entity.tra
 ```
 
 Prefer it to `entity.update.completed` for any status. For a ROLE it is the only one: a role's status lives on its facet, so an update rule never sees it.
+
+Other subjects move through the same door and emit their own transition event, filtered the same way (`to`, `from`, `category`): `track.transition.completed` (a goal), `focus_session.transition.completed` (a session), `playbook_run.transition.completed` (a run, with `stopReason`), `proposal.transition.completed` (every move of a proposal: approved, rejected, expired, withdrawn, failed) and `slot.transition.completed` (an ask or a declared output). `proposal.approved.completed` and `proposal.rejected.completed` still fire for a proposal in a space; the transition also covers the rest.
+
+**The pod applies some automations itself.** An outcome met wherever it was filed, a run that stops early going to Needs you, a roll-up a relation declares: each shows in the same list as the person's automations (Built in, Declared on a link), applied by the pod after the move (`work-model`). Do not write an automation that repeats one.
 
 **A worker usually beats a hand-written rule.** "When a post enters Review, run the review" is an activator on the playbook (`on: enters_status`), and "once 5 leads wait in qualified" is `on: count` + `min`; both compile to a governed rule like the one above, fire once per thing per transition, and are throttled by `maxPendingApprovals`. Write the rule by hand only for work no method owns. Workers: `processes`.
 
@@ -2832,7 +2862,17 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 1. **Check what exists**: `synap_list_widgets` (REST `GET /api/hub/widget-definitions`). Define only what is genuinely new; a cell definition is permanent.
 2. **Write the source** as an **ES module** that default-exports a React component (drawn in the frame, with the host's React and `@synap/kit`), or as an **HTML page** (a source that opens with `<`: drawn as a page, inline script only, no `import`). You do not pick the mechanism: the pod reads it from the source.
 3. **Define it with `synap_create_cell`** `{ name, rendererSource, description?, workspaceId?, contentKind?, viewTypes?, placeOn? }`: the agent door. A client without MCP calls the same door over REST, `POST /api/hub/cells/define` (below); both run one write path.
-4. **Show it**: `placeOn: { viewId }` adds it to a bento in the same call, or `synap_promote_cell_to_renderer({ profileSlug, slot, cellKey })` binds it to a kind (`slot`: `card`, `detail`, `list`, `dashboard`). Until it is placed or bound it shows nowhere.
+4. **Show it**: `placeOn: { viewId }` adds it to a bento in the same call, or `synap_promote_cell_to_renderer` binds it as a renderer. Until it is placed or bound it shows nowhere. One tool binds every target:
+
+   | Target                        | Call                                                                              | Slots                                 |
+   | ----------------------------- | --------------------------------------------------------------------------------- | ------------------------------------- |
+   | a kind's records (every deal) | `{ profileSlug: "deal", slot, cellKey }` (or `target: { kind: "profile", slug }`) | `card`, `detail`, `list`, `dashboard` |
+   | one capability's page         | `{ target: { kind: "capability", id }, slot, cellKey }`                           | `detail`, `dashboard`                 |
+   | one playbook's page           | `{ target: { kind: "playbook", id }, slot: "detail", cellKey }`                   | `detail`                              |
+   | one view's page               | `{ target: { kind: "view", id }, slot: "detail", cellKey }`                       | `detail`                              |
+
+   `scope`: `workspace` (default, needs `workspaceId`) = in that space only; `pod` = everywhere (for one object: its own page, the usual choice); `user` = only you (not for a capability). The cell must exist (yours from `synap_create_cell` may still be pending: bind it in the same breath). `clear: true` (no `cellKey`) unbinds the slot. An applied bind replies `nowBound`, what the page shows now; an agent's bind is a proposal.
+
 5. An agent's define lands as a proposal: `status: "proposed"` is success; pass on `reviewUrl`, never retry.
 
 ### The same door over REST: `POST /api/hub/cells/define`
@@ -3022,6 +3062,35 @@ A board drawn from a playbook, in an HTML page (`window.synap.query`, the same o
 ```
 
 A failed read returns `{ error }`. Show it as a failure, never as an empty board. Moves still go through `update_entity` (the lifecycle property), so the status door and governance apply.
+
+#### Work reads (a view per type of work)
+
+A view per type of work (its state and plan, the work running now, what finished and what it showed, how the week went against the intent) reads ONE object by its id, the same read that object's own page makes. Each answers what this viewer may read; an object they cannot see is an error, never an empty answer. The id is a param; the space is not (the host still stamps it on the other reads).
+
+| Operation            | Params                   | Returns                                                                                                                                                                                                                                                                                       |
+| -------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sessions.get`       | `id` (a session, required)   | `{ continuation: { session: { id, displayTitle, goal, status, statusLabel, currentStage, progress }, nextMove, userMustDecide, openRoomQuestions, blockedBy, waitingOn, workUnits, room, gates, live, stageRuns }, outcomes: { status, counts: { met, total }, outcomes: [{ key, label, kind, owner, met, retired, state }], inputs: [{ key, label, need, open, answered, blocksOutcomeKey }] }, cost }`: what the session must yield (criteria are outcomes of kind `fact`), what it waits on from the person, its next move. `outcomes.status: "unavailable"` = not read, not empty |
+| `process.of`         | `playbookId` (required)  | `{ playbook, when, steps, checks: { criteria, gates }, moves, needs, skills, runs: { counts, recent }, health, unavailable }`: the playbook seen whole. A part named in `unavailable` was not read                                                                                                 |
+| `playbook.scorecard` | `playbookId` (required)  | `{ runs: { total, closed, evaluated, reopened, instantiated, attached }, escalations, overrides, criteria: [{ key, statement, required, sessions, passed, failed, unmeasured, passRate, overrides }] }`: how this viewer's runs of it went. `passRate: null` = nothing measured, not 0          |
+| `project.pillars`    | `id` (a project, required) | `{ mainGoal, pillars, rootHealth }`: where the project stands, pillar by pillar. A part that could not be read is `{ status: "unavailable" }`                                                                                                                                              |
+
+#### Open an object from an HTML page
+
+A page knows no address: no pod URL reaches the frame. To open a session, an entity, a document, a playbook, a goal (`track`) or a proposal, ask the host by kind and id; it opens the object where it opens everywhere (the console's page, the app's route). Nothing comes back. Call it from a click: without one the host may ignore it.
+
+```html
+<button id="open">Open the session</button>
+<script>
+  document.getElementById("open").addEventListener("click", () =>
+    window.synap.open("session", sessionId)
+  );
+  // window.synap.opens lists the kinds a page may open.
+</script>
+```
+
+#### Tokens in an HTML page
+
+The host writes its design tokens into the frame before the page: every `--synap-*` variable, at the value the reader's theme gives it (light, dark, a theme). Draw with `var(--synap-…)` and the page follows the reader's theme; never copy token values into the page, and never link a stylesheet (the frame loads nothing from the network). Your own styles still win where you set them.
 
 #### Mutations (governance-gated — return `{ status: "approved" | "proposed" | "denied" }`)
 
@@ -3276,6 +3345,18 @@ template.
 
 <!-- brief:end -->
 
+## Reading a process whole
+
+`synap_list_playbooks({ playbookId })` returns the playbook in full (goal
+template, stages, criteria, expected outputs) plus `process`, the playbook seen
+whole: what starts it (its automations and workers), its steps, its checks, what
+it moves (the subject kind's states and the step that owns each), its needs (each
+`filled`, `empty` or `unknown` against the space's tools), its skills, its runs
+(counts, recent sessions) and its health (a state and a reason code). A part the
+pod could not read is named in `unavailable` and reads null or `unknown`, never
+empty. `processWithheld` replaces it when your key's grant does not read every
+part (automations, sessions, skills, tools).
+
 ## Writing a process (a playbook that follows a kind's lifecycle)
 
 The status belongs to the **kind or role**, never to a playbook. Its profile declares the lifecycle ONCE, in its
@@ -3382,6 +3463,57 @@ An agent call lands as a proposal (`status: "proposed"` is success). The
 playbook lives on this pod only; to make it an official template, a developer
 writes it into the catalog (`synap-app/packages/workspace-templates`); landing it
 on app-bases main publishes it.
+
+## Who runs it, the tools it needs, a step that is a playbook
+
+A playbook, and each of its stages, can name WHO works it (`runner`) and the
+TOOLS it needs (`requires`); a stage can also BE another playbook (`uses`).
+All three are optional: without them a playbook runs exactly as before.
+
+- `runner`: one choice, or an ordered list where each later choice is a
+  fallback (at most 4):
+  - `"synap_ai"`, or `{ "synapAi": { "persona": "<agents slug>" } }`;
+  - `{ "agentId": "<id from synap_list_agents>", "preset"?: "<preset key>" }`
+    (one agent of this pod: never in a catalog package);
+  - `{ "role": "<agent role or preset key>", "computer"?: "<name or id>" }`;
+  - `{ "engine": "<e.g. claude-code>", "computer"?: "<name or id>" }`;
+  - on a stage only, `"self"`: the run's own agent (the default).
+  Example: render on the Mac, else the devbox:
+  `[{ "role": "video-render", "computer": "mac" }, { "role": "video-render", "computer": "devbox" }]`.
+  `null` clears a playbook's runner. A choice made when running it comes
+  first (`synap_run_playbook { runner }`, the same shapes: a role, engine or
+  list is resolved then, and nobody it names → refused), then the playbook's
+  runner, then the person's remembered choice.
+  A stage's runner can be chosen too: for a whole run,
+  `synap_run_playbook { stageRunners: { "<stage key>": <runner> } }`; while
+  working, `synap_update_session { currentStage, stageRunner }` for the stage
+  you enter (`"self"` = you do it; naming another agent asks the person
+  first). A step with another runner gives that agent a turn on the same
+  session; the reply's `stageRun` says who has it and whether it waits on
+  tools.
+- `requires`: capability keys (`["media-ffmpeg"]`), at most 16; a stage needs
+  its own plus the playbook's. They are checked on the runner's computer
+  before a step is handed over.
+- `tools`: what a RUN of it may use beyond the floor of its class, and ONLY
+  these (a one-shot `generate` playbook gets no tools; a run of at most 2
+  stages and no gate gets 6 reads; a longer one 26: the pod's core tools,
+  the relation read, its own session tools `update_run`, `post_in_room`,
+  `get_brand_kit`, and `list_playbooks`, `list_sessions`, `get_session`).
+  Each entry is a run tool (`update_document`, `web_search`; the MCP
+  spelling synap_web_search reads the same), an intent slug
+  (such as search_external) or a capability name. A stage's `tools` narrows the
+  playbook's while it is active and must be a subset (refused otherwise).
+  A run on the pod's AI whose tools lack what a stage declares does not
+  start; a stage with no `tools` of its own declares the playbook's run
+  tools. A run writes only its OWN session and room (`update_run`,
+  `post_in_room`, long runs); the pod closes its session when the turn ends
+  and raises a stage's `endAsk`.
+- `uses` (a stage): `{ "playbookId": "<id>", "version"?: n, "with"?: { "<its
+  param>": "<this run's param or subject path>" }, "outputs"?: { "<this
+  stage's slot label>": "<its output label>" } }`. Omit `version` to pin
+  the playbook's current one: the pin holds when that playbook changes. The
+  used playbook must be in the same space or pod-wide; a chain of steps that
+  are playbooks has no loop and is at most 3 deep.
 
 ---
 
@@ -3501,6 +3633,7 @@ An `ask` is HOW the person answers a human-owned slot or a question: one tap ins
 **confirm** (yes/no): `{mode:'confirm', prompt (at most 500 chars, IS the question), yes?, no?}`; `yes` / `no` are `{label (<=80), description (<=140, what that answer does), recommended}`; at most ONE recommended.
 
 **choose** (1-8 `options`): `{mode:'choose', options:[{label (<=80), value? (<=500), description? (<=140, the consequence), recommended? (at most ONE), caution? (<=60 chars, one fact to weigh, e.g. 'Skips 1,284 tests'), icon?, media?, followUp?}], allowOther?}`. The person may always answer in their own words unless `allowOther: false` (only for a choice code reads as a value).
+
 - `followUp` (one level only; a follow-up option opening its own is refused): `{prompt (<=120), options: 2-4 of {label, value?, description?, caution?, icon?, media?, recommended?}}`.
 - `media`: `{kind: 'image'|'video'|'audio', ref: {url: http(s)} | {assetId: uuid} | {entityId: uuid}, alt? (<=200)}`.
 
@@ -3508,16 +3641,23 @@ An `ask` is HOW the person answers a human-owned slot or a question: one tap ins
 
 **act** (a thing to DO in the world; they answer 'I did this'): `{mode:'act', url? (http(s)), steps? (up to 7, each <=200 chars)}`. Never for a decision.
 
-**provide** (handed over through the vault; you receive a reference, never the secret): `{mode:'provide', provide: {kind:'connection', service} | {kind:'file', accept?: up to 10 types} | {kind:'secret', name}}`.
+**provide** (handed over through the vault; you receive a reference, never the secret): `{mode:'provide', provide: {kind:'connection', service} | {kind:'file', accept?: up to 10 types} | {kind:'secret', name, purpose?, uses?}}`.
+
+- A secret: always declare `purpose: {for (<=200, the work it serves), tool (<=120, the tool or capability that reads it), action? (<=120), on? (<=120, what it acts on)}`. Without it the person's card says you did not say what it is for. Name things, never a key or token: a part that looks like one is refused. `uses`: `session` (default: you may read it until the session closes or the hour ends) or `once` (one read within 15 minutes); ask for `once` when one read is enough. The person may pick the other, and if you already hold a permanent grant on the secret they hand over, that grant is reused and they are told so.
 
 **Which mode.** A DECISION is `confirm` or `choose`. When you have a view mark exactly ONE answer `recommended`: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity. `ask: null` clears a stored ask.
 
 **Examples.**
+
 - `{"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}`
 - `{"mode":"confirm","prompt":"Publish the post today?","yes":{"description":"Goes live at 9:00","recommended":true},"no":{"description":"Stays a draft"},"stakes":"commitment"}`
 - `{"mode":"choose","options":[{"label":"Deploy","followUp":{"prompt":"Which environment?","options":[{"label":"staging"},{"label":"production","caution":"Live users"}]}},{"label":"Not yet"}]}`
-- `{"mode":"provide","provide":{"kind":"secret","name":"STRIPE_KEY"}}`
+- `{"mode":"provide","provide":{"kind":"secret","name":"GITHUB_MERGE_TOKEN","purpose":{"for":"Merging the delivery PR","tool":"GitHub tool","action":"merge","on":"Synap-core/backend"},"uses":"once"}}`
+
+**Refuse.** On every ask, whatever its mode (and on a slot with no ask), the person can refuse it with an optional reason. The slot comes back to you with `answer.value = {type: 'declined', reason?}` and `answer.text` "Refused: <reason>"; nothing is handed over, no decision is filed, the thing it held up stays blocked. Read the reason, then do the work another way, ask something NEW (an identical re-ask is refused `ask_refused` while the refusal stands), withdraw the slot (`retireOutput`), or close the session `failed`. A `closed` close is refused while that outcome is still yours and open.
 
 Where asks go: an `owner:'human'` slot on `start_session` / `update_session` (and on playbook stages), `synap_ask_person` for one question, `synap_post_message` with kind `question` + `slotLabel`. How answers come back and how to wait: `system/synap/focus-sessions`.
 
 **Blockers** (a slot that holds a THING up, e.g. a lead that cannot move to Contacted). Three optional fields on the same outcome: `blocks: {entityId?, to?}`, the thing (default: the session's subject) and the status it cannot reach yet (a status key; default: its next status). The thing stays in its column, marked blocked; it never moves to a "blocked" status. `blockerKey`, the blocker's short snake_case name (`not_connected`, `^[a-z][a-z0-9_]{0,63}$`) so repeats can be counted. `clearedBy`, what clears it, exactly ONE of `{answer: true}` (the person's answer), `{intent: "request_connection"}`, `{playbookId: "<uuid>"}`, `{capability: "<id>"}`. A person's owed slot already blocks the session's subject; an agent's slot blocks only when it declares `blocks`. When the person answers, a blocker their answer clears goes; one cleared by an intent, playbook or capability stays until that run delivers.
+
+**A key a capability install needs** is not an ask: install it without the key (`market.install`, never the key in `params`). Its install proposal asks the person for the key on the proposal, with the manifest's `obtain` steps, and keeps it in the vault.
