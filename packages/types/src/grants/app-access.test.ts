@@ -289,12 +289,16 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
         } else {
           reconsent += 1;
           // Never over-eager, on every universe: the naive v2 really would
-          // change a permit or a placement, or a row no app may hold is there.
-          const naive = grantScopesForAccess(
-            candidateAccess(pairsOfRequests(approved).pairs)
-          );
+          // change a permit or a placement, or its DOCUMENT would permit
+          // what the pairs did not (a phantom read at the pod), or a row no
+          // app may hold is there.
+          const candidate = candidateAccess(pairsOfRequests(approved).pairs);
+          const naive = grantScopesForAccess(candidate);
           const changes =
-            result.reconsent.unplaceable > 0 || !sameReach(naive, before);
+            result.reconsent.unplaceable > 0 ||
+            !sameReach(naive, before) ||
+            JSON.stringify(permitsTable(documentScopes(candidate), ASKED)) !==
+              JSON.stringify(permitsTable(before, ASKED));
           expect(changes, ctx).toBe(true);
           // And the reason names a real difference.
           if (result.reconsent.reason !== "unplaceable")
