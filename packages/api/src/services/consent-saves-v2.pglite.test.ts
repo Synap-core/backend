@@ -361,7 +361,7 @@ async function expectRefusedUnchanged(
 describe("S — Allow stores v2 first and mints it per tier and kind of place", () => {
   it("the consent context names what was asked and what the person may give", async () => {
     const ctx = await getOAuthConsentContext(authorizeParams() as never, OWNER);
-    const a = ctx.app!.access;
+    const a = ctx.app!.access!;
     expect(
       a.asked.permissions.map((p) => [p.permission, p.tier, p.allSpaces])
     ).toEqual([
@@ -602,7 +602,7 @@ describe("U — the app page widens within the ask (Q2), never beyond", () => {
             permissions: [READ, UNASKED],
             read: { spaces: [BRAND], projects: [] },
             write: { spaces: [BRAND], projects: [] },
-          }),
+          }) as never,
         }),
       /did not ask for it/
     );
@@ -612,7 +612,7 @@ describe("U — the app page widens within the ask (Q2), never beyond", () => {
       read: { spaces: [BRAND, SHARED], projects: [P_BRAND] },
       write: { spaces: [SHARED], projects: [] },
     });
-    await caller(OWNER).updateAccess({ publicId, access: wider });
+    await caller(OWNER).updateAccess({ publicId, access: wider as never });
     expect((await row())!.approved_access).toEqual(wider);
     expect(await apiKeyService.validateApiKey(body.access_token)).toBeNull();
     const next = await refresh(body.refresh_token);
@@ -645,7 +645,7 @@ describe("R — re-consent (Q3): named, and the old access keeps working", () =>
     ]);
     expect((await row())!.approved_access).toBeNull();
     const ctx = await getOAuthConsentContext(authorizeParams() as never, OWNER);
-    const re = ctx.app!.access.reconsent!;
+    const re = ctx.app!.access!.reconsent!;
     expect(re.reason).toBe("widens");
     expect(sorted(re.was as never[])).toEqual(
       sorted([
@@ -663,7 +663,7 @@ describe("R — re-consent (Q3): named, and the old access keeps working", () =>
       { id: BRAND, name: "Brand", templateSlug: null },
       { id: SHARED, name: "Shared", templateSlug: null },
     ]);
-    expect(ctx.app!.access.current).toBeNull();
+    expect(ctx.app!.access!.current).toBeNull();
     const listed = (await caller(OWNER).list()).find(
       (a) => a.public_id === r.public_id
     )!;
@@ -688,7 +688,7 @@ describe("R — re-consent (Q3): named, and the old access keeps working", () =>
       authorizeParams() as never,
       OWNER
     );
-    expect(after.app!.access.reconsent).toBeNull();
+    expect(after.app!.access!.reconsent).toBeNull();
   });
 });
 
@@ -705,8 +705,8 @@ describe("Q — the short ask only adds permissions; a first write needs a place
       authorizeParams(ask) as never,
       OWNER
     );
-    expect(ctx.app!.access.ask!.needsWritePlace).toBe(true);
-    expect(ctx.app!.access.ask!.adds.map((i) => i.permission)).toEqual([
+    expect(ctx.app!.access!.ask!.needsWritePlace).toBe(true);
+    expect(ctx.app!.access!.ask!.adds.map((i) => i.permission)).toEqual([
       CREATE,
     ]);
     await expectRefusedUnchanged(
