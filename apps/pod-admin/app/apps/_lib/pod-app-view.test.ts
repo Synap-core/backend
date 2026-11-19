@@ -175,8 +175,16 @@ describe("the app page's offer: what the app holds (design A lines)", () => {
     const { heldOffer } = await import("./pod-app-view");
     const offer = heldOffer([
       ...APPROVED,
-      { permission: "entity.task.read", workspaceId: null, workspaceName: null },
-      { permission: "entity.post.read", workspaceId: "w-gone", workspaceName: null },
+      {
+        permission: "entity.task.read",
+        workspaceId: null,
+        workspaceName: null,
+      },
+      {
+        permission: "entity.post.read",
+        workspaceId: "w-gone",
+        workspaceName: null,
+      },
     ]);
     expect(offer.items.map((i) => i.permission)).toEqual([
       "entity.post.read",

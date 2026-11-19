@@ -19,8 +19,16 @@ const pod = (approved: PodAppInfo["approved"]): PodAppInfo => ({
 });
 
 const FITS = pod([
-  { permission: "entity.post.read", workspaceId: "w-content", workspaceName: "Content OS" },
-  { permission: "entity.post.create", workspaceId: "w-content", workspaceName: "Content OS" },
+  {
+    permission: "entity.post.read",
+    workspaceId: "w-content",
+    workspaceName: "Content OS",
+  },
+  {
+    permission: "entity.post.create",
+    workspaceId: "w-content",
+    workspaceName: "Content OS",
+  },
 ]);
 
 const html = (p: PodAppInfo) =>
@@ -47,8 +55,16 @@ describe("the app page's access lines", () => {
   it("pairs that do not fit one access: nothing here (the page keeps its per-space list)", () => {
     const out = html(
       pod([
-        { permission: "entity.post.read", workspaceId: "w-content", workspaceName: "Content OS" },
-        { permission: "document.read", workspaceId: "w-eco", workspaceName: "Ecosystem" },
+        {
+          permission: "entity.post.read",
+          workspaceId: "w-content",
+          workspaceName: "Content OS",
+        },
+        {
+          permission: "document.read",
+          workspaceId: "w-eco",
+          workspaceName: "Ecosystem",
+        },
       ])
     );
     expect(out).toBe("");

@@ -1303,7 +1303,7 @@ function CreateSpace({
  * name is its own words), then the question. An app Synap has not checked is
  * asked about by its domain; its self-chosen name is quoted as such.
  */
-function PodAppHeading({
+export function PodAppHeading({
   domain,
   verified,
   clientName,
