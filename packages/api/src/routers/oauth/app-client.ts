@@ -425,6 +425,19 @@ export async function appSignInGrant(
 const NARROW_MEMO = new Map<string, KeyGrant["scopes"][number][]>();
 const NARROW_MEMO_MAX = 512;
 
+/** Deep copies of scopes (their id and permission lists included). */
+function cloneScopes(
+  scopes: readonly KeyGrant["scopes"][number][]
+): KeyGrant["scopes"][number][] {
+  return scopes.map((s) => ({
+    ...s,
+    permissions: [...s.permissions],
+    ...(s.workspaceIds ? { workspaceIds: [...s.workspaceIds] } : {}),
+    ...(s.projectIds ? { projectIds: [...s.projectIds] } : {}),
+    ...(s.entityIds ? { entityIds: [...s.entityIds] } : {}),
+  }));
+}
+
 /** A scope's structure, order-free: equal keys mean the same scope. */
 function scopeKey(scope: {
   permissions: readonly string[];
@@ -467,7 +480,7 @@ export function narrowKeyGrant(
     // answer is kept per (stored, reach) pair, a bounded memo.
     const memoKey = `${live.map(scopeKey).sort().join(";")}#${[...reachKeys].sort().join(";")}`;
     const memo = NARROW_MEMO.get(memoKey);
-    if (memo) kept = memo;
+    if (memo) kept = cloneScopes(memo);
     else {
       try {
         kept = scopesWithinBound(live, reach.scopes);
@@ -479,7 +492,9 @@ export function narrowKeyGrant(
         const oldest = NARROW_MEMO.keys().next().value;
         if (oldest !== undefined) NARROW_MEMO.delete(oldest);
       }
-      NARROW_MEMO.set(memoKey, kept);
+      // Stored as a copy, handed out as copies: nothing a caller does to
+      // its grant reaches another request (review of #1197).
+      NARROW_MEMO.set(memoKey, cloneScopes(kept));
     }
   }
   return {

@@ -240,10 +240,18 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
       // project itself is in it, so an entity's `belongs_to_project` edge to
       // P is read with P). One end outside would name a record the project
       // does not hold.
+      // PER PROJECT (review of #1197, as works_at per space): both ends in
+      // the SAME project. Read over the union of a scope's projects, an
+      // edge from a record of P to a record of Q came back, which a scope
+      // per project never reads.
       projectReach: (ids) =>
-        and(
-          projectLensWhere(relations.sourceEntityId, ids),
-          projectLensWhere(relations.targetEntityId, ids)
+        or(
+          ...ids.map((id) =>
+            and(
+              projectLensWhere(relations.sourceEntityId, [id]),
+              projectLensWhere(relations.targetEntityId, [id])
+            )
+          )
         )!,
     }),
   ],

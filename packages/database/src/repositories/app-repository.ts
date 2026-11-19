@@ -18,8 +18,8 @@ import { APP_PUBLIC_ID_PREFIX } from "@synap-core/types/membrane";
 import {
   assertNeverPlace,
   liftApprovedRequests,
-  normalizeAppAccess,
   pairsOfAccess,
+  withoutDormantPermissions,
   parseAppAccess,
   parseRequestPlace,
   PlaceError,
@@ -617,7 +617,9 @@ export class AppRepository {
     appId: string,
     access: AppAccess
   ): Promise<AppRecord | null> {
-    const approvedAccess = normalizeAppAccess(access);
+    // Nothing dormant is stored (review of #1197): a permission with no
+    // place in its tier would be switched on unseen by a place added later.
+    const approvedAccess = withoutDormantPermissions(access);
     const [row] = await this.db
       .update(apps)
       .set({
@@ -661,7 +663,7 @@ export class AppRepository {
           : (parseAppAccess(current.approvedAccess) ?? approvedAccessOf(pairs));
       const chosen = next({ access, pairs });
       if (!chosen) return null;
-      const approvedAccess = normalizeAppAccess(chosen);
+      const approvedAccess = withoutDormantPermissions(chosen);
       const [row] = await tx
         .update(apps)
         .set({

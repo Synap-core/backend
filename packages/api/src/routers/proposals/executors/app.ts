@@ -47,6 +47,7 @@ import {
   appAccessOffer,
   appApprovalWithinAsked,
   applyApprovedReach,
+  askedOfConnection,
   assertAccessWithinCeiling,
   assertOwnerMayGrant,
   readFrozenAsked,
@@ -54,10 +55,10 @@ import {
 import {
   appAccessBeyond,
   appAccessGivesAnything,
-  expandAppAccess,
   isReadPermission,
   pairsOfAccess,
   parseAppAccess,
+  type AccessAllOrIds,
   type AppAccess,
 } from "@synap-core/types/grants";
 import type { AppApprovedRequest } from "@synap/database/schema";
@@ -286,6 +287,9 @@ async function executeAccessApproval(args: {
       status: proposals.status,
       revisionHistory: proposals.revisionHistory,
       expiresAt: proposals.expiresAt,
+      // Who filed it, read from the row itself (never the caller's copy).
+      agentUserId: proposals.agentUserId,
+      createdBy: proposals.createdBy,
     })
     .from(proposals)
     .where(eq(proposals.id, input.proposalId));
@@ -318,10 +322,39 @@ async function executeAccessApproval(args: {
       message: "This app was revoked — register it again to ask for access.",
     });
   }
-  // The ceiling NOW: what was asked (frozen) ∩ what the owner may give today.
+  // Only the consent door files a v2 approval (review of #1197): the person's
+  // own, filed for their pod app connection on its consent screen. Anything
+  // else carrying `access` (a forged row, an agent's filing) applies nothing.
+  if (
+    alreadyDone?.agentUserId != null ||
+    alreadyDone?.createdBy !== app.ownerUserId ||
+    inner.via !== "oauth-consent" ||
+    app.mode !== "oauth"
+  ) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "This access was not chosen on the app's consent screen: nothing was applied.",
+    });
+  }
+  // What the app asked is re-read from the document the pod holds NOW (the
+  // review verbs dropped for an app that is not a Synap app), never trusted
+  // from the proposal: the frozen copy only narrows it.
+  const document = await askedOfConnection(app);
+  if (!document) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message:
+        "The pod no longer holds this app's description: connect it again.",
+    });
+  }
+  const frozen = new Set(asked.permissions);
+  const frozenPodWide = new Set(asked.podWide);
+  // The ceiling NOW: asked (the document ∩ the frozen copy) ∩ what the owner
+  // may give today.
   const offer = await appAccessOffer(app.ownerUserId, {
-    permissions: asked.permissions,
-    podWide: asked.podWide,
+    permissions: document.permissions.filter((p) => frozen.has(p)),
+    podWide: document.podWide.filter((p) => frozenPodWide.has(p)),
   });
   const add = isAddMode(args.raw);
   let updated;
@@ -453,11 +486,13 @@ async function executeAccessApproval(args: {
 
 /**
  * An ask's pairs added to a connection whose v2 access names projects (W3d):
- * the permissions are added where their tier already holds (the short ask
- * only adds permissions), a first write lands in the asked spaces (Q4), and
- * every asked pair must then hold exactly where it was asked (the card said
- * that place). An ask for a place the connection does not hold is refused:
- * the person chooses new places on the full consent.
+ * a short ask only adds permissions where their tier already holds, so a
+ * card's ask applies ONLY when that is exactly what the card says (review of
+ * #1197): each asked permission named at every place its tier holds, and at
+ * no other (a tier holding a project, or All spaces, never matches a card,
+ * which names spaces). A first write lands in exactly the asked spaces (Q4,
+ * the card's place). Anything else is refused (`ASK_PLACE_CHANGES`): the
+ * person chooses places on the full consent.
  */
 async function addPairsThroughAccess(
   repo: AppRepository,
@@ -465,6 +500,13 @@ async function addPairsThroughAccess(
   requests: readonly AppApprovedRequest[]
 ) {
   const state: { refusal: unknown } = { refusal: null };
+  const placeChanges = () =>
+    new TRPCError({
+      code: "CONFLICT",
+      message:
+        "This ask would apply in places the card does not name: connect the app again to choose its places.",
+      cause: { reasonCode: "ASK_PLACE_CHANGES" },
+    });
   const row = await repo.updateApprovedAccess(appId, ({ access }) => {
     if (!access) return null;
     const permissions = [...new Set(requests.map((r) => r.permission))];
@@ -473,9 +515,48 @@ async function addPairsThroughAccess(
       writes.length > 0 &&
       access.write.spaces.length === 0 &&
       access.write.projects.length === 0;
-    let next: AppAccess;
+    // Each asked permission, asked at exactly its tier's places.
+    const same = (a: readonly string[], b: readonly string[]) =>
+      a.length === b.length && a.every((x) => b.includes(x));
+    for (const permission of permissions) {
+      const asked = [
+        ...new Set(
+          requests
+            .filter((r) => r.permission === permission)
+            .map((r) => r.workspaceId)
+        ),
+      ];
+      if (asked.some((id) => id === null)) {
+        state.refusal = placeChanges();
+        return null;
+      }
+      const read = isReadPermission(permission);
+      if (!read && firstWrite) continue;
+      const tier = read ? access.read : access.write;
+      const spaces: AccessAllOrIds = tier.spaces;
+      const projects: AccessAllOrIds = tier.projects;
+      if (
+        spaces === "all" ||
+        projects === "all" ||
+        projects.length > 0 ||
+        !same(spaces, asked as string[])
+      ) {
+        state.refusal = placeChanges();
+        return null;
+      }
+    }
+    if (firstWrite) {
+      // Every first write asked at the same spaces: they become the place.
+      const first = permissions.filter((p) => !isReadPermission(p));
+      const at = (p: string) =>
+        writes.filter((r) => r.permission === p).map((r) => r.workspaceId);
+      if (first.some((p) => !same(at(p) as string[], at(first[0]!) as string[]))) {
+        state.refusal = placeChanges();
+        return null;
+      }
+    }
     try {
-      next = addedAccessOrThrow(access, {
+      return addedAccessOrThrow(access, {
         permissions,
         writePlace: firstWrite
           ? {
@@ -492,25 +573,6 @@ async function addPairsThroughAccess(
       state.refusal = err;
       return null;
     }
-    const held = new Set(
-      expandAppAccess(next).map((p) =>
-        p.where.kind === "space"
-          ? `${p.permission} ${p.where.id}`
-          : p.where.kind === "pod"
-            ? `${p.permission} null`
-            : ""
-      )
-    );
-    if (requests.some((r) => !held.has(`${r.permission} ${r.workspaceId}`))) {
-      state.refusal = new TRPCError({
-        code: "CONFLICT",
-        message:
-          "This app asks for a place it does not have yet: connect it again to choose its places.",
-        cause: { reasonCode: "ASK_PLACE_CHANGES" },
-      });
-      return null;
-    }
-    return next;
   });
   if (state.refusal) throw state.refusal;
   return row;

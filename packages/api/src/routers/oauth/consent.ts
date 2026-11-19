@@ -42,6 +42,7 @@ import {
   hasReadPlace,
   hasWritePlace,
   isReadPermission,
+  withoutDormantPermissions,
   pairsOfAccess,
   parseSynapAsk,
   type AppAccess,
@@ -992,6 +993,63 @@ function askPlacesNotHeld(
     .map((p) => `${p.permission}@${p.workspaceId ?? "pod"}`);
 }
 
+/**
+ * The short ask's title (review of #1197): it names EVERY place the added
+ * permissions land in, since a short ask adds them where their tier already
+ * holds, never only the place the app's pair named. Places the person can
+ * no longer see are not named.
+ */
+function askTitle(
+  appName: string,
+  current: AppAccess,
+  adds: readonly AccessAskedItem[],
+  needsWritePlace: boolean,
+  offer: { places: AccessPlacesOffer }
+): string {
+  const spaceName = new Map(
+    [...offer.places.read.spaces, ...offer.places.write.spaces].map((x) => [
+      x.id,
+      x.name,
+    ])
+  );
+  const projectName = new Map(
+    [...offer.places.read.projects, ...offer.places.write.projects].map(
+      (x) => [x.id, x.name]
+    )
+  );
+  const placesOf = (tier: AppAccess["read"] | AppAccess["write"]): string => {
+    const spaces: readonly string[] | "all" = tier.spaces;
+    const projectIds: readonly string[] | "all" = tier.projects;
+    if (spaces === "all") return "everywhere in your pod";
+    const named = [
+      ...spaces.map((id) => spaceName.get(id) ?? "a space you no longer see"),
+      ...(projectIds === "all"
+        ? ["every project"]
+        : projectIds.map(
+            (id) =>
+              `project ${projectName.get(id) ?? "you no longer see"}`
+          )),
+    ];
+    return `in ${named.join(", ")}`;
+  };
+  const parts: string[] = [];
+  const reads = adds.filter((i) => i.tier === "read");
+  const writes = adds.filter((i) => i.tier === "write");
+  if (reads.length > 0)
+    parts.push(
+      `to also read ${reads.map((i) => i.permission).join(", ")} ${placesOf(current.read)}`
+    );
+  if (writes.length > 0)
+    parts.push(
+      needsWritePlace
+        ? `to also make changes (${writes.map((i) => i.permission).join(", ")}) in a place you choose`
+        : `to also make changes (${writes.map((i) => i.permission).join(", ")}) ${placesOf(current.write)}`
+    );
+  return parts.length > 0
+    ? `${appName} asks ${parts.join(", and ")}`
+    : `${appName} asks for access`;
+}
+
 /** What the app asked, in v2 terms, read from the request and its document. */
 function accessAskedOf(
   client: StoredClient,
@@ -1023,7 +1081,11 @@ async function consentAccessBlock(
     accessAskedOf(client, permissions)
   );
   const approval = await currentOAuthAppApproval(callerUserId, client.clientId);
-  const current = approval?.access ?? null;
+  // Nothing dormant: a stored permission with no place in its tier never
+  // counts as held, and a first write place switches on only what is added.
+  const current = approval?.access
+    ? withoutDormantPermissions(approval.access)
+    : null;
   let accessAsk: OAuthAppAccessAsk | null = null;
   if (ask && current && addsThroughAccess(current)) {
     const asked = [...new Set(ask.pairs.map((p) => p.permission))].filter(
@@ -1034,18 +1096,29 @@ async function consentAccessBlock(
     );
     const readsNowhere =
       !hasReadPlace(current) && adds.some((i) => i.tier === "read");
+    // Under All spaces a read lands everywhere: one that may not ride All
+    // spaces cannot be added here (review of #1197), never an Allow the
+    // server then refuses.
+    const notAllSpaces =
+      current.read.spaces === "all"
+        ? adds.filter((i) => i.tier === "read" && !i.allSpaces)
+        : [];
+    const needsWritePlace =
+      adds.some((i) => i.tier === "write") && !hasWritePlace(current);
     accessAsk = {
-      title: summarizeAppConnectRequest({
-        appName: client.clientName,
-        requests: ask.pairs,
-        mode: "add",
-      }).title,
+      title: askTitle(
+        client.clientName,
+        current,
+        adds,
+        needsWritePlace,
+        offer
+      ),
       adds,
-      needsWritePlace:
-        adds.some((i) => i.tier === "write") && !hasWritePlace(current),
+      needsWritePlace,
       unavailable: [
         ...ask.unavailable,
         ...askPlacesNotHeld(current, ask.pairs),
+        ...notAllSpaces.map((i) => `${i.permission}@all`),
         ...(readsNowhere
           ? adds.filter((i) => i.tier === "read").map((i) => i.permission)
           : []),
@@ -1059,8 +1132,8 @@ async function consentAccessBlock(
   return {
     asked: offer.asked,
     places: offer.places,
-    current: current ? await nameAppAccess(current) : null,
-    reconsent: approval ? await reconsentViewOf(approval, offer.ceiling) : null,
+    current: current ? await nameAppAccess(current, callerUserId) : null,
+    reconsent: approval ? await reconsentViewOf(approval, callerUserId, offer.ceiling) : null,
     ask: accessAsk,
   };
 }

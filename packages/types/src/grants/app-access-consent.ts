@@ -23,11 +23,18 @@
  */
 
 import { isPodWideReadPermission } from "./pod-wide.js";
+import { permissionWithin } from "./algebra.js";
 import {
   APP_ACCESS_VERSION,
+  compareAppScopes,
+  grantScopesForAccess,
   isReadPermission,
+  LiftTooLargeError,
+  NO_APP_ACCESS,
   normalizeAppAccess,
+  scopesOfPairs,
   type AccessAllOrIds,
+  type AccessPair,
   type AccessWhere,
   type AppAccess,
   type AppAccessGrantScope,
@@ -265,6 +272,90 @@ export function pairsOfAccess(access: AppAccess): {
   return { pairs, exact };
 }
 
+/**
+ * The access with every DORMANT permission dropped (review of #1197): a read
+ * when the access reads nowhere, a write when it writes nowhere. Such a
+ * permission grants nothing today, but a place chosen later (Q4's first
+ * write place) would switch it on unseen, so nothing dormant is stored.
+ */
+export function withoutDormantPermissions(access: AppAccess): AppAccess {
+  const a = normalizeAppAccess(access);
+  const reads = hasReadPlace(a);
+  const writes = hasWritePlace(a);
+  return {
+    ...a,
+    permissions: a.permissions.filter((p) =>
+      isReadPermission(p) ? reads : writes
+    ),
+  };
+}
+
+/**
+ * The v2 pre-fill of a re-consent (Q3), from the old pairs: NEVER WIDER than
+ * what the pairs hold (review of #1197: one click on Allow must never widen).
+ *  - Reads: when any read pair is pod-wide, All spaces with exactly the reads
+ *    held pod-wide; otherwise the union of the read spaces, with only the
+ *    reads held in EVERY one of them (by meaning, `permissionWithin`).
+ *  - Writes: the union of the write spaces, with only the writes held in
+ *    every one of them.
+ * Then clamped to `ceiling` (never widens), and checked against the pairs by
+ * the engine's own `permits` (`compareAppScopes`): anything wider, or too
+ * large to compare, pre-fills nothing. What it leaves out the person ticks
+ * again on the screen.
+ */
+export function reconsentProposal(
+  pairs: readonly AccessPair[],
+  ceiling?: AppAccessCeiling | null
+): AppAccess {
+  const empty = normalizeAppAccess(NO_APP_ACCESS);
+  const once = <T>(xs: readonly T[]) => [...new Set(xs)];
+  const spacesOf = (ps: readonly AccessPair[]) =>
+    once(ps.flatMap((p) => (p.where.kind === "space" ? [p.where.id] : [])));
+  const heldEverywhere = (ps: readonly AccessPair[], spaces: string[]) =>
+    once(ps.map((p) => p.permission)).filter((perm) =>
+      spaces.every((id) =>
+        permissionWithin(
+          perm,
+          ps
+            .filter((p) => p.where.kind === "space" && p.where.id === id)
+            .map((p) => p.permission)
+        )
+      )
+    );
+  const reads = pairs.filter((p) => isReadPermission(p.permission));
+  const writes = pairs.filter((p) => !isReadPermission(p.permission));
+  const podReads = once(
+    reads.filter((p) => p.where.kind === "pod").map((p) => p.permission)
+  );
+  const readSpaces = spacesOf(reads);
+  const writeSpaces = spacesOf(writes);
+  let access: AppAccess = normalizeAppAccess({
+    version: APP_ACCESS_VERSION,
+    permissions: [
+      ...(podReads.length > 0 ? podReads : heldEverywhere(reads, readSpaces)),
+      ...heldEverywhere(writes, writeSpaces),
+    ],
+    read: {
+      spaces: podReads.length > 0 ? "all" : readSpaces,
+      projects: [],
+    },
+    write: { spaces: writeSpaces, projects: [] },
+  });
+  if (ceiling) access = clampAppAccess(access, ceiling);
+  access = withoutDormantPermissions(access);
+  try {
+    const { widens } = compareAppScopes(
+      scopesOfPairs(pairs),
+      grantScopesForAccess(access),
+      { examples: false }
+    );
+    return widens.length > 0 ? empty : access;
+  } catch (err) {
+    if (err instanceof LiftTooLargeError) return empty;
+    throw err;
+  }
+}
+
 // ── the short ask: it only adds permissions (Q4) ─────────────────────────
 
 /** Where a short ask's first write lands (Q4): the person's pick. */
@@ -301,8 +392,13 @@ export function addPermissionsToAccess(
   | { readonly needsWritePlace: true }
   | { readonly noReadPlace: readonly string[] }
   | { readonly writePlaceNotNeeded: true } {
-  const a = normalizeAppAccess(access);
-  const added = permissions.filter((p) => !a.permissions.includes(p));
+  // A permission stored with no place in its tier is dormant: it is dropped
+  // first, so a first write place switches on ONLY what this ask adds
+  // (review of #1197), never a write stored earlier with nowhere to hold.
+  const a = withoutDormantPermissions(access);
+  const added = [...new Set(permissions)].filter(
+    (p) => !a.permissions.includes(p)
+  );
   const asksWrite = added.some((p) => !isReadPermission(p));
   const needsWrite = asksWrite && !hasWritePlace(a);
   if (writePlace && !needsWrite) return { writePlaceNotNeeded: true };
@@ -386,8 +482,9 @@ export interface ReconsentView {
 
 /**
  * An access clamped to a ceiling: what is beyond is dropped, never added
- * (the re-consent's pre-fill). Reads under All spaces that may not be there
- * keep the read spaces the person may give instead.
+ * (a re-consent's pre-fill). Under All spaces, a read that may not ride All
+ * spaces is DROPPED (review of #1197: falling back to every readable space
+ * and every project would pre-fill wider than the old pairs).
  */
 export function clampAppAccess(
   access: AppAccess,
@@ -395,30 +492,22 @@ export function clampAppAccess(
 ): AppAccess {
   const a = normalizeAppAccess(access);
   const asked = new Set(ceiling.permissions);
-  const permissions = a.permissions.filter((p) => asked.has(p));
   const allSpaces = new Set(
     ceiling.allSpacesReads.filter(isPodWideReadPermission)
   );
-  const readsAllOk = permissions
-    .filter(isReadPermission)
-    .every((p) => allSpaces.has(p));
+  const permissions = a.permissions.filter(
+    (p) =>
+      asked.has(p) &&
+      (a.read.spaces !== "all" || !isReadPermission(p) || allSpaces.has(p))
+  );
   const keep = (ids: AccessAllOrIds, offered: readonly string[]) =>
     ids === "all" ? "all" : ids.filter((id) => offered.includes(id));
-  const readSpaces: AccessAllOrIds =
-    a.read.spaces === "all"
-      ? readsAllOk
-        ? "all"
-        : [...ceiling.read.spaces]
-      : keep(a.read.spaces, ceiling.read.spaces);
   return normalizeAppAccess({
     version: APP_ACCESS_VERSION,
     permissions,
     read: {
-      spaces: readSpaces,
-      projects:
-        a.read.spaces === "all" && readSpaces !== "all"
-          ? "all"
-          : keep(a.read.projects, ceiling.read.projects),
+      spaces: keep(a.read.spaces, ceiling.read.spaces),
+      projects: keep(a.read.projects, ceiling.read.projects),
     },
     write: {
       spaces: a.write.spaces.filter((id) => ceiling.write.spaces.includes(id)),

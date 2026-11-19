@@ -101,7 +101,7 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
 
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
-import { AppRepository } from "@synap/database";
+import { AppRepository, GrantRepository } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import { computeS256Challenge } from "../routers/oauth/protocol.js";
 import { oauthApp } from "../routers/oauth/routes.js";
@@ -112,6 +112,15 @@ import {
 import { appsRouter } from "../routers/apps.js";
 import { router } from "../trpc.js";
 import { apiKeyService } from "./api-keys.js";
+import { OpenAPIHono } from "@hono/zod-openapi";
+import { applyProposalApproval } from "../routers/proposals/apply-approval.js";
+import { registerProposalsRoutes } from "../routers/hub-protocol/rest/proposals.js";
+import type {
+  HubHono,
+  HubVariables,
+} from "../routers/hub-protocol/rest/_shared.js";
+import { appSignInGrant } from "../routers/oauth/app-client.js";
+import { effectiveKeyGrant } from "./app-person-token.js";
 
 import type { AppAccess } from "@synap-core/types/grants";
 const ISSUER = "https://pod.test.synap.live";
@@ -193,6 +202,13 @@ beforeAll(async () => {
     await q(
       `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, $4)`,
       [randomUUID(), id, member, role]
+    );
+  }
+  // OTHER_PERSON is a member of the spaces they own (a non-owner sign-in).
+  for (const ws of [VIEWED]) {
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+      [randomUUID(), ws, OTHER_PERSON]
     );
   }
   for (const [id, name, ws, user] of [
@@ -663,6 +679,9 @@ describe("R — re-consent (Q3): named, and the old access keeps working", () =>
       { id: BRAND, name: "Brand", templateSlug: null },
       { id: SHARED, name: "Shared", templateSlug: null },
     ]);
+    // Never wider than the pairs (review of #1197): posts are read in Brand
+    // only and notes in Shared only, so neither is pre-filled for both.
+    expect(re.proposed.permissions).toEqual([]);
     expect(ctx.app!.access!.current).toBeNull();
     const listed = (await caller(OWNER).list()).find(
       (a) => a.public_id === r.public_id
@@ -736,5 +755,310 @@ describe("Q — the short ask only adds permissions; a first write needs a place
       () => allow({}, { synapAsk: `${NOTE_READ}@${SHARED}` }),
       /does not have yet/
     );
+  });
+});
+
+// ── Review of #1197 ──────────────────────────────────────────────────────────
+
+/** An `app/connect` row filed as given (no door), then approved as OWNER. */
+async function fileAndApprove(spec: {
+  data: Record<string, unknown>;
+  createdBy: string;
+  agentUserId?: string | null;
+}): Promise<unknown> {
+  const app = (await row())!;
+  const [proposal] = await (h.db as any)
+    .insert(schema.proposals)
+    .values({
+      targetType: "app",
+      targetId: app.id,
+      proposalType: "connect",
+      workspaceId: null,
+      status: "pending",
+      data: {
+        appId: app.id,
+        publicId: app.public_id,
+        name: "Content Studio",
+        ...spec.data,
+      },
+      agentUserId: spec.agentUserId ?? null,
+      createdBy: spec.createdBy,
+      expiresAt: new Date(Date.now() + 86_400_000),
+      revisionHistory: [],
+      comments: [],
+    })
+    .returning();
+  return applyProposalApproval({
+    proposal,
+    userId: OWNER,
+    input: { proposalId: proposal.id },
+    ctx: ctxOf(OWNER),
+  } as never).then(
+    (r: any) => (r?.success ? "applied" : "refused"),
+    (e: Error) => e.message
+  );
+}
+
+describe("R1 — a forged v2 app/connect applies nothing (review of #1197, must-fix 1)", () => {
+  const wide = access({
+    permissions: [READ, NOTE_READ, CREATE, UNASKED],
+    read: { spaces: [BRAND, SHARED, VIEWED], projects: "all" },
+    write: { spaces: [BRAND, SHARED], projects: [P_SOLO] },
+  });
+  beforeEach(async () => {
+    await allow({
+      access: access({ permissions: [READ], read: { spaces: [BRAND], projects: [] } }),
+    });
+  });
+
+  it("the generic Hub door refuses to file one", async () => {
+    const hub: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    hub.use("*", async (c, next) => {
+      c.set("userId", OWNER);
+      c.set("agentUserId", "agent-of-owner" as never);
+      c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
+      await next();
+    });
+    registerProposalsRoutes(hub);
+    const res = await hub.request("/proposals", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        targetType: "app",
+        targetId: (await row())!.id,
+        proposalType: "connect",
+        data: { access: wide, askedAccess: { permissions: [UNASKED], podWide: [] } },
+      }),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { code: string }).code).toBe(
+      "APP_CONNECT_NOT_FILED_HERE"
+    );
+  });
+
+  it.each([
+    ["filed by an agent", { createdBy: "agent-of-owner", agentUserId: "agent-of-owner", via: "oauth-consent" }],
+    ["filed as the person but not by the consent door", { createdBy: OWNER, agentUserId: null, via: "access-ask" }],
+  ])("%s: refused, nothing stored", async (_label, who) => {
+    const before = (await row())!.approved_access;
+    const out = await fileAndApprove({
+      createdBy: who.createdBy,
+      agentUserId: who.agentUserId,
+      data: {
+        via: who.via,
+        access: wide,
+        askedAccess: { permissions: [READ, NOTE_READ, CREATE, UNASKED], podWide: [READ] },
+        requests: [{ permission: READ, workspaceId: BRAND, scope: "space" }],
+      },
+    });
+    expect(out).not.toBe("applied");
+    expect((await row())!.approved_access).toEqual(before);
+  });
+
+  it("a frozen ask wider than the document is cut to the document: the unasked permission is refused", async () => {
+    const before = (await row())!.approved_access;
+    const out = await fileAndApprove({
+      createdBy: OWNER,
+      data: {
+        via: "oauth-consent",
+        access: access({
+          permissions: [READ, UNASKED],
+          read: { spaces: [BRAND], projects: [] },
+          write: { spaces: [BRAND], projects: [] },
+        }),
+        askedAccess: { permissions: [READ, UNASKED], podWide: [READ] },
+        requests: [{ permission: READ, workspaceId: BRAND, scope: "space" }],
+      },
+    });
+    expect(out).not.toBe("applied");
+    expect((await row())!.approved_access).toEqual(before);
+  });
+});
+
+describe("R2 — a card ask on a connection that names a project applies only where the card says (must-fix 2)", () => {
+  const cardAsk = (permission: string, workspaceId: string) =>
+    fileAndApprove({
+      createdBy: OWNER,
+      data: {
+        mode: "add",
+        via: "access-ask",
+        requests: [{ permission, workspaceId, scope: "space" }],
+        asked: [{ permission, workspaceId }],
+      },
+    });
+
+  it("refused when its tier holds more places than the card names", async () => {
+    await allow({
+      access: access({
+        permissions: [READ],
+        read: { spaces: [BRAND], projects: [P_SOLO] },
+      }),
+    });
+    const before = (await row())!.approved_access;
+    expect(await cardAsk(NOTE_READ, BRAND)).not.toBe("applied");
+    expect((await row())!.approved_access).toEqual(before);
+  });
+
+  it("applied when the tier holds exactly the card's place", async () => {
+    await allow({
+      access: access({
+        permissions: [READ, CREATE],
+        read: { spaces: [BRAND], projects: [] },
+        write: { spaces: [], projects: [P_SOLO] },
+      }),
+    });
+    expect(await cardAsk(NOTE_READ, BRAND)).toBe("applied");
+    expect((await row())!.approved_access!.permissions).toEqual([
+      READ,
+      CREATE,
+      NOTE_READ,
+    ]);
+  });
+});
+
+describe("R3 — nothing dormant is stored; Q4 switches on only what is asked (must-fix 3)", () => {
+  it("a write with no write place is not stored", async () => {
+    await allow({
+      access: access({
+        permissions: [READ, CREATE],
+        read: { spaces: [BRAND], projects: [P_SOLO] },
+      }),
+    });
+    expect((await row())!.approved_access!.permissions).toEqual([READ]);
+    const ctx = await getOAuthConsentContext(
+      authorizeParams({ synapAsk: `${CREATE}@${BRAND}` }) as never,
+      OWNER
+    );
+    expect(ctx.app!.access!.ask!.adds.map((i) => i.permission)).toEqual([
+      CREATE,
+    ]);
+    expect(ctx.app!.access!.ask!.needsWritePlace).toBe(true);
+  });
+});
+
+describe("R4 — narrowing pairs never drops a connection's projects (also-fix 4)", () => {
+  it("refused, with the reason, and nothing changes", async () => {
+    await allow({
+      access: access({
+        permissions: [READ],
+        read: { spaces: [BRAND], projects: [P_SOLO] },
+      }),
+    });
+    const r = (await row())!;
+    await expectRefusedUnchanged(
+      () =>
+        caller(OWNER).narrow({
+          publicId: r.public_id,
+          approved: [{ permission: READ, workspaceId: BRAND }],
+        }),
+      /names projects/
+    );
+  });
+});
+
+describe("R5 — an All-spaces connection never shows an Allow the server refuses (also-fix 5)", () => {
+  it("a read with no pod-wide form is unavailable, and Allow refuses it", async () => {
+    await allow({
+      access: access({
+        permissions: [READ, CREATE],
+        read: { spaces: "all", projects: [] },
+        write: { spaces: [], projects: [P_SOLO] },
+      }),
+    });
+    const ask = { synapAsk: `${NOTE_READ}@${BRAND}` };
+    const ctx = await getOAuthConsentContext(authorizeParams(ask) as never, OWNER);
+    expect(ctx.app!.access!.ask!.unavailable).toContain(`${NOTE_READ}@all`);
+    await expectRefusedUnchanged(() => allow({}, ask), /in all spaces/);
+  });
+});
+
+describe("R6 — a place the person no longer sees is never named (also-fix 6)", () => {
+  it("the row, the editor and the token say 'a space you no longer see'", async () => {
+    await allow({
+      access: access({
+        permissions: [READ],
+        read: { spaces: [BRAND, VIEWED], projects: [] },
+      }),
+    });
+    const membership = await q<{ id: string }>(
+      `select id from workspace_members where workspace_id = $1 and user_id = $2`,
+      [VIEWED, OWNER]
+    );
+    await q(`delete from workspace_members where id = $1`, [membership[0]!.id]);
+    try {
+      const r = (await row())!;
+      const listed = (await caller(OWNER).list()).find(
+        (a) => a.public_id === r.public_id
+      )!;
+      const spaces = listed.pod_app!.access!.read.spaces as Array<{
+        id: string;
+        name: string;
+      }>;
+      expect(spaces.find((x) => x.id === VIEWED)!.name).toBe(
+        "a space you no longer see"
+      );
+      expect(JSON.stringify(listed.pod_app!.access)).not.toContain("Viewed");
+      const offer = await caller(OWNER).accessOffer({ publicId: r.public_id });
+      expect(JSON.stringify(offer.current)).not.toContain("Viewed");
+    } finally {
+      await q(
+        `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'viewer')`,
+        [membership[0]!.id, VIEWED, OWNER]
+      );
+    }
+  });
+});
+
+describe("R7 — person tokens and projects (review tests)", () => {
+  it("a non-owner's sign-in reaches only the projects and spaces both see", async () => {
+    const registered = {
+      ownerUserId: OWNER,
+      approvedRequests: [],
+      approvedAccess: access({
+        permissions: [READ],
+        read: { spaces: [BRAND, VIEWED], projects: [P_BRAND, P_VIEWED] },
+      }),
+      mode: "specific",
+      oauthClientId: null,
+    };
+    expect(await appSignInGrant(registered, OTHER_PERSON)).toBe("not_for_you");
+    h.admins.add(OWNER);
+    try {
+      const reach = await appSignInGrant(registered, OTHER_PERSON);
+      if (reach === "not_for_you") throw new Error("refused");
+      expect(reach.access!.read).toEqual({
+        spaces: [VIEWED],
+        projects: [P_VIEWED],
+      });
+    } finally {
+      h.admins.delete(OWNER);
+    }
+  });
+
+  it("a project lost mid-token stops at the next request", async () => {
+    const temp = randomUUID();
+    await q(
+      `insert into projects (id, name, workspace_id, user_id, status) values ($1, 'Temp', $2, $3, 'active')`,
+      [temp, BRAND, OWNER]
+    );
+    const { body } = await exchange(
+      await allow({
+        access: access({
+          permissions: [NOTE_READ],
+          read: { spaces: [], projects: [temp, P_SOLO] },
+        }),
+      })
+    );
+    const key = (await apiKeyService.validateApiKey(body.access_token))!;
+    const stored = (await new GrantRepository(h.db as never).resolveForKey(
+      key.id
+    ))!;
+    const reached = (g: { scopes: readonly { projectIds?: readonly string[] | null }[] }) =>
+      g.scopes.flatMap((s) => [...(s.projectIds ?? [])]).sort();
+    expect(reached(await effectiveKeyGrant(key.id, stored))).toEqual(
+      [temp, P_SOLO].sort()
+    );
+    await q(`update projects set status = 'archived' where id = $1`, [temp]);
+    expect(reached(await effectiveKeyGrant(key.id, stored))).toEqual([P_SOLO]);
   });
 });

@@ -103,8 +103,7 @@ import {
   addPermissionsToAccess,
   appAccessBeyond,
   appAccessGivesAnything,
-  clampAppAccess,
-  candidateAccess,
+  reconsentProposal,
   normalizeAppAccess,
   pairsOfAccess,
   type AccessBeyond,
@@ -2157,7 +2156,9 @@ async function appOAuthAnswer(
       };
     }),
     user: { id: conn.person.id, name: conn.person.name ?? null },
-    access: reach.access ? await nameAppAccess(reach.access) : null,
+    access: reach.access
+      ? await nameAppAccess(reach.access, conn.app.ownerUserId)
+      : null,
   };
 }
 
@@ -2713,6 +2714,17 @@ export async function narrowApp(args: {
   });
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   assertNotRevoked(found);
+  // A connection whose access names projects is narrowed through its access
+  // (`apps.updateAccess`): pairs cannot hold its projects, and narrowing them
+  // would silently drop every project (review of #1197).
+  const stored = appApprovalOf(found.app, { lift: false }).access;
+  if (stored && !pairsOfAccess(stored).exact) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message:
+        "This app's access names projects: change it with the access editor on its page, which keeps them.",
+    });
+  }
   const current = dedupeRequests(found.app.approvedRequests ?? []);
   const keep = dedupeRequests(args.approved);
   if (keep.length === 0) {
@@ -2912,7 +2924,9 @@ export async function podAppViews(
   keysByPublicId: ReadonlyMap<
     string,
     ReadonlyArray<{ lastUsedAt: Date | null; createdAt: Date }>
-  >
+  >,
+  /** Who reads the rows: only the names of places they see are shown. */
+  viewerUserId: string | null = null
 ): Promise<Map<string, PodAppView>> {
   const pod = rows.filter((r) => r.app.mode === "oauth" && r.app.oauthClientId);
   if (pod.length === 0) return new Map();
@@ -2981,7 +2995,8 @@ export async function podAppViews(
   ]);
   const v2Names = await placeNames(
     v2Ids.flatMap((x) => x.spaces),
-    v2Ids.flatMap((x) => x.projects)
+    v2Ids.flatMap((x) => x.projects),
+    { userId: viewerUserId }
   );
   const out = new Map<string, PodAppView>();
   for (const row of pod) {
@@ -3059,14 +3074,16 @@ export interface AdminPodAppGroup {
  * gates (pod admin, never an agent). Removed rows are not listed; revoked
  * ones are, so the admin sees what was cut off.
  */
-export async function adminPodApps(): Promise<AdminPodAppGroup[]> {
+export async function adminPodApps(
+  viewerUserId: string | null = null
+): Promise<AdminPodAppGroup[]> {
   const repo = new AppRepository(db);
   const rows = (await repo.listAll({ includeRevoked: true })).filter(
     (r) => r.app.mode === "oauth" && r.app.oauthClientId
   );
   if (rows.length === 0) return [];
   const keys = await repo.keysByApp(rows.map((r) => r.app.publicId));
-  const views = await podAppViews(rows, keys);
+  const views = await podAppViews(rows, keys, viewerUserId);
   const ownerIds = [...new Set(rows.map((r) => r.app.ownerUserId))];
   const owners = new Map(
     (
@@ -3305,14 +3322,50 @@ export async function appAccessOffer(
   };
 }
 
-/** Space and project names for display (never a raw id alone). */
+/**
+ * Who reads the names (review of #1197): a person, whose spaces and projects
+ * decide which names they may see, or `trusted` for ids already cut to what
+ * the person sees (`describeBeyond`).
+ */
+type NamesViewer = { userId: string | null } | "trusted";
+
+/**
+ * Space and project names for display (never a raw id alone), only those
+ * the viewer can see now: a stored id of a space or project they no longer
+ * see is shown as "a space you no longer see" (review of #1197). A viewer
+ * with no user sees no name (fail closed).
+ */
 async function placeNames(
   spaceIds: readonly string[],
-  projectIds: readonly string[]
+  projectIds: readonly string[],
+  viewer: NamesViewer
 ): Promise<{
   space: (id: string) => NamedSpace;
   project: (id: string) => NamedProject;
 }> {
+  const trusted = viewer === "trusted";
+  const viewerId = viewer === "trusted" ? null : viewer.userId;
+  const [seenSpaces, seenProjects] = await Promise.all([
+    trusted || spaceIds.length === 0 || !viewerId
+      ? null
+      : getUserWorkspaceIds(viewerId).then((ids) => new Set(ids)),
+    trusted || projectIds.length === 0 || !viewerId
+      ? null
+      : db
+          .select({ id: projects.id })
+          .from(projects)
+          .where(
+            and(
+              inArray(projects.id, [...new Set(projectIds)]),
+              projectVisibleWhere(AccessContext.operator({ userId: viewerId }))
+            )
+          )
+          .then((rows) => new Set(rows.map((r) => r.id))),
+  ]);
+  const seesSpace = (id: string) =>
+    trusted || (seenSpaces?.has(id) ?? false);
+  const seesProject = (id: string) =>
+    trusted || (seenProjects?.has(id) ?? false);
   const [spaceRows, projectRows] = await Promise.all([
     spaceIds.length > 0
       ? db
@@ -3339,6 +3392,8 @@ async function placeNames(
   const projectsById = new Map(projectRows.map((r) => [r.id, r]));
   return {
     space: (id) => {
+      if (!seesSpace(id))
+        return { id, name: "a space you no longer see", templateSlug: null };
       const r = spaces.get(id);
       return {
         id,
@@ -3347,6 +3402,8 @@ async function placeNames(
       };
     },
     project: (id) => {
+      if (!seesProject(id))
+        return { id, name: "a project you no longer see", workspaceId: null };
       const r = projectsById.get(id);
       return {
         id,
@@ -3401,10 +3458,16 @@ function nameAppAccessWith(
  * A v2 access with its places NAMED (W3d): what every screen shows. Under All
  * spaces the read projects show as "all" (Q1: every project is included).
  */
-export async function nameAppAccess(input: AppAccess): Promise<NamedAppAccess> {
+export async function nameAppAccess(
+  input: AppAccess,
+  viewerUserId: string
+): Promise<NamedAppAccess> {
   const access = normalizeAppAccess(input);
   const ids = accessPlaceIds(access);
-  return nameAppAccessWith(access, await placeNames(ids.spaces, ids.projects));
+  return nameAppAccessWith(
+    access,
+    await placeNames(ids.spaces, ids.projects, { userId: viewerUserId })
+  );
 }
 
 type AccessAllOrIdsLike = "all" | readonly string[];
@@ -3430,7 +3493,8 @@ async function describeBeyond(
       b.where?.kind === "project" && seenProjects.has(b.where.id)
         ? [b.where.id]
         : []
-    )
+    ),
+    "trusted"
   );
   const parts = beyond.slice(0, 8).map((b) => {
     switch (b.reason) {
@@ -3500,11 +3564,11 @@ function reconsentOf(
   const lifted = liftApprovedRequests(approval.pairs, { examples: false });
   if ("access" in lifted) return null;
   const { pairs } = pairsOfRequests(approval.pairs);
-  const candidate = candidateAccess(pairs);
   return {
     reason: lifted.reconsent.reason,
     pairs,
-    proposed: ceiling ? clampAppAccess(candidate, ceiling) : candidate,
+    // Never wider than the old pairs: one click on Allow never widens.
+    proposed: reconsentProposal(pairs, ceiling),
   };
 }
 
@@ -3566,17 +3630,21 @@ function reconsentViewWith(
 /**
  * Why a connection asks again, named (Q3): its old pairs cannot become v2 as
  * they are. `was` lists them, each place named; `proposed` is the v2 form the
- * pairs suggest (`candidateAccess`), clamped to `ceiling` when given (the
+ * pairs hold, NEVER wider than them (`reconsentProposal`), clamped to `ceiling` when given (the
  * screen's pre-fill). null when the connection holds a v2 access, or nothing.
  */
 export async function reconsentViewOf(
   approval: AppApproval,
+  viewerUserId: string,
   ceiling?: AppAccessCeiling | null
 ): Promise<ReconsentView | null> {
   const r = reconsentOf(approval, ceiling);
   if (!r) return null;
   const ids = reconsentPlaceIds(r);
-  return reconsentViewWith(r, await placeNames(ids.spaces, ids.projects));
+  return reconsentViewWith(
+    r,
+    await placeNames(ids.spaces, ids.projects, { userId: viewerUserId })
+  );
 }
 
 /**
@@ -3712,12 +3780,25 @@ export async function connectOAuthAppAccess(args: {
     pairsOfAccess(access).pairs.flatMap((p) =>
       p.workspaceId ? [p.workspaceId] : []
     ),
-    []
+    [],
+    { userId: args.ownerUserId }
   );
   const requests = pairsOfAccess(access).pairs.map((r) => ({
     ...withAppRequestScope(r),
     workspaceName: r.workspaceId ? names.space(r.workspaceId).name : null,
   }));
+  // The card reads `access` (what is applied) and names its places from this
+  // (review of #1197): every space and project it names, as the person sees.
+  const accessIds = accessPlaceIds(access);
+  const accessNameOf = await placeNames(
+    accessIds.spaces,
+    accessIds.projects,
+    { userId: args.ownerUserId }
+  );
+  const accessNames: Record<string, string> = Object.fromEntries([
+    ...accessIds.spaces.map((id) => [id, accessNameOf.space(id).name]),
+    ...accessIds.projects.map((id) => [id, accessNameOf.project(id).name]),
+  ]);
   const proposal = await db.transaction((tx) =>
     createPendingProposal(
       {
@@ -3747,6 +3828,7 @@ export async function connectOAuthAppAccess(args: {
               }
             : {}),
           access,
+          accessNames,
           askedAccess: frozen,
           requests,
         },
@@ -3848,8 +3930,10 @@ export async function appAccessEditor(args: {
   return {
     asked: offer.asked,
     places: offer.places,
-    current: approval.access ? await nameAppAccess(approval.access) : null,
-    reconsent: await reconsentViewOf(approval, offer.ceiling),
+    current: approval.access
+      ? await nameAppAccess(approval.access, args.ownerUserId)
+      : null,
+    reconsent: await reconsentViewOf(approval, args.ownerUserId, offer.ceiling),
   };
 }
 

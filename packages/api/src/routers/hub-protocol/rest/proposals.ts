@@ -1250,6 +1250,21 @@ export function registerProposalsRoutes(app: HubHono): void {
         400
       );
     }
+    // An app's access is never filed from caller data (review of #1197): the
+    // `app/connect` executor applies what the proposal carries, so a forged
+    // one would hand an app reach the person never saw on its screen. Only
+    // the app doors file it (`requestAccess`, the consent, the app's own ask),
+    // none of which come through here.
+    if (body.targetType === "app" && body.proposalType === "connect") {
+      return c.json(
+        {
+          error:
+            "An app's access is asked through the app's own door (connect it, or ask from the app), never filed as a proposal.",
+          code: "APP_CONNECT_NOT_FILED_HERE",
+        },
+        403
+      );
+    }
     // Item 3 Part 3: confine a bound service key to its workspace before the write.
     let workspaceId = getConfinedWorkspace(c, body.workspaceId) ?? null;
     const ctxAgentUserId = c.get("agentUserId") as string | undefined;

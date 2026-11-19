@@ -105,7 +105,7 @@ export const appsRouter = router({
         includeRevoked: input?.includeRevoked ?? false,
       });
       const keys = await repo.keysByApp(rows.map((r) => r.app.publicId));
-      const pod = await podAppViews(rows, keys);
+      const pod = await podAppViews(rows, keys, ctx.userId);
       return rows.map((row) => ({
         ...serializeApp(row),
         keys: keys.get(row.app.publicId) ?? [],
@@ -161,7 +161,8 @@ export const appsRouter = router({
       const keys = await new AppRepository(db).keysFor(found.app.publicId);
       const pod = await podAppViews(
         [found],
-        new Map([[found.app.publicId, keys]])
+        new Map([[found.app.publicId, keys]]),
+        ctx.userId
       );
       return {
         ...serializeApp(found),
@@ -456,7 +457,7 @@ export const appsRouter = router({
    */
   adminPodApps: podAdminProcedure.query(({ ctx }) => {
     refuseAgentCredential(ctx, "read every member's apps");
-    return adminPodApps();
+    return adminPodApps(ctx.userId);
   }),
 
   /** End one pod app for EVERY member (each through `revokeApp`). */

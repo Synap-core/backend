@@ -22,6 +22,8 @@
 import { describe, expect, it } from "vitest";
 import {
   addPermissionsToAccess,
+  reconsentProposal,
+  withoutDormantPermissions,
   appAccessBeyond,
   appAccessGivesAnything,
   ceilingScopes,
@@ -148,7 +150,9 @@ function* subsets<T>(items: readonly T[]): Generator<T[]> {
     yield items.filter((_, i) => mask & (1 << i));
 }
 
-function* accessUniverse(): Generator<AppAccess> {
+function* accessUniverse(
+  perms: readonly string[] = [R_NOTE, R_TASK, R_TRACK, W_NOTE, W_UNASKED]
+): Generator<AppAccess> {
   const readSpaces: Array<"all" | string[]> = [
     "all",
     [],
@@ -160,13 +164,7 @@ function* accessUniverse(): Generator<AppAccess> {
   const readProjects: Array<"all" | string[]> = ["all", [], [P], [Q], [R]];
   const writeSpaces = [[], [A], [B]];
   const writeProjects = [[], [P], [Q]];
-  for (const permissions of subsets([
-    R_NOTE,
-    R_TASK,
-    R_TRACK,
-    W_NOTE,
-    W_UNASKED,
-  ]))
+  for (const permissions of subsets(perms))
     for (const rs of readSpaces)
       for (const rp of readProjects)
         for (const ws of writeSpaces)
@@ -603,5 +601,132 @@ describe("normalizeAppAccess / parseAppAccess / appAccessGivesAnything", () => {
         read: { spaces: [], projects: "all" },
       })
     ).toBe(true);
+  });
+});
+
+describe("appAccessBeyond — ceiling variants (review of #1197)", () => {
+  const variants: Array<[string, AppAccessCeiling, string[]]> = [
+    [
+      "an empty floor (no space, no project to give)",
+      {
+        ...CEILING,
+        read: { spaces: [], projects: [] },
+        write: { spaces: [], projects: [] },
+      },
+      [R_NOTE, R_TASK, W_NOTE, W_UNASKED],
+    ],
+    [
+      "no projects at all (all projects mints nothing)",
+      {
+        ...CEILING,
+        read: { spaces: [A, B], projects: [] },
+        write: { spaces: [A], projects: [] },
+      },
+      [R_NOTE, R_TASK, W_NOTE, W_UNASKED],
+    ],
+    [
+      "wildcards asked: *, entity.*.read, entity.read declared pod-wide",
+      {
+        permissions: ["*", "entity.*.read", "entity.read"],
+        allSpacesReads: ["entity.*.read", "entity.read"],
+        read: { spaces: [A, B], projects: [P, Q] },
+        write: { spaces: [A], projects: [P] },
+      },
+      ["*", "entity.*.read", "entity.read", W_UNASKED],
+    ],
+  ];
+  it.each(variants)("%s: never beyond, no phantom", (_label, ceiling, perms) => {
+    const allProjects = [...ceiling.read.projects];
+    const mintIt = (a: AppAccess) => grantScopesForAccess(a, { allProjects });
+    const ceilingTable = permitsTable(ceilingScopes(ceiling));
+    const ceilingPlaces = placement(ceilingScopes(ceiling));
+    let valid = 0;
+    for (const access of accessUniverse(perms)) {
+      if (appAccessBeyond(access, ceiling).length > 0) continue;
+      valid++;
+      const grants = mintIt(access);
+      const table = permitsTable(grants);
+      if (
+        !subsetOf(table, ceilingTable) ||
+        !placedWithin(placement(grants), ceilingPlaces)
+      )
+        throw new Error(`widens: ${JSON.stringify(access)}`);
+      const doc = permitsTable(documentScopes(access, allProjects));
+      if ([...doc].sort().join() !== [...table].sort().join())
+        throw new Error(`phantom: ${JSON.stringify(access)}`);
+    }
+    expect(valid).toBeGreaterThan(0);
+  });
+});
+
+describe("withoutDormantPermissions — Q4 never switches on a stored dormant write", () => {
+  it("a write stored with no write place is dropped, and a first write place switches on only what the ask adds", () => {
+    const dormant: AppAccess = {
+      version: 2,
+      permissions: [R_NOTE, W_NOTE],
+      read: { spaces: [A], projects: [] },
+      write: { spaces: [], projects: [] },
+    };
+    expect(withoutDormantPermissions(dormant).permissions).toEqual([R_NOTE]);
+    expect(
+      addPermissionsToAccess(dormant, ["entity.note.update"], {
+        spaces: [A],
+        projects: [],
+      })
+    ).toEqual({
+      access: {
+        ...dormant,
+        permissions: [R_NOTE, "entity.note.update"],
+        write: { spaces: [A], projects: [] },
+      },
+    });
+  });
+});
+
+describe("reconsentProposal — a re-consent pre-fill is never wider than the old pairs (exhaustive)", () => {
+  const universe = [R_NOTE, R_TASK, W_NOTE].flatMap((permission) =>
+    [A, B, null].map((workspaceId) => ({ permission, workspaceId }))
+  );
+  it("on every subset, with and without the ceiling", () => {
+    let nonEmpty = 0;
+    for (const rows of subsets(universe)) {
+      const { pairs } = pairsOfRequests(rows);
+      const before = scopesOfPairs(pairs);
+      for (const ceiling of [null, CEILING]) {
+        const proposed = reconsentProposal(pairs, ceiling);
+        if (proposed.permissions.length > 0) nonEmpty++;
+        const after = grantScopesForAccess(proposed);
+        if (!subsetOf(permitsTable(after), permitsTable(before)))
+          throw new Error(`widens: ${JSON.stringify(rows)}`);
+        expect(placedWithin(placement(after), placement(before))).toBe(true);
+        if (ceiling) expect(appAccessBeyond(proposed, ceiling)).toEqual([]);
+      }
+    }
+    expect(nonEmpty).toBeGreaterThan(100);
+  });
+
+  it("keeps what the pairs hold exactly; drops what one place does not hold", () => {
+    expect(
+      reconsentProposal(
+        pairsOfRequests([
+          { permission: R_NOTE, workspaceId: A },
+          { permission: R_NOTE, workspaceId: B },
+        ]).pairs
+      )
+    ).toEqual({
+      version: 2,
+      permissions: [R_NOTE],
+      read: { spaces: [A, B], projects: [] },
+      write: { spaces: [], projects: [] },
+    });
+    // Notes in A and tasks in B: neither in both, so neither is pre-filled.
+    expect(
+      reconsentProposal(
+        pairsOfRequests([
+          { permission: R_NOTE, workspaceId: A },
+          { permission: R_TASK, workspaceId: B },
+        ]).pairs
+      ).permissions
+    ).toEqual([]);
   });
 });
