@@ -57,11 +57,12 @@ export {
 } from "@synap-core/types/proposals/dev-deploy";
 
 /**
- * The LEGACY stage a session sits at once a gate clears — used only when the
- * session follows no staged playbook that names the gate (`stageAfterDevGate`
- * decides otherwise). Read by the polling CLI agent as "you may proceed", so
- * only the approval executor writes it: an agent `currentStage` write naming
- * one is refused (`gate-bypass-floor.ts`).
+ * The LEGACY stage stamps a dev gate's approval wrote over the session's stage
+ * when no playbook stage names the gate. No longer written (W6, finding
+ * 9351820d: 242 of 248 stages on the pod were `deploy_approved`): the approval
+ * is recorded in `metadata.devLoop` and leaves the stage. Sessions stamped
+ * before stay; an agent may not write one (`gate-bypass-floor.ts`) and a step
+ * never advances by itself out of one (`advance-if-stage-met.ts`).
  */
 export const DEV_GATE_LEGACY_STAGES = {
   [DEV_PLAN_APPROVAL_TYPE]: "plan_approved",
@@ -80,8 +81,7 @@ export const DEV_GATE_LEGACY_STAGES = {
  *
  * Returns `null` when no stage waits for the gate (a stageless session, a
  * playbook that does not declare it, or the gate stage is the last one) — the
- * caller then keeps the legacy stamp (`plan_approved` / `deploy_approved`) the
- * CLI dev loop polls for.
+ * approval then moves no stage.
  */
 export function stageAfterDevGate(
   stages: unknown,
