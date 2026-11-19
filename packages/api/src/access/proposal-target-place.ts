@@ -89,7 +89,6 @@ export function proposalTargetInProjectsWhere(projectIds: string[]): SQL {
   )!;
 }
 
-
 /** DECIDE half: the projects a proposal's target row is filed in now. */
 export async function proposalTargetProjectIds(proposal: {
   targetType?: string | null;
