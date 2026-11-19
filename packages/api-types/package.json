@@ -14,7 +14,8 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "LICENSE"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc && cp src/generated.d.ts dist/generated.d.ts && node scripts/write-schema-hash.mjs",

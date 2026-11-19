@@ -23,7 +23,8 @@
   "license": "MIT",
   "files": [
     "dist",
-    "src"
+    "src",
+    "LICENSE"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
