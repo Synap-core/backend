@@ -2,15 +2,19 @@
  * AppAccess v2 — the lift from the old pairs, the grants it makes, and the
  * v2-against-v2 comparison (app permissions W2, decision 51ad8d1e).
  *
- * The lift must NEVER widen. Proven two ways, independently of the lift's
- * own check:
- *  - EXHAUSTIVELY, on every subset of two small pair universes: a lifted
- *    connection's grants (`grantScopesForAccess`) permit exactly the requests
- *    the per-space grants of its pairs permit (`legacyGrants` below is the
- *    pre-W2 `grantsForApprovedRequests`, copied), asked through the engine's
- *    own oracle (`permits`) and through the app's place parse;
- *  - and every refused lift really would have changed a permit (the
- *    re-consent is never over-eager).
+ * The lift must NEVER widen and never narrow. Proven two ways,
+ * independently of the lift's own check:
+ *  - EXHAUSTIVELY, on every subset of four small pair universes (wildcards
+ *    and subsumption included: `*`, `entity.read`, `entity.<kind>.read`,
+ *    pod-wide reads beside the same reads per space): a lifted connection's
+ *    grants (`grantScopesForAccess`) permit exactly the requests the
+ *    per-space grants of its pairs permit (`legacyGrants` below is the pre-W2
+ *    `grantsForApprovedRequests`, copied), asked through the engine's own
+ *    oracle (`permits`), and put the app in exactly the same spaces as viewer
+ *    or editor, read through the app's place parse (`parsePlace`);
+ *  - and every refused lift really would have changed a permit or a place
+ *    (the re-consent is never over-eager), on every universe (W3c: the lift
+ *    compares by meaning, so subsumption no longer re-consents).
  * Each table row names the wrong rule it rules out.
  */
 import { describe, expect, it } from "vitest";
@@ -110,19 +114,36 @@ function permitsTable(scopes: readonly Scope[], perms: readonly string[]) {
   return out.sort();
 }
 
-/** Where each permission holds, read the way the app doors read a scope. */
-function placedPairs(scopes: readonly Scope[]) {
-  const out = new Set<string>();
+/**
+ * Where the app is PUT, read the way the app doors read a scope
+ * (`parsePlace`): each space or project it is in, as `viewer` when it only
+ * reads there and `editor` otherwise (`syncAppAgentMemberships`), and the pod
+ * (or "unbounded") for a scope with no space. A pod-wide read permits a read
+ * in A without making the app a member of A, so this is checked beside the
+ * permits.
+ */
+function placement(scopes: readonly Scope[]) {
+  const roles = new Map<string, string>();
   for (const s of scopes) {
     const place = parsePlace(s, "app");
     const where =
       place.kind === "spaces" || place.kind === "projects"
         ? place.ids.map((id) => `${place.kind}:${id}`)
         : [place.kind];
-    for (const w of where) for (const p of s.permissions) out.add(`${p}@${w}`);
+    const writes = s.permissions.some(
+      (p) => parsePermission(p).at(-1) !== "read"
+    );
+    for (const w of where)
+      if (roles.get(w) !== "editor") roles.set(w, writes ? "editor" : "viewer");
   }
-  return [...out].sort();
+  return [...roles].map(([w, r]) => `${w}=${r}`).sort();
 }
+
+/** Same reach: the same permits and the same placement. */
+const sameReach = (a: readonly Scope[], b: readonly Scope[]) =>
+  JSON.stringify(permitsTable(a, ASKED)) ===
+    JSON.stringify(permitsTable(b, ASKED)) &&
+  JSON.stringify(placement(a)) === JSON.stringify(placement(b));
 
 function* subsets<T>(items: readonly T[]): Generator<T[]> {
   for (let mask = 0; mask < 1 << items.length; mask++)
@@ -134,31 +155,55 @@ const universe = (perms: string[]) =>
     [A, B, null].map((workspaceId) => ({ permission, workspaceId }))
   );
 
-/** Concrete requests the engine is asked about (a pattern like `*` is no request). */
-const ASKED = [R_NOTE, R_TASK, R_TRACK, W_NOTE, W_TASK, "entity.task.delete"];
+/**
+ * Concrete requests the engine is asked about (a pattern like `*` is no
+ * request): every named kind, an unnamed kind (`entity.zz.read`), a record of
+ * unknown kind (`entity.read` asks with no kind), each action, a gate verb.
+ */
+const ASKED = [
+  R_NOTE,
+  R_TASK,
+  "entity.zz.read",
+  "entity.read",
+  R_TRACK,
+  W_NOTE,
+  W_TASK,
+  "entity.note.update",
+  "entity.task.delete",
+  "entity.note.merge",
+  "playbook.run",
+];
 const R_ALL_KINDS = "entity.read"; // a read, pod-wide readable, covers R_NOTE
 const FULL = "*"; // a write by tier (its action is not `read`), covers everything
 
+/** Did the pre-W3c lift (exact keys) refuse this approval? */
+function keyLiftRefuses(approved: readonly Pair[]): boolean {
+  const { pairs, unplaceable } = pairsOfRequests(approved);
+  const held = new Set(pairs.map(accessPairKey));
+  const allowed = expandAppAccess(candidateAccess(pairs)).map(accessPairKey);
+  return (
+    unplaceable.length > 0 ||
+    allowed.some((k) => !held.has(k)) ||
+    held.size !== new Set(allowed).size
+  );
+}
+
 describe("liftApprovedRequests — never wider, never narrower (exhaustive)", () => {
-  for (const [label, perms, overEagerChecked] of [
-    [
-      "reads, one not pod-wide, and a write",
-      [R_NOTE, R_TASK, R_TRACK, W_NOTE],
-      true,
-    ],
-    ["two writes and a read", [R_NOTE, W_NOTE, W_TASK], true],
-    // Wildcards and subsumption (review of #1183): `*` is a write and holds
-    // where `write` says, so the tiers never mix through it; `entity.read`
-    // beside `entity.note.read` lifts only on exact keys.
-    [
-      "wildcards: entity.read, entity.note.read and *",
-      [R_ALL_KINDS, R_NOTE, FULL],
-      false,
-    ],
+  for (const [label, perms, subsumption] of [
+    ["reads, one not pod-wide, and a write", [R_NOTE, R_TASK, R_TRACK, W_NOTE], false],
+    ["two writes and a read", [R_NOTE, W_NOTE, W_TASK], false],
+    // Wildcards and subsumption (review of #1183, W3c): `*` is a write and
+    // holds where `write` says, so the tiers never mix through it;
+    // `entity.read` beside `entity.note.read` adds nothing.
+    ["wildcards: entity.read, entity.note.read and *", [R_ALL_KINDS, R_NOTE, FULL], true],
+    // Pod-wide reads beside the same reads per space (synap-chat's shape),
+    // where the app also writes, and where it does not.
+    ["pod-wide and per-space reads beside a write: entity.read, entity.note.read, entity.note.create", [R_ALL_KINDS, R_NOTE, W_NOTE], true],
   ] as const) {
-    it(`every subset of ${label} × {A, B, pod}: same permits, same places`, () => {
+    it(`every subset of ${label} × {A, B, pod}: same permits, same placement`, () => {
       let lifted = 0;
       let reconsent = 0;
+      let liftedByMeaning = 0;
       for (const approved of subsets(universe([...perms]))) {
         const before = legacyGrants(approved);
         const after = w2Grants(approved);
@@ -166,10 +211,11 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
         expect(permitsTable(after, ASKED), ctx).toEqual(
           permitsTable(before, ASKED)
         );
-        expect(placedPairs(after), ctx).toEqual(placedPairs(before));
+        expect(placement(after), ctx).toEqual(placement(before));
         const result = liftApprovedRequests(approved);
         if ("access" in result) {
           lifted += 1;
+          if (keyLiftRefuses(approved)) liftedByMeaning += 1;
           expect(
             grantScopesForAccess(result.access).length
           ).toBeLessThanOrEqual(4);
@@ -181,39 +227,94 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
               );
         } else {
           reconsent += 1;
-          if (!overEagerChecked) continue;
-          // Never over-eager: the naive v2 really would change a permit,
-          // or a row no app may hold is there. NOT checked with subsumption:
-          // the lift compares exact keys, so "entity.read in A and B +
-          // entity.note.read in B" re-consents although it allows nothing new
-          // (known over-eager, W3).
+          // Never over-eager, on every universe: the naive v2 really would
+          // change a permit or a placement, or a row no app may hold is there.
           const naive = grantScopesForAccess(
             candidateAccess(pairsOfRequests(approved).pairs)
           );
           const changes =
-            result.reconsent.unplaceable > 0 ||
-            JSON.stringify(placedPairs(naive)) !==
-              JSON.stringify(placedPairs(before)) ||
-            JSON.stringify(permitsTable(naive, ASKED)) !==
-              JSON.stringify(permitsTable(before, ASKED));
+            result.reconsent.unplaceable > 0 || !sameReach(naive, before);
           expect(changes, ctx).toBe(true);
+          // And the reason names a real difference.
+          if (result.reconsent.reason !== "unplaceable")
+            expect(
+              result.reconsent.widens.length + result.reconsent.narrows.length,
+              ctx
+            ).toBeGreaterThan(0);
         }
       }
       // Non-vacuity: both outcomes happen.
       expect(lifted).toBeGreaterThan(10);
       expect(reconsent).toBeGreaterThan(10);
+      // The subsumption universes hold rows the key comparison refused and
+      // the meaning lifts (the over-eager rows of #1189).
+      if (subsumption) expect(liftedByMeaning).toBeGreaterThan(1);
     });
   }
 
-  it("subsumption is over-eager by design: entity.read in A and B + entity.note.read in B re-consents (W3)", () => {
-    // The v2 form adds entity.note.read in A, which entity.read in A already
-    // allows: no new reach, but the lift compares exact keys.
+  // The over-eager rows #1189 pinned now lift, with grants that say the same.
+  it.each([
+    [
+      "entity.read in A and B + entity.note.read in B",
+      [
+        { permission: R_ALL_KINDS, workspaceId: A },
+        { permission: R_ALL_KINDS, workspaceId: B },
+        { permission: R_NOTE, workspaceId: B },
+      ],
+      [{ permissions: [R_ALL_KINDS, R_NOTE], workspaceIds: [A, B] }],
+    ],
+    [
+      "entity.read + entity.note.read in A, entity.read in B",
+      [
+        { permission: R_ALL_KINDS, workspaceId: A },
+        { permission: R_NOTE, workspaceId: A },
+        { permission: R_ALL_KINDS, workspaceId: B },
+      ],
+      [{ permissions: [R_ALL_KINDS, R_NOTE], workspaceIds: [A, B] }],
+    ],
+    [
+      "entity.note.read pod-wide and in A, where it also writes",
+      [
+        { permission: R_NOTE, workspaceId: null },
+        { permission: R_NOTE, workspaceId: A },
+        { permission: W_NOTE, workspaceId: A },
+      ],
+      [
+        { permissions: [R_NOTE] },
+        { permissions: [W_NOTE], workspaceIds: [A] },
+      ],
+    ],
+  ] as const)("now lifts: %s", (_label, approved, grants) => {
+    expect(keyLiftRefuses(approved)).toBe(true);
+    const r = liftApprovedRequests(approved);
+    expect("access" in r && grantScopesForAccess(r.access)).toEqual(grants);
+    expect(sameReach(w2Grants(approved), legacyGrants(approved))).toBe(true);
+  });
+
+  // Rules out: subsumption read as "anything a pattern covers lifts".
+  it("still refuses a real widening: entity.read in A + entity.note.read in B", () => {
     const r = liftApprovedRequests([
       { permission: R_ALL_KINDS, workspaceId: A },
-      { permission: R_ALL_KINDS, workspaceId: B },
       { permission: R_NOTE, workspaceId: B },
     ]);
     expect("reconsent" in r && r.reconsent.reason).toBe("widens");
+    if ("reconsent" in r)
+      expect(r.reconsent.widens.map(accessPairKey)).toContain(
+        `space:${B}\u0000${R_ALL_KINDS}`
+      );
+  });
+
+  // Rules out: a pod-wide read standing in for a space the app only reads.
+  it("still refuses to drop a space only read in: entity.note.read pod-wide and in A, no write", () => {
+    const r = liftApprovedRequests([
+      { permission: R_NOTE, workspaceId: null },
+      { permission: R_NOTE, workspaceId: A },
+    ]);
+    expect("reconsent" in r && r.reconsent).toMatchObject({
+      reason: "narrows",
+      widens: [],
+      narrows: [{ permission: R_NOTE, where: { kind: "space", id: A } }],
+    });
   });
 
   it("* in a space and a read elsewhere: the tiers stay apart", () => {
@@ -328,6 +429,51 @@ describe("liftApprovedRequests — table", () => {
         { permissions: [R_NOTE, R_TASK] },
         { permissions: [W_NOTE], workspaceIds: [A] },
       ]);
+  });
+
+  // synap-chat as it asks today (site.config.ts, 18 Nov 2026): 36 reads
+  // pod-wide (7 subjects, 29 kinds), and in each chosen space 5 reads
+  // (entity.read, document.read, relation.read, track.read, agent.read) and
+  // 3 acts. v2 holds ONE read place for all of a connection's reads, and
+  // these reads sit at two widths, so neither fits: "all" spaces would read
+  // every kind, document and relation everywhere (entity.read & co. are
+  // pod-wide readable: WIDENS), and would drop track.read and agent.read,
+  // which are not (NARROWS); a list of spaces would drop the 36 pod-wide
+  // reads everywhere else. It re-consents, by meaning, not by key.
+  it("synap-chat's shape re-consents: it reads at two widths", () => {
+    const kinds = Array.from({ length: 29 }, (_, i) => `kind${i}`);
+    const podReads = [
+      ...["playbook", "session", "proposal", "automation", "view", "channel", "project"].map(
+        (s) => `${s}.read`
+      ),
+      ...kinds.map((k) => `entity.${k}.read`),
+    ];
+    const perSpace = [
+      "playbook.run",
+      "session.update",
+      "agent.read",
+      "track.read",
+      "entity.read",
+      "document.read",
+      "relation.read",
+      "chat.stream",
+    ];
+    const r = lift(
+      ...podReads.map((permission) => ({ permission, workspaceId: null })),
+      ...[A, B].flatMap((ws) =>
+        perSpace.map((permission) => ({ permission, workspaceId: ws }))
+      )
+    );
+    expect("reconsent" in r && r.reconsent.reason).toBe("widens");
+    if (!("reconsent" in r)) return;
+    expect(r.reconsent.widens).toContainEqual({
+      permission: "entity.read",
+      where: { kind: "pod" },
+    });
+    expect(r.reconsent.narrows).toContainEqual({
+      permission: "track.read",
+      where: { kind: "space", id: A },
+    });
   });
 
   it("nothing approved lifts to nothing", () => {

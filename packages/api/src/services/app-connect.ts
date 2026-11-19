@@ -693,26 +693,34 @@ function accessOfForm(form: AppApprovalForm): AppAccess | null {
  * everywhere" into "member of FINANCE". An AI's ask with no space does cover
  * any space (`requestsWithin`, agent-connect).
  *
- * v2 against v2 (W2): each side is read as its v2 access (pairs are lifted,
- * `liftApprovedRequests`) and compared place by place (`appAccessWithin`).
- * A lift is lossless, so this is the pair comparison exactly; when a side
- * cannot be lifted (it re-consents), its pairs are compared as before.
+ * Two sets of pairs are compared as pairs (`pairRequestsWithin`), the rule
+ * every approval was checked by before W2. With a v2 form on either side
+ * (W2), approved is within asked when v2 against v2 says so place by place
+ * (`appAccessWithin`, the pairs side lifted by `liftApprovedRequests`), or
+ * when every pair of approved (a v2 form expanded) is within asked's pairs
+ * at its own place, as the pair rule reads them. Both answers are sound, so
+ * either suffices; a pair no app may hold is within nothing.
+ *
+ * Why pairs stay pairs: the lift compares by MEANING (W3c), so the v2 form
+ * of an ask may hold a space read through its pod-wide read
+ * (`entity.note.read` pod-wide and in A, where the app also writes, lifts to
+ * reads in All spaces). Read back as v2 that ask no longer names
+ * `entity.note.read` in A, and an approval of exactly that pair would be
+ * refused although it was asked. The pair rule never loses it.
  */
 export function appRequestsWithin(
   approved: AppApprovalForm,
   asked: AppApprovalForm
 ): boolean {
-  const a = accessOfForm(approved);
-  const b = accessOfForm(asked);
-  if (a && b) return appAccessWithin(a, b);
   if (!isAccessForm(approved) && !isAccessForm(asked))
     return pairRequestsWithin(approved, asked);
-  // One side is v2 and the other cannot be lifted: place by place, and a
-  // pair no app may hold is within nothing.
-  const pairs = (form: AppApprovalForm) =>
-    isAccessForm(form) ? expandAppAccess(form) : pairsOfRequests(form).pairs;
   if (!isAccessForm(approved) && pairsOfRequests(approved).unplaceable.length)
     return false;
+  const a = accessOfForm(approved);
+  const b = accessOfForm(asked);
+  if (a && b && appAccessWithin(a, b)) return true;
+  const pairs = (form: AppApprovalForm) =>
+    isAccessForm(form) ? expandAppAccess(form) : pairsOfRequests(form).pairs;
   return pairsWithin(pairs(approved), pairs(asked));
 }
 
@@ -761,10 +769,11 @@ export function appApprovalWithinAsked(args: {
  * (`liftApprovedRequests`, W2): at most four scopes — reads in the read
  * spaces, reads in the read projects, writes in the write spaces, writes in
  * the write projects (`grantScopesForAccess`). A lift is lossless, so these
- * scopes permit exactly the (permission, place) pairs the per-space grants
- * below permit (types `grants/app-access.test.ts` compares both on every
- * subset of two pair universes; `app-access-v2.pglite.test.ts` on fixtures). Pairs that do not lift (a re-consent) keep the
- * per-space grants.
+ * scopes give the app exactly the reach the per-space grants below give: the
+ * same permits and the same spaces, as viewer or editor (types
+ * `grants/app-access.test.ts` compares both on every subset of four pair
+ * universes, subsumption included; `app-access-v2.pglite.test.ts` on
+ * fixtures). Pairs that do not lift (a re-consent) keep the per-space grants.
  *
  * Never one grant of (all permissions × all workspaces): approving "create
  * People in Sales" and "read Notes in Finance" would then also allow creating
