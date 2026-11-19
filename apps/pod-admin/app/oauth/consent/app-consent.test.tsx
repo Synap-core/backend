@@ -190,6 +190,11 @@ describe("first connect (design A)", () => {
     );
     expect(out).toMatch(/View<\/span> records \(3 kinds\)/);
     expect(out).not.toContain("Customize");
+    // One set for both counts: what it reaches under "In" (re-check #1).
+    expect(out).toContain(
+      "Not included with every space: goals. Pick spaces to include them."
+    );
+    expect(out).toContain("Decide for you: off (it asked)");
     expect(out).not.toContain("Everywhere in your pod</p>");
   });
 

@@ -75,4 +75,22 @@ describe("the app page's access lines", () => {
     );
     expect(out).toBe("");
   });
+
+  it("an access that names a project: no Change door, and a real door to connect it again", () => {
+    const out = html({
+      ...FITS,
+      access: {
+        version: 2,
+        permissions: ["entity.post.read"],
+        read: {
+          spaces: [{ id: "w-content", name: "Content OS", templateSlug: null }],
+          projects: [{ id: "p-l", name: "Launch", workspaceId: null }],
+        },
+        write: { spaces: [], projects: [] },
+      },
+    });
+    expect(out).not.toContain(">Change<");
+    expect(out).toContain('href="https://studio.synap.live"');
+    expect(out).toContain("project Launch");
+  });
 });

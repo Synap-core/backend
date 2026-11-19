@@ -26,6 +26,7 @@ import {
 import {
   Ban,
   Check,
+  ChevronRight,
   Info,
   Monitor,
   Plug,
@@ -1279,6 +1280,8 @@ function CantGiveFold({
     <Accordion
       variant="bordered"
       className="px-3"
+      // The fold arrow points right and turns down, as every row's (P10).
+      disableIndicatorAnimation
       itemClasses={{
         title: "text-sm text-foreground/85",
         trigger: "min-h-10 py-2",
@@ -1287,6 +1290,12 @@ function CantGiveFold({
     >
       <AccordionItem
         key="cant"
+        indicator={({ isOpen }) => (
+          <ChevronRight
+            aria-hidden
+            className={`h-4 w-4 text-foreground/65 ${isOpen ? "rotate-90" : ""}`}
+          />
+        )}
         aria-label={t("cant.title", { n: items.length })}
         title={t("cant.title", { n: items.length })}
       >

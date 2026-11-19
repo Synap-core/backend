@@ -34,6 +34,7 @@ import {
   type ConsentDraft,
   type ConsentOffer,
   partWords,
+  toAccess,
   type PlacePart,
 } from "./consent-access";
 import type { ActsAs } from "./consent-model";
@@ -88,6 +89,11 @@ export interface AccessLinesProps {
   isDisabled?: boolean;
   /** Which sheet starts open (a test, a screenshot). */
   defaultOpen?: Line | null;
+  /**
+   * The lines only say their answers: no door (an action that cannot apply
+   * is absent, never disabled).
+   */
+  readOnly?: boolean;
 }
 
 export function AccessLines(props: AccessLinesProps) {
@@ -179,7 +185,8 @@ export function AccessLines(props: AccessLinesProps) {
     doorLabel: string,
     title: string,
     children: ReactNode
-  ) => ({
+  ) =>
+    props.readOnly ? null : {
     doorLabel,
     doorAccessibleName: `${doorLabel}: ${title}`,
     title,
@@ -189,11 +196,14 @@ export function AccessLines(props: AccessLinesProps) {
     footer,
     live: props.live,
     children,
-  });
+  };
 
   // It can: one entry per level given; what holds only in picked spaces
   // under All, and the decisions left off, are said beside it.
-  const can = canSummary(draft, props.rows);
+  // Counted from what it will actually reach under the current "In" (the
+  // access Allow sends), the same set the headline counts.
+  const reached = new Set(toAccess(draft, props.offer).permissions);
+  const can = canSummary({ ...draft, permissions: reached }, props.rows);
   const levelWord = {
     view: t("level.view"),
     edit: t("level.edit"),
