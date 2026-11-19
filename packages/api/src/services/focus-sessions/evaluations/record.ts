@@ -325,7 +325,11 @@ export async function escalateFailingCriteria(params: {
     if (latest.get(criterion.key) === "pass") continue;
     // After any commit: the owed-slot door takes its own row lock.
     if (
-      await fileCriterionSlot(session.id, criterion, criterionSlotWhy(criterion))
+      await fileCriterionSlot(
+        session.id,
+        criterion,
+        criterionSlotWhy(criterion)
+      )
     ) {
       escalated.push({ criterion, attempts });
     }

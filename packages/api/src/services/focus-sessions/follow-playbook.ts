@@ -576,8 +576,7 @@ export async function followPlaybook(
   // owed once that output is delivered. After the commit, through the slot
   // door's own lock; idempotent.
   if (addedCriteria > 0) {
-    const { fileDeclaredGradeSlots } =
-      await import("./evaluations/record.js");
+    const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
     await fileDeclaredGradeSlots(sessionId);
   }
 

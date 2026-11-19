@@ -170,11 +170,11 @@ describe("the reactor moves what the answer named, through the existing doors", 
 
   it("matches an answer that names a target, and only that answer", () => {
     expect(
-      sessionUnblockNotifyReactor.match(
+      sessionUnblockNotifyReactor.match!(
         answered({ unblocksTarget: { criterion: "contract-signed" } }) as never
       )
     ).toBe(true);
-    expect(sessionUnblockNotifyReactor.match(answered({}) as never)).toBe(
+    expect(sessionUnblockNotifyReactor.match!(answered({}) as never)).toBe(
       false
     );
   });
@@ -182,7 +182,8 @@ describe("the reactor moves what the answer named, through the existing doors", 
   it("a criterion target: graded pass through the grade door, as the owner", async () => {
     queue.push([SESSION_ROW]);
     await sessionUnblockNotifyReactor.handler(
-      answered({ unblocksTarget: { criterion: "contract-signed" } }) as never
+      answered({ unblocksTarget: { criterion: "contract-signed" } }) as never,
+      {} as never
     );
     expect(gradeMock).toHaveBeenCalledTimes(1);
     expect(gradeMock.mock.calls[0]![0]).toMatchObject({
@@ -198,7 +199,8 @@ describe("the reactor moves what the answer named, through the existing doors", 
   it("an output target: attested through the attest door", async () => {
     queue.push([SESSION_ROW]);
     await sessionUnblockNotifyReactor.handler(
-      answered({ unblocksTarget: { output: "signed-contract" } }) as never
+      answered({ unblocksTarget: { output: "signed-contract" } }) as never,
+      {} as never
     );
     expect(attestMock).toHaveBeenCalledTimes(1);
     expect(attestMock.mock.calls[0]![0]).toMatchObject({
@@ -212,7 +214,8 @@ describe("the reactor moves what the answer named, through the existing doors", 
   it("a stage target: that stage's check gate is checked again", async () => {
     queue.push([SESSION_ROW]);
     await sessionUnblockNotifyReactor.handler(
-      answered({ unblocksTarget: { stage: "review" } }) as never
+      answered({ unblocksTarget: { stage: "review" } }) as never,
+      {} as never
     );
     expect(resumeMock).toHaveBeenCalledTimes(1);
     expect(resumeMock.mock.calls[0]![0]).toMatchObject({
@@ -228,7 +231,8 @@ describe("the reactor moves what the answer named, through the existing doors", 
       answered({
         unblocksTarget: { criterion: "contract-signed" },
         value: { type: "declined", reason: "not now" },
-      }) as never
+      }) as never,
+      {} as never
     );
     expect(gradeMock).not.toHaveBeenCalled();
     expect(attestMock).not.toHaveBeenCalled();

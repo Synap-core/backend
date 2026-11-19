@@ -112,9 +112,7 @@ export function slotTheRunWaitsOn(
   const keys = deriveSlotKeys(slots);
   const [newest] = slots
     .map((slot, at) => ({ slot, key: keys[at] }))
-    .filter(
-      ({ slot, key }) => key && slot && isOwedByYouIn(slot, slots)
-    )
+    .filter(({ slot, key }) => key && slot && isOwedByYouIn(slot, slots))
     .sort((a, b) => newestOwedFirst(a.slot, b.slot));
   return newest
     ? { key: newest.key!, label: newest.slot.label || newest.key! }
