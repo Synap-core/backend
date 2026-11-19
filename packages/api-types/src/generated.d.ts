@@ -15323,16 +15323,15 @@ export interface SlotBlocks {
 }
 /**
  * WHAT MOVES when the person answers, as data (work-model W5): ONE thing of
- * the same session, named by its key — a playbook stage, an output, or a
- * criterion. The prose line (`ExpectedOutput.unblocks`) stays what the person
- * reads; this is what the pod moves, through the existing doors
- * (`notifications/session-unblock-reactor.ts`, api): a criterion is graded
- * pass by the person's deed, an output the person owes is attested, a stage's
- * check gate is checked again.
+ * the same session, named by its key — an output or a criterion. The prose
+ * line (`ExpectedOutput.unblocks`) stays what the person reads. The agent
+ * declares it, so the pod only RE-CHECKS what it names, through the existing
+ * doors (`notifications/session-unblock-reactor.ts`, api): the output's claim
+ * is read against its evidence again, the criterion's own check runs again (a
+ * criterion the person grades gets its grade card). It never writes the
+ * person's attestation or verdict. A stage moves on by itself (W6).
  */
 export type SlotUnblocksTarget = {
-	stage: string;
-} | {
 	output: string;
 } | {
 	criterion: string;
@@ -15454,8 +15453,8 @@ export interface ExpectedOutput {
 	 */
 	unblocks?: string;
 	/**
-	 * WHAT MOVES, as data: the stage, output or criterion of this session the
-	 * answer moves ({@link SlotUnblocksTarget}). DECLARED by the agent beside
+	 * WHAT MOVES, as data: the output or criterion of this session the answer
+	 * re-checks ({@link SlotUnblocksTarget}). DECLARED by the agent beside
 	 * `unblocks`, optional, and cleared with it when the slot goes back to the
 	 * agent.
 	 */
@@ -41733,8 +41732,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					unblocks?: string | undefined;
 					unblocksTarget?: {
-						stage: string;
-					} | {
 						output: string;
 					} | {
 						criterion: string;
@@ -43121,8 +43118,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					unblocks?: string | undefined;
 					unblocksTarget?: {
-						stage: string;
-					} | {
 						output: string;
 					} | {
 						criterion: string;

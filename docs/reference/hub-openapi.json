@@ -41797,18 +41797,6 @@
                             {
                               "type": "object",
                               "properties": {
-                                "stage": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 80
-                                }
-                              },
-                              "required": ["stage"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
                                 "output": {
                                   "type": "string",
                                   "minLength": 1,
@@ -46016,18 +46004,6 @@
                         },
                         "unblocksTarget": {
                           "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "stage": {
-                                  "type": "string",
-                                  "minLength": 1,
-                                  "maxLength": 80
-                                }
-                              },
-                              "required": ["stage"],
-                              "additionalProperties": false
-                            },
                             {
                               "type": "object",
                               "properties": {
