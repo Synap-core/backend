@@ -409,6 +409,16 @@ function itemDoorRaceConflict(): TRPCError {
 const DECIDE_STATUSES = PROPOSAL_STATUSES.filter(
   (status) => resolveProposalAttention({ status }) === "decide"
 );
+/**
+ * The statuses the attention rule calls a `notice`: writes that executed with
+ * nobody deciding them (receipts). Derived, never listed by hand.
+ */
+const RECEIPT_STATUSES = PROPOSAL_STATUSES.filter(
+  (status) => resolveProposalAttention({ status }) === "notice"
+);
+function notReceiptWhere() {
+  return notInArray(proposals.status, [...RECEIPT_STATUSES]);
+}
 function notSessionBookkeepingWhere() {
   return or(
     ne(proposals.targetType, SESSION_BOOKKEEPING_TARGET_TYPE),
@@ -693,6 +703,14 @@ export const proposalsRouter = router({
          */
         excludeBookkeeping: z.boolean().optional(),
         /**
+         * Leave out receipts: writes that executed without a decision
+         * (`auto_approved`, the `notice` tier of `resolveProposalAttention`).
+         * For a list that asks the person to look or decide while it reads a
+         * wider status (`all`, `validated`). History and the "on your behalf"
+         * feed (`status: "auto_approved"`) never pass it. Filtered in SQL.
+         */
+        excludeReceipts: z.boolean().optional(),
+        /**
          * Filter to proposals produced by a specific automation's runs.
          * Resolved through `automation_step_runs`/`automation_runs`
          * (`proposals.stepRunId` → `runId` → `automationId`) — `proposals`
@@ -762,6 +780,10 @@ export const proposalsRouter = router({
 
       if (input.excludeBookkeeping) {
         conditions.push(notSessionBookkeepingWhere());
+      }
+
+      if (input.excludeReceipts) {
+        conditions.push(notReceiptWhere());
       }
 
       /** Filter to proposals with a specific correlationId (used to link back to focus sessions) */
