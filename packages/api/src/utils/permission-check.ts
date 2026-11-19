@@ -19,7 +19,10 @@ import {
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
-import { wholeSpacesBeyondPodWideReads } from "@synap-core/types/grants";
+import {
+  spacesCoveredWhole,
+  spacesOfScopeRows,
+} from "@synap-core/types/grants";
 import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
 import {
@@ -5163,6 +5166,35 @@ export type WorkspaceJoinRequestResult =
     }
   | { status: "refused"; workspaceId: string; reason: string };
 
+/**
+ * Why a key pinned to projects or records does not ask to join a space: it
+ * covers no space whole, but a write of one of its rows there still files the
+ * join (the gate's membership-miss branch), so it is told that, never that it
+ * cannot write there.
+ */
+const PINNED_JOIN_REFUSAL =
+  "This key is limited to projects or records, not to this whole space, so it " +
+  "cannot ask to join the space on its own. Writing one of its records in this " +
+  "space files the join request for the person, with that write. Nothing was filed.";
+
+/**
+ * A scope pinned to named projects or records, holding more than reads, whose
+ * rows may sit in `workspaceId`: pinned with no space, or inside that space.
+ */
+function pinnedRowsMaySitIn(
+  scope: Parameters<typeof spacesOfScopeRows>[0],
+  workspaceId: string
+): boolean {
+  if (!scope.projectIds?.length && !scope.entityIds?.length) return false;
+  if (!scope.permissions.some((p) => !p.endsWith(".read"))) return false;
+  const rows = spacesOfScopeRows(scope);
+  return (
+    rows !== null &&
+    rows !== "anywhere" &&
+    (rows.length === 0 || rows.includes(workspaceId))
+  );
+}
+
 /** Said with a filed (or reused) join request. */
 const WORKSPACE_JOIN_REQUESTED_MESSAGE =
   "A workspace JOIN request is pending the person's review (a pending one for " +
@@ -5179,13 +5211,15 @@ const WORKSPACE_JOIN_REQUESTED_MESSAGE =
  * this request is kept on that join and replayed with the rest.
  *
  * Refused before anything is filed when no scope of the key's grant covers
- * the WHOLE space beyond pod-wide reads (`wholeSpacesBeyondPodWideReads`):
- * a scope of other spaces, or of pod-wide reads only, would be denied every
- * write there by the gate's rung 0, so a join would put a card in front of
- * the person that changes nothing; a scope pinned to projects or objects
- * with no space covers no space at all (decision 51ad8d1e F3), so it is not
- * a reason to ask for one. Its write of a row in that space still meets the
- * gate, which files the join with that write.
+ * the WHOLE space beyond pod-wide reads (`spacesCoveredWhole`). A scope of
+ * other spaces, or of pod-wide reads only, would be denied every write there
+ * by the gate's rung 0, so a join would put a card in front of the person
+ * that changes nothing. A scope pinned to projects or objects covers no
+ * space whole (decision 51ad8d1e F3), so it does not ask for one on its own;
+ * its rows may still sit in the space, and a write of one of them there
+ * meets the gate's membership-miss branch, which files the join WITH that
+ * write. The refusal says so (`pinnedJoinRefusal`), never that the key
+ * cannot write there.
  * An archived space is refused, a member's included: no agent writes there.
  */
 export async function requestWorkspaceJoin(opts: {
@@ -5200,8 +5234,8 @@ export async function requestWorkspaceJoin(opts: {
     grant &&
     !grant.scopes.some((scope) => {
       // A join is a membership of the WHOLE space: only a scope that covers
-      // it counts, never a project or object pin with no space.
-      const spaces = wholeSpacesBeyondPodWideReads(scope);
+      // it whole counts, never one pinned to projects or objects.
+      const spaces = spacesCoveredWhole(scope);
       return (
         spaces === "anywhere" ||
         (spaces !== null && spaces.includes(workspaceId))
@@ -5211,8 +5245,9 @@ export async function requestWorkspaceJoin(opts: {
     return {
       status: "refused",
       workspaceId,
-      reason:
-        "This key's grant does not reach this space, so joining it would not let you write there. The person can add the space to this key's permissions, or give you a key that has it. Nothing was filed.",
+      reason: grant.scopes.some((scope) => pinnedRowsMaySitIn(scope, workspaceId))
+        ? PINNED_JOIN_REFUSAL
+        : "This key's grant does not reach this space, so joining it would not let you write there. The person can add the space to this key's permissions, or give you a key that has it. Nothing was filed.",
     };
   }
   const [ws] = await db

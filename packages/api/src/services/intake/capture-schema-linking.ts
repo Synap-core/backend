@@ -15,7 +15,7 @@
  * of the space the capture started in. Deterministic, no model call.
  */
 
-import { wholeSpacesBeyondPodWideReads } from "@synap-core/types/grants";
+import { spacesOfScopeRows } from "@synap-core/types/grants";
 import { COMMON_STOPWORDS } from "../retrieval/stopwords.js";
 import {
   scoreProfileCatalog,
@@ -70,11 +70,12 @@ export interface LinkableLifecycle {
 /**
  * The spaces a request may route into, from its key grant: `null` = not
  * narrowed (no grant, or a scope with no space, project or object pin);
- * otherwise the union of the WHOLE spaces its scopes cover
- * (`wholeSpacesBeyondPodWideReads`) — a key granted on Content and CRM sees
- * exactly those. A scope pinned to projects (or objects) with no space covers
- * none (decision 51ad8d1e F3): it adds no space and never lifts the
- * narrowing, so a grant of project pins alone is narrowed to no space (the
+ * otherwise the union of the spaces its scopes' rows sit in
+ * (`spacesOfScopeRows`) — a key granted on Content and CRM sees exactly
+ * those. A scope pinned to projects (or objects) with no space names none
+ * (decision 51ad8d1e F3): it adds no space and never lifts the narrowing,
+ * nor does the deny-all scope, so a grant of project pins alone is narrowed
+ * to no space (the
  * facet loaders then read no role row, as the `entity_facets` read clause,
  * which has no project path, reads none).
  *
@@ -98,7 +99,7 @@ export function grantedWorkspaceIdsOf(
 ): ReadonlySet<string> | null {
   if (!grant) return null;
   const reached = grant.scopes.flatMap((scope) => {
-    const spaces = wholeSpacesBeyondPodWideReads(scope);
+    const spaces = spacesOfScopeRows(scope);
     return spaces === null ? [] : [spaces];
   });
   // A grant of pod-wide reads alone keeps today's reading: not narrowed.

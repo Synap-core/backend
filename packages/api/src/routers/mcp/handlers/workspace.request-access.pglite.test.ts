@@ -214,18 +214,22 @@ describe("synap_request_workspace_access — the gate's own join, asked for on p
     expect(await joins()).toHaveLength(1);
   });
 
-  // W3a (decision 51ad8d1e F3): a project pin covers no whole space. Before,
-  // a scope pinned to projects (or objects) with no space read as reaching
-  // every space, so it filed a join anywhere.
-  it("a key pinned to a project, with no space ⇒ refused, nothing filed", async () => {
+  // W3a (decision 51ad8d1e F3): a join is a membership of the WHOLE space,
+  // which a project or object pin never covers. Before, a scope pinned to
+  // projects (or objects) with no space read as reaching every space, so it
+  // filed a join anywhere. The refusal tells it the truth: a write of one of
+  // its rows there still files the join (the gate's membership miss).
+  const PINNED = /limited to projects or records, not to this whole space/;
+  const P = randomUUID();
+
+  it("a key pinned to a project, with no space ⇒ refused, told a write files the join", async () => {
     const res = await requestAccess(WS, {
-      scopes: [
-        { permissions: ["*"], workspaceIds: null, projectIds: [randomUUID()] },
-      ],
+      scopes: [{ permissions: ["*"], workspaceIds: null, projectIds: [P] }],
       clientId: null,
     });
     expect(res.status).toBe("refused");
-    expect(String(res.reason)).toMatch(/grant does not reach this space/);
+    expect(String(res.reason)).toMatch(PINNED);
+    expect(String(res.reason)).toMatch(/files the join request/);
     expect(await joins()).toEqual([]);
   });
 
@@ -237,13 +241,37 @@ describe("synap_request_workspace_access — the gate's own join, asked for on p
       clientId: null,
     });
     expect(res.status).toBe("refused");
+    expect(String(res.reason)).toMatch(PINNED);
     expect(await joins()).toEqual([]);
   });
 
-  it("control: a project pin beside the named space files the join (the space is named)", async () => {
+  it("a project pin beside the named space ⇒ refused too (it covers no space whole)", async () => {
+    const res = await requestAccess(WS, {
+      scopes: [{ permissions: ["*"], workspaceIds: [WS], projectIds: [P] }],
+      clientId: null,
+    });
+    expect(res.status).toBe("refused");
+    expect(String(res.reason)).toMatch(PINNED);
+    expect(await joins()).toEqual([]);
+  });
+
+  it("an empty project list, or the deny-all grant ⇒ refused, nothing filed", async () => {
+    for (const scope of [
+      { permissions: ["*"], workspaceIds: null, projectIds: [] },
+      { permissions: [] },
+    ]) {
+      const res = await requestAccess(WS, { scopes: [scope], clientId: null });
+      expect(res.status).toBe("refused");
+      expect(String(res.reason)).toMatch(/grant does not reach this space/);
+    }
+    expect(await joins()).toEqual([]);
+  });
+
+  it("control: a project pin beside an UNPINNED scope files the join (the unpinned scope covers it)", async () => {
     const res = await requestAccess(WS, {
       scopes: [
-        { permissions: ["*"], workspaceIds: [WS], projectIds: [randomUUID()] },
+        { permissions: ["*"], workspaceIds: null, projectIds: [P] },
+        { permissions: ["*"], workspaceIds: null },
       ],
       clientId: null,
     });

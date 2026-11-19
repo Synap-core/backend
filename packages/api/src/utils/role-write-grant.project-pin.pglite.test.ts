@@ -14,7 +14,10 @@
  *     passed on the permit alone, skipping the reach clause every other
  *     narrowed scope takes (the record readable by the key, in the role's
  *     space reach);
- *   - a role write on a record outside the key's project passing at all.
+ *   - a role write on a record outside the key's project passing at all;
+ *   - a SHARED role (stored pod-wide) changed by a project pin on its permit
+ *     alone, on a record the key cannot read;
+ *   - an empty project list or the deny-all grant read as unpinned.
  *
  * Cannot see: production Postgres constraints (tables from the Drizzle
  * definitions without FKs / enums); the HTTP doors (their own suites,
@@ -57,6 +60,9 @@ const IN = randomUUID(); // a pod-wide person filed in P, a contact in CRM
 const OUT = randomUUID(); // a pod-wide person in no project, a contact in CRM
 const F_IN = randomUUID();
 const F_OUT = randomUUID();
+const ROLE_DEAL = randomUUID(); // a SHARED role granted to CRM (rows stored pod-wide)
+const S_IN = randomUUID(); // IN's deal (shared, stored NULL)
+const S_OUT = randomUUID(); // OUT's deal (shared, stored NULL)
 
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 const grant = (...scopes: GrantScope[]): KeyGrant => ({
@@ -100,6 +106,25 @@ beforeAll(async () => {
      values ($1,$2,$3,$4,$5,'belongs_to_project','entity','entity')`,
     [randomUUID(), ALICE, CRM, IN, P]
   );
+  await q(
+    `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, workspace_id) values
+       ($1,'deal','Deal','role','shared','pod',true,'{}'::jsonb,null)`,
+    [ROLE_DEAL]
+  );
+  await q(
+    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    [ROLE_DEAL, CRM]
+  );
+  for (const [id, entityId] of [
+    [S_IN, IN],
+    [S_OUT, OUT],
+  ] as const) {
+    await q(
+      `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, properties)
+       values ($1,$2,$3,$4,null,null,'{}'::jsonb)`,
+      [id, entityId, ROLE_DEAL, ALICE]
+    );
+  }
   for (const [id, entityId] of [
     [F_IN, IN],
     [F_OUT, OUT],
@@ -121,6 +146,15 @@ const moveRole = (entityId: string, facetId: string, g: KeyGrant) =>
     g
   );
 
+/** The same move on `entityId`'s SHARED deal role (row stored pod-wide). */
+const moveShared = (entityId: string, facetId: string, g: KeyGrant) =>
+  roleWriteGrantSpace(
+    "update",
+    { entityId, facetId, profileId: null, storedWorkspaceId: null },
+    { subjectType: "entity", action: "transition", data: { id: entityId } },
+    g
+  );
+
 describe("roleRowInKeyReach — a project pin finds no role row", () => {
   const pinned = grant({ permissions: ["*"], projectIds: [P] });
 
@@ -136,6 +170,27 @@ describe("roleRowInKeyReach — a project pin finds no role row", () => {
         grant({ permissions: ["*"], entityIds: [IN] })
       )
     ).toBe(false);
+  });
+
+  it("an empty project list, or the deny-all grant: no role row", async () => {
+    expect(
+      await roleRowInKeyReach(
+        F_IN,
+        grant({ permissions: ["*"], projectIds: [] })
+      )
+    ).toBe(false);
+    expect(await roleRowInKeyReach(F_IN, grant({ permissions: [] }))).toBe(
+      false
+    );
+  });
+
+  it("control: a project pin beside an UNPINNED scope finds every row (the unpinned scope does)", async () => {
+    expect(
+      await roleRowInKeyReach(
+        F_OUT,
+        grant({ permissions: ["*"], projectIds: [P] }, { permissions: ["*"] })
+      )
+    ).toBe(true);
   });
 
   it("control: an unpinned key finds every row; a key on CRM finds CRM's", async () => {
@@ -188,6 +243,42 @@ describe("roleWriteGrantSpace — a project pin is not unlimited", () => {
         grant({ permissions: READ_UPDATE, projectIds: [P] })
       )
     ).toEqual({ space: CRM });
+  });
+
+  it("a SHARED role on a record in the project the key does not READ: refused (no space holds the row; the read is its one reach)", async () => {
+    expect(
+      await moveShared(
+        IN,
+        S_IN,
+        grant({ permissions: ["entity.person.update"], projectIds: [P] })
+      )
+    ).toHaveProperty("denied");
+  });
+
+  it("a SHARED role on a record outside the key's project: refused", async () => {
+    expect(
+      await moveShared(
+        OUT,
+        S_OUT,
+        grant({ permissions: READ_UPDATE, projectIds: [P] })
+      )
+    ).toHaveProperty("denied");
+  });
+
+  it("control: a SHARED role on a record in the project the key reads moves pod scope", async () => {
+    expect(
+      await moveShared(
+        IN,
+        S_IN,
+        grant({ permissions: READ_UPDATE, projectIds: [P] })
+      )
+    ).toEqual({ space: null });
+  });
+
+  it("control: an unpinned key passes on its permit alone, stamped or shared", async () => {
+    expect(
+      await moveShared(OUT, S_OUT, grant({ permissions: ["entity.person.update"] }))
+    ).toEqual({ space: null });
   });
 
   it("control: an unpinned key passes on its permit alone", async () => {

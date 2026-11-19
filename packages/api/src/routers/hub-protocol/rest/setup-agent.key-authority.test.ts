@@ -145,9 +145,12 @@ const connect = (body: Record<string, unknown>) => {
 };
 
 const everywhere = {
+  permissions: ["*"] as string[],
   workspaceIds: null as string[] | null,
   projectIds: null as string[] | null,
   entityIds: null as string[] | null,
+  /** More scopes of the calling key, beside the one above. */
+  extra: [] as Array<Record<string, unknown>>,
 };
 const PROJECT = "0eeeeeee-0000-4000-8000-000000000006";
 
@@ -185,21 +188,24 @@ beforeEach(() => {
   h.podAdmins = new Set([ADMIN]);
   h.memberAnswers = [];
   h.inserts = [];
+  everywhere.permissions = ["*"];
   everywhere.workspaceIds = null;
   everywhere.projectIds = null;
   everywhere.entityIds = null;
+  everywhere.extra = [];
   usersFindMany.mockResolvedValue([
     { id: VICTIM, email: VICTIM_EMAIL, name: "Victim" },
     { id: ADMIN, email: "admin@example.test", name: "Admin" },
   ]);
   liveGrantsOfKey.mockImplementation(async () => [
     {
-      permissions: ["*"],
+      permissions: everywhere.permissions,
       workspaceIds: everywhere.workspaceIds,
       projectIds: everywhere.projectIds,
       entityIds: everywhere.entityIds,
       expiresAt: null,
     },
+    ...everywhere.extra,
   ]);
   provisionSurfaceAgentKey.mockImplementation(
     async (opts: { onAgentUserResolved?: (id: string) => Promise<void> }) => {
@@ -317,10 +323,44 @@ describe("F5 — a surface key adds its AI only to a space its person administer
     expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
   });
 
-  it("control: the owner's key naming the space beside a project adds the agent", async () => {
+  it("an owner whose key names the space beside a project: 403 (a project pin covers no space whole)", async () => {
     key(MEMBER, ["hub-protocol.write"]);
     everywhere.workspaceIds = [WS];
     everywhere.projectIds = [PROJECT];
+    h.memberAnswers = [{ role: "owner" }];
+    const res = await connect({ workspaceId: WS });
+    expect(res.status).toBe(403);
+    expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
+  });
+
+  it("an admin whose key has an empty project list, or is the deny-all grant: 403", async () => {
+    for (const set of [
+      () => (everywhere.projectIds = []),
+      () => (everywhere.permissions = []),
+    ]) {
+      everywhere.projectIds = null;
+      everywhere.permissions = ["*"];
+      set();
+      key(MEMBER, ["hub-protocol.write"]);
+      h.memberAnswers = [{ role: "admin" }];
+      const res = await connect({ workspaceId: WS });
+      expect(res.status).toBe(403);
+    }
+    expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
+  });
+
+  it("control: a project pin beside an UNPINNED scope adds the agent (the unpinned scope covers the space)", async () => {
+    key(MEMBER, ["hub-protocol.write"]);
+    everywhere.projectIds = [PROJECT];
+    everywhere.extra = [
+      {
+        permissions: ["*"],
+        workspaceIds: null,
+        projectIds: null,
+        entityIds: null,
+        expiresAt: null,
+      },
+    ];
     h.memberAnswers = [{ role: "owner" }, { userId: MEMBER }, undefined];
     const res = await connect({ workspaceId: WS });
     expect(res.status).toBe(200);

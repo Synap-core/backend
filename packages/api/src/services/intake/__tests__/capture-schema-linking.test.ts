@@ -325,5 +325,13 @@ describe("the kind floor — live spaces, inside the request's grant", () => {
         ],
       })!,
     ]).toEqual([BUILDER]);
+    // An empty project list, and the deny-all grant (`narrowKeyGrant`):
+    // narrowed to no space, never "anywhere".
+    for (const scope of [
+      { permissions: ["*"], projectIds: [] as string[] },
+      { permissions: [] as string[] },
+    ]) {
+      expect([...grantedWorkspaceIdsOf({ scopes: [scope] })!]).toEqual([]);
+    }
   });
 });

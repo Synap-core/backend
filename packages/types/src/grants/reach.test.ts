@@ -17,7 +17,8 @@ import {
   placeSpaceIds,
   requestScopeOf,
   withAppRequestScope,
-  wholeSpacesBeyondPodWideReads,
+  spacesCoveredWhole,
+  spacesOfScopeRows,
   type Place,
 } from "./index.js";
 
@@ -284,27 +285,46 @@ describe("the doors' helpers", () => {
   });
 
   // Rules out: a project or object pin read as "anywhere" by the doors that
-  // hand out a whole space (join, add an AI, role rows, capture routing).
-  it("whole spaces: a project or object pin with no space covers none", () => {
-    const whole = wholeSpacesBeyondPodWideReads;
-    expect(whole({ permissions: ["*"] })).toBe("anywhere");
-    expect(whole({ permissions: ["*"], workspaceIds: ["a", "b"] })).toEqual([
+  // bound by space (role rows, capture routing), and a deny-all scope read as
+  // unpinned.
+  it("rows by space: a project or object pin with no space names none", () => {
+    const rows = spacesOfScopeRows;
+    expect(rows({ permissions: ["*"] })).toBe("anywhere");
+    expect(rows({ permissions: ["*"], workspaceIds: ["a", "b"] })).toEqual([
       "a",
       "b",
     ]);
-    // A project pin beside spaces narrows inside them: still those spaces.
+    // A project pin beside spaces narrows inside them: its rows sit there.
+    expect(
+      rows({ permissions: ["*"], workspaceIds: ["a"], projectIds: ["p"] })
+    ).toEqual(["a"]);
+    expect(rows({ permissions: ["*"], projectIds: ["p"] })).toEqual([]);
+    expect(
+      rows({ permissions: ["entity.note.update"], projectIds: ["p", "q"] })
+    ).toEqual([]);
+    expect(rows({ permissions: ["*"], entityIds: ["e"] })).toEqual([]);
+    // An empty project list permits nothing (`permits`): never anywhere.
+    expect(rows({ permissions: ["*"], projectIds: [] })).toEqual([]);
+    // The deny-all scope (`narrowKeyGrant`): never anywhere.
+    expect(rows({ permissions: [] })).toEqual([]);
+    expect(rows({ permissions: ["entity.decision.read"] })).toBeNull();
+  });
+
+  // Rules out: a door that hands out a whole space (join, add an AI) reading
+  // a pinned scope as covering it.
+  it("whole spaces: any project or object pin covers none, beside spaces or not", () => {
+    const whole = spacesCoveredWhole;
+    expect(whole({ permissions: ["*"] })).toBe("anywhere");
+    expect(whole({ permissions: ["*"], workspaceIds: ["a"] })).toEqual(["a"]);
     expect(
       whole({ permissions: ["*"], workspaceIds: ["a"], projectIds: ["p"] })
-    ).toEqual(["a"]);
-    // Pinned to projects or objects, no space: no whole space.
-    expect(whole({ permissions: ["*"], projectIds: ["p"] })).toEqual([]);
-    expect(
-      whole({ permissions: ["entity.note.update"], projectIds: ["p", "q"] })
     ).toEqual([]);
-    expect(whole({ permissions: ["*"], entityIds: ["e"] })).toEqual([]);
-    // An empty project list permits nothing (`permits`): never anywhere.
+    expect(
+      whole({ permissions: ["*"], workspaceIds: ["a"], entityIds: ["e"] })
+    ).toEqual([]);
+    expect(whole({ permissions: ["*"], projectIds: ["p"] })).toEqual([]);
     expect(whole({ permissions: ["*"], projectIds: [] })).toEqual([]);
-    // A pod-wide read reaches no space at all.
+    expect(whole({ permissions: [] })).toEqual([]);
     expect(whole({ permissions: ["entity.decision.read"] })).toBeNull();
   });
 
