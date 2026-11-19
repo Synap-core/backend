@@ -143,6 +143,11 @@ type ChildRow = {
   workspaceId: string | null;
   /** The space-ladder rung that placed it (`readWorkspacePlacementRung`). */
   workspaceRung: SessionWorkspaceRung | null;
+  /**
+   * Its `metadata`, kept whole: the grant check reads where it COUNTS from
+   * it (`SessionPlace`, `access/session-counted-spaces.ts`).
+   */
+  metadata: unknown;
   projectId: string | null;
   trackId: string | null;
 };
@@ -171,9 +176,12 @@ async function loadOwnedSessions(
       )
     );
   return new Map(
-    rows.map(({ metadata, ...r }) => [
+    rows.map((r) => [
       r.id,
-      { ...r, workspaceRung: readWorkspacePlacementRung(metadata) } as ChildRow,
+      {
+        ...r,
+        workspaceRung: readWorkspacePlacementRung(r.metadata),
+      } as ChildRow,
     ])
   );
 }
