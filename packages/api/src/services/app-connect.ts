@@ -762,8 +762,8 @@ export function appApprovalWithinAsked(args: {
  * spaces, reads in the read projects, writes in the write spaces, writes in
  * the write projects (`grantScopesForAccess`). A lift is lossless, so these
  * scopes permit exactly the (permission, place) pairs the per-space grants
- * below permit (app-connect.access-v2.test.ts compares both on every subset
- * of a pair universe). Pairs that do not lift (a re-consent) keep the
+ * below permit (types `grants/app-access.test.ts` compares both on every
+ * subset of two pair universes; `app-access-v2.pglite.test.ts` on fixtures). Pairs that do not lift (a re-consent) keep the
  * per-space grants.
  *
  * Never one grant of (all permissions × all workspaces): approving "create
@@ -798,7 +798,10 @@ export function grantsForApp(app: {
 }): GrantInput[] {
   const stored = parseAppAccess(app.approvedAccess ?? null);
   const pairs = app.approvedRequests ?? [];
-  if (stored && (pairs.length === 0 || accessSaysPairs(stored, pairs)))
+  // Empty pairs are an approval of nothing (a revoke, a revived app): a v2
+  // left beside them must not re-attach the old reach, so it wins only when
+  // it says exactly what the pairs say.
+  if (stored && accessSaysPairs(stored, pairs))
     return grantScopesForAccess(stored);
   return grantsForApprovedRequests(pairs);
 }

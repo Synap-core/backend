@@ -242,6 +242,18 @@ describe("grantsForApp — the stored v2, never a stale one", () => {
     expect(placedPairs(grants)).toEqual([`entity.post.read@spaces:${CONTENT}`]);
   });
 
+  // Rules out: a revoke that cleared the pairs re-attaching the old reach
+  // through the v2 left beside them (review of #1183).
+  it("empty or missing pairs beside a valid stored v2 mint no grants", () => {
+    const stored = v2([CONTENT, BRAND]);
+    expect(
+      grantsForApp({ approvedRequests: [], approvedAccess: stored })
+    ).toEqual([]);
+    expect(
+      grantsForApp({ approvedRequests: null, approvedAccess: stored })
+    ).toEqual([]);
+  });
+
   it("no v2 lifts the pairs at read time; an invalid v2 is no v2", () => {
     expect(grantsForApp({ approvedRequests: pairs })).toEqual(
       grantsForApprovedRequests(pairs)

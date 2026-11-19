@@ -134,10 +134,27 @@ const universe = (perms: string[]) =>
     [A, B, null].map((workspaceId) => ({ permission, workspaceId }))
   );
 
+/** Concrete requests the engine is asked about (a pattern like `*` is no request). */
+const ASKED = [R_NOTE, R_TASK, R_TRACK, W_NOTE, W_TASK, "entity.task.delete"];
+const R_ALL_KINDS = "entity.read"; // a read, pod-wide readable, covers R_NOTE
+const FULL = "*"; // a write by tier (its action is not `read`), covers everything
+
 describe("liftApprovedRequests — never wider, never narrower (exhaustive)", () => {
-  for (const [label, perms] of [
-    ["reads, one not pod-wide, and a write", [R_NOTE, R_TASK, R_TRACK, W_NOTE]],
-    ["two writes and a read", [R_NOTE, W_NOTE, W_TASK]],
+  for (const [label, perms, overEagerChecked] of [
+    [
+      "reads, one not pod-wide, and a write",
+      [R_NOTE, R_TASK, R_TRACK, W_NOTE],
+      true,
+    ],
+    ["two writes and a read", [R_NOTE, W_NOTE, W_TASK], true],
+    // Wildcards and subsumption (review of #1183): `*` is a write and holds
+    // where `write` says, so the tiers never mix through it; `entity.read`
+    // beside `entity.note.read` lifts only on exact keys.
+    [
+      "wildcards: entity.read, entity.note.read and *",
+      [R_ALL_KINDS, R_NOTE, FULL],
+      false,
+    ],
   ] as const) {
     it(`every subset of ${label} × {A, B, pod}: same permits, same places`, () => {
       let lifted = 0;
@@ -146,8 +163,8 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
         const before = legacyGrants(approved);
         const after = w2Grants(approved);
         const ctx = JSON.stringify(approved);
-        expect(permitsTable(after, perms), ctx).toEqual(
-          permitsTable(before, perms)
+        expect(permitsTable(after, ASKED), ctx).toEqual(
+          permitsTable(before, ASKED)
         );
         expect(placedPairs(after), ctx).toEqual(placedPairs(before));
         const result = liftApprovedRequests(approved);
@@ -156,10 +173,20 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
           expect(
             grantScopesForAccess(result.access).length
           ).toBeLessThanOrEqual(4);
+          // `*` never holds in a read place, a read never in a write place.
+          for (const s of grantScopesForAccess(result.access))
+            if (s.permissions.includes(FULL))
+              expect(s.workspaceIds ?? [], ctx).toEqual(
+                expect.arrayContaining([...result.access.write.spaces])
+              );
         } else {
           reconsent += 1;
+          if (!overEagerChecked) continue;
           // Never over-eager: the naive v2 really would change a permit,
-          // or a row no app may hold is there.
+          // or a row no app may hold is there. NOT checked with subsumption:
+          // the lift compares exact keys, so "entity.read in A and B +
+          // entity.note.read in B" re-consents although it allows nothing new
+          // (known over-eager, W3).
           const naive = grantScopesForAccess(
             candidateAccess(pairsOfRequests(approved).pairs)
           );
@@ -167,8 +194,8 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
             result.reconsent.unplaceable > 0 ||
             JSON.stringify(placedPairs(naive)) !==
               JSON.stringify(placedPairs(before)) ||
-            JSON.stringify(permitsTable(naive, perms)) !==
-              JSON.stringify(permitsTable(before, perms));
+            JSON.stringify(permitsTable(naive, ASKED)) !==
+              JSON.stringify(permitsTable(before, ASKED));
           expect(changes, ctx).toBe(true);
         }
       }
@@ -177,6 +204,28 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
       expect(reconsent).toBeGreaterThan(10);
     });
   }
+
+  it("subsumption is over-eager by design: entity.read in A and B + entity.note.read in B re-consents (W3)", () => {
+    // The v2 form adds entity.note.read in A, which entity.read in A already
+    // allows: no new reach, but the lift compares exact keys.
+    const r = liftApprovedRequests([
+      { permission: R_ALL_KINDS, workspaceId: A },
+      { permission: R_ALL_KINDS, workspaceId: B },
+      { permission: R_NOTE, workspaceId: B },
+    ]);
+    expect("reconsent" in r && r.reconsent.reason).toBe("widens");
+  });
+
+  it("* in a space and a read elsewhere: the tiers stay apart", () => {
+    const r = liftApprovedRequests([
+      { permission: FULL, workspaceId: A },
+      { permission: R_NOTE, workspaceId: B },
+    ]);
+    expect("access" in r && grantScopesForAccess(r.access)).toEqual([
+      { permissions: [R_NOTE], workspaceIds: [B] },
+      { permissions: [FULL], workspaceIds: [A] },
+    ]);
+  });
 });
 
 describe("liftApprovedRequests — table", () => {
