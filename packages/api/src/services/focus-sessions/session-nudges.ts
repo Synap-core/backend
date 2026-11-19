@@ -79,12 +79,14 @@ export type NudgeSessionLike = Pick<
   FocusSession,
   | "playbookId"
   | "origin"
-  | "status"
   | "currentStage"
   | "stages"
   | "expectedOutputs"
   | "metadata"
->;
+> & {
+  /** Read by the check-gate nudge (W6); a caller without it gets no "held" line. */
+  status?: FocusSession["status"];
+};
 
 export interface SessionNudges {
   /** Declared criteria with no pass/fail verdict yet (keys). */
