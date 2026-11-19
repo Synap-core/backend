@@ -214,7 +214,10 @@ describe("synap_create_playbook → the process contract", () => {
       "run_ended",
     ]);
     // A link's outcome rides the same way.
-    expect(activatorItem.properties.outcome!.enum).toEqual(["done", "not_done"]);
+    expect(activatorItem.properties.outcome!.enum).toEqual([
+      "done",
+      "not_done",
+    ]);
     expect(activatorItem.properties.size!.enum).toEqual([
       "per_thing",
       "per_moment",
