@@ -16,9 +16,13 @@
 --                   "ask first" row of equal or higher rank: it RAN (the row
 --                   was never read), it now ASKS (D2's intended fix)
 --     ambiguous     an auto and a propose grant both live for one redeemer
---                   on one action, uncapped and with no expiry: the grant
---                   lookup's ORDER BY tied, so which one decided was
---                   arbitrary; it now RUNS (the auto row)
+--                   on one action, uncapped and with no expiry (typically a
+--                   session pre-approval beside the install's seeded grant):
+--                   they DISAGREE and the grant lookup's ORDER BY tied, so
+--                   which one decided was arbitrary (ran or asked). After
+--                   0434 the AUTO one wins: it RUNS (its auto row; the
+--                   propose grant makes no row). One line per pair, with
+--                   the agent and the space it concerns
 --     never         an auto grant a "Never" could cover is not carried over:
 --                   for an agent the Never does not reach it RAN, it now ASKS
 --     capped        a live auto grant capped in uses: it RAN until used up,
@@ -29,9 +33,20 @@
 --                   stricter wins; listed when the auto row was the newer
 --     tool-row      an active row naming a tool CONTAINER id: before, it
 --                   matched nothing; it now covers each member action
---     channel       active auto capability rows: they now meet a stricter
---                   channel (rung 7) as an auto grant did; a per-run fact,
---                   counted, not measurable here
+--     channel-*     TIGHTEN-ONLY. An auto approval row now meets a stricter
+--                   channel (policy rung 7: a channel member with can_act =
+--                   false makes the run propose) exactly as an auto grant
+--                   did; before, an auto ROW skipped that rung. Counted:
+--                   channel-rows = the active auto capability rows this
+--                   applies to; channel-members = the agent channel
+--                   memberships that would tighten (can_act = false).
+--                   NOTE (verified in code at backend 684311a5): no caller
+--                   of gateCapabilityExecution passes channelCapabilities
+--                   today (skills.ts, external-dispatch.ts x2,
+--                   connector-import-bridge.ts, execute-capability.ts,
+--                   connect-inbound-source.ts), so the rung never fires on a
+--                   tool run yet: the runs that change today are zero. The
+--                   counts say what it reaches once a door passes them
 --
 -- Matching mirrors 0434 and `resolveGovernanceRule`: a grant matches a
 -- redeemer when granted_to / workspace_id is NULL or equal; a row's reach is
@@ -132,7 +147,10 @@ SELECT '4-change-ask-first',
 UNION ALL
 SELECT '4-change-ambiguous',
        a."id"::text || ' (auto) and ' || p."id"::text || ' (propose) on '
-         || coalesce(a.verb_name, a."grantable_id"),
+         || coalesce(a.verb_name, a."grantable_id")
+         || ' agent=' || coalesce(a."granted_to", p."granted_to", 'anyone')
+         || ' space=' || coalesce(a."workspace_id"::text, p."workspace_id"::text, 'pod')
+         || ' -> after 0434: auto (runs)',
        1
   FROM live a JOIN live p
     ON p."grantable_type" = a."grantable_type"
@@ -170,6 +188,15 @@ SELECT '4-change-tool-row',
        1
   FROM active_rules r JOIN "capabilities" c ON c."id"::text = r."target_pattern"
 UNION ALL
-SELECT '4-change-channel', 'active auto capability rows (per-run, not measurable)', count(*)::int
+SELECT '4-change-channel-rows',
+       'active auto capability rows that now meet a stricter channel (tighten-only)',
+       count(*)::int
   FROM active_rules WHERE "verdict"::text = 'auto'
+UNION ALL
+SELECT '4-change-channel-members',
+       'agent channel memberships with can_act = false, in '
+         || count(DISTINCT m."channel_id")::text || ' channel(s) (tighten-only)',
+       count(*)::int
+  FROM "channel_members" m
+ WHERE m."member_kind" = 'ai_agent' AND m."can_act" = false
 ORDER BY 1, 2;

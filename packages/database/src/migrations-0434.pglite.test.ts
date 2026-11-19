@@ -62,6 +62,9 @@ const G = {
   secret: "50000000-0000-4000-8000-000000000007",
   revoked: "50000000-0000-4000-8000-000000000008",
   expired: "50000000-0000-4000-8000-000000000009",
+  // The install's seeded propose grant on the same action and space as the
+  // session pre-approval: today the two tie in the grant lookup.
+  installBeside: "50000000-0000-4000-8000-00000000000a",
 };
 
 let pg: PGlite;
@@ -108,6 +111,17 @@ beforeAll(async () => {
     CREATE TABLE tools (id uuid PRIMARY KEY, name text NOT NULL);
     CREATE TABLE skills (id uuid PRIMARY KEY, name text NOT NULL);
     CREATE TABLE capabilities (id uuid PRIMARY KEY, name text NOT NULL);
+    CREATE TABLE channel_members (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      channel_id uuid NOT NULL,
+      member_id text NOT NULL,
+      member_kind text NOT NULL,
+      can_act boolean NOT NULL DEFAULT false
+    );
+    INSERT INTO channel_members (channel_id, member_id, member_kind, can_act) VALUES
+      ('60000000-0000-4000-8000-000000000001', '${AGENT_A}', 'ai_agent', false),
+      ('60000000-0000-4000-8000-000000000001', '${PERSON}', 'human', false),
+      ('60000000-0000-4000-8000-000000000002', '${AGENT_B}', 'ai_agent', true);
     CREATE TABLE links (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       from_type text NOT NULL,
@@ -170,7 +184,8 @@ beforeAll(async () => {
       ('${G.secret}', 'secret', '${T_MAIL}', 'auto', '${AGENT_A}', '${WS1}', NULL, NULL, NULL, '${PERSON}'),
       -- revoked and expired grants decide nothing
       ('${G.revoked}', 'tool', '${T_MAIL}', 'auto', '${AGENT_B}', '${WS1}', NULL, now(), NULL, '${PERSON}'),
-      ('${G.expired}', 'tool', '${T_MAIL}', 'auto', '${AGENT_B}', '${WS2}', NULL, NULL, now() - interval '1 day', '${PERSON}');
+      ('${G.expired}', 'tool', '${T_MAIL}', 'auto', '${AGENT_B}', '${WS2}', NULL, NULL, now() - interval '1 day', '${PERSON}'),
+      ('${G.installBeside}', 'tool', '${T_MAIL}', 'propose', NULL, '${WS1}', NULL, NULL, NULL, '${PERSON}');
   `);
   await pg.exec("BEGIN TRANSACTION READ ONLY");
   dryRun = (
@@ -276,6 +291,8 @@ describe("migration 0434 — a grant's exec_mode becomes an approval row", () =>
   });
 
   it("preserves auto: the grant's agent runs in the grant's space, and nobody else gains", async () => {
+    // Also the ambiguous pair's answer: the install's propose grant beside it
+    // made no row, so the session pre-approval decides.
     expect(await verdict(AGENT_A, WS1, T_MAIL, "mail_send")).toBe("auto");
     // Another agent, or the same agent in another space, gains nothing.
     expect(await verdict(AGENT_B, WS1, T_MAIL, "mail_send")).toBeUndefined();
@@ -358,10 +375,10 @@ describe("after 0434 — the approval row is the one answer", () => {
       ["tool auto live", 3],
       ["tool auto not live", 2],
       ["tool dry-run live", 1],
-      ["tool propose live", 1],
+      ["tool propose live", 2],
     ]);
     expect(bySection("2-outcome")).toEqual([
-      ["no row: a propose grant behaved as no grant (tool)", 1],
+      ["no row: a propose grant behaved as no grant (tool)", 2],
       ["none: a Never could cover it (tool)", 1],
       ["none: capped in uses (tool)", 1],
       ["row: ask first (was dry-run) (tool)", 1],
@@ -387,9 +404,30 @@ describe("after 0434 — the approval row is the one answer", () => {
     expect(bySection("4-change-dry-run").map(([i]) => i.split(" ")[0])).toEqual(
       [G.dryRun]
     );
+    // The session pre-approval and the install's grant disagree; after 0434
+    // the auto one decides (asserted through the resolver below).
+    expect(bySection("4-change-ambiguous")).toEqual([
+      [
+        `${G.autoAgentSpace} (auto) and ${G.installBeside} (propose) on mail_send agent=${AGENT_A} space=${WS1} -> after 0434: auto (runs)`,
+        1,
+      ],
+    ]);
+    // Tighten-only, counted: no auto row existed before; one agent membership
+    // may not act (a person's membership, and an agent that may act, are not counted).
+    expect(bySection("4-change-channel-rows")).toEqual([
+      [
+        "active auto capability rows that now meet a stricter channel (tighten-only)",
+        0,
+      ],
+    ]);
+    expect(bySection("4-change-channel-members")).toEqual([
+      [
+        "agent channel memberships with can_act = false, in 1 channel(s) (tighten-only)",
+        1,
+      ],
+    ]);
     for (const none of [
       "4-change-ask-first",
-      "4-change-ambiguous",
       "4-change-tie",
       "4-change-tool-row",
     ]) {
