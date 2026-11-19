@@ -8,13 +8,18 @@
  *   chart-snapshot  the chart, drawn from its numbers (`embed-chart`)
  *   chart-broken    a visible error row with the reason — never an empty chart
  *   entity          a card that opens the record's console page; its title
- *                   only when the reader's own read returns it
+ *                   only when the reader's own read returns it. As a block,
+ *                   the entity-card renderer the one resolution picks draws
+ *                   it when there is one (`rendered-object`)
  *   view            a chip that opens the view's console page
  *   ask             a session's live question, as the shared answer card
  *   cell-frame      an HTML page cell RUNS, in the isolated frame of
- *                   `html-frame`, its source read on the viewer's own floor
- *                   (`widgetDefinitions.get`); any other cell is a chip that
- *                   opens its `/open/cell/<key>` card (handed to the app).
+ *                   `html-frame`; a module cell (a React component, stored
+ *                   `frame`) RUNS in the module frame (`module-frame`, via
+ *                   `rendered-object`'s `ModuleCell`) on the pod's renderer
+ *                   bundle. Both sources are read on the viewer's own floor
+ *                   (`widgetDefinitions.get`). Any other cell (built-in, an
+ *                   app's) is a chip that opens its `/open/cell/<key>` page.
  *                   One that names only an instance is first read
  *                   (`cellInstances.get`): its name and type, then the same
  *                   as a keyed cell
@@ -22,11 +27,12 @@
  *                   a quiet chip naming it + the object's "Open in app"
  *   broken          says the embed names nothing
  *
- * HTML runs in the isolated frame in exactly two places: a stored HTML
- * document's own page, and an HTML cell embedded in a body (here) — the same
- * `HtmlFrame`, sandbox and policy (`@synap-core/types/cell-bridge`), never
- * same-origin and never inline in the console's DOM. Nothing else in content
- * runs: a React cell is never mounted here. The author's fallback prose stays
+ * Code runs in exactly two frames, both from `@synap-core/types/cell-bridge`,
+ * never same-origin and never inline in the console's DOM: `HtmlFrame` (a
+ * stored page: read-only bridge) and `ModuleFrame` (a module cell: reads and
+ * governed writes, on the bundle's own React, never the console's). A React
+ * cell is never mounted in the console's own tree. Without the bundle, a
+ * module cell says so beside its door. The author's fallback prose stays
  * visible under every block.
  */
 
@@ -51,6 +57,7 @@ import { AskChip, AskEmbed } from "./embed-ask";
 import { ChartSnapshot } from "./embed-chart";
 import { EmbedHostContext, type EmbedHost } from "./embed-context";
 import { HtmlFrame } from "./html-frame";
+import { ModuleCell, RenderedObject } from "./rendered-object";
 import {
   objectPage,
   type EmbedCellInstanceRead,
@@ -234,7 +241,7 @@ function EntityCardBody({
   );
   // A record that IS an image (an uploaded file) shows it, as a thumbnail.
   const media = read.state === "ready" ? read.media : undefined;
-  return media ? (
+  const identity = media ? (
     <div className="flex flex-col gap-2">
       <MediaView
         media={media}
@@ -246,6 +253,27 @@ function EntityCardBody({
     </div>
   ) : (
     card
+  );
+  // The entity-card slot: a card cell the one resolution picks (the
+  // record's own override, its kind's binding, the bundle's default) draws
+  // it; else this identity card.
+  const subject = read.state === "ready" ? read.card : undefined;
+  if (!subject) return identity;
+  return (
+    <RenderedObject
+      subject={{
+        kind: "entity",
+        slot: "entity-card",
+        entityId: subject.entityId,
+        profileSlug: subject.profileSlug,
+        ...(subject.systemData !== undefined
+          ? { systemData: subject.systemData }
+          : {}),
+      }}
+      workspaceId={subject.workspaceId}
+      title={title}
+      fallback={identity}
+    />
   );
 }
 
@@ -413,6 +441,15 @@ function CellFrameBody({
           refusedAction={
             <CellDoor model={model} words={words} inline={false} />
           }
+        />
+      );
+    case "module":
+      return (
+        <ModuleCell
+          source={read.source}
+          identity={model.cellKey ? { typeKey: model.cellKey } : {}}
+          title={words.label}
+          door={<CellDoor model={model} words={words} inline={false} />}
         />
       );
     case "app":

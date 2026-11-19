@@ -111,7 +111,8 @@ export function inferOpenTypeFromId(id: string): TypedOpenKind | undefined {
  * are hosted so a link lands somewhere useful on any device: their
  * de-escalating acts (pause, cancel, disconnect), a capability's verbs turned
  * on, and a read of the rest. A document's body and a conversation's recent
- * messages read there too. Authoring and replying stay in the app.
+ * messages read there too, and a cell (by its type key) runs there on the
+ * pod's renderer bundle. Authoring and replying stay in the app.
  */
 export const WEB_HOSTED_OPEN_KINDS = [
   "entity",
@@ -127,6 +128,7 @@ export const WEB_HOSTED_OPEN_KINDS = [
   "track",
   "skill",
   "tool",
+  "cell",
 ] as const;
 export type WebHostedOpenKind = (typeof WEB_HOSTED_OPEN_KINDS)[number];
 

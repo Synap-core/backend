@@ -1,11 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CELL_FRAME_SANDBOX } from "@synap-core/types/cell-bridge";
+import {
+  CELL_FRAME_SANDBOX,
+  CELL_MODULE_FRAME_SANDBOX,
+} from "@synap-core/types/cell-bridge";
 
-// The frame reads the console's client only inside an effect (never on a
-// static render); the hook just has to exist.
+// The frames read the console's client only inside an effect (never on a
+// static render); the hook just has to exist. A module cell reads the pod's
+// renderer bundle (`renderers.hostModules`): none installed unless a test
+// says so.
+const { bundle } = vi.hoisted(() => ({
+  bundle: {
+    answer: { error: { data: { code: "NOT_FOUND" } } } as {
+      data?: unknown;
+      error?: unknown;
+    },
+  },
+}));
 vi.mock("../../../../lib/trpc", () => ({
-  trpc: { useUtils: () => ({ client: {} }) },
+  trpc: {
+    useUtils: () => ({ client: {} }),
+    renderers: {
+      hostModules: {
+        useQuery: () => ({
+          isLoading: false,
+          error: null,
+          data: undefined,
+          refetch: () => {},
+          ...bundle.answer,
+        }),
+      },
+    },
+  },
 }));
 
 import MarkdownView from "./markdown-view";
@@ -110,14 +136,58 @@ describe("a `frame` row that opens with <title> runs as a page", () => {
   });
 });
 
-describe("a cell the console does not run is a door", () => {
-  it("a React cell is a link to its cell card, not a bare chip", () => {
+describe("a React cell runs in the module frame on the pod's bundle", () => {
+  it("with the bundle installed, it runs in the module frame, never the page frame", () => {
+    bundle.answer = {
+      data: {
+        notModified: false,
+        setSha256: "s1",
+        modules: {
+          react: "r",
+          reactDom: "rd",
+          reactDomClient: "rdc",
+          jsxRuntime: "jsx",
+          tokensCss: ":root{}",
+        },
+        kitExports: [],
+      },
+    };
+    try {
+      const out = draw(
+        block("cell:crm:deal-board"),
+        readOf({ rendererType: "frame", rendererSource: REACT })
+      );
+      const frames = iframes(out);
+      expect(frames).toHaveLength(1);
+      expect(attr(frames[0]!, "sandbox")).toBe(CELL_MODULE_FRAME_SANDBOX);
+      expect(attr(frames[0]!, "src")).toBeNull();
+    } finally {
+      bundle.answer = { error: { data: { code: "NOT_FOUND" } } };
+    }
+  });
+
+  it("without the bundle, it says so beside the link to its cell page", () => {
     const out = draw(
       block("cell:crm:deal-board"),
       readOf({ rendererType: "frame", rendererSource: REACT })
     );
     expect(iframes(out)).toHaveLength(0);
+    expect(out).toContain("Synap’s renderers aren’t on this pod.");
     // The chip itself is the link: its name sits inside the <a>.
+    expect(out).toMatch(
+      /<a [^>]*href="\/open\/cell\/cell%3Acrm%3Adeal-board"[^>]*>(?:(?!<\/a>).)*Deal board(?:(?!<\/a>).)*<\/a>/
+    );
+  });
+});
+
+describe("a cell the console does not run is a door", () => {
+  it("a built-in cell is a link to its cell page, not a bare chip", () => {
+    const out = draw(
+      block("cell:crm:deal-board"),
+      readOf({ rendererType: "builtin", rendererSource: REACT })
+    );
+    expect(iframes(out)).toHaveLength(0);
+    expect(out).not.toContain("renderers aren’t on this pod");
     expect(out).toMatch(
       /<a [^>]*href="\/open\/cell\/cell%3Acrm%3Adeal-board"[^>]*>(?:(?!<\/a>).)*Deal board(?:(?!<\/a>).)*<\/a>/
     );

@@ -234,10 +234,27 @@ export function contentHref(url: string | null | undefined): ContentHref {
 export type EmbedEntityRead =
   | { state: "unresolved" }
   | { state: "loading" }
-  /** `media`: the record's own image (an uploaded file), when it has one. */
-  | { state: "ready"; title: string; media?: MediaRef }
+  /**
+   * `media`: the record's own image (an uploaded file), when it has one.
+   * `card`: what the entity-card renderer resolution reads (its kind, its
+   * `systemData` override, its space), when the answer names its kind.
+   */
+  | {
+      state: "ready";
+      title: string;
+      media?: MediaRef;
+      card?: EmbedEntityCardSubject;
+    }
   | { state: "hidden" }
   | { state: "failed"; retry?: () => void };
+
+/** An embedded record as the entity-card slot resolves it. */
+export interface EmbedEntityCardSubject {
+  entityId: string;
+  profileSlug: string;
+  systemData?: unknown;
+  workspaceId: string | null;
+}
 
 export const HIDDEN_CODES: ReadonlySet<string> = new Set([
   "NOT_FOUND",
@@ -268,6 +285,9 @@ export function entityEmbedRead(query: {
             documentId?: unknown;
             properties?: unknown;
             systemData?: unknown;
+            profileSlug?: unknown;
+            type?: unknown;
+            workspaceId?: unknown;
           };
         }
       | undefined
@@ -284,10 +304,31 @@ export function entityEmbedRead(query: {
         : null,
     systemData: entity.systemData,
   });
+  const kind =
+    typeof entity.profileSlug === "string" && entity.profileSlug.trim()
+      ? entity.profileSlug.trim()
+      : typeof entity.type === "string" && entity.type.trim()
+        ? entity.type.trim()
+        : null;
   return {
     state: "ready",
     title: title || "Untitled",
     ...(primary.via === "none" ? {} : { media: primary }),
+    ...(kind && typeof entity.id === "string"
+      ? {
+          card: {
+            entityId: entity.id,
+            profileSlug: kind,
+            ...(entity.systemData !== undefined
+              ? { systemData: entity.systemData }
+              : {}),
+            workspaceId:
+              typeof entity.workspaceId === "string"
+                ? entity.workspaceId
+                : null,
+          },
+        }
+      : {}),
   };
 }
 
@@ -313,6 +354,8 @@ export type EmbedCellRead =
       /** The cell's own space: the lens its reads are stamped with. */
       workspaceId: string | null;
     }
+  /** A module cell (a React component): it runs in `module-frame`. */
+  | { state: "module"; source: ModuleCellSource }
   | { state: "app" }
   | { state: "hidden" }
   | { state: "failed"; retry?: () => void };
@@ -339,6 +382,43 @@ export function cellIsHtmlPage(def: {
   return def.rendererType === "frame" && isHtmlPageSource(source);
 }
 
+/** A module cell as stored (`widgetDefinitions.get`), the part a frame needs. */
+export interface ModuleCellSource {
+  code: string;
+  deps?: Record<string, string>;
+  externalHosts?: readonly string[];
+  /** The cell's own space: its lens when the host has none of its own. */
+  workspaceId: string | null;
+}
+
+/** A stored cell row → its module source, or null when it is not a module frame cell. */
+export function moduleCellSource(def: unknown): ModuleCellSource | null {
+  if (!def || typeof def !== "object") return null;
+  const d = def as Record<string, unknown>;
+  if (d.rendererType !== "frame") return null;
+  const code = typeof d.rendererSource === "string" ? d.rendererSource : "";
+  // A `frame` row whose source is a page is a stored HTML page
+  // (`cellIsHtmlPage`): it runs in `html-frame`, not here.
+  if (!code.trim() || isHtmlPageSource(code)) return null;
+  const deps =
+    d.deps && typeof d.deps === "object" && !Array.isArray(d.deps)
+      ? Object.fromEntries(
+          Object.entries(d.deps as Record<string, unknown>).filter(
+            (e): e is [string, string] => typeof e[1] === "string"
+          )
+        )
+      : undefined;
+  const externalHosts = Array.isArray(d.externalHosts)
+    ? d.externalHosts.filter((h): h is string => typeof h === "string")
+    : undefined;
+  return {
+    code,
+    ...(deps ? { deps } : {}),
+    ...(externalHosts ? { externalHosts } : {}),
+    workspaceId: typeof d.workspaceId === "string" ? d.workspaceId : null,
+  };
+}
+
 export function cellEmbedRead(query: {
   isLoading: boolean;
   error: { data?: { code?: string | null } | null } | null | undefined;
@@ -361,7 +441,10 @@ export function cellEmbedRead(query: {
     | null
     | undefined;
   if (!def) return { state: "hidden" };
-  if (!cellIsHtmlPage(def)) return { state: "app" };
+  if (!cellIsHtmlPage(def)) {
+    const source = moduleCellSource(def);
+    return source ? { state: "module", source } : { state: "app" };
+  }
   const html = def.rendererSource as string;
   const bytes = htmlByteLength(html);
   return {

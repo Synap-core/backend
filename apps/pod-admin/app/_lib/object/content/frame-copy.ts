@@ -1,5 +1,6 @@
 /**
- * The words around a stored page's frame (`html-frame`), as catalogs
+ * The words around a stored page's frame (`html-frame`) and a module
+ * cell's frame (`module-frame`, `rendered-object`), as catalogs
  * (`@synap-core/types/i18n`): English is the source and the type. DRAFT
  * French ("vous"), awaiting the founder's review. The reason a page is not
  * run (`frameNetworkCodeRefusal`) is the author's technical sentence: it
@@ -24,6 +25,16 @@ export const en = {
   "toggle.source": "Source",
   fullSize: "Full size",
   "preview.note": "Preview. It reads nothing from your pod until approved.",
+  "renderer.loading": "Drawing this view…",
+  "renderer.notInstalled": "Synap’s renderers aren’t on this pod.",
+  "renderer.managedOnly": "Synap’s renderers come with pods hosted by Synap.",
+  "renderer.failed": "Couldn’t draw this view",
+  "renderer.needsKit": "This view needs parts this pod doesn’t have.",
+  "renderer.refused.mark": "Not drawn",
+  "renderer.refused.line": "This view can’t run here.",
+  "renderer.stopped": "This view stopped responding.",
+  "renderer.write.proposed": "Sent for review",
+  "renderer.write.proposedBody": "The change waits for someone to approve it.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -41,6 +52,20 @@ export const fr: Catalog<typeof en> = {
   "toggle.source": "Source",
   fullSize: "Plein écran",
   "preview.note": "Aperçu. Il ne lit rien de votre pod avant l’approbation.",
+  "renderer.loading": "Affichage de cette vue…",
+  "renderer.notInstalled":
+    "Les moteurs d’affichage de Synap ne sont pas sur ce pod.",
+  "renderer.managedOnly":
+    "Les moteurs d’affichage de Synap sont fournis avec les pods hébergés par Synap.",
+  "renderer.failed": "Impossible d’afficher cette vue",
+  "renderer.needsKit":
+    "Cette vue a besoin d’éléments que ce pod ne possède pas.",
+  "renderer.refused.mark": "Non affichée",
+  "renderer.refused.line": "Cette vue ne peut pas s’exécuter ici.",
+  "renderer.stopped": "Cette vue ne répond plus.",
+  "renderer.write.proposed": "Envoyé pour validation",
+  "renderer.write.proposedBody":
+    "La modification attend que quelqu’un l’approuve.",
 };
 
 /** The frame's translator, in the ambient catalog locale. */
