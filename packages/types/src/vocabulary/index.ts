@@ -719,6 +719,9 @@ const ACTION_VERB_ROWS = {
   // Library: run a reader on a kept link again (or with another reader). The
   // button asks "Read again"; the receipt says it was "Read".
   read_again: { imperative: "Read again", past: "Read" },
+  // The design door (`design.apply`, matched on its last segment): an
+  // agent's ops applied to a design. Humanized, the receipt said "Apply".
+  apply: { imperative: "Apply", past: "Applied" },
 } satisfies Readonly<Record<string, ActionVerb>>;
 
 export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> =
