@@ -238,7 +238,7 @@ describe("re-consent", () => {
     expect(out).toContain("data-reconsent");
     expect(out).toMatch(/changes? to confirm/);
     expect(out).toContain("was in Content OS");
-    expect(out).toMatch(/>Turn [a-z]+ off</);
+    expect(out).toMatch(/>Turn [a-z ]+ off everywhere</);
     expect(out).toContain("Everything else stays as you allowed it.");
     expect(out).toContain(">Confirm<");
     expect(out).toContain(">Not now<");

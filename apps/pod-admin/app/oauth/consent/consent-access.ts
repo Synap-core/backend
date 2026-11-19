@@ -974,7 +974,10 @@ export function draftHeadline(
     out.push(
       sent.read.spaces === "all"
         ? t("headline.seesEverywhere", { what: view.text })
-        : t("headline.sees", { what: view.text, where: inPhrase(shown, names) })
+        : t("headline.sees", {
+            what: view.text,
+            where: t("place.in", { name: inPhrase(shown, names) }),
+          })
     );
   }
   if (change.length > 0) {
@@ -1218,7 +1221,6 @@ export function reconsentChanges(
     const widened = [...new Set(held.widens.map((w) => w.permission))];
     for (const permission of widened) {
       const now = proposed.filter((p) => p.permission === permission);
-      const everywhere = now.some((p) => p.where.kind === "pod");
       const coveredByKinds =
         !!kindsRow &&
         kindOf(permission) === null &&
@@ -1230,14 +1232,13 @@ export function reconsentChanges(
         now: phraseOf(now),
         was: wasOf(permission) ?? t("reconsent.nowhere"),
         permission,
+        // Turning it off takes it away everywhere, where it was too: say so.
         narrow:
           kindsRow && coveredByKinds
             ? t("reconsent.keepKinds", { n: kindsRow.kinds.length })
-            : everywhere
-              ? t("reconsent.turnOffEverywhere", {
-                  what: objectName(permission),
-                })
-              : t("reconsent.turnOff", { what: objectName(permission) }),
+            : t("reconsent.turnOffEverywhere", {
+                what: objectName(permission),
+              }),
         reason: null,
       });
     }
