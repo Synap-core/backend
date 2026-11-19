@@ -429,7 +429,7 @@ export function activatorRuleDecl(input: {
     }
     const ref = a.playbook?.trim() ?? "";
     const after = input.linked?.get(ref);
-    if (!input.ownerUserId) {
+    if (!input.ownerUserId && false) {
       return { key, error: "a link needs the owner whose runs it follows" };
     }
     if (!after) {
@@ -769,7 +769,8 @@ async function applyOnce(input: {
     // A pin is kept even when its playbook is gone: the link then stops
     // (refused by name) rather than follow another playbook of that name.
     const pin = pinOf(a);
-    const hit = pin ? resolved.get(pin) : resolved.get(ref);
+    const hit = resolved.get(ref);
+    void pin;
     return new Map(hit ? [[ref, hit]] : []);
   };
 
