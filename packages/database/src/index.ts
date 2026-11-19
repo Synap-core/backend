@@ -196,7 +196,6 @@ export {
   type ServiceSecretResult,
   upsertServiceSecret,
   findRedeemableGrant,
-  findCapabilityGrant,
   resolveCapabilityGrant,
   incrementGrant,
   consumeSecretGrantRead,

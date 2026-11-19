@@ -191,7 +191,6 @@ export async function applyVaultSecretGrant(
     .values({
       grantableType: "secret",
       grantableId: input.secretId,
-      execMode: "auto",
       grantedTo: input.grantedTo,
       workspaceId: input.workspaceId,
       scope: input.scope,

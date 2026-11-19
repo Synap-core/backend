@@ -74,6 +74,11 @@ import {
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
 import { approvalRefusesRun } from "@synap/capability-gate";
+import {
+  resolveEveryoneCapabilityVerdicts,
+  resolveGovernanceRule,
+  type CapabilityVerdictTarget,
+} from "@synap/database/agent-governance";
 
 /**
  * Whether the execute door can launch a backing skill: the door resolves only
@@ -558,18 +563,29 @@ export function deriveProviderVerbParamsSchema(
 }
 
 /**
+ * What a listing knows about one tool's access: whether an active grant lets
+ * an agent use it ("may use"), and the approval row for EVERYONE on each of
+ * its verbs (`resolveEveryoneCapabilityVerdicts`; decision D2: an approval row
+ * is the only "runs without asking").
+ */
+export interface VerbAccess {
+  granted: boolean;
+  verdictFor?: (verbId: string) => "auto" | "propose" | "deny" | undefined;
+}
+
+/**
  * Join a tool's structured verb catalog (`tools.capabilities`) with the tool's
- * active grant to produce the connection × verb × grant matrix rows. Each verb
- * inherits the SAME tool-level grant state today (grants are issued per tool, not
- * per verb): `granted` reflects an active grant existing, and `effectiveExecMode`
- * is the grant's exec-mode when granted, else the verb's `govDefault` — exactly
- * what the gate would apply. `paramsSchema` is attached per verb: builtin verbs
+ * access to produce the connection × verb × grant matrix rows. `granted`
+ * reflects an active grant existing on the tool ("may use"), and
+ * `effectiveExecMode` is `auto` only when the approval row for everyone on
+ * that verb (or its tool) says auto, else `propose` — what the gate applies to
+ * an agent with no row of its own. `paramsSchema` is attached per verb: builtin verbs
  * from their Zod validator, provider verbs from the requiring declarative skill's
  * `providerSpec` (looked up by verb id = skill name in `providerSpecByName`).
  */
 export function buildVerbStates(
   catalog: ToolVerbCatalogEntry[] | null | undefined,
-  grant: { execMode: ExecMode } | undefined,
+  access: VerbAccess | undefined,
   toolKind: string,
   providerSpecByName: Map<string, ProviderVerbSpec>,
   backingSkillExecutableByName: Map<string, boolean>,
@@ -600,7 +616,9 @@ export function buildVerbStates(
    */
   ownSkillIntents: Map<string, string> = new Map()
 ): CapabilityVerbStateWithResponseShape[] {
-  const granted = !!grant;
+  const granted = access?.granted === true;
+  const execModeOf = (verbId: string): ExecMode =>
+    access?.verdictFor?.(verbId) === "auto" ? "auto" : "propose";
 
   // If catalog is empty but THIS tool's own skills declare intents, build verb
   // states from the authoritative column (migration 0292). Scoped to
@@ -620,7 +638,7 @@ export function buildVerbStates(
         label: verbId,
         kind: "action" as const, // default for tool verbs
         granted: false, // ROUTING, NEVER AUTHORIZATION — a catalog-less tool has no grant
-        govDefault: "propose", // absent grant, the posture is propose
+        govDefault: "propose", // absent an approval row, the posture is propose
         effectiveExecMode: "propose", // intent is routing; never widen authority
         ...(intent ? { intent } : {}),
         ...(declared !== undefined ? { declaredReadOnly: declared } : {}),
@@ -657,7 +675,7 @@ export function buildVerbStates(
       ...v,
       ...(intent ? { intent } : {}),
       granted,
-      effectiveExecMode: grant ? grant.execMode : v.govDefault,
+      effectiveExecMode: execModeOf(v.id),
       ...(paramsSchema ? { paramsSchema } : {}),
       // What this verb RETURNS — read off the same declarative spec the executor
       // applies (`execute-provider-verb.ts`), never re-derived or fabricated.
@@ -739,7 +757,9 @@ interface SkillVerbFacts {
  */
 function buildSkillVerb(
   row: SkillVerbFacts,
-  skillIntentByName: Map<string, string>
+  skillIntentByName: Map<string, string>,
+  /** The approval row for everyone on this verb (D2), when one names it. */
+  verdict?: "auto" | "propose" | "deny"
 ): CapabilityVerbStateWithResponseShape[] {
   const declared = declaredReadOnly(
     (row.metadata as Record<string, unknown> | null) ?? null
@@ -761,19 +781,15 @@ function buildSkillVerb(
         row.kind
       ),
       // A skill row is not a tool row, so there is no tool grant to resolve and
-      // no `govDefault` in a catalog. `false` is the honest "no grant exists",
-      // which is what makes a non-read-only verb PROPOSE rather than run.
+      // no `govDefault` in a catalog: `false` is the honest "no grant exists".
       granted: false,
       // Required by the `CapabilityVerbState` contract (`ToolVerb.govDefault`) —
-      // the posture this verb would get with no grant, i.e. exactly the
-      // `effectiveExecMode` below. It carries no decision here: `runPosture`
-      // reads `granted` first and a skill row is never granted, so this is the
-      // value a reader sees for "absent grant", not a second authority.
+      // the posture this verb gets with no approval row.
       govDefault: "propose",
-      // The verb's default posture absent any grant, kept as the same value a
-      // catalog-derived verb would carry so a consumer reading it cannot
-      // mistake "unmeasured" for "auto".
-      effectiveExecMode: "propose",
+      // `auto` only when the approval row for everyone on this verb says so
+      // (an action's "runs on its own", `writeActionMode`); never "unmeasured"
+      // read as "auto".
+      effectiveExecMode: verdict === "auto" ? "auto" : "propose",
       // Read off THIS row, exactly as `buildVerbStates` does for a tool verb —
       // so `runPosture` short-circuits to `auto` for a skill that declares
       // itself read-only, identically on both paths.
@@ -970,20 +986,15 @@ export async function listCapabilities(
       )
     );
 
-  // Resolve each tool's active grant so the verb catalog can be surfaced WITH
-  // grant-state (the connection × verb × grant matrix). "Active" = not revoked,
-  // not expired, and uses remaining (or unlimited). When several grants exist for
-  // a tool we keep the first active row — the gate's resolver applies the same
-  // narrowing per redemption. Aligns the read-model to the founder's grant model.
+  // Which tools carry an active grant ("may use": not revoked, not expired,
+  // uses remaining). A grant no longer says whether a verb runs without
+  // asking: that is the approval row, read below once the containers are known.
   const toolIds = toolRows.map((r) => r.id);
-  const grantByGrantableId = new Map<string, { execMode: ExecMode }>();
+  const grantedToolIds = new Set<string>();
   if (toolIds.length > 0) {
     const now = new Date();
     const grantRows = await db
-      .select({
-        grantableId: vaultGrants.grantableId,
-        execMode: vaultGrants.execMode,
-      })
+      .select({ grantableId: vaultGrants.grantableId })
       .from(vaultGrants)
       .where(
         and(
@@ -997,11 +1008,7 @@ export async function listCapabilities(
           )
         )
       );
-    for (const g of grantRows) {
-      if (!grantByGrantableId.has(g.grantableId)) {
-        grantByGrantableId.set(g.grantableId, { execMode: g.execMode });
-      }
-    }
+    for (const g of grantRows) grantedToolIds.add(g.grantableId);
   }
 
   // ── Skills (instruction | code) ─────────────────────────────────────────────
@@ -1207,6 +1214,51 @@ export async function listCapabilities(
     userId: ctx.userId,
   });
 
+  // The approval row for EVERYONE on each verb (decision D2): ONE read for the
+  // whole listing. A tool verb is asked about by the tool's id, the verb's name
+  // and the tool its brick belongs to; a skill verb by its name and its tool.
+  const skillByName = new Map(skillRows.map((r) => [r.name, r]));
+  const verdictTargets: CapabilityVerdictTarget[] = [];
+  const containerIdsOf = (...keys: string[]): string[] =>
+    keys
+      .map((k) => containerByMember.get(k)?.id)
+      .filter((id): id is string => !!id);
+  for (const row of toolRows) {
+    const verbIds = new Set<string>([
+      ...((row.capabilities as ToolVerbCatalogEntry[] | null) ?? []).map(
+        (v) => v.id
+      ),
+      ...(skillIntentsByTool.get(row.id)?.keys() ?? []),
+    ]);
+    for (const verbId of verbIds) {
+      const skill = skillByName.get(verbId);
+      verdictTargets.push({
+        key: `tool:${row.id}:${verbId}`,
+        capabilityId: row.id,
+        capabilityVerbName: verbId,
+        capabilityContainerIds: containerIdsOf(
+          containerMemberKey("tool", row.id),
+          ...(skill ? [containerMemberKey("skill", skill.id)] : [])
+        ),
+      });
+    }
+  }
+  for (const row of skillRows) {
+    verdictTargets.push({
+      key: `skill:${row.id}`,
+      capabilityId: row.id,
+      capabilityVerbName: row.name,
+      capabilityContainerIds: containerIdsOf(
+        containerMemberKey("skill", row.id)
+      ),
+    });
+  }
+  const everyoneVerdict = await resolveEveryoneCapabilityVerdicts({
+    db,
+    workspaceId: ctx.allSpaces ? null : (ctx.workspaceId ?? null),
+    targets: verdictTargets,
+  });
+
   // Only an all-spaces read tags a row with its space (shape unchanged otherwise).
   const spaceTag = (workspaceId: string | null | undefined) =>
     ctx.allSpaces ? { workspaceId: workspaceId ?? null } : {};
@@ -1232,7 +1284,11 @@ export async function listCapabilities(
         withUrlPatterns(
           buildVerbStates(
             row.capabilities as ToolVerbCatalogEntry[] | null,
-            grantByGrantableId.get(row.id),
+            {
+              granted: grantedToolIds.has(row.id),
+              verdictFor: (verbId) =>
+                everyoneVerdict.get(`tool:${row.id}:${verbId}`),
+            },
             row.kind,
             providerSpecByName,
             backingSkillExecutableByName,
@@ -1313,7 +1369,11 @@ export async function listCapabilities(
           runnable: row.status === "active",
           verbs: withCredentialed(
             withUrlPatterns(
-              buildSkillVerb(row, skillIntentByName),
+              buildSkillVerb(
+                row,
+                skillIntentByName,
+                everyoneVerdict.get(`skill:${row.id}`)
+              ),
               urlPatternsByName
             ),
             credentialedByName
@@ -1914,6 +1974,13 @@ export interface CapabilityGrantRow {
   grantableId: string;
   /** Display name of the granted capability (secret/tool/skill/command), null if dead. */
   capabilityName: string | null;
+  /**
+   * How the grant's agent (or anyone, for a grant naming no agent) runs this
+   * capability in the grant's space: the approval row's verdict (`auto`,
+   * `propose`, `deny`), never a column of the grant (decision D2, 0434).
+   * `propose` when no row names it. Secrets: always `auto` (a grant to read a
+   * secret has no approval row).
+   */
   execMode: string;
   scope: string;
   grantedTo: string | null;
@@ -1925,6 +1992,54 @@ export interface CapabilityGrantRow {
   revokedAt: string | null;
   createdAt: string;
   active: boolean;
+}
+
+/**
+ * The approval verdict each grant's agent meets on the granted capability, in
+ * the grant's space (or the pod): the SAME ranked read the capability gate
+ * makes (`resolveGovernanceRule`), once per distinct (kind, capability, agent,
+ * space). `propose` when no row names it. A display read for a grant listing:
+ * the floors (untrusted origin, outward runs) are per-run facts it cannot see.
+ */
+export async function approvalVerdictForGrants(
+  grants: ReadonlyArray<{
+    id: string;
+    grantableType: string;
+    grantableId: string;
+    grantedTo: string | null;
+    workspaceId: string | null;
+  }>,
+  names: ReadonlyMap<string, string> = new Map()
+): Promise<Map<string, "auto" | "propose" | "deny">> {
+  const db = await getDb();
+  const byTuple = new Map<string, Promise<"auto" | "propose" | "deny">>();
+  const out = new Map<string, "auto" | "propose" | "deny">();
+  for (const g of grants) {
+    if (g.grantableType === "secret") {
+      out.set(g.id, "auto");
+      continue;
+    }
+    const kind = g.grantableType as "tool" | "skill" | "command";
+    const key = [kind, g.grantableId, g.grantedTo, g.workspaceId].join("|");
+    let verdict = byTuple.get(key);
+    if (!verdict) {
+      verdict = resolveGovernanceRule({
+        db,
+        agentUserId: g.grantedTo,
+        workspaceId: g.workspaceId,
+        subjectType: "capability",
+        action: "run",
+        capabilityId: g.grantableId,
+        // A command's display name is its title, not a verb name.
+        capabilityVerbName:
+          kind === "command" ? null : (names.get(g.grantableId) ?? null),
+        capabilityKind: kind,
+      }).then((m) => m?.verdict ?? "propose");
+      byTuple.set(key, verdict);
+    }
+    out.set(g.id, await verdict);
+  }
+  return out;
 }
 
 /**
@@ -2024,13 +2139,14 @@ export async function listCapabilityGrants(args: {
     );
   }
 
+  const verdictByGrant = await approvalVerdictForGrants(rows, nameById);
   const now = Date.now();
   return rows.map((g) => ({
     grantId: g.id,
     grantableType: g.grantableType as CapabilityGrantKind,
     grantableId: g.grantableId,
     capabilityName: nameById.get(g.grantableId) ?? null,
-    execMode: g.execMode,
+    execMode: verdictByGrant.get(g.id) ?? "propose",
     scope: g.scope,
     grantedTo: g.grantedTo,
     workspaceId: g.workspaceId,

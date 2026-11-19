@@ -10,10 +10,13 @@
  * tighten, so it is the one verdict that ranks ABOVE the floors (a floor
  * proposes; "Never" refuses).
  *
- * Resolution (rung 2.8, `resolveAgentGovernanceDecision`) ranks matching rows
- * by specificity — agent > any, workspace > pod, exact action > profile >
- * glob > `*` — and takes the top-ranked active row. This schema file defines
- * storage only; the resolver and engine wiring are a separate wave.
+ * Resolution (rung 2.8, `resolveGovernanceRule` in
+ * utils/resolve-agent-governance-decision.ts, wired into the engine and the
+ * capability gate) ranks matching rows by specificity — agent > class > any,
+ * workspace > pod, exact action > profile or tool > glob > `*` — and takes
+ * the top-ranked active row. For a tool run (target `capability`) it is the
+ * ONLY answer to "may this run without asking?" (decision D2, 0434): a grant
+ * means only "may use".
  */
 
 import {

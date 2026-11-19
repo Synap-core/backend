@@ -1121,8 +1121,8 @@ export async function createCapabilityFromDefinition(
     if (result.proposalId) proposals.push(result.proposalId);
     // Seed the ENFORCEMENT grant so an APPROVED tool is runnable by agents once
     // the born-draft tool is approved (Wave 2 + 3b: seed(draft) → approve →
-    // grant → agent run is governed). Conservative `execMode: "propose"` for a
-    // side-effecting tool — an agent run routes to review unless re-granted auto.
+    // grant → agent run is governed). No approval row: an agent run of a
+    // side-effecting tool asks first until a person writes an auto row.
     if (result.status === "created" && toolId) {
       await issueCapabilityGrant(
         "tool",
@@ -1131,8 +1131,7 @@ export async function createCapabilityFromDefinition(
         connWorkspaceId ?? null
       );
       // Derive + persist the verb catalog from the skills that require this tool.
-      // `govDefault` aligns to the exec-mode `issueCapabilityGrant` just seeded
-      // ("propose") so the verb never bypasses the approved+grant model.
+      // `govDefault` is "propose": with no approval row the gate asks first.
       const verbs = deriveToolVerbs(
         t.name,
         def.skills,
@@ -1432,7 +1431,7 @@ export async function createCapabilityFromDefinition(
     }
 
     // Seed the enforcement grant for a created skill (same conservative policy
-    // as tools — approved skill runnable by agents, execMode propose by default).
+    // as tools — approved skill usable by agents, asking first with no approval row).
     if (result.status === "created") {
       await issueCapabilityGrant(
         "skill",
@@ -1828,9 +1827,9 @@ export async function createCapabilityFromDefinition(
 
 // ── Verb-catalog derivation (the capability-matrix axis) ──────────────────────
 //
-// The exec-mode the applier seeds on every tool/skill grant (`issueCapabilityGrant`
-// below). The verb catalog's `govDefault` reuses this SAME constant so a verb's
-// governance default can never drift from the grant the gate actually enforces.
+// A verb's governance default in the catalog (`govDefault`): `propose`, what
+// the gate applies to a tool run no approval row names. (Before 0434 the
+// applier also seeded it as each grant's exec_mode; a grant now carries none.)
 export const GRANT_DEFAULT_EXEC_MODE = "propose" as const;
 
 const VERB_WRITE_SIGNALS = [
@@ -1997,13 +1996,14 @@ export function deriveToolVerbs(
 // ── Capability-grant seeding (Wave 3b applier grant) ──────────────────────────
 //
 // Issue a `capability_grants` (vault_grants) row for a freshly-created tool/skill
-// so that — once the born-draft capability is approved — an agent can RUN it
-// under governance. Workspace-scoped when a workspace is present (grantedTo null,
-// runnable by any agent in that workspace); otherwise pod-wide, bound to the
-// acting user (grantedTo = userId) so the canonical wildcard firewall
-// (`assertGrantScoped`: never both null) is satisfied. `execMode: "propose"` is
-// the conservative default for a side-effecting tool/skill — the capability
-// runs through review unless an explicit auto grant is later issued.
+// so that — once the born-draft capability is approved — an agent MAY USE it.
+// Workspace-scoped when a workspace is present (grantedTo null, any agent in
+// that workspace); otherwise pod-wide, bound to the acting user (grantedTo =
+// userId) so the canonical wildcard firewall (`assertGrantScoped`: never both
+// null) is satisfied. It writes no approval row: with none, a run asks first,
+// the conservative default for a side-effecting tool/skill, until a person
+// writes an "auto" approval row (decision D2: the grant's exec_mode, always
+// "propose" here, was retired by 0434).
 export async function issueCapabilityGrant(
   grantableType: "tool" | "skill",
   grantableId: string,
@@ -2020,7 +2020,6 @@ export async function issueCapabilityGrant(
   await db.insert(vaultGrants).values({
     grantableType,
     grantableId,
-    execMode: GRANT_DEFAULT_EXEC_MODE,
     grantedTo,
     workspaceId,
     // `permanent` (not `session`): a seeded capability grant persists beyond any

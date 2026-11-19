@@ -1,25 +1,35 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 /**
- * Tripwire for Option B / D1 (docs/decisions/agent-governance.md, phase 2 D1, ratified
- * 2026-07-27): a `governance_rules` `target_kind: "capability"` row must now
- * be consulted by `gateCapabilityExecution` at BOTH points it would otherwise
- * return `propose` — the no-grant route and the policy-propose fallthrough —
- * while every floor (approved===false deny, dry-run, secret exclusion) stays
- * absolute regardless of the rule.
+ * Tripwire for the ONE approval store (founder decisions D2 and D3, 19 Nov
+ * 2026, document b387ca45) on top of Option B / D1 (phase 2 D1, ratified
+ * 2026-07-27): the `governance_rules` `target_kind: "capability"` row is the
+ * ONLY answer to "may this agent run this tool without asking?". An "auto"
+ * row runs it, grant or no grant; an "ask first" row or no row asks; a "Never"
+ * refuses. A capability grant means only "may use": the gate never reads it.
+ * Every floor (approved===false deny, untrusted origin, secret exclusion)
+ * stays absolute regardless of the row.
  *
- * `getDb`/`eq`/`findCapabilityGrant` (from `@synap/database`) and
- * `resolveGovernanceRule` (from `@synap/database/agent-governance`) are
- * mocked so this stays a pure unit test of the gate's branching — no live DB.
+ * `findCapabilityGrantMock` still answers with an ACTIVE AUTO GRANT (the
+ * shape the gate read before 0434) and is asserted never called: run against
+ * the gate before D2, the "ask first" and "no row" cases below go red,
+ * because that gate let the grant's exec mode run them.
+ *
+ * `getDb`/`eq` (from `@synap/database`) and `resolveGovernanceRule` (from
+ * `@synap/database/agent-governance`) are mocked so this stays a pure unit
+ * test of the gate's branching — no live DB.
  */
 
 const findCapabilityGrantMock = vi.fn();
+const AUTO_GRANT = { ok: true, grantId: "grant-1", execMode: "auto" };
 const resolveGovernanceRuleMock = vi.fn();
 const resolveOriginTrustMock = vi.fn();
 
 vi.mock("@synap/database", () => ({
   getDb: async () => ({}),
   eq: (a: unknown, b: unknown) => ({ a, b }),
+  // Not imported by the gate since D2; mocked so the gate from BEFORE D2
+  // (the negative control) reads an active auto grant here.
   findCapabilityGrant: (...args: unknown[]) => findCapabilityGrantMock(...args),
   // No key grant: these runs come from no pod app, so the app outward floor
   // (app-outward-floor.test.ts) never applies here.
@@ -55,6 +65,7 @@ const BASE_INPUT = {
 describe("gateCapabilityExecution — capability rule consultation (Option B)", () => {
   beforeEach(() => {
     findCapabilityGrantMock.mockReset();
+    findCapabilityGrantMock.mockResolvedValue(AUTO_GRANT);
     resolveGovernanceRuleMock.mockReset();
     // Default: no channel context → origin-trust no-ops (the common case).
     resolveOriginTrustMock.mockReset();
@@ -62,7 +73,7 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
   });
 
   it("approved + NO grant + auto rule → run (rule authorizes with no grant at all)", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     resolveGovernanceRuleMock.mockResolvedValue({
       verdict: "auto",
       matchedPattern: "tool-123",
@@ -83,6 +94,7 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
   it("approved + propose-mode grant + auto rule → run", async () => {
     findCapabilityGrantMock.mockResolvedValue({
       ok: true,
+      grantId: "grant-1",
       execMode: "propose",
     });
     resolveGovernanceRuleMock.mockResolvedValue({
@@ -107,9 +119,36 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
     expect(resolveGovernanceRuleMock).not.toHaveBeenCalled();
   });
 
-  it("dry-run grant + auto rule → still dry-run (a rule can never override dry-run)", async () => {
+  it("D2: an active AUTO grant + an 'ask first' row on the tool → propose (a stored ask-first now asks)", async () => {
+    // The contradiction D2 closes: before it, the grant's exec mode ran this
+    // and the propose row was never read.
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "propose",
+      matchedPattern: "tool-123",
+    });
+
+    const decision = await gateCapabilityExecution(BASE_INPUT);
+
+    expect(decision).toMatchObject({
+      decision: "propose",
+      reasonCode: "CAPABILITY_PROPOSE",
+    });
+    expect(findCapabilityGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("D2: an active AUTO grant and NO row → propose (a grant only means may-use)", async () => {
+    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+
+    const decision = await gateCapabilityExecution(BASE_INPUT);
+
+    expect(decision.decision).toBe("propose");
+    expect(findCapabilityGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("D2: a legacy dry-run grant is not read — the auto row decides", async () => {
     findCapabilityGrantMock.mockResolvedValue({
       ok: true,
+      grantId: "grant-1",
       execMode: "dry-run",
     });
     resolveGovernanceRuleMock.mockResolvedValue({
@@ -119,16 +158,43 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
 
     const decision = await gateCapabilityExecution(BASE_INPUT);
 
-    expect(decision).toEqual({ decision: "dry-run" });
-    // dry-run short-circuits before the policy-propose rule consultation —
-    // the widening lookup only ever happens on the no-grant route, which never
-    // fires here because a grant exists. The ONE lookup is the "Never" check
-    // (0.2), which can only refuse.
-    expect(resolveGovernanceRuleMock).toHaveBeenCalledTimes(1);
+    expect(decision).toEqual({ decision: "run" });
+    expect(findCapabilityGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("D2: an auto row still meets a stricter channel (rung 7 tightens the row as it did the grant)", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "auto",
+      matchedPattern: "tool-123",
+    });
+
+    const decision = await gateCapabilityExecution({
+      ...BASE_INPUT,
+      channelCapabilities: { canDraft: true, canPropose: true, canAct: false },
+    });
+
+    expect(decision).toMatchObject({
+      decision: "propose",
+      reasonCode: "CHANNEL_PROPOSE",
+    });
+  });
+
+  it("D3: the lookup asks for the tools this action belongs to (a row on the tool covers it)", async () => {
+    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+
+    await gateCapabilityExecution(BASE_INPUT);
+
+    expect(resolveGovernanceRuleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capabilityId: "tool-123",
+        capabilityKind: "tool",
+      })
+    );
   });
 
   it("no grant + no matching rule → propose (unchanged fallback)", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     resolveGovernanceRuleMock.mockResolvedValue(undefined);
 
     const decision = await gateCapabilityExecution(BASE_INPUT);
@@ -139,6 +205,7 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
   it("revoked/expired rule (resolver returns undefined) + propose-mode grant → propose", async () => {
     findCapabilityGrantMock.mockResolvedValue({
       ok: true,
+      grantId: "grant-1",
       execMode: "propose",
     });
     resolveGovernanceRuleMock.mockResolvedValue(undefined);
@@ -148,8 +215,8 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
     expect(decision.decision).toBe("propose");
   });
 
-  it("secret grantable + auto rule → rule ignored, no grant means still propose (never mints secret decrypt)", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+  it("secret grantable + auto rule → rule ignored, still propose (never mints secret decrypt)", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     resolveGovernanceRuleMock.mockResolvedValue({
       verdict: "auto",
       matchedPattern: "secret-123",
@@ -170,7 +237,7 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
   });
 
   it("threads the tool row's stable NAME through to resolveGovernanceRule as capabilityVerbName (2026-07-27)", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     resolveGovernanceRuleMock.mockResolvedValue(undefined);
 
     await gateCapabilityExecution({
@@ -192,7 +259,7 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
   });
 
   it("a 'propose' verdict rule (not auto) never widens — still propose", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     resolveGovernanceRuleMock.mockResolvedValue({
       verdict: "propose",
       matchedPattern: "tool-123",
@@ -209,13 +276,14 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
  * engine's rung 2.55 (untrusted origin > every rung below) is proven in
  * governance-policy/policy.test.ts; these tripwires prove the GATE threads the
  * resolved origin trust so an untrusted-origin channel can never be laundered
- * into an auto-run by an "auto" governance rule OR an "auto" grant exec-mode —
- * the two widening shortcuts a capability run has. `channelId` is passed so the
+ * into an auto-run by an "auto" approval row — since D2 the only widening a
+ * capability run has. `channelId` is passed so the
  * gate calls `resolveOriginTrust`, which the mock forces to "untrusted".
  */
 describe("gateCapabilityExecution — untrusted origin (#4 provenance)", () => {
   beforeEach(() => {
     findCapabilityGrantMock.mockReset();
+    findCapabilityGrantMock.mockResolvedValue(AUTO_GRANT);
     resolveGovernanceRuleMock.mockReset();
     resolveOriginTrustMock.mockReset();
   });
@@ -224,7 +292,7 @@ describe("gateCapabilityExecution — untrusted origin (#4 provenance)", () => {
 
   it("untrusted origin + NO grant + auto rule → propose (rule can't widen an untrusted origin)", async () => {
     resolveOriginTrustMock.mockResolvedValue("untrusted");
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     resolveGovernanceRuleMock.mockResolvedValue({
       verdict: "auto",
       matchedPattern: "tool-123",
@@ -239,18 +307,27 @@ describe("gateCapabilityExecution — untrusted origin (#4 provenance)", () => {
     expect(resolveGovernanceRuleMock).toHaveBeenCalledTimes(1);
   });
 
-  it("untrusted origin + auto-mode grant → propose (grant exec-mode can't auto-run an untrusted origin)", async () => {
+  it("untrusted origin + an auto row and an auto grant → propose (nothing auto-runs an untrusted origin)", async () => {
     resolveOriginTrustMock.mockResolvedValue("untrusted");
-    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "auto",
+      matchedPattern: "tool-123",
+    });
 
     const decision = await gateCapabilityExecution(UNTRUSTED_INPUT);
 
-    expect(decision.decision).toBe("propose");
+    expect(decision).toMatchObject({
+      decision: "propose",
+      reasonCode: "UNTRUSTED_ORIGIN",
+    });
   });
 
-  it("TRUSTED origin + auto-mode grant → run (a trusted channel never tightens)", async () => {
+  it("TRUSTED origin + an auto row → run (a trusted channel never tightens)", async () => {
     resolveOriginTrustMock.mockResolvedValue("trusted");
-    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "auto",
+      matchedPattern: "tool-123",
+    });
 
     const decision = await gateCapabilityExecution(UNTRUSTED_INPUT);
 
@@ -294,8 +371,8 @@ describe("propose decisions carry a structured cause", () => {
     resolveOriginTrustMock.mockResolvedValue(undefined);
   });
 
-  it("no-grant route names CAPABILITY_PROPOSE", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+  it("no row names CAPABILITY_PROPOSE", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     resolveGovernanceRuleMock.mockResolvedValue(undefined);
 
     const decision = await gateCapabilityExecution(BASE_INPUT);
@@ -306,8 +383,8 @@ describe("propose decisions carry a structured cause", () => {
     );
   });
 
-  it("an UNTRUSTED origin on the no-grant route names the FLOOR, not the generic cause", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+  it("an UNTRUSTED origin names the FLOOR, not the generic cause", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     // An auto rule that WOULD widen — rung 2.55 sits above rung 2.8, so it
     // must neither run the call nor let the generic reason mask the floor.
     resolveGovernanceRuleMock.mockResolvedValue({
@@ -331,27 +408,32 @@ describe("propose decisions carry a structured cause", () => {
   });
 
   it("the policy route carries the verdict's OWN code rather than re-deriving it", async () => {
-    findCapabilityGrantMock.mockResolvedValue({
-      ok: true,
-      execMode: "propose",
+    // An auto row inside a channel that may only propose: the policy's rung 7
+    // names CHANNEL_PROPOSE, which the gate carries through.
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "auto",
+      matchedPattern: "tool-123",
     });
-    resolveGovernanceRuleMock.mockResolvedValue(undefined);
 
-    const decision = await gateCapabilityExecution(BASE_INPUT);
+    const decision = await gateCapabilityExecution({
+      ...BASE_INPUT,
+      channelCapabilities: { canDraft: true, canPropose: true, canAct: false },
+    });
 
     expect(decision.decision).toBe("propose");
     const code = decision.decision === "propose" ? decision.reasonCode : null;
     expect(
       code,
       "a propose decision must never reach review with no cause"
-    ).toBeTruthy();
+    ).toBe("CHANNEL_PROPOSE");
   });
 });
 
 /**
  * A person's "Never" (a founder decision, 0381): a `deny` rule naming this
- * capability refuses the agent's run, typed, before every other rung — an
- * auto grant, a declared read and an auto rule included.
+ * capability refuses the agent's run, typed, before every other rung — a
+ * declared read and an auto rule included (ranked: a MORE specific auto row
+ * outranks a broad Never, `resolveGovernanceRule`).
  */
 describe("gateCapabilityExecution — a deny rule refuses the run", () => {
   beforeEach(() => {
@@ -366,16 +448,18 @@ describe("gateCapabilityExecution — a deny rule refuses the run", () => {
     reasonCode: "DENIED_BY_RULE",
   };
 
-  it("control: an auto grant runs when no rule says never", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
-    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+  it("control: an auto row runs when no rule says never", async () => {
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "auto",
+      matchedPattern: "tool-123",
+    });
     expect(await gateCapabilityExecution(BASE_INPUT)).toEqual({
       decision: "run",
     });
   });
 
   it("an auto grant + a deny rule → refused, typed", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+    findCapabilityGrantMock.mockResolvedValue(AUTO_GRANT);
     resolveGovernanceRuleMock.mockResolvedValue({
       verdict: "deny",
       matchedPattern: "tool-123",
@@ -385,7 +469,7 @@ describe("gateCapabilityExecution — a deny rule refuses the run", () => {
     expect(decision.decision === "deny" && decision.reason).toMatch(
       /^DENIED_BY_RULE:/
     );
-    // Refused before the grant is even looked up.
+    // The gate never looks a grant up.
     expect(findCapabilityGrantMock).not.toHaveBeenCalled();
   });
 
@@ -458,7 +542,7 @@ describe("gateCapabilityExecution — one rule lookup per run", () => {
   const AUTO_RULE = { verdict: "auto", matchedPattern: "tool-123" };
 
   it("no grant + an auto rule: run, from one lookup", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     resolveGovernanceRuleMock.mockResolvedValue(AUTO_RULE);
     expect(await gateCapabilityExecution(BASE_INPUT)).toEqual({
       decision: "run",
@@ -469,6 +553,7 @@ describe("gateCapabilityExecution — one rule lookup per run", () => {
   it("a propose-mode grant + an auto rule: run, from one lookup", async () => {
     findCapabilityGrantMock.mockResolvedValue({
       ok: true,
+      grantId: "grant-1",
       execMode: "propose",
     });
     resolveGovernanceRuleMock.mockResolvedValue(AUTO_RULE);
@@ -479,7 +564,7 @@ describe("gateCapabilityExecution — one rule lookup per run", () => {
   });
 
   it("no grant + no rule: propose, from one lookup", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     resolveGovernanceRuleMock.mockResolvedValue(undefined);
     expect((await gateCapabilityExecution(BASE_INPUT)).decision).toBe(
       "propose"
@@ -488,7 +573,7 @@ describe("gateCapabilityExecution — one rule lookup per run", () => {
   });
 
   it("a deny rule refuses from that same one lookup", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
     resolveGovernanceRuleMock.mockResolvedValue({ verdict: "deny" });
     expect(await gateCapabilityExecution(BASE_INPUT)).toMatchObject({
       decision: "deny",

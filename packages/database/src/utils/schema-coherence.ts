@@ -1890,14 +1890,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   // vault_grants → capability grants generalization (0142). The polymorphic
   // subject columns are what the resolver/issuance now key on; their absence
   // means a pod is on a pre-0142 schema and grant redemption would break.
+  // (`exec_mode`, also added by 0142, was retired by 0434: an approval row
+  // is the only verdict, a grant means "may use".)
   {
     table: "vault_grants",
     column: "grantable_type",
-    addedBy: "0142_capability_grants.sql",
-  },
-  {
-    table: "vault_grants",
-    column: "exec_mode",
     addedBy: "0142_capability_grants.sql",
   },
 

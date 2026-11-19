@@ -408,22 +408,6 @@ export const GRANTABLE_TYPES = grantableTypeEnum.enumValues;
 export type GrantableType = (typeof GRANTABLE_TYPES)[number];
 
 /**
- * What happens when a grant is exercised — the governance/execMode axis (the
- * same axis as Capability.governance in @synap/playbooks):
- *   'auto'    — run the capability directly (today's secret-read behavior).
- *   'propose' — route the exercise through a reviewable proposal.
- *   'dry-run' — preview only (stub external writes/sends, keep reads + checks).
- */
-export const grantExecModeEnum = pgEnum("grant_exec_mode", [
-  "auto",
-  "propose",
-  "dry-run",
-]);
-
-export const GRANT_EXEC_MODES = grantExecModeEnum.enumValues;
-export type GrantExecMode = (typeof GRANT_EXEC_MODES)[number];
-
-/**
  * Capability Grants (formerly Vault Grants — generalized in 0142)
  *
  * Records an AI/agent access grant to a GRANTABLE capability (a vault secret, a
@@ -450,8 +434,10 @@ export const vaultGrants = pgTable(
     grantableType: grantableTypeEnum("grantable_type").notNull(),
     grantableId: text("grantable_id").notNull(),
 
-    // What happens when the grant is exercised (governance axis).
-    execMode: grantExecModeEnum("exec_mode").notNull().default("auto"),
+    // No verdict here: a grant means only "may use" (scope, expiry, uses).
+    // Whether the capability runs without asking is an approval row
+    // (`governance_rules`), never the grant (decision D2, document b387ca45;
+    // `exec_mode` was retired by 0434).
 
     // The proposal this grant was approved against.
     proposalId: uuid("proposal_id"),

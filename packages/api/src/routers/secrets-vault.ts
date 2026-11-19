@@ -204,7 +204,6 @@ function getRepository(): SecretsVaultRepository {
 type VaultGrantRow = {
   id: string;
   grantableId: string;
-  execMode: string;
   grantedTo: string | null;
   proposalId: string | null;
   scope: string;
@@ -1102,7 +1101,7 @@ export const secretsVaultRouter = router({
       // 6. Insert the grant row (the enforcement record consulted at redemption).
       //    A vault secret is just one grantable KIND — write the generalized
       //    capability-grant columns (grantableType='secret', grantableId=secret
-      //    id, execMode='auto'). The legacy `secret_id` column still exists in
+      //    id). The legacy `secret_id` column still exists in
       //    the DB (kept for audit) but is no longer in the Drizzle model — the
       //    subject is carried by grantableId now.
       //    The grant and the approval commit together: the status door matches
@@ -1114,7 +1113,6 @@ export const secretsVaultRouter = router({
           .values({
             grantableType: "secret",
             grantableId: secret.id,
-            execMode: "auto",
             proposalId: input.proposalId,
             grantedTo,
             workspaceId: grantWorkspaceId,

@@ -519,7 +519,7 @@ describe("buildVerbStates — empty catalog with tool-scoped skill intents", () 
 
     const verbs = buildVerbStates(
       emptyCatalog,
-      { execMode: "auto" }, // grant with auto mode
+      { granted: true, verdictFor: () => "auto" }, // a grant and an auto approval row
       "builtin",
       new Map(),
       backingSkillExecutableByName,
@@ -528,7 +528,7 @@ describe("buildVerbStates — empty catalog with tool-scoped skill intents", () 
       ownSkillIntents
     );
 
-    // Even with a grant, a catalog-less tool must stay propose — intent is ROUTING, not authorization
+    // Even with a grant and an auto row, a catalog-less tool must stay propose — intent is ROUTING, not authorization
     expect(verbs[0].granted).toBe(false);
     expect(verbs[0].effectiveExecMode).toBe("propose");
   });

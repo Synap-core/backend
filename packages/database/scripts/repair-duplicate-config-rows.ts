@@ -215,7 +215,7 @@ async function scanToolReferences(
     repointed: true,
     note: "THE GRANT LIVES HERE. Cloned onto the survivor + original revoked.",
     rows: await sql`
-      SELECT id, grantable_id, exec_mode, proposal_id, granted_to, workspace_id,
+      SELECT id, grantable_id, proposal_id, granted_to, workspace_id,
              scope, expires_at, max_uses, use_count, revoked_at, created_by
         FROM vault_grants
        WHERE grantable_type = 'tool' AND grantable_id = ${toolId}`,
@@ -403,7 +403,7 @@ async function scanSkillReferences(
         "grant with no same-named counterpart is REPORTED and left in place — " +
         "silently dropping an authorization is worse than an orphan.",
       rows: await sql`
-        SELECT id, grantable_id, exec_mode, proposal_id, granted_to, workspace_id,
+        SELECT id, grantable_id, proposal_id, granted_to, workspace_id,
                scope, expires_at, max_uses, use_count, revoked_at, created_by
           FROM vault_grants
          WHERE grantable_type = 'skill' AND grantable_id = ANY(${skillIds})`,
@@ -491,10 +491,10 @@ async function applyToolMerge(
     for (const g of grants) {
       const [inserted] = await tx<Row[]>`
         INSERT INTO vault_grants
-          (grantable_type, grantable_id, exec_mode, proposal_id, granted_to,
+          (grantable_type, grantable_id, proposal_id, granted_to,
            workspace_id, scope, expires_at, max_uses, use_count, created_by)
         VALUES
-          ('tool', ${survivorId}, ${g.exec_mode as string}, ${g.proposal_id as string | null},
+          ('tool', ${survivorId}, ${g.proposal_id as string | null},
            ${g.granted_to as string | null}, ${g.workspace_id as string | null},
            ${g.scope as string}, ${g.expires_at as Date | null},
            ${g.max_uses as number | null}, ${g.use_count as number}, ${g.created_by as string})
@@ -503,6 +503,14 @@ async function applyToolMerge(
       await tx`UPDATE vault_grants SET revoked_at = now() WHERE id = ${g.id as string}`;
     }
     result.updated["vault_grants(cloned+revoked)"] = grants.length;
+    // The approval rows naming the loser by id (a grant's "runs without
+    // asking" since 0434) follow the grant onto the survivor.
+    const rules = await tx<Row[]>`
+      UPDATE governance_rules SET target_pattern = ${survivorId}
+       WHERE target_kind = 'capability' AND target_pattern = ${loserId}
+         AND revoked_at IS NULL
+      RETURNING id`;
+    result.updated["governance_rules(repointed)"] = rules.length;
 
     // 2. Graph edges. `links` carries a unique-edge index, so a re-point that
     //    would collide with an edge the survivor already has is dropped rather
@@ -704,10 +712,10 @@ async function applyCapabilityMerge(
       for (const g of grants) {
         const [inserted] = await tx<Row[]>`
           INSERT INTO vault_grants
-            (grantable_type, grantable_id, exec_mode, proposal_id, granted_to,
+            (grantable_type, grantable_id, proposal_id, granted_to,
              workspace_id, scope, expires_at, max_uses, use_count, created_by)
           VALUES
-            ('skill', ${survivorSkill.id as string}, ${g.exec_mode as string},
+            ('skill', ${survivorSkill.id as string},
              ${g.proposal_id as string | null}, ${g.granted_to as string | null},
              ${g.workspace_id as string | null}, ${g.scope as string},
              ${g.expires_at as Date | null}, ${g.max_uses as number | null},
@@ -719,6 +727,15 @@ async function applyCapabilityMerge(
       result.updated["vault_grants:skill(cloned+revoked)"] =
         (result.updated["vault_grants:skill(cloned+revoked)"] ?? 0) +
         grants.length;
+      // The approval rows naming the retiring skill by id follow its grants.
+      const rules = await tx<Row[]>`
+        UPDATE governance_rules SET target_pattern = ${survivorSkill.id as string}
+         WHERE target_kind = 'capability' AND target_pattern = ${skillId}
+           AND revoked_at IS NULL
+        RETURNING id`;
+      result.updated["governance_rules:skill(repointed)"] =
+        (result.updated["governance_rules:skill(repointed)"] ?? 0) +
+        rules.length;
     }
 
     // 5. Retire the container's member skills WITH it.

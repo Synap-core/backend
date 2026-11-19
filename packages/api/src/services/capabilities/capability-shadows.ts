@@ -33,6 +33,7 @@ import {
   tools,
   links,
   vaultGrants,
+  governanceRules,
   isNull,
   drizzleSql,
 } from "@synap/database";
@@ -342,6 +343,20 @@ export async function retireCapabilityShadows(input: {
           inArray(vaultGrants.grantableType, ["skill", "tool"]),
           inArray(vaultGrants.grantableId, ids),
           isNull(vaultGrants.revokedAt)
+        )
+      );
+    // The auto approval rows naming a removed part by its id (a grant's, since
+    // 0434) would match nothing again; take them back with the grants so the
+    // approvals list does not keep a dead "runs on its own".
+    await tx
+      .update(governanceRules)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(governanceRules.targetKind, "capability"),
+          inArray(governanceRules.targetPattern, ids),
+          eq(governanceRules.verdict, "auto"),
+          isNull(governanceRules.revokedAt)
         )
       );
   });

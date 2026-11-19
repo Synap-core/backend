@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
  * Each case rules out one wrong floor:
  *  - a person token on publish_post owner-bypassed       → "person token … proposes";
  *  - the floor reaching the person's own pod-UI use      → "no app … runs";
- *  - an auto grant widening an app run past it           → "app agent key with an auto grant";
+ *  - an auto approval row widening an app run past it    → "app agent key with an auto approval row";
  *  - the floor swallowing reads                          → "a read intent … runs";
  *  - an unknown intent read as safe                      → "no declared intent … proposes";
  *  - an agent's intent action auto-running past it       → "an intent action with no app …";
@@ -25,7 +25,6 @@ import { fileURLToPath } from "node:url";
  */
 
 const grantMock = vi.fn();
-const findCapabilityGrantMock = vi.fn();
 const resolveGovernanceRuleMock = vi.fn();
 /** edit_video's effect as migration 0370 seeds it (decision ac1ba2b6). */
 const EDIT_VIDEO_EFFECT = readFileSync(
@@ -72,7 +71,6 @@ const fakeDb = {
 vi.mock("@synap/database", () => ({
   getDb: async () => fakeDb,
   eq: (a: unknown, b: unknown) => ({ a, b }),
-  findCapabilityGrant: (...args: unknown[]) => findCapabilityGrantMock(...args),
   getRequestGrant: () => grantMock(),
 }));
 
@@ -113,7 +111,6 @@ const personRun = (intent: string | null, over: object = {}) => ({
 describe("gateCapabilityExecution — an app's outward run always proposes (4A)", () => {
   beforeEach(() => {
     grantMock.mockReset();
-    findCapabilityGrantMock.mockReset();
     resolveGovernanceRuleMock.mockReset();
     resolveGovernanceRuleMock.mockResolvedValue(undefined);
     skillRows.clear();
@@ -140,9 +137,8 @@ describe("gateCapabilityExecution — an app's outward run always proposes (4A)"
     });
   });
 
-  it("an app agent key with an auto grant still proposes", async () => {
+  it("an app agent key with an auto approval row still proposes", async () => {
     grantMock.mockReturnValue(APP_GRANT);
-    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
     resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" });
     const decision = await gateCapabilityExecution(
       personRun("publish_post", {
@@ -208,7 +204,6 @@ describe("gateCapabilityExecution — an app's outward run always proposes (4A)"
         personRun("publish_post", { intentRun: true })
       )
     ).toMatchObject({ decision: "propose", reasonCode: "INTENT_OUTWARD" });
-    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
     resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" });
     expect(
       await gateCapabilityExecution(
