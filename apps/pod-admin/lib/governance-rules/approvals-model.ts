@@ -32,9 +32,12 @@
 import {
   actionRunModeOf,
   isRootSwitchRule,
+  ruleTitle,
   type ActionRunMode,
   type GovernanceRuleRowLike,
+  type HumanizeTargetOptions,
 } from "@synap-core/types/governance-rules";
+import { resolveVerbStepLabel } from "@synap-core/types/vocabulary";
 
 /** The author prefixes the pod stamps (`@synap/database`), as stored. */
 export const AUTHORED_PREFIX = "user:";
@@ -216,4 +219,56 @@ export function filterValues(
     else byId.set(id, { id, count: 1, sample: row });
   }
   return [...byId.values()];
+}
+
+// ─── What a row covers, in words ────────────────────────────────────────
+
+/** The capability catalog fields that name a tool (`capabilities.catalog`). */
+export interface ToolNameSource {
+  id: string | null;
+  name: string;
+  verbs: ReadonlyArray<{ verbId: string; label: string }>;
+}
+
+/**
+ * A tool rule's `targetPattern` (an action's stable name, or a capability's
+ * id) → its display name from the catalog: "Read a LinkedIn profile
+ * (Apify)", or the capability's own name. null when the catalog does not
+ * hold it.
+ */
+export function toolNamesOf(
+  cards: readonly ToolNameSource[] | null | undefined
+): (pattern: string) => string | null {
+  const names = new Map<string, string>();
+  for (const card of cards ?? []) {
+    if (card.id) names.set(card.id, card.name);
+    for (const v of card.verbs)
+      if (!names.has(v.verbId))
+        names.set(v.verbId, `${v.label} (${card.name})`);
+  }
+  return (pattern) => names.get(pattern) ?? null;
+}
+
+/**
+ * A tool's name for a row or a chip: the catalog's label, else the
+ * vocabulary's words for the action (`resolveVerbStepLabel`). Never the raw
+ * id: `Tool "apify_linkedin_profile"` is what this replaced.
+ */
+export function approvalToolName(
+  pattern: string,
+  toolName: (pattern: string) => string | null
+): string {
+  return toolName(pattern) ?? resolveVerbStepLabel(pattern);
+}
+
+/** A row's title: a tool by its name, everything else by the shared rule words. */
+export function approvalTitle(
+  row: ApprovalRowLike,
+  opts: HumanizeTargetOptions & {
+    toolName: (pattern: string) => string | null;
+  }
+): string {
+  if (row.targetKind === "capability")
+    return approvalToolName(row.targetPattern, opts.toolName);
+  return ruleTitle(row, opts);
 }

@@ -81,14 +81,23 @@ export function ApprovalLine({
       <ResourceRow
         Icon={ShieldCheck}
         primary={title}
-        secondary={[
-          who,
-          where,
-          // The origin's door sits in the actions; its words stay here too.
-          origin.href ? null : t("row.from", { origin: originWords }),
-        ]
-          .filter(Boolean)
-          .join(" · ")}
+        // who · where · from: one line, the origin a door when it has a page,
+        // so the right side holds only the mark and the way back.
+        secondary={
+          <>
+            {who} · {where} · {t("row.fromLabel")}{" "}
+            {origin.href ? (
+              <Link
+                href={origin.href}
+                className="text-foreground/85 underline-offset-2 hover:underline"
+              >
+                {originWords}
+              </Link>
+            ) : (
+              originWords
+            )}
+          </>
+        }
         status={{
           kind: MODE_TONE[mode],
           label: resolveActionRunModeLabel(mode),
@@ -96,18 +105,6 @@ export function ApprovalLine({
         wrap
         actions={
           <div className="flex flex-wrap items-center gap-1">
-            {origin.href && (
-              <Button
-                as={Link}
-                href={origin.href}
-                size="sm"
-                variant="light"
-                radius="md"
-                className="min-h-9"
-              >
-                {t("row.from", { origin: originWords })}
-              </Button>
-            )}
             {back.kind === "revoke" ? (
               <Button
                 size="sm"

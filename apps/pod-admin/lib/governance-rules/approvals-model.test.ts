@@ -11,8 +11,11 @@ import {
   approvalOrigin,
   approvalSpaceKey,
   approvalTakeBack,
+  approvalTitle,
   approvalToolKey,
+  approvalToolName,
   filterValues,
+  toolNamesOf,
   type ApprovalRowLike,
 } from "./approvals-model";
 import { en, fr } from "../../app/(admin)/approvals/_lib/copy";
@@ -234,6 +237,50 @@ describe("the page's words", () => {
     for (const key of ORIGIN_KEYS) {
       expect(en[`origin.${key}`], key).toBeTruthy();
       expect(fr[`origin.${key}`], key).toBeTruthy();
+    }
+  });
+});
+
+describe("a tool is named by its words, never its raw id", () => {
+  const CARDS = [
+    {
+      id: "cap-apify",
+      name: "Apify",
+      verbs: [
+        { verbId: "apify_linkedin_profile", label: "Read a LinkedIn profile" },
+        { verbId: "capture_social_post", label: "Capture a social post" },
+      ],
+    },
+  ];
+  const toolName = toolNamesOf(CARDS);
+  /** A raw verb id or snake_case token in a title. */
+  const RAW = /\b[a-z0-9]+(?:_[a-z0-9]+)+\b/;
+
+  it("a tool rule's title is the catalog's label and its tool, with no raw id", () => {
+    const title = approvalTitle(row(), { toolName });
+    expect(title).toBe("Read a LinkedIn profile (Apify)");
+    expect(title).not.toMatch(RAW);
+  });
+
+  it("a rule naming the capability itself reads its name", () => {
+    expect(
+      approvalTitle(row({ targetPattern: "cap-apify" }), { toolName })
+    ).toBe("Apify");
+  });
+
+  it("an action the catalog does not hold still reads as words, never the id", () => {
+    const name = approvalToolName("fr_company_lookup", toolNamesOf([]));
+    expect(name).not.toMatch(RAW);
+    expect(name).not.toContain("fr_company_lookup");
+  });
+
+  it("no capability row of the fixtures renders a raw id when a label exists", () => {
+    for (const r of Object.values(BY_ORIGIN).filter(
+      (r) => r.targetKind === "capability"
+    )) {
+      const title = approvalTitle(r, { toolName });
+      expect(title, r.targetPattern).not.toMatch(RAW);
+      expect(title, r.targetPattern).not.toContain(r.targetPattern);
     }
   });
 });

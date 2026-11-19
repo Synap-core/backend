@@ -29,12 +29,8 @@ import {
   APPROVALS_TITLE,
   humanizePrincipal,
   humanizeScope,
-  ruleTitle,
 } from "@synap-core/types/governance-rules";
-import {
-  humanizeToken,
-  resolveActionRunModeLabel,
-} from "@synap-core/types/vocabulary";
+import { resolveActionRunModeLabel } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
 import { navHref } from "../../../lib/console-nav";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -52,9 +48,16 @@ import {
   approvalMatches,
   approvalMode,
   approvalSpaceKey,
+  approvalTitle,
   approvalToolKey,
+  approvalToolName,
   filterValues,
+  toolNamesOf,
 } from "../../../lib/governance-rules/approvals-model";
+import {
+  CAPABILITY_READ_OPTIONS,
+  CATALOG_INPUT,
+} from "../tools/_lib/tools-model";
 import { matrixAgents } from "../../../lib/agent-matrix/matrix-view-model";
 import { ConfirmModal } from "../components/confirm-modal";
 import {
@@ -121,6 +124,16 @@ function ApprovalsInner() {
     () => buildConnectionLabelLookup(connections.data ?? []),
     [connections.data]
   );
+  // A tool rule names an action by its stable id: its words come from the
+  // catalog (the Tools list's read), else the vocabulary; never the raw id.
+  const catalog = trpc.capabilities.catalog.useQuery(CATALOG_INPUT, {
+    ...CAPABILITY_READ_OPTIONS,
+    enabled: all.some((r) => r.targetKind === "capability"),
+  });
+  const toolName = useMemo(
+    () => toolNamesOf(catalog.data ?? []),
+    [catalog.data]
+  );
 
   useEffect(() => {
     if (rules.error) redirectToLoginIfUnauthorized(rules.error);
@@ -158,7 +171,7 @@ function ApprovalsInner() {
         }));
   const toolOptions = filterValues(all, approvalToolKey).map((v) => ({
     id: v.id,
-    label: humanizeToken(v.id),
+    label: approvalToolName(v.id, toolName),
     count: v.count,
   }));
   const verdictOptions = APPROVAL_VERDICTS.map((v) => {
@@ -185,7 +198,7 @@ function ApprovalsInner() {
   const utils = trpc.useUtils();
   const revoke = trpc.governanceRules.revoke.useMutation();
   const titleOf = (row: GovernanceRuleRow) =>
-    ruleTitle(row, { connectionLabel });
+    approvalTitle(row, { connectionLabel, toolName });
 
   async function confirmTakeBack() {
     if (!pending) return;
