@@ -4929,6 +4929,103 @@ const pdfInfoHandler: BuiltinVerbHandler = async (params, ctx) => {
   return runPdfInfo(params, ctx);
 };
 
+// ── The design door (plan 0fc746f4 §2.6) ─────────────────────────────────────
+//
+// Shipped by the market `design` capability, not Synap Core: the skill rows
+// exist (and so the verbs run) only where that package is installed. Each
+// handler hands off to `services/designs/design-door.ts`, which validates
+// against the installed catalog snapshot with the one board parser
+// (`@synap-core/types/design-board`) and writes through the governed entity
+// door as the acting agent. Their param contract is
+// `DESIGN_VERB_PARAMETERS` (the package carries it verbatim; the
+// catalog-coherence tripwire reads it).
+//
+//   design.read     READ-ONLY: a design, its board, an outline per frame,
+//                   whether it may be edited, what the catalog cannot place.
+//   design.catalog  READ-ONLY: the installed kit, its components and props,
+//                   the canvas blocks, the grid, the frame presets.
+//   design.apply    WRITE, SELF-GATED (`SELF_GATED_BUILTIN_VERBS`): the entity
+//                   door is the one gate, so one proposal carries the entity
+//                   diff; under `mustPropose` it is told `forcePropose`.
+// A refusal (an op the catalog refuses, a design changed since it was read,
+// no catalog installed) is a `VerbRefusal`: a definite not-run whose sentence
+// names the op, the reason and the catalog hash.
+
+const designReadParams = z.object({ designId: z.string().uuid() });
+const designCatalogParams = z.object({});
+const designApplyParams = z.object({
+  designId: z.string().uuid().optional(),
+  baseUpdatedAt: z.string().min(1).optional(),
+  ops: z.array(z.record(z.string(), z.unknown())).min(1).max(200),
+  acceptDrops: z.boolean().optional(),
+});
+
+/** The design door's TRPC refusals, as a verb's refusal (a definite not-run, classed). */
+async function designDoorRefusals<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof TRPCError) {
+      const errorClass =
+        err.code === "NOT_FOUND"
+          ? "target_missing"
+          : err.code === "FORBIDDEN" || err.code === "UNAUTHORIZED"
+            ? "permission"
+            : err.code === "CONFLICT"
+              ? "conflict"
+              : err.code === "BAD_REQUEST" ||
+                  err.code === "PRECONDITION_FAILED" ||
+                  err.code === "UNPROCESSABLE_CONTENT"
+                ? "validation"
+                : null;
+      if (errorClass) throw new VerbRefusal(err.message, errorClass);
+    }
+    throw err;
+  }
+}
+
+const designReadHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = designReadParams.parse(params);
+  const { readDesign } = await import("../designs/design-door.js");
+  return designDoorRefusals(() =>
+    readDesign(
+      { userId: ctx.userId, workspaceId: ctx.workspaceId },
+      input.designId
+    )
+  );
+};
+
+const designCatalogHandler: BuiltinVerbHandler = async (params) => {
+  designCatalogParams.parse(params);
+  const { designCatalog } = await import("../designs/design-door.js");
+  return designDoorRefusals(() => designCatalog());
+};
+
+const designApplyHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = designApplyParams.parse(params);
+  const { applyDesign } = await import("../designs/design-door.js");
+  // Same as entity.update: the entity door keys its AI ladder on the agent,
+  // so an unforwarded actor would be judged on the operator path.
+  const agentUserId = getActingAgentUserId() ?? ctx.agentUserId ?? null;
+  const reply = await designDoorRefusals(() =>
+    applyDesign(
+      {
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        agentUserId,
+        sessionId: ctx.sessionId ?? null,
+        mustPropose: ctx.mustPropose === true,
+      },
+      input
+    )
+  );
+  if (reply.status === "refused")
+    throw new VerbRefusal(reply.message, "validation", "DESIGN_OP_REFUSED");
+  if (reply.status === "conflict")
+    throw new VerbRefusal(reply.message, "conflict", "DESIGN_CHANGED");
+  return reply;
+};
+
 /**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
@@ -5050,6 +5147,10 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "pdf.to_pdf": pdfToPdfHandler,
   "pdf.to_markdown": pdfToMarkdownHandler,
   "pdf.info": pdfInfoHandler,
+  // The design door: shipped by the market `design` capability (see above).
+  "design.read": designReadHandler,
+  "design.catalog": designCatalogHandler,
+  "design.apply": designApplyHandler,
 };
 
 /**
@@ -5134,6 +5235,9 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "pdf.to_pdf": pdfToPdfParams,
   "pdf.to_markdown": pdfToMarkdownParams,
   "pdf.info": pdfInfoParams,
+  "design.read": designReadParams,
+  "design.catalog": designCatalogParams,
+  "design.apply": designApplyParams,
 };
 
 /**
@@ -5243,4 +5347,8 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // caller's floor) and RETURNS the pod's own engine's report on it. Creates
   // nothing; the bytes go only to the pod's internal engine, never outward.
   "pdf.info",
+  // design.read — one design through the caller's entity read floor, parsed;
+  // design.catalog — the installed package's catalog snapshot. Write nothing.
+  "design.read",
+  "design.catalog",
 ]);

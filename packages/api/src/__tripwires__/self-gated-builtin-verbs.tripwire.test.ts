@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   sendInputs: [] as Array<Record<string, unknown>>,
   installInputs: [] as Array<Record<string, unknown>>,
   connectInputs: [] as Array<Record<string, unknown>>,
+  designInputs: [] as Array<Record<string, unknown>>,
   gateDecision: {
     decision: "propose",
     reasonCode: "APP_OUTWARD_INTENT",
@@ -103,6 +104,16 @@ vi.mock("../services/webhooks/connect-inbound-source.js", () => ({
     return { status: "proposed", proposalId: "inner-proposal" };
   },
 }));
+// design.apply's inner gate is the governed entity door, told `forcePropose`
+// under `mustPropose` (`applyDesign`; its own suite drives that half).
+vi.mock("../services/designs/design-door.js", () => ({
+  applyDesign: async (ctx: Record<string, unknown>) => {
+    h.designInputs.push(ctx);
+    return ctx.mustPropose
+      ? { status: "proposed", proposalId: "inner-proposal", reviewUrl: null }
+      : { status: "applied", designId: "d1" };
+  },
+}));
 vi.mock("../services/capabilities/market-sources.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   resolveMarketSource: async () => ({ official: true }),
@@ -150,12 +161,21 @@ const PROBES: Record<
     },
     innerGateSaw: () => h.connectInputs.length === 1,
   },
+  "design.apply": {
+    params: {
+      designId: "44444444-4444-4444-8444-444444444444",
+      baseUpdatedAt: "2026-11-19T00:00:00.000Z",
+      ops: [{ op: "remove_block", id: "Text-1" }],
+    },
+    innerGateSaw: () => h.designInputs.at(-1)?.mustPropose,
+  },
 };
 
 beforeEach(() => {
   h.sendInputs.length = 0;
   h.installInputs.length = 0;
   h.connectInputs.length = 0;
+  h.designInputs.length = 0;
   h.capabilityProposals.length = 0;
   h.gateDecision = { decision: "propose", reasonCode: "APP_OUTWARD_INTENT" };
 });
@@ -171,6 +191,12 @@ describe("every self-gated builtin verb hands mustPropose to its inner gate", ()
     // Decision abaaa696: a generic capability.run would store the call's
     // parameters and its approval would write the run result to recall.
     expect(SELF_GATED_BUILTIN_VERBS.has("inbound_source.connect")).toBe(true);
+  });
+
+  it("design.apply is self-gated: one entity proposal carries the design's diff", () => {
+    // Plan 0fc746f4 §2.6: a capability.run in front of the entity door would
+    // be a second gate showing the ops, not the design.
+    expect(SELF_GATED_BUILTIN_VERBS.has("design.apply")).toBe(true);
   });
 
   it("the set is not empty and every member has a probe", () => {
