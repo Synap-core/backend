@@ -365,7 +365,11 @@ describe("the page bridge — through the console's own client", () => {
     await send(query("playbook.scorecard", { id: "pb1" }, "q2"));
     expect(calls).toEqual([]);
     expect(posted.map((p) => p.message)).toEqual([
-      { type: "synap:query:result", id: "q1", error: '"sessions.get" needs an id.' },
+      {
+        type: "synap:query:result",
+        id: "q1",
+        error: '"sessions.get" needs an id.',
+      },
       {
         type: "synap:query:result",
         id: "q2",

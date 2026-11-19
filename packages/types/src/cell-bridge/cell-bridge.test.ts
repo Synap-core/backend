@@ -327,7 +327,12 @@ describe("the host's tokens in the frame", () => {
   it("frameTokensCss: every --synap-* name the host declares, at the value the host computes now", () => {
     const rule = (...names: string[]) => ({ style: names });
     const sheets = [
-      { cssRules: [rule("--synap-bg", "color", "--other-x"), rule("--synap-ink")] },
+      {
+        cssRules: [
+          rule("--synap-bg", "color", "--other-x"),
+          rule("--synap-ink"),
+        ],
+      },
       // A media or layer group: its rules are walked too.
       { cssRules: [{ cssRules: [rule("--synap-bg", "--synap-accent")] }] },
       // Another origin's sheet throws on read: it holds no token of ours.

@@ -151,7 +151,11 @@ describe("handleFrameOpen — a page asks to open an object, the console decides
   it("every kind a page may open has a console page (none is a dead door)", () => {
     for (const kind of FRAME_OPEN_KINDS) {
       const { e, calls } = env();
-      const done = handleFrameOpen({ source: FRAME, data: open(kind) }, FRAME, e);
+      const done = handleFrameOpen(
+        { source: FRAME, data: open(kind) },
+        FRAME,
+        e
+      );
       expect(done?.action, kind).toBe("here");
       // A console page, never an app link drawn in the reader's tab.
       expect(calls, kind).toEqual([
@@ -185,7 +189,11 @@ describe("handleFrameOpen — a page asks to open an object, the console decides
       handleFrameOpen({ source: FRAME, data: open("capability") }, FRAME, e)
     ).toBe(null);
     expect(
-      handleFrameOpen({ source: FRAME, data: open("session", "../x") }, FRAME, e)
+      handleFrameOpen(
+        { source: FRAME, data: open("session", "../x") },
+        FRAME,
+        e
+      )
     ).toBe(null);
     expect(calls).toEqual([]);
   });
@@ -201,7 +209,11 @@ describe("handleFrameOpen — a page asks to open an object, the console decides
   it("a link message is not an open, and an open is not a link", () => {
     const { e, calls } = env();
     expect(
-      handleFrameOpen({ source: FRAME, data: link(`${POD}/open/abc`) }, FRAME, e)
+      handleFrameOpen(
+        { source: FRAME, data: link(`${POD}/open/abc`) },
+        FRAME,
+        e
+      )
     ).toBe(null);
     expect(
       handleFrameLink({ source: FRAME, data: open("session") }, FRAME, e)

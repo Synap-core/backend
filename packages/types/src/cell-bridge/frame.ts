@@ -117,15 +117,19 @@ export function cellFrameHeadBlock(options: CellFrameOptions = {}): string {
 /** The token names a frame receives: the design tokens' own prefix. */
 export const FRAME_TOKEN_PREFIX = "--synap-";
 
-/** The slice of a CSS rule read here (a style rule, or a group of rules). */
+/**
+ * The slice of a CSS rule read here: a style rule (`style`, the names it
+ * declares) or a group of rules (`cssRules`: a media, supports or layer
+ * block). Any other rule has neither and is passed over.
+ */
 interface FrameTokenRule {
   readonly style?: ArrayLike<string>;
-  readonly cssRules?: ArrayLike<FrameTokenRule>;
+  readonly cssRules?: ArrayLike<unknown>;
 }
 
-/** The slice of a stylesheet read here. */
+/** The slice of a stylesheet read here (a `CSSStyleSheet`). */
 interface FrameTokenSheet {
-  readonly cssRules: ArrayLike<FrameTokenRule>;
+  readonly cssRules: ArrayLike<unknown>;
 }
 
 /**
@@ -144,9 +148,10 @@ export function frameTokensCss(
   computed: { getPropertyValue(name: string): string }
 ): string {
   const names = new Set<string>();
-  const walk = (rules: ArrayLike<FrameTokenRule>) => {
+  const walk = (rules: ArrayLike<unknown>) => {
     for (let i = 0; i < rules.length; i += 1) {
-      const rule = rules[i]!;
+      const rule = rules[i] as FrameTokenRule | null | undefined;
+      if (!rule) continue;
       if (rule.style) {
         for (let j = 0; j < rule.style.length; j += 1) {
           const name = rule.style[j]!;
@@ -157,7 +162,7 @@ export function frameTokensCss(
     }
   };
   for (let i = 0; i < sheets.length; i += 1) {
-    let rules: ArrayLike<FrameTokenRule>;
+    let rules: ArrayLike<unknown>;
     try {
       rules = sheets[i]!.cssRules;
     } catch {
