@@ -11,7 +11,8 @@
  * Rows rule out: a second join stacked for the same space (the gate's reuse),
  * a join filed for an agent that is already a member, a join filed when the
  * key's grant cannot reach the space (it would change nothing; a grant of
- * pod-wide reads only reaches none), a join into an archived space, a member
+ * pod-wide reads only reaches none, nor does one pinned to projects or objects
+ * with no space), a join into an archived space, a member
  * of an archived space told it is a member, and a join filed for a space that
  * does not exist.
  */
@@ -207,6 +208,43 @@ describe("synap_request_workspace_access — the gate's own join, asked for on p
   it("control: a grant on every space (no list) files the join", async () => {
     const res = await requestAccess(WS, {
       scopes: [{ permissions: ["*"], workspaceIds: null }],
+      clientId: null,
+    });
+    expect(res.status).toBe("proposed");
+    expect(await joins()).toHaveLength(1);
+  });
+
+  // W3a (decision 51ad8d1e F3): a project pin covers no whole space. Before,
+  // a scope pinned to projects (or objects) with no space read as reaching
+  // every space, so it filed a join anywhere.
+  it("a key pinned to a project, with no space ⇒ refused, nothing filed", async () => {
+    const res = await requestAccess(WS, {
+      scopes: [
+        { permissions: ["*"], workspaceIds: null, projectIds: [randomUUID()] },
+      ],
+      clientId: null,
+    });
+    expect(res.status).toBe("refused");
+    expect(String(res.reason)).toMatch(/grant does not reach this space/);
+    expect(await joins()).toEqual([]);
+  });
+
+  it("a key pinned to objects, with no space ⇒ refused, nothing filed", async () => {
+    const res = await requestAccess(WS, {
+      scopes: [
+        { permissions: ["*"], workspaceIds: null, entityIds: [randomUUID()] },
+      ],
+      clientId: null,
+    });
+    expect(res.status).toBe("refused");
+    expect(await joins()).toEqual([]);
+  });
+
+  it("control: a project pin beside the named space files the join (the space is named)", async () => {
+    const res = await requestAccess(WS, {
+      scopes: [
+        { permissions: ["*"], workspaceIds: [WS], projectIds: [randomUUID()] },
+      ],
       clientId: null,
     });
     expect(res.status).toBe("proposed");

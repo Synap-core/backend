@@ -8,7 +8,7 @@
 
 import { presenceProofSchema } from "@synap-core/types/presence";
 import { resolveKeyExpiry } from "@synap/governance-policy/grants";
-import { placeBeyondPodWideReads } from "@synap-core/types/grants";
+import { wholeSpacesBeyondPodWideReads } from "@synap-core/types/grants";
 import {
   ExpiresInDaysSchema,
   GrantInputSchema,
@@ -1135,13 +1135,15 @@ export function registerSetupRoutes(app: HubHono): void {
             404
           );
         }
-        // A pod-wide read (decision e1b59d38 "B") reaches no space to add
-        // an AI to: only a scope about spaces does.
+        // The AI becomes an editor of the WHOLE space, so only a scope that
+        // covers it counts: unpinned, or naming it. A pod-wide read (decision
+        // e1b59d38 "B") covers none, nor does a scope pinned to projects or
+        // objects with no space (decision 51ad8d1e F3).
         const withinGrant = surfaceCallerGrants.some((g) => {
-          const place = placeBeyondPodWideReads(g);
+          const spaces = wholeSpacesBeyondPodWideReads(g);
           return (
-            place !== null &&
-            (place.kind !== "spaces" || place.ids.includes(ws.id))
+            spaces === "anywhere" ||
+            (spaces !== null && spaces.includes(ws.id))
           );
         });
         if (

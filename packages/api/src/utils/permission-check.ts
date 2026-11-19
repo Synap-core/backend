@@ -19,7 +19,7 @@ import {
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
-import { placeBeyondPodWideReads } from "@synap-core/types/grants";
+import { wholeSpacesBeyondPodWideReads } from "@synap-core/types/grants";
 import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
 import {
@@ -5178,11 +5178,14 @@ const WORKSPACE_JOIN_REQUESTED_MESSAGE =
  * an archived space refused, a pending join reused), so a write made after
  * this request is kept on that join and replayed with the rest.
  *
- * Refused before anything is filed when the key's grant does not reach the
- * space for anything beyond pod-wide reads (THE reach parse,
- * `placeBeyondPodWideReads`; a grant of pod-wide reads only reaches none): the
- * gate's rung 0 would deny every write there whatever the membership, so a
- * join would only put a card in front of the person that changes nothing.
+ * Refused before anything is filed when no scope of the key's grant covers
+ * the WHOLE space beyond pod-wide reads (`wholeSpacesBeyondPodWideReads`):
+ * a scope of other spaces, or of pod-wide reads only, would be denied every
+ * write there by the gate's rung 0, so a join would put a card in front of
+ * the person that changes nothing; a scope pinned to projects or objects
+ * with no space covers no space at all (decision 51ad8d1e F3), so it is not
+ * a reason to ask for one. Its write of a row in that space still meets the
+ * gate, which files the join with that write.
  * An archived space is refused, a member's included: no agent writes there.
  */
 export async function requestWorkspaceJoin(opts: {
@@ -5196,14 +5199,12 @@ export async function requestWorkspaceJoin(opts: {
   if (
     grant &&
     !grant.scopes.some((scope) => {
-      const place = placeBeyondPodWideReads(scope);
-      // A project pin reads here as it did before projects were a place
-      // (no space narrowing); its projects narrow at `permits` (W1).
+      // A join is a membership of the WHOLE space: only a scope that covers
+      // it counts, never a project or object pin with no space.
+      const spaces = wholeSpacesBeyondPodWideReads(scope);
       return (
-        place !== null &&
-        (place.kind === "unbounded" ||
-          place.kind === "projects" ||
-          place.ids.includes(workspaceId))
+        spaces === "anywhere" ||
+        (spaces !== null && spaces.includes(workspaceId))
       );
     })
   ) {

@@ -156,6 +156,42 @@ export function placeBeyondPodWideReads(
 /** A place that is not the pod: what a scope reaches beyond its pod-wide reads. */
 export type SpacesOrAnywhere = Exclude<Place, { readonly kind: "pod" }>;
 
+/**
+ * The WHOLE spaces a scope reaches beyond its pod-wide reads: what a door
+ * asks when what it hands out, or routes into, is a space itself (join it,
+ * add an AI to it, find a role row stamped in it, route a capture into it),
+ * never one row.
+ *
+ *  - `"anywhere"`: a scope with no space, project or object pin;
+ *  - the named spaces of a `spaces` place (a project or object pin beside
+ *    them narrows the rows inside them, as `parsePlace` reads it);
+ *  - none (`[]`) for a scope pinned to projects or objects with no space: its
+ *    rows sit inside spaces but it covers no space entire ("only project X"
+ *    is no space, decision 51ad8d1e F3). There is no project-to-space mapping
+ *    here: a project's spaces count only for a project-only session
+ *    (`session-counted-spaces.ts`). An empty project list, which `permits`
+ *    reads as no project at all, reaches none either;
+ *  - null: a pod-wide read, which reaches no space beyond reading its kinds.
+ */
+export function wholeSpacesBeyondPodWideReads(
+  scope: PlaceScopeLike
+): "anywhere" | readonly string[] | null {
+  const place = placeBeyondPodWideReads(scope);
+  if (place === null) return null;
+  switch (place.kind) {
+    case "spaces":
+      return place.ids;
+    case "projects":
+      return [];
+    case "unbounded":
+      return scope.projectIds != null || scope.entityIds != null
+        ? []
+        : "anywhere";
+    default:
+      return assertNeverPlace(place);
+  }
+}
+
 /** One request as a connect proposal, `approved_requests` or `synap_grant` carry it. */
 export interface PlaceRequestLike {
   readonly permission: string;

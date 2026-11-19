@@ -1266,6 +1266,37 @@ describe("T5 — never wider than the consent; the app's lifecycle reaches it", 
     }
   });
 
+  // W3a: a sign-in scope pinned to a project beside its spaces was read as
+  // those whole spaces, so narrowing re-minted it from pairs WITHOUT the pin:
+  // a narrower approval widened the token to every row of Sales.
+  it("narrowing never re-mints a project-pinned scope without its pin", async () => {
+    const t = await signIn(OWNER);
+    const keyId = (await keyRow(t)).id;
+    await q(
+      `update grants set project_ids = $2::uuid[] where api_key_id = $1 and revoked_at is null`,
+      [keyId, `{${randomUUID()}}`]
+    );
+    const repo = new AppRepository(h.db as never);
+    await repo.setApprovedRequests(
+      appId,
+      APPROVED.filter((r) => r.workspaceId === SALES)
+    );
+    try {
+      await applyApprovedReach(appId);
+      const live = await q<{
+        workspace_ids: string[] | null;
+        project_ids: string[] | null;
+      }>(
+        `select workspace_ids, project_ids from grants where api_key_id = $1 and revoked_at is null`,
+        [keyId]
+      );
+      // No live scope lost the project pin (it is dropped, never widened).
+      expect(live.rows.filter((g) => !g.project_ids?.length)).toEqual([]);
+    } finally {
+      await repo.setApprovedRequests(appId, APPROVED);
+    }
+  });
+
   it("rotating the app's own key keeps the person signed in; revoking the app ends it", async () => {
     const t = await signIn(OWNER);
     appKey = (

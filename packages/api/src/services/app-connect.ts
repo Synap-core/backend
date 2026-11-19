@@ -1079,15 +1079,18 @@ async function narrowAppPersonTokens(
     const kept: AppApprovedRequest[] = [];
     let before = 0;
     for (const scope of live) {
-      // A scope with no space holds the pod-wide reads (`workspaceId: null`);
-      // anything else in it has no approved pair, so it is not kept.
-      const place = parsePlace(scope, "app");
-      if (place.kind === "projects") {
-        // No pair names a project: such a scope is never kept as a pod-wide
-        // read (that would widen it), so the token is re-derived without it.
+      if (scope.projectIds != null || scope.entityIds != null) {
+        // No pair names a project or an object, so a pinned scope is never
+        // kept as pairs: re-minted from them it would lose its pin and widen
+        // (a scope pinned to projects read as a pod-wide read; one pinned to
+        // spaces AND projects read as those whole spaces). The token is
+        // re-derived without it.
         before += scope.permissions.length;
         continue;
       }
+      // A scope with no space holds the pod-wide reads (`workspaceId: null`);
+      // anything else in it has no approved pair, so it is not kept.
+      const place = parsePlace(scope, "app");
       const places: Array<string | null> =
         place.kind === "spaces" ? [...place.ids] : [null];
       for (const workspaceId of places) {

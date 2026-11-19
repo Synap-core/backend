@@ -144,7 +144,12 @@ const connect = (body: Record<string, unknown>) => {
   });
 };
 
-const everywhere = { workspaceIds: null as string[] | null };
+const everywhere = {
+  workspaceIds: null as string[] | null,
+  projectIds: null as string[] | null,
+  entityIds: null as string[] | null,
+};
+const PROJECT = "0eeeeeee-0000-4000-8000-000000000006";
 
 /** The calling key: held by `person`, with `scope`. */
 function key(person: string, scope: string[]) {
@@ -181,6 +186,8 @@ beforeEach(() => {
   h.memberAnswers = [];
   h.inserts = [];
   everywhere.workspaceIds = null;
+  everywhere.projectIds = null;
+  everywhere.entityIds = null;
   usersFindMany.mockResolvedValue([
     { id: VICTIM, email: VICTIM_EMAIL, name: "Victim" },
     { id: ADMIN, email: "admin@example.test", name: "Admin" },
@@ -189,8 +196,8 @@ beforeEach(() => {
     {
       permissions: ["*"],
       workspaceIds: everywhere.workspaceIds,
-      projectIds: null,
-      entityIds: null,
+      projectIds: everywhere.projectIds,
+      entityIds: everywhere.entityIds,
       expiresAt: null,
     },
   ]);
@@ -285,6 +292,39 @@ describe("F5 — a surface key adds its AI only to a space its person administer
     const res = await connect({ workspaceId: WS });
     expect(res.status).toBe(403);
     expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
+  });
+
+  // W3a (decision 51ad8d1e F3): the AI becomes an editor of the WHOLE space,
+  // which a project or object pin with no space does not cover. Before, such
+  // a key read as reaching every space and added its AI to any it administers.
+  it("an admin whose key is pinned to a project, with no space: 403, nothing minted", async () => {
+    key(MEMBER, ["hub-protocol.write"]);
+    everywhere.projectIds = [PROJECT];
+    h.memberAnswers = [{ role: "admin" }];
+    const res = await connect({ workspaceId: WS });
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe("WORKSPACE_ADMIN_REQUIRED");
+    expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
+    expect(h.inserts).toEqual([]);
+  });
+
+  it("an admin whose key is pinned to objects, with no space: 403, nothing minted", async () => {
+    key(MEMBER, ["hub-protocol.write"]);
+    everywhere.entityIds = ["0fffffff-0000-4000-8000-000000000007"];
+    h.memberAnswers = [{ role: "admin" }];
+    const res = await connect({ workspaceId: WS });
+    expect(res.status).toBe(403);
+    expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
+  });
+
+  it("control: the owner's key naming the space beside a project adds the agent", async () => {
+    key(MEMBER, ["hub-protocol.write"]);
+    everywhere.workspaceIds = [WS];
+    everywhere.projectIds = [PROJECT];
+    h.memberAnswers = [{ role: "owner" }, { userId: MEMBER }, undefined];
+    const res = await connect({ workspaceId: WS });
+    expect(res.status).toBe(200);
+    expect(provisionSurfaceAgentKey).toHaveBeenCalled();
   });
 
   it("an admin of a space with NO owner row: the agent joins as editor, no human is written in as owner", async () => {
