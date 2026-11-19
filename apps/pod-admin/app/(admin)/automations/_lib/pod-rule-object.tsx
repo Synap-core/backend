@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * `/rules/<rule id>` for a rule the POD applies (a built-in rule, or a
+ * `/automations/<rule id>` for a rule the POD applies (a built-in rule, or a
  * roll-up a relation declares; decision D8): the second rung after the
  * Rules list. In order:
  *   1. what it is: its name, on or paused, and its one act (Pause / Turn on,
@@ -71,7 +71,7 @@ export function PodRuleObject({ id }: { id: string }) {
           <ResourceRowEmpty message="No automation by this name, or you can’t see it." />
         )}
         <Link
-          href={navHref("rules")}
+          href={navHref("automations")}
           className="mt-4 inline-block text-[13px] underline underline-offset-2"
         >
           Back to the automations
@@ -81,7 +81,7 @@ export function PodRuleObject({ id }: { id: string }) {
   }
 
   const turnOn = !rule.enabled;
-  async function confirm() {
+  async function confirmAct() {
     setError(null);
     try {
       const r = await setRule.mutateAsync({ id: rule!.id, on: turnOn });
@@ -104,7 +104,7 @@ export function PodRuleObject({ id }: { id: string }) {
   return (
     <PageShell>
       <Link
-        href={navHref("rules")}
+        href={navHref("automations")}
         className="mb-3 inline-block text-[12.5px] text-foreground/65 hover:text-foreground"
       >
         Automations
@@ -213,7 +213,7 @@ export function PodRuleObject({ id }: { id: string }) {
           setConfirming(false);
           setError(null);
         }}
-        onConfirm={() => void confirm()}
+        onConfirm={() => void confirmAct()}
         title={
           turnOn
             ? `${resolveActionLabel("turn_on")} “${rule.title}”?`

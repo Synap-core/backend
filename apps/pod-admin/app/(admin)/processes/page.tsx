@@ -11,7 +11,7 @@
  * door away ("All automations" in the header); the ACTIVE ones that belong
  * to no process (the read's `automationsOutsideProcess`, membership decided
  * once on the pod) are counted under the list, a door to
- * `/rules?process=outside`, which opens on the same Active filter.
+ * `/automations?process=outside`, which opens on the same Active filter.
  * Filters live in the URL (`?space=`, `?health=`), like Automations.
  * `?focus=<playbookId>` is received by the row wrappers.
  */
@@ -45,7 +45,7 @@ import { useFocusRow } from "../components/use-focus-row";
 import { filterBySearch } from "../components/list-search";
 import { ListSearch, useDebouncedQuery } from "../components/list-search-box";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
-import { ruleIsActive } from "../rules/_lib/rule-rows";
+import { ruleIsActive } from "../automations/_lib/rule-rows";
 import { CATALOGS } from "./_lib/copy";
 import {
   countDoors,
@@ -96,7 +96,7 @@ function ProcessesInner() {
     [list.data]
   );
   // null = that read failed (never "none"); undefined = still loading. The
-  // footer counts the active ones: /rules opens on its Active filter.
+  // footer counts the active ones: /automations opens on its Active filter.
   const outside = list.data?.automationsOutsideProcess;
   const outsideActive = outside?.filter(ruleIsActive).length ?? 0;
   const spaceName = useMemo(() => {
@@ -144,7 +144,7 @@ function ProcessesInner() {
           <>
             <Button
               as={Link}
-              href={navHref("rules")}
+              href={navHref("automations")}
               size="sm"
               variant="flat"
               radius="md"
@@ -217,7 +217,7 @@ function ProcessesInner() {
             <p className="flex flex-wrap items-center gap-2 px-1 pt-3 text-[12px] text-foreground/65">
               {t("list.outside", { n: outsideActive })}
               <Link
-                href={navHref("rules", { process: "outside" })}
+                href={navHref("automations", { process: "outside" })}
                 className="text-foreground/85 underline-offset-2 hover:underline"
               >
                 {t("list.outsideDoor")}

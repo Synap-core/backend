@@ -58,5 +58,5 @@ export function ruleAroundMark(
 
 /** The Rules list's page for one rule. */
 export function ruleAroundHref(r: StatusOfReaction): string {
-  return `/rules/${encodeURIComponent(r.ruleId)}`;
+  return `/automations/${encodeURIComponent(r.ruleId)}`;
 }
