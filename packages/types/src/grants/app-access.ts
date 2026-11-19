@@ -338,7 +338,9 @@ const sameSet = (a: readonly string[], b: readonly string[]) =>
  *   - its writes in its write spaces;
  *   - its writes in its write projects.
  * Reads and writes over the same list are one scope (as one approved space
- * is one scope today). "all" projects makes no scope yet: the engine has no
+ * is one scope today). Spaces and projects are NEVER in one scope: inside a
+ * scope `permits` ANDs its limits (the intersection), and F3 is a union,
+ * which only separate scopes give (any scope permits). "all" projects makes no scope yet: the engine has no
  * "every project" pin, and a pod read would be wider (fail closed; W3).
  * The key still acts only within the person's floor (grant ∩ floor).
  */

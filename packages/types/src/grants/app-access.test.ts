@@ -312,6 +312,45 @@ describe("grantScopesForAccess — v2 with projects (no lift makes one yet)", ()
     ]);
   });
 
+  // Rules out: one scope carrying both workspaceIds and projectIds. Inside a
+  // scope `permits` ANDs its limits (the intersection); F3 is a UNION, which
+  // only separate scopes (ORed) give.
+  it("spaces [A] and projects [P] are a union: a row in A only and a row in P only are both permitted", () => {
+    const scopes = grantScopesForAccess(
+      access({
+        read: { spaces: [A], projects: ["P"] },
+        write: { spaces: [A], projects: ["P"] },
+      })
+    );
+    for (const s of scopes)
+      expect(s.workspaceIds && s.projectIds, JSON.stringify(s)).toBeFalsy();
+    for (const permission of [R_NOTE, W_NOTE]) {
+      const req = requestOf(permission);
+      const inAOnly = { ...req, workspaceId: A, projectIds: ["Q"] };
+      const inPOnly = { ...req, workspaceId: B, projectIds: ["P"] };
+      const inNeither = { ...req, workspaceId: B, projectIds: ["Q"] };
+      expect(scopes.some((s) => permits(s, inAOnly)), permission).toBe(true);
+      expect(scopes.some((s) => permits(s, inPOnly)), permission).toBe(true);
+      expect(scopes.some((s) => permits(s, inNeither)), permission).toBe(false);
+    }
+  });
+
+  it("no v2 access ever mints a scope with both spaces and projects", () => {
+    const lists: Array<"all" | string[]> = ["all", [], [A], [A, B]];
+    const plists: Array<"all" | string[]> = ["all", [], ["P"], ["P", "Q"]];
+    for (const rs of lists)
+      for (const rp of plists)
+        for (const ws of lists.filter((l): l is string[] => l !== "all"))
+          for (const wp of plists.filter((l): l is string[] => l !== "all"))
+            for (const s of grantScopesForAccess(
+              access({
+                read: { spaces: rs, projects: rp },
+                write: { spaces: ws, projects: wp },
+              })
+            ))
+              expect(Boolean(s.workspaceIds && s.projectIds)).toBe(false);
+  });
+
   it('"only project X": no space at all, the project pinned', () => {
     expect(
       grantScopesForAccess(
