@@ -468,7 +468,11 @@ export function appScopesCompareCost(
 ): number {
   const all = [...before, ...after];
   const distinct = [...new Set(all.flatMap((s) => s.permissions))];
-  return costOf(probesFor(distinct, all).permissions.length, distinct.length, all);
+  return costOf(
+    probesFor(distinct, all).permissions.length,
+    distinct.length,
+    all
+  );
 }
 
 /** What a comparison needs: examples (at most `SAMPLE` each way), or only whether there is a difference. */
@@ -553,7 +557,11 @@ function permitDiffs(
   };
   const gained = new Map<string, AccessPair>();
   const lost = new Map<string, AccessPair>();
-  const note = (into: Map<string, AccessPair>, permission: string, i: number) => {
+  const note = (
+    into: Map<string, AccessPair>,
+    permission: string,
+    i: number
+  ) => {
     if (into.size >= SAMPLE) return;
     const pair = { permission, where: whereOfProbe(places[i]!) };
     into.set(accessPairKey(pair), pair);
@@ -565,7 +573,8 @@ function permitDiffs(
       if (now === was) continue;
       if (now) note(gained, giver(a, r, i), i);
       else note(lost, giver(b, r, i), i);
-      if (!examples) return { gained: [...gained.values()], lost: [...lost.values()] };
+      if (!examples)
+        return { gained: [...gained.values()], lost: [...lost.values()] };
       if (gained.size >= SAMPLE && lost.size >= SAMPLE)
         return { gained: [...gained.values()], lost: [...lost.values()] };
     }
