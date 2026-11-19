@@ -141,12 +141,6 @@ export async function applySessionWorkspaceMove(
     .update(focusSessions)
     .set({
       workspaceId,
-      metadata: drizzleSql`(coalesce(${focusSessions.metadata}, '{}'::jsonb) - ${SESSION_WORKSPACE_PLACEMENT_KEY}) || ${JSON.stringify(
-        workspacePlacementPatch({
-          workspaceId,
-          rung: args.rung ?? "explicit",
-        })
-      )}::jsonb`,
       updatedAt: new Date(),
     })
     .where(eq(focusSessions.id, sessionId));
