@@ -10,9 +10,12 @@
  *     404 { error, code: "NO_RENDERER_BUNDLE" } when none is installed
  *
  * The modules are the bundle's build output (React, the kit, the tokens),
- * the same for every caller and no row a grant bounds: `hub-protocol.read`
- * is the scope, and the door fence admits a scoped key
- * (`GRANT_SAFE_REST_READS`).
+ * the same for every caller: `hub-protocol.read` is the scope, and the door
+ * fence refuses it to every scoped key (`GRANT_REST_GET_READS`, REFUSED: the
+ * licensed kit goes only to a full key's host).
+ *
+ * The 200's ETag and body come from ONE read (`readRendererHostModules`), so
+ * a host never caches modules under another set's tag.
  */
 
 import { z } from "zod";

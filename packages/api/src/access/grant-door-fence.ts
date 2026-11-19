@@ -406,10 +406,6 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/playbooks\/?$/,
   route("/playbooks/:id"),
   /^\/brand\/kit\/?$/,
-  // The installed renderer bundle's host modules (`rest/renderers.ts`): its
-  // build output (React, the kit, the tokens CSS), the same for every caller.
-  // No row a grant bounds: which CELLS a key reads stays on `/cells`.
-  /^\/renderers\/host-modules\/?$/,
   // Read only through the grant-aware channel / session helpers
   // (utils/channel-visibility.ts, access/session-visibility.ts):
   /^\/channels\/?$/,
@@ -1082,6 +1078,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [
     /^\/errors\/[^/]+\/?$/,
     REFUSED("Pod internals: the cause of every server error on the pod."),
+  ],
+  // The installed renderer bundle's host modules (`rest/renderers.ts`): the
+  // licensed kit's code (React, the kit, the tokens CSS), served only to a
+  // full key's host. A narrowly scoped key (an app, a site) never fetches it.
+  [
+    /^\/renderers\/host-modules\/?$/,
+    REFUSED("The renderer kit's code: only a full key's host fetches it."),
   ],
   // A person's channels (`listPersonChannels`, services/channels/
   // person-channels.ts): the record through `entityReadVisibleWhere`, its

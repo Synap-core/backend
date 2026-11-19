@@ -11,6 +11,12 @@
  *   - a failure inside the act rolls the whole act back (no module, no cell,
  *     no bundle row, no announcement);
  *   - a reinstall of the same slug updates in place;
+ *   - the stored version is the catalog row's (`options.version`), never the
+ *     definition's `_meta.version`;
+ *   - another install of the same slug committing its host modules while
+ *     this one runs is refused CONFLICT RENDERER_BUNDLE_INSTALL_RACED (retry
+ *     safe, nothing written), never a raw key violation; two installs of one
+ *     slug started together both land;
  *   - the reads: status and host modules (notModified, NOT_FOUND).
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -28,6 +34,8 @@ const h = vi.hoisted(() => ({
   db: null as unknown,
   emitted: [] as Array<Record<string, unknown>>,
   failOnKey: null as string | null,
+  /** Runs inside the install's transaction, before the first cell. */
+  inTx: null as null | ((tx: unknown) => Promise<unknown>),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -55,16 +63,23 @@ vi.mock("../cells/install-cell-from-definition.js", async (importOriginal) => {
       input: Parameters<typeof actual.installCellFromDefinition>[0]
     ) => {
       if (input.cellKey === h.failOnKey) throw new Error("cell write failed");
+      if (h.inTx) {
+        const run = h.inTx;
+        h.inTx = null;
+        await run(input.tx);
+      }
       return actual.installCellFromDefinition(input);
     },
   };
 });
 
+import { sql } from "drizzle-orm";
 import { rendererBindings, widgetDefinitions } from "@synap/database/schema";
 import {
   installRendererBundle,
   rendererSetSha256,
   RENDERER_BUNDLE_HASH_MISMATCH,
+  RENDERER_BUNDLE_INSTALL_RACED,
   RENDERER_HOST_SET_TAKEN,
 } from "./install-renderer-bundle.js";
 import {
@@ -174,6 +189,7 @@ beforeEach(async () => {
   );
   h.emitted.length = 0;
   h.failOnKey = null;
+  h.inTx = null;
 });
 
 describe("installRendererBundle", () => {
@@ -182,6 +198,7 @@ describe("installRendererBundle", () => {
     const out = await installRendererBundle(def, {
       userId: "user-1",
       source: "synap",
+      version: "1.0.0",
     });
     expect(out).toMatchObject({
       slug: "synap-renderers",
@@ -278,6 +295,7 @@ describe("installRendererBundle", () => {
     const err = await installRendererBundle(def, {
       userId: "user-1",
       source: "synap",
+      version: "1.0.0",
     }).catch((e: unknown) => e);
     expect(reasonOf(err)).toBe(RENDERER_BUNDLE_HASH_MISMATCH);
     expect(
@@ -289,6 +307,7 @@ describe("installRendererBundle", () => {
     const err2 = await installRendererBundle(tamperedCell, {
       userId: "user-1",
       source: "synap",
+      version: "1.0.0",
     }).catch((e: unknown) => e);
     expect(
       (err2 as { cause?: { mismatches?: string[] } }).cause?.mismatches
@@ -309,10 +328,12 @@ describe("installRendererBundle", () => {
     await installRendererBundle(bundle(), {
       userId: "user-1",
       source: "synap",
+      version: "1.0.0",
     });
     const err = await installRendererBundle(bundle("acme-renderers"), {
       userId: "user-1",
       source: "synap",
+      version: "1.0.0",
     }).catch((e: unknown) => e);
     expect(reasonOf(err)).toBe(RENDERER_HOST_SET_TAKEN);
     expect((err as { code?: string }).code).toBe("CONFLICT");
@@ -331,7 +352,11 @@ describe("installRendererBundle", () => {
   it("rolls the whole act back when a step fails inside it", async () => {
     h.failOnKey = "board";
     await expect(
-      installRendererBundle(bundle(), { userId: "user-1", source: "synap" })
+      installRendererBundle(bundle(), {
+        userId: "user-1",
+        source: "synap",
+        version: "1.0.0",
+      })
     ).rejects.toThrow("cell write failed");
     expect(
       await count(`select count(*)::int as n from renderer_host_modules`)
@@ -349,6 +374,7 @@ describe("installRendererBundle", () => {
     await installRendererBundle(bundle(), {
       userId: "user-1",
       source: "synap",
+      version: "1.0.0",
     });
     const next = bundle("synap-renderers", "1.1.0");
     next.hostModules.tokensCss = mod(":root{--x:1}");
@@ -360,6 +386,7 @@ describe("installRendererBundle", () => {
     const out = await installRendererBundle(next, {
       userId: "user-2",
       source: "synap",
+      version: "1.1.0",
     });
     expect(out.cells.every((c) => c.changeType === "updated")).toBe(true);
     const row = await h.client!.query<{ version: string; set_sha256: string }>(
@@ -371,6 +398,69 @@ describe("installRendererBundle", () => {
     expect(
       await count(`select count(*)::int as n from renderer_host_modules`)
     ).toBe(6);
+  });
+});
+
+describe("the version and racing installs", () => {
+  it("stores the catalog row's version, never _meta.version", async () => {
+    const def = bundle("synap-renderers", "9.9.9-not-the-row");
+    const out = await installRendererBundle(def, {
+      userId: "user-1",
+      source: "synap",
+      version: "h-0123456789ab",
+    });
+    expect(out.version).toBe("h-0123456789ab");
+    const row = await h.client!.query<{ version: string }>(
+      `select version from renderer_bundles`
+    );
+    expect(row.rows).toEqual([{ version: "h-0123456789ab" }]);
+    const cells = await h.client!.query<{ version: string }>(
+      `select distinct version from widget_definitions`
+    );
+    expect(cells.rows).toEqual([{ version: "h-0123456789ab" }]);
+    expect(
+      (await readRendererStatus({ workspaceId: null })).bundle
+    ).toMatchObject({ version: "h-0123456789ab" });
+  });
+
+  it("another install of the slug committing meanwhile: a retry-safe CONFLICT, nothing written", async () => {
+    // What a concurrent install's committed rows look like to this one.
+    h.inTx = (tx) =>
+      (tx as { execute: (q: unknown) => Promise<unknown> }).execute(
+        sql`insert into renderer_host_modules (bundle_slug, module, source, sha256, byte_length)
+            values ('synap-renderers', 'react', 'x', 'y', 1)`
+      );
+    const err = await installRendererBundle(bundle(), {
+      userId: "user-1",
+      source: "synap",
+      version: "1.0.0",
+    }).catch((e: unknown) => e);
+    expect((err as { code?: string }).code).toBe("CONFLICT");
+    expect(reasonOf(err)).toBe(RENDERER_BUNDLE_INSTALL_RACED);
+    expect((err as Error).message).toContain("retry");
+    expect(
+      await count(`select count(*)::int as n from renderer_host_modules`)
+    ).toBe(0);
+    expect(await count(`select count(*)::int as n from renderer_bundles`)).toBe(
+      0
+    );
+    expect(h.emitted).toEqual([]);
+  });
+
+  it("two installs of one slug started together both land", async () => {
+    const opts = { userId: "user-1", source: "synap", version: "1.0.0" };
+    const [a, b] = await Promise.all([
+      installRendererBundle(bundle(), opts),
+      installRendererBundle(bundle(), opts),
+    ]);
+    expect(a.slug).toBe("synap-renderers");
+    expect(b.slug).toBe("synap-renderers");
+    expect(
+      await count(`select count(*)::int as n from renderer_host_modules`)
+    ).toBe(6);
+    expect(await count(`select count(*)::int as n from renderer_bundles`)).toBe(
+      1
+    );
   });
 });
 
@@ -388,7 +478,11 @@ describe("the reads", () => {
 
   it("status names the bundle, its defaults and the installed cells without source", async () => {
     const def = bundle();
-    await installRendererBundle(def, { userId: "user-1", source: "synap" });
+    await installRendererBundle(def, {
+      userId: "user-1",
+      source: "synap",
+      version: "1.0.0",
+    });
     const status = await readRendererStatus({ workspaceId: null });
     expect(status).toEqual({
       bundle: {
@@ -418,7 +512,11 @@ describe("the reads", () => {
 
   it("host modules: the set, then notModified for the set the caller holds", async () => {
     const def = bundle();
-    await installRendererBundle(def, { userId: "user-1", source: "synap" });
+    await installRendererBundle(def, {
+      userId: "user-1",
+      source: "synap",
+      version: "1.0.0",
+    });
     const full = await readRendererHostModules({});
     expect(full).toEqual({
       notModified: false,

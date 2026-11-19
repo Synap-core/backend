@@ -10,18 +10,33 @@
  * Every refusal is FORBIDDEN with a machine reason (`error.data.reasonCode`):
  *
  *   renderer_bundle_no_control_plane  no CONTROL_PLANE_URL (a self-hosted pod)
+ *   renderer_bundle_insecure_control_plane
+ *                                     CONTROL_PLANE_URL is not https (only
+ *                                     localhost / 127.0.0.1 may be http, in
+ *                                     development): no token is sent
  *   renderer_bundle_pod_not_enrolled  no pod-signed credential (the route
  *                                     takes no legacy key)
  *   renderer_bundle_managed_only      the CP refused: not a managed, live pod
  *
- * TRUST. The bundle is withheld from Synap's signed public index (the CP
- * serves `definition: null` for the kind and leaves it out of the index), so
- * `assertOfficialDefinition` would refuse it under enforcement. Its trust is
- * the authenticated pod→CP connection, as for a private capability
- * (`admitPrivateCapability`): the definition must name what was asked
- * (`_meta.slug`, and the version when one was asked), and Synap's catalog
- * freeze still applies (`standing.blocked`). Every source is then re-hashed
- * on install (`installRendererBundle`).
+ * AUTHENTICITY. The bundle's BYTES are withheld from Synap's public catalog,
+ * but its DIGEST is signed: the signed index lists it under its top-level
+ * `rendererBundles` (`{ kind: "renderer-bundle", slug, version, contentHash }`),
+ * which the catalog sync stores in `official_catalog_digests` with the other
+ * listings. What the CP serves is checked against it exactly as every other
+ * official kind is (`assertOfficialDefinition`): `contentHash` is
+ * `officialContentHash("renderer-bundle", definition)` (sha256 of the
+ * canonical JSON without `_meta`, `contentHash`, `sourcePackage`) and the
+ * listed version is the CP row's `package.version`. No trust anchor: admitted
+ * as before; report mode: a mismatch is logged; enforce: an unlisted,
+ * mismatching or frozen bundle is refused PRECONDITION_FAILED
+ * (`MARKET_OFFICIAL_UNVERIFIED`). In every mode the definition must name the
+ * slug asked (`_meta.slug`) and the row the version asked. Every source is
+ * then re-hashed on install (`installRendererBundle`).
+ *
+ * VERSION. The CP row's `package.version` (always `h-` + the first 12 hex of
+ * the digest) IS the bundle's version: what was asked, what the signed index
+ * lists, what `renderer_bundles.version` stores. The body's `_meta.version`
+ * is ignored, as the CP ignores it.
  *
  * The CP's honest limit holds here too: this gates DELIVERY, it is not a
  * protection of the code.
@@ -31,7 +46,8 @@ import { TRPCError } from "@trpc/server";
 import { podCpAuthHeaders } from "@synap/database";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
-import { officialCatalogStandingNow } from "../capabilities/official-catalog-trust.js";
+import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
+import { assertOfficialDefinition } from "../capabilities/official-catalog-trust.js";
 import {
   installRendererBundle,
   type InstalledRendererBundle,
@@ -39,6 +55,8 @@ import {
 
 export const RENDERER_BUNDLE_NO_CONTROL_PLANE =
   "renderer_bundle_no_control_plane" as const;
+export const RENDERER_BUNDLE_INSECURE_CONTROL_PLANE =
+  "renderer_bundle_insecure_control_plane" as const;
 export const RENDERER_BUNDLE_POD_NOT_ENROLLED =
   "renderer_bundle_pod_not_enrolled" as const;
 export const RENDERER_BUNDLE_MANAGED_ONLY =
@@ -52,6 +70,9 @@ const CP_POD_JWT_REQUIRED = "POD_JWT_REQUIRED";
 /** A ~5 MB definition: more than the 8 s the catalog reads take. */
 const FETCH_TIMEOUT_MS = 30_000;
 
+/** The only hosts a control plane may be reached at over plain http (development). */
+const PLAIN_HTTP_HOSTS = new Set(["localhost", "127.0.0.1"]);
+
 function refused(reasonCode: string, message: string): TRPCError {
   return new TRPCError({ code: "FORBIDDEN", message, cause: { reasonCode } });
 }
@@ -63,16 +84,52 @@ function notEnrolled(): TRPCError {
   );
 }
 
-/** Fetch the official bundle's definition from this pod's Control Plane. */
+function unverified(message: string): TRPCError {
+  return new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message,
+    cause: { code: "MARKET_OFFICIAL_UNVERIFIED" },
+  });
+}
+
+/** https, or http on localhost / 127.0.0.1 only. */
+function isSecureControlPlane(base: string): boolean {
+  try {
+    const url = new URL(base);
+    return (
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && PLAIN_HTTP_HOSTS.has(url.hostname))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** What the CP served: its row's version and the definition. */
+export interface FetchedRendererBundle {
+  /** The CP row's `package.version`: the bundle's version. */
+  version: string;
+  definition: Record<string, unknown>;
+}
+
+/** Fetch the official bundle's row from this pod's Control Plane. */
 export async function fetchOfficialRendererBundle(input: {
   slug: string;
   version?: string | null;
-}): Promise<Record<string, unknown>> {
+}): Promise<FetchedRendererBundle> {
   const base = controlPlaneBaseUrl();
   if (!base) {
     throw refused(
       RENDERER_BUNDLE_NO_CONTROL_PLANE,
       "The official renderers come from the Synap control plane, and this pod has none. Nothing was installed."
+    );
+  }
+  // Before any credential is minted: a pod-signed token never travels over
+  // plain http.
+  if (!isSecureControlPlane(base)) {
+    throw refused(
+      RENDERER_BUNDLE_INSECURE_CONTROL_PLANE,
+      "This pod reaches its control plane over plain http, so it does not fetch the official renderers from it. Set CONTROL_PLANE_URL to an https:// address. Nothing was installed."
     );
   }
   let auth: Awaited<ReturnType<typeof podCpAuthHeaders>>;
@@ -116,7 +173,7 @@ export async function fetchOfficialRendererBundle(input: {
   }
   const body = (await res.json().catch(() => null)) as {
     code?: unknown;
-    package?: { definition?: unknown };
+    package?: { version?: unknown; definition?: unknown };
   } | null;
   if (res.status === 403 && body?.code === CP_MANAGED_ONLY) {
     throw refused(
@@ -141,53 +198,52 @@ export async function fetchOfficialRendererBundle(input: {
       message: `The control plane answered ${res.status} for the renderer bundle "${input.slug}". Retry the install later; nothing was installed.`,
     });
   }
+  const version = body?.package?.version;
   const definition = body?.package?.definition;
   if (
+    typeof version !== "string" ||
+    version.length === 0 ||
     !definition ||
     typeof definition !== "object" ||
     Array.isArray(definition)
   ) {
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
-      message: `The control plane returned no definition for "${input.slug}". Nothing was installed.`,
+      message: `The control plane returned no version or no definition for "${input.slug}". Nothing was installed.`,
     });
   }
-  return definition as Record<string, unknown>;
+  return { version, definition: definition as Record<string, unknown> };
 }
 
 /**
- * Is this definition the one asked for, and may Synap's catalog install now?
+ * Is this the bundle asked for, and does Synap's signed index vouch for it?
  * Throws PRECONDITION_FAILED (`MARKET_OFFICIAL_UNVERIFIED`) when not.
  */
 export async function admitOfficialRendererBundle(input: {
   slug: string;
+  /** The version asked, if any. */
   version?: string | null;
-  definition: Record<string, unknown>;
+  fetched: FetchedRendererBundle;
 }): Promise<void> {
-  const meta = input.definition._meta as
-    { slug?: unknown; version?: unknown } | undefined;
-  const named = meta && typeof meta === "object" ? meta : {};
-  const wrong =
-    named.slug !== input.slug
-      ? `names itself "${String(named.slug)}"`
-      : input.version && named.version !== input.version
-        ? `is version "${String(named.version)}", not "${input.version}"`
-        : null;
-  if (wrong) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: `The renderer bundle served for "${input.slug}" ${wrong}. Nothing was installed.`,
-      cause: { code: "MARKET_OFFICIAL_UNVERIFIED" },
-    });
+  const { definition, version } = input.fetched;
+  const meta = definition._meta as { slug?: unknown } | undefined;
+  const namedSlug = meta && typeof meta === "object" ? meta.slug : undefined;
+  if (namedSlug !== input.slug) {
+    throw unverified(
+      `The renderer bundle served for "${input.slug}" names itself "${String(namedSlug)}". Nothing was installed.`
+    );
   }
-  const standing = await officialCatalogStandingNow();
-  if (standing.blocked) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: `${standing.blocked} Nothing was installed.`,
-      cause: { code: "MARKET_OFFICIAL_UNVERIFIED" },
-    });
+  if (input.version && version !== input.version) {
+    throw unverified(
+      `The control plane served "${input.slug}" at "${version}", not "${input.version}". Nothing was installed.`
+    );
   }
+  await assertOfficialDefinition({
+    kind: RENDERER_BUNDLE_KIND,
+    slug: input.slug,
+    version,
+    definition,
+  });
 }
 
 /** Fetch, admit and install the official bundle (the `market.install` door). */
@@ -196,10 +252,11 @@ export async function installOfficialRendererBundle(input: {
   version?: string | null;
   userId: string;
 }): Promise<InstalledRendererBundle> {
-  const definition = await fetchOfficialRendererBundle(input);
-  await admitOfficialRendererBundle({ ...input, definition });
-  return installRendererBundle(definition, {
+  const fetched = await fetchOfficialRendererBundle(input);
+  await admitOfficialRendererBundle({ ...input, fetched });
+  return installRendererBundle(fetched.definition, {
     userId: input.userId,
     source: OFFICIAL_SOURCE_ID,
+    version: fetched.version,
   });
 }

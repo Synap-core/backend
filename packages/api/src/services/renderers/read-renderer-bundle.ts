@@ -129,29 +129,41 @@ export async function readRendererSetSha256(): Promise<string | null> {
 export async function readRendererHostModules(input: {
   knownSetSha256?: string;
 }): Promise<RendererHostModulesRead> {
-  const bundle = await activeBundle();
-  if (!bundle) {
+  if (input.knownSetSha256) {
+    const current = await readRendererSetSha256();
+    if (current !== null && current === input.knownSetSha256) {
+      return { notModified: true, setSha256: current };
+    }
+  }
+  // ONE statement, so one snapshot: the set's sha256, its kit exports and its
+  // modules always belong together, even while an install replaces the set.
+  // One set per pod (`renderer_host_modules_one_set`): every row is the same
+  // bundle's.
+  const db = await getDb();
+  const rows = await db
+    .select({
+      setSha256: rendererBundles.setSha256,
+      kitExports: rendererBundles.kitExports,
+      module: rendererHostModules.module,
+      source: rendererHostModules.source,
+    })
+    .from(rendererHostModules)
+    .innerJoin(
+      rendererBundles,
+      eq(rendererBundles.slug, rendererHostModules.bundleSlug)
+    );
+  const [first] = rows;
+  if (!first) {
     throw new TRPCError({
       code: "NOT_FOUND",
       message: "No renderer bundle is installed on this pod.",
       cause: { reasonCode: NO_RENDERER_BUNDLE },
     });
   }
-  if (input.knownSetSha256 === bundle.setSha256) {
-    return { notModified: true, setSha256: bundle.setSha256 };
-  }
-  const db = await getDb();
-  const rows = await db
-    .select({
-      module: rendererHostModules.module,
-      source: rendererHostModules.source,
-    })
-    .from(rendererHostModules)
-    .where(eq(rendererHostModules.bundleSlug, bundle.slug));
   return {
     notModified: false,
-    setSha256: bundle.setSha256,
+    setSha256: first.setSha256,
     modules: Object.fromEntries(rows.map((r) => [r.module, r.source])),
-    kitExports: bundle.kitExports,
+    kitExports: first.kitExports,
   };
 }
