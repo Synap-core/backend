@@ -45,6 +45,7 @@ import {
   WIDTH_CLASS_BREAKPOINTS,
   applyOps,
   catalogSchema,
+  composeAppCatalog,
   designEditability,
   designOpSchema,
   describeRefusal,
@@ -56,6 +57,7 @@ import {
   type Board,
   type DesignCatalogSnapshot,
   type DesignChange,
+  type DesignKitCatalog,
   type DesignLifecycle,
   type DropReason,
   type Editability,
@@ -65,6 +67,7 @@ import {
 } from "@synap-core/types/design-board";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import type { Context } from "../../context.js";
+import { readAppKit } from "./app-kit.js";
 
 /** The kind of a design (builder.yaml). */
 export const UI_DESIGN_PROFILE = "ui-design";
@@ -104,7 +107,12 @@ export interface DesignDoorContext {
 // ─── The catalog ────────────────────────────────────────────────────────────
 
 export type CatalogRead =
-  | { status: "installed"; catalog: DesignCatalogSnapshot }
+  | {
+      status: "installed";
+      catalog: DesignCatalogSnapshot;
+      /** The app's own kit, when the catalog is an app's (its components, Synap's canvas blocks). */
+      kit?: DesignKitCatalog;
+    }
   | { status: "missing"; message: string }
   | { status: "unreadable"; message: string };
 
@@ -141,12 +149,58 @@ export async function readInstalledCatalog(): Promise<CatalogRead> {
   };
 }
 
-/** design.catalog's answer: the kit, its components and props, the canvas blocks, the grid, the frame presets. */
-export async function designCatalog() {
-  const read = await readInstalledCatalog();
+/**
+ * The catalog a design of `appId` is checked against (plan 0fc746f4 W6). No
+ * app, or an app that names no kit: Synap's installed catalog. An app with a
+ * kit: the kit's components with Synap's canvas blocks (`composeAppCatalog`).
+ * An app whose kit cannot be read is `unreadable` with the reason, never
+ * Synap's catalog in its place: its designs would be checked against
+ * components the canvas does not draw them with.
+ */
+export async function readCatalogFor(
+  userId: string,
+  appId: string | null
+): Promise<CatalogRead> {
+  const synap = await readInstalledCatalog();
+  if (synap.status !== "installed" || !appId) return synap;
+  let app: Awaited<ReturnType<typeof readAppKit>>;
+  try {
+    app = await readAppKit(userId, appId);
+  } catch (err) {
+    if (err instanceof TRPCError)
+      return { status: "unreadable", message: err.message };
+    throw err;
+  }
+  if (app.status === "none") return synap;
+  const composed = composeAppCatalog(synap.catalog, app.kit);
+  if (!composed.ok)
+    return {
+      status: "unreadable",
+      message: `App ${appId}'s design kit cannot be drawn with Synap's canvas blocks: ${composed.error}`,
+    };
+  return { status: "installed", catalog: composed.catalog, kit: app.kit };
+}
+
+/** The app a design is for (`design-app`), or null. */
+const appOf = (p: Record<string, unknown>): string | null => {
+  const v = p[DESIGN_APP_PROPERTY];
+  return typeof v === "string" && v !== "" ? v : null;
+};
+
+/**
+ * design.catalog's answer: the kit, its components and props, the canvas
+ * blocks, the grid, the frame presets. With `appId`, the catalog of that
+ * app's designs; when the app has its own kit, `kit` says how the Design app
+ * loads it (React major, the two files' hashes, how a dropped block starts).
+ */
+export async function designCatalog(
+  userId: string,
+  appId: string | null = null
+) {
+  const read = await readCatalogFor(userId, appId);
   if (read.status !== "installed")
     throw new TRPCError({ code: "PRECONDITION_FAILED", message: read.message });
-  const { catalog } = read;
+  const { catalog, kit } = read;
   return {
     kitId: catalog.kitId,
     hash: catalog.hash,
@@ -155,6 +209,27 @@ export async function designCatalog() {
     grid: { columns: GRID_COLUMNS, breakpoints: WIDTH_CLASS_BREAKPOINTS },
     frames: FRAME_PRESETS,
     ...(catalog.generatedAt ? { generatedAt: catalog.generatedAt } : {}),
+    ...(appId ? { appId } : {}),
+    ...(kit
+      ? {
+          kit: {
+            kitId: kit.kitId,
+            hash: kit.hash,
+            react: kit.kit.react,
+            files: {
+              js: {
+                sha256: kit.kit.files.js.sha256,
+                bytes: kit.kit.files.js.bytes,
+              },
+              css: {
+                sha256: kit.kit.files.css.sha256,
+                bytes: kit.kit.files.css.bytes,
+              },
+            },
+            canvas: kit.canvas,
+          },
+        }
+      : {}),
   };
 }
 
@@ -286,7 +361,7 @@ export async function readDesign(ctx: DesignDoorContext, designId: string) {
       code: "PRECONDITION_FAILED",
       message: `Design ${designId} has no design-json; it is not a canvas yet.`,
     });
-  const read = await readInstalledCatalog();
+  const read = await readCatalogFor(ctx.userId, appOf(row.properties));
   const catalog = read.status === "installed" ? read.catalog : null;
   const schema = catalog ? catalogSchema(catalog) : null;
   const parsed = parseBoard(raw, schema ?? undefined);
@@ -297,14 +372,13 @@ export async function readDesign(ctx: DesignDoorContext, designId: string) {
     });
   const lifecycle = await loadLifecycle(row.workspaceId);
   const status = statusOf(row.properties, lifecycle);
-  const app = row.properties[DESIGN_APP_PROPERTY];
   return {
     design: {
       id: row.id,
       title: row.title,
       status: status ?? null,
       updatedAt: row.updatedAt.toISOString(),
-      appId: typeof app === "string" ? app : null,
+      appId: appOf(row.properties),
       schemaVersion: row.properties["schema-version"] ?? null,
       editable: designEditability(status, lifecycle),
     },
@@ -504,15 +578,23 @@ export async function applyDesign(
   ctx: DesignDoorContext,
   input: ApplyDesignInput
 ): Promise<ApplyDesignReply> {
-  const read = await readInstalledCatalog();
-  if (read.status !== "installed")
-    throw new TRPCError({ code: "PRECONDITION_FAILED", message: read.message });
-  const { catalog } = read;
   const first = designOpSchema.safeParse(input.ops[0]);
   const create =
     first.success && first.data.op === "create_design" ? first.data : null;
+  // The catalog of the design's app: a new design's (`create_design.appId`),
+  // else the stored design's `design-app`; Synap's when there is none.
+  const catalogOf = async (appId: string | null) => {
+    const read = await readCatalogFor(ctx.userId, appId);
+    if (read.status !== "installed")
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: read.message,
+      });
+    return read.catalog;
+  };
 
   if (!input.designId) {
+    const catalog = await catalogOf(create?.appId ?? null);
     if (!create)
       return refusedBatch(0, input.ops[0], catalog, {
         kind: "bad-op",
@@ -521,9 +603,12 @@ export async function applyDesign(
     return createDesign(ctx, create, input.ops.slice(1), catalog);
   }
   if (create)
-    return refusedBatch(0, input.ops[0], catalog, { kind: "create-not-first" });
+    return refusedBatch(0, input.ops[0], await catalogOf(null), {
+      kind: "create-not-first",
+    });
 
   const row = await loadDesignRow(ctx.userId, input.designId);
+  const catalog = await catalogOf(appOf(row.properties));
   if (!input.baseUpdatedAt)
     return refusedBatch(null, null, catalog, {
       kind: "bad-op",
