@@ -137,7 +137,7 @@ export async function planStageWorkStep(
   const slots = Array.isArray(s.expectedOutputs)
     ? (s.expectedOutputs as ExpectedOutput[])
     : [];
-  if (!resume && slots.some((o) => !!o && isOwedSlot(o))) return null;
+  if (!resume && slots.some((o) => !!o && isOwedSlot(o, slots))) return null;
   if (resume) {
     const { heldByCheckGate } = await import("./evaluations/evaluate.js");
     if (!(await heldByCheckGate(s.id, s.currentStage))) return null;
