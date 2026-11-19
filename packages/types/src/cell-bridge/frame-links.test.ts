@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   CELL_FRAME_LINK_DOOR,
   FRAME_NAVIGATE_TYPE,
+  FRAME_OPEN_KINDS,
   parseFrameNavigate,
+  parseFrameOpen,
   resolveFrameLink,
   type FrameNavigateMessage,
 } from "./frame-links.js";
@@ -107,6 +109,60 @@ describe("parseFrameNavigate — a frame is stored code: only a plain http(s) ad
       expect(parseFrameNavigate(bad)).toBeNull();
     }
     expect(parseFrameNavigate({ type: "synap:navigate", href: 7 })).toBeNull();
+  });
+});
+
+describe("parseFrameOpen — a page names an object, never an address", () => {
+  const ID = "33333333-3333-4333-8333-333333333333";
+  const open = (surface: unknown) => ({ type: "synap:surface:open", surface });
+
+  it("accepts each kind a page may open, with a uuid", () => {
+    for (const objectKind of FRAME_OPEN_KINDS) {
+      expect(
+        parseFrameOpen(open({ kind: "object", objectKind, objectId: ID }))
+      ).toEqual({
+        type: "synap:surface:open",
+        surface: { kind: "object", objectKind, objectId: ID },
+      });
+    }
+  });
+
+  it("keeps only the kind and the id: a url, a placement or a space is dropped", () => {
+    expect(
+      parseFrameOpen(
+        open({
+          kind: "object",
+          objectKind: "session",
+          objectId: ID.toUpperCase(),
+          url: "https://evil.example/?leak=1",
+          placement: "main",
+          workspaceId: "w",
+        })
+      )
+    ).toEqual({
+      type: "synap:surface:open",
+      surface: { kind: "object", objectKind: "session", objectId: ID },
+    });
+  });
+
+  it("refuses anything else", () => {
+    for (const data of [
+      null,
+      "synap:surface:open",
+      [open({ kind: "object", objectKind: "session", objectId: ID })],
+      { type: "synap:navigate", surface: { kind: "object" } },
+      open(null),
+      // The module cell's other surfaces are not a page's to ask for.
+      open({ kind: "app", appId: "x" }),
+      open({ kind: "entity", entityId: ID }),
+      open({ kind: "object", objectKind: "capability", objectId: ID }),
+      open({ kind: "object", objectKind: "toString", objectId: ID }),
+      open({ kind: "object", objectKind: "session", objectId: "abc" }),
+      open({ kind: "object", objectKind: "session", objectId: `${ID}/x` }),
+      open({ kind: "object", objectKind: "session" }),
+    ]) {
+      expect(parseFrameOpen(data)).toBe(null);
+    }
   });
 });
 
