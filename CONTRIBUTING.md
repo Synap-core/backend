@@ -184,5 +184,7 @@ named after the area touched, for example `fix(proposals): ...` or
    [`docs/ARCHITECTURE-OVERVIEW.md`](docs/ARCHITECTURE-OVERVIEW.md) in the same
    pull request.
 
-By contributing, you agree that your contribution is licensed under the
-[MIT License](LICENSE).
+By contributing, you license your contribution to Synap on terms that let Synap
+distribute it under the project license ([PolyForm Noncommercial 1.0.0](LICENSE),
+or the MIT License for the SDK and contract packages) and relicense it in the
+future. You keep your copyright. (Pending legal review.)

@@ -1,6 +1,7 @@
 {
   "name": "pod-admin",
   "version": "0.1.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "description": "Operator-facing pod administration surface. Replaces apps/admin-ui.",
   "scripts": {

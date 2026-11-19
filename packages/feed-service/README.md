@@ -351,4 +351,4 @@ console.log(`Consecutive failures: ${status.consecutiveFailures}`);
 
 ## License
 
-MIT - Synap Systems
+PolyForm Noncommercial 1.0.0 - Synap
