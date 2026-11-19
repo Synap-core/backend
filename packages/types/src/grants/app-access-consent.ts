@@ -89,11 +89,8 @@ export function appAccessBeyond(
   const a = normalizeAppAccess(access);
   const out: AccessBeyond[] = [];
   const asked = new Set(ceiling.permissions);
-  const allSpaces = new Set(
-    ceiling.allSpacesReads.filter(
-      (p) => asked.has(p) && isPodWideReadPermission(p)
-    )
-  );
+  // NEGATIVE CONTROL: All spaces no longer requires a pod-wide read (D1).
+  const allSpaces = new Set(ceiling.allSpacesReads.filter((p) => asked.has(p)));
   for (const permission of a.permissions) {
     if (!asked.has(permission))
       out.push({ reason: "not-asked", permission, where: null, tier: null });
