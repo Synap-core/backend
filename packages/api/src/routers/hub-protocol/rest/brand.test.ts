@@ -205,7 +205,11 @@ describe("GET /brand/kit", () => {
       const css = (await (
         await buildApp().request("/brand/kit?format=synap-css")
       ).json()) as Record<string, string>;
-      expect(JSON.parse(css.content!)).toEqual({ vars: {}, light: {}, dark: {} });
+      expect(JSON.parse(css.content!)).toEqual({
+        vars: {},
+        light: {},
+        dark: {},
+      });
     });
   });
 

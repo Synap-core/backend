@@ -34,8 +34,7 @@ export function dtcgLeaves(
     out.set(path.join("."), o["$value"]);
     const ext = o["$extensions"] as Record<string, unknown> | undefined;
     const modes = ext?.["com.synap.modes"] as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     if (lights && modes && "light" in modes)
       lights.set(path.join("."), modes["light"]);
     return;

@@ -208,10 +208,7 @@ const SYNAP_BRAND_LEAVES: ReadonlyArray<
     "page",
     ["page-gutter-compact", "page-gutter-medium", "page-gutter-expanded"],
   ],
-  [
-    "section",
-    ["section-y-compact", "section-y-medium", "section-y-expanded"],
-  ],
+  ["section", ["section-y-compact", "section-y-medium", "section-y-expanded"]],
   ["breakpoint", ["bp-medium", "bp-expanded"]],
 ];
 

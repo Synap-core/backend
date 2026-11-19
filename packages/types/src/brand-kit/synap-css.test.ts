@@ -18,7 +18,11 @@ const BRAND_DTCG = {
     background: {
       $type: "color",
       // `$value` is dark; the light value rides Synap's mode extension.
-      $value: { colorSpace: "srgb", components: [0.1, 0.1, 0.1], hex: "#1A1A1A" },
+      $value: {
+        colorSpace: "srgb",
+        components: [0.1, 0.1, 0.1],
+        hex: "#1A1A1A",
+      },
       $extensions: {
         "com.synap.modes": {
           light: { colorSpace: "srgb", components: [1, 1, 1], hex: "#FFFFFF" },
@@ -46,7 +50,10 @@ const BRAND_DTCG = {
     "radius-control": { $value: "{radius.radius-control}" },
   },
   font: {
-    "font-body": { $type: "fontFamily", $value: ["Source Sans 3", "sans-serif"] },
+    "font-body": {
+      $type: "fontFamily",
+      $value: ["Source Sans 3", "sans-serif"],
+    },
   },
   type: {
     "text-md": { $type: "dimension", $value: { value: 15, unit: "px" } },
@@ -76,7 +83,10 @@ const BRAND_DTCG = {
     },
   },
   section: {
-    "section-y-compact": { $type: "dimension", $value: { value: 40, unit: "px" } },
+    "section-y-compact": {
+      $type: "dimension",
+      $value: { value: 40, unit: "px" },
+    },
   },
   breakpoint: {
     "bp-medium": { $type: "dimension", $value: { value: 600, unit: "px" } },
@@ -190,13 +200,20 @@ describe("dtcgTokenSetFromEntities", () => {
       set("B broken", { "token-json": "{not json" }),
       set("C draft", {
         "token-status": "draft",
-        "token-json": JSON.stringify({ brand: { primary: { $value: "#ff0000" } } }),
+        "token-json": JSON.stringify({
+          brand: { primary: { $value: "#ff0000" } },
+        }),
       }),
       set("D dark", {
         "token-mode": "dark",
-        "token-json": JSON.stringify({ brand: { primary: { $value: "#00ff00" } } }),
+        "token-json": JSON.stringify({
+          brand: { primary: { $value: "#00ff00" } },
+        }),
       }),
-      set("E base", { "token-mode": "base", "token-json": JSON.stringify(brand) }),
+      set("E base", {
+        "token-mode": "base",
+        "token-json": JSON.stringify(brand),
+      }),
     ]);
     expect(got).toEqual(brand);
     expect(dtcgTokenSetFromEntities([])).toBeUndefined();
@@ -205,7 +222,10 @@ describe("dtcgTokenSetFromEntities", () => {
 
 describe("exportBrandKit — dtcg and synap-css", () => {
   const kit = brandKitFromEntities([
-    e("brand-color", "Ochre", { "color-role": "primary", "color-hex": "#B67A38" }),
+    e("brand-color", "Ochre", {
+      "color-role": "primary",
+      "color-hex": "#B67A38",
+    }),
   ]);
 
   it("is listed among the door's formats", () => {

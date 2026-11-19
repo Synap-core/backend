@@ -63,12 +63,7 @@ import {
 import { renderDtcg, renderSynapCss } from "./synap-css.js";
 
 export type BrandKitFormat =
-  | "json"
-  | "css"
-  | "frame-md"
-  | "od-design-system"
-  | "dtcg"
-  | "synap-css";
+  "json" | "css" | "frame-md" | "od-design-system" | "dtcg" | "synap-css";
 
 export const BRAND_KIT_FORMATS: readonly BrandKitFormat[] = [
   "json",
