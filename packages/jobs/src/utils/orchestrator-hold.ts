@@ -20,6 +20,7 @@
 import { db, and, eq, inArray, focusSessions, links } from "@synap/database";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import { holdWaitSlotMatches } from "@synap-core/types/lifecycle";
+import { isUuid } from "@synap-core/types/property-render";
 
 /** The person's yes on an orchestrator: the slot every held session waits on. */
 export const ORCHESTRATOR_APPROVAL_SLOT = "plan-approval";
@@ -29,8 +30,6 @@ export interface HoldingOrchestrator {
   /** Its title, else its goal, clipped: what the refusal names. */
   name: string;
 }
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type SlotLike = {
   key?: unknown;
@@ -58,7 +57,7 @@ export async function orchestratorHolding(
         eq(links.linkType, "orchestrated_by")
       )
     );
-  const ids = edges.map((e) => e.toId).filter((id) => UUID.test(id));
+  const ids = edges.map((e) => e.toId).filter((id) => isUuid(id));
   if (ids.length === 0) return null;
   const [held] = await db
     .select({ userId: focusSessions.userId })
