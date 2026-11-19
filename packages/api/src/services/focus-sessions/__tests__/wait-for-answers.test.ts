@@ -4,7 +4,12 @@ import {
   WAIT_MAX_SECONDS,
   clampWaitSeconds,
   waitForSessionAnswers,
+  waitForSessionChanges,
 } from "../wait-for-answers.js";
+import type {
+  SessionChangeEvent,
+  SessionChangesPage,
+} from "../session-changes.js";
 import { stampPickedUp } from "../answer-pickup.js";
 import type {
   SessionAnswerItem,
@@ -268,5 +273,158 @@ describe("stampPickedUp (the receipt rule)", () => {
       NOW
     );
     expect(stamped).toBe(0);
+  });
+});
+
+/**
+ * The "Seen by the agent" mark (plan efb315a5, W1): an agent's stamped wait
+ * that READ the owner's message (or an answer, which posted one) marks it
+ * seen; a peek (`stampReceipt: false`, a watcher) and a caller that hung up
+ * never do. Driven through the injected `stampSeen`, like `stamp`.
+ */
+describe("waitForSessionChanges — the seen-by-agent mark", () => {
+  const ownerMessage = {
+    kind: "owner_message",
+    id: "m-owner",
+    at: "2026-11-18T11:26:17.314Z",
+    untrusted: true,
+    fenced: "Not mine",
+    message: { id: "m-owner", text: "Not mine", authorId: "u1" },
+    wake: true,
+  } as unknown as SessionChangeEvent;
+  const answered = {
+    kind: "answer",
+    id: "a1",
+    at: "2026-11-18T11:25:43.066Z",
+    untrusted: true,
+    fenced: "Disqualified",
+    answer: answer({ id: "a1", messageId: "m-answer" }),
+    wake: true,
+  } as unknown as SessionChangeEvent;
+  const changes = (events: SessionChangeEvent[]): SessionChangesPage => ({
+    sessionId: SID,
+    since: null,
+    events,
+    nextSince: events.at(-1)?.at ?? null,
+    hasMore: false,
+    state: { currentStage: null, status: "active" },
+  });
+  const kinds = new Set(["answer", "owner_message"] as const);
+
+  it("an agent's read marks the owner's message AND the answer's message seen", async () => {
+    const stampSeen = vi.fn().mockResolvedValue(2);
+    const r = await waitForSessionChanges(
+      {
+        sessionId: SID,
+        userId: "u1",
+        agentUserId: "agent-1",
+        kinds: kinds as never,
+        stampReceipt: true,
+      },
+      {
+        list: vi.fn().mockResolvedValue(changes([answered, ownerMessage])),
+        subscribe: wakeChannel().subscribe,
+        stamp: vi.fn(),
+        stampRead: vi.fn(),
+        stampSeen,
+      }
+    );
+    expect(r?.status).toBe("changed");
+    expect(stampSeen).toHaveBeenCalledTimes(1);
+    expect(stampSeen).toHaveBeenCalledWith({
+      sessionId: SID,
+      userId: "u1",
+      agentUserId: "agent-1",
+      messageIds: ["m-owner", "m-answer"],
+    });
+  });
+
+  it("a PEEK (stampReceipt false) never marks; a failed mark still returns the read", async () => {
+    const peekSeen = vi.fn();
+    await waitForSessionChanges(
+      { sessionId: SID, userId: "u1", kinds: kinds as never },
+      {
+        list: vi.fn().mockResolvedValue(changes([ownerMessage])),
+        subscribe: wakeChannel().subscribe,
+        stamp: vi.fn(),
+        stampRead: vi.fn(),
+        stampSeen: peekSeen,
+      }
+    );
+    expect(peekSeen).not.toHaveBeenCalled();
+
+    const failing = vi.fn().mockRejectedValue(new Error("lock timeout"));
+    const r = await waitForSessionChanges(
+      {
+        sessionId: SID,
+        userId: "u1",
+        kinds: kinds as never,
+        stampReceipt: true,
+      },
+      {
+        list: vi.fn().mockResolvedValue(changes([ownerMessage])),
+        subscribe: wakeChannel().subscribe,
+        stamp: vi.fn(),
+        stampRead: vi.fn(),
+        stampSeen: failing,
+      }
+    );
+    expect(failing).toHaveBeenCalledTimes(1);
+    expect(r?.status).toBe("changed");
+  });
+
+  it("a caller that HUNG UP marks nothing", async () => {
+    const ctl = new AbortController();
+    ctl.abort();
+    const stampSeen = vi.fn();
+    await waitForSessionChanges(
+      {
+        sessionId: SID,
+        userId: "u1",
+        kinds: kinds as never,
+        stampReceipt: true,
+        signal: ctl.signal,
+      },
+      {
+        list: vi.fn().mockResolvedValue(changes([ownerMessage])),
+        subscribe: wakeChannel().subscribe,
+        stamp: vi.fn(),
+        stampRead: vi.fn(),
+        stampSeen,
+      }
+    );
+    expect(stampSeen).not.toHaveBeenCalled();
+  });
+});
+
+describe("waitForSessionAnswers — the seen-by-agent mark", () => {
+  it("an agent's read marks the answer's room message seen; a person's read does not", async () => {
+    const list = vi
+      .fn()
+      .mockResolvedValue(page([answer({ messageId: "m-answer" })]));
+    const personSeen = vi.fn();
+    await waitForSessionAnswers(
+      { sessionId: SID, userId: "u1" },
+      {
+        list,
+        subscribe: wakeChannel().subscribe,
+        stamp: vi.fn(),
+        stampSeen: personSeen,
+      }
+    );
+    expect(personSeen).not.toHaveBeenCalled();
+    const agentSeen = vi.fn().mockResolvedValue(1);
+    await waitForSessionAnswers(
+      { sessionId: SID, userId: "u1", stampReceipt: true },
+      {
+        list,
+        subscribe: wakeChannel().subscribe,
+        stamp: vi.fn(),
+        stampSeen: agentSeen,
+      }
+    );
+    expect(agentSeen).toHaveBeenCalledWith(
+      expect.objectContaining({ messageIds: ["m-answer"] })
+    );
   });
 });

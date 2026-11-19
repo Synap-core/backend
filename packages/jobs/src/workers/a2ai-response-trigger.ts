@@ -54,6 +54,7 @@ import {
   messages,
   persistAssistantReply,
   agentOverridesForTurn,
+  stampMessagesSeenByAgent,
   RoutedSource,
   type AgentTurnOverrides,
 } from "@synap/database";
@@ -477,6 +478,30 @@ export async function handleA2AIResponseTrigger(
     streamError = result.error;
     aiSteps = result.steps;
     partialFailure = result.partialFailure;
+    // The turn ran with the person's message as its trigger: in a session's
+    // room that is the "Seen by the agent" mark (`seen-by-agent.ts`). Once,
+    // and only for a turn that ANSWERED (text, no error, nothing partial): a
+    // call that failed, even one that resolved with its error, never read it.
+    // Never thrown.
+    if (
+      job.data.focusSessionId &&
+      result.text &&
+      !result.error &&
+      !result.partialFailure
+    ) {
+      try {
+        await stampMessagesSeenByAgent({
+          channelId,
+          messageIds: [userMessageId],
+          agentUserId: agentUserId ?? null,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, channelId, userMessageId },
+          "A2AI: the seen-by-agent mark was not stamped"
+        );
+      }
+    }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     logger.error(

@@ -183,7 +183,13 @@ export interface PostChannelMessageResult {
    * every other post. `hint` when the ask's prompt only repeats the slot's
    * label (`ask-text.ts`): filed anyway, said back.
    */
-  slot?: { status: string; hint?: string; warnings?: string[] };
+  slot?: {
+    status: string;
+    hint?: string;
+    warnings?: string[];
+    /** ONE CARD PER QUESTION: the open card this question was filed on instead. */
+    deduped?: { key: string | null; label: string; asked: string };
+  };
 }
 
 /**
@@ -312,9 +318,13 @@ async function fileSlotQuestion(
       ...(params.ask ? { ask: params.ask } : {}),
       agentUserId,
       userId,
+      messageId,
     });
     return {
       status: filed.status,
+      ...("deduped" in filed && filed.deduped
+        ? { deduped: filed.deduped }
+        : {}),
       ...("hint" in filed && filed.hint ? { hint: filed.hint } : {}),
       ...("warnings" in filed && filed.warnings?.length
         ? { warnings: filed.warnings }

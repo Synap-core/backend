@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   requestHeadlessChatText: vi.fn(),
   persistAssistantReply: vi.fn(),
   agentOverridesForTurn: vi.fn(),
+  stampMessagesSeenByAgent: vi.fn(),
   insertReturning: [] as TurnRow[],
   selectReturning: [] as unknown[],
   messageLookup: undefined as { id: string } | undefined,
@@ -99,6 +100,8 @@ vi.mock("@synap/database", () => ({
     mocks.persistAssistantReply(...args),
   agentOverridesForTurn: (...args: unknown[]) =>
     mocks.agentOverridesForTurn(...args),
+  stampMessagesSeenByAgent: (...args: unknown[]) =>
+    mocks.stampMessagesSeenByAgent(...args),
   db: {
     insert: () => ({
       values: () => ({
@@ -195,6 +198,71 @@ beforeEach(() => {
 });
 
 describe("handleA2AIResponseTrigger", () => {
+  it("a session room's turn that RAN marks the person's message seen by the agent; a failed call does not", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.stampMessagesSeenByAgent.mockResolvedValue(1);
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "on it",
+      error: null,
+      steps: [],
+    });
+    await handleA2AIResponseTrigger(baseJob({ focusSessionId: "fs-1" }));
+    expect(mocks.stampMessagesSeenByAgent).toHaveBeenCalledWith({
+      channelId,
+      messageIds: [userMessageId],
+      agentUserId: "agent-user",
+    });
+
+    // Not a session's room: no mark.
+    mocks.stampMessagesSeenByAgent.mockClear();
+    mocks.insertReturning = [runningTurn()];
+    await handleA2AIResponseTrigger(baseJob());
+    expect(mocks.stampMessagesSeenByAgent).not.toHaveBeenCalled();
+
+    // The IS call failed: the agent never read it.
+    mocks.insertReturning = [runningTurn()];
+    const refused = Object.assign(new Error("bad request"), { status: 400 });
+    mocks.requestHeadlessChatText.mockRejectedValue(refused);
+    await handleA2AIResponseTrigger(baseJob({ focusSessionId: "fs-1" }));
+    expect(mocks.stampMessagesSeenByAgent).not.toHaveBeenCalled();
+  });
+
+  it("a call that RESOLVED with an error (or partly failed) marks nothing", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "",
+      error: "model overloaded",
+      steps: [],
+    });
+    await handleA2AIResponseTrigger(baseJob({ focusSessionId: "fs-1" })).catch(
+      () => undefined
+    );
+    expect(mocks.stampMessagesSeenByAgent).not.toHaveBeenCalled();
+
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "half",
+      error: "stream cut",
+      steps: [],
+    });
+    await handleA2AIResponseTrigger(baseJob({ focusSessionId: "fs-1" })).catch(
+      () => undefined
+    );
+    expect(mocks.stampMessagesSeenByAgent).not.toHaveBeenCalled();
+  });
+
+  it("a failed seen mark never fails the turn", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.stampMessagesSeenByAgent.mockRejectedValue(new Error("lock"));
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "on it",
+      error: null,
+      steps: [],
+    });
+    await handleA2AIResponseTrigger(baseJob({ focusSessionId: "fs-1" }));
+    expect(mocks.persistAssistantReply).toHaveBeenCalledTimes(1);
+  });
+
   it("passes priority:background and collectSteps:true to the headless transport", async () => {
     mocks.insertReturning = [runningTurn()];
     mocks.requestHeadlessChatText.mockResolvedValue({

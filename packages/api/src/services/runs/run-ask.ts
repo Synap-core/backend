@@ -75,7 +75,10 @@ export async function raiseRunAsk(p: RunAskInput): Promise<boolean> {
         ask: p.ask,
         idempotencyKey: p.idempotencyKey,
       });
-      if (posted.slot?.status === "blocked") return true;
+      if (posted.slot?.status === "blocked") {
+        if (posted.slot.deduped) await dropDeclared(p.session.id, wanted);
+        return true;
+      }
       logger.warn(
         { runId: p.runId, slot: posted.slot?.status ?? null },
         "run-ask: the question did not file on the slot; handing it over directly"
@@ -91,6 +94,9 @@ export async function raiseRunAsk(p: RunAskInput): Promise<boolean> {
       agentUserId: p.askingAgentUserId,
       askCause: { kind: "run", ref: { kind: "run", id: p.runId } },
     });
+    if (blocked.status === "blocked" && blocked.deduped) {
+      await dropDeclared(p.session.id, wanted);
+    }
     return blocked.status === "blocked";
   } catch (err) {
     logger.error(
@@ -99,4 +105,23 @@ export async function raiseRunAsk(p: RunAskInput): Promise<boolean> {
     );
     return false;
   }
+}
+
+/**
+ * The slot step 1 declared, taken back when the hand-over was DEDUPED (an open
+ * card of the session already asks the same, `same-question.ts`): the person
+ * answers that card, and a pending slot of the pod's own under this label
+ * would be owed by nobody. Only a slot of that label the person does not
+ * hold and nobody delivered.
+ */
+async function dropDeclared(sessionId: string, wanted: string | undefined) {
+  await updateExpectedOutputsLocked(sessionId, (current) => {
+    const next = current.filter(
+      (o) =>
+        normalizeExpectedLabel(o?.label) !== wanted ||
+        o.owner === "human" ||
+        o.status === "done"
+    );
+    return next.length === current.length ? current : next;
+  });
 }
