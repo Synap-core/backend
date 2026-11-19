@@ -53,6 +53,7 @@
  *               grant fails closed.
  */
 
+import { isUuid } from "@synap-core/types/property-render";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { and, db, eq, getRequestGrant, type KeyGrant } from "@synap/database";
 import {
@@ -196,7 +197,6 @@ const str = (v: unknown): string | undefined =>
 
 /** The project-membership edge (utils/project-scope.ts `BELONGS_TO_PROJECT`). */
 const BELONGS_TO_PROJECT = "belongs_to_project";
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A stored entity's kind and the live projects it is filed in; undefined = no row. */
 async function storedEntity(
@@ -234,7 +234,7 @@ async function storedEntity(
 async function storedTrackProject(
   trackId: string
 ): Promise<string | undefined> {
-  if (!UUID.test(trackId)) return undefined;
+  if (!isUuid(trackId)) return undefined;
   const [row] = await db
     .select({ projectId: projectTracks.projectId })
     .from(projectTracks)
@@ -245,7 +245,7 @@ async function storedTrackProject(
 
 /** Is there a project with this id? */
 async function projectExists(projectId: string): Promise<boolean> {
-  if (!UUID.test(projectId)) return false;
+  if (!isUuid(projectId)) return false;
   const [row] = await db
     .select({ id: projects.id })
     .from(projects)
@@ -258,7 +258,7 @@ async function projectExists(projectId: string): Promise<boolean> {
 async function storedSessionProject(
   sessionId: string
 ): Promise<string | null | undefined> {
-  if (!UUID.test(sessionId)) return undefined;
+  if (!isUuid(sessionId)) return undefined;
   const [row] = await db
     .select({ projectId: focusSessions.projectId })
     .from(focusSessions)

@@ -24,6 +24,7 @@
  * withdraw route of `synap_reject_proposal`).
  */
 
+import { isUuid } from "@synap-core/types/property-render";
 import {
   and,
   db,
@@ -88,7 +89,6 @@ export function proposalTargetInProjectsWhere(projectIds: string[]): SQL {
   )!;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** DECIDE half: the projects a proposal's target row is filed in now. */
 export async function proposalTargetProjectIds(proposal: {
@@ -96,7 +96,7 @@ export async function proposalTargetProjectIds(proposal: {
   targetId?: string | null;
 }): Promise<string[]> {
   const id = proposal.targetId;
-  if (!id || !UUID.test(id)) return [];
+  if (!id || !isUuid(id)) return [];
   switch (proposal.targetType) {
     case "entity": {
       const rows = await db
