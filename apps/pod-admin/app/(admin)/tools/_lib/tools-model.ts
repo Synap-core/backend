@@ -155,6 +155,11 @@ export interface ToolItem {
   status: StatusMark;
   workspaceId: string | null;
   scope: "pod" | "user" | "workspace";
+  /**
+   * ADD-ON: the base tool this capability extends ("Add-on of Apify"), or
+   * null. An add-on is its own row; this only marks it.
+   */
+  addOnOf: { id: string; name: string } | null;
   /** A capability's actions turned on, of how many; null when unknown. */
   actionsOn: number | null;
   actionsTotal: number | null;
@@ -204,6 +209,7 @@ function capabilityItem(
     status: capabilityStatus({ card, health: c.health }),
     workspaceId: c.workspaceId ?? null,
     scope: c.workspaceId ? "workspace" : "pod",
+    addOnOf: c.extends ?? null,
     actionsOn: cardsRead && card ? verbs.filter((v) => v.enabled).length : null,
     actionsTotal: cardsRead && card ? verbs.length : null,
     lastRunAt: c.health.lastRunAt ?? null,
@@ -232,6 +238,7 @@ function skillItem(
         : s.workspaceId
           ? "workspace"
           : "pod",
+    addOnOf: null,
     actionsOn: null,
     actionsTotal: null,
     lastRunAt: null,
@@ -270,6 +277,47 @@ export function toolItems(input: {
   );
 }
 
+/** One add-on on its base's page: its own row, its own mark, its own page. */
+export interface AddOnRow {
+  id: string;
+  name: string;
+  description: string | null;
+  status: StatusMark;
+  href: string;
+}
+
+/**
+ * The base page's "Add-ons" card: each add-on installed on it (`addOns` from
+ * `capabilities.containers.get`), its mark from the SAME catalog card and
+ * composition the Tools list reads. `cards` null leaves the mark unknown,
+ * never "On".
+ */
+export function addOnRows(
+  addOns: ReadonlyArray<{
+    id: string;
+    name: string;
+    description: string | null;
+  }>,
+  cards: readonly CardLike[] | null,
+  compositions: readonly CompositionLike[] | null
+): AddOnRow[] {
+  return addOns.map((a) => ({
+    id: a.id,
+    name: a.name,
+    description: a.description?.trim() || null,
+    status: capabilityStatus({
+      card: cards?.find((c) => c.id === a.id) ?? null,
+      health: compositions?.find((c) => c.id === a.id)?.health ?? null,
+    }),
+    href: hrefOf("capability", a.id),
+  }));
+}
+
+/** An add-on's page links to its base: the base's own page. */
+export function addOnParentHref(baseId: string): string {
+  return hrefOf("capability", baseId);
+}
+
 /**
  * Does the tool match the search? Every word of the query must appear in its
  * name, slug, description or one of its action labels (any case).
@@ -281,6 +329,7 @@ export function matchesToolSearch(item: ToolItem, query: string): boolean {
     item.name,
     item.slug ?? "",
     item.description ?? "",
+    item.addOnOf?.name ?? "",
     ...item.actionLabels,
   ]
     .join("\n")
@@ -333,6 +382,7 @@ export function toolSecondary(item: ToolItem, where: string): string {
   const t = toolsT();
   if (item.type === "capability")
     return [
+      item.addOnOf ? t("row.addOnOf", { base: item.addOnOf.name }) : null,
       where,
       item.actionsTotal
         ? t("row.actionsOn", {

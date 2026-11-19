@@ -29790,7 +29790,8 @@
                       "assigned_to",
                       "serves",
                       "advances",
-                      "orchestrated_by"
+                      "orchestrated_by",
+                      "extends"
                     ]
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },

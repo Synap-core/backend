@@ -26,6 +26,7 @@
  *   track               --advances-->          workspace    (the goal moves that pillar of its project; metadata.primary)
  *   participant(agent)  --dispatched_via-->    tool         (BINDING: how the pod hands this agent work — tools.config.agentBinding)
  *   participant(agent)  --assigned_to-->       playbook|profile|project|workspace (who takes that work by default — route())
+ *   capability(add-on)  --extends-->           capability (base)  (an add-on's base, written by the applier)
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
@@ -274,7 +275,19 @@ export type LinkType =
    * clears. ONE producer: `services/focus-sessions/start-orchestrator.ts`
    * (same owner at both ends). The Hub REST links door lists and refuses it.
    */
-  | "orchestrated_by";
+  | "orchestrated_by"
+  /**
+   * capability(add-on) --extends--> capability(base). The add-on is its own
+   * container, package and listing; its actions run through its base's tool
+   * rows and are members of the add-on only (founder decision D6, document
+   * b387ca45 §6). ONE producer: the capability applier
+   * (`services/capabilities/addon.ts`, called by
+   * `createCapabilityFromDefinition` for a definition with `extends`), after it
+   * found the base installed. Readers: the add-on reads
+   * (`readAddOnRelations`), the catalog card's base-tool fallback. The Hub
+   * REST links door lists and refuses it: an install writes it, never a key.
+   */
+  | "extends";
 
 export const links = pgTable(
   "links",

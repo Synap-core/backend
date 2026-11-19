@@ -356,7 +356,11 @@ function ToolCard({ item, where }: { item: ToolItem; where: string }) {
       </p>
       <div className="mt-auto flex min-w-0 items-center gap-2 pt-1 text-[11px] text-foreground/65">
         <StatusPill kind={item.status.kind} label={item.status.label} />
-        <span className="truncate">{where}</span>
+        <span className="truncate">
+          {item.addOnOf
+            ? `${t("row.addOnOf", { base: item.addOnOf.name })} · ${where}`
+            : where}
+        </span>
       </div>
     </Link>
   );

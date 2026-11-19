@@ -17,6 +17,8 @@ const TOOL = "d26aa29b-45f0-494b-9ebf-388da2bb9528";
 
 const h = vi.hoisted(() => ({
   card: null as unknown,
+  /** `capabilities.containers.get`'s answer; null = Hetzner, not an add-on. */
+  container: null as unknown,
   approveCalls: [] as unknown[],
   switches: new Map<string, (on: boolean) => void>(),
 }));
@@ -40,9 +42,18 @@ vi.mock("../../../../lib/trpc", async () => {
       useUtils: () => ({}),
       capabilities: {
         containers: {
-          get: query(() => ({
-            capability: { id: CAP, name: "Hetzner Cloud", workspaceId: null },
-          })),
+          get: query(
+            () =>
+              h.container ?? {
+                capability: {
+                  id: CAP,
+                  name: "Hetzner Cloud",
+                  workspaceId: null,
+                },
+                extends: null,
+                addOns: [],
+              }
+          ),
         },
         catalog: query(() => [h.card]),
         compositions: query(() => [
@@ -121,6 +132,7 @@ vi.mock("./tool-runs", () => ({ ToolRuns: () => null }));
 
 import { ObjectPage } from "../object-page";
 import { CapabilityObject } from "./capability-object";
+import { addOnParentHref } from "../../../(admin)/tools/_lib/tools-model";
 import type { ObjectFrame } from "./object-frame";
 
 const FRAME: ObjectFrame = {
@@ -178,6 +190,7 @@ const render = (viewerIsPodAdmin = true) =>
 beforeEach(() => {
   h.approveCalls.length = 0;
   h.switches.clear();
+  h.container = null;
 });
 
 describe("a capability whose access to the service is off", () => {
@@ -212,5 +225,61 @@ describe("a capability whose access to the service is off", () => {
     const html = render();
     expect(html).not.toContain("data-capability-access");
     expect(text(html)).not.toContain("Access off");
+  });
+});
+
+/* ── Add-ons (founder decision D6) ─────────────────────────────────────── */
+
+const BASE = "22222222-2222-4222-8222-222222222222";
+const ADDON = "33333333-3333-4333-8333-333333333333";
+
+describe("a base tool with add-ons", () => {
+  it("shows them in their own Add-ons card, each a door to its own page", () => {
+    h.card = hetzner();
+    h.container = {
+      capability: { id: CAP, name: "Hetzner Cloud", workspaceId: null },
+      extends: null,
+      addOns: [
+        {
+          id: ADDON,
+          name: "Snapshots",
+          description: "Schedule server snapshots",
+          workspaceId: null,
+        },
+      ],
+    };
+    const html = render();
+    expect(html).toContain("data-addons");
+    const page = text(html);
+    expect(page).toContain("Add-ons");
+    expect(page).toContain("Snapshots");
+    expect(page).toContain("Schedule server snapshots");
+    expect(page).toContain("runs through Hetzner Cloud’s access");
+  });
+
+  it("a tool with no add-on draws no Add-ons card", () => {
+    h.card = hetzner();
+    const html = render();
+    expect(html).not.toContain("data-addons");
+    expect(text(html)).not.toContain("Add-on of");
+  });
+});
+
+describe("an add-on's page", () => {
+  it("names its parent tool, linked to the parent's page", () => {
+    h.card = hetzner();
+    h.container = {
+      capability: { id: CAP, name: "Hetzner Cloud", workspaceId: null },
+      extends: { id: BASE, name: "Apify" },
+      addOns: [],
+    };
+    const html = render();
+    expect(html).toContain(`href="${addOnParentHref(BASE)}"`);
+    expect(addOnParentHref(BASE)).toContain(BASE);
+    const page = text(html);
+    expect(page).toContain("Add-on of");
+    expect(page).toContain("Apify");
+    expect(page).toContain("It runs through Apify’s access");
+    expect(html).not.toContain("data-addons");
   });
 });
