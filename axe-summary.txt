@@ -22,6 +22,10 @@ after a05-app-page light desktop violations=0 incomplete=color-contrast
 after a05-app-page light phone violations=0 incomplete=color-contrast
 after a05-app-page dark desktop violations=0 incomplete=color-contrast
 after a05-app-page dark phone violations=0 incomplete=color-contrast
+after a05b-app-page-projects light desktop violations=0 incomplete=color-contrast
+after a05b-app-page-projects light phone violations=0 incomplete=color-contrast
+after a05b-app-page-projects dark desktop violations=0 incomplete=color-contrast
+after a05b-app-page-projects dark phone violations=0 incomplete=color-contrast
 after a06-in-noprojects light desktop violations=0 incomplete=aria-valid-attr-value,color-contrast
 after a06-in-noprojects light phone violations=0 incomplete=aria-valid-attr-value,color-contrast
 after a06-in-noprojects dark desktop violations=0 incomplete=aria-valid-attr-value,color-contrast
