@@ -198,9 +198,7 @@ export async function withProposalTargetPlace<
 ): Promise<T & { targetProjectIds: string[] | null }> {
   if (
     !grant ||
-    !grant.scopes.some((scope) => !!scope.projectIds) ||
-    // A filing has no project: no project pin decides it.
-    proposalIsFiling(proposal)
+    !grant.scopes.some((scope) => !!scope.projectIds)
   ) {
     return { ...proposal, targetProjectIds: null };
   }
