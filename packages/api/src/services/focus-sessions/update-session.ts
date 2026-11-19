@@ -3037,8 +3037,7 @@ export async function updateFocusSession(
   // slots in step: a grade naming its output is filed, a re-pointed one
   // follows, one whose criterion was removed is withdrawn.
   if (criteriaChange) {
-    const { fileDeclaredGradeSlots } =
-      await import("./evaluations/record.js");
+    const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
     await fileDeclaredGradeSlots(sessionId);
   }
   // C6: the own-session criteria change says so in the room, with its Undo.

@@ -334,11 +334,17 @@ const GRADE_ROWS: ReadonlyArray<{
   },
   {
     rulesOut: "a non-string outputKey matched as text",
-    slots: [{ ...GRADE, outputKey: 7 }, { ...COPY, key: "7" }],
+    slots: [
+      { ...GRADE, outputKey: 7 },
+      { ...COPY, key: "7" },
+    ],
   },
   {
     rulesOut: "a numeric output key matched as text",
-    slots: [{ ...GRADE, outputKey: "7" }, { ...COPY, key: 7 }],
+    slots: [
+      { ...GRADE, outputKey: "7" },
+      { ...COPY, key: 7 },
+    ],
   },
   {
     rulesOut: "a grade held back by an output nobody declared",
@@ -362,7 +368,10 @@ const GRADE_ROWS: ReadonlyArray<{
   },
   {
     rulesOut: "a done grade owed",
-    slots: [{ ...GRADE, status: "done" }, { ...COPY, status: "done" }],
+    slots: [
+      { ...GRADE, status: "done" },
+      { ...COPY, status: "done" },
+    ],
   },
   {
     rulesOut: "a scalar in the list breaks the read",
@@ -383,10 +392,7 @@ async function sqlListOwed(slots: unknown[]): Promise<boolean> {
 
 const tsListOwed = (slots: unknown[]): boolean =>
   slots.some(
-    (s) =>
-      !!s &&
-      typeof s === "object" &&
-      isOwedByYouIn(s as never, slots)
+    (s) => !!s && typeof s === "object" && isOwedByYouIn(s as never, slots)
   );
 
 describe("a criterion's grade is owed once its output is delivered", () => {

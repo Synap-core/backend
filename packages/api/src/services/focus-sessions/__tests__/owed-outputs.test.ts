@@ -62,11 +62,14 @@ describe("isOwedSlot — the TypeScript twin", () => {
 
   it("drops a RETIRED slot — the cancelled-session receipt", () => {
     expect(
-      isOwedSlot({
-        ...OWED,
-        retiredAt: "2026-09-08T13:00:00.000Z",
-        retiredReason: "session_cancelled",
-      }, [])
+      isOwedSlot(
+        {
+          ...OWED,
+          retiredAt: "2026-09-08T13:00:00.000Z",
+          retiredReason: "session_cancelled",
+        },
+        []
+      )
     ).toBe(false);
   });
 

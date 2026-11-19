@@ -1456,8 +1456,7 @@ export async function createFocusSession(
   // its output gets its grade slot now, owed once that output is delivered.
   // After the commit, through the slot door's own lock.
   if (sessionCriteria.some((c) => c.check.kind === "human" && c.outputKey)) {
-    const { fileDeclaredGradeSlots } =
-      await import("./evaluations/record.js");
+    const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
     await fileDeclaredGradeSlots(sessionOut.id);
   }
 

@@ -325,9 +325,7 @@ export interface SlotBlocks {
  * check gate is checked again.
  */
 export type SlotUnblocksTarget =
-  | { stage: string }
-  | { output: string }
-  | { criterion: string };
+  { stage: string } | { output: string } | { criterion: string };
 
 /**
  * WHAT CLEARS a blocker — exactly one door (plan §9): the person's answer, an
