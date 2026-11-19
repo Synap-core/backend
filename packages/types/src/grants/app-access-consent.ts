@@ -140,7 +140,9 @@ export function appAccessBeyond(
  * pod-wide-declared reads unpinned, writes in their writable spaces and
  * projects. Spaces and projects never share a scope.
  */
-export function ceilingScopes(ceiling: AppAccessCeiling): AppAccessGrantScope[] {
+export function ceilingScopes(
+  ceiling: AppAccessCeiling
+): AppAccessGrantScope[] {
   const reads = ceiling.permissions.filter(isReadPermission);
   const writes = ceiling.permissions.filter((p) => !isReadPermission(p));
   const allSpaces = ceiling.allSpacesReads.filter(
@@ -320,7 +322,10 @@ export function addPermissionsToAccess(
       read: a.read,
       write:
         needsWrite && writePlace
-          ? { spaces: [...writePlace.spaces], projects: [...writePlace.projects] }
+          ? {
+              spaces: [...writePlace.spaces],
+              projects: [...writePlace.projects],
+            }
           : a.write,
     }),
   };

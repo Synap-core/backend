@@ -149,11 +149,24 @@ function* subsets<T>(items: readonly T[]): Generator<T[]> {
 }
 
 function* accessUniverse(): Generator<AppAccess> {
-  const readSpaces: Array<"all" | string[]> = ["all", [], [A], [B], [A, B], [C]];
+  const readSpaces: Array<"all" | string[]> = [
+    "all",
+    [],
+    [A],
+    [B],
+    [A, B],
+    [C],
+  ];
   const readProjects: Array<"all" | string[]> = ["all", [], [P], [Q], [R]];
   const writeSpaces = [[], [A], [B]];
   const writeProjects = [[], [P], [Q]];
-  for (const permissions of subsets([R_NOTE, R_TASK, R_TRACK, W_NOTE, W_UNASKED]))
+  for (const permissions of subsets([
+    R_NOTE,
+    R_TASK,
+    R_TRACK,
+    W_NOTE,
+    W_UNASKED,
+  ]))
     for (const rs of readSpaces)
       for (const rp of readProjects)
         for (const ws of writeSpaces)
@@ -215,8 +228,9 @@ describe("appAccessBeyond — a stored access never grants beyond asked ∩ floo
         !subsetOf(permitsTable(grants), ceilingTable) ||
         !placedWithin(placement(grants), ceilingPlaces);
       const phantom =
-        [...permitsTable(documentScopes(access, ALL_PROJECTS))].sort().join() !==
-        [...permitsTable(grants)].sort().join();
+        [...permitsTable(documentScopes(access, ALL_PROJECTS))]
+          .sort()
+          .join() !== [...permitsTable(grants)].sort().join();
       if (!widens && !phantom) continue;
       widening++;
       expect(appAccessBeyond(access, CEILING).length).toBeGreaterThan(0);
@@ -240,7 +254,11 @@ describe("appAccessBeyond — a stored access never grants beyond asked ∩ floo
     // Declared per space: never All spaces.
     expect(
       appAccessBeyond(
-        { ...base, permissions: [R_TASK], read: { spaces: "all", projects: [] } },
+        {
+          ...base,
+          permissions: [R_TASK],
+          read: { spaces: "all", projects: [] },
+        },
         CEILING
       )
     ).toEqual([
@@ -254,7 +272,11 @@ describe("appAccessBeyond — a stored access never grants beyond asked ∩ floo
     // Declared pod-wide, but no pod-wide read (D1): never All spaces.
     expect(
       appAccessBeyond(
-        { ...base, permissions: [R_TRACK], read: { spaces: "all", projects: [] } },
+        {
+          ...base,
+          permissions: [R_TRACK],
+          read: { spaces: "all", projects: [] },
+        },
         CEILING
       ).map((b) => b.reason)
     ).toEqual(["not-all-spaces"]);
@@ -293,7 +315,7 @@ describe("appAccessBeyond — a stored access never grants beyond asked ∩ floo
     ]);
   });
 
-  it('Q1: All spaces includes every project, and a reader in All spaces reads a project-only row', () => {
+  it("Q1: All spaces includes every project, and a reader in All spaces reads a project-only row", () => {
     const access: AppAccess = {
       version: 2,
       permissions: [R_NOTE],
@@ -356,9 +378,9 @@ describe("pairsOfAccess — the old pairs, for what still reads them", () => {
         const lifted = liftApprovedRequests(pairs);
         expect("access" in lifted).toBe(true);
         if ("access" in lifted) {
-          expect([...permitsTable(grantScopesForAccess(lifted.access))].sort()).toEqual(
-            [...permitsTable(grants)].sort()
-          );
+          expect(
+            [...permitsTable(grantScopesForAccess(lifted.access))].sort()
+          ).toEqual([...permitsTable(grants)].sort());
         }
       }
     }

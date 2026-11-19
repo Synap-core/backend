@@ -658,8 +658,7 @@ export class AppRepository {
       const access =
         current.approvedRequests === null
           ? null
-          : (parseAppAccess(current.approvedAccess) ??
-            approvedAccessOf(pairs));
+          : (parseAppAccess(current.approvedAccess) ?? approvedAccessOf(pairs));
       const chosen = next({ access, pairs });
       if (!chosen) return null;
       const approvedAccess = normalizeAppAccess(chosen);

@@ -1001,7 +1001,10 @@ async function syncAppAgentMemberships(
     );
     for (const workspaceId of g.workspaceIds ?? []) {
       const prior = roles.get(workspaceId);
-      roles.set(workspaceId, prior === "editor" || !reads ? "editor" : "viewer");
+      roles.set(
+        workspaceId,
+        prior === "editor" || !reads ? "editor" : "viewer"
+      );
     }
   }
   const current = await db
@@ -2154,9 +2157,7 @@ async function appOAuthAnswer(
       };
     }),
     user: { id: conn.person.id, name: conn.person.name ?? null },
-    access: reach.access
-      ? await nameAppAccess(reach.access)
-      : null,
+    access: reach.access ? await nameAppAccess(reach.access) : null,
   };
 }
 
@@ -2734,7 +2735,7 @@ export async function narrowApp(args: {
   if (keep.length === current.length) return found;
 
   const repo = new AppRepository(db);
-  await repo.setApprovedRequests(found.app.id, keep);
+  const narrowed = await repo.setApprovedRequests(found.app.id, keep);
   if (found.app.mode === "oauth") {
     // The connection's live key, whoever holds it: the person's token (every
     // pod app since 12 Nov 2026) or, for a connection not refreshed since,
@@ -2748,7 +2749,14 @@ export async function narrowApp(args: {
       await syncAppAgentMemberships(
         found.app.agentUserId,
         found.app.ownerUserId,
-        keep
+        narrowed
+          ? grantsForApp(narrowed, {
+              allProjects: await allProjectsFor(
+                found.app.ownerUserId,
+                narrowed
+              ),
+            })
+          : grantsForPairs(keep)
       );
     }
   } else {
@@ -3637,7 +3645,10 @@ export async function connectOAuthAppAccess(args: {
   /** The full consent: the person's choice. */
   access?: AppAccess;
   /** The short ask: the permissions to add, and Q4's write place. */
-  add?: { permissions: readonly string[]; writePlace?: AccessWritePlace | null };
+  add?: {
+    permissions: readonly string[];
+    writePlace?: AccessWritePlace | null;
+  };
   ctx: Context;
   presenceChecked?: "oauth.consent";
 }): Promise<{ appId: string; publicId: string; proposalId: string }> {
@@ -3648,7 +3659,11 @@ export async function connectOAuthAppAccess(args: {
   const offer = await appAccessOffer(args.ownerUserId, args.asked);
   const repo = new AppRepository(db);
   const existing = await db
-    .select({ approvedRequests: apps.approvedRequests, approvedAccess: apps.approvedAccess, revokedAt: apps.revokedAt })
+    .select({
+      approvedRequests: apps.approvedRequests,
+      approvedAccess: apps.approvedAccess,
+      revokedAt: apps.revokedAt,
+    })
     .from(apps)
     .where(
       and(
@@ -3694,7 +3709,9 @@ export async function connectOAuthAppAccess(args: {
   // The old pairs ride along for every reader of a request (cards, timeline),
   // named; the v2 access is what the executor stores.
   const names = await placeNames(
-    pairsOfAccess(access).pairs.flatMap((p) => (p.workspaceId ? [p.workspaceId] : [])),
+    pairsOfAccess(access).pairs.flatMap((p) =>
+      p.workspaceId ? [p.workspaceId] : []
+    ),
     []
   );
   const requests = pairsOfAccess(access).pairs.map((r) => ({

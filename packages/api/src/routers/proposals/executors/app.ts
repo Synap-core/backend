@@ -346,10 +346,11 @@ async function executeAccessApproval(args: {
         )
       : [];
     const wp = inner.writePlace as
-      | { spaces?: unknown; projects?: unknown }
-      | undefined;
+      { spaces?: unknown; projects?: unknown } | undefined;
     const ids = (v: unknown) =>
-      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+      Array.isArray(v)
+        ? v.filter((x): x is string => typeof x === "string")
+        : [];
     const writePlace = wp
       ? { spaces: ids(wp.spaces), projects: ids(wp.projects) }
       : null;

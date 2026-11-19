@@ -249,7 +249,9 @@ function authorizeParams(extra: Record<string, unknown> = {}) {
   };
 }
 
-const access = (a: Partial<AppAccess> & Pick<AppAccess, "permissions">): AppAccess => ({
+const access = (
+  a: Partial<AppAccess> & Pick<AppAccess, "permissions">
+): AppAccess => ({
   version: 2,
   read: { spaces: [], projects: [] },
   write: { spaces: [], projects: [] },
@@ -257,7 +259,10 @@ const access = (a: Partial<AppAccess> & Pick<AppAccess, "permissions">): AppAcce
 });
 
 async function allow(
-  input: { access?: AppAccess; askWritePlace?: { spaces: string[]; projects: string[] } },
+  input: {
+    access?: AppAccess;
+    askWritePlace?: { spaces: string[]; projects: string[] };
+  },
   extra: Record<string, unknown> = {}
 ): Promise<string> {
   const { redirectTo } = await decideOAuthAuthorization(
@@ -300,7 +305,10 @@ const row = async () =>
     await q<{
       id: string;
       public_id: string;
-      approved_requests: Array<{ permission: string; workspaceId: string | null }> | null;
+      approved_requests: Array<{
+        permission: string;
+        workspaceId: string | null;
+      }> | null;
       approved_access: AppAccess | null;
     }>(
       `select id, public_id, approved_requests, approved_access from apps
@@ -342,7 +350,9 @@ async function expectRefusedUnchanged(
   const before = await row();
   await expect(run()).rejects.toThrow(message);
   const after = await row();
-  expect(after?.approved_access ?? null).toEqual(before?.approved_access ?? null);
+  expect(after?.approved_access ?? null).toEqual(
+    before?.approved_access ?? null
+  );
   expect(after?.approved_requests ?? null).toEqual(
     before?.approved_requests ?? null
   );
@@ -392,7 +402,9 @@ describe("S — Allow stores v2 first and mints it per tier and kind of place", 
     expect(status).toBe(200);
     const r = (await row())!;
     expect(r.approved_access).toEqual(chosen);
-    expect(sorted(r.approved_requests!.map((p) => [p.permission, p.workspaceId]))).toEqual(
+    expect(
+      sorted(r.approved_requests!.map((p) => [p.permission, p.workspaceId]))
+    ).toEqual(
       sorted([
         [READ, BRAND],
         [CREATE, BRAND],
@@ -451,12 +463,18 @@ describe("B — SECURITY: never beyond asked ∩ what the person may give; nothi
   it.each([
     [
       "an unasked permission",
-      access({ permissions: [UNASKED], write: { spaces: [BRAND], projects: [] } }),
+      access({
+        permissions: [UNASKED],
+        write: { spaces: [BRAND], projects: [] },
+      }),
       /did not ask for it/,
     ],
     [
       "a write where the person only reads",
-      access({ permissions: [CREATE], write: { spaces: [VIEWED], projects: [] } }),
+      access({
+        permissions: [CREATE],
+        write: { spaces: [VIEWED], projects: [] },
+      }),
       /changes in space Viewed/,
     ],
     [
@@ -466,23 +484,34 @@ describe("B — SECURITY: never beyond asked ∩ what the person may give; nothi
     ],
     [
       "All spaces for a read declared per space",
-      access({ permissions: [NOTE_READ], read: { spaces: "all", projects: [] } }),
+      access({
+        permissions: [NOTE_READ],
+        read: { spaces: "all", projects: [] },
+      }),
       /in all spaces/,
     ],
     [
       "a write in a project the person cannot write in",
-      access({ permissions: [CREATE], write: { spaces: [], projects: [P_VIEWED] } }),
+      access({
+        permissions: [CREATE],
+        write: { spaces: [], projects: [P_VIEWED] },
+      }),
       /changes in project Watched/,
     ],
     [
       "a read in a project the person cannot see",
-      access({ permissions: [READ], read: { spaces: [], projects: [P_HIDDEN] } }),
+      access({
+        permissions: [READ],
+        read: { spaces: [], projects: [P_HIDDEN] },
+      }),
       /reading in a project you cannot see/,
     ],
   ])("%s is refused", async (_label, chosen, message) => {
     await expectRefusedUnchanged(() => allow({ access: chosen }), message);
     // A place the person cannot see is never named.
-    await expect(allow({ access: chosen })).rejects.not.toThrow(/Hidden|Secret/);
+    await expect(allow({ access: chosen })).rejects.not.toThrow(
+      /Hidden|Secret/
+    );
   });
 
   it("a write in all spaces is not an access at all", async () => {
@@ -620,8 +649,14 @@ describe("R — re-consent (Q3): named, and the old access keeps working", () =>
     expect(re.reason).toBe("widens");
     expect(sorted(re.was as never[])).toEqual(
       sorted([
-        { permission: READ, place: { kind: "space", id: BRAND, name: "Brand" } },
-        { permission: NOTE_READ, place: { kind: "space", id: SHARED, name: "Shared" } },
+        {
+          permission: READ,
+          place: { kind: "space", id: BRAND, name: "Brand" },
+        },
+        {
+          permission: NOTE_READ,
+          place: { kind: "space", id: SHARED, name: "Shared" },
+        },
       ] as never[])
     );
     expect(re.proposed.read.spaces).toEqual([
@@ -649,7 +684,10 @@ describe("R — re-consent (Q3): named, and the old access keeps working", () =>
         read: { spaces: [BRAND, SHARED], projects: [] },
       }),
     });
-    const after = await getOAuthConsentContext(authorizeParams() as never, OWNER);
+    const after = await getOAuthConsentContext(
+      authorizeParams() as never,
+      OWNER
+    );
     expect(after.app!.access.reconsent).toBeNull();
   });
 });
@@ -663,9 +701,14 @@ describe("Q — the short ask only adds permissions; a first write needs a place
       }),
     });
     const ask = { synapAsk: `${CREATE}@${BRAND}` };
-    const ctx = await getOAuthConsentContext(authorizeParams(ask) as never, OWNER);
+    const ctx = await getOAuthConsentContext(
+      authorizeParams(ask) as never,
+      OWNER
+    );
     expect(ctx.app!.access.ask!.needsWritePlace).toBe(true);
-    expect(ctx.app!.access.ask!.adds.map((i) => i.permission)).toEqual([CREATE]);
+    expect(ctx.app!.access.ask!.adds.map((i) => i.permission)).toEqual([
+      CREATE,
+    ]);
     await expectRefusedUnchanged(
       () => allow({}, ask),
       /nowhere to make changes yet/

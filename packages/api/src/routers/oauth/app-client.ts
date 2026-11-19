@@ -17,11 +17,7 @@
 
 import { createHash } from "node:crypto";
 import { and, db, eq, inArray, isNull, type KeyGrant } from "@synap/database";
-import {
-  apps,
-  oauthClients,
-  workspaces,
-} from "@synap/database/schema";
+import { apps, oauthClients, workspaces } from "@synap/database/schema";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import {
   accessModel,
@@ -384,8 +380,11 @@ export async function appSignInGrant(
     personUserId === app.ownerUserId
       ? owner
       : await ownerAccessFloor(personUserId, { projects, writeSpaces: [] });
-  const both = (ids: readonly string[], x: readonly string[], y: readonly string[]) =>
-    ids.filter((id) => x.includes(id) && y.includes(id));
+  const both = (
+    ids: readonly string[],
+    x: readonly string[],
+    y: readonly string[]
+  ) => ids.filter((id) => x.includes(id) && y.includes(id));
   const allProjects =
     a.read.projects === "all"
       ? both(owner.readProjects, owner.readProjects, person.readProjects)

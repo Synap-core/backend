@@ -1021,9 +1021,7 @@ export function pairsWithin(
 
 /** Do two accesses allow exactly the same (permission, place) pairs? */
 export function sameAppAccess(a: AppAccess, b: AppAccess): boolean {
-  const ka = new Set(
-    expandAppAccess(normalizeAppAccess(a)).map(accessPairKey)
-  );
+  const ka = new Set(expandAppAccess(normalizeAppAccess(a)).map(accessPairKey));
   const kb = expandAppAccess(normalizeAppAccess(b)).map(accessPairKey);
   return ka.size === new Set(kb).size && kb.every((k) => ka.has(k));
 }

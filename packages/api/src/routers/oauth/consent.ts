@@ -1018,10 +1018,7 @@ async function consentAccessBlock(
     callerUserId,
     accessAskedOf(client, permissions)
   );
-  const approval = await currentOAuthAppApproval(
-    callerUserId,
-    client.clientId
-  );
+  const approval = await currentOAuthAppApproval(callerUserId, client.clientId);
   const current = approval?.access ?? null;
   let accessAsk: OAuthAppAccessAsk | null = null;
   if (ask && current && addsThroughAccess(current)) {
@@ -1059,9 +1056,7 @@ async function consentAccessBlock(
     asked: offer.asked,
     places: offer.places,
     current: current ? await nameAppAccess(current) : null,
-    reconsent: approval
-      ? await reconsentViewOf(approval, offer.ceiling)
-      : null,
+    reconsent: approval ? await reconsentViewOf(approval, offer.ceiling) : null,
     ask: accessAsk,
   };
 }

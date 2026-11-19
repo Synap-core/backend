@@ -1313,9 +1313,9 @@ describe("T5 — never wider than the consent; the app's lifecycle reaches it", 
         const unpinned = live.filter(
           (g) => !g.project_ids?.length && !g.entity_ids?.length
         );
-        expect(
-          unpinned.map((g) => [g.permissions, g.workspace_ids])
-        ).toEqual([[["entity.person.read"], [SALES]]]);
+        expect(unpinned.map((g) => [g.permissions, g.workspace_ids])).toEqual([
+          [["entity.person.read"], [SALES]],
+        ]);
         // An object pin is never kept; a project pin only with its pin, in
         // Sales only (the approval left).
         expect(live.filter((g) => g.entity_ids?.length)).toEqual([]);
