@@ -3195,6 +3195,43 @@ export interface StatusOfWorkNextMove {
 	sessionId?: string;
 	url?: string;
 }
+/**
+ * A criterion that checks a declared output (it names it by `outputKey`, the
+ * outcome projection's rule 7), as `synap_get_session`'s outcomes nest it.
+ */
+export interface StatusOfWorkCriterion {
+	key: string;
+	/** The criterion's statement ("Every slide has a picture"). */
+	label: string;
+	/** Its current verdict is `pass`. */
+	met: boolean;
+	/** THE mark's state (`UNIT_STATES`), from the one derivation. */
+	state: UnitState;
+	/** The key of the output it checks: the outcome it is listed under. */
+	outputKey: string;
+}
+/**
+ * One declared outcome of the session (`projectSessionOutcomes`, the read
+ * behind `synap_get_session`'s `outcomes`): a declared output, a criterion,
+ * or an output with the criteria that check it.
+ */
+export interface StatusOfWorkOutcome {
+	/** The slot's key, or the criterion's. */
+	key: string;
+	label: string;
+	/** The output's kind (`report`, `document`, …), or `"fact"` for a criterion. */
+	kind: string;
+	/** Who yields it. */
+	owner: "agent" | "human";
+	/** Delivered, or proven (its required criteria pass). */
+	met: boolean;
+	/** Let go when its session was cancelled: neither met nor owed. */
+	retired: boolean;
+	/** THE mark's state (`UNIT_STATES`), the vocabulary `synap_get_session` uses. */
+	state: UnitState;
+	/** The criteria that check this output; absent when none does. */
+	criteria?: StatusOfWorkCriterion[];
+}
 /** Who has the session now (the packet's `holder`). */
 export interface StatusOfWorkHolder {
 	kind: "agent" | "nobody" | "person";
@@ -3247,6 +3284,19 @@ export interface StatusOfWorkItem {
 		items: StatusOfWorkProposal[];
 		status: "ok";
 		total: number;
+	} | StatusOfWorkUnavailable;
+	/**
+	 * What it must yield, in declared order, each met or not (`counts` over the
+	 * outcomes not retired); `items: []` = it declares none. Absent = a pod
+	 * from before this field: it does not say.
+	 */
+	outcomes?: {
+		counts: {
+			met: number;
+			total: number;
+		};
+		items: StatusOfWorkOutcome[];
+		status: "ok";
 	} | StatusOfWorkUnavailable;
 	/** Its CURRENT hold, when it stands paused under one. */
 	hold?: RecordedHold | StatusOfWorkUnavailable;

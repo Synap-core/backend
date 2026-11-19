@@ -18,6 +18,9 @@
  *     move's `stopped_early` rung and the Continue door share;
  *   - the Continue offer: `continueAt`, THE door's own predicate, so the
  *     button is offered exactly when the door would run.
+ * The outcomes are THE section `synap_get_session` carries
+ * (`readSessionOutcomesSection`, read by `status-work.ts`), renamed for the
+ * wire like the packet's: a failed read stays `unavailable`.
  * What THIS reader may do (`continue.canAct`, each gate's `canReview`) is
  * decided by the read (`status-work.ts`) with the doors' own checks and
  * passed in (`may`): this file only places it.
@@ -30,6 +33,7 @@ import {
   resolveStatusTone,
   type StatusOfWorkAsk,
   type StatusOfWorkItem,
+  type StatusOfWorkOutcome,
   type StatusOfWorkRun,
   type StatusOfWorkStage,
   type StatusOfWorkUnavailable,
@@ -40,6 +44,7 @@ import {
 } from "@synap-core/types/focus-sessions";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import type { ContinuationPacket } from "../focus-sessions/continuation-packet.js";
+import type { SessionOutcomesSection } from "../focus-sessions/session-outputs.js";
 import {
   continueAt,
   continueLabel,
@@ -184,6 +189,46 @@ function asksOf(
 }
 
 /**
+ * The session's outcomes, from THE outcomes section (the read behind
+ * `synap_get_session`): each declared outcome with its mark, and the criteria
+ * that check an output listed under it. A section that could not be read is
+ * `unavailable`, never an empty list.
+ */
+export function workOutcomes(
+  section: SessionOutcomesSection
+): NonNullable<StatusOfWorkItem["outcomes"]> {
+  if (section.status === "unavailable") {
+    return unavailable("Its outcomes could not be read.");
+  }
+  return {
+    status: "ok",
+    counts: section.counts,
+    items: section.outcomes.map(
+      (o): StatusOfWorkOutcome => ({
+        key: o.key,
+        label: o.label,
+        kind: o.kind,
+        owner: o.owner,
+        met: o.met,
+        retired: o.retired,
+        state: o.state.state,
+        ...(o.criteria?.length
+          ? {
+              criteria: o.criteria.map((c) => ({
+                key: c.key,
+                label: c.statement,
+                met: c.met,
+                state: c.state.state,
+                outputKey: o.key,
+              })),
+            }
+          : {}),
+      })
+    ),
+  };
+}
+
+/**
  * ONE work item. `packet` is the session's continuation packet, or the reason
  * it could not be built (every packet section is then `unavailable`, and the
  * next move unknown). `run` is its newest run (`null` = none), or the reason
@@ -195,6 +240,8 @@ export function workItemOf(input: {
   kind: string;
   packet: ContinuationPacket | { failed: string };
   run: WorkRunRow | null | { failed: string };
+  /** Its outcomes section (`readSessionOutcomesSection`), failed or not. */
+  outcomes: SessionOutcomesSection;
   /** Its current hold, read only when it stands paused. */
   hold?: RecordedHold | StatusOfWorkUnavailable;
   /**
@@ -293,6 +340,7 @@ export function workItemOf(input: {
             })),
           };
     }),
+    outcomes: workOutcomes(input.outcomes),
     ...(category === "paused" && input.hold ? { hold: input.hold } : {}),
     holder: section((p) =>
       p.holder.status === "unavailable"
