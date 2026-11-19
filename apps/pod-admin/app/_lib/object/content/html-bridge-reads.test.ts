@@ -456,7 +456,7 @@ describe("the page bridge — through the console's own client", () => {
   it("fields with no profileId are every field the space can see (the board asks with no input)", async () => {
     const { calls, send } = wired(SPACE);
     await send(query("propertyDefs.list", {}));
-    expect(calls.map(([path, input]) => [path, input])).toEqual([
+    expect(calls.map((c) => [c.path, c.input])).toEqual([
       ["propertyDefs.list", undefined],
     ]);
   });
