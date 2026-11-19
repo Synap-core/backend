@@ -422,7 +422,7 @@ describe("the reply line stays one lean line", () => {
   });
 });
 
-describe("a playbook dedicated to one record (subjectProfile.entityId, plan W8 D10a)", () => {
+describe("a playbook dedicated to one record (subjectProfile.entityId)", () => {
   const APP = "aaaaaaaa-0000-4000-8000-000000000001";
   const OTHER_APP = "aaaaaaaa-0000-4000-8000-000000000002";
   const app = (id: string) => ({ id, kind: "app", properties: {} });

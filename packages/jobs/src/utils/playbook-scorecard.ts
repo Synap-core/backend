@@ -46,9 +46,17 @@ import {
   type EvaluationRowLike,
 } from "@synap-core/types/focus-sessions";
 import { isCriterionRequired, readCriteria } from "@synap/playbooks";
+import { isUuid } from "@synap-core/types/property-render";
 import { FOCUS_SESSION_CLOSED_EVENT_TYPE } from "../workers/automation-trigger-matcher.js";
 
 const TERMINAL = new Set(["closed", "cancelled", "failed"]);
+
+/**
+ * How far back the runs that teach a playbook are read (the lessons scanner's
+ * evidence window, and the precedents an agent is shown). Older runs are
+ * stale.
+ */
+export const PLAYBOOK_LEARNING_WINDOW_DAYS = 90;
 
 export interface ScorecardSessionRow {
   id: string;
@@ -238,7 +246,7 @@ export function projectPlaybookScorecard(
 }
 
 /**
- * The SUCCESSFUL runs (plan W8 D7a, "how others did it"): closed sessions
+ * The SUCCESSFUL runs, what a precedent is made of: closed sessions
  * whose every REQUIRED criterion's current verdict is `pass`. A run that
  * declared no required criterion, or left one unmeasured, is not counted:
  * success is graded, never assumed. Pure, over the same rows the scorecard
@@ -301,11 +309,10 @@ export async function loadRunsUsedParts(
         inArray(links.toType, ["tool", "skill"])
       )
     );
-  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const idsOf = (kind: string) => [
     ...new Set(
       edges
-        .filter((e) => e.toType === kind && UUID.test(e.toId))
+        .filter((e) => e.toType === kind && isUuid(e.toId))
         .map((e) => e.toId)
     ),
   ];
@@ -349,7 +356,13 @@ export async function loadRunsUsedParts(
  */
 export async function loadPlaybookScorecardRows(
   database: typeof Db,
-  params: { playbookIds: string[]; userId: string; closedAfter?: Date | null }
+  params: {
+    playbookIds: string[];
+    userId: string;
+    closedAfter?: Date | null;
+    /** At most this many sessions, the most recently closed first. */
+    limit?: number;
+  }
 ): Promise<{
   sessions: ScorecardSessionRow[];
   evaluations: ScorecardEvaluationRow[];
@@ -388,7 +401,9 @@ export async function loadPlaybookScorecardRows(
       >`${focusSessions.metadata} #>> '{followedVia}'`,
     })
     .from(focusSessions)
-    .where(where);
+    .where(where)
+    .orderBy(drizzleSql`${focusSessions.closedAt} desc nulls last`)
+    .limit(params.limit ?? Number.MAX_SAFE_INTEGER);
   const sessions = rows.map((r) => ({
     ...r,
     status: String(r.status),

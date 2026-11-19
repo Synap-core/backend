@@ -313,7 +313,7 @@ export const playbookRequiredIntentsSchema = z
  * stripped. The update door applies the same schema.
  */
 /**
- * What a PACKAGE playbook may not carry (plan W8, decision D10a): a
+ * What a PACKAGE playbook may not carry: a
  * pod-local reference, i.e. a guidance `entity:<id>` ref or a dedicated
  * record (`subjectProfile.entityId`). An id names one record of one pod; on
  * the installing pod it means nothing. The package doors
@@ -448,7 +448,7 @@ export const packagePlaybookDefinitionSchema = playbookDefinitionSchema
     // A package travels to other pods: an agent id or a playbook id names
     // something on THIS pod only. A role or an engine is portable; a step
     // that is a playbook is not carried by a package yet. Nor is a guidance
-    // `entity:<id>` ref or a dedicated record (D10a).
+    // `entity:<id>` ref or a dedicated record.
     refusePodLocalPlaybookRefs(def, ctx);
     if (runnerNamesAgentId(def.runner)) {
       ctx.addIssue({

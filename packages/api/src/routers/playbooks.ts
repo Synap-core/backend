@@ -59,6 +59,7 @@ import {
   playbookAutomations,
   playbookEnrollments,
   entities,
+  profiles,
   secrets,
   vaultGrants,
   workspaceMembers,
@@ -146,6 +147,8 @@ import {
 } from "../services/playbooks/pinned-subject.js";
 import { loadVisibleEntitiesById } from "../services/playbooks/pinned-subject-query.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { findDuplicateCandidates } from "../services/duplicates/find-duplicate-candidates.js";
 import type { DuplicateCheck } from "@synap-core/types/proposals";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
@@ -1394,27 +1397,55 @@ const playbookEnrollmentsRouter = router({
  */
 async function assertSubjectProfileResolves(
   db: Parameters<typeof assertKnownProfileSlug>[0],
-  subjectProfile: unknown
+  subjectProfile: unknown,
+  reader?: { userId: string }
 ): Promise<void> {
   if (!subjectProfile || typeof subjectProfile !== "object") return;
   const slug = (subjectProfile as { profileSlug?: unknown }).profileSlug;
   if (typeof slug !== "string" || slug.length === 0) return;
   // Throws TRPCError NOT_FOUND naming the slug and pointing at list_profiles.
   await assertKnownProfileSlug(db, slug);
-  // A playbook dedicated to one record (D10a) names a record that exists.
   const dedicated = dedicatedSubjectId(subjectProfile);
-  if (dedicated) {
-    const [row] = await db
-      .select({ id: entities.id })
-      .from(entities)
-      .where(and(eq(entities.id, dedicated), isNull(entities.deletedAt)))
-      .limit(1);
-    if (!row) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: `subjectProfile.entityId ${dedicated} names no record of this pod`,
-      });
-    }
+  if (!dedicated) return;
+  // An activator compiles per KIND, so on a playbook dedicated to one record
+  // it would fire on every record of the kind. Run it on its record instead.
+  const activators = (subjectProfile as { activators?: unknown }).activators;
+  if (
+    Array.isArray(activators) &&
+    activators.some((a) => (a as { on?: unknown } | null)?.on !== "manual")
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A playbook dedicated to one record (subjectProfile.entityId) takes no activator: an activator fires on every record of the kind. Remove the activators, or the dedicated record.",
+    });
+  }
+  // The record is one the writer can read, of the playbook's kind. A
+  // revision of a pending proposal names no reader: its approval replays
+  // through `update`, which checks it then.
+  if (!reader) return;
+  const [row] = await db
+    .select({ kind: profiles.slug })
+    .from(entities)
+    .leftJoin(profiles, eq(profiles.id, entities.profileId))
+    .where(
+      and(
+        eq(entities.id, dedicated),
+        isNull(entities.deletedAt),
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId: reader.userId,
+        })
+      )
+    )
+    .limit(1);
+  if (row?.kind !== slug) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `subjectProfile.entityId names no ${resolveObjectNoun(slug).toLowerCase()} you can read`,
+    });
   }
 }
 
@@ -1434,10 +1465,12 @@ async function assertSubjectProfileResolves(
 export async function assertPlaybookDefinitionWritable(
   database: Parameters<typeof assertKnownProfileSlug>[0],
   write: { goalTemplate?: unknown; params?: unknown; subjectProfile?: unknown },
-  previous?: { goalTemplate: unknown; params: unknown }
+  previous?: { goalTemplate: unknown; params: unknown },
+  /** The writer, whose floor a dedicated record is read under. */
+  reader?: { userId: string }
 ): Promise<void> {
   if (write.subjectProfile !== undefined) {
-    await assertSubjectProfileResolves(database, write.subjectProfile);
+    await assertSubjectProfileResolves(database, write.subjectProfile, reader);
   }
   if (!previous) {
     assertGoalPlaceholdersDeclared({
@@ -2107,11 +2140,16 @@ export const playbooksRouter = router({
       input.subjectProfile = foldProcessDeclarationsOrRefuse(input);
       // Dangling `subjectProfile` slugs and goal placeholders no run will
       // fill are refused here, before the gate.
-      await assertPlaybookDefinitionWritable(await getDb(), {
-        goalTemplate: input.goalTemplate,
-        params: input.params,
-        subjectProfile: input.subjectProfile,
-      });
+      await assertPlaybookDefinitionWritable(
+        await getDb(),
+        {
+          goalTemplate: input.goalTemplate,
+          params: input.params,
+          subjectProfile: input.subjectProfile,
+        },
+        undefined,
+        { userId: ctx.userId }
+      );
       // The ONE tools list (plan 08e4fba7 decisions 3-4): the deprecated
       // `requiredIntents` and stage `grants` fold into `tools` ONCE, here, so
       // the gate payload, the approval replay and the insert carry the stored
@@ -2523,7 +2561,8 @@ export const playbooksRouter = router({
           params: input.params,
           subjectProfile: input.subjectProfile,
         },
-        existing
+        existing,
+        { userId: ctx.userId }
       );
       // 2c'. A step that IS a playbook: checked and PINNED before the gate
       // (same reason as the create door).

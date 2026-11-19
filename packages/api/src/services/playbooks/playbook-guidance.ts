@@ -20,11 +20,12 @@
  *     `loadPlaybookContextSkill`).
  *   - a subject ref (`subject:<relation>`): the entities linked to the RUN'S
  *     subject by that relation type (either direction, the relation readers'
- *     own visibility), each under the same trust line as a kind's rows: its
- *     lifecycle category is `done`, it is not deleted, the reader may read it,
- *     a listing shows it. A run with no subject names the item as missing.
+ *     own visibility), each only when a PERSON approved it: it sits in a
+ *     `done` option of its kind's lifecycle that is `humanOnly`, it is not
+ *     deleted, the reader may read it, a listing shows it. A run with no
+ *     subject names the item as missing.
  *   - an entity ref (`entity:<id>`, pod-local playbooks only): that one
- *     entity, under the same trust line.
+ *     entity, under the same rule.
  * An unresolved ref is named as missing with why, never dropped.
  * Only a TRIAL override (slice 1b's rule lab) renders a draft, in place of a
  * current version it names, and the run records it as `replaces`.
@@ -278,10 +279,13 @@ function rowOf(e: EntityColumns, declared: DeclaredFields): GuidanceRow {
 }
 
 /**
- * Named entities as rows, under the kind refs' trust line: visible to the
- * reader, listable, not deleted, and in their kind's approved (`done`)
- * category. `seen` counts the ids the reader can read at all, so the caller
- * can tell "not approved" from "not there".
+ * Named entities as rows. A record renders only when the reader may read it
+ * (floor, listable, not deleted) AND it sits in a `done` option of its kind's
+ * lifecycle that is `humanOnly`: only a person can make it current, so an
+ * agent cannot write a record, link it to the subject, mark it done and have
+ * its text become the AI's instructions (the catalog's rule for kind refs).
+ * `seen` counts the ids the reader can read at all, so the caller can tell
+ * "not approved" from "not there".
  */
 async function approvedRowsOf(
   database: Db,
@@ -293,7 +297,7 @@ async function approvedRowsOf(
     .select({
       ...columns,
       profileId: entities.profileId,
-      statusCategory: entities.statusCategory,
+      status: entities.status,
     })
     .from(entities)
     .where(
@@ -305,24 +309,30 @@ async function approvedRowsOf(
       )
     )
     .orderBy(entities.id);
-  const approved = found.filter((e) => e.statusCategory === "done");
   const resolver = new ProfileResolutionService(database as never);
+  const kindIds = [
+    ...new Set(found.flatMap((e) => (e.profileId ? [e.profileId] : []))),
+  ];
+  const lifecycles = await resolver.getEffectiveLifecycles(kindIds);
   const fieldsByKind = new Map<string, DeclaredFields>();
   const rows: GuidanceRow[] = [];
-  for (const e of approved) {
-    const kind = e.profileId;
-    let declared = kind ? fieldsByKind.get(kind) : new Map();
-    if (!declared && kind) {
-      declared = await declaredFieldsOf(resolver, kind);
-      fieldsByKind.set(kind, declared);
+  for (const e of found) {
+    if (!e.profileId) continue;
+    const option = lifecycles
+      .get(e.profileId)
+      ?.options.find((o) => o.key === e.status);
+    if (option?.category !== "done" || option.humanOnly !== true) continue;
+    let declared = fieldsByKind.get(e.profileId);
+    if (!declared) {
+      declared = await declaredFieldsOf(resolver, e.profileId);
+      fieldsByKind.set(e.profileId, declared);
     }
-    rows.push(rowOf(e, declared ?? new Map()));
+    rows.push(rowOf(e, declared));
   }
   return { rows, seen: found.length };
 }
 
-const NOT_APPROVED =
-  "it is not approved: only a record in its kind's approved status renders";
+const NOT_APPROVED = "not approved by a person";
 
 async function resolveEntityRef(
   database: Db,
@@ -404,7 +414,7 @@ async function resolveSubjectRef(
     rows,
     missingReason:
       seen > 0
-        ? `${seen} linked by ${relation}, none approved: only a record in its kind's approved status renders`
+        ? `${seen} linked by ${relation}, none ${NOT_APPROVED}`
         : `nothing you can read is linked to this run's subject by ${relation}`,
   };
 }

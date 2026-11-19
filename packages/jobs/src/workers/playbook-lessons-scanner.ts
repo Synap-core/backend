@@ -31,7 +31,7 @@
  * A criterion that belongs to a stage teaches that stage (`stages[].lessons`).
  * A PLAYBOOK-LEVEL criterion (no `stageKey`), and every criterion of a
  * playbook with no stages, teaches the playbook itself
- * (`metadata.lessons`, plan W8 D7a), never an arbitrary stage.
+ * (`metadata.lessons`), never an arbitrary stage.
  *
  * ── WHAT WORKED ─────────────────────────────────────────────────────────────
  * The runs teach what to do as well as what went wrong (founder: "the
@@ -87,6 +87,7 @@ import {
   findOverrides,
   loadRunsUsedParts,
   successfulRunIds,
+  PLAYBOOK_LEARNING_WINDOW_DAYS,
   type RunUsedPart,
   type PlaybookScorecard,
   type ScorecardEvaluationRow,
@@ -117,7 +118,7 @@ export const MIN_EVALUATED_SESSIONS = 3;
  */
 export const MIN_FINDING_OCCURRENCES = 2;
 /** Evidence lookback. A lesson learned from runs older than this is stale. */
-export const WINDOW_DAYS = 90;
+export const WINDOW_DAYS = PLAYBOOK_LEARNING_WINDOW_DAYS;
 /** Playbooks examined per pass. */
 const SCAN_LIMIT = 200;
 /** Findings sent to the IS for one stage (its request schema caps at 12). */
@@ -286,14 +287,14 @@ export function planPlaybookRevision(
 /**
  * What the successful runs used: each tool or skill that at least
  * `MIN_FINDING_OCCURRENCES` of them recorded, most used first, capped. `null`
- * when fewer than `MIN_EVALUATED_SESSIONS` runs succeeded (too few to say)
- * or nothing was used often enough.
+ * when nothing was used often enough. The scan calls it only once
+ * `MIN_EVALUATED_SESSIONS` runs succeeded (fewer say too little), before it
+ * reads what they used.
  */
 export function distilWhatWorked(
   successIds: readonly string[],
   used: ReadonlyMap<string, readonly RunUsedPart[]>
 ): WhatWorked | null {
-  if (successIds.length < MIN_EVALUATED_SESSIONS) return null;
   const counts = new Map<
     string,
     { kind: RunUsedPart["kind"]; name: string; runs: number }
@@ -311,6 +312,18 @@ export function distilWhatWorked(
     .sort((a, b) => b.runs - a.runs || (a.name < b.name ? -1 : 1))
     .slice(0, MAX_WHAT_WORKED_PARTS);
   return parts.length > 0 ? { runs: successIds.length, parts } : null;
+}
+
+/**
+ * Whether two "what worked" lists name the same tools and skills. The run
+ * counts move on every pass, so comparing them would re-file the same
+ * proposal every week.
+ */
+export function sameParts(a: WhatWorked, b: WhatWorked | null): boolean {
+  if (!b) return false;
+  const names = (w: WhatWorked) =>
+    w.parts.map((p) => `${p.kind}:${p.name}`).sort();
+  return JSON.stringify(names(a)) === JSON.stringify(names(b));
 }
 
 /**
@@ -515,8 +528,7 @@ export async function runPlaybookLessonsScan(
             )
           : null;
       const workedChanged =
-        whatWorked !== null &&
-        JSON.stringify(whatWorked) !== JSON.stringify(whatWorkedBefore);
+        whatWorked !== null && !sameParts(whatWorked, whatWorkedBefore);
 
       if (revisions.length === 0 && !workedChanged) continue;
 

@@ -87,7 +87,7 @@ export const PLAYBOOK_LEARNED_HEADING =
   "## What earlier runs of this playbook taught";
 
 /**
- * The playbook-level learning (plan W8 D7a), from `playbooks.metadata`: the
+ * The playbook-level learning, from `playbooks.metadata`: the
  * lessons no stage can hold and the tools and skills its successful runs
  * used. Both were proposed by the lessons scanner and approved by a person.
  * "" when there is none.

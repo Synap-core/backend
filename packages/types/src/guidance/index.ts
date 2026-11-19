@@ -10,7 +10,7 @@
  *   - `skill:<slug>` — an approved, active skill, e.g. `skill:creative-director`;
  *   - `subject:<relation slug>` — the approved entities linked to the RUN'S
  *     SUBJECT by that relation, resolved at run time ("the brand guide linked
- *     to this client"): one object, still portable (plan W8, decision D10a);
+ *     to this client"): one object, still portable;
  *   - `entity:<id>` — one approved entity of THIS pod. Pod-local only: a
  *     package or catalog manifest refuses it ({@link podLocalGuidanceProblem}).
  *

@@ -1294,7 +1294,7 @@ describe("focusSessions.get returns the continuation packet", () => {
       await h.client!.exec(ddlFor(projects as unknown as PgTable));
     }
   });
-  it("howOthersDidIt: the reader's earlier SUCCESSFUL runs of the same playbook, what each used, and the scorecard (W8 D7a)", async () => {
+  it("precedents: the reader's earlier SUCCESSFUL runs of the same playbook, what each used, and the scorecard", async () => {
     const playbookId = randomUUID();
     const toolId = randomUUID();
     await q(
@@ -1326,6 +1326,8 @@ describe("focusSessions.get returns the continuation packet", () => {
     const older = await earlier("Ship v1", "pass", 9);
     const newer = await earlier("Ship v2", "pass", 2);
     await earlier("Ship v3", "fail", 1);
+    // Outside the learning window: never a precedent, never counted.
+    await earlier("Ship v0", "pass", 100);
     await q(
       `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_by, created_at)
        values ($1, 'session', $2, 'tool', $3, 'used', $4, now())`,
@@ -1338,11 +1340,11 @@ describe("focusSessions.get returns the continuation packet", () => {
     ]);
 
     const c = (await get(id)).continuation;
-    expect(c.howOthersDidIt).toEqual({
+    expect(c.precedents).toEqual({
       status: "ok",
       playbookId,
       scorecard: expect.objectContaining({ closedRuns: 3, evaluatedRuns: 3 }),
-      precedents: {
+      runs: {
         status: "ok",
         total: 2,
         // Newest first; the failed run is no precedent.
@@ -1355,8 +1357,8 @@ describe("focusSessions.get returns the continuation packet", () => {
     expectSamePacket((await mcpGet(id)).continuation, c);
   });
 
-  it("howOthersDidIt is null for a session that follows no playbook", async () => {
+  it("precedents is null for a session that follows no playbook", async () => {
     const id = await seed({ owed: false });
-    expect((await get(id)).continuation.howOthersDidIt).toBeNull();
+    expect((await get(id)).continuation.precedents).toBeNull();
   });
 });

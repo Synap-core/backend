@@ -757,18 +757,23 @@ export function playbookRowToPackagePlaybook(
     (g) => podLocalGuidanceProblem(g) === null
   );
   // Likewise the one record a playbook is dedicated to.
-  const subjectProfile =
-    p.subjectProfile && typeof p.subjectProfile === "object"
-      ? (({ entityId: _id, ...rest }) => rest)(
-          p.subjectProfile as Record<string, unknown>
-        )
-      : p.subjectProfile;
+  let subjectProfile = p.subjectProfile;
+  if (subjectProfile && typeof subjectProfile === "object") {
+    const { entityId: _record, ...portable } = subjectProfile as Record<
+      string,
+      unknown
+    >;
+    subjectProfile = portable;
+  }
   // Never export another package's source-link: the installing pod stamps
-  // its own. Every other metadata key (e.g. the propose-only governance
-  // marker) travels.
-  const metadata = detachMarketSource(
-    p.metadata as Record<string, unknown> | null
-  );
+  // its own. Nor what this pod's runs taught it (`lessons`, `whatWorked`):
+  // they are distilled from the owner's private sessions. Every other
+  // metadata key (e.g. the propose-only governance marker) travels.
+  const {
+    lessons: _lessons,
+    whatWorked: _whatWorked,
+    ...metadata
+  } = detachMarketSource(p.metadata as Record<string, unknown> | null);
   return {
     name: p.name,
     description: p.description ?? undefined,

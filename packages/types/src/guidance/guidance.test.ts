@@ -100,7 +100,7 @@ describe("parseGuidanceRef / validators", () => {
     expect(parseGuidanceRef(42)).toBeNull();
   });
 
-  it("accepts a subject relation and one record id (D10a)", () => {
+  it("accepts a subject relation and one record id", () => {
     expect(parseGuidanceRef("subject:uses_brand")).toEqual({
       type: "subject",
       slug: "uses_brand",

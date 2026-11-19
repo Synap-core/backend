@@ -427,7 +427,7 @@ describe("lessons scanner — the real DB tier", () => {
   });
 });
 
-describe("what worked (W8 D7a) — the real used edges", () => {
+describe("what worked — the real used edges", () => {
   async function used(sessionId: string, toType: "tool" | "skill", toId: string) {
     await q(
       `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_by, created_at)

@@ -1986,7 +1986,7 @@ export function readStageLessons(stage: unknown): string[] {
 }
 
 /**
- * The PLAYBOOK-level lessons (`playbooks.metadata.lessons`, plan W8 D7a):
+ * The PLAYBOOK-level lessons (`playbooks.metadata.lessons`):
  * what earlier runs taught when no stage can hold it (a playbook with no
  * stages, or a criterion of the whole playbook). Same bound and the same
  * whole-list revision as a stage's.
@@ -2007,7 +2007,7 @@ export interface WhatWorkedPart {
 
 /**
  * What the successful runs of a playbook used (`playbooks.metadata.whatWorked`,
- * plan W8 D7a), distilled by the lessons scanner from the runs' recorded
+ * distilled by the lessons scanner from the runs' recorded
  * `session --used--> tool|skill` edges and approved by a person.
  */
 export interface WhatWorked {

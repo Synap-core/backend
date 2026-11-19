@@ -194,8 +194,8 @@ export const playbookSubjectProfileSchema = z
     activators: playbookActivatorsSchema.optional(),
     humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
     /**
-     * The one record of `profileSlug` this playbook is dedicated to (plan W8
-     * D10a): it binds and runs on that record only. Pod-local: a package
+     * The one record of `profileSlug` this playbook is dedicated to: it binds
+     * and runs on that record only, and takes no activator. Pod-local: a package
      * install and the catalog refuse it.
      */
     entityId: z.uuid().optional(),

@@ -62,8 +62,8 @@ export function subjectProfileSlug(subjectProfile: unknown): string | null {
 }
 
 /**
- * The ONE record a playbook is dedicated to (`subjectProfile.entityId`, plan
- * W8 D10a), or null. Unlike the pin LIST (consumed from the front), it never
+ * The ONE record a playbook is dedicated to (`subjectProfile.entityId`), or
+ * null. Unlike the pin LIST (consumed from the front), it never
  * moves: the playbook runs on that record only. Pod-local: a package and the
  * catalog refuse it, since an id means nothing on another pod.
  */

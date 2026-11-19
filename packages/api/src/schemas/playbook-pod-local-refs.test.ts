@@ -1,6 +1,5 @@
 /**
- * A package names kinds and relations, never this pod's ids (plan W8,
- * decision D10a). A guidance `entity:<id>` ref and a dedicated record
+ * A package names kinds and relations, never this pod's ids. A guidance `entity:<id>` ref and a dedicated record
  * (`subjectProfile.entityId`) are pod-local: the pod's own playbook door
  * accepts them, every package door refuses them, and the exporter leaves
  * them out.
@@ -55,7 +54,7 @@ describe("pod-local playbook refs", () => {
     expect(r.success).toBe(false);
   });
 
-  it("the exporter leaves the pod-local refs out and keeps the rest", () => {
+  it("the exporter leaves the pod-local refs and the learned metadata out, and keeps the rest", () => {
     const out = playbookRowToPackagePlaybook(
       {
         name: base.name,
@@ -73,12 +72,18 @@ describe("pod-local playbook refs", () => {
         criteria: [],
         expectedOutputs: [],
         guidance: podLocal.guidance,
-        metadata: {},
+        metadata: {
+          lessons: ["Read the brief first"],
+          whatWorked: { runs: 3, parts: [] },
+          proposeOnly: true,
+        },
       },
       undefined
     );
     expect(out.guidance).toEqual([{ ref: "subject:uses_brand" }]);
     expect(out.subjectProfile).toEqual({ profileSlug: "app" });
+    // What this pod's runs taught stays on the pod; the rest of the bag travels.
+    expect(out.metadata).toEqual({ proposeOnly: true });
     // What a package door then reads of it passes (the row's null schedule
     // and channel are the exporter's own business, not this check's).
     const { schedule: _s, channelSpec: _c, ...portable } = out;

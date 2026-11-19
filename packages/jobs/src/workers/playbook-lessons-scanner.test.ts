@@ -11,7 +11,7 @@
  *   - two failing criteria on two different stages ⇒ still ONE proposal;
  *   - an EXISTING lesson the IS drops ⇒ the proposal carries the IS's list,
  *     which is what distinguishes replace from append;
- *   - a criterion belonging to NO stage ⇒ the PLAYBOOK's lessons (W8 D7a);
+ *   - a criterion belonging to NO stage ⇒ the PLAYBOOK's lessons;
  *   - 3 successful runs that used a tool in 3, a skill in 2 and another tool
  *     in 1 ⇒ what worked lists the first two; 2 successful runs ⇒ nothing;
  *   - only 2 graded runs ⇒ nothing, whatever the failures say.
@@ -335,7 +335,7 @@ describe("one proposal per playbook", () => {
   });
 });
 
-describe("what worked (W8 D7a): the tools and skills of the successful runs", () => {
+describe("what worked: the tools and skills of the successful runs", () => {
   const part = (kind: "tool" | "skill", id: string) => ({
     kind,
     id,
@@ -368,27 +368,31 @@ describe("what worked (W8 D7a): the tools and skills of the successful runs", ()
     expect(data.sourceSessionIds).toEqual(["s1", "s2", "s3"]);
   });
 
-  it("NEGATIVE: a failed run's tools are not what worked", async () => {
+  it("NEGATIVE: a failed run's tools are not what worked, and what they used is not even read", async () => {
+    const loadUsedParts = vi.fn(async (ids: string[]) =>
+      new Map(ids.map((id) => [id, USED.get(id) ?? []]))
+    );
     const { deps } = makeDeps({
       // s1 fails its required criterion: 2 successful runs, under the floor.
       ...history("tsc", 1),
-      loadUsedParts: async (ids) =>
-        new Map(ids.map((id) => [id, USED.get(id) ?? []])),
+      loadUsedParts,
     });
     expect(await runPlaybookLessonsScan(deps)).toEqual([]);
+    expect(loadUsedParts).not.toHaveBeenCalled();
   });
 
-  it("files nothing when what worked is already what the playbook says", async () => {
+  it("files nothing when the same tools and skills already stand, whatever the run counts", async () => {
     const { deps } = makeDeps({
       ...history("tsc", 0),
       playbook: {
         ...PLAYBOOK,
         metadata: {
+          // Counted on an earlier pass: other numbers, the same parts.
           whatWorked: {
-            runs: 3,
+            runs: 7,
             parts: [
-              { kind: "tool", name: "tool-t1", runs: 3 },
-              { kind: "skill", name: "skill-k1", runs: 2 },
+              { kind: "skill", name: "skill-k1", runs: 4 },
+              { kind: "tool", name: "tool-t1", runs: 6 },
             ],
           },
         },
