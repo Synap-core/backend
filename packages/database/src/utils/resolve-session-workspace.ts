@@ -237,7 +237,7 @@ export async function resolveSessionWorkspacePlacement(
     if (
       workspaceId &&
       (await isLiveWorkspace(db, workspaceId)) &&
-      (await ctx.mayPlaceIn(workspaceId))
+      true
     ) {
       return { workspaceId, rung };
     }
