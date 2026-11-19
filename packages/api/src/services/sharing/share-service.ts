@@ -696,6 +696,7 @@ export async function unshareResource(
     action: "delete",
     workspaceId: target.workspaceId ?? anchor.workspaceId,
     projectId: anchor.id,
+    storedProjectIds: [anchor.id],
   });
   if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
 
@@ -860,6 +861,7 @@ export async function revokeLink(
     action: "delete",
     workspaceId: anchor.workspaceId,
     projectId: anchor.id,
+    storedProjectIds: [anchor.id],
   });
   if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const removedGuests =

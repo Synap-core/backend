@@ -253,7 +253,16 @@ export function grantHoldsAction(
   });
 }
 
-/** Is ONE scope pinned to some spaces, projects or objects? */
+/**
+ * Is ONE scope pinned to some spaces, projects or objects? A project pin is
+ * narrowed exactly like a space pin (app-permission plan 8189ae7c, W1): the
+ * row reads behind `SEAMED` and `NARROWED` doors AND the grant clause, and
+ * `grant-read.ts` gives sessions, proposals, channels, views, goals, records,
+ * their bodies and edges a project path (`projectReach`), so a project-pinned
+ * key passes those doors and reads the project's rows. An aggregate `READS`
+ * door cannot narrow row by row, so it refuses a project pin as it refuses a
+ * space pin. Events have no project path (`scopeReadsDevEvents`).
+ */
 function scopeIsPinned(scope: GrantScope): boolean {
   return Boolean(scope.workspaceIds || scope.projectIds || scope.entityIds);
 }

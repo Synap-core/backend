@@ -1121,14 +1121,35 @@ describe("M1 — a PROJECT-bounded key rejects in its project, not outside it (r
     const OTHER = randomUUID();
     const inProject = randomUUID();
     const elsewhere = randomUUID();
-    for (const [id, project] of [
-      [inProject, PROJECT],
-      [elsewhere, OTHER],
+    // A proposal is in a project when its TARGET is (W1 review: its own
+    // `project_id` is a provenance tag): one about a record filed in
+    // PROJECT, one STAMPED PROJECT about a record filed in OTHER.
+    const recordIn = randomUUID();
+    const recordOut = randomUUID();
+    for (const [project] of [[PROJECT], [OTHER]] as const) {
+      await q(
+        `insert into projects (id, user_id, workspace_id, name) values ($1,$2,$3,'p')`,
+        [project, OWNER, SALES]
+      );
+    }
+    for (const [record, project] of [
+      [recordIn, PROJECT],
+      [recordOut, OTHER],
+    ] as const) {
+      await q(
+        `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, source_kind, target_kind)
+         values ($1,$2,$3,$4,$5,'belongs_to_project','entity','entity')`,
+        [randomUUID(), OWNER, SALES, record, project]
+      );
+    }
+    for (const [id, record] of [
+      [inProject, recordIn],
+      [elsewhere, recordOut],
     ] as const) {
       await q(
         `insert into proposals (id, target_type, target_id, proposal_type, workspace_id, project_id, status, data, created_by, agent_user_id)
-         values ($1,'probe','probe-target','noop',$2,$3,'pending','{}'::jsonb,$4,null)`,
-        [id, SALES, project, OWNER]
+         values ($1,'entity',$2,'noop',$3,$4,'pending','{}'::jsonb,$5,null)`,
+        [id, record, SALES, PROJECT, OWNER]
       );
     }
     const projectKey: KeyGrant = {

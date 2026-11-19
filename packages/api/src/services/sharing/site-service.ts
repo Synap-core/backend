@@ -809,6 +809,7 @@ export async function unpublishSite(
     action: "update",
     workspaceId: site.workspaceId ?? undefined,
     projectId: site.resourceId,
+    storedProjectIds: [site.resourceId],
   });
   if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const updated = await database
@@ -864,6 +865,7 @@ export async function revokeSite(
     action: "delete",
     workspaceId: site.workspaceId ?? undefined,
     projectId: site.resourceId,
+    storedProjectIds: [site.resourceId],
   });
   if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const now = new Date();
@@ -1522,6 +1524,7 @@ export async function unpublishFromSite(
     action: "update",
     workspaceId: site.workspaceId ?? undefined,
     projectId: site.resourceId,
+    storedProjectIds: [site.resourceId],
   });
   if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
   const updated = await database

@@ -258,6 +258,32 @@ export function sessionRoomCountsInSpacesWhere(spaces: string[]): SQL {
 }
 
 /**
+ * READ half for a project pin (W1 of the app-permission plan): the room of a
+ * session FILED in one of `projectIds` (`focus_sessions.project_id`), by the
+ * same mint stamp + `channel_id` pair and the same space match as
+ * {@link sessionRoomCountsInSpacesWhere}. The session's own project path in
+ * `grant-read.ts` is its `project_id`; its room follows it here.
+ */
+export function sessionRoomInProjectsWhere(projectIds: string[]): SQL {
+  return and(
+    eq(channels.contextObjectType, "focus_session"),
+    exists(
+      db
+        .select({ one: drizzleSql`1` })
+        .from(focusSessions)
+        .where(
+          and(
+            eq(focusSessions.id, channels.contextObjectId),
+            eq(focusSessions.channelId, channels.id),
+            drizzleSql`${channels.workspaceId}::text IS NOT DISTINCT FROM ${focusSessions.workspaceId}`,
+            inArray(focusSessions.projectId, projectIds)
+          )
+        )
+    )
+  )!;
+}
+
+/**
  * Is the request bounded by an APP's grant? Such a request never adds a space
  * to a project (`linkProjectToWorkspace` refuses it): a `uses` edge widens
  * every pinned grant's reach over the project's sessions (this module), so

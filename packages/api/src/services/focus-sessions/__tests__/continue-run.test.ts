@@ -407,6 +407,9 @@ describe("continueCheck — the door's check, asked by the read (continue.canAct
         action: "update",
         workspaceId: null,
         projectId: null,
+        // Where the session lives now, read from its row (W1 filing rule):
+        // this one is filed in no project.
+        storedProjectIds: null,
       },
     ]);
   });
