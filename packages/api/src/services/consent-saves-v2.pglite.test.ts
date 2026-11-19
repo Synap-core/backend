@@ -1012,7 +1012,7 @@ describe("R6 — a place the person no longer sees is never named (also-fix 6)",
       const listed = (await caller(OWNER).list()).find(
         (a) => a.public_id === r.public_id
       )!;
-      const spaces = listed.pod_app!.access!.read.spaces as Array<{
+      const spaces = listed.pod_app!.access!.read.spaces as unknown as Array<{
         id: string;
         name: string;
       }>;
