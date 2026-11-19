@@ -5245,7 +5245,9 @@ export async function requestWorkspaceJoin(opts: {
     return {
       status: "refused",
       workspaceId,
-      reason: grant.scopes.some((scope) => pinnedRowsMaySitIn(scope, workspaceId))
+      reason: grant.scopes.some((scope) =>
+        pinnedRowsMaySitIn(scope, workspaceId)
+      )
         ? PINNED_JOIN_REFUSAL
         : "This key's grant does not reach this space, so joining it would not let you write there. The person can add the space to this key's permissions, or give you a key that has it. Nothing was filed.",
     };

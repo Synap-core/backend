@@ -277,7 +277,11 @@ describe("roleWriteGrantSpace — a project pin is not unlimited", () => {
 
   it("control: an unpinned key passes on its permit alone, stamped or shared", async () => {
     expect(
-      await moveShared(OUT, S_OUT, grant({ permissions: ["entity.person.update"] }))
+      await moveShared(
+        OUT,
+        S_OUT,
+        grant({ permissions: ["entity.person.update"] })
+      )
     ).toEqual({ space: null });
   });
 

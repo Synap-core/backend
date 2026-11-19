@@ -194,9 +194,7 @@ export async function roleRowInKeyReach(
 ): Promise<boolean> {
   if (
     !grant ||
-    grant.scopes.some(
-      (scope) => spacesOfScopeRows(scope) === "anywhere"
-    )
+    grant.scopes.some((scope) => spacesOfScopeRows(scope) === "anywhere")
   )
     return true;
   const spaces = keySpaces(grant);
