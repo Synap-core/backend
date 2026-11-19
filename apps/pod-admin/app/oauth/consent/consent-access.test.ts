@@ -48,11 +48,31 @@ import {
 } from "./consent-access";
 import { ALSO_SEE } from "./consent-model";
 
-const BUILDER = { workspaceId: "w-builder", workspaceName: "Builder", templateSlug: null };
-const CONTENT = { workspaceId: "w-content", workspaceName: "Content OS", templateSlug: "content-os" };
-const ECO = { workspaceId: "w-eco", workspaceName: "Ecosystem", templateSlug: "ecosystem" };
-const FINANCE = { workspaceId: "w-finance", workspaceName: "Finance", templateSlug: null };
-const LAUNCH = { projectId: "p-launch", projectName: "Launch v1", workspaceId: "w-builder" };
+const BUILDER = {
+  workspaceId: "w-builder",
+  workspaceName: "Builder",
+  templateSlug: null,
+};
+const CONTENT = {
+  workspaceId: "w-content",
+  workspaceName: "Content OS",
+  templateSlug: "content-os",
+};
+const ECO = {
+  workspaceId: "w-eco",
+  workspaceName: "Ecosystem",
+  templateSlug: "ecosystem",
+};
+const FINANCE = {
+  workspaceId: "w-finance",
+  workspaceName: "Finance",
+  templateSlug: null,
+};
+const LAUNCH = {
+  projectId: "p-launch",
+  projectName: "Launch v1",
+  workspaceId: "w-builder",
+};
 
 const KINDS = ["task", "person", "deal"];
 const GROUP = { permission: "entity.read", kinds: KINDS };
@@ -60,13 +80,32 @@ const GROUP = { permission: "entity.read", kinds: KINDS };
 /** synap-chat: kinds read pod-wide in one request, sessions edited, no templates. */
 const CHAT: ConsentAppWire = {
   permissions: [
-    { permission: "session.update", workspaces: [BUILDER, CONTENT], reason: " To answer a run, as you. ", projects: [LAUNCH] },
-    { permission: "track.read", workspaces: [BUILDER, CONTENT, FINANCE], reason: null, projects: [LAUNCH] },
-    { permission: "proposal.approve", workspaces: [BUILDER, CONTENT], reason: null, projects: [] },
+    {
+      permission: "session.update",
+      workspaces: [BUILDER, CONTENT],
+      reason: " To answer a run, as you. ",
+      projects: [LAUNCH],
+    },
+    {
+      permission: "track.read",
+      workspaces: [BUILDER, CONTENT, FINANCE],
+      reason: null,
+      projects: [LAUNCH],
+    },
+    {
+      permission: "proposal.approve",
+      workspaces: [BUILDER, CONTENT],
+      reason: null,
+      projects: [],
+    },
     { permission: "agent.read", workspaces: [], reason: null, projects: [] },
   ],
   podWide: [
-    ...KINDS.map((k) => ({ permission: `entity.${k}.read`, reason: "To show records.", kindGroup: GROUP })),
+    ...KINDS.map((k) => ({
+      permission: `entity.${k}.read`,
+      reason: "To show records.",
+      kindGroup: GROUP,
+    })),
     { permission: "session.read", reason: null, kindGroup: null },
     { permission: "document.read", reason: null, kindGroup: null },
   ],
@@ -76,9 +115,21 @@ const CHAT: ConsentAppWire = {
 /** Content Studio: three template spaces, posts edited, documents read. */
 const STUDIO: ConsentAppWire = {
   permissions: [
-    { permission: "entity.post.read", workspaces: [BUILDER, CONTENT, ECO], reason: null },
-    { permission: "entity.post.create", workspaces: [BUILDER, CONTENT, ECO], reason: "To draft your posts." },
-    { permission: "document.read", workspaces: [BUILDER, CONTENT, ECO], reason: null },
+    {
+      permission: "entity.post.read",
+      workspaces: [BUILDER, CONTENT, ECO],
+      reason: null,
+    },
+    {
+      permission: "entity.post.create",
+      workspaces: [BUILDER, CONTENT, ECO],
+      reason: "To draft your posts.",
+    },
+    {
+      permission: "document.read",
+      workspaces: [BUILDER, CONTENT, ECO],
+      reason: null,
+    },
   ],
   podWide: [],
   templates: ["content-os", "ecosystem"],
@@ -101,7 +152,9 @@ describe("the offer", () => {
       "document.read",
     ]);
     expect(offer.items[0]!.reason).toBe("To answer a run, as you.");
-    expect(offer.items.find((i) => i.permission === "entity.task.read")!.podWide).toBe(true);
+    expect(
+      offer.items.find((i) => i.permission === "entity.task.read")!.podWide
+    ).toBe(true);
     expect(offer.projectsOffered).toBe(true);
     // Before #1196 no item carries projects: the Projects choice is omitted.
     expect(offerOf(STUDIO).projectsOffered).toBe(false);
@@ -110,9 +163,13 @@ describe("the offer", () => {
   it("reads may go everywhere only when a pod-wide read is on offer; writes list only writable places", () => {
     expect(readChoices(offerOf(CHAT)).everywhere).toBe(true);
     expect(readChoices(offerOf(STUDIO)).everywhere).toBe(false);
-    expect(writeChoices(offerOf(CHAT)).spaces.map((s) => s.workspaceName)).toEqual(["Builder", "Content OS"]);
+    expect(
+      writeChoices(offerOf(CHAT)).spaces.map((s) => s.workspaceName)
+    ).toEqual(["Builder", "Content OS"]);
     // Finance is offered for a read only: absent from the write picker, named once.
-    expect(viewOnlySpaces(offerOf(CHAT)).map((s) => s.workspaceName)).toEqual(["Finance"]);
+    expect(viewOnlySpaces(offerOf(CHAT)).map((s) => s.workspaceName)).toEqual([
+      "Finance",
+    ]);
   });
 });
 
@@ -137,7 +194,10 @@ describe("a first consent's draft (design A §2)", () => {
     const one: ConsentAppWire = {
       ...STUDIO,
       templates: [],
-      permissions: STUDIO.permissions.map((p) => ({ ...p, workspaces: [BUILDER] })),
+      permissions: STUDIO.permissions.map((p) => ({
+        ...p,
+        workspaces: [BUILDER],
+      })),
     };
     expect(firstDraft(offerOf(one)).write.spaces).toEqual(["w-builder"]);
   });
@@ -153,7 +213,11 @@ describe("what Allow sends", () => {
   it("toAccess never holds what the offer does not: an unknown permission or place is dropped; All includes every project (Q1)", () => {
     const offer = offerOf(STUDIO);
     const d: ConsentDraft = {
-      permissions: new Set(["entity.post.read", "entity.post.create", "admin.everything"]),
+      permissions: new Set([
+        "entity.post.read",
+        "entity.post.create",
+        "admin.everything",
+      ]),
       read: { spaces: ["w-content", "w-elsewhere"], projects: ["p-unknown"] },
       write: { spaces: ["w-eco", "w-elsewhere"], projects: [] },
     };
@@ -164,24 +228,49 @@ describe("what Allow sends", () => {
       write: { spaces: ["w-eco"], projects: [] },
     });
     // "All spaces" without a pod-wide read on offer is every offered space, never "all".
-    const all = toAccess({ ...d, read: { spaces: "all", projects: [] } }, offer);
-    expect(all.read).toEqual({ spaces: ["w-builder", "w-content", "w-eco"], projects: [] });
+    const all = toAccess(
+      { ...d, read: { spaces: "all", projects: [] } },
+      offer
+    );
+    expect(all.read).toEqual({
+      spaces: ["w-builder", "w-content", "w-eco"],
+      projects: [],
+    });
     const chat = offerOf(CHAT);
-    expect(toAccess({ ...firstDraft(chat) }, chat).read).toEqual({ spaces: "all", projects: "all" });
+    expect(toAccess({ ...firstDraft(chat) }, chat).read).toEqual({
+      spaces: "all",
+      projects: "all",
+    });
   });
 
   it("on today's wire: pod-wide reads as null, other reads in every offered space under All; writes in the picked spaces only", () => {
     const offer = offerOf(CHAT);
     const d = toggleWritePlace(firstDraft(offer), "space", "w-builder");
     const pairs = toApprovedPairs(d, offer);
-    expect(pairs).toContainEqual({ permission: "entity.task.read", workspaceId: null });
-    expect(pairs).toContainEqual({ permission: "track.read", workspaceId: "w-finance" });
-    expect(pairs).toContainEqual({ permission: "session.update", workspaceId: "w-builder" });
-    expect(pairs).not.toContainEqual({ permission: "session.update", workspaceId: "w-content" });
+    expect(pairs).toContainEqual({
+      permission: "entity.task.read",
+      workspaceId: null,
+    });
+    expect(pairs).toContainEqual({
+      permission: "track.read",
+      workspaceId: "w-finance",
+    });
+    expect(pairs).toContainEqual({
+      permission: "session.update",
+      workspaceId: "w-builder",
+    });
+    expect(pairs).not.toContainEqual({
+      permission: "session.update",
+      workspaceId: "w-content",
+    });
     // Every pair is one the offer holds.
     for (const p of pairs) {
       const item = offer.items.find((i) => i.permission === p.permission)!;
-      expect(p.workspaceId === null ? item.podWide : item.spaces.some((s) => s.workspaceId === p.workspaceId)).toBe(true);
+      expect(
+        p.workspaceId === null
+          ? item.podWide
+          : item.spaces.some((s) => s.workspaceId === p.workspaceId)
+      ).toBe(true);
     }
   });
 
@@ -204,7 +293,14 @@ describe("It can: rows and levels", () => {
     expect(rows.some((r) => r.key === ALSO_SEE)).toBe(true);
     expect(rows.at(-1)!.decisions).toBe(true);
     // A permission with no place at all is not a row: it is "can't give".
-    expect(rows.flatMap((r) => [...r.permissions, ...r.members.flatMap((m) => m.permissions)]).some((p) => p.permission === "agent.read")).toBe(false);
+    expect(
+      rows
+        .flatMap((r) => [
+          ...r.permissions,
+          ...r.members.flatMap((m) => m.permissions),
+        ])
+        .some((p) => p.permission === "agent.read")
+    ).toBe(false);
   });
 
   it("a kind turned off stays off; All toggles every kind; Off clears the row", () => {
@@ -225,7 +321,10 @@ describe("It can: rows and levels", () => {
   it("the summary says each level once, folding what it also sees as a count", () => {
     const d = firstDraft(offer);
     const said = canSummary(d, rows);
-    expect(said[0]).toEqual({ level: "view", text: expect.stringMatching(/^records \(3 kinds\)/) });
+    expect(said[0]).toEqual({
+      level: "view",
+      text: expect.stringMatching(/^records \(3 kinds\)/),
+    });
     expect(said.find((s) => s.level === "edit")!.text).toMatch(/jobs/i);
     expect(said.some((s) => s.level === "on")).toBe(false);
   });
@@ -254,7 +353,9 @@ describe("In and It changes things in", () => {
     expect(showsUnion(d)).toBe(false);
     d = toggleReadProject(setReadProjectsMode(d, "pick"), "p-launch");
     expect(readProjectsMode(d, false)).toBe("pick");
-    expect(inPhrase(d, names)).toBe("Builder and Content OS, or project Launch v1");
+    expect(inPhrase(d, names)).toBe(
+      "Builder and Content OS, or project Launch v1"
+    );
     expect(showsUnion(d)).toBe(true);
     d = setReadProjectsMode(d, "none");
     expect(d.read.projects).toEqual([]);
@@ -265,7 +366,12 @@ describe("In and It changes things in", () => {
   it("a read with no pod-wide form is named under All, never dropped silently", () => {
     const d = firstDraft(offer);
     expect(notEverywhere(d, canRows(offer, "person"))).toEqual(["goals"]);
-    expect(notEverywhere(setReadSpacesMode(d, offer, "pick"), canRows(offer, "person"))).toEqual([]);
+    expect(
+      notEverywhere(
+        setReadSpacesMode(d, offer, "pick"),
+        canRows(offer, "person")
+      )
+    ).toEqual([]);
   });
 
   it("the write line exists only while something changes things", () => {
@@ -273,7 +379,8 @@ describe("In and It changes things in", () => {
     let d = firstDraft(offer);
     expect(needsWritePlace(d)).toBe(true);
     expect(writePhrase(d, names)).toBeNull();
-    for (const r of rows) if (rowLevel(d, r) === "edit") d = setRowLevel(d, r, "view");
+    for (const r of rows)
+      if (rowLevel(d, r) === "edit") d = setRowLevel(d, r, "view");
     expect(needsWritePlace(d)).toBe(false);
   });
 });
@@ -282,14 +389,36 @@ describe("why Allow waits", () => {
   it("nothing to give, nothing on, no write place (with the View remedy), no read place; else null", () => {
     const offer = offerOf(CHAT);
     const rows = canRows(offer, "person");
-    expect(draftBlockedReason(firstDraft(offerOf({ permissions: [{ permission: "x.read", workspaces: [] }], podWide: [], templates: [] })), offerOf({ permissions: [{ permission: "x.read", workspaces: [] }], podWide: [], templates: [] }), [])).toBe("You have no space to give it yet.");
+    expect(
+      draftBlockedReason(
+        firstDraft(
+          offerOf({
+            permissions: [{ permission: "x.read", workspaces: [] }],
+            podWide: [],
+            templates: [],
+          })
+        ),
+        offerOf({
+          permissions: [{ permission: "x.read", workspaces: [] }],
+          podWide: [],
+          templates: [],
+        }),
+        []
+      )
+    ).toBe("You have no space to give it yet.");
     const none = { ...firstDraft(offer), permissions: new Set<string>() };
-    expect(draftBlockedReason(none, offer, rows)).toBe("Turn on at least one thing it asks for.");
-    expect(draftBlockedReason(firstDraft(offer), offer, rows)).toBe("Pick where it can make changes, or set Jobs to View.");
+    expect(draftBlockedReason(none, offer, rows)).toBe(
+      "Turn on at least one thing it asks for."
+    );
+    expect(draftBlockedReason(firstDraft(offer), offer, rows)).toBe(
+      "Pick where it can make changes, or set Jobs to View."
+    );
     const placed = toggleWritePlace(firstDraft(offer), "space", "w-builder");
     expect(draftBlockedReason(placed, offer, rows)).toBeNull();
     const nowhere = setReadSpacesMode(placed, offer, "pick");
-    expect(draftBlockedReason(nowhere, offer, rows)).toBe("Pick at least one space or project it can work in.");
+    expect(draftBlockedReason(nowhere, offer, rows)).toBe(
+      "Pick at least one space or project it can work in."
+    );
   });
 });
 
@@ -301,7 +430,9 @@ describe("what it asked that cannot be given", () => {
       ["agent.read", expect.any(String)],
     ]);
     expect(items[0]!.reason).toBe("Apps are never given this.");
-    expect(items[1]!.reason).toBe("You have no space where you can let it see this.");
+    expect(items[1]!.reason).toBe(
+      "You have no space where you can let it see this."
+    );
   });
 });
 
@@ -316,10 +447,12 @@ describe("what the connection holds: re-consent", () => {
       { permission: "entity.post.create", workspaceId: "w-content" },
     ]);
     expect(held.kind).toBe("access");
-    expect(reconsentChanges(held, offer, rows, [
-      { permission: "entity.post.read", workspaceId: "w-content" },
-      { permission: "entity.post.create", workspaceId: "w-content" },
-    ]).map((c) => c.key)).toEqual(["new:document.read"]);
+    expect(
+      reconsentChanges(held, offer, rows, [
+        { permission: "entity.post.read", workspaceId: "w-content" },
+        { permission: "entity.post.create", workspaceId: "w-content" },
+      ]).map((c) => c.key)
+    ).toEqual(["new:document.read"]);
   });
 
   it("pairs that would widen: each widened permission says now / was and has ONE door that turns it off, with Undo", () => {

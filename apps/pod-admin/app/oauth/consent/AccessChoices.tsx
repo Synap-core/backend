@@ -64,7 +64,10 @@ function RowDetail({ row }: { row: ConsentObject }) {
   return (
     <>
       {reasons.map((r) => (
-        <p key={r} className="text-pretty text-xs leading-relaxed text-foreground/75">
+        <p
+          key={r}
+          className="text-pretty text-xs leading-relaxed text-foreground/75"
+        >
           {/* The developer's words, as text: why it asks. */}
           <span className="text-foreground/65">{t("reason.prefix")} </span>
           {r}
@@ -265,9 +268,13 @@ export function InChoices({
               draft.read.spaces !== "all" &&
               draft.read.spaces.includes(s.workspaceId)
             }
-            onValueChange={() => onChange(toggleReadSpace(draft, s.workspaceId))}
+            onValueChange={() =>
+              onChange(toggleReadSpace(draft, s.workspaceId))
+            }
           >
-            <span className="text-sm text-foreground/85">{s.workspaceName}</span>
+            <span className="text-sm text-foreground/85">
+              {s.workspaceName}
+            </span>
           </Checkbox>
         ))}
       </div>
@@ -275,7 +282,11 @@ export function InChoices({
   const missing = notEverywhere(draft, rows);
   return (
     <div className="flex flex-col gap-4">
-      <div role="group" className="flex flex-col gap-1" aria-label={t("in.spaces")}>
+      <div
+        role="group"
+        className="flex flex-col gap-1"
+        aria-label={t("in.spaces")}
+      >
         <p className={LEGEND} aria-hidden>
           {t("in.spaces")}
         </p>
@@ -317,13 +328,20 @@ export function InChoices({
       </div>
 
       {offer.projectsOffered ? (
-        <div role="group" className="flex flex-col gap-1" aria-label={t("in.projects")}>
+        <div
+          role="group"
+          className="flex flex-col gap-1"
+          aria-label={t("in.projects")}
+        >
           <p className={LEGEND} aria-hidden>
             {t("in.projects")}
           </p>
           {all ? (
             <p className={`flex items-start gap-1.5 ${CAPTION}`}>
-              <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+              <Check
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary"
+                aria-hidden
+              />
               {t("in.everyProject")}
             </p>
           ) : (
@@ -334,7 +352,9 @@ export function InChoices({
                 isDisabled={isDisabled}
                 onValueChange={(v) => {
                   setPickingProjects(v === "pick");
-                  onChange(setReadProjectsMode(draft, v as "all" | "pick" | "none"));
+                  onChange(
+                    setReadProjectsMode(draft, v as "all" | "pick" | "none")
+                  );
                 }}
               >
                 <Radio
@@ -414,7 +434,11 @@ export function WriteChoices({
   return (
     <div className="flex flex-col gap-3">
       {choices.spaces.length > 0 ? (
-        <div role="group" aria-label={t("write.spaces")} className="flex flex-col">
+        <div
+          role="group"
+          aria-label={t("write.spaces")}
+          className="flex flex-col"
+        >
           <p className={LEGEND} aria-hidden>
             {t("write.spaces")}
           </p>
@@ -432,7 +456,8 @@ export function WriteChoices({
               >
                 <span className="flex items-center gap-1.5 text-sm text-foreground/85">
                   {s.workspaceName}
-                  {s.templateSlug && offer.templates.includes(s.templateSlug) ? (
+                  {s.templateSlug &&
+                  offer.templates.includes(s.templateSlug) ? (
                     <Chip size="sm" variant="flat">
                       {t("write.asked")}
                     </Chip>
@@ -444,7 +469,11 @@ export function WriteChoices({
         </div>
       ) : null}
       {choices.projects.length > 0 ? (
-        <div role="group" aria-label={t("write.projects")} className="flex flex-col">
+        <div
+          role="group"
+          aria-label={t("write.projects")}
+          className="flex flex-col"
+        >
           <p className={LEGEND} aria-hidden>
             {t("write.projects")}
           </p>
@@ -460,7 +489,9 @@ export function WriteChoices({
                   onChange(toggleWritePlace(draft, "project", p.projectId))
                 }
               >
-                <span className="text-sm text-foreground/85">{p.projectName}</span>
+                <span className="text-sm text-foreground/85">
+                  {p.projectName}
+                </span>
               </Checkbox>
             ))}
           </div>

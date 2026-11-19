@@ -105,7 +105,12 @@ export function AccessLines(props: AccessLinesProps) {
   const footer =
     mode === "page" ? (
       <>
-        <Button size="sm" variant="light" className="min-h-10" onPress={() => setOpen(null)}>
+        <Button
+          size="sm"
+          variant="light"
+          className="min-h-10"
+          onPress={() => setOpen(null)}
+        >
           {t("sheet.cancel")}
         </Button>
         <Button
@@ -122,11 +127,21 @@ export function AccessLines(props: AccessLinesProps) {
         </Button>
       </>
     ) : (
-      <Button size="sm" color="primary" className="min-h-10" onPress={() => setOpen(null)}>
+      <Button
+        size="sm"
+        color="primary"
+        className="min-h-10"
+        onPress={() => setOpen(null)}
+      >
         {t("sheet.done")}
       </Button>
     );
-  const sheet = (line: Line, doorLabel: string, title: string, children: ReactNode) => ({
+  const sheet = (
+    line: Line,
+    doorLabel: string,
+    title: string,
+    children: ReactNode
+  ) => ({
     doorLabel,
     doorAccessibleName: `${doorLabel}: ${title}`,
     title,
@@ -139,7 +154,11 @@ export function AccessLines(props: AccessLinesProps) {
 
   // It can: one entry per level given.
   const can = canSummary(draft, props.rows);
-  const levelWord = { view: t("level.view"), edit: t("level.edit"), on: t("level.on") };
+  const levelWord = {
+    view: t("level.view"),
+    edit: t("level.edit"),
+    on: t("level.on"),
+  };
 
   // In: every place, or the picked spaces "or" projects.
   const read = draft.read;
@@ -148,25 +167,53 @@ export function AccessLines(props: AccessLinesProps) {
       ? t("in.every")
       : (() => {
           const spaces = read.spaces.map((id) => (
-            <PlaceName key={id} kind="workspace" id={id} door={door} name={props.names[id] ?? id} />
+            <PlaceName
+              key={id}
+              kind="workspace"
+              id={id}
+              door={door}
+              name={props.names[id] ?? id}
+            />
           ));
           const projects =
             read.projects === "all"
               ? [<Fragment key="all">{t("in.allProjects")}</Fragment>]
               : read.projects.map((id) => (
-                  <PlaceName key={id} kind="project" id={id} door={door} name={props.names[id] ?? id} />
+                  <PlaceName
+                    key={id}
+                    kind="project"
+                    id={id}
+                    door={door}
+                    name={props.names[id] ?? id}
+                  />
                 ));
-          const parts = [spaces, projects].filter((p) => p.length > 0).map((p) => joinNodes(p));
-          return parts.length === 0 ? t("in.nowhere") : joinNodes(parts, ", or ");
+          const parts = [spaces, projects]
+            .filter((p) => p.length > 0)
+            .map((p) => joinNodes(p));
+          return parts.length === 0
+            ? t("in.nowhere")
+            : joinNodes(parts, ", or ");
         })();
 
   // It changes things in.
   const writes = [
     ...draft.write.spaces.map((id) => (
-      <PlaceName key={id} kind="workspace" id={id} door={door} name={props.names[id] ?? id} />
+      <PlaceName
+        key={id}
+        kind="workspace"
+        id={id}
+        door={door}
+        name={props.names[id] ?? id}
+      />
     )),
     ...draft.write.projects.map((id) => (
-      <PlaceName key={id} kind="project" id={id} door={door} name={props.names[id] ?? id} />
+      <PlaceName
+        key={id}
+        kind="project"
+        id={id}
+        door={door}
+        name={props.names[id] ?? id}
+      />
     )),
   ];
   const writeLine = needsWritePlace(draft);
@@ -197,7 +244,8 @@ export function AccessLines(props: AccessLinesProps) {
         ) : (
           can.map((c) => (
             <span key={c.level}>
-              <span className="text-foreground/65">{levelWord[c.level]}</span> {c.text}
+              <span className="text-foreground/65">{levelWord[c.level]}</span>{" "}
+              {c.text}
             </span>
           ))
         )}

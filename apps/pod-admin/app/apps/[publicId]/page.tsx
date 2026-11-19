@@ -577,105 +577,111 @@ function PodAppSettings({
           }}
         />
       ) : (
-      <section className="mt-6" aria-labelledby="pod-reach">
-        <div
-          role="note"
-          className="mb-3 flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
-        >
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-foreground/75" aria-hidden />
-          <div className="flex flex-col gap-0.5">
-            <p className="text-sm font-medium text-foreground">
-              {t("page.confirmLaterTitle")}
-            </p>
-            <p className="text-pretty text-xs text-foreground/75">
-              {t("page.confirmLater")}
-            </p>
+        <section className="mt-6" aria-labelledby="pod-reach">
+          <div
+            role="note"
+            className="mb-3 flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
+          >
+            <Info
+              className="mt-0.5 h-4 w-4 shrink-0 text-foreground/75"
+              aria-hidden
+            />
+            <div className="flex flex-col gap-0.5">
+              <p className="text-sm font-medium text-foreground">
+                {t("page.confirmLaterTitle")}
+              </p>
+              <p className="text-pretty text-xs text-foreground/75">
+                {t("page.confirmLater")}
+              </p>
+            </div>
           </div>
-        </div>
-        <h2 id="pod-reach" className="mb-2 text-sm font-medium text-foreground">
-          What it may touch
-        </h2>
-        <ul className="flex flex-col gap-3">
-          {spaces.map((space) => (
-            <li
-              key={space.workspaceId ?? "pod"}
-              className="rounded-lg border border-foreground/10 bg-content1 px-4 py-3"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium text-foreground/85">
-                  {space.workspaceId === null
-                    ? POD_WIDE_HEADING
-                    : space.workspaceName}
-                </p>
-                {spaces.length > 1 ? (
-                  <Button
-                    size="sm"
-                    variant="light"
-                    className="min-h-10 text-foreground/70"
-                    onPress={() =>
-                      setDrop({
-                        workspaceId: space.workspaceId,
-                        what:
-                          space.workspaceId === null
-                            ? `everything it reads ${EVERYWHERE_IN_POD}`
-                            : `everything in ${space.workspaceName}`,
-                      })
-                    }
-                  >
+          <h2
+            id="pod-reach"
+            className="mb-2 text-sm font-medium text-foreground"
+          >
+            What it may touch
+          </h2>
+          <ul className="flex flex-col gap-3">
+            {spaces.map((space) => (
+              <li
+                key={space.workspaceId ?? "pod"}
+                className="rounded-lg border border-foreground/10 bg-content1 px-4 py-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-foreground/85">
                     {space.workspaceId === null
-                      ? "Remove these reads"
-                      : "Remove this space"}
-                  </Button>
-                ) : null}
-              </div>
-              <ul className="mt-1 flex flex-col">
-                {space.permissions.map((p) => {
-                  const pair = {
-                    permission: p.permission,
-                    workspaceId: space.workspaceId,
-                  };
-                  const removable = keepWithout(pod.approved, pair) !== null;
-                  return (
-                    <li
-                      key={p.permission}
-                      className="flex min-h-10 items-center justify-between gap-3"
+                      ? POD_WIDE_HEADING
+                      : space.workspaceName}
+                  </p>
+                  {spaces.length > 1 ? (
+                    <Button
+                      size="sm"
+                      variant="light"
+                      className="min-h-10 text-foreground/70"
+                      onPress={() =>
+                        setDrop({
+                          workspaceId: space.workspaceId,
+                          what:
+                            space.workspaceId === null
+                              ? `everything it reads ${EVERYWHERE_IN_POD}`
+                              : `everything in ${space.workspaceName}`,
+                        })
+                      }
                     >
-                      <span className="text-xs text-foreground/75">
-                        {p.label}{" "}
-                        <span className="font-mono text-xs text-foreground/65">
-                          {p.permission}
+                      {space.workspaceId === null
+                        ? "Remove these reads"
+                        : "Remove this space"}
+                    </Button>
+                  ) : null}
+                </div>
+                <ul className="mt-1 flex flex-col">
+                  {space.permissions.map((p) => {
+                    const pair = {
+                      permission: p.permission,
+                      workspaceId: space.workspaceId,
+                    };
+                    const removable = keepWithout(pod.approved, pair) !== null;
+                    return (
+                      <li
+                        key={p.permission}
+                        className="flex min-h-10 items-center justify-between gap-3"
+                      >
+                        <span className="text-xs text-foreground/75">
+                          {p.label}{" "}
+                          <span className="font-mono text-xs text-foreground/65">
+                            {p.permission}
+                          </span>
                         </span>
-                      </span>
-                      {removable ? (
-                        <Button
-                          size="sm"
-                          variant="light"
-                          isIconOnly
-                          className="min-h-10 min-w-10"
-                          aria-label={`Remove ${p.label} ${placePhrase(space)}`}
-                          onPress={() =>
-                            setDrop({
-                              ...pair,
-                              what: `${p.label} ${placePhrase(space)}`,
-                            })
-                          }
-                        >
-                          <Minus size={15} />
-                        </Button>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-2 max-w-2xl text-pretty text-xs text-foreground/65">
-          Taking something away applies now, with no new consent: the app&apos;s
-          current access stops, and the next one it gets no longer includes it.
-          To remove everything, revoke it.
-        </p>
-      </section>
+                        {removable ? (
+                          <Button
+                            size="sm"
+                            variant="light"
+                            isIconOnly
+                            className="min-h-10 min-w-10"
+                            aria-label={`Remove ${p.label} ${placePhrase(space)}`}
+                            onPress={() =>
+                              setDrop({
+                                ...pair,
+                                what: `${p.label} ${placePhrase(space)}`,
+                              })
+                            }
+                          >
+                            <Minus size={15} />
+                          </Button>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 max-w-2xl text-pretty text-xs text-foreground/65">
+            Taking something away applies now, with no new consent: the
+            app&apos;s current access stops, and the next one it gets no longer
+            includes it. To remove everything, revoke it.
+          </p>
+        </section>
       )}
 
       <section className="mt-6" aria-labelledby="pod-writes">

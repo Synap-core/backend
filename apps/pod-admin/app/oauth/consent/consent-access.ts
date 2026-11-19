@@ -159,7 +159,8 @@ export function givable(item: OfferItem): boolean {
 }
 
 /** A write tier permission: anything but a read (AppAccess v2's own split). */
-export const isWriteTier = (permission: string) => !isReadPermission(permission);
+export const isWriteTier = (permission: string) =>
+  !isReadPermission(permission);
 
 function uniqueBy<T>(list: readonly T[], id: (t: T) => string): T[] {
   const seen = new Set<string>();
@@ -218,7 +219,9 @@ export function writeChoices(offer: ConsentOffer): TierChoices {
  * write picker, named in one sentence ("you can only view them").
  */
 export function viewOnlySpaces(offer: ConsentOffer): OfferedSpace[] {
-  const writable = new Set(writeChoices(offer).spaces.map((s) => s.workspaceId));
+  const writable = new Set(
+    writeChoices(offer).spaces.map((s) => s.workspaceId)
+  );
   return readChoices(offer).spaces.filter((s) => !writable.has(s.workspaceId));
 }
 
@@ -276,7 +279,10 @@ export function firstDraft(offer: ConsentOffer): ConsentDraft {
   const writeTemplates = templateSpaces(writes.spaces, offer.templates);
   const onlyWritePlace =
     writes.spaces.length + writes.projects.length === 1
-      ? { spaces: writes.spaces.map((s) => s.workspaceId), projects: writes.projects.map((p) => p.projectId) }
+      ? {
+          spaces: writes.spaces.map((s) => s.workspaceId),
+          projects: writes.projects.map((p) => p.projectId),
+        }
       : null;
   return {
     permissions,
@@ -425,7 +431,10 @@ const flip = (ids: readonly string[], id: string) =>
 /** One space ticked or unticked in "Only the spaces I pick". */
 export function toggleReadSpace(draft: ConsentDraft, id: string): ConsentDraft {
   if (draft.read.spaces === "all") return draft;
-  return { ...draft, read: { ...draft.read, spaces: flip(draft.read.spaces, id) } };
+  return {
+    ...draft,
+    read: { ...draft.read, spaces: flip(draft.read.spaces, id) },
+  };
 }
 
 /** "All projects", "Only the projects I pick" or "No projects". */
@@ -456,7 +465,10 @@ export function readProjectsMode(
 }
 
 /** One project ticked or unticked in "Only the projects I pick". */
-export function toggleReadProject(draft: ConsentDraft, id: string): ConsentDraft {
+export function toggleReadProject(
+  draft: ConsentDraft,
+  id: string
+): ConsentDraft {
   const p = draft.read.projects;
   if (p === "all") return draft;
   return { ...draft, read: { ...draft.read, projects: flip(p, id) } };
@@ -599,7 +611,11 @@ export function setRowLevel(
   const kindOff = (p: string) => {
     if (kinds.length === 0) return false;
     const k = kinds.find((x) => x.permissions.includes(p));
-    return !!k && rowLevel(draft, row) !== "off" && !k.permissions.some((q) => draft.permissions.has(q));
+    return (
+      !!k &&
+      rowLevel(draft, row) !== "off" &&
+      !k.permissions.some((q) => draft.permissions.has(q))
+    );
   };
   for (const p of rowPermissions(row)) {
     const off = kindOff(p);
@@ -611,11 +627,17 @@ export function setRowLevel(
 
 /** How many of the F4 row's kinds are on. */
 export function kindsOn(draft: ConsentDraft, row: CanRow): number {
-  return row.kinds.filter((k) => k.permissions.some((p) => draft.permissions.has(p))).length;
+  return row.kinds.filter((k) =>
+    k.permissions.some((p) => draft.permissions.has(p))
+  ).length;
 }
 
 /** One kind of the F4 row turned on or off, at the row's level (View when Off). */
-export function toggleKind(draft: ConsentDraft, row: CanRow, kind: string): ConsentDraft {
+export function toggleKind(
+  draft: ConsentDraft,
+  row: CanRow,
+  kind: string
+): ConsentDraft {
   const k = row.kinds.find((x) => x.kind === kind);
   if (!k) return draft;
   const next = new Set(draft.permissions);
@@ -713,7 +735,10 @@ export function needsWritePlace(draft: ConsentDraft): boolean {
 }
 
 /** The rows at Edit or On, by name: what "Pick where" asks about. */
-export function writeRows(draft: ConsentDraft, rows: readonly CanRow[]): CanRow[] {
+export function writeRows(
+  draft: ConsentDraft,
+  rows: readonly CanRow[]
+): CanRow[] {
   return rows.filter((r) => {
     const l = rowLevel(draft, r);
     return l === "edit" || l === "on";
@@ -722,19 +747,25 @@ export function writeRows(draft: ConsentDraft, rows: readonly CanRow[]): CanRow[
 
 // ─── In / It changes things in: the answers ──────────────────────────────────
 
-
 /**
  * The "In" line's answer in words: every place, or the picked spaces, then
  * "every project, including new ones" / the picked projects, joined by "or"
  * (F3 is a union). "Nowhere yet" when nothing is picked.
  */
-export function inPhrase(draft: ConsentDraft, names: Readonly<Record<string, string>>): string {
+export function inPhrase(
+  draft: ConsentDraft,
+  names: Readonly<Record<string, string>>
+): string {
   if (draft.read.spaces === "all") return consentT()("in.every");
-  const spaces = draft.read.spaces.map((id) => names[id] ?? "a space you no longer see");
+  const spaces = draft.read.spaces.map(
+    (id) => names[id] ?? "a space you no longer see"
+  );
   const projects =
     draft.read.projects === "all"
       ? ["every project, including new ones"]
-      : draft.read.projects.map((id) => `project ${names[id] ?? "you no longer see"}`);
+      : draft.read.projects.map(
+          (id) => `project ${names[id] ?? "you no longer see"}`
+        );
   const parts: string[] = [];
   if (spaces.length > 0) parts.push(andList(spaces));
   if (projects.length > 0) parts.push(andList(projects));
@@ -742,10 +773,15 @@ export function inPhrase(draft: ConsentDraft, names: Readonly<Record<string, str
 }
 
 /** The "It changes things in" answer, or null when nothing is picked. */
-export function writePhrase(draft: ConsentDraft, names: Readonly<Record<string, string>>): string | null {
+export function writePhrase(
+  draft: ConsentDraft,
+  names: Readonly<Record<string, string>>
+): string | null {
   const places = [
     ...draft.write.spaces.map((id) => names[id] ?? "a space you no longer see"),
-    ...draft.write.projects.map((id) => `project ${names[id] ?? "you no longer see"}`),
+    ...draft.write.projects.map(
+      (id) => `project ${names[id] ?? "you no longer see"}`
+    ),
   ];
   return places.length === 0 ? null : andList(places);
 }
@@ -754,16 +790,20 @@ export function writePhrase(draft: ConsentDraft, names: Readonly<Record<string, 
 export function showsUnion(draft: ConsentDraft): boolean {
   if (draft.read.spaces === "all") return false;
   const projects = draft.read.projects;
-  return draft.read.spaces.length > 0 && (projects === "all" || projects.length > 0);
+  return (
+    draft.read.spaces.length > 0 && (projects === "all" || projects.length > 0)
+  );
 }
-
 
 /**
  * Reads that "All spaces" cannot carry: a read the pod has no pod-wide form
  * of (`isPodWideReadPermission`: goals, agents…) holds only in a space you
  * pick. Named under the "In" choices, never dropped silently.
  */
-export function notEverywhere(draft: ConsentDraft, rows: readonly CanRow[]): string[] {
+export function notEverywhere(
+  draft: ConsentDraft,
+  rows: readonly CanRow[]
+): string[] {
   if (draft.read.spaces !== "all") return [];
   const out: string[] = [];
   for (const p of draft.permissions) {
@@ -782,7 +822,10 @@ export function notEverywhere(draft: ConsentDraft, rows: readonly CanRow[]): str
  * grants the draft makes (`grantScopesForAccess`), so it reads as the app's
  * page will say it.
  */
-export function draftHeadline(draft: ConsentDraft, offer: ConsentOffer): string {
+export function draftHeadline(
+  draft: ConsentDraft,
+  offer: ConsentOffer
+): string {
   const access = toAccess(draft, offer);
   return describeAccess(accessModel(grantScopesForAccess(access), "app"), {
     names: placeNames(offer),
@@ -805,9 +848,14 @@ export function draftBlockedReason(
   const access = toAccess(draft, offer);
   if (access.permissions.length === 0) return t("blocked.nothing");
   const writes = access.permissions.some(isWriteTier);
-  if (writes && access.write.spaces.length + access.write.projects.length === 0) {
+  if (
+    writes &&
+    access.write.spaces.length + access.write.projects.length === 0
+  ) {
     const names = writeRows(draft, rows).map((r) => r.label);
-    const toView = writeRows(draft, rows).every((r) => r.levels.includes("view"));
+    const toView = writeRows(draft, rows).every((r) =>
+      r.levels.includes("view")
+    );
     return names.length > 0 && toView
       ? t("blocked.writeOrView", { names: andList(names) })
       : t("blocked.write");
@@ -836,7 +884,10 @@ export interface CantGive {
  * app is given (`ignoredScopes`), and permissions with no place to give them
  * in. Each with its reason; never a disabled toggle.
  */
-export function cantGive(offer: ConsentOffer, ignoredScopes: readonly string[]): CantGive[] {
+export function cantGive(
+  offer: ConsentOffer,
+  ignoredScopes: readonly string[]
+): CantGive[] {
   const t = consentT();
   const out: CantGive[] = [];
   for (const s of ignoredScopes) {
@@ -862,7 +913,10 @@ export function cantGive(offer: ConsentOffer, ignoredScopes: readonly string[]):
 // ─── What the connection holds: re-consent and the app page ──────────────────
 
 /** A place as words: "in Builder", "everywhere in your pod", "in project Launch". */
-export function wherePhrase(pair: AccessPair, names: Readonly<Record<string, string>>): string {
+export function wherePhrase(
+  pair: AccessPair,
+  names: Readonly<Record<string, string>>
+): string {
   switch (pair.where.kind) {
     case "pod":
       return EVERYWHERE_IN_POD;
@@ -1025,7 +1079,10 @@ export function reconsentChanges(
  * OFF (the pod keeps what the person approved, not what they were asked: a
  * "no" last time looks exactly like a new ask), as today.
  */
-export function reconsentDraft(held: HeldAccess, offer: ConsentOffer): ConsentDraft {
+export function reconsentDraft(
+  held: HeldAccess,
+  offer: ConsentOffer
+): ConsentDraft {
   if (held.kind === "none") return firstDraft(offer);
   const access = held.kind === "access" ? held.access : held.proposed;
   const draft = draftOf(access);
@@ -1052,9 +1109,14 @@ export function allowNew(
 }
 
 /** Every new ask is on: the switch reads On. */
-export function newAllowed(draft: ConsentDraft, changes: readonly ReconsentChange[]): boolean {
+export function newAllowed(
+  draft: ConsentDraft,
+  changes: readonly ReconsentChange[]
+): boolean {
   const asks = changes.filter((c) => c.mark === "new");
-  return asks.length > 0 && asks.every((c) => draft.permissions.has(c.permission));
+  return (
+    asks.length > 0 && asks.every((c) => draft.permissions.has(c.permission))
+  );
 }
 
 /** Two drafts give the same: the app page's Save is pressable only when not. */
