@@ -14,7 +14,10 @@
  *   - after it, a stored "ask first" on the same reach as an auto row wins
  *     (the stricter verdict takes a tool run's tie, whatever the age), and a
  *     row naming the TOOL covers each of its actions below a row naming one;
- *   - the baseline and the boot coherence list no longer carry the column.
+ *   - the baseline and the boot coherence list no longer carry the column;
+ *   - the read-only dry run (`scripts/0434-dry-run.sql`, the report run on a
+ *     real pod before the migration) classifies every grant and names
+ *     exactly the rows the migration then writes.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { readFileSync } from "node:fs";
@@ -31,6 +34,10 @@ const read = (f: string) =>
   readFileSync(resolve(HERE, "../migrations", f), "utf8");
 const M0434 = read("0434_grant_exec_mode_to_approval_rows.sql");
 const BASELINE = read("0000_baseline_schema.sql");
+const DRY_RUN = readFileSync(
+  resolve(HERE, "../scripts/0434-dry-run.sql"),
+  "utf8"
+);
 
 const AGENT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const AGENT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -60,6 +67,8 @@ const G = {
 let pg: PGlite;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let db: any;
+/** The dry run's rows, read BEFORE the migration ran. */
+let dryRun: Array<{ section: string; item: string; n: number }> = [];
 
 beforeAll(async () => {
   pg = new PGlite();
@@ -98,6 +107,7 @@ beforeAll(async () => {
     );
     CREATE TABLE tools (id uuid PRIMARY KEY, name text NOT NULL);
     CREATE TABLE skills (id uuid PRIMARY KEY, name text NOT NULL);
+    CREATE TABLE capabilities (id uuid PRIMARY KEY, name text NOT NULL);
     CREATE TABLE links (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       from_type text NOT NULL,
@@ -162,6 +172,11 @@ beforeAll(async () => {
       ('${G.revoked}', 'tool', '${T_MAIL}', 'auto', '${AGENT_B}', '${WS1}', NULL, now(), NULL, '${PERSON}'),
       ('${G.expired}', 'tool', '${T_MAIL}', 'auto', '${AGENT_B}', '${WS2}', NULL, NULL, now() - interval '1 day', '${PERSON}');
   `);
+  await pg.exec("BEGIN TRANSACTION READ ONLY");
+  dryRun = (
+    await pg.query<{ section: string; item: string; n: number }>(DRY_RUN)
+  ).rows;
+  await pg.exec("ROLLBACK");
   await pg.exec(M0434);
   await pg.exec(M0434);
   db = drizzle(pg);
@@ -327,6 +342,59 @@ describe("after 0434 — the approval row is the one answer", () => {
       VALUES ('any', 'pod', 'capability', 'crm_write', 'propose', 'user:${PERSON}');
     `);
     expect(await verdict(AGENT_B, WS2, T_PROPOSE, "crm_write")).toBe("propose");
+  });
+
+  it("the dry run classifies every grant and names exactly the rows the migration wrote", async () => {
+    // Sorted here, by code unit: the SQL's ORDER BY follows the database
+    // collation, which a real pod may set differently.
+    const bySection = (section: string) =>
+      dryRun
+        .filter((r) => r.section === section)
+        .map((r) => [r.item, r.n] as const)
+        .sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+    expect(bySection("1-grants")).toEqual([
+      ["secret auto live", 1],
+      ["skill auto live", 1],
+      ["tool auto live", 3],
+      ["tool auto not live", 2],
+      ["tool dry-run live", 1],
+      ["tool propose live", 1],
+    ]);
+    expect(bySection("2-outcome")).toEqual([
+      ["no row: a propose grant behaved as no grant (tool)", 1],
+      ["none: a Never could cover it (tool)", 1],
+      ["none: capped in uses (tool)", 1],
+      ["row: ask first (was dry-run) (tool)", 1],
+      ["row: auto (skill)", 1],
+      ["row: auto (tool)", 1],
+    ]);
+    const predicted = dryRun
+      .filter((r) => r.section === "3-row")
+      .map((r) => r.item.split(" ")[0])
+      .sort();
+    const { rows: written } = await pg.query<{ id: string }>(
+      `SELECT substr(created_by, length($1) + 1) AS id FROM governance_rules
+        WHERE created_by LIKE $1 || '%' ORDER BY 1`,
+      [GRANT_EXEC_MODE_CREATED_BY_PREFIX]
+    );
+    expect(predicted).toEqual(written.map((r) => r.id));
+    expect(bySection("4-change-never").map(([i]) => i.split(" ")[0])).toEqual([
+      G.coveredByNever,
+    ]);
+    expect(bySection("4-change-capped").map(([i]) => i.split(" ")[0])).toEqual([
+      G.capped,
+    ]);
+    expect(bySection("4-change-dry-run").map(([i]) => i.split(" ")[0])).toEqual(
+      [G.dryRun]
+    );
+    for (const none of [
+      "4-change-ask-first",
+      "4-change-ambiguous",
+      "4-change-tie",
+      "4-change-tool-row",
+    ]) {
+      expect(bySection(none), none).toEqual([]);
+    }
   });
 
   it("the baseline and the boot coherence list no longer carry the column", () => {
