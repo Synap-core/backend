@@ -713,7 +713,7 @@ describe("param / criterion / provide / room question on the ONE answer door", (
     expect(JSON.stringify(await roomMessages(channelId))).not.toContain(id);
   });
 
-  it("provide under a criterion's key: handing it over grades the criterion PASS; the slot keeps its own answer rule", async () => {
+  it("provide a criterion checks: handing it over grades the criterion PASS; the slot keeps its own answer rule", async () => {
     const id = await seedSecret({ userId: OWNER });
     const { sessionId } = await seed(
       [
@@ -728,6 +728,7 @@ describe("param / criterion / provide / room question on the ONE answer door", (
             key: "stripe-key",
             statement: "The live Stripe key is in the vault",
             check: { kind: "human" },
+            outputKey: "stripe-key",
           },
         ],
       }
