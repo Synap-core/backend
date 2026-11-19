@@ -186,17 +186,19 @@ export function AccessLines(props: AccessLinesProps) {
     title: string,
     children: ReactNode
   ) =>
-    props.readOnly ? null : {
-    doorLabel,
-    doorAccessibleName: `${doorLabel}: ${title}`,
-    title,
-    isOpen: open === line,
-    onOpenChange: (o: boolean) => openLine(line, o),
-    isDisabled: props.isDisabled,
-    footer,
-    live: props.live,
-    children,
-  };
+    props.readOnly
+      ? null
+      : {
+          doorLabel,
+          doorAccessibleName: `${doorLabel}: ${title}`,
+          title,
+          isOpen: open === line,
+          onOpenChange: (o: boolean) => openLine(line, o),
+          isDisabled: props.isDisabled,
+          footer,
+          live: props.live,
+          children,
+        };
 
   // It can: one entry per level given; what holds only in picked spaces
   // under All, and the decisions left off, are said beside it.
