@@ -8,7 +8,11 @@
  *   - its room channel's `workspaceId` + `scope` (the same rule the mint uses,
  *     `ensure-session-channel.ts`: a space ⇒ WORKSPACE, none ⇒ POD) — otherwise
  *     the session and its room disagree on lens;
- *   - its `artifacts` rows — the outputs lens follows the session.
+ *   - its `artifacts` rows — the outputs lens follows the session;
+ *   - its placement stamp (`metadata.workspacePlacement`): a move is a
+ *     deliberate placement, so it reads `explicit` (one space for an app
+ *     grant) unless the mover says which rung of the space ladder it applies
+ *     (the backfill: `project_home`); a move to no space drops it.
  * What NEVER moves: the entities and documents the session produced. They are
  * records with their own home (one space per domain); `move_entities` exists.
  *
@@ -27,12 +31,16 @@ import {
   ChannelMemberKind,
   ChannelScope,
   db,
+  drizzleSql,
   eq,
   and,
   focusSessions,
   getWorkspaceMembership,
+  SESSION_WORKSPACE_PLACEMENT_KEY,
   users,
+  workspacePlacementPatch,
   workspaces,
+  type SessionWorkspaceRung,
 } from "@synap/database";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { SESSION_ROOM_CONTEXT_TYPE } from "../../utils/channel-visibility.js";
@@ -124,12 +132,23 @@ export async function applySessionWorkspaceMove(
     sessionId: string;
     channelId: string | null;
     workspaceId: string | null;
+    /** The ladder rung this move applies. Default: a deliberate move. */
+    rung?: SessionWorkspaceRung;
   }
 ): Promise<void> {
   const { sessionId, channelId, workspaceId } = args;
   await tx
     .update(focusSessions)
-    .set({ workspaceId, updatedAt: new Date() })
+    .set({
+      workspaceId,
+      metadata: drizzleSql`(coalesce(${focusSessions.metadata}, '{}'::jsonb) - ${SESSION_WORKSPACE_PLACEMENT_KEY}) || ${JSON.stringify(
+        workspacePlacementPatch({
+          workspaceId,
+          rung: args.rung ?? "explicit",
+        })
+      )}::jsonb`,
+      updatedAt: new Date(),
+    })
     .where(eq(focusSessions.id, sessionId));
   if (channelId) {
     await tx

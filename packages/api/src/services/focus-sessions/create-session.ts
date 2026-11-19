@@ -21,6 +21,9 @@ import {
   conversationCwdPatch,
   recordSessionSpawn,
   resolveSessionProjectPlacement,
+  resolveSessionWorkspacePlacement,
+  workspacePlacementPatch,
+  type SessionWorkspaceRung,
   startedByAgentPatch,
   insertFocusSessionRow,
   sessionDefinitionColumns,
@@ -28,15 +31,20 @@ import {
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
+  gateAdmitsWorkspace,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
+import { applySessionWorkspaceMove } from "./move-session-workspace.js";
 import { canUserSeeChannel } from "../../utils/channel-visibility.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
-import { getAgentFocusProjectId } from "../agent-identity-service.js";
+import {
+  getAgentFocusProjectId,
+  getAgentFocusWorkspaceId,
+} from "../agent-identity-service.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import {
   collectPlaybookCriteria,
@@ -200,11 +208,18 @@ export const NO_CRITERIA_MESSAGE =
 export interface CreateFocusSessionParams {
   userId: string;
   /**
-   * Workspace the session belongs to. Optional — a session may instead be
-   * anchored to a project or live on the user floor. When null/undefined the governance membrane
-   * treats it as a personal resource and auto-grants (no membership needed).
+   * The space the caller pins the session to (rung 1 of the space ladder,
+   * `resolveSessionWorkspacePlacement`). Absent, the ladder places it from
+   * its chain (playbook, subject, parent, project home, agent focus); when no
+   * rung answers it stays null, a personal resource the membrane auto-grants.
    */
   workspaceId?: string | null;
+  /**
+   * With a `workspaceId` copied from another session: the rung that placed
+   * that session (`readWorkspacePlacementRung`), so the new one keeps its
+   * reach. Absent ⇒ the space is the caller's own pin (`explicit`).
+   */
+  workspaceRung?: SessionWorkspaceRung | null;
   projectId?: string | null;
   /**
    * The TRACK (`project_tracks`, 0272) this session is born inside — the
@@ -551,7 +566,7 @@ export async function createFocusSession(
 ): Promise<CreateFocusSessionResult> {
   const {
     userId,
-    workspaceId = null,
+    workspaceId: explicitWorkspaceId = null,
     projectId: explicitProjectId = null,
     trackId: requestedTrackId = null,
     subjectEntityId: explicitSubjectEntityId = null,
@@ -726,7 +741,9 @@ export async function createFocusSession(
       where: and(
         eq(focusSessions.correlationId, correlationId),
         eq(focusSessions.userId, userId),
-        ...(workspaceId ? [eq(focusSessions.workspaceId, workspaceId)] : [])
+        ...(explicitWorkspaceId
+          ? [eq(focusSessions.workspaceId, explicitWorkspaceId)]
+          : [])
       ),
     });
     if (existing) return { status: "created", session: existing };
@@ -792,6 +809,36 @@ export async function createFocusSession(
           : null,
     })
   ).projectId;
+
+  // SPACE — the session sits in a space read from its chain (W3, D1 a):
+  // explicit → the playbook's → the subject's → the parent's → the project's
+  // home → the agent's focus, a derived rung counting only where the actor
+  // may write (`resolve-session-workspace.ts`). Before the dedup and the
+  // membrane: the space is the session's governance home, and the twin check
+  // compares it.
+  const workspacePlacement = await resolveSessionWorkspacePlacement(db, {
+    userId,
+    explicitWorkspaceId,
+    explicitRung: params.workspaceRung ?? null,
+    playbookId: playbook?.id ?? null,
+    subjectEntityId,
+    parentSessionId,
+    projectId,
+    focusWorkspaceId: agentUserId
+      ? () => getAgentFocusWorkspaceId(agentUserId)
+      : undefined,
+    // The membrane's own membership check: a space it would not admit this
+    // start in is skipped, never turned into a join proposal or a denial.
+    mayPlaceIn: (candidate) =>
+      gateAdmitsWorkspace({
+        userId,
+        agentUserId,
+        workspaceId: candidate,
+        subjectType: "focus_session",
+        action: "create",
+      }),
+  });
+  const workspaceId = workspacePlacement.workspaceId;
 
   // GOAL INHERITANCE (structural plan S5, founder Q6): a sub-session is in its
   // parent's goal, written at creation on the same parent rung that gives it
@@ -1011,6 +1058,11 @@ export async function createFocusSession(
         : {}),
       ...(subjectEntityId ? { subjectEntityId } : {}),
       ...(channelId ? { channelId } : {}),
+      // Which rung placed it: the approval stamps it on the row as the direct
+      // insert does (`proposal.workspaceId` carries the space itself).
+      ...(workspacePlacement.workspaceId && workspacePlacement.rung
+        ? { workspacePlacement: workspacePlacement.rung }
+        : {}),
       // Sanitized BEFORE it is proposed, so the payload a human reviews is the
       // one that will be written — a proposal showing `attestedBy: "Antoine"`
       // is asking someone to approve a claim about themselves. The executor
@@ -1204,6 +1256,7 @@ export async function createFocusSession(
         .select({
           title: focusSessions.title,
           metadata: focusSessions.metadata,
+          workspaceId: focusSessions.workspaceId,
         })
         .from(focusSessions)
         .where(eq(focusSessions.id, adoptId))
@@ -1230,7 +1283,8 @@ export async function createFocusSession(
           // from the NEW goal (still `derived`, so the titler may improve it).
           // A title a person or agent chose is never touched.
           title: title ?? (adoptKeepsTitle ? undefined : derivedTitle),
-          workspaceId: workspaceId ?? undefined,
+          // Its space moves through THE move below (room and outputs with it).
+          workspaceId: undefined,
           projectId: projectId ?? undefined,
           subjectEntityId: subjectEntityId ?? undefined,
           ...(playbook ? { origin: "playbook" as const } : {}),
@@ -1243,6 +1297,7 @@ export async function createFocusSession(
               adoptedAt: new Date().toISOString(),
               ...(params.governance ? { governance: params.governance } : {}),
               ...playbookOptOutPatch(params.templateId),
+              ...workspacePlacementPatch(workspacePlacement),
               // What this run was actually given — same key, same meaning as
               // the run funnel's (`RUN_PARAMS_METADATA_KEY`). Only when a
               // playbook resolved; an ad-hoc session has no params to store.
@@ -1263,6 +1318,21 @@ export async function createFocusSession(
         )
         .returning();
       session = adopted;
+      // The start placed it elsewhere than the receipt's first write did:
+      // re-home the session, its room and its outputs together.
+      if (adopted && workspaceId && adoptee?.workspaceId !== workspaceId) {
+        await applySessionWorkspaceMove(tx, {
+          sessionId: adopted.id,
+          channelId: adopted.channelId,
+          workspaceId,
+          rung: workspacePlacement.rung ?? "explicit",
+        });
+        [session] = await tx
+          .select()
+          .from(focusSessions)
+          .where(eq(focusSessions.id, adopted.id))
+          .limit(1);
+      }
     }
     // Not adopting — or the auto-opened row went away since the lookup.
     const adopted = !!session;
@@ -1295,6 +1365,7 @@ export async function createFocusSession(
           ...startedByAgentPatch(agentUserId),
           ...(params.governance ? { governance: params.governance } : {}),
           ...playbookOptOutPatch(params.templateId),
+          ...workspacePlacementPatch(workspacePlacement),
           ...(title ? titleSourcePatch(agentUserId ? "agent" : "human") : {}),
           // @see the adopt branch above.
           ...(paramResolution
@@ -1565,7 +1636,6 @@ export async function createFocusSession(
           phase: "start",
           title: sessionOut.title ?? null,
           workspaceId: sessionOut.workspaceId ?? null,
-          projectId: sessionOut.projectId ?? null,
           subjectEntityId: sessionOut.subjectEntityId ?? null,
           parentSessionId,
         });

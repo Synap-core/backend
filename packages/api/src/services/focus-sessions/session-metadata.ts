@@ -2,6 +2,7 @@ import {
   drizzleSql,
   focusSessions,
   SESSION_STARTED_BY_AGENT_KEY,
+  SESSION_WORKSPACE_PLACEMENT_KEY,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
@@ -73,7 +74,9 @@ export const MESSAGE_WAKE_META_KEY = "messageWake";
  * did the thing: `triage` (also `acceptedBy`), `conversion` (the session →
  * object receipt), `recalled` (what the recall door posted) and the agent that
  * started it (`SESSION_STARTED_BY_AGENT_KEY` — a forged one hides handed work
- * from that agent's `handedToYou`, or shows it its own). A client or
+ * from that agent's `handedToYou`, or shows it its own), and the rung that
+ * placed it in its space (`SESSION_WORKSPACE_PLACEMENT_KEY` — a forged one
+ * would widen an app grant's reach over the session). A client or
  * agent metadata write never carries them
  * ({@link withoutServerOwnedSessionMetadata}).
  */
@@ -94,6 +97,7 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   "conversion",
   "recalled",
   SESSION_STARTED_BY_AGENT_KEY,
+  SESSION_WORKSPACE_PLACEMENT_KEY,
 ] as const;
 
 /** A client/agent metadata bag with every server-owned key dropped. Pure. */

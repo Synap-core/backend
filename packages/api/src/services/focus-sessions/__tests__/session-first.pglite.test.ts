@@ -83,6 +83,9 @@ const { permSpy } = vi.hoisted(() => ({
 vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: permSpy,
   proposedMessageFor: (_t: unknown, fallback: string) => fallback,
+  // The membrane's membership check, asked by the space ladder: the agent
+  // here is a member of no space, so the ladder places nothing.
+  gateAdmitsWorkspace: async () => false,
 }));
 vi.mock("../ensure-session-channel.js", () => ({
   ensureSessionChannel: vi.fn(async () => null),
@@ -1334,7 +1337,9 @@ describe("titleSource and the proposed template path", () => {
       playbookId: id,
       templateId: id,
     });
-    // No workspace for the executor's instantiate branch ⇒ legacy row.
+    // No workspace for the executor's instantiate branch ⇒ legacy row (the
+    // agent may not start work in the playbook's space, so the space ladder
+    // leaves the start in none).
     await createFocusSession({
       userId: USER,
       agentUserId: AGENT,
