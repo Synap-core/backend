@@ -85,6 +85,10 @@ import {
 import type { ExpectedOutput } from "@synap/playbooks";
 import { createFocusSession } from "../create-session.js";
 import { isOwedSlot, owedSlotWhere } from "../owed-outputs.js";
+import {
+  fileDeclaredGradeSlots,
+  reconcileGradeSlots,
+} from "../evaluations/record.js";
 
 const USER = "user-1";
 const AGENT = "agent-1";
@@ -188,6 +192,53 @@ describe("a grade declared up front is owed once its output is delivered (W5)", 
     // Now it is the person's move, in both halves.
     expect(isOwedSlot(grade!, delivered)).toBe(true);
     expect(await sqlOwes(id)).toBe(true);
+  });
+
+  it("is idempotent: a second run files no second slot and writes nothing", async () => {
+    const id = await start([GRADE]);
+    expect(await fileDeclaredGradeSlots(id)).toEqual([]);
+    const outputs = await outputsOf(id);
+    expect(outputs.filter((o) => o.kind === "criterion")).toHaveLength(1);
+    expect(
+      reconcileGradeSlots(outputs, [{ ...GRADE, check: { kind: "human" } }])
+    ).toBeNull();
+  });
+
+  it("a criterion REMOVED later leaves no owed slot: its grade is withdrawn", async () => {
+    const id = await start([GRADE]);
+    const delivered = (await outputsOf(id)).map((o) =>
+      o.key === "landing-copy" ? { ...o, status: "done" as const } : o
+    );
+    const next = reconcileGradeSlots(delivered, []);
+    expect(next).not.toBeNull();
+    const grade = next!.outputs.find((o) => o.kind === "criterion")!;
+    expect(grade).toMatchObject({ retiredReason: "withdrawn" });
+    // Delivered output, criterion gone: owed by nobody.
+    expect(isOwedSlot(grade, next!.outputs)).toBe(false);
+    // …through the real door too, on the stored row.
+    await h.client!.query(
+      `update focus_sessions set expected_outputs = $2::jsonb, criteria = '[]'::jsonb where id = $1`,
+      [id, JSON.stringify(delivered)]
+    );
+    await fileDeclaredGradeSlots(id);
+    expect(await sqlOwes(id)).toBe(false);
+  });
+
+  it("a criterion RE-POINTED later moves its grade to the new output", async () => {
+    const id = await start([GRADE]);
+    const outputs = [
+      ...(await outputsOf(id)).map((o) =>
+        o.key === "landing-copy" ? { ...o, status: "done" as const } : o
+      ),
+      { kind: "document", label: "Pricing copy", key: "pricing-copy" },
+    ] as ExpectedOutput[];
+    const next = reconcileGradeSlots(outputs, [
+      { ...GRADE, check: { kind: "human" }, outputKey: "pricing-copy" },
+    ]);
+    const grade = next!.outputs.find((o) => o.kind === "criterion")!;
+    expect(grade.outputKey).toBe("pricing-copy");
+    // The old output is done, the new one is not: the grade waits.
+    expect(isOwedSlot(grade, next!.outputs)).toBe(false);
   });
 
   it("CONTROL: a human criterion that names no output files no grade slot", async () => {
