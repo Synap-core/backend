@@ -14,6 +14,7 @@
  * Pure: no I/O. `readDesignCatalog` refuses a snapshot it cannot trust
  * (never "repairs" one into an empty catalog).
  */
+import { isUuid } from "../property-render/structured-value.js";
 import { GRID_PROPS } from "./grid.js";
 import type { CanvasSchema, FieldSpec, ItemFieldSpec } from "./schema.js";
 
@@ -138,4 +139,142 @@ export function readDesignCatalog(raw: unknown): ReadCatalogResult {
 /** The one schema a design is validated against: the canvas blocks and the kit's components. */
 export function catalogSchema(catalog: DesignCatalogSnapshot): CanvasSchema {
   return { ...catalog.layout, ...catalog.components };
+}
+
+// ─── A client app's kit (plan 0fc746f4 §3.1 K1, W6) ────────────────────────
+
+/**
+ * The `devplane_app` property naming the app's kit: a `file` entity holding
+ * the kit's catalog.json (`pnpm design:kit --publish` in a Website Factory
+ * app). Absent = the app is drawn with Synap's own kit.
+ */
+export const DESIGN_KIT_PROPERTY = "design-kit";
+
+/** One of the kit's two code files on the pod, pinned by its bytes' sha256. */
+export interface KitFileRef {
+  entityId: string;
+  sha256: string;
+  bytes: number;
+}
+
+/** The kit's two code files. */
+export type KitPart = "js" | "css";
+export const KIT_PARTS: readonly KitPart[] = ["js", "css"];
+
+/**
+ * A client app's catalog.json: the snapshot shape (its `layout` empty: the
+ * canvas's own blocks are Synap's, the pod adds them, {@link composeAppCatalog}),
+ * plus `kit` (the React major it was built against and its two files) and
+ * `canvas` (how a dropped block starts: the Design app's business, passed
+ * through as it is).
+ */
+export interface DesignKitCatalog extends DesignCatalogSnapshot {
+  kit: {
+    /** The React MAJOR the kit was built against ("19"): the Design app lends its own React. */
+    react: string;
+    files: Record<KitPart, KitFileRef>;
+    /** Where it was built (repo, sha), for people; never compared. */
+    build?: unknown;
+  };
+  canvas: { components: Record<string, unknown>; categories?: unknown };
+}
+
+export type ReadKitCatalogResult =
+  { ok: true; catalog: DesignKitCatalog } | { ok: false; error: string };
+
+const SHA256 = /^[0-9a-f]{64}$/;
+
+/**
+ * Read a client kit's catalog.json. Refuses what the snapshot reader refuses,
+ * plus: Synap's own kit id, canvas blocks declared by the kit, a component
+ * with no `canvas` entry, no React major, a code file without its id and
+ * sha256. Never "repairs" a kit into an empty one.
+ */
+export function readKitCatalog(raw: unknown): ReadKitCatalogResult {
+  const base = readDesignCatalog(raw);
+  if (!base.ok) return base;
+  const r = raw as Record<string, unknown>;
+  if (base.catalog.kitId === SYNAP_KIT_ID)
+    return {
+      ok: false,
+      error: `A client kit cannot be named "${SYNAP_KIT_ID}": that is Synap's own kit.`,
+    };
+  if (Object.keys(base.catalog.layout).length > 0)
+    return {
+      ok: false,
+      error:
+        "A client kit declares no canvas blocks (`layout` is empty): Section, Stack, Text… are Synap's, the pod adds them.",
+    };
+  if (Object.keys(base.catalog.components).length === 0)
+    return { ok: false, error: "The kit has no components." };
+  const canvas = r.canvas;
+  if (!isObj(canvas) || !isObj(canvas.components))
+    return { ok: false, error: "The kit's catalog has no `canvas` block." };
+  for (const name of Object.keys(base.catalog.components))
+    if (!isObj(canvas.components[name]))
+      return {
+        ok: false,
+        error: `The kit's canvas block has no entry for ${name}.`,
+      };
+  const kit = r.kit;
+  if (!isObj(kit) || typeof kit.react !== "string" || !/^\d+$/.test(kit.react))
+    return {
+      ok: false,
+      error: 'The kit names no React major (`kit.react`, e.g. "19").',
+    };
+  if (!isObj(kit.files))
+    return { ok: false, error: "The kit lists no code files (`kit.files`)." };
+  const files = {} as Record<KitPart, KitFileRef>;
+  for (const part of KIT_PARTS) {
+    const f = kit.files[part];
+    if (
+      !isObj(f) ||
+      typeof f.entityId !== "string" ||
+      !isUuid(f.entityId) ||
+      typeof f.sha256 !== "string" ||
+      !SHA256.test(f.sha256) ||
+      typeof f.bytes !== "number"
+    )
+      return {
+        ok: false,
+        error: `The kit's ${part} file is not published (kit.files.${part} needs entityId, sha256 and bytes): run \`pnpm design:kit --publish\`.`,
+      };
+    files[part] = { entityId: f.entityId, sha256: f.sha256, bytes: f.bytes };
+  }
+  return {
+    ok: true,
+    catalog: {
+      ...base.catalog,
+      kit: {
+        react: kit.react,
+        files,
+        ...(kit.build !== undefined ? { build: kit.build } : {}),
+      },
+      canvas: {
+        components: canvas.components,
+        ...(canvas.categories !== undefined
+          ? { categories: canvas.categories }
+          : {}),
+      },
+    },
+  };
+}
+
+/**
+ * The catalog a design of an app with a kit is validated against: the kit's
+ * components, Synap's canvas blocks (the same for every kit, plan D1). Its
+ * hash names both (`<kit>+<synap>`), so a refusal says which changed. A kit
+ * component named like a canvas block is refused, as in any snapshot.
+ */
+export function composeAppCatalog(
+  synap: DesignCatalogSnapshot,
+  kit: DesignKitCatalog
+): ReadCatalogResult {
+  return readDesignCatalog({
+    kitId: kit.kitId,
+    hash: `${kit.hash}+${synap.hash}`,
+    components: kit.components,
+    layout: synap.layout,
+    ...(kit.generatedAt ? { generatedAt: kit.generatedAt } : {}),
+  });
 }

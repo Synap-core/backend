@@ -48,22 +48,37 @@
  * `css`, `frame-md`, `od-design-system`), so it names the kit's version rather
  * than one rendering of it.
  *
- * The two TOKEN formats (`dtcg`, `synap-css`, see `synap-css.ts`) render the
- * brand's approved DTCG token set, not the kit, so their `hash` is cyrb53 over
- * the `dtcg` content: the same for both, naming the token set's version.
+ * The TOKEN formats (`dtcg`, `synap-css`, `css-shadcn`, see `synap-css.ts`
+ * and `shadcn-css.ts`) render the brand's approved DTCG token set, not the
+ * kit, so their `hash` is cyrb53 over the `dtcg` content: the same for all
+ * three, naming the token set's version.
  */
 
 export * from "./resolve.js";
 export * from "./open-design.js";
 export * from "./synap-css.js";
+export * from "./shadcn-css.js";
 import {
   renderOdDesignSystem,
   type OdDesignSystemOptions,
 } from "./open-design.js";
 import { renderDtcg, renderSynapCss } from "./synap-css.js";
+import { renderShadcnCss } from "./shadcn-css.js";
 
 export type BrandKitFormat =
-  "json" | "css" | "frame-md" | "od-design-system" | "dtcg" | "synap-css";
+  | "json"
+  | "css"
+  | "frame-md"
+  | "od-design-system"
+  | "dtcg"
+  | "synap-css"
+  | "css-shadcn";
+
+/** The formats that render the brand's approved DTCG token set (not the kit), hashed by that set. */
+export const BRAND_TOKEN_FORMATS = ["dtcg", "synap-css", "css-shadcn"] as const;
+export type BrandTokenFormat = (typeof BRAND_TOKEN_FORMATS)[number];
+export const isBrandTokenFormat = (f: BrandKitFormat): f is BrandTokenFormat =>
+  (BRAND_TOKEN_FORMATS as readonly string[]).includes(f);
 
 export const BRAND_KIT_FORMATS: readonly BrandKitFormat[] = [
   "json",
@@ -72,11 +87,12 @@ export const BRAND_KIT_FORMATS: readonly BrandKitFormat[] = [
   "od-design-system",
   "dtcg",
   "synap-css",
+  "css-shadcn",
 ];
 
 /** Options of `exportBrandKit`, each read by the format named. */
 export interface BrandKitExportOptions extends OdDesignSystemOptions {
-  /** `dtcg` / `synap-css`: the brand's approved DTCG token set, parsed. */
+  /** `dtcg` / `synap-css` / `css-shadcn`: the brand's approved DTCG token set, parsed. */
   dtcg?: Record<string, unknown>;
 }
 
@@ -88,7 +104,7 @@ export const BRAND_KIT_PROFILE_SLUGS = [
   "brand-asset",
   "brand-voice-guide",
   "brand-rule",
-  // Read only by `od-design-system`, `dtcg` and `synap-css` (tokens); never part of the kit input or its hash.
+  // Read only by `od-design-system` and the token formats (`dtcg`, `synap-css`, `css-shadcn`); never part of the kit input or its hash.
   "brand-token-set",
 ] as const;
 
@@ -538,9 +554,14 @@ export function exportBrandKit(
   format: BrandKitFormat,
   options: BrandKitExportOptions = {}
 ): BrandKitExport {
-  if (format === "dtcg" || format === "synap-css") {
+  if (isBrandTokenFormat(format)) {
     const file = renderDtcg(options.dtcg);
-    const content = format === "dtcg" ? file : renderSynapCss(options.dtcg);
+    const content =
+      format === "dtcg"
+        ? file
+        : format === "synap-css"
+          ? renderSynapCss(options.dtcg)
+          : renderShadcnCss(options.dtcg);
     return { format, content, hash: cyrb53(file) };
   }
   const kit = canonicalBrandKit(input);

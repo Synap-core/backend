@@ -964,6 +964,10 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // person's row): given to a key that reads some kind, the designs it
   // validates. Admitted when one live scope grants `entity.<some kind>.read`.
   [/^\/designs\/catalog\/?$/, NARROWED("entity", [])],
+  // An app's kit file (W6, `services/designs/app-kit.ts`): the app read
+  // through `entityReadVisibleWhere`, each file through `readableFileEntity`
+  // (`scopedDb`, the key's grant ANDed). Same admission as the catalog.
+  [/^\/designs\/kit\/?$/, NARROWED("entity", [])],
   [route("/designs/:id"), NARROWED("entity", [])],
   // THE PROCESS READ (one playbook whole, or a space's process cards): see
   // `PROCESS_READ` for the subjects it composes.

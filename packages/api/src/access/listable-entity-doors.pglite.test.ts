@@ -736,6 +736,8 @@ const WITHHELD_FILES: Record<string, string> = {
     "one person's LinkedIn reach: the person read by id (POST /channels/linkedin-reach/:personId)",
   "services/channels/person-channels.ts":
     "one person's channels: the person read by id (GET /entities/:id/channels)",
+  "services/designs/app-kit.ts":
+    "one app, by id (its design kit: design.catalog, GET /designs/kit)",
   "services/designs/design-door.ts":
     "one design, by id (design.read / design.apply, GET /designs/:id)",
   "services/diagnose/index.ts": "diagnose one object, by id",
