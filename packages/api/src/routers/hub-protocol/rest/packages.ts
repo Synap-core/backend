@@ -53,6 +53,7 @@ import {
 } from "../../../services/resolve-project-for-pack-install.js";
 import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
+
 import {
   getDb,
   sql,
@@ -83,6 +84,23 @@ import { templateDocumentsSchema } from "../../../schemas/template-document.js";
 import { appliedPackageVersion } from "../../../services/applied-package-version.js";
 import { layerTwoFailedSentence } from "../../../services/template-health.js";
 import { isPodAdmin } from "../../../utils/workspace-role.js";
+
+/**
+ * The key half of the engagement surface write (`projects.settings.layout`):
+ * a direct write on the project row is `project.update` where the project
+ * lives, under the calling key's grant (W1 review). null = allowed.
+ */
+function projectSurfaceGrantDenial(
+  projectId: string,
+  workspaceId: string | null
+): Promise<string | null> {
+  return grantWriteDenial({
+    subjectType: "project",
+    action: "update",
+    workspaceId,
+    data: { id: projectId },
+  });
+}
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
 
@@ -1024,12 +1042,10 @@ export function registerPackagesRoutes(app: HubHono): void {
             // A direct write on the project row: under a key's grant it is
             // `project.update` where the project lives (W1 review). Refused,
             // the install goes on without the surface and says so.
-            const denied = await grantWriteDenial({
-              subjectType: "project",
-              action: "update",
-              workspaceId: existing?.workspaceId ?? null,
-              data: { id: resolved.projectId },
-            });
+            const denied = await projectSurfaceGrantDenial(
+              resolved.projectId,
+              existing?.workspaceId ?? null
+            );
             if (denied) {
               result.projectSurfaceApplied = false;
               result.projectSurfaceWithheld = denied;

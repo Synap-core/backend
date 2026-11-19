@@ -95,6 +95,7 @@ const REL = {
   bpQ: randomUUID(), // E.q  --belongs_to_project--> Q
   inside: randomUUID(), // E.p --related_to--> E.p2 (both in P)
   outside: randomUUID(), // E.p --related_to--> E.n (one end out)
+  bpPerson: randomUUID(), // PERSON --belongs_to_project--> P
 };
 const SESS = { p: randomUUID(), q: randomUUID(), n: randomUUID() };
 const CH = {
@@ -192,7 +193,7 @@ beforeAll(async () => {
     `insert into entities (id, type, user_id, workspace_id) values ($1,'person',$2,null)`,
     [PERSON, ALICE]
   );
-  await rel(randomUUID(), PERSON, P, "belongs_to_project");
+  await rel(REL.bpPerson, PERSON, P, "belongs_to_project");
   await rel(REL.outside, E.p, E.n, "related_to");
   await q(
     `insert into focus_sessions (id, user_id, workspace_id, project_id, channel_id, goal, status) values
@@ -274,7 +275,7 @@ const inP = (permission: string): GrantScope => ({
 
 describe("a scope pinned to project P reads the rows IN P (W1)", () => {
   const cases: Array<[string, object, unknown, string, string[]]> = [
-    ["entities", entities, entities.id, "entity.read", [E.p, E.p2]],
+    ["entities", entities, entities.id, "entity.read", [E.p, E.p2, PERSON]],
     [
       "documents (a body follows its entity)",
       documents,
@@ -287,7 +288,7 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
       relations,
       relations.id,
       "relation.read",
-      [REL.bpP, REL.bpP2, REL.inside],
+      [REL.bpP, REL.bpP2, REL.bpPerson, REL.inside],
     ],
     [
       "focus_sessions",
@@ -605,7 +606,6 @@ describe("a non-create write is placed by its STORED row, never the door's proje
   const P_KEY: GrantScope = {
     permissions: [
       "view.update",
-      "profile.renderer.set",
       "profile.update",
       "track.update",
       "proposal.reject",

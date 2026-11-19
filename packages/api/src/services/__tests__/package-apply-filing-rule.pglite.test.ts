@@ -81,6 +81,10 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
+  // The `uses` edge insert names this index (`createLink` onConflict).
+  await q(
+    `create unique index if not exists idx_links_unique_edge on links (from_type, from_id, to_type, to_id, link_type)`
+  );
   await q(`insert into users (id, email, user_type) values ($1,'a@x','human')`, [
     ALICE,
   ]);
@@ -132,7 +136,8 @@ describe("package apply: an app grant files nothing into a project (W1 filing ru
 
   it("CONTROL — the person's own apply (no grant) files the space's records", async () => {
     const result = await apply();
-    expect(result.projectLink).toMatchObject({ status: "linked" });
+    // The whole receipt on a miss: an `error` names its cause.
+    expect(JSON.stringify(result.projectLink)).toContain('"status":"linked"');
     expect((await filed()).sort()).toEqual([...RECORDS].sort());
   });
 });
