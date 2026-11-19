@@ -1430,9 +1430,33 @@ describe("LinkedIn reach: HELD when filed, released on connected, and recorded o
     expect(row.status).toBe("pending");
     expect(row.data).toMatchObject({
       body: "Hello Marie",
-      held: { errorClass: "missing_field", reason: held.reason },
+      held: {
+        errorClass: "missing_field",
+        missing: "profile",
+        reason: held.reason,
+      },
     });
     expect(getProfile).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("a profile on file that LinkedIn gives no id for: filed HELD (missing_field, missing provider_id), its own next step; nothing sent", async () => {
+    profileSays({
+      providerId: "",
+      networkDistance: "FIRST_DEGREE",
+      connection: "connected",
+      relationRequest: null,
+    });
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ success: false, proposed: true });
+    const row = await heldOf(out.proposalId as string);
+    expect(row.status).toBe("pending");
+    expect(row.data).toMatchObject({
+      held: { errorClass: "missing_field", missing: "provider_id" },
+    });
+    expect((row.data.held as { reason: string }).reason).toMatch(
+      /No Linkedin id on file/i
+    );
     expect(startChat).not.toHaveBeenCalled();
   });
 

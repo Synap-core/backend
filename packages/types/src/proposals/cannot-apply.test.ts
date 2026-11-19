@@ -29,6 +29,24 @@ describe("cannotApplyYet: a held message, as the pod reads it", () => {
     ).toEqual({ reason: "no_profile", held: true, until: null });
   });
 
+  it("no LinkedIn id for the profile on file (missing_field, missing provider_id) reads as no_provider_id, with its own line", () => {
+    expect(
+      cannotApplyYet(
+        heldSend({ errorClass: "missing_field", missing: "provider_id" }),
+        NOW
+      )
+    ).toEqual({ reason: "no_provider_id", held: true, until: null });
+    expect(
+      cannotApplyYet(
+        heldSend({ errorClass: "missing_field", missing: "profile" }),
+        NOW
+      )?.reason
+    ).toBe("no_profile");
+    expect(cannotApplyYetLine("no_provider_id", "en")).not.toBe(
+      cannotApplyYetLine("no_profile", "en")
+    );
+  });
+
   it("a hold written before its class was stored reads as not_connected", () => {
     expect(cannotApplyYet(heldSend({}), NOW)?.reason).toBe("not_connected");
   });

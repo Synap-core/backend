@@ -427,12 +427,14 @@ async function executeChannelSend(args: {
           result.errorClass === "missing_field" &&
           result.providerRef?.toLowerCase() === "linkedin"
         ) {
-          // No LinkedIn profile on file for them: only the person can add
-          // it, so the send waits for it, kept (plan 8032a127 D1).
+          // No LinkedIn profile (or id) on file for them: only the person
+          // can fix their record, so the send is kept, held (plan 8032a127
+          // D1); it goes out on an approval after the record is fixed.
           heldRecord = heldSend(
             result.error ?? "No LinkedIn profile on file.",
             new Date(),
-            "missing_field"
+            "missing_field",
+            result.missing
           );
         }
         return {

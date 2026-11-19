@@ -22,11 +22,14 @@
  *     READ (LinkedIn down) files as before and is checked again at dispatch;
  *     an unknown reach is never "not connected".
  *   - `missing_field`: a LinkedIn first message to someone with no LinkedIn
- *     profile on file (no URL, public identifier or LinkedIn id). Only the
- *     person can add it (plan 8032a127 D1: hold what only the person can
- *     unblock), so the draft is kept, never refused. The approval re-reads
- *     the reach live, so once the profile is on file it goes out (or holds
- *     as `not_connected`); recording them connected releases it too.
+ *     profile on file (no URL, public identifier or LinkedIn id; `missing:
+ *     "profile"`), or whose profile on file gave no LinkedIn id (`missing:
+ *     "provider_id"`). Only the person can fix their record (plan 8032a127
+ *     D1: hold what only the person can unblock), so the draft is kept, never
+ *     refused. Adding the profile does NOT release it: the person approves
+ *     the message again, and that approval re-reads the reach live (it sends,
+ *     or holds again, e.g. as `not_connected`). Recording them connected
+ *     releases it (`releaseHeldSends`).
  *   - `linkedin_limit`: the sending LinkedIn account used today's limit, or
  *     LinkedIn paused it for the day (`linkedin-account-limits.ts`). Held
  *     until `until` (the next UTC midnight): from then it reads as not held
@@ -60,6 +63,8 @@ const SEND_TYPE = "messaging.external.send";
 /** Why a pending send cannot go out yet, on `proposals.data.held`. */
 export interface HeldSend {
   errorClass: "not_connected" | "missing_field" | "linkedin_limit";
+  /** `missing_field` only: what is missing (`ChannelSendRefusal.missing`). */
+  missing?: "profile" | "provider_id";
   /** The sentence that names the next step ("Ask to connect first."). */
   reason: string;
   /** When the pod last found it unreachable (ISO). */
@@ -72,9 +77,15 @@ export interface HeldSend {
 export function heldSend(
   reason: string,
   now: Date = new Date(),
-  errorClass: "not_connected" | "missing_field" = "not_connected"
+  errorClass: "not_connected" | "missing_field" = "not_connected",
+  missing?: "profile" | "provider_id"
 ): HeldSend {
-  return { errorClass, reason, at: now.toISOString() };
+  return {
+    errorClass,
+    ...(errorClass === "missing_field" && missing ? { missing } : {}),
+    reason,
+    at: now.toISOString(),
+  };
 }
 
 /**
@@ -91,12 +102,17 @@ export function readHeld(
   const h = held as Record<string, unknown>;
   if (typeof h.reason !== "string" || typeof h.at !== "string") return null;
   if (h.errorClass !== "linkedin_limit") {
-    return {
-      errorClass:
-        h.errorClass === "missing_field" ? "missing_field" : "not_connected",
-      reason: h.reason,
-      at: h.at,
-    };
+    if (h.errorClass === "missing_field") {
+      return {
+        errorClass: "missing_field",
+        ...(h.missing === "profile" || h.missing === "provider_id"
+          ? { missing: h.missing }
+          : {}),
+        reason: h.reason,
+        at: h.at,
+      };
+    }
+    return { errorClass: "not_connected", reason: h.reason, at: h.at };
   }
   const until = typeof h.until === "string" ? Date.parse(h.until) : NaN;
   if (Number.isNaN(until) || until <= now.getTime()) return null;

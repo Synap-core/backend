@@ -110,30 +110,51 @@ export async function createEventBackedProposal(
     }
   }
 
-  const { correlationId, requestedEvent, data } =
-    await buildRequestedEventAndData(input);
-
-  const proposal = await createPendingProposal({
-    userId: input.userId,
-    workspaceId: input.workspaceId ?? null,
+  // CAN IT APPLY? The one filing check (`can-apply.ts`), asked BEFORE the
+  // `.requested` event: a proposal its approval would refuse leaves no event
+  // behind it. The refusal is thrown as the 400 it is.
+  const { proposalCannotApply, ProposalCannotApplyError } =
+    await import("../services/proposals/can-apply.js");
+  const cannotApply = await proposalCannotApply({
     targetType: input.targetType,
     targetId: input.targetId,
     proposalType: input.proposalType,
-    data,
-    agentUserId: input.agentUserId,
-    createdBy: input.createdBy,
-    threadId: input.threadId,
-    commandRunId: input.commandRunId,
-    sourceMessageId: input.sourceMessageId,
+    data: input.data,
+    userId: input.userId,
+    workspaceId: input.workspaceId ?? null,
+    agentUserId: input.agentUserId ?? null,
     sessionId: input.sessionId ?? null,
-    sessionSource: input.sessionSource,
-    projectId: input.projectId ?? null,
-    expiresAt: input.expiresAt,
-    ...(input.governanceReason
-      ? { governanceReason: input.governanceReason }
-      : {}),
-    notificationDescription: input.summary,
   });
+  if (cannotApply) throw new ProposalCannotApplyError(cannotApply);
+
+  const { correlationId, requestedEvent, data } =
+    await buildRequestedEventAndData(input);
+
+  const proposal = await createPendingProposal(
+    {
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? null,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      proposalType: input.proposalType,
+      data,
+      agentUserId: input.agentUserId,
+      createdBy: input.createdBy,
+      threadId: input.threadId,
+      commandRunId: input.commandRunId,
+      sourceMessageId: input.sourceMessageId,
+      sessionId: input.sessionId ?? null,
+      sessionSource: input.sessionSource,
+      projectId: input.projectId ?? null,
+      expiresAt: input.expiresAt,
+      ...(input.governanceReason
+        ? { governanceReason: input.governanceReason }
+        : {}),
+      notificationDescription: input.summary,
+    },
+    undefined,
+    { canApplyAsked: true }
+  );
 
   return { proposal, requestedEvent, correlationId };
 }

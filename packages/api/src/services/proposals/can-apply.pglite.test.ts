@@ -9,14 +9,15 @@
  * against each other rather than against a mock.
  *
  * Kinds covered here: `command/execute` (the materializer's
- * `commandPolicyRefusal`) and `focus_session/update` (the approval's
- * `detectServerStampedWrites`), both in the request envelope every
- * `checkPermissionOrPropose` door stores. The recipe run is the seam test
- * `execute-capability.recipe-at-filing.test.ts`; that a read which fails
- * files as before is `can-apply.test.ts`.
+ * `commandPolicyRefusal`), `focus_session/update` (the approval's
+ * `detectServerStampedWrites`) and `playbook/create` (the definition check,
+ * read unmocked: a `subjectProfile` that names no profile), all in the
+ * request envelope every `checkPermissionOrPropose` door stores. The recipe
+ * run is the seam test `execute-capability.recipe-at-filing.test.ts`; that a
+ * read which fails files as before is `can-apply.test.ts`.
  *
- * NOT covered: `createProposal`'s mapping of the refusal to the gate's
- * `{ denied }` (held by tripwire `filing-and-approval-share-the-check`).
+ * `createProposal`'s mapping of the refusal to the gate's `{ denied }` is
+ * `utils/permission-check.can-apply.real-gate.pglite.test.ts`.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -171,6 +172,30 @@ describe("the one filing check, at createPendingProposal", () => {
       }),
     });
     expect(await rowsFor(sessionId)).toBe(1);
+  });
+
+  it("a playbook whose subject kind names no profile is refused when filed: the definition check's NOT_FOUND, read unmocked, NO row", async () => {
+    const targetId = randomUUID();
+    const err = await createPendingProposal({
+      userId: "human-1",
+      workspaceId: WS,
+      targetType: "playbook",
+      targetId,
+      proposalType: "create",
+      data: envelope("playbook", "create", {
+        name: "Qualify a lead",
+        goalTemplate: "Qualify the lead",
+        stages: [],
+        subjectProfile: { profileSlug: "no-such-kind" },
+      }),
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProposalCannotApplyError);
+    expect(err).toMatchObject({
+      code: "BAD_REQUEST",
+      reasonCode: "INVALID_PLAYBOOK",
+      message: expect.stringContaining('Unknown profile: "no-such-kind"'),
+    });
+    expect(await rowsFor(targetId)).toBe(0);
   });
 
   it("a kind with no entry is filed as before", async () => {

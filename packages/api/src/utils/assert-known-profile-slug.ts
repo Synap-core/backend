@@ -50,6 +50,26 @@ type ProfileSlugDb = Parameters<typeof profileSlugRows>[0];
  * above. The two predicate entries are ONE implementation (the slug-taking one
  * is `profileSlugRows` + delegate) and a unit test pins their SQL identical.
  */
+/**
+ * The refusal {@link assertKnownProfileSlug} throws: a NOT_FOUND naming the
+ * slug. Its own class so a caller can tell "this slug names nothing" from any
+ * other NOT_FOUND (the filing check refuses a playbook on it, `can-apply.ts`).
+ */
+export class UnknownProfileSlugError extends TRPCError {
+  readonly profileSlug: string;
+  constructor(profileSlug: string) {
+    super({
+      code: "NOT_FOUND",
+      message:
+        `Unknown profile: "${profileSlug}". No profile with this slug exists in ` +
+        `this pod, so this query can never match. List the available vocabulary ` +
+        `(profiles.list / list_profiles) and use a slug from it.`,
+    });
+    this.name = "UnknownProfileSlugError";
+    this.profileSlug = profileSlug;
+  }
+}
+
 export async function assertKnownProfileSlug(
   db: ProfileSlugDb,
   profileSlug: string
@@ -57,11 +77,5 @@ export async function assertKnownProfileSlug(
   const rows = await profileSlugRows(db, profileSlug);
   if (rows.length > 0) return rows;
 
-  throw new TRPCError({
-    code: "NOT_FOUND",
-    message:
-      `Unknown profile: "${profileSlug}". No profile with this slug exists in ` +
-      `this pod, so this query can never match. List the available vocabulary ` +
-      `(profiles.list / list_profiles) and use a slug from it.`,
-  });
+  throw new UnknownProfileSlugError(profileSlug);
 }

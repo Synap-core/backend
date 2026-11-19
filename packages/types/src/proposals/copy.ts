@@ -56,7 +56,9 @@ export const en = {
   "proposals.cannotApplyYet.not_connected":
     "Not one of your LinkedIn connections yet. It can go once they accept your connection request.",
   "proposals.cannotApplyYet.no_profile":
-    "No LinkedIn profile on file for this person. Add their LinkedIn URL to their record, then send it.",
+    "No LinkedIn profile on file for this person. Add their LinkedIn URL to their record, then approve the message.",
+  "proposals.cannotApplyYet.no_provider_id":
+    "LinkedIn gave no id for the profile on file. Check the LinkedIn URL on this person’s record, then approve the message.",
   "proposals.cannotApplyYet.daily_limit":
     "Your LinkedIn account reached today’s limit. It can go tomorrow.",
   "proposals.cannotApplyYet.needs_setup":
@@ -104,7 +106,9 @@ export const fr: Catalog<typeof en> = {
   "proposals.cannotApplyYet.not_connected":
     "Cette personne ne fait pas encore partie de vos relations LinkedIn. Le message pourra partir dès qu’elle aura accepté votre invitation.",
   "proposals.cannotApplyYet.no_profile":
-    "Aucun profil LinkedIn enregistré pour cette personne. Ajoutez son URL LinkedIn à sa fiche, puis envoyez-le.",
+    "Aucun profil LinkedIn enregistré pour cette personne. Ajoutez son URL LinkedIn à sa fiche, puis approuvez le message.",
+  "proposals.cannotApplyYet.no_provider_id":
+    "LinkedIn n’a donné aucun identifiant pour le profil enregistré. Vérifiez l’URL LinkedIn sur la fiche de cette personne, puis approuvez le message.",
   "proposals.cannotApplyYet.daily_limit":
     "Votre compte LinkedIn a atteint sa limite du jour. Le message pourra partir demain.",
   "proposals.cannotApplyYet.needs_setup":

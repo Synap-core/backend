@@ -7,10 +7,12 @@
  * Two sources, both READ here, never written:
  *   - `data.held`, stored by the pod on a message it filed instead of sending
  *     (`services/channels/held-sends.ts`): not a LinkedIn connection yet
- *     (`not_connected`), no LinkedIn profile on file (`missing_field`), or the
- *     LinkedIn account's day is used up (`linkedin_limit`, until `until`). The
- *     pod re-reads the reach at every approval and releases a hold when they
- *     connect.
+ *     (`not_connected`), no LinkedIn profile on file (`missing_field`), no
+ *     LinkedIn id for the profile on file (`missing_field` with `missing:
+ *     "provider_id"`), or the LinkedIn account's day is used up
+ *     (`linkedin_limit`, until `until`). The pod re-reads the reach at every
+ *     approval and releases a hold when they connect; a fixed record is read
+ *     by the next approval (no release of its own).
  *   - `setup`, derived by the pod on every read of an install request
  *     (`services/proposals/proposal-setup.ts`): `blocking` while a required
  *     key or connection is missing. Its form is the setup's own; this only
@@ -29,6 +31,7 @@ import { proposalsT } from "./copy.js";
 export const CANNOT_APPLY_YET_REASONS = [
   "not_connected",
   "no_profile",
+  "no_provider_id",
   "daily_limit",
   "needs_setup",
 ] as const;
@@ -86,7 +89,9 @@ export function cannotApplyYet(
       typeof held.at === "string"
     ) {
       const reason: CannotApplyYetReason =
-        HELD_REASON[String(held.errorClass)] ?? "not_connected";
+        held.errorClass === "missing_field" && held.missing === "provider_id"
+          ? "no_provider_id"
+          : (HELD_REASON[String(held.errorClass)] ?? "not_connected");
       if (reason !== "daily_limit") return { reason, held: true, until: null };
       const until = typeof held.until === "string" ? held.until : null;
       const ends = until ? Date.parse(until) : NaN;

@@ -4047,13 +4047,18 @@ export async function createPendingProposal(
    * the caller's transaction and notifications are SKIPPED here — the caller must
    * invoke notifyProposalCreated() AFTER the tx commits (see createProposal).
    */
-  tx?: DbTx
+  tx?: DbTx,
+  /**
+   * `canApplyAsked`: the caller asked the one filing check itself, before
+   * the event it writes first (`createEventBackedProposal`).
+   */
+  opts: { canApplyAsked?: true } = {}
 ) {
   // Public shape unchanged (returns the row) so the many simple callers stay
   // as-is; they still benefit transparently from the SSOT's dedup guard (they
   // get the existing row back, no duplicate). Only createProposal needs the
   // `deduped` signal — it uses createPendingProposalRow directly.
-  const { proposal } = await createPendingProposalRow(input, tx);
+  const { proposal } = await createPendingProposalRow(input, tx, opts);
   return proposal;
 }
 

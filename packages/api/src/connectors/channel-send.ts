@@ -378,6 +378,13 @@ export interface ChannelSendRefusal {
   error: string;
   errorClass: FailureErrorClass;
   providerRef?: string;
+  /**
+   * `missing_field` only, what is missing: `profile` = nothing to look them
+   * up by (no URL, public identifier or id on their record); `provider_id` =
+   * no provider id for them (the profile lookup returned none, or there is no
+   * lookup and none is on file).
+   */
+  missing?: "profile" | "provider_id";
 }
 
 /** How the message goes out: into the chat, or by starting it. */
@@ -431,6 +438,7 @@ export async function readChannelReach(args: {
         error: `No ${humanizeToken(provider)} profile on file for ${name}.`,
         errorClass: "missing_field",
         providerRef: provider,
+        missing: "profile",
       };
     }
     const profile = await connector.getProfile(accountId, lookup);
@@ -482,6 +490,7 @@ export async function readChannelReach(args: {
       error: `No ${humanizeToken(provider)} id on file for ${name}.`,
       errorClass: "missing_field",
       providerRef: provider,
+      missing: "provider_id",
     };
   }
   return { ok: true, attendee };
@@ -535,7 +544,8 @@ const HELD_AT_FILING: ReadonlySet<string> = new Set([
  * (`readChannelReach`).
  *
  * Two refusals hold here: `not_connected`, and `missing_field` (no LinkedIn
- * profile on file for them: only the person can add it, plan 8032a127 D1).
+ * profile on file for them, or no LinkedIn id for the one on file: only the
+ * person can fix their record, plan 8032a127 D1; `missing` says which).
  * Everything else files as before, and the dispatch check still holds: a
  * channel with a chat (it continues), another provider, no account to read
  * with, and a read that FAILED (LinkedIn or Unipile down): an unread reach is

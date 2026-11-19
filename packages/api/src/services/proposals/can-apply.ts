@@ -27,9 +27,20 @@
  *     duplicate door files it with `duplicateCheck`) and every kind with no
  *     entry.
  *
- * An entry reads the pod's own database only: it runs inside the filing
- * transaction of `createProposal`. A read that FAILS files as before (an
- * entry that throws is logged and filed): never refuse on a fact not read.
+ * An entry reads the pod's own database only. `createProposal` and
+ * `createEventBackedProposal` ask it BEFORE their transaction and their
+ * `.requested` event; `createPendingProposalRow` asks it for every other
+ * caller, inside the caller's transaction when there is one (`reader`). A
+ * read that FAILS files as before (an entry that throws is logged and filed):
+ * never refuse on a fact not read.
+ *
+ * Doors that file WITHOUT this check (they insert through
+ * `insertPendingProposal` in @synap/jobs, which cannot import @synap/api):
+ *   - `playbook-lessons-scanner.ts` files `playbook/update` (a stage-lessons
+ *     revision built from the stored playbook, never an agent's definition);
+ *   - `automation-governance.ts` (`checkAutomationWriteOrPropose`) files an
+ *     automation's write of any kind; a slot list on a session update is
+ *     checked by `fileableExpectedOutputs` before it.
  *
  * Keyed like the approve executors (`execution-registry.ts`): the exact
  * `${targetType}/${proposalType}`, then the bare `proposalType`.
@@ -85,13 +96,19 @@ async function playbookRefusal(
 ): Promise<CanApplyRefusal | null> {
   const { assertRevisedPlaybookPayload } =
     await import("../../routers/playbooks.js");
+  const { UnknownProfileSlugError } =
+    await import("../../utils/assert-known-profile-slug.js");
   try {
     await assertRevisedPlaybookPayload(changeType, payload);
     return null;
   } catch (err) {
-    // A refusal is the definition check's BAD_REQUEST; anything else is a
-    // read that failed, and files as before.
-    if (err instanceof TRPCError && err.code === "BAD_REQUEST") {
+    // A refusal is the definition check's BAD_REQUEST, or its NOT_FOUND for a
+    // `subjectProfile` naming no kind (`UnknownProfileSlugError`, only that
+    // shape); anything else is a read that failed, and files as before.
+    if (
+      (err instanceof TRPCError && err.code === "BAD_REQUEST") ||
+      err instanceof UnknownProfileSlugError
+    ) {
       return { reasonCode: "INVALID_PLAYBOOK", message: err.message };
     }
     throw err;

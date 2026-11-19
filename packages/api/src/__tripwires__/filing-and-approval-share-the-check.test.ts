@@ -27,14 +27,19 @@ import ts from "typescript";
  *      `recipeRunRefusalAtFiling`, and it calls the check.
  *   3. THE ONE FILING CHECK (`can-apply.ts`, plan 8032a127 D1). The door
  *      that inserts every API-filed pending row, `createPendingProposalRow`,
- *      calls `proposalCannotApply` before `insertPendingProposal` (a caller
- *      that asked it itself, before its transaction, files with
- *      `canApplyAsked`: `createProposal`); a revision
- *      asks it too (`checkRevisedPayload`), and no door-local copy is left
- *      (`REVISED_PAYLOAD_VALIDATORS`, `executeCapability`'s own recipe call).
- *      Every entry of its table is DERIVED from the source and must name the
- *      function its approval runs (`APPROVAL_TWINS` below): an entry with no
- *      proven twin goes red, so a new kind joins by existing.
+ *      calls `proposalCannotApply` before `insertPendingProposal`. A caller
+ *      that asked it itself files with `canApplyAsked`; every such call in
+ *      the api sources is DERIVED, and the function holding it must ask the
+ *      check first (`createProposal`, before its transaction;
+ *      `createEventBackedProposal`, before its `.requested` event). A
+ *      revision asks it too (`checkRevisedPayload`), and no door-local copy
+ *      is left (`REVISED_PAYLOAD_VALIDATORS`, `executeCapability`'s own
+ *      recipe call). Every entry of its table is DERIVED from the source and
+ *      must name the function its approval runs (`APPROVAL_TWINS` below): an
+ *      entry with no proven twin goes red, so a new kind joins by existing.
+ *      The playbook twin is read in the `create` and `update` PROCEDURE
+ *      bodies of `playbooksRouter` (what the approval replays), not anywhere
+ *      in the file: the filing side's own call sits in the same file.
  *
  * Behaviour is proven elsewhere (`fileable-expected-outputs.test.ts`,
  * governance-seams M5b, `focus-sessions.patch-stamps.test.ts`,
@@ -46,7 +51,9 @@ import ts from "typescript";
  * a filing door whose `data` gets `expectedOutputs` through a spread of a
  * variable (`...patch`), which no literal shows; the executor link is checked
  * per FILE (`executors/focus-session.ts` calls `applyOutputMutations`), not
- * per function; a call guarded by a condition that is never true.
+ * per function; a call guarded by a condition that is never true; a
+ * `canApplyAsked` passed through a variable (`createPendingProposal` forwards
+ * its own `opts`), which no literal shows.
  */
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -82,6 +89,7 @@ const EXECUTE_CAPABILITY = join(
 
 const CAN_APPLY = join(API_SRC, "services", "proposals", "can-apply.ts");
 const PERMISSION_CHECK = join(API_SRC, "utils", "permission-check.ts");
+const EVENT_BACKED = join(API_SRC, "utils", "event-backed-proposal.ts");
 const PROPOSALS_SERVICE = join(
   API_SRC,
   "services",
@@ -168,6 +176,36 @@ function namedFunction(sf: ts.SourceFile, name: string): FnNode {
       found = n.initializer;
   });
   if (!found) throw new Error(`${sf.fileName}: no function ${name}`);
+  return found;
+}
+
+/**
+ * The initializer of procedure `proc` in `const <routerName> = router({ … })`
+ * (`create: workspaceProcedure.input(…).mutation(…)`).
+ */
+function routerProcedure(
+  sf: ts.SourceFile,
+  routerName: string,
+  proc: string
+): ts.Node {
+  let found: ts.Node | null = null;
+  walk(sf, (n) => {
+    if (
+      found ||
+      !ts.isVariableDeclaration(n) ||
+      !ts.isIdentifier(n.name) ||
+      n.name.text !== routerName ||
+      !n.initializer ||
+      !ts.isCallExpression(n.initializer)
+    )
+      return;
+    const obj = n.initializer.arguments[0];
+    if (!obj || !ts.isObjectLiteralExpression(obj)) return;
+    for (const p of obj.properties)
+      if (ts.isPropertyAssignment(p) && p.name.getText() === proc)
+        found = p.initializer;
+  });
+  if (!found) throw new Error(`${sf.fileName}: no ${routerName}.${proc}`);
   return found;
 }
 
@@ -411,7 +449,8 @@ describe("filing and approval share the check", () => {
         calls: string;
         callsIn: string;
         shared: string;
-        approval: { file: string; fn?: string };
+        /** `fn`: a function of the file; `procedure`: of `playbooksRouter`. */
+        approval: { file: string; fn?: string; procedure?: string };
       }
     > = {
       "capability.run": {
@@ -424,13 +463,13 @@ describe("filing and approval share the check", () => {
         calls: "assertRevisedPlaybookPayload",
         callsIn: PLAYBOOKS_ROUTER,
         shared: "assertPlaybookDefinitionWritable",
-        approval: { file: PLAYBOOKS_ROUTER },
+        approval: { file: PLAYBOOKS_ROUTER, procedure: "create" },
       },
       "playbook/update": {
         calls: "assertRevisedPlaybookPayload",
         callsIn: PLAYBOOKS_ROUTER,
         shared: "assertPlaybookDefinitionWritable",
-        approval: { file: PLAYBOOKS_ROUTER },
+        approval: { file: PLAYBOOKS_ROUTER, procedure: "update" },
       },
       "command/execute": {
         calls: "commandPolicyRefusal",
@@ -446,13 +485,25 @@ describe("filing and approval share the check", () => {
       },
     };
 
-    /** `callee` is called by `fn` of `file`, or anywhere in `file`. */
-    function reaches(file: string, fn: string | undefined, callee: string) {
-      if (fn) return calls(file, fn, callee);
+    /**
+     * `callee` is called by `fn` of `file`, inside the `procedure` of the
+     * file's `playbooksRouter`, or anywhere in `file`.
+     */
+    function reaches(
+      file: string,
+      approval: { fn?: string; procedure?: string },
+      callee: string
+    ) {
+      if (approval.fn) return calls(file, approval.fn, callee);
       let hit = false;
-      walk(parse(file), (n) => {
-        if (ts.isCallExpression(n) && calleeName(n) === callee) hit = true;
-      });
+      walk(
+        approval.procedure
+          ? routerProcedure(parse(file), "playbooksRouter", approval.procedure)
+          : parse(file),
+        (n) => {
+          if (ts.isCallExpression(n) && calleeName(n) === callee) hit = true;
+        }
+      );
       return hit;
     }
 
@@ -493,23 +544,38 @@ describe("filing and approval share the check", () => {
       expect(check).toBeLessThan(insert);
     });
 
-    it("a caller that files with `canApplyAsked` asked the check itself first (createProposal, before its transaction)", () => {
-      const sf = parse(PERMISSION_CHECK);
-      const skips: Array<{ fn: FnNode | null; at: number }> = [];
-      const visit = (n: ts.Node, fn: FnNode | null): void => {
-        const inner = isFn(n) ? n : fn;
-        if (
-          ts.isCallExpression(n) &&
-          calleeName(n) === "createPendingProposalRow" &&
-          n.arguments[2] &&
-          /canApplyAsked/.test(n.arguments[2].getText())
-        )
-          skips.push({ fn: inner, at: n.getStart() });
-        n.forEachChild((c) => visit(c, inner));
-      };
-      visit(sf, null);
-      // Non-vacuity: createProposal's call is seen.
-      expect(skips.length).toBeGreaterThanOrEqual(1);
+    it("a caller that files with `canApplyAsked` asked the check itself first (createProposal, createEventBackedProposal)", () => {
+      const skips: Array<{ fn: FnNode | null; at: number; where: string }> =
+        [];
+      for (const file of sources(API_SRC)) {
+        const text = readFileSync(file, "utf8");
+        if (!text.includes("canApplyAsked")) continue;
+        const sf = parse(file);
+        const visit = (n: ts.Node, fn: FnNode | null): void => {
+          const inner = isFn(n) ? n : fn;
+          if (
+            ts.isCallExpression(n) &&
+            ["createPendingProposalRow", "createPendingProposal"].includes(
+              calleeName(n) ?? ""
+            ) &&
+            n.arguments
+              .slice(1)
+              .some((a) => /canApplyAsked/.test(a.getText()))
+          )
+            skips.push({
+              fn: inner,
+              at: n.getStart(),
+              where: relative(API_SRC, file),
+            });
+          n.forEachChild((c) => visit(c, inner));
+        };
+        visit(sf, null);
+      }
+      // Non-vacuity: both callers that ask the check themselves are seen.
+      expect([...new Set(skips.map((s) => s.where))].sort()).toEqual([
+        "utils/event-backed-proposal.ts",
+        "utils/permission-check.ts",
+      ]);
       const unasked = skips.filter((s) => {
         // The call sits in the transaction's callback: ask of the function
         // that opens it, the outermost function holding the call.
@@ -531,12 +597,24 @@ describe("filing and approval share the check", () => {
         });
         return asked < 0 || asked > s.at;
       });
-      expect(unasked).toEqual([]);
-      const createProposal = namedFunction(sf, "createProposal");
+      expect(unasked.map((s) => s.where)).toEqual([]);
+      const createProposal = namedFunction(
+        parse(PERMISSION_CHECK),
+        "createProposal"
+      );
       const asked = firstCallAt(createProposal, "proposalCannotApply");
       const tx = firstCallAt(createProposal, "transaction");
       expect(asked).toBeGreaterThan(0);
       expect(asked).toBeLessThan(tx);
+      // createEventBackedProposal asks it before the `.requested` event.
+      const eventBacked = namedFunction(
+        parse(EVENT_BACKED),
+        "createEventBackedProposal"
+      );
+      const checked = firstCallAt(eventBacked, "proposalCannotApply");
+      const event = firstCallAt(eventBacked, "buildRequestedEventAndData");
+      expect(checked).toBeGreaterThan(0);
+      expect(checked).toBeLessThan(event);
     });
 
     it("a revision asks the same check, and no revise-only copy is left", () => {
@@ -574,9 +652,9 @@ describe("filing and approval share the check", () => {
           !calls(twin.callsIn, twin.calls, twin.shared)
         )
           problems.push(`${key}: ${twin.calls} does not call ${twin.shared}`);
-        if (!reaches(twin.approval.file, twin.approval.fn, twin.shared))
+        if (!reaches(twin.approval.file, twin.approval, twin.shared))
           problems.push(
-            `${key}: the approval (${relative(API_SRC, twin.approval.file)}${twin.approval.fn ? ` ${twin.approval.fn}` : ""}) does not call ${twin.shared}`
+            `${key}: the approval (${relative(API_SRC, twin.approval.file)}${twin.approval.fn ? ` ${twin.approval.fn}` : ""}${twin.approval.procedure ? ` ${twin.approval.procedure}` : ""}) does not call ${twin.shared}`
           );
       }
       expect(problems).toEqual([]);
@@ -586,6 +664,27 @@ describe("filing and approval share the check", () => {
       const replays = readFileSync(PLAYBOOK_EXECUTOR, "utf8");
       expect(replays).toMatch(/playbookCaller\.create\(/);
       expect(replays).toMatch(/playbookCaller\.update\(/);
+    });
+
+    it("self-check: the procedure scan reads one procedure's body, not its sibling's", () => {
+      const sf = ts.createSourceFile(
+        "sample.ts",
+        `const playbooksRouter = router({
+           create: p.mutation(async () => { await shared(); }),
+           update: p.mutation(async () => { await other(); }),
+         });`,
+        ts.ScriptTarget.Latest,
+        true
+      );
+      const seen = (proc: string) => {
+        let hit = false;
+        walk(routerProcedure(sf, "playbooksRouter", proc), (n) => {
+          if (ts.isCallExpression(n) && calleeName(n) === "shared") hit = true;
+        });
+        return hit;
+      };
+      expect(seen("create")).toBe(true);
+      expect(seen("update")).toBe(false);
     });
 
     it("self-check: the entry scan sees a literal sample's keys and calls", () => {
