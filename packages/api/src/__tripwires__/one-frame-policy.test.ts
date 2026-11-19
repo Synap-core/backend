@@ -36,7 +36,11 @@
  *      (`packages/types/src/cell-bridge/`, `frame-scripts.ts`). No string
  *      literal outside it contains `importmap`, `createObjectURL(new Blob`,
  *      `__synapOnHostMessage` or `synap:ready`: a host that spelled one
- *      would be building a second frame runtime. Read from the TypeScript
+ *      would be building a second frame runtime. The leaf's own files are
+ *      exempt BY NAME (`RUNTIME_FILES`, and `FRAME_LEAF_FILES` for rule 2),
+ *      never as a directory: a new file in `cell-bridge/` that writes a frame
+ *      or a runtime mark is red like any other, and an exempt file that no
+ *      longer holds what exempts it is red too (a stale exemption). Read from the TypeScript
  *      AST (string and template literals only), so a host that CALLS
  *      `URL.createObjectURL(new Blob(...))` in its own code (a download, a
  *      rendered SVG) is not a frame runtime and is not flagged. It cannot
@@ -66,9 +70,26 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
 const LEAF = "packages/types/src/cell-bridge/frame.ts";
-/** The leaf directory: the page frame (`frame.ts`) and the module frame (`module-frame.ts`). */
 const LEAF_DIR = "packages/types/src/cell-bridge/";
+/** The leaf files that write a frame (rule 2): the page frame and the module frame. */
+const FRAME_LEAF_FILES = new Set(
+  ["frame.ts", "module-frame.ts"].map((f) => LEAF_DIR + f)
+);
 const FRAME_RUNTIME = "packages/types/src/cell-bridge/frame-scripts.ts";
+/**
+ * The leaf files that spell a runtime mark in a literal (rule 5): the runtime,
+ * the SDKs it ships into the frame, the module frame that boots on init, and
+ * the message parser and host that read `synap:ready`.
+ */
+const RUNTIME_FILES = new Set(
+  [
+    "frame-scripts.ts",
+    "frame-sdks.ts",
+    "module-frame.ts",
+    "messages.ts",
+    "frame-host.ts",
+  ].map((f) => LEAF_DIR + f)
+);
 /** What only the one frame runtime spells, inside a string literal. */
 const RUNTIME_MARKS = [
   "importmap",
@@ -191,7 +212,7 @@ describe("tripwire: one frame policy, no CDN, taken by every frame host", () => 
     files.map(({ abs, rel }) => [rel, readFileSync(abs, "utf8")])
   );
   const hosts = [...text.keys()].filter(
-    (rel) => !rel.startsWith(LEAF_DIR) && FRAME_HOST.test(text.get(rel)!)
+    (rel) => !FRAME_LEAF_FILES.has(rel) && FRAME_HOST.test(text.get(rel)!)
   );
   const runners = [...text.keys()].filter(
     (rel) => rel !== LEAF && /\bwrapHtmlForFrame\s*\(/.test(text.get(rel)!)
@@ -201,6 +222,19 @@ describe("tripwire: one frame policy, no CDN, taken by every frame host", () => 
     expect(text.has(LEAF)).toBe(true);
     expect(hosts).toContain(POD_ADMIN_FRAME);
     expect(runners).toContain(POD_ADMIN_FRAME);
+  });
+
+  it("the leaf is exempt by name, and each exempt file still holds what exempts it", () => {
+    for (const rel of FRAME_LEAF_FILES)
+      expect(
+        FRAME_HOST.test(text.get(rel) ?? ""),
+        `${rel} writes a frame`
+      ).toBe(true);
+    for (const rel of RUNTIME_FILES)
+      expect(
+        runtimeMarks(rel, text.get(rel) ?? ""),
+        `${rel} spells a runtime mark`
+      ).not.toEqual([]);
   });
 
   it("the page policy names no origin: no script CDN, no font, style or image host", () => {
@@ -275,7 +309,7 @@ describe("tripwire: one frame policy, no CDN, taken by every frame host", () => 
       runtimeMarks("x.ts", "const s = `tag.type = 'importmap';`;")
     ).toEqual(['x.ts:1: "importmap"']);
     const outside = [...text.keys()]
-      .filter((rel) => !rel.startsWith(LEAF_DIR))
+      .filter((rel) => !RUNTIME_FILES.has(rel))
       .flatMap((rel) => runtimeMarks(rel, text.get(rel)!));
     expect(outside).toEqual([]);
   });

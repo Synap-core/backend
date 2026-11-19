@@ -75,13 +75,28 @@ export interface RendererBundleDefinition {
   bundleApi: typeof RENDERER_BUNDLE_API;
   /** The React version every module was built against. */
   reactVersion: string;
-  /** sha256 over the whole host-module set. */
+  /** sha256 of `rendererSetDigestText` over the host modules' sha256s. */
   setSha256: string;
   /** Every name the kit exports. */
   kitExports: string[];
   hostModules: RendererBundleHostModules;
   cells: RendererBundleCell[];
   defaults: RendererBundleDefaults;
+}
+
+/**
+ * The exact text whose sha256 is a host-module set's identity (`setSha256`):
+ * one line `"<module> <sha256>\n"` per host module, sorted by module name
+ * (JavaScript's default sort). The bundle build (app-bases
+ * `build-renderer-bundle.mjs`, `rendererSetSha256`) and the pod's install
+ * hash THIS text; it lives here so neither spells the formula alone. Pure:
+ * the caller hashes it (node crypto, Web Crypto).
+ */
+export function rendererSetDigestText(hashes: Record<string, string>): string {
+  return Object.keys(hashes)
+    .sort()
+    .map((name) => `${name} ${hashes[name]}\n`)
+    .join("");
 }
 
 /** One reason a definition is refused, with where it is. */
@@ -154,6 +169,7 @@ export function validateRendererBundleDefinition(
   if (!kitExports) add("kitExports", "kitExports must be a list of names.");
 
   const modules = d.hostModules;
+  const hasKit = isRecord(modules) && modules.kit !== undefined;
   if (!isRecord(modules)) add("hostModules", "hostModules is missing.");
   else {
     for (const name of [...REQUIRED_MODULES, ...OPTIONAL_MODULES]) {
@@ -182,7 +198,8 @@ export function validateRendererBundleDefinition(
     }
   }
 
-  const keys = new Set<string>();
+  /** Each cell by its key (the first cell that holds a key). */
+  const keys = new Map<string, Record<string, unknown>>();
   if (!Array.isArray(d.cells) || d.cells.length === 0)
     add("cells", "A bundle has at least one cell.");
   else {
@@ -199,7 +216,7 @@ export function validateRendererBundleDefinition(
         );
       else if (keys.has(cell.key))
         add(`${path}.key`, `"${cell.key}" is used by another cell.`);
-      else keys.add(cell.key);
+      else keys.set(cell.key, cell);
       if (!text(cell.name)) add(`${path}.name`, "The name is missing.");
       if (!text(cell.contentKind))
         add(`${path}.contentKind`, "The content kind is missing.");
@@ -213,6 +230,11 @@ export function validateRendererBundleDefinition(
         add(`${path}.minSize`, "minSize must be whole w and h.");
       if (!isStringList(cell.kitImports))
         add(`${path}.kitImports`, "kitImports must be a list of names.");
+      else if (cell.kitImports.length > 0 && !hasKit)
+        add(
+          `${path}.kitImports`,
+          "The cell imports the kit, and the bundle has no kit module."
+        );
       else if (kitExports) {
         const unknown = cell.kitImports.filter((n) => !kitExports.has(n));
         if (unknown.length > 0)
@@ -239,19 +261,38 @@ export function validateRendererBundleDefinition(
   const defaults = d.defaults;
   if (!isRecord(defaults)) add("defaults", "defaults is missing.");
   else {
-    const names = (key: unknown, path: string) => {
+    /** A default names a cell of the bundle that draws its slot. */
+    const names = (
+      key: unknown,
+      path: string,
+      draws: (cell: Record<string, unknown>) => boolean,
+      slot: string
+    ) => {
       if (key === undefined) return;
-      if (typeof key !== "string" || !keys.has(key))
-        add(path, `"${String(key)}" is not a cell of this bundle.`);
+      const cell = typeof key === "string" ? keys.get(key) : undefined;
+      if (!cell) add(path, `"${String(key)}" is not a cell of this bundle.`);
+      else if (!draws(cell)) add(path, `"${key}" does not draw ${slot}.`);
     };
-    names(defaults["entity-card"], "defaults.entity-card");
-    names(defaults["entity-detail"], "defaults.entity-detail");
+    for (const slot of ["entity-card", "entity-detail"] as const)
+      names(
+        defaults[slot],
+        `defaults.${slot}`,
+        (cell) => cell.contentKind === slot,
+        `the ${slot} slot`
+      );
     if (defaults.views !== undefined) {
       if (!isRecord(defaults.views))
         add("defaults.views", "views must map a view type to a cell.");
       else
         for (const [viewType, key] of Object.entries(defaults.views))
-          names(key, `defaults.views.${viewType}`);
+          names(
+            key,
+            `defaults.views.${viewType}`,
+            (cell) =>
+              Array.isArray(cell.viewTypes) &&
+              cell.viewTypes.includes(viewType),
+            `the ${viewType} view`
+          );
     }
     for (const name of Object.keys(defaults)) {
       if (!["entity-card", "entity-detail", "views"].includes(name))

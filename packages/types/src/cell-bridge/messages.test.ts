@@ -66,6 +66,28 @@ describe("the module frame's messages", () => {
     );
   });
 
+  it("navigate opens https URLs only: javascript:, data: and http: are refused", () => {
+    const nav = (url: string) =>
+      parseCellFrameMessage({
+        type: "synap:navigate",
+        target: { type: "url", url },
+      });
+    expect(nav("https://example.com/a?b=1")).toEqual({
+      type: "synap:navigate",
+      target: { type: "url", url: "https://example.com/a?b=1" },
+    });
+    for (const url of [
+      "javascript:alert(1)",
+      "JavaScript:alert(1)",
+      "data:text/html,<script>alert(1)</script>",
+      "http://example.com",
+      "//example.com",
+      "not a url",
+      `https://example.com/${"x".repeat(2048)}`,
+    ])
+      expect(nav(url), url).toBe(null);
+  });
+
   it("a toast's level is info unless it says error", () => {
     expect(
       parseCellFrameMessage({

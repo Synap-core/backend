@@ -1,9 +1,11 @@
 /**
  * The renderer-bundle definition's pure check (`validateRendererBundleDefinition`).
  */
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   RENDERER_BUNDLE_MAX_MODULE_BYTES,
+  rendererSetDigestText,
   validateRendererBundleDefinition,
   type RendererBundleDefinition,
 } from "./index.js";
@@ -118,5 +120,78 @@ describe("validateRendererBundleDefinition", () => {
       "defaults.views.board",
       "defaults.collection",
     ]);
+  });
+
+  it("a default must name a cell that draws its slot", () => {
+    const d = bundle();
+    d.cells.push({
+      key: "detail",
+      name: "Detail",
+      code: "export default function D() { return null; }",
+      sha256: SHA,
+      contentKind: "entity-detail",
+      kitImports: [],
+    });
+    // Each default names a real cell, of the wrong slot.
+    d.defaults = {
+      "entity-card": "detail",
+      "entity-detail": "entity-card",
+      views: { board: "board", table: "board", gallery: "entity-card" },
+    };
+    expect(validateRendererBundleDefinition(d)).toEqual([
+      {
+        path: "defaults.entity-card",
+        message: '"detail" does not draw the entity-card slot.',
+      },
+      {
+        path: "defaults.entity-detail",
+        message: '"entity-card" does not draw the entity-detail slot.',
+      },
+      {
+        path: "defaults.views.table",
+        message: '"board" does not draw the table view.',
+      },
+      {
+        path: "defaults.views.gallery",
+        message: '"entity-card" does not draw the gallery view.',
+      },
+    ]);
+  });
+
+  it("a cell that imports the kit needs the kit module", () => {
+    const d = bundle();
+    delete d.hostModules.kit;
+    d.cells[1]!.kitImports = [];
+    expect(validateRendererBundleDefinition(d)).toEqual([
+      {
+        path: "cells[0].kitImports",
+        message: "The cell imports the kit, and the bundle has no kit module.",
+      },
+    ]);
+  });
+});
+
+describe("rendererSetDigestText (what setSha256 hashes)", () => {
+  it("one line per module, sorted by name: a fixed vector", () => {
+    const h = (c: string) => c.repeat(64);
+    const text = rendererSetDigestText({
+      tokensCss: h("6"),
+      reactDomClient: h("5"),
+      react: h("3"),
+      kit: h("2"),
+      reactDom: h("4"),
+      jsxRuntime: h("1"),
+    });
+    expect(text).toBe(
+      `jsxRuntime ${h("1")}\n` +
+        `kit ${h("2")}\n` +
+        `react ${h("3")}\n` +
+        `reactDom ${h("4")}\n` +
+        `reactDomClient ${h("5")}\n` +
+        `tokensCss ${h("6")}\n`
+    );
+    expect(createHash("sha256").update(text, "utf8").digest("hex")).toBe(
+      "7d6b29b997caf12b40c34dd273169797afbe782e5dc150757ad28ff5611e39c9"
+    );
   });
 });

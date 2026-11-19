@@ -90,10 +90,24 @@ function parseTarget(v: unknown): CellFrameNavigationTarget | null {
     target.id = v.id;
   }
   if (v.url !== undefined) {
-    if (typeof v.url !== "string" || v.url.length > 2048) return null;
+    if (!isHttpsUrl(v.url)) return null;
     target.url = v.url;
   }
   return target;
+}
+
+/**
+ * A URL a frame may ask the host to open: `https:` only, at most 2048
+ * characters. `javascript:`, `data:`, `http:` and anything that does not
+ * parse are refused, so a host that opens it can never run or downgrade it.
+ */
+function isHttpsUrl(v: unknown): v is string {
+  if (typeof v !== "string" || v.length > 2048) return false;
+  try {
+    return new URL(v).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 /** A frame message, validated, or null. */
