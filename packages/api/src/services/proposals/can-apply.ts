@@ -106,8 +106,9 @@ async function playbookRefusal(
     // `subjectProfile` naming no kind (`UnknownProfileSlugError`, only that
     // shape); anything else is a read that failed, and files as before.
     if (
+      // NEGATIVE CONTROL: the unknown-slug NOT_FOUND is no longer a refusal.
       (err instanceof TRPCError && err.code === "BAD_REQUEST") ||
-      err instanceof UnknownProfileSlugError
+      (err instanceof UnknownProfileSlugError && false)
     ) {
       return { reasonCode: "INVALID_PLAYBOOK", message: err.message };
     }
