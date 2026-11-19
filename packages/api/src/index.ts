@@ -552,6 +552,7 @@ export { registerGoalLoopReactor } from "./services/tracks/goal-loop-reactor.js"
 export { holdResumeFollowUp } from "./services/lifecycle/hold-resume-follow-up.js";
 export { meetOutcomesReactionEffect } from "./services/reactions/meet-outcomes-effect.js";
 export { reachStageStatusReactionEffect } from "./services/reactions/reach-stage-status-effect.js";
+export { advanceStageReactionEffect } from "./services/reactions/advance-stage-effect.js";
 export {
   listReactionRules,
   type ReactionRuleView,

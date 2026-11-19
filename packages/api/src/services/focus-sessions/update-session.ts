@@ -198,6 +198,13 @@ export interface UpdateFocusSessionParams {
   progress?: number;
   currentStage?: string;
   /**
+   * With `currentStage`: the stage the caller READ (null: none). A session
+   * whose step moved meanwhile — a step advances by itself once its work is
+   * met (W6) — answers `conflict` (`stage_stale`) and nothing is written.
+   * Absent, the move is still a compare-and-set on the stage this door read.
+   */
+  expectedStage?: string | null;
+  /**
    * With `currentStage`: who works the stage being entered, named for THIS
    * entry (the stage runner's first rung, spec 7111934d §2.4). `"self"` = the
    * caller's run agent does it. An agent naming another agent goes through
@@ -312,10 +319,49 @@ export interface UpdateFocusSessionParams {
   followStageKey?: string | null;
 }
 
+/** A stale step move (`expectedStage` no longer holds): nothing was written. */
+export interface StageConflictResult {
+  status: "conflict";
+  conflict: {
+    reason: "stage_stale";
+    /** The stage the caller said it saw. */
+    expectedStage: string | null;
+    /** The stage the session stands on now — re-plan from this. */
+    currentStage: string | null;
+  };
+  message: string;
+}
+
+function stageConflict(
+  expectedStage: string | null,
+  currentStage: string | null
+): StageConflictResult {
+  return {
+    status: "conflict",
+    conflict: { reason: "stage_stale", expectedStage, currentStage },
+    message: `The step moved meanwhile: you expected "${expectedStage ?? "none"}", it is now "${currentStage ?? "none"}". Nothing was changed — re-read it and decide again.`,
+  };
+}
+
+/** The stale step inside an error the write threw (`SessionStageConflictError`), or null. */
+function stageConflictOf(err: unknown): StageConflictResult | null {
+  const e = err as {
+    code?: unknown;
+    expectedStage?: unknown;
+    actualStage?: unknown;
+  } | null;
+  if (!e || e.code !== "STAGE_STALE") return null;
+  return stageConflict(
+    typeof e.expectedStage === "string" ? e.expectedStage : null,
+    typeof e.actualStage === "string" ? e.actualStage : null
+  );
+}
+
 export type UpdateFocusSessionResult =
   | { status: "not_found" }
   /** A stale move (`expectedStatus` no longer holds): nothing was written. */
   | LifecycleConflictResult
+  | StageConflictResult
   | {
       status: "denied";
       reason: string;
@@ -2142,6 +2188,14 @@ export async function updateFocusSession(
       new LifecycleConflictError(params.expectedStatus, existing.status)
     )!;
   }
+  // A stale step: the caller decided on a stage the session left (W6).
+  if (
+    params.currentStage !== undefined &&
+    params.expectedStage !== undefined &&
+    params.expectedStage !== (existing.currentStage ?? null)
+  ) {
+    return stageConflict(params.expectedStage, existing.currentStage ?? null);
+  }
   const reopening = closedRunRefusal(existing.status, params.status);
   if (reopening) return { status: "denied", reason: reopening };
   // WHEN and WHAT IT WAITS ON (W4), refused before anything is filed; the
@@ -2439,6 +2493,33 @@ export async function updateFocusSession(
       params.currentStage
     );
     if (undeclared) return { status: "denied", reason: undeclared.reason };
+  }
+
+  // BACK OVER A STEP THAT MOVED BY ITSELF (W6): a step advances on its own
+  // once its work is met, so an agent moving the session BACK without saying
+  // which stage it read could undo that move unseen. Refused unless the
+  // agent names `expectedStage` (then the compare-and-set decides).
+  if (
+    agentUserId &&
+    params.currentStage !== undefined &&
+    params.expectedStage === undefined &&
+    existing.currentStage
+  ) {
+    const { loadSessionProcess } =
+      await import("@synap/jobs/utils/session-process.js");
+    const proc = await loadSessionProcess({
+      sessionId: existing.id,
+      playbookId: existing.playbookId,
+    });
+    const order = (proc?.stages ?? []).map((st) => st?.key);
+    const from = order.indexOf(existing.currentStage);
+    const to = order.indexOf(params.currentStage);
+    if (from >= 0 && to >= 0 && to < from) {
+      return {
+        status: "denied",
+        reason: `Moving the step back (from "${existing.currentStage}" to "${params.currentStage}") needs expectedStage: the stage you read. A step moves on by itself once its work is met.`,
+      };
+    }
   }
 
   // TRACK FILING (adopt into a step) — resolved BEFORE the membrane for the
@@ -2931,11 +3012,16 @@ export async function updateFocusSession(
         hold: params.hold,
         occurredAt: params.occurredAt ? new Date(params.occurredAt) : null,
         expectedStatus: params.expectedStatus ?? null,
+        // A step move is a compare-and-set on the stage this door read, so
+        // a step that advanced by itself meanwhile is never jumped (W6).
+        ...(params.currentStage !== undefined
+          ? { expectedStage: existing.currentStage ?? null }
+          : {}),
       });
     })
     .catch((err: unknown) => {
       // Moved between the read above and the write: the same conflict.
-      const stale = lifecycleConflictOf(err);
+      const stale = lifecycleConflictOf(err) ?? stageConflictOf(err);
       if (stale) return stale;
       throw err;
     });

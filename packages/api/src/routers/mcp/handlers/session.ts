@@ -1877,6 +1877,10 @@ export const sessionHandlers: McpHandlerMap = {
       ...moveHoldToolArgs(args),
       progress: args.progress as number | undefined,
       currentStage: args.currentStage as string | undefined,
+      // The stage the agent SAW (compare-and-set, W6): a string or null.
+      ...(typeof args.expectedStage === "string" || args.expectedStage === null
+        ? { expectedStage: args.expectedStage as string | null }
+        : {}),
       ...(args.stageRunner !== undefined
         ? { stageRunner: args.stageRunner as PlaybookRunner | null }
         : {}),

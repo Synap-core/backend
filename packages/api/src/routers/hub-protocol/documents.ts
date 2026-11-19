@@ -64,6 +64,7 @@ import {
   holdsAskDefinition,
   materializeAskDefinitions,
 } from "../../services/document-patch/materialize-asks.js";
+import { askNudgeFor } from "../../services/document-patch/ask-nudge.js";
 import { diagnoseHtmlPage } from "../../services/document-patch/document-diagnostics.js";
 import {
   podDocumentScopeFloor,
@@ -356,7 +357,18 @@ export const documentsRouter = router({
         ...(slotClaimWarning ? [slotClaimWarning] : []),
         ...pageWarnings,
       ];
-      const receiptWarnings = warnings.length > 0 ? { warnings } : {};
+      // A question for the person written as prose, with no ask block in the
+      // document: one advisory line, never a refusal (`ask-nudge.ts`).
+      const nudge =
+        actingAgent &&
+        !input.url &&
+        normalizeDocumentType(input.type, "markdown") === "markdown"
+          ? askNudgeFor([input.content ?? ""])
+          : null;
+      const receiptWarnings = {
+        ...(warnings.length > 0 ? { warnings } : {}),
+        ...(nudge ? { nudge } : {}),
+      };
 
       if ("proposalId" in perm) {
         // Not auto-approved: content is stored in proposal JSONB.

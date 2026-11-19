@@ -79,6 +79,8 @@ const PRESERVES: Record<string, string> = {
     "`expectedOutputs:` is the orchestrator's slots handed to `createFocusSession`, which keys them (`insertFocusSessionRow`); its `setSessionStatus` pauses the picked sessions and never sets expected_outputs",
   "services/playbooks/stage-gate.ts":
     "`expectedOutputs:` is the READ input of the track check gate's outcome projection (`projectSessionOutcomes`); its `.update(focusSessions)` never sets expected_outputs",
+  "services/focus-sessions/evaluations/evaluate.ts":
+    "`expectedOutputs:` is the READ input of the session check gate's stage reading (`checkGateFailing`, W6); its `setSessionStatus` resumes the session and never sets expected_outputs",
 };
 
 function walk(dir: string, out: string[] = []): string[] {

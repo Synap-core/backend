@@ -95,7 +95,9 @@ export function reactionViaWords(r: ReactionDeclaration): string {
     case "run_session":
       return "the session the run drives";
     case "slot_stage":
-      return "the stage that owes the outcome, once every outcome it owes is in, and that session's thing";
+      return r.do.effect === "advance_stage"
+        ? "the session, once every outcome of the step it stands on is met,"
+        : "the stage that owes the outcome, once every outcome it owes is in, and that session's thing";
     case "relation": {
       const parent = parentEnd(r)?.name.toLowerCase() ?? "thing";
       const rel = (r.declaredOn?.relationName ?? r.via.relation).toLowerCase();
@@ -115,6 +117,8 @@ export function reactionDoWords(r: ReactionDeclaration): string {
       return "pauses and waits on you until you answer";
     case "reach_stage_status":
       return "moves to the status that stage reaches when its work is approved";
+    case "advance_stage":
+      return "moves on to its next step, unless a person gates that step";
     case "roll_up": {
       const to = r.do.to
         ? `moves to ${r.do.to.replace(/_/g, " ")}`
