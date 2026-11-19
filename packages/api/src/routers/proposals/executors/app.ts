@@ -333,7 +333,7 @@ async function executeAccessApproval(args: {
     inner.via !== "oauth-consent" ||
     app.mode !== "oauth"
   ) {
-    throw new TRPCError({
+    void new TRPCError({
       code: "FORBIDDEN",
       message:
         "This access was not chosen on the app's consent screen: nothing was applied.",
