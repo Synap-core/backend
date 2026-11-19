@@ -364,6 +364,8 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_reasons" jsonb NOT NULL DEFAULT '{}'::jsonb;
 -- 0379: the permissions it asks for pod-wide (`synap_requests[].scope = "pod"`).
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_pod_wide" text[] NOT NULL DEFAULT '{}';
+-- 0437: the entries that list their kinds (`synap_requests[].kinds`), as declared.
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_kind_groups" jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,

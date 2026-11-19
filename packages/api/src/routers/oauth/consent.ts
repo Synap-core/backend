@@ -50,9 +50,11 @@ import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 import {
   connectOAuthApp,
   currentOAuthApproval,
+  kindGroupOf,
   oauthAppOffer,
   oauthAppPodWideKinds,
   oauthAppPodWideOffer,
+  type OAuthAppKindGroup,
   type OAuthAppOfferItem,
 } from "../../services/app-connect.js";
 import { podAppMayConnect } from "../../services/pod-app-policy.js";
@@ -673,7 +675,9 @@ export interface OAuthAppConsent {
   homepage: string | null;
   /**
    * Each permission the app asked for AND declared, with the spaces this
-   * person may give it in (`oauthAppOffer`). An empty list means the person
+   * person may give it in (`oauthAppOffer`), with its kinds group (F4) and
+   * the projects it may be given in (W3c: offered only, nothing mints a
+   * project grant yet). An empty list means the person
    * has no space to give that permission in. `reason`: the document's own
    * `synap_requests[].reason` (display text, `displayReason`), or null —
    * the developer's words, shown as text, never a reason to trust the app.
@@ -684,8 +688,15 @@ export interface OAuthAppConsent {
    * = "pod"`, decision e1b59d38 "B"): each a read of one named kind, one tick
    * each, shown in their own section. Ticked, each is sent as
    * `{ permission, workspaceId: null }`. Never also in `permissions`.
+   * `kindGroup`: the entry it was declared in when that entry listed its
+   * kinds (F4), else null; items that share one draw as ONE row ("Records:
+   * N kinds"), as in `permissions`.
    */
-  podWide: Array<{ permission: string; reason: string | null }>;
+  podWide: Array<{
+    permission: string;
+    reason: string | null;
+    kindGroup: OAuthAppKindGroup | null;
+  }>;
   /** What this person approved for this app before (re-consent pre-ticks it). */
   approved: AppApprovedRequest[];
   /**
@@ -964,7 +975,14 @@ export async function getOAuthConsentContext(
     req.client.requestedPodWide ?? []
   );
   const perSpace = permissions.filter((p) => !podWide.includes(p));
-  const offer = await oauthAppOffer(callerUserId, perSpace);
+  // The screen's offer also carries each item's kinds group (F4: one row
+  // "Records: N kinds") and the projects it may be given in (W3c). A copy
+  // cached before 0437 has no grouping: its kinds show one per row.
+  const kindGroups = req.client.requestedKindGroups ?? [];
+  const offer = await oauthAppOffer(callerUserId, perSpace, {
+    kindGroups,
+    projects: true,
+  });
   const ask = resolveConsentAsk(params.synapAsk, offer);
   return {
     ...base,
@@ -984,6 +1002,7 @@ export async function getOAuthConsentContext(
       podWide: podWide.map((permission) => ({
         permission,
         reason: reasonFor(req.client, permission),
+        kindGroup: kindGroupOf(permission, kindGroups),
       })),
       approved: await currentOAuthApproval(callerUserId, req.client.clientId),
       templates: req.client.requestedTemplates ?? [],

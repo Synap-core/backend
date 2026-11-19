@@ -49,6 +49,7 @@ import {
   apps,
   oauthAuthorizationCodes,
   profiles,
+  projects,
   users,
   webhookSubscriptions,
   workspaceMembers,
@@ -56,6 +57,7 @@ import {
   KEY_PREFIXES,
   isPodWideReadPermission,
   type AppApprovedRequest,
+  type RequestedKindGroup,
 } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
@@ -95,6 +97,8 @@ import { isSynapApp, type PodAppActsAs } from "../routers/oauth/config.js";
 import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
 import { assertPresencePass, type PresencePass } from "./presence/pass.js";
+import { AccessContext } from "../access/context.js";
+import { projectVisibleWhere } from "../access/project-visibility.js";
 import {
   appAccessWithin,
   assertNeverPlace,
@@ -104,11 +108,13 @@ import {
   pairsOfRequests,
   pairsWithin,
   expandAppAccess,
+  KindsRequestError,
   parseAppAccess,
   parsePlace,
   parseRequestPlace,
   permissionWithin,
   PlaceError,
+  permissionsForKinds,
   sameAppAccess,
   withAppRequestScope,
   type AppAccess,
@@ -1377,6 +1383,17 @@ export const APP_OAUTH_ACCESS_TTL_SECONDS = 60 * 60;
 export const APP_OAUTH_DEAD_KEYS_KEPT = 2;
 const APP_OAUTH_KEY_SWEEP_BATCH = 100;
 
+/** One `synap_requests` entry that listed its kinds (F4), as declared. */
+export type OAuthAppKindGroup = RequestedKindGroup;
+
+/** A project the consenting person may give an app a permission in. */
+export interface OAuthAppOfferProject {
+  projectId: string;
+  projectName: string;
+  /** Its home space, or null for a project that lives in no space. */
+  workspaceId: string | null;
+}
+
 /** One permission a pod app asks for, and the spaces it may be given in. */
 export interface OAuthAppOfferItem {
   permission: string;
@@ -1390,6 +1407,109 @@ export interface OAuthAppOfferItem {
      */
     templateSlug: string | null;
   }>;
+  /**
+   * With `kindGroups` (the consent screen): the entry this permission was
+   * declared in when that entry listed its kinds (F4: `{permission:
+   * "entity.read", kinds}`), else null. Items that share one draw as ONE row
+   * ("Records: N kinds"). Display only: the permission is still given and
+   * checked per kind (D4).
+   */
+  kindGroup?: OAuthAppKindGroup | null;
+  /**
+   * With `projects` (the consent screen, app permissions W3c): the projects
+   * the person may give this permission in, by name — every project they can
+   * see for a read, only those they may write in for anything else
+   * (`oauthAppProjectOffer`). Offered only: no consent mints a project grant
+   * yet.
+   */
+  projects?: OAuthAppOfferProject[];
+}
+
+/** What else the consent screen's offer carries (each additive). */
+export interface OAuthAppOfferOptions {
+  /** The cached document's kinds grouping (`requestedKindGroups`, F4). */
+  kindGroups?: readonly RequestedKindGroup[];
+  /** Offer projects beside the spaces (W3c). */
+  projects?: boolean;
+}
+
+/**
+ * The entry a permission was declared in, when that entry listed its kinds
+ * (`requestedKindGroups`, F4), or null. Each group is expanded again
+ * (`permissionsForKinds`) rather than trusted, so a group can only ever name
+ * the permissions it expands to; one that does not expand names none.
+ */
+export function kindGroupOf(
+  permission: string,
+  groups: readonly RequestedKindGroup[]
+): OAuthAppKindGroup | null {
+  for (const g of groups) {
+    let expanded: string[];
+    try {
+      expanded = permissionsForKinds(g.permission, g.kinds);
+    } catch (err) {
+      if (err instanceof KindsRequestError) continue;
+      throw err;
+    }
+    if (expanded.includes(permission))
+      return { permission: g.permission, kinds: [...g.kinds] };
+  }
+  return null;
+}
+
+/**
+ * The projects a person may give an app a permission in (app permissions
+ * W3c; offered only, nothing mints a project grant yet):
+ *  - `readable`: every project they can SEE (`projectVisibleWhere`, THE
+ *    project visibility predicate: a member of its home space, the owner of a
+ *    project in no space, or a member of the project), except an archived
+ *    project or one whose home space is archived (nothing works there);
+ *  - `writable`: of those, the projects whose home space they may WRITE in
+ *    (`spacesOwnerMayWriteIn`, the rule the space offer and
+ *    `assertOwnerMayGrant` use), and the projects in no space they OWN (the
+ *    owner floor such a project's writes gate on). A project role alone
+ *    (`project_members`) gives no write here: a project's own writes are
+ *    gated on its home space.
+ * Sorted by name.
+ */
+export async function oauthAppProjectOffer(ownerUserId: string): Promise<{
+  readable: OAuthAppOfferProject[];
+  writable: OAuthAppOfferProject[];
+}> {
+  const rows = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      workspaceId: projects.workspaceId,
+      userId: projects.userId,
+    })
+    .from(projects)
+    .leftJoin(workspaces, eq(workspaces.id, projects.workspaceId))
+    .where(
+      and(
+        projectVisibleWhere(AccessContext.operator({ userId: ownerUserId })),
+        ne(projects.status, "archived"),
+        isNull(workspaces.archivedAt)
+      )
+    );
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  const homes = [
+    ...new Set(rows.flatMap((r) => (r.workspaceId ? [r.workspaceId] : []))),
+  ];
+  const mayWrite = await spacesOwnerMayWriteIn(ownerUserId, homes);
+  const offer = (r: (typeof rows)[number]): OAuthAppOfferProject => ({
+    projectId: r.id,
+    projectName: r.name,
+    workspaceId: r.workspaceId ?? null,
+  });
+  return {
+    readable: rows.map(offer),
+    writable: rows
+      .filter((r) =>
+        r.workspaceId ? mayWrite.has(r.workspaceId) : r.userId === ownerUserId
+      )
+      .map(offer),
+  };
 }
 
 /**
@@ -1398,10 +1518,16 @@ export interface OAuthAppOfferItem {
  * for a read, only the spaces they may WRITE in (`spacesOwnerMayWriteIn`, the
  * rule `assertOwnerMayGrant` enforces) for anything else. The person ticks a
  * subset; the offer is what that subset is checked against.
+ *
+ * The consent screen also asks (`options`, each additive, W3c): each item's
+ * kinds group (F4), and the projects it may be given in, by the same read /
+ * write rule (`oauthAppProjectOffer`). Without options the items are exactly
+ * as before.
  */
 export async function oauthAppOffer(
   ownerUserId: string,
-  permissions: readonly string[]
+  permissions: readonly string[],
+  options: OAuthAppOfferOptions = {}
 ): Promise<OAuthAppOfferItem[]> {
   const readable = await getUserWorkspaceIds(ownerUserId);
   const rows =
@@ -1425,6 +1551,9 @@ export async function oauthAppOffer(
         rows.map((r) => r.id)
       )
     : new Set<string>();
+  const projectOffer = options.projects
+    ? await oauthAppProjectOffer(ownerUserId)
+    : null;
   return permissions.map((permission) => ({
     permission,
     workspaces: rows
@@ -1434,6 +1563,16 @@ export async function oauthAppOffer(
         workspaceName: r.name,
         templateSlug: r.templateSlug ?? null,
       })),
+    ...(options.kindGroups
+      ? { kindGroup: kindGroupOf(permission, options.kindGroups) }
+      : {}),
+    ...(projectOffer
+      ? {
+          projects: isReadPermission(permission)
+            ? projectOffer.readable
+            : projectOffer.writable,
+        }
+      : {}),
   }));
 }
 
