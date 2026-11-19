@@ -20,6 +20,11 @@ const pod = (approved: PodAppInfo["approved"]): PodAppInfo => ({
 
 const FITS = pod([
   {
+    permission: "document.read",
+    workspaceId: "w-content",
+    workspaceName: "Content OS",
+  },
+  {
     permission: "entity.post.read",
     workspaceId: "w-content",
     workspaceName: "Content OS",
