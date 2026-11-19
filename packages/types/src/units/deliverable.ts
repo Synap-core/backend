@@ -221,6 +221,61 @@ export function deliverableOwedBy(
   return slot.owner === "human" ? "you" : "session";
 }
 
+/** The fields {@link isGradeAwaitingOutput} reads. */
+type GradeFacts = Pick<DeliverableFacts, "kind"> & {
+  /** On a grade slot: the key of the output its criterion checks. */
+  outputKey?: unknown;
+};
+
+/**
+ * A criterion's GRADE slot that waits on the output its criterion checks
+ * (founder, 19 Nov 2026, work-model W5): the slot names that output's key
+ * (`outputKey`, stamped from the criterion's own `outputKey` when the slot is
+ * filed), and a slot of the same session carries that stored `key` and is not
+ * delivered yet. Until then the grade is not the person's move: it is not
+ * owed, so it neither counts in needs-you nor parks the run.
+ *
+ * Owed as before when the slot names no output, or no slot of the session
+ * carries that key: a grade that could never come due is shown, never hidden.
+ * A grade slot is never the output another grade waits on.
+ *
+ * The SQL mirror is `gradeAwaitsOutputSql` (`@synap/database`,
+ * `owed-slot-predicate.ts`), held to this by its PGlite parity test.
+ */
+export function isGradeAwaitingOutput(
+  slot: GradeFacts,
+  outputs: readonly unknown[]
+): boolean {
+  if (slot.kind !== CRITERION_SLOT_KIND) return false;
+  const key = slot.outputKey;
+  if (typeof key !== "string" || key === "") return false;
+  return outputs.some((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const o = raw as DeliverableFacts & { key?: unknown };
+    return (
+      o.key === key &&
+      o.kind !== CRITERION_SLOT_KIND &&
+      !isDeliverableDelivered(o)
+    );
+  });
+}
+
+/**
+ * Owed by the person NOW, read in its session: {@link deliverableOwedBy} is
+ * `"you"` and it is not a grade waiting on its output
+ * ({@link isGradeAwaitingOutput}). THE question needs-you, run parking and
+ * the reapers ask (`owedSlotExistsIn` in SQL). `outputs` is the session's
+ * whole `expected_outputs` list, the slot included.
+ */
+export function isOwedByYouIn(
+  slot: FloorFacts & Pick<DeliverableFacts, "owner"> & GradeFacts,
+  outputs: readonly unknown[]
+): boolean {
+  return (
+    deliverableOwedBy(slot) === "you" && !isGradeAwaitingOutput(slot, outputs)
+  );
+}
+
 /**
  * NEWEST OWED FIRST: the order every "what does the person owe, latest
  * first" read uses (orient's owed-by-person rows, the slot a stopped run

@@ -165,7 +165,7 @@ const text = (v: unknown): string | undefined =>
 /**
  * The OPEN ask this agent filed with `dedupeKey`, on any open session of the
  * person's, or null. EXACT in SQL — the session holds a slot that is owed
- * (`owedSlotPredicateSql`, THE owed-slot predicate), unanswered, asked by this
+ * (`owedSlotPredicateIn`, THE owed-slot predicate), unanswered, asked by this
  * agent, with this key — so no page window can hide it; the slot is then
  * picked in TypeScript with the same rule (`isOwedSlot`). An answered, done or
  * withdrawn ask is never reopened.
@@ -183,7 +183,7 @@ async function findDedupedAsk(input: {
     inArray,
     desc,
     drizzleSql,
-    owedSlotPredicateSql,
+    owedSlotPredicateIn,
   } = await import("@synap/database");
   const { OPEN_SESSION_STATUSES } =
     await import("../../../services/focus-sessions/session-statuses.js");
@@ -202,7 +202,7 @@ async function findDedupedAsk(input: {
                  THEN ${focusSessions.expectedOutputs}
                  ELSE '[]'::jsonb END
           ) AS slot
-          WHERE ${owedSlotPredicateSql}
+          WHERE ${owedSlotPredicateIn(focusSessions.expectedOutputs)}
             AND slot->>'askedBy' = ${input.agentUserId}
             AND slot->'ask'->>'dedupeKey' = ${input.dedupeKey}
             AND slot->'answer' IS NULL
@@ -222,7 +222,7 @@ async function findDedupedAsk(input: {
       o?.askedBy === input.agentUserId &&
       o.ask?.dedupeKey === input.dedupeKey &&
       o.answer === undefined &&
-      isOwedSlot(o)
+      isOwedSlot(o, outputs)
   );
   return slot ? { sessionId: row.id, slot } : null;
 }

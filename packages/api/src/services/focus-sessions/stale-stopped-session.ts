@@ -77,7 +77,7 @@ export async function staleStoppedSession(input: {
       ? (row.expectedOutputs as ExpectedOutput[])
       : [];
     const owed = outputs.filter(
-      (o) => o && typeof o === "object" && isOwedSlot(o)
+      (o) => o && typeof o === "object" && isOwedSlot(o, outputs)
     );
     // The SQL said every owed slot ends with the session; the rule says so
     // again here, in the lock, before anything is stamped.

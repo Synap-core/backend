@@ -18,8 +18,8 @@ import {
 } from "@synap/database";
 import { dispatchLifecycleTransition } from "@synap/events";
 import {
-  deliverableOwedBy,
   deriveSlotKeys,
+  isOwedByYouIn,
   newestOwedFirst,
   type SlotFacts,
 } from "@synap-core/types/units";
@@ -112,7 +112,9 @@ export function slotTheRunWaitsOn(
   const keys = deriveSlotKeys(slots);
   const [newest] = slots
     .map((slot, at) => ({ slot, key: keys[at] }))
-    .filter(({ slot, key }) => key && slot && deliverableOwedBy(slot) === "you")
+    .filter(
+      ({ slot, key }) => key && slot && isOwedByYouIn(slot, slots)
+    )
     .sort((a, b) => newestOwedFirst(a.slot, b.slot));
   return newest
     ? { key: newest.key!, label: newest.slot.label || newest.key! }
