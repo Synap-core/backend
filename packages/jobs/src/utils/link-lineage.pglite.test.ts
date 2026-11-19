@@ -106,11 +106,7 @@ describe("the link chain a run ended in", () => {
     const a = await run(PB.a!);
     const b = await run(PB.b!, { after: a });
     const c = await run(PB.c!, { after: b });
-    expect((await readLinkLineage(c)).playbookIds).toEqual([
-      PB.c,
-      PB.b,
-      PB.a,
-    ]);
+    expect((await readLinkLineage(c)).playbookIds).toEqual([PB.c, PB.b, PB.a]);
     expect(await linkWouldLoop({ endedSessionId: c, playbookId: PB.a! })).toBe(
       true
     );
@@ -121,7 +117,8 @@ describe("the link chain a run ended in", () => {
 
   it("a legitimate chain longer than the depth floor (3) still starts its next playbook", async () => {
     let s = await run(PB.a!);
-    for (const k of ["b", "c", "d", "e", "f"]) s = await run(PB[k]!, { after: s });
+    for (const k of ["b", "c", "d", "e", "f"])
+      s = await run(PB[k]!, { after: s });
     expect((await readLinkLineage(s)).playbookIds).toHaveLength(6);
     expect(await linkWouldLoop({ endedSessionId: s, playbookId: PB.g! })).toBe(
       false

@@ -163,7 +163,11 @@ describe("a link never starts a playbook already in its chain", () => {
     await executePlaybookRun(
       {
         playbookId: PB,
-        worker: { key: "created", size: "per_thing", profileSlug: "x" } as never,
+        worker: {
+          key: "created",
+          size: "per_thing",
+          profileSlug: "x",
+        } as never,
       },
       context(),
       "ws-1",
