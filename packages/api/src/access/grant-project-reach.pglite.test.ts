@@ -221,7 +221,12 @@ beforeAll(async () => {
       PERSON,
     ]
   );
-  const prop = (id: string, type: string, target: string, stamp: string | null) =>
+  const prop = (
+    id: string,
+    type: string,
+    target: string,
+    stamp: string | null
+  ) =>
     q(
       `insert into proposals (id, created_by, status, workspace_id, project_id, target_type, target_id, proposal_type, data)
        values ($1,$2,'pending',$3,$4,$5,$6,'update','{}'::jsonb)`,

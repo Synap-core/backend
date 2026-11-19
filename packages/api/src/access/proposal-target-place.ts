@@ -41,7 +41,10 @@ import {
   relations,
 } from "@synap/database/schema";
 import { sql } from "drizzle-orm";
-import { BELONGS_TO_PROJECT, projectLensWhere } from "../utils/project-scope.js";
+import {
+  BELONGS_TO_PROJECT,
+  projectLensWhere,
+} from "../utils/project-scope.js";
 
 /** READ half: a proposal whose target row is in one of `projectIds`. */
 export function proposalTargetInProjectsWhere(projectIds: string[]): SQL {

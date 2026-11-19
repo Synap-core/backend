@@ -1095,7 +1095,9 @@ export async function answerGrantWrite(sessionId: string): Promise<{
     projectId: row?.projectId ?? null,
     // Read from the row itself: where the session lives now (the filing
     // rule, `grant-write-check.ts`), not a lens.
-    ...(row ? { storedProjectIds: row.projectId ? [row.projectId] : null } : {}),
+    ...(row
+      ? { storedProjectIds: row.projectId ? [row.projectId] : null }
+      : {}),
   };
   return {
     ...write,

@@ -85,9 +85,10 @@ beforeAll(async () => {
   await q(
     `create unique index if not exists idx_links_unique_edge on links (from_type, from_id, to_type, to_id, link_type)`
   );
-  await q(`insert into users (id, email, user_type) values ($1,'a@x','human')`, [
-    ALICE,
-  ]);
+  await q(
+    `insert into users (id, email, user_type) values ($1,'a@x','human')`,
+    [ALICE]
+  );
   await q(
     `insert into workspaces (id, name, owner_id, settings) values ($1,'w',$2,'{}'::jsonb)`,
     [W, ALICE]
