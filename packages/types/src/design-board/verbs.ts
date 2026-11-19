@@ -47,7 +47,14 @@ export const DESIGN_VERB_PARAMETERS: Readonly<
   },
   [DESIGN_CATALOG_VERB]: {
     type: "object",
-    properties: {},
+    properties: {
+      appId: {
+        type: "string",
+        format: "uuid",
+        description:
+          "The app (devplane_app) a design is for. Its designs are drawn with the app's own component kit when it has one (its `design-kit`); omit it for Synap's own components.",
+      },
+    },
     additionalProperties: false,
   },
   [DESIGN_APPLY_VERB]: {

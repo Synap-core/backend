@@ -23,6 +23,9 @@ const h = vi.hoisted(() => ({
     string,
     unknown
   >,
+  /** What the app's kit read answers (app-kit.ts has its own suite). */
+  appKit: null as null | ((appId: string) => unknown),
+  appKitCalls: [] as string[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -85,6 +88,12 @@ vi.mock("../lifecycle/board-lens.js", () => ({
     ],
     initialStatus: "draft",
   }),
+}));
+vi.mock("./app-kit.js", () => ({
+  readAppKit: async (_userId: string, appId: string) => {
+    h.appKitCalls.push(appId);
+    return h.appKit ? h.appKit(appId) : { status: "none", appId };
+  },
 }));
 vi.mock("../../routers/entities.js", () => ({
   entitiesRouter: {
@@ -175,6 +184,8 @@ beforeEach(() => {
   h.callerCtx.length = 0;
   h.createReply = { id: "new-design", updatedAt: "2026-11-19T10:00:00.000Z" };
   h.updateReply = { id: "d1", updatedAt: "2026-11-19T10:00:00.000Z" };
+  h.appKit = null;
+  h.appKitCalls.length = 0;
 });
 
 describe("design.apply writes through the governed entity door", () => {
@@ -374,7 +385,7 @@ describe("design.apply writes through the governed entity door", () => {
 describe("no catalog installed: an error, never an empty catalog", () => {
   it("design.catalog and design.apply refuse, naming how to install it; design.read still reads, and says so", async () => {
     h.catalogRows = [];
-    await expect(designCatalog()).rejects.toThrow(/not installed/);
+    await expect(designCatalog("owner-1")).rejects.toThrow(/not installed/);
     await expect(
       applyDesign(ctx, {
         designId: "d1",
@@ -397,7 +408,7 @@ describe("no catalog installed: an error, never an empty catalog", () => {
 
   it("a catalog the pod cannot read is refused, not read as empty", async () => {
     h.catalogRows = [{ metadata: { designCatalog: { kitId: "synap" } } }];
-    await expect(designCatalog()).rejects.toThrow(/cannot read/);
+    await expect(designCatalog("owner-1")).rejects.toThrow(/cannot read/);
   });
 
   it("design.read with the catalog: outline per frame with its width class and columns", async () => {
@@ -414,5 +425,154 @@ describe("no catalog installed: an error, never an empty catalog", () => {
         blocks: [{ id: "sec", type: "Section" }],
       },
     ]);
+  });
+});
+
+const { TRPCError } = await import("@trpc/server");
+
+const CRM_KIT = {
+  kitId: "crm",
+  hash: "sha256:kit",
+  components: {
+    Button: {
+      variant: { kind: "select", options: ["default", "outline"] },
+      children: { kind: "slot" },
+    },
+  },
+  layout: {},
+  canvas: { components: { Button: { category: "button", defaults: {} } } },
+  kit: {
+    react: "19",
+    files: {
+      js: { entityId: "f-js", sha256: "a".repeat(64), bytes: 10 },
+      css: { entityId: "f-css", sha256: "b".repeat(64), bytes: 20 },
+    },
+  },
+};
+const withKit = () => {
+  h.appKit = (appId) => ({
+    status: "kit",
+    appId,
+    catalogFileId: "f-cat",
+    kit: CRM_KIT,
+  });
+};
+
+describe("a design of an app with its own kit (W6)", () => {
+  it("design.catalog for the app: the kit's components, Synap's canvas blocks, a hash naming both, how to load the kit", async () => {
+    withKit();
+    const c = await designCatalog("owner-1", "app-1");
+    expect(c).toMatchObject({
+      kitId: "crm",
+      hash: "sha256:kit+h-1",
+      appId: "app-1",
+      kit: {
+        kitId: "crm",
+        react: "19",
+        files: { js: { sha256: "a".repeat(64), bytes: 10 } },
+        canvas: CRM_KIT.canvas,
+      },
+    });
+    expect(Object.keys(c.components)).toEqual(["Button"]);
+    expect(Object.keys(c.layout).sort()).toEqual(["Section", "Text"]);
+    // No app: Synap's own, and the app's kit is never read.
+    h.appKitCalls.length = 0;
+    expect(await designCatalog("owner-1")).toMatchObject({ kitId: "synap" });
+    expect(h.appKitCalls).toEqual([]);
+  });
+
+  it("design.apply checks a design against ITS app's kit: the kit's Button goes in, Synap's components are refused", async () => {
+    withKit();
+    const ok = await applyDesign(ctx, {
+      designId: "d1",
+      baseUpdatedAt: UPDATED,
+      ops: [
+        {
+          op: "add_block",
+          frameId: "d",
+          parentId: "sec",
+          type: "Button",
+          props: { variant: "outline" },
+        },
+      ],
+    });
+    expect(ok).toMatchObject({
+      status: "applied",
+      catalogHash: "sha256:kit+h-1",
+    });
+    expect(h.appKitCalls).toEqual(["app-1"]);
+    const refused = await applyDesign(ctx, {
+      designId: "d1",
+      baseUpdatedAt: UPDATED,
+      ops: [
+        {
+          op: "add_block",
+          frameId: "d",
+          parentId: "sec",
+          type: "SpatialButton",
+          props: {},
+        },
+      ],
+    });
+    expect(refused).toMatchObject({
+      status: "refused",
+      opIndex: 0,
+      catalogHash: "sha256:kit+h-1",
+    });
+  });
+
+  it("create_design for an app takes that app's kit", async () => {
+    withKit();
+    const r = await applyDesign(ctx, {
+      ops: [
+        {
+          op: "create_design",
+          title: "Leads",
+          appId: "99999999-9999-4999-8999-999999999999",
+        },
+        { op: "add_frame", preset: "desktop", id: "d" },
+        { op: "add_block", frameId: "d", type: "Button", props: {} },
+      ],
+    });
+    expect(r).toMatchObject({ status: "created" });
+    expect(h.appKitCalls).toEqual(["99999999-9999-4999-8999-999999999999"]);
+  });
+
+  it("a kit the pod cannot read is an error naming why, never Synap's catalog in its place", async () => {
+    h.appKit = () => {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "App app-1's design kit (file f-cat) cannot be used: The kit names no React major.",
+      });
+    };
+    await expect(designCatalog("owner-1", "app-1")).rejects.toThrow(
+      /cannot be used/
+    );
+    await expect(
+      applyDesign(ctx, {
+        designId: "d1",
+        baseUpdatedAt: UPDATED,
+        ops: [addText],
+      })
+    ).rejects.toThrow(/cannot be used/);
+    expect(h.updates).toEqual([]);
+    const read = await readDesign(ctx, "d1");
+    expect(read.catalog).toMatchObject({
+      kitId: null,
+      note: expect.stringMatching(/cannot be used/),
+    });
+  });
+
+  it("a kit component named like a canvas block is refused", async () => {
+    h.appKit = (appId) => ({
+      status: "kit",
+      appId,
+      catalogFileId: "f-cat",
+      kit: { ...CRM_KIT, components: { Text: {} } },
+    });
+    await expect(designCatalog("owner-1", "app-1")).rejects.toThrow(
+      /cannot be drawn with Synap's canvas blocks/
+    );
   });
 });
