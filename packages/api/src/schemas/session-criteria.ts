@@ -82,6 +82,15 @@ export const sessionCriterionSchema = z
         path: ["checkKind"],
       });
     }
+    // A criterion about HOW the work is done checks no output (W4).
+    if (c.about === "method" && c.outputKey) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          'A criterion about the method names no output: drop outputKey or set about to "result"',
+        path: ["outputKey"],
+      });
+    }
     if (c.check.kind === "capability" && !c.check.capability) {
       ctx.addIssue({
         code: "custom",

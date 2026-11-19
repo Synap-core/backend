@@ -24,6 +24,7 @@ import {
   selectSlotsMetByRef,
 } from "../satisfy-expected-output.js";
 import { criteriaAboutOutcome } from "../../dev-loop/recheck-criteria.js";
+import { outputKeyWarnings } from "../update-session.js";
 
 const PR_URL = "https://github.com/Synap-core/backend/pull/1200";
 const slot: ExpectedOutput = {
@@ -61,6 +62,23 @@ describe("closers pair a criterion with a slot by outputKey only", () => {
     expect(
       selectClaimsWithEvidence([slot], evidence, checkedOutputKeys([naming]))
     ).toEqual([]);
+  });
+
+  it("an OPTIONAL criterion naming the slot never holds it: evidence and the merge still close it", () => {
+    const optional = checkedOutputKeys([{ ...naming, required: false }]);
+    const evidence = new Map([
+      ["pr-backend", { kind: "output" as const, id: "o-1" }],
+    ]);
+    expect(selectClaimsWithEvidence([slot], evidence, optional)).toHaveLength(
+      1
+    );
+    expect(
+      selectMergedPullRequestSlots(
+        [slot],
+        parsePullRequestRef(PR_URL)!,
+        optional
+      )
+    ).toHaveLength(1);
   });
 
   it("merge: the PR slot closes beside a same-key criterion, holds under one naming it", () => {
@@ -135,9 +153,26 @@ describe("a playbook step's criteria check the step's output (D4 b)", () => {
       sessionTerminal: false,
     });
     expect(view.outcomes).toHaveLength(1);
-    expect(view.outcomes[0]!.checks?.map((c) => [c.key, c.stageKey])).toEqual([
-      ["on-brand", undefined],
-      ["has-pricing", "draft"],
-    ]);
+    expect(view.outcomes[0]!.criteria?.map((c) => [c.key, c.stageKey])).toEqual(
+      [
+        ["on-brand", undefined],
+        ["has-pricing", "draft"],
+      ]
+    );
+  });
+});
+
+describe("an outputKey that names no output is said back (W4)", () => {
+  it("one sentence per sent criterion naming no outcome slot; stage criteria are left out", () => {
+    const sent: SessionCriterion[] = [
+      naming,
+      { ...naming, key: "orphan", outputKey: "deck" },
+      { ...naming, key: "later", outputKey: "deck", stageKey: "draft" },
+    ];
+    const warnings = outputKeyWarnings(sent, [slot]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('Criterion "orphan"');
+    expect(warnings[0]).toContain('"deck"');
+    expect(outputKeyWarnings(undefined, [slot])).toEqual([]);
   });
 });

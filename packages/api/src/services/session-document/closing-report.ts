@@ -54,13 +54,8 @@ import {
 } from "@synap-core/types/focus-sessions";
 import { isCriterionRequired, type SessionCriterion } from "@synap/playbooks";
 import {
-  CRITERION_SLOT_KIND,
-  PARAM_SLOT_KIND,
-} from "@synap-core/types/focus-sessions";
-import {
   criteriaByOutput,
-  deriveSlotKeys,
-  slotKindOf,
+  outcomeSlotKeys,
   slotLabelOf,
   type SlotFacts,
 } from "@synap-core/types/units";
@@ -184,17 +179,11 @@ export function groupCriteriaUnderOutputs(
 export function declaredOutputsOf(
   raw: unknown
 ): ClosingReportInput["declaredOutputs"] {
-  const slots: unknown[] = Array.isArray(raw) ? raw : [];
-  const keys = deriveSlotKeys(slots);
-  return slots.flatMap((entry, i) => {
-    const key = keys[i];
-    // `deriveSlotKeys` keys objects only.
-    if (!key) return [];
-    const slot = entry as SlotFacts;
-    const kind = slotKindOf(slot);
-    if (kind === PARAM_SLOT_KIND || kind === CRITERION_SLOT_KIND) return [];
-    return [{ key, label: slotLabelOf(slot) }];
-  });
+  const slots = raw as unknown[];
+  return outcomeSlotKeys(raw).map(({ index, key }) => ({
+    key,
+    label: slotLabelOf(slots[index] as SlotFacts),
+  }));
 }
 
 /** Pure: the four sections, deterministic for a given input. */

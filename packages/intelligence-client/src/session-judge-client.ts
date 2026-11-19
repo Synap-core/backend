@@ -24,7 +24,10 @@ export interface JudgeCriteriaRequest {
     key: string;
     statement: string;
     hint?: string;
-    /** Optional: an IS that predates it ignores it (zod strips unknown keys). */
+    /**
+     * Optional. The IS grades on it from intelligence-hub 31a4f7db; an IS
+     * that predates it ignores it (zod strips unknown keys).
+     */
     output?: JudgeCriterionOutput;
   }>;
   /** ≤ 16000 chars (`MATERIAL_MAX`, judge-material.ts): the produced work, the room. */

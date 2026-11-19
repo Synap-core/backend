@@ -144,10 +144,11 @@ export function goalNextRunBrief(input: {
 /**
  * A goal criterion as a run carries it: the session shape, no judge's
  * decision, marked `about: "method"` — it checks the goal through this run,
- * not one of the run's outputs, so it hangs on none (work-model W4).
+ * not one of the run's outputs, so it hangs on none and any `outputKey` the
+ * goal named is dropped (work-model W4; the schema refuses method + output).
  */
 export function asRunCriterion(c: GoalCriterion): SessionCriterion {
-  const { acceptance: _decided, ...criterion } = c;
+  const { acceptance: _decided, outputKey: _output, ...criterion } = c;
   return { ...criterion, about: "method" };
 }
 

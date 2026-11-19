@@ -1244,8 +1244,7 @@ export async function createFocusSession(
       // exists to strip exactly the `owner`/`owedSince` a caller must not
       // forge. The first stage's own outputs are owed from birth too
       // (`withBirthStageSlots`), the rule every later advance applies.
-      ...sessionDefinitionColumns(playbook, birthSlots),
-      criteria: sessionCriteria,
+      ...sessionDefinitionColumns(playbook, birthSlots, sessionCriteria),
     };
 
     let session: typeof focusSessions.$inferSelect | undefined;

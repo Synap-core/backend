@@ -271,7 +271,7 @@ export function openRequiredWork(args: {
       owedByPerson.push({ key, label });
       return;
     }
-    // Checked by a criterion (`outputKey`): listed there.
+    // Checked by a REQUIRED criterion (`outputKey`): listed there.
     if (key && checkedKeys.has(key)) return;
     // Awaiting the person's review: the agent's claim, or its proposal in
     // pack mode. Listed, never refusing.

@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  checkedOutputKeys,
+  criteriaNamingNoOutput,
   deriveSlotKeys,
+  nameSharedKeyOutputs,
+  outcomeSlotKeys,
   projectSessionOutcomes,
   readInputs,
   readOutcomes,
@@ -38,6 +42,9 @@ const T1 = "2026-10-01T11:00:00.000Z";
  *      fold: pairing is `outputKey`, never the key)
  *   K. "one passing check meets the output" (an output's checks all count:
  *      its kind's and its step's, D4 a)
+ *   L. "a delivered slot is met" (a required criterion that failed, or has
+ *      no grade yet, still holds a delivered output: the projection must agree
+ *      with `computeSessionVerdict` and the close check)
  */
 interface Row {
   name: string;
@@ -345,6 +352,94 @@ const ROWS: Row[] = [
     inputs: [],
   },
   {
+    name: "a DELIVERED output whose required criterion failed is not met",
+    rulesOut: "L",
+    slots: [
+      {
+        kind: "pull_request",
+        label: "PR",
+        key: "pr",
+        status: "done",
+        attestedBy: "u",
+      },
+    ],
+    criteria: [
+      {
+        key: "tests-pass",
+        statement: "Tests pass",
+        check: { kind: "evidence" },
+        outputKey: "pr",
+      },
+    ],
+    evaluations: [
+      {
+        criterionKey: "tests-pass",
+        verdict: "fail",
+        evaluatorKind: "evidence",
+        createdAt: T0,
+      },
+    ],
+    outcomes: [{ key: "pr", state: "failed", met: false, verify: "evidence" }],
+    inputs: [],
+  },
+  {
+    name: "a DELIVERED output whose required criterion has no grade yet is not met",
+    rulesOut: "L",
+    slots: [
+      {
+        kind: "pull_request",
+        label: "PR",
+        key: "pr",
+        status: "done",
+        attestedBy: "u",
+      },
+    ],
+    criteria: [
+      {
+        key: "tests-pass",
+        statement: "Tests pass",
+        check: { kind: "evidence" },
+        outputKey: "pr",
+      },
+    ],
+    outcomes: [
+      { key: "pr", state: "unmeasured", met: false, verify: "evidence" },
+    ],
+    inputs: [],
+  },
+  {
+    name: "a DELIVERED output with only an OPTIONAL failing criterion is met",
+    rulesOut: "L",
+    slots: [
+      {
+        kind: "pull_request",
+        label: "PR",
+        key: "pr",
+        status: "done",
+        attestedBy: "u",
+      },
+    ],
+    criteria: [
+      {
+        key: "tidy",
+        statement: "The diff is tidy",
+        required: false,
+        check: { kind: "judge" },
+        outputKey: "pr",
+      },
+    ],
+    evaluations: [
+      {
+        criterionKey: "tidy",
+        verdict: "fail",
+        evaluatorKind: "judge",
+        createdAt: T0,
+      },
+    ],
+    outcomes: [{ key: "pr", state: "done", met: true, verify: "judge" }],
+    inputs: [],
+  },
+  {
     name: "an agent slot whose question was answered: outcome stays, input closed",
     rulesOut: "B",
     slots: [
@@ -465,7 +560,7 @@ describe("evidence and unattached", () => {
   });
 });
 
-describe("checks hang on their output (rule 7, W4)", () => {
+describe("criteria hang on their output (rule 7, W4)", () => {
   const slots = [
     { kind: "document", label: "Deck", key: "deck" },
     {
@@ -518,7 +613,7 @@ describe("checks hang on their output (rule 7, W4)", () => {
     const deck = view.outcomes[0]!;
     expect(deck.met).toBe(false);
     expect(
-      deck.checks?.map((c) => [c.key, c.met, c.state.state, c.stageKey])
+      deck.criteria?.map((c) => [c.key, c.met, c.state.state, c.stageKey])
     ).toEqual([
       ["on-brand", false, "needs_you", undefined],
       ["has-pricing", true, "done", "build"],
@@ -545,6 +640,21 @@ describe("checks hang on their output (rule 7, W4)", () => {
     expect(deck.verdict?.at).toBe(T1);
   });
 
+  it("a required slot stays required when its only criteria are optional; an optional slot a required criterion checks becomes required", () => {
+    const optionalOnly = projectSessionOutcomes({
+      expectedOutputs: [slots[0]],
+      criteria: [{ ...criteria[0]!, required: false }],
+      sessionTerminal: false,
+    });
+    expect(optionalOnly.outcomes[0]!.required).toBe(true);
+    const optionalSlot = projectSessionOutcomes({
+      expectedOutputs: [{ ...slots[0]!, optional: true }],
+      criteria: [criteria[0]!],
+      sessionTerminal: false,
+    });
+    expect(optionalSlot.outcomes[0]!.required).toBe(true);
+  });
+
   it("an optional check never holds the output while a required one counts", () => {
     const view = projectSessionOutcomes({
       expectedOutputs: [slots[0]],
@@ -553,6 +663,79 @@ describe("checks hang on their output (rule 7, W4)", () => {
       sessionTerminal: false,
     });
     expect(view.outcomes[0]!.met).toBe(true);
+  });
+});
+
+describe("the pairing helpers (W4)", () => {
+  const slots = [
+    { kind: "document", label: "Plan", key: "plan" },
+    { kind: PARAM_SLOT_KIND, label: "Region", key: "region" },
+    { kind: CRITERION_SLOT_KIND, label: "Grade", key: "grade" },
+    { kind: "report", label: "Lead list" },
+  ];
+
+  it("outcomeSlotKeys: the outcome slots only, keyed as stamped, in order", () => {
+    expect(outcomeSlotKeys(slots)).toEqual([
+      { index: 0, key: "plan" },
+      { index: 3, key: "lead-list" },
+    ]);
+    expect(outcomeSlotKeys("not an array")).toEqual([]);
+  });
+
+  it("checkedOutputKeys: only a REQUIRED criterion holds its slot", () => {
+    const c = (required?: boolean) => ({
+      outputKey: "plan",
+      ...(required === undefined ? {} : { required }),
+    });
+    expect([...checkedOutputKeys([c()])]).toEqual(["plan"]);
+    expect([...checkedOutputKeys([c(false)])]).toEqual([]);
+  });
+
+  it("nameSharedKeyOutputs: a same-key criterion names its outcome slot; method, param and named ones are left alone", () => {
+    const criteria = [
+      { key: "plan", statement: "Sound", check: { kind: "judge" as const } },
+      { key: "lead-list", statement: "EU", check: { kind: "judge" as const } },
+      { key: "region", statement: "Set", check: { kind: "judge" as const } },
+      {
+        key: "plan-method",
+        statement: "Reviewed",
+        check: { kind: "judge" as const },
+        outputKey: "plan",
+      },
+      {
+        key: "nothing",
+        statement: "Free",
+        check: { kind: "judge" as const },
+      },
+    ];
+    expect(
+      nameSharedKeyOutputs(criteria, slots).map((c) => [c.key, c.outputKey])
+    ).toEqual([
+      ["plan", "plan"],
+      ["lead-list", "lead-list"],
+      ["region", undefined],
+      ["plan-method", "plan"],
+      ["nothing", undefined],
+    ]);
+    const method = [{ ...criteria[0]!, about: "method" as const }];
+    expect(nameSharedKeyOutputs(method, slots)).toBe(method);
+    expect(nameSharedKeyOutputs(criteria.slice(2), slots)).toEqual(
+      criteria.slice(2)
+    );
+  });
+
+  it("criteriaNamingNoOutput: an outputKey that names no outcome slot", () => {
+    expect(
+      criteriaNamingNoOutput(
+        [
+          { key: "a", outputKey: "plan" },
+          { key: "b", outputKey: "region" },
+          { key: "c", outputKey: "missing" },
+          { key: "d" },
+        ],
+        slots
+      )
+    ).toEqual(["b", "c"]);
   });
 });
 

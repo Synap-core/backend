@@ -2778,15 +2778,15 @@ export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
 	capability?: string;
 	evidenceKey?: string;
 	/**
-	 * A slot's checks: every criterion naming it by `outputKey` (rule 7), in
+	 * A slot's criteria: every criterion naming it by `outputKey` (rule 7), in
 	 * declared order. Absent on an outcome no criterion checks. `verify`,
 	 * `verdict`, `stageKey`, `capability` and `evidenceKey` above read the first
-	 * check (and the deciding verdict), as they did when one criterion could.
+	 * criterion (and the deciding verdict), as they did when one could.
 	 */
-	checks?: OutcomeCheck[];
+	criteria?: OutcomeCriterion[];
 }
 /** One criterion under the output it checks. */
-export interface OutcomeCheck {
+export interface OutcomeCriterion {
 	/** The criterion's key (its evaluations' `criterionKey`). */
 	key: string;
 	statement: string;

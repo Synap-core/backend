@@ -56,11 +56,13 @@
  *  7. A criterion's state is its CURRENT verdict (`latestEvaluationPerCriterion`
  *     — a human row beats any later non-human row). A criterion that names a
  *     slot by `outputKey` CHECKS that slot ({@link criteriaByOutput}, the one
- *     pairing): the slot and its checks are ONE outcome, met when the slot was
- *     delivered or when every check that counts passes (the required ones, or
- *     all of them when none is required). The checks are listed under it
- *     (`checks`). Sharing a key pairs nothing: a criterion with no
- *     `outputKey`, or one naming no slot, is its own outcome.
+ *     pairing): the slot and its criteria are ONE outcome, listed under it
+ *     (`criteria`). With a REQUIRED criterion, the outcome is met only when
+ *     every required one passes, delivered or not (D4 a: both must pass, as
+ *     `computeSessionVerdict` reads them); with none required, delivery or
+ *     every criterion passing meets it. Sharing a key pairs nothing: a
+ *     criterion with no `outputKey`, or one naming no slot, is its own
+ *     outcome.
  *  8. Evidence joins by KEY first, then by the normalised label; a produced
  *     item that names no outcome is UNATTACHED. (Known edge: two LEGACY slots
  *     sharing one label, neither keyed yet — label evidence lands on the
@@ -290,11 +292,88 @@ export function criteriaByOutput<C extends { outputKey?: string | null }>(
   return out;
 }
 
-/** The keys of the slots a criterion checks: {@link criteriaByOutput}'s keys. */
+/**
+ * The keys of the slots a REQUIRED criterion checks: the slots the evidence
+ * closers and the close check leave to their criteria. An optional criterion
+ * never holds its slot.
+ */
 export function checkedOutputKeys(
-  criteria: readonly { outputKey?: string | null }[]
+  criteria: readonly { outputKey?: string | null; required?: boolean }[]
 ): Set<string> {
-  return new Set(criteriaByOutput(criteria).keys());
+  return new Set(
+    criteriaByOutput(criteria.filter((c) => c.required !== false)).keys()
+  );
+}
+
+/**
+ * The slots that are OUTCOMES (rule 3: not a param, not an escalated
+ * criterion), with their index and key, in stored order. Non-object entries
+ * are skipped. The one answer to "which slots can a criterion check".
+ */
+export function outcomeSlotKeys(
+  raw: unknown
+): Array<{ index: number; key: string }> {
+  const slots = Array.isArray(raw) ? raw : [];
+  const keys = deriveSlotKeys(slots);
+  const out: Array<{ index: number; key: string }> = [];
+  slots.forEach((entry, index) => {
+    const slot = asSlot(entry);
+    const key = keys[index];
+    if (!slot || !key) return;
+    const kind = slotKindOf(slot);
+    if (kind === PARAM_SLOT_KIND || kind === CRITERION_SLOT_KIND) return;
+    out.push({ index, key });
+  });
+  return out;
+}
+
+/**
+ * INPUT normalisation at the criteria write doors (W4): a criterion that
+ * shares its key with an outcome slot of the same session and names no output
+ * gets `outputKey = key`, the rule migration 0433 applied to stored rows, for
+ * what old-style callers still send (the deprecated `criteria` and
+ * `expectedOutputs` under one key, proposals filed before the switch).
+ * Readers stay `outputKey`-only. A criterion about the method names no
+ * output and is left alone. Returns the same array when nothing changes.
+ */
+export function nameSharedKeyOutputs<C>(
+  criteria: readonly C[],
+  slots: unknown
+): readonly C[] {
+  const keys = new Set(outcomeSlotKeys(slots).map((s) => s.key));
+  let changed = false;
+  const out = criteria.map((entry) => {
+    // A stored bag is read leniently: a malformed entry is left as it is.
+    const c = asSlot(entry) as {
+      key?: unknown;
+      outputKey?: unknown;
+      about?: unknown;
+    } | null;
+    const key = typeof c?.key === "string" ? c.key : undefined;
+    if (!c || !key || text(c.outputKey) || c.about === "method") return entry;
+    if (!keys.has(key)) return entry;
+    changed = true;
+    return { ...c, outputKey: key } as C;
+  });
+  return changed ? out : criteria;
+}
+
+/**
+ * The keys of the criteria whose `outputKey` names no outcome slot of the
+ * session: they check nothing until such a slot exists. Said back to the
+ * caller, never refused (a stage's output arrives when its stage is entered).
+ */
+export function criteriaNamingNoOutput(
+  criteria: readonly { key: string; outputKey?: string | null }[],
+  slots: unknown
+): string[] {
+  const keys = new Set(outcomeSlotKeys(slots).map((s) => s.key));
+  return criteria
+    .filter((c) => {
+      const named = text(c.outputKey);
+      return !!named && !keys.has(named);
+    })
+    .map((c) => c.key);
 }
 
 /**
@@ -368,16 +447,16 @@ export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
   capability?: string;
   evidenceKey?: string;
   /**
-   * A slot's checks: every criterion naming it by `outputKey` (rule 7), in
+   * A slot's criteria: every criterion naming it by `outputKey` (rule 7), in
    * declared order. Absent on an outcome no criterion checks. `verify`,
    * `verdict`, `stageKey`, `capability` and `evidenceKey` above read the first
-   * check (and the deciding verdict), as they did when one criterion could.
+   * criterion (and the deciding verdict), as they did when one could.
    */
-  checks?: OutcomeCheck[];
+  criteria?: OutcomeCriterion[];
 }
 
 /** One criterion under the output it checks. */
-export interface OutcomeCheck {
+export interface OutcomeCriterion {
   /** The criterion's key (its evaluations' `criterionKey`). */
   key: string;
   statement: string;
@@ -505,36 +584,29 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
   const inputs: SessionInput[] = [];
   /** Criterion keys an OPEN grade input is waiting on. */
   const gradeOwed = new Set<string>();
-  /** Keys of the slots that are outcomes (rule 3), for the pairing. */
-  const outcomeSlotKeys = new Set<string>();
-  raw.forEach((entry, i) => {
+  for (const entry of raw) {
     const slot = asSlot(entry);
-    const key = keys[i];
-    if (!slot || !key) return;
-    const kind = slotKindOf(slot);
-    if (kind === CRITERION_SLOT_KIND) {
-      const criterionKey = text(slot.criterionKey);
-      if (
-        criterionKey &&
-        isDeliverableOutstanding(slot) &&
-        slot.owner === "human"
-      ) {
-        gradeOwed.add(criterionKey);
-      }
-    } else if (kind !== PARAM_SLOT_KIND) {
-      outcomeSlotKeys.add(key);
+    if (!slot || slotKindOf(slot) !== CRITERION_SLOT_KIND) continue;
+    const criterionKey = text(slot.criterionKey);
+    if (
+      criterionKey &&
+      isDeliverableOutstanding(slot) &&
+      slot.owner === "human"
+    ) {
+      gradeOwed.add(criterionKey);
     }
-  });
-  // (7) Each slot's checks; a criterion naming no slot stays its own outcome.
-  const checksBySlot = new Map<string, OutcomeCriterionLike[]>();
+  }
+  // (7) Each slot's criteria; a criterion naming no slot stays its own outcome.
+  const outcomeKeys = new Set(outcomeSlotKeys(raw).map((s) => s.key));
+  const criteriaBySlot = new Map<string, OutcomeCriterionLike[]>();
   /** Criterion key → the slot key it checks. */
   const checkedSlotOf = new Map<string, string>();
   for (const [slotKey, list] of criteriaByOutput(criteria)) {
-    if (!outcomeSlotKeys.has(slotKey)) continue;
-    checksBySlot.set(slotKey, list);
+    if (!outcomeKeys.has(slotKey)) continue;
+    criteriaBySlot.set(slotKey, list);
     for (const c of list) checkedSlotOf.set(c.key, slotKey);
   }
-  const checkView = (c: OutcomeCriterionLike): OutcomeCheck => {
+  const criterionView = (c: OutcomeCriterionLike): OutcomeCriterion => {
     const verdict = verdictByKey.get(c.key) ?? null;
     return {
       key: c.key,
@@ -598,19 +670,19 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
       return;
     }
 
-    // (3) Every other slot is an outcome; (7) its checks fold into it.
-    const checks = (checksBySlot.get(key) ?? []).map((c) => ({
+    // (3) Every other slot is an outcome; (7) its criteria fold into it.
+    const checks = (criteriaBySlot.get(key) ?? []).map((c) => ({
       c,
-      view: checkView(c),
+      view: criterionView(c),
     }));
     const first = checks[0]?.c;
-    const counted = checks.some((x) => x.view.required)
-      ? checks.filter((x) => x.view.required)
-      : checks;
-    const checksPass = counted.length > 0 && counted.every((x) => x.view.met);
-    // The verdict that decides: a failing check, else (all passing) the
-    // latest pass, else the first check still short of a pass.
-    const deciding = checksPass
+    const required = checks.filter((x) => x.view.required);
+    // The criteria that decide: the required ones; with none required, all.
+    const counted = required.length > 0 ? required : checks;
+    const countedPass = counted.length > 0 && counted.every((x) => x.view.met);
+    // The verdict that decides: a failing criterion, else (all passing) the
+    // latest pass, else the first one still short of a pass.
+    const deciding = countedPass
       ? [...counted].sort((a, b) =>
           (b.view.verdict?.at ?? "").localeCompare(a.view.verdict?.at ?? "")
         )[0]
@@ -619,12 +691,23 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
     const verdict = deciding?.view.verdict ?? null;
     const retired = slot.retiredAt != null;
     const delivered = isDeliverableDelivered(slot);
-    const met = !retired && (delivered || checksPass);
+    // A required criterion holds even a delivered slot (D4 a, the reading of
+    // `computeSessionVerdict` and the close check); with none required,
+    // delivery or every criterion passing meets it.
+    const met =
+      !retired &&
+      (required.length > 0 ? countedPass : delivered || countedPass);
+    // The criteria tell the state while they decide it: a verdict on them, or
+    // a delivered slot still waiting on a required one. Otherwise the slot
+    // answers by the deliverable rule.
+    const byCriteria =
+      !retired &&
+      !!deciding &&
+      !(delivered && met) &&
+      (verdict !== null || (delivered && required.length > 0));
     const state = resolveUnitState(
-      // A verdict on its checks is the stronger fact; without one the slot
-      // answers by the deliverable rule.
-      verdict && !delivered && !retired
-        ? criterionState(deciding!.c, verdict, false)
+      byCriteria
+        ? criterionState(deciding!.c, verdict, gradeOwed.has(deciding!.c.key))
         : deliverableUnitInput(slot, {
             sessionTerminal: input.sessionTerminal,
           })
@@ -640,12 +723,14 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
         : slotOwner(slot) === "human"
           ? "human"
           : "evidence",
-      // An OPTIONAL slot never holds a gate; a required check still can.
-      required: first
-        ? checks.some((x) => x.view.required)
-        : slot.optional !== true,
+      // An OPTIONAL slot holds no gate unless a required criterion checks it.
+      required: slot.optional !== true || required.length > 0,
       met,
-      metBy: !met ? null : delivered ? slotMetBy(slot) : "verdict",
+      metBy: !met
+        ? null
+        : required.length === 0 && delivered
+          ? slotMetBy(slot)
+          : "verdict",
       retired,
       state,
       verdict,
@@ -658,7 +743,7 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
       ...(first?.check.evidenceKey
         ? { evidenceKey: first.check.evidenceKey }
         : {}),
-      ...(first ? { checks: checks.map((x) => x.view) } : {}),
+      ...(first ? { criteria: checks.map((x) => x.view) } : {}),
     });
 
     // (4) Handed to the person on a blocker / with an ask, or asked and
@@ -751,8 +836,8 @@ export function readInputs(
  * no outcomes passes on being closed).
  *
  * Over criterion-only outcomes this is exactly `computeSessionVerdict`'s
- * "every required criterion's current verdict is pass"; a slot with checks is
- * also met when its slot was delivered (rule 7).
+ * "every required criterion's current verdict is pass"; a slot a required
+ * criterion checks is met by that rule too, delivered or not (rule 7).
  */
 export function unmetRequiredOutcomes(
   outcomes: ReadonlyArray<

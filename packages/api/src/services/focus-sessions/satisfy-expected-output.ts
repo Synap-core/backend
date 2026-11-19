@@ -829,8 +829,8 @@ export function refEvidence(slot: ExpectedOutput): SlotEvidence | null {
  *   - it is not already done (any door) and not retired;
  *   - it is NOT the person's (`owner: 'human'`): a person's deliverable is
  *     checked by the person (attest / answer), never by what an agent made;
- *   - no CRITERION checks it (`outputKey`, `checkedOutputKeys`): such an
- *     outcome is checked by that criterion's evaluator (`judge` /
+ *   - no REQUIRED criterion checks it (`outputKey`, `checkedOutputKeys`):
+ *     such an outcome is checked by that criterion's evaluator (`judge` /
  *     `capability` / `human` — evaluate_session), and evidence alone would
  *     short-circuit the check it declared;
  *   - there IS evidence: a produced object the output join attributed to the
@@ -1019,7 +1019,7 @@ function slotPullRequest(slot: ExpectedOutput): PullRequestRef | null {
  *   - its key is `slotKey` (the one the sweeper resolved), when given;
  *   - it is not already done and not retired;
  *   - it is NOT the person's (`owner: 'human'`);
- *   - no CRITERION checks it (`outputKey`: that criterion's evaluator does);
+ *   - no REQUIRED criterion checks it (`outputKey`: its evaluator does);
  *   - its OWN `ref.url` is this pull request: same repo (any case), same
  *     number. A slot with no ref, a ref to another PR or another repo, or
  *     only a conventional key, is never closed here.
@@ -1137,7 +1137,7 @@ export interface ChildSlotWanted {
  * is closed only when ALL hold:
  *   - it is one the step expects back (`wanted`), found by label;
  *   - it is not already done, not retired, not the person's (`owner:
- *     'human'`), and no criterion checks it (`outputKey`: that criterion's
+ *     'human'`), and no REQUIRED criterion checks it (`outputKey`: its
  *     evaluator does);
  *   - the child's slot of the mapped label is DONE (through one of the
  *     child's own doors) and not retired.
@@ -1323,7 +1323,7 @@ function slotRefIs(slot: ExpectedOutput, ref: OutcomeRefTarget): boolean {
  *   - its OWN `ref` is that object (`{kind, id}`, same kind, same id);
  *   - it is not already done and not retired;
  *   - it is NOT the person's (`owner: 'human'`): a person checks their own;
- *   - no CRITERION checks it (`outputKey`: that criterion's evaluator does).
+ *   - no REQUIRED criterion checks it (`outputKey`: its evaluator does).
  * No claim is needed: the approval is the person's acceptance of the object,
  * and the slot named that object as what it waits for.
  */

@@ -54,6 +54,18 @@ describe("openRequiredWork", () => {
     expect(w.outcomes.map((o) => o.key)).toEqual(["tests-pass"]);
   });
 
+  it("an OPTIONAL criterion naming a slot does not take it off the owed list", () => {
+    const w = openRequiredWork({
+      criteria: [{ ...criterion, required: false, outputKey: "tests" }],
+      latest: [],
+      agentMovable: new Set(["tests-pass"]),
+      expectedOutputs: [
+        { key: "tests", kind: "code", label: "Tests", status: "pending" },
+      ],
+    });
+    expect(w.outcomes.map((o) => o.key)).toEqual(["tests"]);
+  });
+
   it("a criterion checking the person's own slot waits on the person", () => {
     const w = openRequiredWork({
       criteria: [{ ...criterion, outputKey: "sign-off" }],
