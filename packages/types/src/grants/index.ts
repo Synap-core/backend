@@ -43,3 +43,4 @@ export * from "./reach.js";
 export * from "./access-model.js";
 export * from "./access-ask.js";
 export * from "./app-access.js";
+export * from "./app-access-consent.js";
