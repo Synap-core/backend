@@ -5421,6 +5421,8 @@ CREATE TABLE IF NOT EXISTS "apps" (
   "logo_url"          text,
   "mode"              text        NOT NULL DEFAULT 'specific',
   "approved_requests" jsonb,
+  -- 0434: the approval in its v2 form (what + where per tier), or NULL.
+  "approved_access"   jsonb,
   "metadata"          jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "last_used_at"      timestamptz,
   "created_at"        timestamptz NOT NULL DEFAULT now(),

@@ -634,6 +634,8 @@ describe("R5 — the refreshed key carries the CURRENT approval", () => {
         workspaceId: BRAND,
         workspaceName: "Brand",
         scope: "space",
+        projectId: null,
+        place: { kind: "spaces", ids: [BRAND] },
       },
     ]);
   });
@@ -1029,6 +1031,8 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
         workspaceId: SHARED,
         workspaceName: "Shared",
         scope: "space",
+        projectId: null,
+        place: { kind: "spaces", ids: [SHARED] },
       },
     ]);
     expect(await keyGrants(replay.body.access_token)).toEqual([[SHARED]]);

@@ -93,6 +93,7 @@ import {
   materializeAskDefinitionsInOps,
   opsHoldAskDefinition,
 } from "./materialize-asks.js";
+import { askNudgeFor, patchOpTexts } from "./ask-nudge.js";
 import {
   buildDocumentEditRecord,
   documentPatchPayload,
@@ -968,6 +969,12 @@ export async function applyDocumentPatch(
       );
     }
   }
+  // A prose question for the person, with no ask block anywhere in the
+  // result: one advisory line on the receipt (`ask-nudge.ts`), agents only.
+  const nudge = agentUserId
+    ? askNudgeFor(patchOpTexts(ops), rendered.markdown)
+    : null;
+  const nudgeField = nudge ? { nudge } : {};
   const perm = await checkPermissionOrPropose({
     ...gateBase(),
     subjectType: "document",
@@ -991,6 +998,7 @@ export async function applyDocumentPatch(
       ...(rename ? { rename } : {}),
       preview: rendered.previews,
       ...diagnosticsFields(diagnostics),
+      ...nudgeField,
     };
   }
 
@@ -1040,6 +1048,7 @@ export async function applyDocumentPatch(
     ...(rename ? { rename } : {}),
     preview: rendered.previews,
     ...diagnosticsFields(diagnostics),
+    ...nudgeField,
     ...("autoApprovedProposalId" in perm && perm.autoApprovedProposalId
       ? { autoApprovedProposalId: perm.autoApprovedProposalId }
       : {}),

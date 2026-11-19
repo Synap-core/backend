@@ -57,6 +57,8 @@ function placedSpaces(
       };
     case "pod":
     case "unbounded":
+    case "projects":
+      // A project place names no space (its projects ride on `projectIds`).
       return { place, workspaces: null };
     default:
       return assertNeverPlace(place);

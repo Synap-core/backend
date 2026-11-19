@@ -96,13 +96,22 @@ import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
 import { assertPresencePass, type PresencePass } from "./presence/pass.js";
 import {
+  appAccessWithin,
   assertNeverPlace,
   EVERYWHERE_IN_POD,
+  grantScopesForAccess,
+  liftApprovedRequests,
+  pairsOfRequests,
+  pairsWithin,
+  expandAppAccess,
+  parseAppAccess,
   parsePlace,
   parseRequestPlace,
   permissionWithin,
   PlaceError,
+  sameAppAccess,
   withAppRequestScope,
+  type AppAccess,
   type Place,
 } from "@synap-core/types/grants";
 
@@ -664,14 +673,51 @@ const touchesAsked = (fields: unknown): boolean => {
   );
 };
 
+/** An approval in either form: the old pairs, or a v2 access (W2). */
+export type AppApprovalForm = readonly AppApprovedRequest[] | AppAccess;
+
+const isAccessForm = (form: AppApprovalForm): form is AppAccess =>
+  !Array.isArray(form);
+
+/** The v2 form of an approval: itself, or the lossless lift of its pairs. */
+function accessOfForm(form: AppApprovalForm): AppAccess | null {
+  if (isAccessForm(form)) return form;
+  const lifted = liftApprovedRequests(form);
+  return "access" in lifted ? lifted.access : null;
+}
+
 /**
  * approved ⊆ asked for an APP, place by place. An app's ask with no space is a
  * pod-wide read (decision e1b59d38 "B"): it covers that same pod-wide read and
  * never the read in one space, so a forged consent cannot turn "read decisions
  * everywhere" into "member of FINANCE". An AI's ask with no space does cover
  * any space (`requestsWithin`, agent-connect).
+ *
+ * v2 against v2 (W2): each side is read as its v2 access (pairs are lifted,
+ * `liftApprovedRequests`) and compared place by place (`appAccessWithin`).
+ * A lift is lossless, so this is the pair comparison exactly; when a side
+ * cannot be lifted (it re-consents), its pairs are compared as before.
  */
 export function appRequestsWithin(
+  approved: AppApprovalForm,
+  asked: AppApprovalForm
+): boolean {
+  const a = accessOfForm(approved);
+  const b = accessOfForm(asked);
+  if (a && b) return appAccessWithin(a, b);
+  if (!isAccessForm(approved) && !isAccessForm(asked))
+    return pairRequestsWithin(approved, asked);
+  // One side is v2 and the other cannot be lifted: place by place, and a
+  // pair no app may hold is within nothing.
+  const pairs = (form: AppApprovalForm) =>
+    isAccessForm(form) ? expandAppAccess(form) : pairsOfRequests(form).pairs;
+  if (!isAccessForm(approved) && pairsOfRequests(approved).unplaceable.length)
+    return false;
+  return pairsWithin(pairs(approved), pairs(asked));
+}
+
+/** The pair comparison (each approved pair within the asked ones at its space). */
+function pairRequestsWithin(
   approved: readonly AppApprovedRequest[],
   asked: readonly AppApprovedRequest[]
 ): boolean {
@@ -708,16 +754,72 @@ export function appApprovalWithinAsked(args: {
 }
 
 /**
- * The grants an app's key carries for what its owner approved: ONE grant per
- * workspace, holding exactly the permissions approved IN that workspace, plus
- * ONE grant with no workspace for the pod-wide reads, if any.
+ * The grants an app's key carries for what its owner approved (pairs: an
+ * app's `approved_requests`, or a person's sign-in reach).
+ *
+ * The pairs are read as their v2 access when they lift
+ * (`liftApprovedRequests`, W2): at most four scopes — reads in the read
+ * spaces, reads in the read projects, writes in the write spaces, writes in
+ * the write projects (`grantScopesForAccess`). A lift is lossless, so these
+ * scopes permit exactly the (permission, place) pairs the per-space grants
+ * below permit (app-connect.access-v2.test.ts compares both on every subset
+ * of a pair universe). Pairs that do not lift (a re-consent) keep the
+ * per-space grants.
  *
  * Never one grant of (all permissions × all workspaces): approving "create
  * People in Sales" and "read Notes in Finance" would then also allow creating
- * People in Finance — a reach nobody approved. The key may act where ANY one
- * grant permits (`KeyGrant`), so each pair stays bounded to its own workspace.
+ * People in Finance — a reach nobody approved. Both forms keep each pair
+ * bounded to its own place.
  */
 export function grantsForApprovedRequests(
+  approved: readonly AppApprovedRequest[]
+): GrantInput[] {
+  const lifted = liftApprovedRequests(approved);
+  return "access" in lifted
+    ? grantScopesForAccess(lifted.access)
+    : grantsForPairs(approved);
+}
+
+/**
+ * The grants for an app's approval as STORED: its v2 access
+ * (`approved_access`) when it holds a valid one, else its pairs, lifted at
+ * read time when they lift, else the per-space grants (a re-consent row
+ * keeps today's behaviour).
+ *
+ * Until the consent screen writes v2 itself (W3), v2 is DERIVED from the
+ * pairs (`AppRepository` writes both; the backfill lifts old rows). A stored
+ * v2 that no longer says what the pairs say was left behind by a write that
+ * bypassed the repository (a raw UPDATE of `approved_requests`): the pairs
+ * win, never the stale v2. W3 turns this round when v2 is written first.
+ */
+export function grantsForApp(app: {
+  approvedRequests: readonly AppApprovedRequest[] | null;
+  approvedAccess?: unknown;
+}): GrantInput[] {
+  const stored = parseAppAccess(app.approvedAccess ?? null);
+  const pairs = app.approvedRequests ?? [];
+  if (stored && (pairs.length === 0 || accessSaysPairs(stored, pairs)))
+    return grantScopesForAccess(stored);
+  return grantsForApprovedRequests(pairs);
+}
+
+/** Does `access` allow exactly the (permission, place) pairs `pairs` hold? */
+function accessSaysPairs(
+  access: AppAccess,
+  pairs: readonly AppApprovedRequest[]
+): boolean {
+  const lifted = liftApprovedRequests(pairs);
+  return "access" in lifted && sameAppAccess(access, lifted.access);
+}
+
+/**
+ * The per-space grants of a set of pairs: ONE grant per workspace, holding
+ * exactly the permissions approved IN that workspace, plus ONE grant with no
+ * workspace for the pod-wide reads, if any. What every app got before W2,
+ * and what pairs that do not lift still get. The key may act where ANY one
+ * grant permits (`KeyGrant`), so each pair stays bounded to its own workspace.
+ */
+export function grantsForPairs(
   approved: readonly AppApprovedRequest[]
 ): GrantInput[] {
   const byWorkspace = new Map<string, Set<string>>();
@@ -742,6 +844,9 @@ export function grantsForApprovedRequests(
         break;
       case "unbounded":
         // A write with no space: an app never holds one (dropped).
+        break;
+      case "projects":
+        // A pair names no project: an app's projects are its v2 access.
         break;
       default:
         assertNeverPlace(place);
@@ -866,19 +971,28 @@ async function syncAppAgentMemberships(
  * active grant set, so a re-run with the same approval changes nothing.
  */
 async function setApprovedReach(args: {
-  app: { publicId: string; ownerUserId: string };
+  app: {
+    publicId: string;
+    ownerUserId: string;
+    /** The approval's v2 form (`apps.approved_access`), read first. */
+    approvedAccess?: unknown;
+  };
   agentUserId: string;
   approved: readonly AppApprovedRequest[];
   apiKeyIds: readonly string[];
 }): Promise<void> {
   const owner = args.app.ownerUserId;
   await syncAppAgentMemberships(args.agentUserId, owner, args.approved);
+  const grants = grantsForApp({
+    approvedRequests: args.approved,
+    approvedAccess: args.app.approvedAccess,
+  });
   for (const apiKeyId of args.apiKeyIds) {
     await attachGrantsOrRevoke({
       apiKeyId,
       principalUserId: args.agentUserId,
       onBehalfOf: owner,
-      grants: grantsForApprovedRequests(args.approved),
+      grants,
       expiresAt: null,
       createdBy: owner,
       clientId: args.app.publicId,
@@ -965,6 +1079,12 @@ async function narrowAppPersonTokens(
       // A scope with no space holds the pod-wide reads (`workspaceId: null`);
       // anything else in it has no approved pair, so it is not kept.
       const place = parsePlace(scope, "app");
+      if (place.kind === "projects") {
+        // No pair names a project: such a scope is never kept as a pod-wide
+        // read (that would widen it), so the token is re-derived without it.
+        before += scope.permissions.length;
+        continue;
+      }
       const places: Array<string | null> =
         place.kind === "spaces" ? [...place.ids] : [null];
       for (const workspaceId of places) {

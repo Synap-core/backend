@@ -63,6 +63,11 @@ const DOORS = [
   // A stage's reached status (D2): the stage writer, which moves the subject
   // through `moveStatus` (`stage-subject-status.ts`, `writeSubjectStatusValue`).
   "writeStageReachedStatus",
+  // W6: a step whose work is met moves on through THE advance door
+  // (`advance-stage.ts`), or a check gate holding it is released through the
+  // gate's own release (`setSessionStatus`, `evaluations/evaluate.ts`).
+  "advanceSessionStage",
+  "resumeCheckGateIfMet",
 ];
 
 const RAW_WRITE = [

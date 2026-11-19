@@ -34,7 +34,10 @@ import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import { createHash } from "node:crypto";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  CHECK_GATE_METADATA_KEY,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import {
   attachSessionVerdicts,
   loadSessionEvaluationSummary,
@@ -80,7 +83,10 @@ export type NudgeSessionLike = Pick<
   | "stages"
   | "expectedOutputs"
   | "metadata"
->;
+> & {
+  /** Read by the check-gate nudge (W6); a caller without it gets no "held" line. */
+  status?: FocusSession["status"];
+};
 
 export interface SessionNudges {
   /** Declared criteria with no pass/fail verdict yet (keys). */
@@ -96,6 +102,20 @@ export interface SessionNudges {
     state: "unset" | "not_final";
     current: string | null;
     stages: string[];
+  };
+  /**
+   * The last CHECK gate's verdict (`metadata.checkGate`, `stage-gate.ts`):
+   * the stage it judged, what failed, and the gate's own reason — for an
+   * owed output, which slot to deliver and how (W6). `held`: the session is
+   * paused on it and resumes by itself once that is met; otherwise its
+   * `onFail` sent the run back (`sentBackTo`), and the agent advances again.
+   */
+  heldByCheck?: {
+    stageKey: string;
+    fromStage: string;
+    failing: string[];
+    held: boolean;
+    sentBackTo?: string;
   };
   /** Outputs handed to the person (`owner: 'human'`) still pending. */
   owedByPerson?: number;
@@ -200,6 +220,57 @@ export function computeSessionNudges(input: {
       out.stage = { state: "not_final", current: cur, stages };
       out.hints.push(
         `Closed at stage "${cur}", not the last ("${stages[stages.length - 1]}") — advance currentStage as the work moves.`
+      );
+    }
+  }
+
+  // A check gate's hold: its reason names the slot to deliver and how.
+  const held = (session.metadata as Record<string, unknown> | null)?.[
+    CHECK_GATE_METADATA_KEY
+  ] as
+    | {
+        stageKey?: unknown;
+        fromStage?: unknown;
+        failing?: unknown;
+        reason?: unknown;
+      }
+    | undefined;
+  if (
+    phase === "update" &&
+    typeof held?.stageKey === "string" &&
+    typeof held.fromStage === "string"
+  ) {
+    const failing = Array.isArray(held.failing)
+      ? held.failing.filter((k): k is string => typeof k === "string")
+      : [];
+    // Paused on the gate's stage: the gate holds it. On another stage: its
+    // `onFail` sent the run back there (the record stays, it says why).
+    const paused =
+      session.status === "paused" && session.currentStage === held.stageKey;
+    // A record the run has since passed (it stands after the gate's stage)
+    // says nothing about now.
+    const order = stageKeys(session.stages);
+    const at = session.currentStage ? order.indexOf(session.currentStage) : -1;
+    const backTo =
+      !paused && at >= 0 && at < order.indexOf(held.stageKey)
+        ? session.currentStage!
+        : undefined;
+    const why =
+      typeof held.reason === "string" && held.reason
+        ? held.reason
+        : `The check of "${held.fromStage}" did not pass: ${failing.join(", ")}.`;
+    if (paused || backTo) {
+      out.heldByCheck = {
+        stageKey: held.stageKey,
+        fromStage: held.fromStage,
+        failing,
+        held: paused,
+        ...(backTo ? { sentBackTo: backTo } : {}),
+      };
+      out.hints.push(
+        paused
+          ? `${why} The session resumes at "${held.stageKey}" by itself once that is met.`
+          : `${why} Its check sent the run back to "${backTo}": once that is met, advance to "${held.stageKey}" again.`
       );
     }
   }

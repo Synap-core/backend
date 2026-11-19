@@ -585,6 +585,9 @@ describe("I2 — the key is exactly the consented subset; narrowing works, widen
         workspaceName: "Brand",
         templateSlug: "content-os",
         scope: "space",
+        // Additive since app permissions W2.
+        projectId: null,
+        place: { kind: "spaces", ids: [BRAND] },
       },
     ]);
     expect(body.synap_user).toEqual({ id: OWNER, name: "Ada" });
@@ -670,7 +673,15 @@ describe("I2 — the key is exactly the consented subset; narrowing works, widen
       { permission: READ, workspaceId: BRAND },
       { permission: READ, workspaceId: SHARED },
     ]);
-    expect(await liveGrantsOf(record.id)).toHaveLength(2);
+    // One read in both spaces: since W2 the uniform pairs lift into ONE
+    // scope naming both spaces (`grantScopesForAccess`), the same reach as
+    // the two per-space scopes before.
+    const before = await liveGrantsOf(record.id);
+    expect(before).toHaveLength(1);
+    expect(before[0]!.permissions).toEqual([READ]);
+    expect([...before[0]!.workspaceIds!].sort()).toEqual(
+      [BRAND, SHARED].sort()
+    );
     // The same person consents again, ticking less (no /token call).
     await consent([{ permission: READ, workspaceId: BRAND }]);
     expect(await liveGrantsOf(record.id)).toEqual([

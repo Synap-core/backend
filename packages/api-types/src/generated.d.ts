@@ -72,6 +72,12 @@ export type Place = {
 		...string[]
 	];
 	readonly kind: "spaces";
+} | {
+	readonly ids: readonly [
+		string,
+		...string[]
+	];
+	readonly kind: "projects";
 };
 export interface KeyDraft {
 	/** What the person calls it. Required. */
@@ -6604,27 +6610,6 @@ export interface CatalogSyncStamp {
 	 */
 	retirementsUnreported?: true;
 }
-/**
- * Apps — a developer's application identity (App Connect v1, 2026-10-06).
- *
- * The object a developer registers is an APPLICATION; its `public_id`
- * (`app_<uuid>`) is the app's stable id AND the `client_id` its grant carries
- * (`grants.client_id`). The bearer is an API key (`api_keys`), unchanged — an
- * app never holds a secret of its own beyond the key minted for it.
- *
- * `approved_requests` is what the app ASKED for and a human APPROVED
- * (`[{ permission, workspaceId }]`); it is the exact list the key issue turns
- * into grants — ONE per workspace, never their cross product
- * (`grantsForApprovedRequests`, services/app-connect.ts; client_id = public_id).
- * It is written ONLY by the `app/connect` approval executor — never at register
- * time, so a proposal with no plaintext and a key minted only on demand means
- * no secret ever rests in a proposal.
- *
- * The app acts as its own agent user (`agent_user_id`, 0313) — see
- * `ensureAppAgent` (api services/app-connect.ts).
- *
- * ONE write door: `AppRepository` (repositories/app-repository.ts).
- */
 /**
  * One entry of `apps.approved_requests` — a permission bounded to a workspace,
  * or, with `workspaceId: null`, a POD-WIDE read ("everywhere in your pod",
@@ -22882,6 +22867,10 @@ export type ReactionDo =
  | {
 	effect: "reach_stage_status";
 }
+/** Advance the session to its next stage (the one advance door, W6). */
+ | {
+	effect: "advance_stage";
+}
 /**
  * Roll the parent up (decision D5): when every non-lost part is done and
  * at least one is, the parent moves to `to`, else to its next status
@@ -26882,6 +26871,18 @@ export type AnswerExpectedOutputResult = {
 	/** `true` ⇒ the slot was the person's and is now back with the agent. */
 	handedBack: boolean;
 	kind: string;
+	/**
+	 * A NO to an orchestrator's `plan-approval` (decision D-O2): the
+	 * orchestrator was closed (`cancelled`, "Plan declined") through the
+	 * one close door, or why not. The held sessions resume either way (the
+	 * answer ends their wait). Absent for every other answer.
+	 */
+	planDeclined?: {
+		closed: true;
+	} | {
+		closed: false;
+		error: string;
+	};
 	session: {
 		agentIds: string[];
 		channelId: string | null;

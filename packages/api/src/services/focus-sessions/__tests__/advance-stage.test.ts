@@ -105,6 +105,13 @@ vi.mock("@synap/events", () => ({
   },
 }));
 
+// The orchestrator hold (D-O1) is its own rule with its own suite
+// (`start-orchestrator.pglite.test.ts`); nothing here is orchestrated.
+vi.mock("@synap/jobs/utils/orchestrator-hold.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  orchestratorHolding: async () => null,
+}));
+
 const { advanceSessionStage } = await import("../advance-stage.js");
 
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";

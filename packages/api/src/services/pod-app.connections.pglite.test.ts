@@ -472,6 +472,8 @@ describe("N — narrow without a new consent", () => {
         workspaceId: BRAND,
         workspaceName: "Brand",
         scope: "space",
+        projectId: null,
+        place: { kind: "spaces", ids: [BRAND] },
       },
     ]);
     const keyId = await keyIdOf(r.body.access_token);
