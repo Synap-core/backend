@@ -404,7 +404,6 @@ export const PINNED_PLACEMENT_FIELDS = [
   // proposed session start (W3); the approval stamps it on the session, and a
   // ladder rung widens an app grant's reach over it (D2 a). A revise that could
   // plant or change it would widen that reach after the person read the card.
-  "workspacePlacement",
 ] as const;
 
 /** The pinned placement field a patch would CHANGE at either level, or null. */
