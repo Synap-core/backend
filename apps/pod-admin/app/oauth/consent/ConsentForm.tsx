@@ -961,10 +961,7 @@ export function AppConsent({
   defaultOpen?: "can" | "in" | "write" | null;
 }) {
   const t = consentT();
-  const { offer, rows, held, changes, names } = useConsentModel(
-    app,
-    spaceHint
-  );
+  const { offer, rows, held, changes, names } = useConsentModel(app, spaceHint);
   const groupId = useId();
   const confirming = changes.length > 0;
   const moved = changes.filter((c) => c.mark !== "new");
@@ -974,7 +971,9 @@ export function AppConsent({
     moved.some(
       (c) => c.mark === "wider" && !draft.permissions.has(c.permission)
     ) ||
-    changes.some((c) => c.mark === "new" && draft.permissions.has(c.permission));
+    changes.some(
+      (c) => c.mark === "new" && draft.permissions.has(c.permission)
+    );
   const cannot = cantGive(offer, app.ignoredScopes);
   const headline = draftHeadline(draft, offer, rows, names);
   const failed = step.kind === "error" ? step.message : null;
@@ -1355,7 +1354,10 @@ function CreateSpace({
   if (templates.length === 0) {
     // A state, not an error (rv-ui U9): the screen's neutral hint tone.
     return (
-      <p role="status" className="py-1 text-xs leading-relaxed text-foreground/75">
+      <p
+        role="status"
+        className="py-1 text-xs leading-relaxed text-foreground/75"
+      >
         {t("create.none")}
       </p>
     );

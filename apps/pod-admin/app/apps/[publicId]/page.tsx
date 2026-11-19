@@ -65,10 +65,7 @@ import {
   writeModeConfirm,
   type PodAppInfo,
 } from "../_lib/pod-app-view";
-import {
-  AppAccessSection,
-  drawsAccessLines,
-} from "../_lib/app-access-section";
+import { AppAccessSection, drawsAccessLines } from "../_lib/app-access-section";
 import { consentT } from "../../oauth/consent/copy";
 
 type LoadState = "loading" | "ready" | "missing" | "error";
@@ -583,23 +580,23 @@ function PodAppSettings({
         <section className="mt-6" aria-labelledby="pod-reach">
           {/* Only pairs that do not fit one access have something to confirm. */}
           {pod.approved.length > 0 ? (
-          <div
-            role="note"
-            className="mb-3 flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
-          >
-            <Info
-              className="mt-0.5 h-4 w-4 shrink-0 text-foreground/75"
-              aria-hidden
-            />
-            <div className="flex flex-col gap-0.5">
-              <p className="text-sm font-medium text-foreground">
-                {t("page.confirmLaterTitle")}
-              </p>
-              <p className="text-pretty text-xs text-foreground/75">
-                {t("page.confirmLater")}
-              </p>
+            <div
+              role="note"
+              className="mb-3 flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
+            >
+              <Info
+                className="mt-0.5 h-4 w-4 shrink-0 text-foreground/75"
+                aria-hidden
+              />
+              <div className="flex flex-col gap-0.5">
+                <p className="text-sm font-medium text-foreground">
+                  {t("page.confirmLaterTitle")}
+                </p>
+                <p className="text-pretty text-xs text-foreground/75">
+                  {t("page.confirmLater")}
+                </p>
+              </div>
             </div>
-          </div>
           ) : null}
           <h2
             id="pod-reach"

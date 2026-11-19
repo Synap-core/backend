@@ -140,7 +140,10 @@ export function KindsGroupRow({
           ) : null}
         </Checkbox>
         {perKindLevels ? (
-          <ul aria-label={`${t("kinds.label")}, ${appName}`} className="flex flex-col">
+          <ul
+            aria-label={`${t("kinds.label")}, ${appName}`}
+            className="flex flex-col"
+          >
             {row.kinds.map((k) => (
               <li
                 key={k.kind}
@@ -179,7 +182,9 @@ export function KindsGroupRow({
         )}
         {showPodWide ? (
           <p className="text-pretty text-xs leading-relaxed text-foreground/65">
-            {t("kinds.podWide", { names: andList(podWide.map((k) => k.label)) })}
+            {t("kinds.podWide", {
+              names: andList(podWide.map((k) => k.label)),
+            })}
           </p>
         ) : null}
       </div>

@@ -668,7 +668,6 @@ describe("the W3d consent contract (be6caecc v1)", () => {
   });
 });
 
-
 describe("review fixes (#1198 review, C3–C10, U2, U8)", () => {
   it("C3: a tier with no permission sent carries no place; an unverified app's templates pre-tick no write place", () => {
     const offer = offerOf(STUDIO);
@@ -754,8 +753,16 @@ describe("review fixes (#1198 review, C3–C10, U2, U8)", () => {
     const offer = offerOf({
       permissions: [
         ...["task", "deal"].flatMap((k) => [
-          { permission: `entity.${k}.read`, workspaces: [BUILDER], kindGroup: group },
-          { permission: `entity.${k}.update`, workspaces: [BUILDER], kindGroup: { permission: "entity.update", kinds: ["task", "deal"] } },
+          {
+            permission: `entity.${k}.read`,
+            workspaces: [BUILDER],
+            kindGroup: group,
+          },
+          {
+            permission: `entity.${k}.update`,
+            workspaces: [BUILDER],
+            kindGroup: { permission: "entity.update", kinds: ["task", "deal"] },
+          },
         ]),
       ],
       podWide: [],
@@ -791,18 +798,31 @@ describe("review fixes (#1198 review, C3–C10, U2, U8)", () => {
     const c = {
       asked: {
         permissions: [
-          { permission: "entity.task.read", tier: "read" as const, reason: null, kindGroup: null, allSpaces: false, offerable: true },
+          {
+            permission: "entity.task.read",
+            tier: "read" as const,
+            reason: null,
+            kindGroup: null,
+            allSpaces: false,
+            offerable: true,
+          },
         ],
         templates: [],
       },
       places: {
-        read: { allSpaces: false, spaces: [sp("a", "A"), sp("b", "B")], projects: [] },
+        read: {
+          allSpaces: false,
+          spaces: [sp("a", "A"), sp("b", "B")],
+          projects: [],
+        },
         write: { spaces: [], projects: [], suggestedSpaceIds: [] },
       },
       current: null,
       reconsent: null,
       ask: null,
     };
-    expect(offerOfContract(c, "b").items[0]!.spaces.map((s) => s.workspaceId)).toEqual(["b", "a"]);
+    expect(
+      offerOfContract(c, "b").items[0]!.spaces.map((s) => s.workspaceId)
+    ).toEqual(["b", "a"]);
   });
 });

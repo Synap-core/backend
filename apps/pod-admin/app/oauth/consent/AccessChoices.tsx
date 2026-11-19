@@ -47,11 +47,7 @@ import {
   type ActsAs,
   type ConsentObject,
 } from "./consent-model";
-import {
-  CONSENT_CHECKBOX,
-  CONSENT_RADIO,
-  LevelControl,
-} from "./LevelControl";
+import { CONSENT_CHECKBOX, CONSENT_RADIO, LevelControl } from "./LevelControl";
 import { KindsGroupRow } from "./KindsGroupRow";
 import { consentT } from "./copy";
 
@@ -403,7 +399,11 @@ export function InChoices({
   const missing = notEverywhere(draft, rows, offer);
   return (
     <div className="flex flex-col gap-4">
-      <div role="group" aria-labelledby={`${id}-sp`} className="flex flex-col gap-1">
+      <div
+        role="group"
+        aria-labelledby={`${id}-sp`}
+        className="flex flex-col gap-1"
+      >
         <p id={`${id}-sp`} className={LEGEND}>
           {t("in.spaces")}
         </p>
@@ -534,7 +534,10 @@ export function WriteChoices({
   isDisabled?: boolean;
   onChange: OnChange;
   asked?: readonly string[];
-  within?: { spaces: readonly string[] | "all"; projects: readonly string[] | "all" };
+  within?: {
+    spaces: readonly string[] | "all";
+    projects: readonly string[] | "all";
+  };
 }) {
   const t = consentT();
   const choices = writeChoices(offer);
@@ -557,7 +560,11 @@ export function WriteChoices({
   return (
     <div className="flex flex-col gap-3">
       {spaces.length > 0 ? (
-        <div role="group" aria-label={t("write.spaces")} className="flex flex-col">
+        <div
+          role="group"
+          aria-label={t("write.spaces")}
+          className="flex flex-col"
+        >
           <p className={LEGEND} aria-hidden>
             {t("in.spaces")}
           </p>

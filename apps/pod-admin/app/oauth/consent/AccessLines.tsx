@@ -135,13 +135,24 @@ export function AccessLines(props: AccessLinesProps) {
           >
             {t("page.keepEditing")}
           </Button>
-          <Button size="sm" color="danger" variant="flat" className="min-h-10" onPress={close}>
+          <Button
+            size="sm"
+            color="danger"
+            variant="flat"
+            className="min-h-10"
+            onPress={close}
+          >
             {t("page.discard")}
           </Button>
         </div>
       ) : (
         <>
-          <Button size="sm" variant="light" className="min-h-10" onPress={close}>
+          <Button
+            size="sm"
+            variant="light"
+            className="min-h-10"
+            onPress={close}
+          >
             {t("sheet.cancel")}
           </Button>
           <Button
@@ -202,7 +213,9 @@ export function AccessLines(props: AccessLinesProps) {
           if (read.spaces.length > 0)
             groups.push(
               joinNodes(
-                read.spaces.map((p) => <PlaceName key={p.id} part={p} door={door} />),
+                read.spaces.map((p) => (
+                  <PlaceName key={p.id} part={p} door={door} />
+                )),
                 and
               )
             );
@@ -210,7 +223,9 @@ export function AccessLines(props: AccessLinesProps) {
           else if (read.projects.length > 0)
             groups.push(
               joinNodes(
-                read.projects.map((p) => <PlaceName key={p.id} part={p} door={door} />),
+                read.projects.map((p) => (
+                  <PlaceName key={p.id} part={p} door={door} />
+                )),
                 and
               )
             );

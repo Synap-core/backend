@@ -723,8 +723,6 @@ export function toggleAllKinds(draft: ConsentDraft, row: CanRow): ConsentDraft {
   return { ...draft, permissions: next };
 }
 
-
-
 /**
  * A vocabulary noun mid-sentence: "Posts" → "posts"; "AI agents" stays. The
  * ONE place a label is lower-cased (never at a call site).
@@ -914,8 +912,6 @@ export function writePhrase(
   const parts = writeParts(draft, names);
   return parts.length === 0 ? null : andList(parts.map(partWords));
 }
-
-
 
 /** "All spaces" is picked and no project is: the F3 union sentence is moot. */
 export function showsUnion(draft: ConsentDraft): boolean {
@@ -1261,8 +1257,7 @@ export function reconsentChanges(
     }
   }
   if (held.kind !== "none") {
-    const holds =
-      heldPermissions ?? new Set(current.map((c) => c.permission));
+    const holds = heldPermissions ?? new Set(current.map((c) => c.permission));
     for (const i of offer.items) {
       if (holds.has(i.permission) || !givable(i)) continue;
       out.push({

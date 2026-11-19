@@ -38,7 +38,8 @@ export const en = {
   "level.on": "On",
   "level.mixed": "Mixed",
   "can.nothing": "Nothing yet",
-  "can.records": "{n, plural, one {records (# kind)} other {records (# kinds)}}",
+  "can.records":
+    "{n, plural, one {records (# kind)} other {records (# kinds)}}",
   "can.more": "{n, plural, one {# more} other {# more}}",
   "can.notDecide": "Not allowed to {what}",
   "can.onlyPicked": "{names}: only in spaces you pick",
@@ -94,7 +95,8 @@ export const en = {
   "write.asked": "Asked",
   "write.viewOnly":
     "{names} {n, plural, one {isn’t listed: you can only view it.} other {aren’t listed: you can only view them.}}",
-  "write.noEverywhere": "Pick each place. There is no “everywhere” for changes.",
+  "write.noEverywhere":
+    "Pick each place. There is no “everywhere” for changes.",
   "write.noPlace": "You have no space where it could make changes.",
   "kinds.count": "{n, plural, one {# kind} other {# kinds}}",
   "kinds.all": "All {n} kinds it asked for",
@@ -273,8 +275,7 @@ export const fr: Catalog<typeof en> = {
   "in.notEverywhere":
     "Avec tous les espaces, il ne voit toujours pas {names} : ils ne valent que dans les espaces que vous choisissez.",
   "in.nowhere": "Nulle part pour l’instant",
-  "in.every":
-    "Chaque espace et chaque projet, y compris ceux que vous créerez",
+  "in.every": "Chaque espace et chaque projet, y compris ceux que vous créerez",
   "in.union":
     "Il atteint une fiche lorsqu’elle est dans un espace choisi, ou classée dans un projet choisi. Les fiches d’un projet hors de vos espaces choisis sont incluses.",
   "write.spaces": "Espaces où il peut modifier",
@@ -366,8 +367,7 @@ export const fr: Catalog<typeof en> = {
   "ask.pickFor": "Choisissez où il peut faire cette modification",
   "ask.newChoice":
     "Il ne modifie rien pour l’instant, c’est donc un nouveau choix.",
-  "ask.withinIn":
-    "Seuls les lieux où il peut déjà regarder sont proposés.",
+  "ask.withinIn": "Seuls les lieux où il peut déjà regarder sont proposés.",
   "ask.blocked": "Choisissez au moins un lieu.",
   "ask.unavailableBlocked":
     "Une partie de cette demande vise un lieu où il ne travaille pas encore : reconnectez-le pour choisir ses lieux.",

@@ -29,7 +29,9 @@ export interface AllowPayload {
 export function allowPayload(input: {
   /** The consent context's `app` (null: not a pod app). */
   app: {
-    ask: { pairs: ReadonlyArray<{ permission: string; workspaceId: string }> } | null;
+    ask: {
+      pairs: ReadonlyArray<{ permission: string; workspaceId: string }>;
+    } | null;
   } | null;
   contract: ConsentContract | null;
   offer: ConsentOffer | null;

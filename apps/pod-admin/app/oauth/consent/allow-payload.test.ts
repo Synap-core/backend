@@ -36,14 +36,36 @@ const PAIRS = {
 const CONTRACT: ConsentContract = {
   asked: {
     permissions: [
-      { permission: "entity.post.read", tier: "read", reason: null, kindGroup: null, allSpaces: false, offerable: true },
-      { permission: "entity.post.create", tier: "write", reason: null, kindGroup: null, allSpaces: false, offerable: true },
+      {
+        permission: "entity.post.read",
+        tier: "read",
+        reason: null,
+        kindGroup: null,
+        allSpaces: false,
+        offerable: true,
+      },
+      {
+        permission: "entity.post.create",
+        tier: "write",
+        reason: null,
+        kindGroup: null,
+        allSpaces: false,
+        offerable: true,
+      },
     ],
     templates: [],
   },
   places: {
-    read: { allSpaces: false, spaces: [{ id: "w-a", name: "A", templateSlug: null }], projects: [] },
-    write: { spaces: [{ id: "w-a", name: "A", templateSlug: null }], projects: [], suggestedSpaceIds: [] },
+    read: {
+      allSpaces: false,
+      spaces: [{ id: "w-a", name: "A", templateSlug: null }],
+      projects: [],
+    },
+    write: {
+      spaces: [{ id: "w-a", name: "A", templateSlug: null }],
+      projects: [],
+      suggestedSpaceIds: [],
+    },
   },
   current: null,
   reconsent: null,
@@ -54,7 +76,13 @@ describe("what Allow sends", () => {
   it("the full consent, today's pod: pairs only", () => {
     const offer = offerOf(APP);
     const draft = toggleWritePlace(firstDraft(offer), "space", "w-a");
-    const p = allowPayload({ app: { ask: null }, contract: null, offer, draft, askWrite: null });
+    const p = allowPayload({
+      app: { ask: null },
+      contract: null,
+      offer,
+      draft,
+      askWrite: null,
+    });
     expect(p.access).toBeUndefined();
     expect(p.approved).toEqual([
       { permission: "entity.post.read", workspaceId: "w-a" },
@@ -65,7 +93,13 @@ describe("what Allow sends", () => {
   it("the full consent on a W3d pod: pairs AND the v2 access", () => {
     const offer = offerOfContract(CONTRACT);
     const draft = toggleWritePlace(firstDraft(offer), "space", "w-a");
-    const p = allowPayload({ app: { ask: null }, contract: CONTRACT, offer, draft, askWrite: null });
+    const p = allowPayload({
+      app: { ask: null },
+      contract: CONTRACT,
+      offer,
+      draft,
+      askWrite: null,
+    });
     expect(p.access).toEqual({
       version: 2,
       permissions: ["entity.post.read", "entity.post.create"],
@@ -81,14 +115,26 @@ describe("what Allow sends", () => {
       "entity.post.create",
       false
     );
-    const p = allowPayload({ app: { ask: null }, contract: CONTRACT, offer, draft, askWrite: null });
+    const p = allowPayload({
+      app: { ask: null },
+      contract: CONTRACT,
+      offer,
+      draft,
+      askWrite: null,
+    });
     expect(p.access!.write).toEqual({ spaces: [], projects: [] });
   });
 
   it("C7: today's short ask sends exactly its pairs, never a full access, even on a W3d pod", () => {
     const offer = offerOfContract(CONTRACT);
     const draft = firstDraft(offer);
-    const p = allowPayload({ app: { ask: PAIRS }, contract: CONTRACT, offer, draft, askWrite: null });
+    const p = allowPayload({
+      app: { ask: PAIRS },
+      contract: CONTRACT,
+      offer,
+      draft,
+      askWrite: null,
+    });
     expect(p).toEqual({
       approved: [{ permission: "entity.note.read", workspaceId: "w-a" }],
     });
@@ -97,19 +143,44 @@ describe("what Allow sends", () => {
   it("C2: the contract's short ask sends neither pairs nor access; its write place only when it needs one", () => {
     const offer = offerOfContract(CONTRACT);
     const askWrite = toggleWritePlace(firstDraft(offer), "space", "w-a");
-    const ask = { title: "", adds: [], unavailable: [], connectionPublicId: null };
+    const ask = {
+      title: "",
+      adds: [],
+      unavailable: [],
+      connectionPublicId: null,
+    };
     const needs = { ...CONTRACT, ask: { ...ask, needsWritePlace: true } };
     const plain = { ...CONTRACT, ask: { ...ask, needsWritePlace: false } };
     expect(
-      allowPayload({ app: { ask: PAIRS }, contract: needs, offer, draft: null, askWrite })
+      allowPayload({
+        app: { ask: PAIRS },
+        contract: needs,
+        offer,
+        draft: null,
+        askWrite,
+      })
     ).toEqual({ askWritePlace: { spaces: ["w-a"], projects: [] } });
     expect(
-      allowPayload({ app: { ask: null }, contract: plain, offer, draft: null, askWrite })
+      allowPayload({
+        app: { ask: null },
+        contract: plain,
+        offer,
+        draft: null,
+        askWrite,
+      })
     ).toEqual({});
   });
 
   it("not a pod app: nothing of the app's", () => {
-    expect(allowPayload({ app: null, contract: null, offer: null, draft: null, askWrite: null })).toEqual({});
+    expect(
+      allowPayload({
+        app: null,
+        contract: null,
+        offer: null,
+        draft: null,
+        askWrite: null,
+      })
+    ).toEqual({});
   });
 
   it("C6: a pod app's failure is drawn inline, never also on its own screen", () => {
