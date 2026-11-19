@@ -123,7 +123,15 @@ describe("writeForFrame — each op to its own door, stamped", () => {
       },
       undefined,
     ]);
-    expect(result).toEqual({ status: "approved", data: { id: "r-1" } });
+    expect(result).toEqual({
+      status: "approved",
+      data: {
+        id: "r-1",
+        sourceEntityId: A,
+        targetEntityId: B,
+        type: "relates_to",
+      },
+    });
   });
 });
 
@@ -178,5 +186,83 @@ describe("readWriteAnswer — what the pod said", () => {
     await expect(
       writeForFrame(client, req("delete_entity", { id: A }))
     ).rejects.toThrow("boom");
+  });
+});
+
+describe("an approved write's data: ONE shape per op, on every host", () => {
+  const ENTITY_ROW = {
+    id: A,
+    title: "Acme",
+    profileSlug: "deal",
+    status: "open",
+  };
+
+  it("create_entity → the entity record the pod returned, unwrapped", async () => {
+    const { client } = recording({
+      status: "created",
+      message: "Entity created",
+      id: A,
+      entity: ENTITY_ROW,
+    });
+    const result = await writeForFrame(
+      client,
+      req("create_entity", { profileSlug: "deal", title: "Acme" })
+    );
+    expect(result).toEqual({ status: "approved", data: ENTITY_ROW });
+  });
+
+  it("update_entity → the record as the write left it, with its id", async () => {
+    const { client } = recording({
+      status: "updated",
+      message: "Entity updated",
+      written: { title: "Acme", properties: { stage: "won" } },
+    });
+    const result = await writeForFrame(
+      client,
+      req("update_entity", { id: A, properties: { stage: "won" } })
+    );
+    expect(result).toEqual({
+      status: "approved",
+      data: { id: A, title: "Acme", properties: { stage: "won" } },
+    });
+  });
+
+  it("delete_entity → { id }", async () => {
+    const { client } = recording({
+      status: "deleted",
+      message: "Entity deleted",
+    });
+    const result = await writeForFrame(client, req("delete_entity", { id: A }));
+    expect(result).toEqual({ status: "approved", data: { id: A } });
+  });
+
+  it("create_relation → the relation record", async () => {
+    const { client } = recording({ id: "r-1", status: "created" });
+    const result = await writeForFrame(
+      client,
+      req("create_relation", {
+        sourceEntityId: A,
+        targetEntityId: B,
+        type: "relates_to",
+      })
+    );
+    expect(result).toEqual({
+      status: "approved",
+      data: {
+        id: "r-1",
+        sourceEntityId: A,
+        targetEntityId: B,
+        type: "relates_to",
+      },
+    });
+  });
+
+  it("the answer's status never rides inside data", async () => {
+    const { client } = recording({ status: "updated" });
+    const result = await writeForFrame(
+      client,
+      req("update_entity", { id: A, properties: {} })
+    );
+    expect(result).toEqual({ status: "approved", data: { id: A } });
   });
 });

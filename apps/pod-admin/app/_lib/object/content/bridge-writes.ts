@@ -16,6 +16,14 @@
  * The answer is what the POD said, mapped to approved / proposed / denied
  * (`readWriteAnswer`). Nothing is applied optimistically, and an answer this
  * reader does not recognise is never "approved".
+ *
+ * An approved write's `data` has ONE shape on every host (the desktop's
+ * too), never mixed with `status`:
+ *
+ *   create_entity   → the entity record the pod returned (unwrapped)
+ *   update_entity   → the entity record as the write left it (`id` + `written`)
+ *   delete_entity   → `{ id }`
+ *   create_relation → the relation record (`id`, both ends, `type`)
  */
 
 import type {
@@ -25,11 +33,12 @@ import type {
 import { readableError } from "../../../../lib/format";
 import type { BridgeClient } from "./html-bridge-reads";
 
-type Answer = {
+export type WriteAnswer = {
   status?: unknown;
   proposalId?: unknown;
   id?: unknown;
-  entity?: { id?: unknown } | null;
+  entity?: Record<string, unknown> | null;
+  written?: Record<string, unknown> | null;
   statusMove?: { status?: unknown; proposalId?: unknown } | null;
 };
 
@@ -39,9 +48,18 @@ const APPLIED = new Set<unknown>(["created", "updated", "deleted"]);
 export const UNREAD_WRITE_ANSWER =
   "The pod did not say whether the change was made.";
 
-/** The pod's answer to one write, as the frame reads it. */
-export function readWriteAnswer(answer: unknown): CellBridgeMutateResult {
-  const a = (answer ?? {}) as Answer;
+/** What the frame reads when the pod refused without a sentence of its own. */
+export const REFUSED_WRITE_ANSWER = "The pod refused this change.";
+
+/**
+ * The pod's answer to one write, as the frame reads it. `dataOf` is the op's
+ * `data` (see the header); without it an approved answer carries its id.
+ */
+export function readWriteAnswer(
+  answer: unknown,
+  dataOf?: (answer: WriteAnswer) => unknown
+): CellBridgeMutateResult {
+  const a = (answer ?? {}) as WriteAnswer;
   if (a.status === "proposed") {
     return typeof a.proposalId === "string"
       ? { status: "proposed", proposalId: a.proposalId }
@@ -55,6 +73,7 @@ export function readWriteAnswer(answer: unknown): CellBridgeMutateResult {
         ? { status: "proposed", proposalId: a.statusMove.proposalId }
         : { status: "proposed" };
     }
+    if (dataOf) return { status: "approved", data: dataOf(a) };
     const id =
       typeof a.entity?.id === "string"
         ? a.entity.id
@@ -80,7 +99,7 @@ function deniedOrThrow(err: unknown): CellBridgeMutateResult {
     const detail = readableError(e.message);
     return detail
       ? { status: "denied", error: detail }
-      : { status: "denied", error: "The pod refused this change." };
+      : { status: "denied", error: REFUSED_WRITE_ANSWER };
   }
   throw err;
 }
@@ -113,7 +132,8 @@ export async function writeForFrame(
               viewContext,
             },
             lensContext(request)
-          )
+          ),
+          (a) => a.entity ?? (typeof a.id === "string" ? { id: a.id } : {})
         );
       }
       case "update_entity": {
@@ -130,16 +150,20 @@ export async function writeForFrame(
               viewContext,
             },
             lensContext(request)
-          )
+          ),
+          (a) => ({ ...(a.written ?? {}), id: p.id })
         );
       }
-      case "delete_entity":
+      case "delete_entity": {
+        const { id } = request.payload;
         return readWriteAnswer(
           await client.entities.delete.mutate(
-            { id: request.payload.id, source, viewContext },
+            { id, source, viewContext },
             lensContext(request)
-          )
+          ),
+          () => ({ id })
         );
+      }
       case "create_relation": {
         const p = request.payload;
         const ws = request.lens.workspaceId;
@@ -150,6 +174,12 @@ export async function writeForFrame(
             type: p.type,
             viewContext,
             ...(ws ? { workspaceId: ws } : {}),
+          }),
+          (a) => ({
+            ...(typeof a.id === "string" ? { id: a.id } : {}),
+            sourceEntityId: p.sourceEntityId,
+            targetEntityId: p.targetEntityId,
+            type: p.type,
           })
         );
       }
