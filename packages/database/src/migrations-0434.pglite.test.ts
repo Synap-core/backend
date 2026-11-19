@@ -412,17 +412,17 @@ describe("after 0434 — the approval row is the one answer", () => {
         1,
       ],
     ]);
-    // Tighten-only, counted: no auto row existed before; one agent membership
+    // Counted for the founder's decision on the channel rung (not applied): no auto row existed before; one agent membership
     // may not act (a person's membership, and an agent that may act, are not counted).
     expect(bySection("4-change-channel-rows")).toEqual([
       [
-        "active auto capability rows that now meet a stricter channel (tighten-only)",
+        "active auto capability rows the channel rung would reach (not applied)",
         0,
       ],
     ]);
     expect(bySection("4-change-channel-members")).toEqual([
       [
-        "agent channel memberships with can_act = false, in 1 channel(s) (tighten-only)",
+        "agent channel memberships with can_act = false, in 1 channel(s) (rung not applied)",
         1,
       ],
     ]);

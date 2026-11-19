@@ -33,20 +33,15 @@
 --                   stricter wins; listed when the auto row was the newer
 --     tool-row      an active row naming a tool CONTAINER id: before, it
 --                   matched nothing; it now covers each member action
---     channel-*     TIGHTEN-ONLY. An auto approval row now meets a stricter
---                   channel (policy rung 7: a channel member with can_act =
---                   false makes the run propose) exactly as an auto grant
---                   did; before, an auto ROW skipped that rung. Counted:
---                   channel-rows = the active auto capability rows this
---                   applies to; channel-members = the agent channel
---                   memberships that would tighten (can_act = false).
---                   NOTE (verified in code at backend 684311a5): no caller
---                   of gateCapabilityExecution passes channelCapabilities
---                   today (skills.ts, external-dispatch.ts x2,
---                   connector-import-bridge.ts, execute-capability.ts,
---                   connect-inbound-source.ts), so the rung never fires on a
---                   tool run yet: the runs that change today are zero. The
---                   counts say what it reaches once a door passes them
+--     channel-*     NOT A CHANGE (kept as before, W1 lead's default; the
+--                   founder decides at review): an auto approval row does NOT
+--                   meet the channel rung (policy rung 7: an agent member with
+--                   can_act = false makes a run propose), as an auto rule never
+--                   did. Counted for that decision: channel-rows = active auto
+--                   capability rows the rung would reach; channel-members =
+--                   agent memberships with can_act = false. No caller of
+--                   gateCapabilityExecution passes channelCapabilities today
+--                   (verified at backend 684311a5)
 --
 -- Matching mirrors 0434 and `resolveGovernanceRule`: a grant matches a
 -- redeemer when granted_to / workspace_id is NULL or equal; a row's reach is
@@ -189,13 +184,13 @@ SELECT '4-change-tool-row',
   FROM active_rules r JOIN "capabilities" c ON c."id"::text = r."target_pattern"
 UNION ALL
 SELECT '4-change-channel-rows',
-       'active auto capability rows that now meet a stricter channel (tighten-only)',
+       'active auto capability rows the channel rung would reach (not applied)',
        count(*)::int
   FROM active_rules WHERE "verdict"::text = 'auto'
 UNION ALL
 SELECT '4-change-channel-members',
        'agent channel memberships with can_act = false, in '
-         || count(DISTINCT m."channel_id")::text || ' channel(s) (tighten-only)',
+         || count(DISTINCT m."channel_id")::text || ' channel(s) (rung not applied)',
        count(*)::int
   FROM "channel_members" m
  WHERE m."member_kind" = 'ai_agent' AND m."can_act" = false

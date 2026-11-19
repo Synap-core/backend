@@ -257,7 +257,8 @@ export type GateCapabilityDecision =
  *      row (2) over a pod row (0), plus a row naming the action (3) over a
  *      row naming its tool (2); on a tie the stricter verdict wins. `auto`
  *      → the policy's capability rung (2.7) with exec mode `auto` (a
- *      stricter channel still tightens; a propose-only action still asks);
+ *      propose-only action still asks; the channel rung 7 is NOT applied,
+ *      as it never was to an auto rule);
  *      `propose` or no row → propose (the posture default for a tool run).
  *      Grants are never read: a grant means "may use", not "without asking".
  *   3. A run with no agent (a person who is not the owner) keeps the policy's
@@ -572,9 +573,15 @@ async function decideCapabilityExecution(
   // ── 2. THE APPROVAL ROW (decisions D2/D3) — the ONLY answer to "may this
   //       agent run this without asking?". An `auto` row (resolved once above,
   //       ranked, the stricter verdict winning a tie) sends the run through
-  //       the policy's capability rung with exec mode `auto`, the path an
-  //       auto grant took before 0434; an "ask first" row or no row proposes.
-  //       A grant is not read: it means "may use", never "without asking".
+  //       the policy's capability rung with exec mode `auto`; an "ask first"
+  //       row or no row proposes. A grant is not read: it means "may use",
+  //       never "without asking".
+  //       CHANNEL RUNG 7 IS NOT APPLIED to an auto row: an auto rule never met
+  //       it before 0434, and with `can_act = false` on nearly every agent
+  //       membership (founder's pod, 19 Nov 2026: 4001 memberships in 2060
+  //       channels) applying it would stop auto rules in most rooms. Kept as
+  //       before by the lead's default (W1, D2 review); the founder decides
+  //       at review. No caller passes `channelCapabilities` today either.
   let approvalMode: "auto" | null = null;
   if (input.agentUserId) {
     if (originUntrusted) {
@@ -597,7 +604,12 @@ async function decideCapabilityExecution(
     action: CAPABILITY_RUN_PROPOSAL.proposalType,
     capabilityGovernance,
     capabilityExecMode: approvalMode,
-    channelCapabilities: input.channelCapabilities ?? undefined,
+    // An auto approval row skips the channel rung (see step 2); a person's
+    // run with no row keeps it, as before.
+    channelCapabilities:
+      approvalMode === "auto"
+        ? undefined
+        : (input.channelCapabilities ?? undefined),
     // #4: an untrusted origin downgrades a would-be-auto run to propose at rung
     // 2.55 (above the capability rung 2.7) inside the pure engine.
     originTrust,

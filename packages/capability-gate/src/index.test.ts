@@ -162,8 +162,11 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
     expect(findCapabilityGrantMock).not.toHaveBeenCalled();
   });
 
-  it("D2: an auto row still meets a stricter channel (rung 7 tightens the row as it did the grant)", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false, code: "no_grant" });
+  it("PIN: an auto row runs in a can_act=false channel (the channel rung is not applied to a row)", async () => {
+    // Lead's default for W1 (founder decides at review): an auto RULE never
+    // met policy rung 7, and can_act=false is on nearly every agent
+    // membership. The beforeEach's ACTIVE AUTO GRANT makes this red on the
+    // gate before D2, whose grant path sent the run through rung 7.
     resolveGovernanceRuleMock.mockResolvedValue({
       verdict: "auto",
       matchedPattern: "tool-123",
@@ -174,10 +177,7 @@ describe("gateCapabilityExecution — capability rule consultation (Option B)", 
       channelCapabilities: { canDraft: true, canPropose: true, canAct: false },
     });
 
-    expect(decision).toMatchObject({
-      decision: "propose",
-      reasonCode: "CHANNEL_PROPOSE",
-    });
+    expect(decision).toEqual({ decision: "run" });
   });
 
   it("D3: the lookup asks for the tools this action belongs to (a row on the tool covers it)", async () => {
@@ -408,15 +408,13 @@ describe("propose decisions carry a structured cause", () => {
   });
 
   it("the policy route carries the verdict's OWN code rather than re-deriving it", async () => {
-    // An auto row inside a channel that may only propose: the policy's rung 7
-    // names CHANNEL_PROPOSE, which the gate carries through.
-    resolveGovernanceRuleMock.mockResolvedValue({
-      verdict: "auto",
-      matchedPattern: "tool-123",
-    });
-
+    // A person who does not own the tool, inside a channel that may only
+    // propose: the policy's rung 7 names CHANNEL_PROPOSE, which the gate
+    // carries through.
     const decision = await gateCapabilityExecution({
       ...BASE_INPUT,
+      actorUserId: "person-2",
+      agentUserId: null,
       channelCapabilities: { canDraft: true, canPropose: true, canAct: false },
     });
 
