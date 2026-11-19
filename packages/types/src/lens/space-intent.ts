@@ -122,6 +122,13 @@ export interface SpaceProducedKindInput {
     status: string | null;
     reason: SpaceHeadlineReason;
   } | null;
+  /**
+   * `helper`: the space works this kind to serve an output, it is not one
+   * (`SpaceKindRole`, the template's `produces[].role`). Absent = produced.
+   */
+  role?: "helper";
+  /** The kind this one feeds (`produces[].feeds`); absent = none declared. */
+  feeds?: string;
 }
 
 /** One space of `lifecycle.home`. */

@@ -102,7 +102,9 @@ vi.mock("@synap/database", async (importOriginal) => {
       delete: () => ({
         where: async (pred: { keep: string[] }) => {
           store.links = store.links.filter(
-            (l) => l.role !== "activator" || pred.keep.includes(l.automationId)
+            (l) =>
+              (l.role !== "activator" && l.role !== "link") ||
+              pred.keep.includes(l.automationId)
           );
         },
       }),
@@ -206,6 +208,22 @@ vi.mock("../rules/lineage.js", () => ({
     return r && !(r.metadata.rule as Row).draft ? [r.automationId] : [];
   },
 }));
+// The playbooks a link names, as the space holds them (`resolveLinkedPlaybooks`
+// reads them through real SQL in `playbook-links.pglite.test.ts`).
+const linkable = vi.hoisted(() => ({
+  rows: new Map<string, { id: string; name: string }>(),
+}));
+vi.mock("./playbook-links.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveLinkedPlaybooks: vi.fn(async (refs: readonly string[]) => {
+    const out = new Map<string, { id: string; name: string }>();
+    for (const r of refs) {
+      const hit = linkable.rows.get(r);
+      if (hit) out.set(r, hit);
+    }
+    return out;
+  }),
+}));
 vi.mock("@synap-core/core", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -221,6 +239,8 @@ import {
 } from "./playbook-activators.js";
 import { templateRuleHash } from "../rules/template-rules.js";
 import { toBackendTrigger } from "@synap-core/types/automations";
+import { linkOfTrigger } from "./playbook-links.js";
+import { FOCUS_SESSION_CLOSED_EVENT_TYPE } from "../focus-sessions/close-event.js";
 import { createRuleGoverned } from "../rules/create.js";
 import { updateRuleGoverned } from "../rules/update.js";
 
@@ -252,6 +272,7 @@ beforeEach(() => {
   store.seq = 0;
   store.profileRows = [];
   store.lifecycleProperty = null;
+  linkable.rows = new Map();
   vi.mocked(createRuleGoverned).mockClear();
   vi.mocked(updateRuleGoverned).mockClear();
 });
@@ -1253,5 +1274,128 @@ describe("D4: rules compiled before the worker spec re-converge once", () => {
       ((store.playbook!.metadata as Row).activatorRules as Row | undefined)
         ?.compileVersion
     ).toBeUndefined();
+  });
+});
+
+describe("a LINK: when a run of another playbook ends (W8a)", () => {
+  const SHIP = { id: "pb-ship", name: "Ship a change" };
+  const LINK = {
+    on: "run_ended",
+    playbook: "Ship a change",
+    outcome: "delivered",
+    mode: "propose",
+  };
+
+  it("compiles onto the session close of the followed playbook, through the rule door, linked as `link`", async () => {
+    linkable.rows.set("Ship a change", SHIP);
+    setPlaybook([LINK, TWO[0]]);
+    const res = await run();
+    expect(res.outcomes.map((o) => [o.key, o.status])).toEqual([
+      ["run_ended:Ship a change:delivered", "created"],
+      ["created", "created"],
+    ]);
+    const call = vi.mocked(createRuleGoverned).mock.calls[0]![0];
+    expect(call.intent).toBe(
+      'When a run of "Ship a change" is delivered, propose running "Repurpose" on its post.'
+    );
+    const sentence = call.sentence as {
+      trigger: Parameters<typeof toBackendTrigger>[0];
+      conditions: Parameters<typeof toBackendTrigger>[1];
+      actions: Array<{ config: Record<string, unknown> }>;
+    };
+    const trigger = toBackendTrigger(sentence.trigger, sentence.conditions);
+    // The close door's event (its SSOT), filtered on the followed playbook
+    // and the end.
+    expect(trigger).toEqual({
+      triggerType: "event",
+      triggerConfig: {
+        eventPattern: FOCUS_SESSION_CLOSED_EVENT_TYPE,
+        filters: { playbookId: "pb-ship", status: "closed" },
+      },
+    });
+    // The flow read draws the edge back off that same trigger.
+    expect(linkOfTrigger(trigger.triggerConfig)).toEqual({
+      playbookId: "pb-ship",
+      outcome: "delivered",
+    });
+    // …and its THEN starts THIS playbook on the ended run's subject.
+    expect(sentence.actions[0]!.config).toMatchObject({
+      __nodeType: "playbook_run",
+      __playbookId: PB,
+      __mode: "propose",
+    });
+    expect(store.links).toEqual([
+      { playbookId: PB, automationId: "auto-rule-1", role: "link" },
+      { playbookId: PB, automationId: "auto-rule-2", role: "activator" },
+    ]);
+  });
+
+  it("a dropped end filters on a status that is not closed; any end filters on none", async () => {
+    linkable.rows.set("Ship a change", SHIP);
+    for (const [outcome, status] of [
+      ["dropped", { $ne: "closed" }],
+      [undefined, undefined],
+    ] as const) {
+      const decl = activatorRuleDecl({
+        activator: { ...LINK, outcome } as never,
+        playbookId: PB,
+        playbookName: "Repurpose",
+        profileSlug: "post",
+        statusProperty: null,
+        subject: { profileKind: "kind", lifecycleProperty: null },
+        linked: linkable.rows,
+      });
+      const s = (
+        decl as {
+          sentence: {
+            trigger: Parameters<typeof toBackendTrigger>[0];
+            conditions: Parameters<typeof toBackendTrigger>[1];
+          };
+        }
+      ).sentence;
+      const filters = toBackendTrigger(s.trigger, s.conditions).triggerConfig
+        .filters as Record<string, unknown>;
+      expect(filters.status).toEqual(status);
+      expect(filters.playbookId).toBe("pb-ship");
+    }
+  });
+
+  it("a link to a playbook the space does not hold is refused by name, then compiles once it is installed", async () => {
+    setPlaybook([LINK]);
+    const before = await run();
+    expect(before.outcomes).toEqual([
+      expect.objectContaining({
+        key: "run_ended:Ship a change:delivered",
+        status: "denied",
+        reason: expect.stringContaining('no playbook "Ship a change"'),
+      }),
+    ]);
+    expect(createRuleGoverned).not.toHaveBeenCalled();
+    linkable.rows.set("Ship a change", SHIP);
+    const after = await run();
+    expect(after.outcomes[0]!.status).toBe("created");
+  });
+
+  it("a playbook following itself, or a link enabled for a project, compiles nothing", () => {
+    const base = {
+      playbookId: PB,
+      playbookName: "Repurpose",
+      profileSlug: "post",
+      statusProperty: null,
+      subject: { profileKind: "kind" as const, lifecycleProperty: null },
+    };
+    const self = activatorRuleDecl({
+      ...base,
+      activator: { ...LINK, playbook: "Repurpose" } as never,
+      linked: new Map([["Repurpose", { id: PB, name: "Repurpose" }]]),
+    });
+    expect(self).toMatchObject({ error: expect.stringContaining("its own run") });
+    const scoped = activatorRuleDecl({
+      ...base,
+      activator: LINK as never,
+      linked: new Map([["Ship a change", SHIP]]),
+      scope: { projectId: "proj-1" },
+    });
+    expect(scoped).toMatchObject({ error: expect.stringContaining("space-wide") });
   });
 });

@@ -17,8 +17,13 @@
 import { describe, it, expect } from "vitest";
 import type { AutomationTriggerConfig } from "@synap/database";
 import {
+  playbookActivatorSentence,
+  toBackendTrigger,
+} from "@synap-core/types/automations";
+import {
   matchTriggerSpecificFilters,
   matchFilters,
+  matchPattern,
   FOCUS_SESSION_CLOSED_EVENT_TYPE,
 } from "../automation-trigger-matcher.js";
 
@@ -85,5 +90,59 @@ describe("focus_session close trigger match", () => {
     expect(
       matchFilters(closeData, { workspaceId: closeData.workspaceId })
     ).toBe(true);
+  });
+});
+
+/**
+ * A playbook LINK (W8a, `run_ended`): the rule its activator compiles to
+ * (`playbookActivatorSentence` → `toBackendTrigger`, the rule door's own
+ * compile) fires on the close of a run of the followed playbook — and only
+ * on the end it names.
+ */
+describe("a playbook link fires on the close of the followed playbook's run", () => {
+  const link = (outcome?: "delivered" | "dropped") => {
+    const sentence = playbookActivatorSentence({
+      playbookId: "44444444-4444-4444-8444-444444444444",
+      profileSlug: "devplane_feature",
+      on: "run_ended",
+      afterPlaybookId: closeData.playbookId,
+      ...(outcome ? { outcome } : {}),
+      mode: "propose",
+    });
+    return toBackendTrigger(sentence.trigger!, sentence.conditions)
+      .triggerConfig as { eventPattern: string; filters: Record<string, unknown> };
+  };
+  const fires = (
+    t: ReturnType<typeof link>,
+    data: Record<string, unknown>
+  ) =>
+    matchPattern(FOCUS_SESSION_CLOSED_EVENT_TYPE, t.eventPattern) &&
+    matchFilters(data, t.filters) &&
+    matchTriggerSpecificFilters(
+      FOCUS_SESSION_CLOSED_EVENT_TYPE,
+      data,
+      config(t as Partial<AutomationTriggerConfig>)
+    );
+
+  it("any end of a run of the followed playbook", () => {
+    expect(fires(link(), closeData)).toBe(true);
+    expect(fires(link(), { ...closeData, status: "cancelled" })).toBe(true);
+  });
+
+  it("a delivered link fires on a closed run only; a dropped one on a cancelled or failed run only", () => {
+    expect(fires(link("delivered"), closeData)).toBe(true);
+    expect(fires(link("delivered"), { ...closeData, status: "failed" })).toBe(
+      false
+    );
+    expect(fires(link("dropped"), closeData)).toBe(false);
+    expect(fires(link("dropped"), { ...closeData, status: "cancelled" })).toBe(
+      true
+    );
+  });
+
+  it("never on another playbook's run, nor on a session that follows none", () => {
+    const other = "55555555-5555-4555-8555-555555555555";
+    expect(fires(link(), { ...closeData, playbookId: other })).toBe(false);
+    expect(fires(link(), { ...closeData, playbookId: null })).toBe(false);
   });
 });

@@ -596,6 +596,14 @@ export interface SpaceBriefSeed {
   fields: Partial<Record<string, string>>;
 }
 
+/**
+ * What a kind is to its space (work model D6, kinds per space): `produced` =
+ * an output of the space (the default); `helper` = a kind the space works to
+ * serve an output without being one (a story feeding a feature).
+ */
+export const SPACE_KIND_ROLES = ["produced", "helper"] as const;
+export type SpaceKindRole = (typeof SPACE_KIND_ROLES)[number];
+
 /** `settings.intent` — what a space produces, as its template declared it. */
 export interface WorkspaceIntentSettings {
   /** The purpose word shown first ("Product · Dev"). */
@@ -607,6 +615,13 @@ export interface WorkspaceIntentSettings {
    * one of `produces`; absent = none declared (a library never has one).
    */
   primary?: string;
+  /**
+   * The slugs of `produces` that are HELPER kinds (`SpaceKindRole`): worked
+   * here, not an output. Absent = every kind is produced.
+   */
+  helpers?: string[];
+  /** A kind of `produces` → the kind of `produces` it feeds. Absent = none. */
+  feeds?: Record<string, string>;
   source: "template";
 }
 

@@ -11,6 +11,7 @@
  */
 
 import type {
+  SpaceKindRole,
   WorkspaceDefaultSource,
   WorkspaceLayoutDefinition,
   WorkspaceSettings,
@@ -33,7 +34,16 @@ export interface LifecycleAuthoring {
  */
 export interface WorkspaceIntentDefinition {
   label: string;
-  produces?: { profile: string }[];
+  /**
+   * Each kind the space works. `role` (default `produced`): `helper` = a kind
+   * that serves the space's output without being one (a story feeding a
+   * feature); `feeds` = the kind it feeds.
+   */
+  produces?: {
+    profile: string;
+    role?: SpaceKindRole;
+    feeds?: string;
+  }[];
   /** The ONE output the space produces: one of `produces` (decision 3). */
   primary?: string;
 }

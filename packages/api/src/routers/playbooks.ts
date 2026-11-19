@@ -111,6 +111,10 @@ import {
 } from "../schemas/playbook-runner.js";
 import { recordPlaybookVersion } from "../services/playbooks/playbook-versions.js";
 import { resolveStageUses } from "../services/playbooks/stage-uses.js";
+import {
+  findPlaybookLinkCycle,
+  playbookLinkCycleMessage,
+} from "../services/playbooks/playbook-links.js";
 import type { RunChoice } from "@synap-core/types/agents";
 import {
   mapRunnerAtRun,
@@ -518,6 +522,28 @@ function foldProcessDeclarationsOrRefuse(
       throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
     }
     throw err;
+  }
+}
+
+/**
+ * A playbook's declared links (`run_ended` activators) must not make a loop
+ * (`findPlaybookLinkCycle`): refused here, at the write door, before the
+ * gate. Reads the links off the `subjectProfile` as it will be stored.
+ */
+async function assertNoPlaybookLinkCycle(self: {
+  id: string | null;
+  name: string;
+  workspaceId: string | null;
+  subjectProfile: unknown;
+}): Promise<void> {
+  const { activators } = readPlaybookProcess(self.subjectProfile);
+  if (!activators.some((a) => a.on === "run_ended")) return;
+  const cycle = await findPlaybookLinkCycle({ ...self, activators });
+  if (cycle) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: playbookLinkCycleMessage(cycle),
+    });
   }
 }
 
@@ -2086,6 +2112,12 @@ export const playbooksRouter = router({
       // INSIDE `subjectProfile` — folded ONCE, here, so the gate payload, the
       // approval replay and the insert all carry the same stored shape.
       input.subjectProfile = foldProcessDeclarationsOrRefuse(input);
+      await assertNoPlaybookLinkCycle({
+        id: input.proposedPlaybookId ?? null,
+        name: input.name,
+        workspaceId: ctx.workspaceId ?? null,
+        subjectProfile: input.subjectProfile,
+      });
       // Dangling `subjectProfile` slugs and goal placeholders no run will
       // fill are refused here, before the gate.
       await assertPlaybookDefinitionWritable(await getDb(), {
@@ -2487,6 +2519,15 @@ export const playbooksRouter = router({
           activators: input.activators,
           humanOnlyStatuses: input.humanOnlyStatuses,
         }) as typeof input.subjectProfile;
+      }
+      // 2b'. A link that would close a loop is refused (the create door's rule).
+      if (input.subjectProfile !== undefined || input.name !== undefined) {
+        await assertNoPlaybookLinkCycle({
+          id: existing.id,
+          name: input.name ?? existing.name,
+          workspaceId: existing.workspaceId,
+          subjectProfile: input.subjectProfile ?? existing.subjectProfile,
+        });
       }
 
       // 2b. A patch that REPOINTS the subject must name a slug that resolves —

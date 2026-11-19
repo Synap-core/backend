@@ -3,8 +3,9 @@
  *
  *   subjectProfile: { profileSlug, filter?, statusProperty? }
  *   activators?:        [{ on: "created" | "enters_status" | "count" |
- *                          "schedule" | "manual", status?, cron?, min?,
- *                          size?, mode, maxPendingApprovals? }]
+ *                          "schedule" | "manual" | "run_ended", status?,
+ *                          cron?, min?, playbook?, outcome?, size?, mode,
+ *                          maxPendingApprovals? }]
  *   humanOnlyStatuses?: string[]
  *
  * ── WHERE IT IS STORED, AND WHY ONE FOLD ────────────────────────────────────
@@ -25,8 +26,10 @@ import { z } from "zod";
 import { readSubjectLifecycle, type PlaybookActivator } from "@synap/playbooks";
 import { isSentenceCron } from "@synap-core/types/automations";
 import {
+  type WorkerActivatorTrigger,
   WORKER_COUNT_MIN_FLOOR,
   WORKER_MAX_PENDING_APPROVALS_CEILING,
+  WORKER_RUN_OUTCOMES,
   WORKER_SIZES,
   workerActivatorKey,
   type WorkerActivator,
@@ -37,10 +40,24 @@ const statusValueSchema = z.string().trim().min(1).max(200);
 /** One declared activator — see `PlaybookActivator` (@synap/playbooks). */
 export const playbookActivatorSchema = z
   .strictObject({
-    on: z.enum(["created", "enters_status", "count", "schedule", "manual"]),
+    // Spelled out (the catalog mirror tripwire reads this literal list); held
+    // to `WORKER_ACTIVATOR_TRIGGERS` by the type checks below.
+    on: z.enum([
+      "created",
+      "enters_status",
+      "count",
+      "schedule",
+      "manual",
+      "run_ended",
+    ]),
     status: statusValueSchema.optional(),
     cron: z.string().trim().min(1).max(120).optional(),
     min: z.number().int().min(WORKER_COUNT_MIN_FLOOR).max(10_000).optional(),
+    // A LINK (`run_ended`): the playbook whose run ending starts this one, by
+    // name or id; resolved in the same space (or pod-wide) when the rule is
+    // compiled (`services/playbooks/playbook-links.ts`).
+    playbook: z.string().trim().min(1).max(200).optional(),
+    outcome: z.enum(WORKER_RUN_OUTCOMES).optional(),
     // No default: an activator declared before sizes existed parses to the
     // SAME object (its compiled rule's seed hash does not move).
     size: z.enum(WORKER_SIZES).optional(),
@@ -86,12 +103,29 @@ export const playbookActivatorSchema = z
     path: ["status"],
   })
   .refine(
-    (a) => (a.on !== "created" && a.on !== "manual") || a.status === undefined,
+    (a) =>
+      (a.on !== "created" && a.on !== "manual" && a.on !== "run_ended") ||
+      a.status === undefined,
     {
-      message: 'An activator with on: "created" or "manual" takes no status',
+      message:
+        'An activator with on: "created", "manual" or "run_ended" takes no status',
       path: ["status"],
     }
   )
+  .refine((a) => (a.on === "run_ended") === (a.playbook !== undefined), {
+    message:
+      'on: "run_ended" needs the playbook whose run ends, and only a run_ended takes one',
+    path: ["playbook"],
+  })
+  .refine((a) => a.outcome === undefined || a.on === "run_ended", {
+    message: 'outcome is read by on: "run_ended" only',
+    path: ["outcome"],
+  })
+  .refine((a) => a.on !== "run_ended" || a.size !== "per_moment", {
+    message:
+      "a run_ended link starts one run on the ended run's subject (per_thing)",
+    path: ["size"],
+  })
   .refine((a) => (a.on === "schedule") === (a.cron !== undefined), {
     message: 'on: "schedule" needs a cron, and only a schedule takes one',
     path: ["cron"],
@@ -143,6 +177,11 @@ type ActivatorWire = z.infer<typeof playbookActivatorSchema>;
 const _wireIsMirror: PlaybookActivator = {} as ActivatorWire;
 const _mirrorIsWire: ActivatorWire = {} as PlaybookActivator;
 const _wireIsWorker: WorkerActivator = {} as ActivatorWire;
+// …and the `on` list is the vocabulary's, both ways.
+const _onIsTrigger: WorkerActivatorTrigger = {} as ActivatorWire["on"];
+const _triggerIsOn: ActivatorWire["on"] = {} as WorkerActivatorTrigger;
+void _onIsTrigger;
+void _triggerIsOn;
 void _wireIsMirror;
 void _mirrorIsWire;
 void _wireIsWorker;

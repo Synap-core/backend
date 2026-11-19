@@ -13,7 +13,10 @@
  * `entity.create|update` → `playbook_run` rule the matcher already fires.
  *
  * Each compiled rule's automation is linked in `playbook_automations` with
- * role `"activator"`, so "what starts this process" is one join away.
+ * role `"activator"`, so "what starts this process" is one join away. A LINK
+ * (`run_ended`: "when a run of X ends", `playbook-links.ts`) is an activator
+ * like the others, compiled onto the session close event; its automation
+ * carries role `"link"` so the chain reads apart from the subject's triggers.
  *
  * ── IDEMPOTENCE (re-install, reconcile, every boot) ─────────────────────────
  * Every rule carries the template-rule stamp `metadata.rule.seed =
@@ -99,6 +102,8 @@ import {
   type RuleSeed,
 } from "../rules/index.js";
 import { createRuleGoverned } from "../rules/create.js";
+import { LINK_ROLE } from "./playbook-automation-links.js";
+import { linkRefsOf, resolveLinkedPlaybooks } from "./playbook-links.js";
 import { updateRuleGoverned } from "../rules/update.js";
 import { readRuleAutomationIds } from "../rules/lineage.js";
 import {
@@ -335,6 +340,12 @@ export function activatorRuleDecl(input: {
     trackId?: string | null;
     parentSessionId?: string | null;
   };
+  /**
+   * A `run_ended` link's playbook, by the ref it was declared with
+   * (`resolveLinkedPlaybooks`). A ref absent here names no playbook in the
+   * space yet: the link does not compile.
+   */
+  linked?: ReadonlyMap<string, { id: string; name: string }>;
 }):
   | TemplateRuleDecl
   | { key: string; error: string }
@@ -398,6 +409,43 @@ export function activatorRuleDecl(input: {
   const batch = perMoment ? "on them" : "on it";
   const tail =
     perMoment && a.mode === "propose" ? ", proposing every change" : "";
+
+  if (a.on === "run_ended") {
+    if (input.scope) {
+      return {
+        key,
+        error:
+          "a link between playbooks runs space-wide: it is never enabled for a project, goal or session",
+      };
+    }
+    const ref = a.playbook?.trim() ?? "";
+    const after = input.linked?.get(ref);
+    if (!after) {
+      return {
+        key,
+        error: `no playbook "${ref}" in this space for this link to follow: install or name it, and the link compiles on the next pass`,
+      };
+    }
+    if (after.id === playbookId) {
+      return { key, error: "a playbook cannot start when its own run ends" };
+    }
+    const end =
+      a.outcome === "delivered"
+        ? "is delivered"
+        : a.outcome === "dropped"
+          ? "is dropped"
+          : "ends";
+    return {
+      key,
+      intent: `When a run of "${after.name}" ${end}, ${verb} "${input.playbookName}" on its ${kind}.`,
+      sentence: playbookActivatorSentence({
+        ...common,
+        on: "run_ended",
+        afterPlaybookId: after.id,
+        ...(a.outcome ? { outcome: a.outcome } : {}),
+      }),
+    };
+  }
 
   if (a.on === "schedule") {
     return {
@@ -665,8 +713,16 @@ async function applyOnce(input: {
 
   const outcomes: ActivatorOutcome[] = [];
   const declaredKeys = new Set<string>();
-  /** Rules that should be LIVE after this pass — their automations get linked. */
-  const liveRuleIds = new Set<string>();
+  /**
+   * Rules that should be LIVE after this pass, each with the role its
+   * automations are linked with (`link` for a `run_ended` link).
+   */
+  const liveRules = new Map<string, string>();
+  // The playbooks this one's links follow, resolved in its space.
+  const linked = await resolveLinkedPlaybooks(
+    linkRefsOf(declared),
+    pb.workspaceId
+  );
 
   // Every activator needs it: `enters_status` for where the status lives,
   // `created` because a ROLE is never created — it is attached.
@@ -683,11 +739,13 @@ async function applyOnce(input: {
           profileSlug: process.profileSlug,
           statusProperty: process.statusProperty,
           subject,
+          linked,
         })
       : {
           key: activatorKey(activator),
           error: "activators need subjectProfile.profileSlug",
         };
+    const role = activator.on === "run_ended" ? LINK_ROLE : ACTIVATOR_ROLE;
     declaredKeys.add(built.key);
     if ("error" in built) {
       outcomes.push({ key: built.key, status: "denied", reason: built.error });
@@ -739,7 +797,7 @@ async function applyOnce(input: {
           });
           outcomes.push(updateOutcome(decl.key, found.id, r, "reactivated"));
           if (r.status === "updated") {
-            liveRuleIds.add(found.id);
+            liveRules.set(found.id, role);
             memory.rules[decl.key] = { ruleId: found.id };
           }
           continue;
@@ -772,7 +830,7 @@ async function applyOnce(input: {
             ruleId: found.id,
           });
         }
-        liveRuleIds.add(found.id);
+        liveRules.set(found.id, role);
         continue;
       }
 
@@ -813,7 +871,7 @@ async function applyOnce(input: {
       });
       if (r.status === "created") {
         outcomes.push({ key: decl.key, status: "created", ruleId: r.ruleId });
-        liveRuleIds.add(r.ruleId);
+        liveRules.set(r.ruleId, role);
         memory.rules[decl.key] = { ruleId: r.ruleId };
       } else if (r.status === "proposed") {
         outcomes.push({
@@ -953,7 +1011,7 @@ async function applyOnce(input: {
         });
         outcomes.push(updateOutcome(key, row.id, r, "reactivated"));
         if (r.status === "updated") {
-          liveRuleIds.add(row.id);
+          liveRules.set(row.id, ACTIVATOR_ROLE);
           delete memory.rules[key];
         }
         continue;
@@ -984,7 +1042,7 @@ async function applyOnce(input: {
           ruleId: row.id,
         });
       }
-      liveRuleIds.add(row.id);
+      liveRules.set(row.id, ACTIVATOR_ROLE);
     } catch (err) {
       outcomes.push({
         key,
@@ -1010,7 +1068,7 @@ async function applyOnce(input: {
     if (!row || memory.rules[key]!.retired !== true) delete memory.rules[key];
   }
 
-  await syncActivatorLinks(pb.id, [...liveRuleIds]);
+  await syncActivatorLinks(pb.id, liveRules);
   // The compile version is a marker: stamped only by a pass where every
   // declared activator converged. A failed or refused one is retried at the
   // next boot (an unchanged decl writes nothing, so a retry costs a read).
@@ -1064,7 +1122,9 @@ export async function convergePlaybookActivatorsSafely(input: {
  *   - compiled at an older `ACTIVATOR_COMPILE_VERSION` (its memory says so,
  *     or has none) — the once-per-version re-convergence (D4), or
  *   - declares an `enters_status` activator — the recompile of rules whose
- *     subject profile has since declared (or retired) its lifecycle.
+ *     subject profile has since declared (or retired) its lifecycle, or
+ *   - declares a `run_ended` link — the playbook it follows may have been
+ *     installed (or renamed) since its last pass.
  *
  * Not a conversion op: the recompile IS the activator convergence above —
  * the governed rule door, the three-way seed stamp (an owner-edited rule is
@@ -1095,6 +1155,7 @@ export async function convergeActivatorsAtBoot(): Promise<{
         drizzleSql`jsonb_array_length(coalesce(${playbooks.subjectProfile}->'activators', '[]'::jsonb)) > 0`,
         drizzleSql`(
           ${playbooks.subjectProfile}->'activators' @> '[{"on":"enters_status"}]'::jsonb
+          OR ${playbooks.subjectProfile}->'activators' @> '[{"on":"run_ended"}]'::jsonb
           OR coalesce((${playbooks.metadata}->${ACTIVATOR_MEMORY_KEY}->>'compileVersion')::int, 1) < ${ACTIVATOR_COMPILE_VERSION}
         )`
       )
@@ -1158,32 +1219,33 @@ async function priorOffer(
 }
 
 /**
- * The automations of the LIVE activator rules are linked with role
- * `activator`; every other `activator` link of this playbook is removed (a
- * retired rule's archived automation, a rule since deleted by its owner). A
- * rule's automations are read through the ONE lineage reader
- * (`readRuleAutomationIds`, the `skill --activates--> automation` edge).
+ * The automations of the LIVE activator rules are linked with their role
+ * (`activator`, or `link` for a `run_ended` link); every other `activator` or
+ * `link` row of this playbook is removed (a retired rule's archived
+ * automation, a rule since deleted by its owner). A rule's automations are
+ * read through the ONE lineage reader (`readRuleAutomationIds`, the
+ * `skill --activates--> automation` edge).
  */
 async function syncActivatorLinks(
   playbookId: string,
-  liveRuleIds: string[]
+  liveRules: ReadonlyMap<string, string>
 ): Promise<void> {
-  const live: string[] = [];
-  for (const id of liveRuleIds) {
+  const live = new Map<string, string>();
+  for (const [id, role] of liveRules) {
     for (const a of await readRuleAutomationIds(id)) {
-      if (!live.includes(a)) live.push(a);
+      if (!live.has(a)) live.set(a, role);
     }
   }
-  for (const automationId of live) {
+  for (const [automationId, role] of live) {
     await db
       .insert(playbookAutomations)
-      .values({ playbookId, automationId, role: ACTIVATOR_ROLE })
+      .values({ playbookId, automationId, role })
       .onConflictDoUpdate({
         target: [
           playbookAutomations.playbookId,
           playbookAutomations.automationId,
         ],
-        set: { role: ACTIVATOR_ROLE, updatedAt: new Date() },
+        set: { role, updatedAt: new Date() },
       });
   }
   await db
@@ -1191,9 +1253,9 @@ async function syncActivatorLinks(
     .where(
       and(
         eq(playbookAutomations.playbookId, playbookId),
-        eq(playbookAutomations.role, ACTIVATOR_ROLE),
-        ...(live.length > 0
-          ? [notInArray(playbookAutomations.automationId, live)]
+        inArray(playbookAutomations.role, [ACTIVATOR_ROLE, LINK_ROLE]),
+        ...(live.size > 0
+          ? [notInArray(playbookAutomations.automationId, [...live.keys()])]
           : [])
       )
     );

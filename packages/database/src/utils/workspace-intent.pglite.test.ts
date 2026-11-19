@@ -282,4 +282,53 @@ describe("settings.intent — projected by the create and reconcile writers", ()
       source: "template",
     });
   });
+
+  it("(6) a helper kind and the kind it feeds land with it (W8a, kinds per space)", async () => {
+    const r = await createWorkspaceFromDefinition({
+      definition: {
+        workspaceName: "Builder",
+        intent: {
+          label: "Product",
+          primary: "devplane_feature",
+          produces: [
+            { profile: "devplane_feature" },
+            {
+              profile: "devplane_story",
+              role: "helper",
+              feeds: "devplane_feature",
+            },
+            { profile: "ui-design", role: "produced" },
+          ],
+        },
+      },
+      userId: USER,
+      createdBy: "provisioning",
+    });
+    // Through the install door's zod: a key it did not declare would be
+    // stripped before the projection ever saw it.
+    expect((await settingsOf(r.workspaceId)).intent).toEqual({
+      label: "Product",
+      produces: ["devplane_feature", "devplane_story", "ui-design"],
+      primary: "devplane_feature",
+      helpers: ["devplane_story"],
+      feeds: { devplane_story: "devplane_feature" },
+      source: "template",
+    });
+    // A `feeds` naming no produced kind (or itself) drops alone; an unknown
+    // role drops its entry, like any malformed one.
+    expect(
+      projectTemplateIntent({
+        label: "Product",
+        produces: [
+          { profile: "devplane_feature", feeds: "devplane_feature" },
+          { profile: "devplane_story", feeds: "invoice" },
+          { profile: "note", role: "sidekick" },
+        ],
+      })
+    ).toEqual({
+      label: "Product",
+      produces: ["devplane_feature", "devplane_story"],
+      source: "template",
+    });
+  });
 });

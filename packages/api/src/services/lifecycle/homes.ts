@@ -168,6 +168,13 @@ export interface ProducedKind {
     status: string | null;
     reason: HeadlineReason;
   } | null;
+  /**
+   * `helper`: the template says this kind serves the space's output without
+   * being one (`settings.intent.helpers`). Absent = produced.
+   */
+  role?: "helper";
+  /** The kind this one feeds (`settings.intent.feeds`); absent = none declared. */
+  feeds?: string;
 }
 
 export interface SpaceIntent {
@@ -372,17 +379,37 @@ async function projectSpaceIds(
 }
 
 /** The stored (template) intent, when well-formed. */
-function storedIntentOf(
-  settings: Record<string, unknown> | null
-): { label: string; produces: string[] } | null {
+function storedIntentOf(settings: Record<string, unknown> | null): {
+  label: string;
+  produces: string[];
+  helpers: string[];
+  feeds: Record<string, string>;
+} | null {
   const intent = settings?.intent as
-    { label?: unknown; produces?: unknown } | null | undefined;
+    | {
+        label?: unknown;
+        produces?: unknown;
+        helpers?: unknown;
+        feeds?: unknown;
+      }
+    | null
+    | undefined;
   if (!intent || typeof intent.label !== "string" || !intent.label.trim())
     return null;
-  const produces = Array.isArray(intent.produces)
-    ? intent.produces.filter((s): s is string => typeof s === "string")
-    : [];
-  return { label: intent.label, produces };
+  const strings = (v: unknown) =>
+    Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : [];
+  const feeds: Record<string, string> = {};
+  if (intent.feeds && typeof intent.feeds === "object") {
+    for (const [k, v] of Object.entries(intent.feeds)) {
+      if (typeof v === "string") feeds[k] = v;
+    }
+  }
+  return {
+    label: intent.label,
+    produces: strings(intent.produces),
+    helpers: strings(intent.helpers),
+    feeds,
+  };
 }
 
 /**
@@ -823,12 +850,16 @@ export async function readHome(
           label: own.label,
           source: "template" as const,
           produces: own.produces,
+          helpers: own.helpers,
+          feeds: own.feeds,
         }
       : {
           space: s,
           label: s.name,
           source: "inferred" as const,
           produces: inferred.get(s.id) ?? [],
+          helpers: [] as string[],
+          feeds: {} as Record<string, string>,
         };
   });
 
@@ -901,9 +932,14 @@ export async function readHome(
     })
   );
   const out = intents.map((i, idx): SpaceIntent => {
-    const produced = read.filter(
-      (p, n): p is ProducedKind => p !== null && pairs[n]!.idx === idx
-    );
+    const produced = read
+      .filter((p, n): p is ProducedKind => p !== null && pairs[n]!.idx === idx)
+      // What the template says each kind is to the space (W8a).
+      .map((p) => ({
+        ...p,
+        ...(i.helpers.includes(p.profileSlug) ? { role: "helper" as const } : {}),
+        ...(i.feeds[p.profileSlug] ? { feeds: i.feeds[p.profileSlug] } : {}),
+      }));
     return {
       workspaceId: i.space.id,
       name: i.space.name,

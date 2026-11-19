@@ -837,11 +837,25 @@ export interface PlaybookActivator {
    * `count` — at least `min` things sit in `status` (always per_moment).
    * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
    * `manual` — a button, never by itself: compiles no rule.
+   * `run_ended` — a run of the playbook named in `playbook` ended (a LINK:
+   *   a feature shipped → its announcement); the new run works on the same
+   *   subject.
    * Mirror of `WorkerActivator` (`@synap-core/types/workers`); this package
    * is dependency-free, the pod's zod schema (`playbook-process.ts`) is
    * `satisfies` both.
    */
-  on: "created" | "enters_status" | "count" | "schedule" | "manual";
+  on: "created" | "enters_status" | "count" | "schedule" | "manual" | "run_ended";
+  /**
+   * Required for `run_ended`, and only it: the playbook whose run ending
+   * starts this one, by name (the catalog's spelling) or id, in the same
+   * space or pod-wide.
+   */
+  playbook?: string;
+  /**
+   * `run_ended` only: `delivered` (the run closed done) or `dropped`
+   * (cancelled or failed). Absent = any end.
+   */
+  outcome?: "delivered" | "dropped";
   /** Required for `enters_status` / `count`; optional for `schedule`. */
   status?: string;
   /** Required for `schedule`. */

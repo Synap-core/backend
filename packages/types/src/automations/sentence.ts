@@ -157,6 +157,10 @@ export type ActionVerb =
   // event of the moveStatus door, `entity.transition.completed`. Kinds AND
   // roles: a role's status lives on its facet, which no "updated" sees.
   | "transitioned"
+  // A focus session ENDED (closed, cancelled or failed; `status` says which)
+  // — the close door's one event, `focus_session.closed.completed`. A
+  // playbook link (`run_ended` activator) compiles onto it.
+  | "closed"
   | "received"
   | "completed"
   | "approved"
@@ -884,6 +888,8 @@ export function proposePlaybookOnKindSentence(input: {
  *                     created on its own, and the entity's create event
  *                     names its kind.
  *   `enters_status` — WHEN the subject (a kind OR a role) ENTERS `status`.
+ *   `run_ended`     — WHEN a run of another playbook ENDS (a link): the
+ *                     session close event, on that playbook and outcome.
  *
  * `enters_status` follows the event that actually fires for the property:
  *
@@ -927,6 +933,19 @@ export type PlaybookActivatorTrigger =
        *  {@link isSentenceCron}; the worker spec carries the set. */
       on: "schedule";
       cron: string;
+    }
+  | {
+      /**
+       * A LINK: a run of `afterPlaybookId` ended — the session close event
+       * (`focus_session.closed.completed`) filtered on the session's
+       * `playbookId` and, for an `outcome`, its terminal `status`
+       * (`delivered` = closed; `dropped` = cancelled or failed). The new run
+       * works on the ended session's subject (the matcher derives it from the
+       * event, `run-subject.ts`).
+       */
+      on: "run_ended";
+      afterPlaybookId: string;
+      outcome?: "delivered" | "dropped";
     };
 
 /**
@@ -976,7 +995,14 @@ export function playbookActivatorSentence(
             ...parseCron(input.cron.trim().split(/\s+/).join(" ")),
             cronTimezone: "UTC",
           }
-        : {
+        : input.on === "run_ended"
+          ? {
+              // A session's event: no kind filter (the subject rides on it).
+              triggerType: "event",
+              subjectCategory: "focus_session",
+              actionVerb: trigger.actionVerb,
+            }
+          : {
             triggerType: "event",
             subjectCategory: "entity",
             profileSlug: input.profileSlug,
@@ -1022,6 +1048,31 @@ function activatorTriggerShape(
   conditions: ConditionRow[];
 } {
   if (t.on === "created") return { actionVerb: "created", conditions: [] };
+  if (t.on === "run_ended") {
+    return {
+      actionVerb: "closed",
+      conditions: [
+        {
+          id: "link-playbook",
+          key: "playbookId",
+          operator: "is",
+          value: t.afterPlaybookId,
+        },
+        ...(t.outcome
+          ? [
+              {
+                id: "link-outcome",
+                key: "status",
+                operator: (t.outcome === "delivered" ? "is" : "is_not") as
+                  | "is"
+                  | "is_not",
+                value: "closed",
+              },
+            ]
+          : []),
+      ],
+    };
+  }
   if (t.lifecycle === "declared") {
     return {
       actionVerb: "transitioned",

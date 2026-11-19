@@ -937,6 +937,7 @@ describe("event pattern round trip", () => {
     "completed",
     "approved",
     "rejected",
+    "closed",
   ]);
 
   it("covers every subject category the union declares", () => {
@@ -1250,6 +1251,45 @@ describe("playbookActivatorSentence — a declared activator as a rule", () => {
         mode: "propose",
       })
     );
+  });
+
+  it("a LINK (run_ended) compiles onto the session close door's event, on the followed playbook and its end (W8a)", () => {
+    const SHIP = "88888888-8888-4888-8888-888888888888";
+    const link = (outcome?: "delivered" | "dropped") => {
+      const sentence = playbookActivatorSentence({
+        playbookId: PB,
+        profileSlug: "devplane_feature",
+        on: "run_ended",
+        afterPlaybookId: SHIP,
+        ...(outcome ? { outcome } : {}),
+        mode: "propose",
+      });
+      return toBackendTrigger(sentence.trigger!, sentence.conditions);
+    };
+    // `focus_session.closed.completed` IS what the close door emits
+    // (`close-event.ts`), and the authoring door accepts it.
+    expect(link().triggerConfig.eventPattern).toBe(
+      "focus_session.closed.completed"
+    );
+    expect(validateEventPattern("focus_session.closed.completed")).toBeTruthy();
+    // The close event's own data keys (`playbookId`, `status`); no kind
+    // filter on a session's event (it carries none).
+    expect(link().triggerConfig).toEqual({
+      eventPattern: "focus_session.closed.completed",
+      filters: { playbookId: SHIP },
+    });
+    expect(link("delivered").triggerConfig.filters).toEqual({
+      playbookId: SHIP,
+      status: "closed",
+    });
+    expect(link("dropped").triggerConfig.filters).toEqual({
+      playbookId: SHIP,
+      status: { $ne: "closed" },
+    });
+    // It reads back as the sentence it was written from.
+    expect(
+      triggerToSentence("event", link().triggerConfig)
+    ).toMatchObject({ subjectCategory: "focus_session", actionVerb: "closed" });
   });
 });
 

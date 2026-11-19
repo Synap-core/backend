@@ -10,10 +10,19 @@
  * malformed definition can never write a half-shaped intent.
  */
 import { z } from "zod";
+import { SPACE_KIND_ROLES } from "@synap-core/types/workspaces/settings";
 import type { WorkspaceIntentSettings } from "../schema/workspaces.js";
 
-/** One produced entry, as a definition declares it. */
-const producedEntrySchema = z.object({ profile: z.string() });
+/**
+ * One produced entry, as a definition declares it: the kind, and what it is
+ * to the space (`role`, default `produced`; `helper` = worked here, not an
+ * output) and the kind it `feeds`.
+ */
+const producedEntrySchema = z.object({
+  profile: z.string(),
+  role: z.enum(SPACE_KIND_ROLES).optional(),
+  feeds: z.string().optional(),
+});
 
 /**
  * The wire form on a compiled definition — declared by EVERY install door's
@@ -50,12 +59,25 @@ export function projectTemplateIntent(
 ): WorkspaceIntentSettings | null {
   const parsed = projectedIntentSchema.safeParse(intent);
   if (!parsed.success || !parsed.data.label.trim()) return null;
-  const slugs = (parsed.data.produces ?? []).flatMap((p) => {
+  const entries = (parsed.data.produces ?? []).flatMap((p) => {
     const entry = producedEntrySchema.safeParse(p);
     const slug = entry.success ? entry.data.profile.trim() : "";
-    return slug ? [slug] : [];
+    return entry.success && slug ? [{ ...entry.data, profile: slug }] : [];
   });
-  const produces = [...new Set(slugs)];
+  const produces = [...new Set(entries.map((e) => e.profile))];
+  // A helper kind and what a kind feeds, each kept only when it names kinds
+  // of `produces` (a dangling `feeds` is dropped alone, like `primary`).
+  const helpers = [
+    ...new Set(
+      entries.filter((e) => e.role === "helper").map((e) => e.profile)
+    ),
+  ];
+  const feeds: Record<string, string> = {};
+  for (const e of entries) {
+    const to = e.feeds?.trim();
+    if (to && to !== e.profile && produces.includes(to) && !feeds[e.profile])
+      feeds[e.profile] = to;
+  }
   // Kept only when it names one of `produces`: a primary the space does not
   // produce is a malformed declaration, dropped alone.
   const primary =
@@ -64,6 +86,9 @@ export function projectTemplateIntent(
     label: parsed.data.label.trim(),
     produces,
     ...(primary && produces.includes(primary) ? { primary } : {}),
+    // Omitted when none: an intent with no helper stores what it stored before.
+    ...(helpers.length > 0 ? { helpers } : {}),
+    ...(Object.keys(feeds).length > 0 ? { feeds } : {}),
     source: "template",
   };
 }
