@@ -45,7 +45,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: h.db, getDb: async () => h.db };
 });
 
-import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { is } from "drizzle-orm";
 import * as schema from "@synap/database/schema";
 import {
