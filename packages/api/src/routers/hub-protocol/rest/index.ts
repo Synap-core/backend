@@ -76,6 +76,7 @@ export { registerSessionsRoutes } from "./sessions.js";
 export { registerPlaybooksRoutes } from "./playbooks.js";
 export { registerWidgetDefinitionsRoutes } from "./widget-definitions.js";
 export { registerCellsRoutes } from "./cells.js";
+export { registerRenderersRoutes } from "./renderers.js";
 export { registerCellInstancesRoutes } from "./cell-instances.js";
 export { registerWhiteboardsRoutes } from "./whiteboards.js";
 export { registerRealtimeRoutes } from "./realtime.js";

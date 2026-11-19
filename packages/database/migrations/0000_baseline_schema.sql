@@ -5357,6 +5357,45 @@ CREATE TABLE IF NOT EXISTS "realtime_room_tickets" (
 CREATE INDEX IF NOT EXISTS "realtime_room_tickets_expires_idx"
   ON "realtime_room_tickets" ("expires_at");
 
+-- Renderer bundles (0436): a bundle row (its defaults are the host fallback,
+-- never a renderer binding) and its ONE host-module set per pod (unique on
+-- `module`; the modules' FK is checked at commit). Mirrors 0436.
+CREATE TABLE IF NOT EXISTS "renderer_bundles" (
+  "slug"          text        PRIMARY KEY,
+  "version"       text        NOT NULL,
+  "set_sha256"    text        NOT NULL,
+  "react_version" text        NOT NULL,
+  "kit_exports"   jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  "defaults"      jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "source"        text        NOT NULL,
+  "installed_by"  text        NOT NULL,
+  "installed_at"  timestamptz NOT NULL DEFAULT now(),
+  "updated_at"    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS "renderer_host_modules" (
+  "bundle_slug" text    NOT NULL,
+  "module"      text    NOT NULL,
+  "source"      text    NOT NULL,
+  "sha256"      text    NOT NULL,
+  "byte_length" integer NOT NULL,
+  PRIMARY KEY ("bundle_slug", "module")
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'renderer_host_modules_bundle_fk'
+  ) THEN
+    ALTER TABLE "renderer_host_modules" ADD CONSTRAINT "renderer_host_modules_bundle_fk"
+      FOREIGN KEY ("bundle_slug") REFERENCES "renderer_bundles"("slug")
+      ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "renderer_host_modules_one_set"
+  ON "renderer_host_modules" ("module");
+
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.
 CREATE TABLE IF NOT EXISTS "account_recovery_codes" (

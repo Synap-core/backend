@@ -94,6 +94,7 @@ import {
   registerViewsRoutes,
   registerWidgetDefinitionsRoutes,
   registerCellsRoutes,
+  registerRenderersRoutes,
   registerCellInstancesRoutes,
   registerWhiteboardsRoutes,
   registerRealtimeRoutes,
@@ -381,6 +382,7 @@ registerSessionsRoutes(app); // /sessions*, /compacted-states*
 registerPlaybooksRoutes(app); // /playbooks/promote-from-session (governed)
 registerWidgetDefinitionsRoutes(app); // /widget-definitions
 registerCellsRoutes(app); // /cells, /cells/install, /cells/:typeKey
+registerRenderersRoutes(app); // /renderers/host-modules
 registerCellInstancesRoutes(app); // /cell-instances, /cell-instances/html, /cell-instances/:id*
 registerWhiteboardsRoutes(app); // /whiteboards/:viewId/placements/propose
 registerRealtimeRoutes(app); // POST /realtime/room-ticket — a pod app opens a live room (0438)

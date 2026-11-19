@@ -406,6 +406,10 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/playbooks\/?$/,
   route("/playbooks/:id"),
   /^\/brand\/kit\/?$/,
+  // The installed renderer bundle's host modules (`rest/renderers.ts`): its
+  // build output (React, the kit, the tokens CSS), the same for every caller.
+  // No row a grant bounds: which CELLS a key reads stays on `/cells`.
+  /^\/renderers\/host-modules\/?$/,
   // Read only through the grant-aware channel / session helpers
   // (utils/channel-visibility.ts, access/session-visibility.ts):
   /^\/channels\/?$/,
