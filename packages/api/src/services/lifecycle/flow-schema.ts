@@ -16,7 +16,7 @@ import {
   WAITING_ON_REASONS,
   type ThingBlocker,
 } from "@synap-core/types/units";
-import { WORKER_SCOPES } from "@synap-core/types/workers";
+import { WORKER_RUN_OUTCOMES, WORKER_SCOPES } from "@synap-core/types/workers";
 
 const STAGE_CATEGORIES = [
   "backlog",
@@ -82,6 +82,17 @@ export const flowOfFlowSchema = z.object({
   undeclaredStatuses: z.array(z.string()),
   /** Open runs, and how many run a frozen copy older than `version`. */
   runs: z.object({ open: z.number(), onOlderVersion: z.number() }),
+  /**
+   * Its live links in: the playbooks whose run end starts it (`run_ended`
+   * activators); `outcome` null = any end.
+   */
+  startsAfter: z.array(
+    z.object({
+      playbookId: z.string(),
+      playbookName: z.string(),
+      outcome: z.enum(WORKER_RUN_OUTCOMES).nullable(),
+    })
+  ),
   /** Its enabled workers (empty when `workers` is withheld). */
   workers: z.array(flowWorkerSchema),
 });
@@ -221,6 +232,8 @@ export const flowOfSchema = z.object({
     .object({
       primaryOutput: z.string().nullable(),
       produces: z.array(z.string()),
+      /** Kinds of `produces` that are helpers: worked here, not an output. */
+      helpers: z.array(z.string()),
     })
     .nullable(),
   totals: z.object({

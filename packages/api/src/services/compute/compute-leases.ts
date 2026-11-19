@@ -9,6 +9,10 @@
  *           was queued or proposed again downstream): a person must look.
  *   close   a `release_compute` run in mode destroy ends the lease of the
  *           machine it names, whoever ran it.
+ *   keep    a start that carried a pod registration code (a new pod's
+ *           server, plan a640c5bb B1) ends `kept` once the Control Plane says
+ *           that code registered: it is the person's pod now, never destroyed
+ *           at its TTL (`keepComputeLease`, read by the sweeper).
  *
  * The TTL sweeper (`release-expired-leases.ts`) releases the rest.
  */
@@ -137,6 +141,7 @@ export async function openComputeLease(input: {
       connectionSelector: (input.connectionSelector ?? null) as never,
       ttlMinutes: input.start.ttlMinutes,
       maxSpendCents: input.start.maxSpendCents,
+      registrationCodeHash: input.start.podRegistrationCodeHash,
       state: "starting",
       expiresAt,
       createdAt: now,
@@ -209,4 +214,38 @@ export async function closeComputeLeaseOnRelease(input: {
     )
     .returning({ id: computeLeases.id });
   return closed.length;
+}
+
+/**
+ * End a new pod's server's lease as `kept`: its code registered, so the TTL
+ * destroy no longer applies. Only an active lease; returns whether it moved.
+ */
+export async function keepComputeLease(input: {
+  leaseId: string;
+  podId: string | null;
+  at?: Date;
+}): Promise<boolean> {
+  const at = input.at ?? new Date();
+  const kept = await db
+    .update(computeLeases)
+    .set({
+      state: "kept",
+      releaseResult: {
+        kept: {
+          reason: "pod_registered",
+          podId: input.podId,
+          at: at.toISOString(),
+        },
+      } as never,
+      lastReleaseError: null,
+      updatedAt: at,
+    })
+    .where(
+      and(
+        eq(computeLeases.id, input.leaseId),
+        eq(computeLeases.state, "active")
+      )
+    )
+    .returning({ id: computeLeases.id });
+  return kept.length > 0;
 }

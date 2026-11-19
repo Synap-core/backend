@@ -35,7 +35,14 @@
  *      pod (browser `createViewFrameHandlers.ts`, relay `useCellFrameHandlers.ts`).
  *   5. Nothing secret crosses: no token, no pod URL, no key is sent into the
  *      frame — only the answer to what the page asked.
- *   6. Links, when a host asks (the `links` option of `wrapHtmlForFrame`,
+ *   6. Opening an object: `window.synap.open(kind, id)` posts
+ *      `synap:surface:open` with the object's kind and id only
+ *      (`parseFrameOpen`, `frame-links.ts`); the host opens it through its own
+ *      route table. No address crosses, in either direction.
+ *   7. Tokens, when a host hands them in (the `tokens` option of
+ *      `wrapHtmlForFrame`, built by `frameTokensCss`): the host's `--synap-*`
+ *      values in the reader's theme, as the frame's first style.
+ *   8. Links, when a host asks (the `links` option of `wrapHtmlForFrame`,
  *      `frame-links.ts`). A clicked http(s) link does NOT navigate the frame:
  *      the frame posts `synap:navigate` and the host decides (`resolveFrameLink`):
  *      a console `/open/…` link in the reader's own tab, anything else in a new
@@ -63,6 +70,7 @@ export {
   cellBridgeReadRefusal,
   isCellBridgeReadOp,
   pickBridgeParams,
+  projectPillarsAnswer,
   type CellBridgeParamValue,
   type CellBridgeReadOp,
 } from "./read-ops.js";
@@ -77,9 +85,11 @@ export {
   CELL_FRAME_CSP_DIRECTIVES,
   CELL_FRAME_MAX_BYTES,
   CELL_FRAME_SANDBOX,
+  FRAME_TOKEN_PREFIX,
   buildCellFrameCsp,
   buildCellModuleFrameCsp,
   cellFrameHeadBlock,
+  frameTokensCss,
   htmlByteLength,
   wrapHtmlForFrame,
   type CellFrameOptions,
@@ -87,10 +97,15 @@ export {
 export {
   CELL_FRAME_LINK_DOOR,
   FRAME_NAVIGATE_TYPE,
+  FRAME_OPEN_KINDS,
+  FRAME_SURFACE_OPEN_TYPE,
   parseFrameNavigate,
+  parseFrameOpen,
   resolveFrameLink,
   type FrameLinkAction,
   type FrameNavigateMessage,
+  type FrameOpenKind,
+  type FrameOpenMessage,
 } from "./frame-links.js";
 export { frameExternalOrigins } from "./external-origins.js";
 export {

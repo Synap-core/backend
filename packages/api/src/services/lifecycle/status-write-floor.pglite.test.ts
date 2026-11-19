@@ -55,6 +55,12 @@ vi.mock("@synap/jobs/utils/session-process.js", () => ({
     humanOnlyStatuses: [],
   })),
 }));
+// The orchestrator hold (D-O1) is its own rule with its own suite
+// (`start-orchestrator.pglite.test.ts`); nothing here is orchestrated.
+vi.mock("@synap/jobs/utils/orchestrator-hold.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  orchestratorHolding: async () => null,
+}));
 vi.mock("../playbooks/playbook-activators.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   readSubjectProfile: vi.fn(async () => ({ profileKind: "kind" })),

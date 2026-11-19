@@ -8,10 +8,15 @@
  *
  *   head     ONE row of chips, [agent] for [person] · [session] · [age], each
  *            a door, said once on the page (`RequestHead`), both kinds;
- *   flat     when the shared model says the story adds nothing the head and
- *            the bar do not (`story.rail` false): Now alone, no rail, no
- *            labels; the plain consequence joins the bar's line (the host's);
- *   timeline one item per line: [when | rail mark | what]
+ *   flat     THE DEFAULT (founder, 18 Nov 2026: "show the card only, then
+ *            it shows the timeline when it finds some"): Now alone, no rail,
+ *            no labels, while the story reads, when its read failed (one
+ *            quiet line with Try again under Now), when there is nothing to
+ *            read, and when the shared model says the story adds nothing the
+ *            head and the bar do not (`story.rail` false); the plain
+ *            consequence joins the bar's line (the host's);
+ *   timeline only once the read answered AND `story.rail` is true:
+ *            one item per line: [when | rail mark | what]
  *     past   a solid sage dot on a solid rail: the last steps, repeats
  *            grouped; older ones folded into their own first row, a door to
  *            the whole story;
@@ -356,18 +361,18 @@ export function storyStatusOf(
 }
 
 /**
- * Flat (no rail, no Now/Next labels) when the shared model says the story
- * adds nothing the head and the bar do not (`story.rail`), once its read
- * answered. While it reads or failed, the rail holds the skeleton or the
- * failure in its place.
+ * Flat (no rail, no Now/Next labels) BY DEFAULT (founder, 18 Nov 2026: the
+ * card only, the timeline when the read finds some): while the story reads,
+ * when its read failed or there is nothing to read, and when the shared
+ * model says it adds nothing the head and the bar do not. The rail is drawn
+ * only once the read answered AND `story.rail` is true; no placeholder rail
+ * ever holds its place.
  */
 export function storyIsFlat(
   story: RequestStory | null,
   read: StoryRead
 ): boolean {
-  return (
-    !!story && !story.rail && (read.status === "ok" || read.status === "off")
-  );
+  return !(read.status === "ok" && story?.rail === true);
 }
 
 /** The head the shared model gives: its `by` (or cause) and its session. */
@@ -579,6 +584,29 @@ export function StoryDepth({ children }: { children: ReactNode }) {
 export const STORY_FOOTER =
   "z-10 flex flex-col gap-2 border-t border-foreground/[0.08] bg-content1";
 
+/** A failed story read, said once and quietly under Now, with Try again
+ *  (never drawn as "nothing happened"). */
+function StoryReadFailed({ retry }: { retry: () => void }) {
+  const t = useT(REQUEST_CATALOGS);
+  return (
+    <p
+      data-story-unreadable="all"
+      className="flex flex-wrap items-center gap-2 text-[12.5px] text-status-stale"
+    >
+      {t("story.failed")}
+      <Button
+        size="sm"
+        variant="light"
+        className="min-h-11"
+        startContent={<RotateCw className="h-3 w-3" aria-hidden />}
+        onPress={retry}
+      >
+        {t("story.retry")}
+      </Button>
+    </p>
+  );
+}
+
 // ─── The story ───────────────────────────────────────────────────────────────
 
 export function RequestStoryView({
@@ -657,48 +685,6 @@ export function RequestStoryView({
     body: ReactNode;
   };
   const entries: Entry[] = [];
-  if (read.status === "loading") {
-    for (const k of ["load-1", "load-2"])
-      entries.push({
-        key: k,
-        when: "",
-        mark: "wait",
-        node: "past",
-        body: (
-          <span
-            aria-hidden={k === "load-2"}
-            className="h-4 w-48 max-w-full animate-pulse rounded bg-foreground/[0.08]"
-          >
-            <span className="sr-only">{t("story.loading")}</span>
-          </span>
-        ),
-      });
-  }
-  if (read.status === "error") {
-    entries.push({
-      key: "failed",
-      when: "",
-      mark: "unread",
-      node: "past",
-      body: (
-        <p
-          data-story-unreadable="all"
-          className="flex flex-wrap items-center gap-2 text-[12.5px] text-status-stale"
-        >
-          {t("story.failed")}
-          <Button
-            size="sm"
-            variant="light"
-            className="min-h-11"
-            startContent={<RotateCw className="h-3 w-3" aria-hidden />}
-            onPress={read.retry}
-          >
-            {t("story.retry")}
-          </Button>
-        </p>
-      ),
-    });
-  }
   if (fold) {
     entries.push({
       key: "fold",
@@ -806,6 +792,7 @@ export function RequestStoryView({
         >
           {nowEntry?.body}
           <Unreadable lines={[...pastUnreadable, ...afterUnreadable]} />
+          {read.status === "error" && <StoryReadFailed retry={read.retry} />}
         </div>
         {footer}
         {depth}

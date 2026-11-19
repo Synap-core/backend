@@ -52,6 +52,8 @@ const EFFECT_TARGET: Record<
   pause_session: "focus_session",
   // D2's built-in: a stage's approved work moves the session's thing.
   reach_stage_status: "entity",
+  // W6's built-in: a stage whose work is all met moves its session on.
+  advance_stage: "focus_session",
   roll_up: "entity",
 };
 

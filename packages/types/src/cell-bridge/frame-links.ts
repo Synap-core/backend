@@ -22,6 +22,8 @@
  * already refuses that), is not a click on a link and is not intercepted.
  */
 
+import { isUuid } from "../property-render/structured-value.js";
+
 export const FRAME_NAVIGATE_TYPE = "synap:navigate" as const;
 
 /** Frame → host: the reader clicked a link in the page. */
@@ -106,6 +108,74 @@ export function resolveFrameLink(
   if (env.activated === null)
     return { action: "ignore", reason: "not-activated" };
   return { action: "newTab", href: url.href };
+}
+
+/**
+ * THE "open this" intent: a page asks its host to open ONE object by its id
+ * (`window.synap.open(kind, id)`, `sdk.ts`). A page knows no address (no pod
+ * URL crosses into the frame), so a door in a page could only print an id.
+ *
+ *   frame → host   `synap:surface:open`  { surface: { kind: "object",
+ *                                           objectKind, objectId } }
+ *   host           its own route table for objects decides where it opens
+ *
+ * The message is the module cell's own (synap-app `cell-runtime/
+ * iframe-protocol.ts`, `kind: "object"`), so the desktop answers it with the
+ * door it already has (`objectNavTarget`), and pod admin with `objectPage`.
+ * The page names WHAT, never WHERE: no URL, no placement, no space.
+ */
+export const FRAME_SURFACE_OPEN_TYPE = "synap:surface:open" as const;
+
+/**
+ * The objects a page may ask to open: what the page reads names (an entity, a
+ * session, a document, a playbook, a goal, a proposal). Each is a kind of the
+ * pod's typed `/open` route (`TYPED_OPEN_KINDS`, pinned by a test there).
+ */
+export const FRAME_OPEN_KINDS = [
+  "entity",
+  "session",
+  "document",
+  "playbook",
+  "track",
+  "proposal",
+] as const;
+export type FrameOpenKind = (typeof FRAME_OPEN_KINDS)[number];
+
+/** Frame → host: open this object. */
+export interface FrameOpenMessage {
+  type: typeof FRAME_SURFACE_OPEN_TYPE;
+  surface: { kind: "object"; objectKind: FrameOpenKind; objectId: string };
+}
+
+/**
+ * An open message, validated, or null: a kind of `FRAME_OPEN_KINDS` and a
+ * uuid, nothing else. Whatever else the frame put on the surface (a `url`, a
+ * placement, a space) is dropped, never forwarded.
+ */
+export function parseFrameOpen(data: unknown): FrameOpenMessage | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const msg = data as Record<string, unknown>;
+  if (msg.type !== FRAME_SURFACE_OPEN_TYPE) return null;
+  const surface = msg.surface as Record<string, unknown> | null | undefined;
+  if (!surface || typeof surface !== "object" || surface.kind !== "object") {
+    return null;
+  }
+  const { objectKind, objectId } = surface;
+  if (
+    typeof objectKind !== "string" ||
+    !(FRAME_OPEN_KINDS as readonly string[]).includes(objectKind) ||
+    !isUuid(objectId)
+  ) {
+    return null;
+  }
+  return {
+    type: FRAME_SURFACE_OPEN_TYPE,
+    surface: {
+      kind: "object",
+      objectKind: objectKind as FrameOpenKind,
+      objectId: objectId.toLowerCase(),
+    },
+  };
 }
 
 /**

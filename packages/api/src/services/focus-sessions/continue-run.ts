@@ -67,6 +67,7 @@ import {
   grantWriteDenial,
   type GrantWriteInput,
 } from "../../utils/grant-write-check.js";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
 import {
   stagesLeft,
   stagesLeftWords,
@@ -189,6 +190,7 @@ export type ContinueSession = Pick<
   | "userId"
   | "workspaceId"
   | "projectId"
+  | "metadata"
   | "status"
   | "playbookId"
   | "stages"
@@ -232,11 +234,23 @@ export async function continueCheck<R extends { status: string }>(input: {
     };
   }
   // The key's grant bounds it like any session write (the gate's rung 0).
-  const denial = await input.grantDenial({
+  const write = {
     subjectType: "focus_session",
     action: "update",
-    workspaceId: session.workspaceId ?? null,
     projectId: session.projectId ?? null,
+  };
+  const denial = await input.grantDenial({
+    ...write,
+    // A project-only session counts in its project's spaces
+    // (`session-counted-spaces.ts`).
+    workspaceId: await sessionGrantWorkspaceId(
+      {
+        workspaceId: session.workspaceId ?? null,
+        projectId: session.projectId ?? null,
+        metadata: session.metadata,
+      },
+      write
+    ),
   });
   if (denial) return { ok: false, reason: "denied", message: denial };
   const left = continueAt({

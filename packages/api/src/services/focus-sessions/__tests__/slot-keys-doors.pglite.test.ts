@@ -283,6 +283,8 @@ describe("slot keys reach storage through the write doors", () => {
           key: "deck",
           statement: "The deck convinces",
           check: { kind: "judge" },
+          // W4: a criterion checks the slot it names by outputKey.
+          outputKey: "deck",
         },
       ]),
     ]);

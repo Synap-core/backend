@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { FRAME_OPEN_KINDS } from "@synap-core/types/cell-bridge";
 import {
   OPEN_CLIENT_MOBILE,
   OPEN_CLIENT_PARAM,
@@ -49,6 +50,16 @@ const DEEP_LINK_EMITTED_KINDS = ["capability", "settings"] as const;
 describe("open kinds lock", () => {
   it("every kind deep-links.ts emits is served by TYPED_OPEN_KINDS", () => {
     for (const kind of DEEP_LINK_EMITTED_KINDS) {
+      expect(TYPED_OPEN_KINDS as readonly string[]).toContain(kind);
+    }
+  });
+
+  // A page's "open this" (`window.synap.open`, `@synap-core/types/cell-bridge`)
+  // is routed by each host's object door, which the typed route also serves:
+  // a kind added there without a route here is a dead door in every page.
+  it("every kind a page may ask to open is served by TYPED_OPEN_KINDS", () => {
+    expect(FRAME_OPEN_KINDS.length).toBeGreaterThan(0);
+    for (const kind of FRAME_OPEN_KINDS) {
       expect(TYPED_OPEN_KINDS as readonly string[]).toContain(kind);
     }
   });

@@ -1031,6 +1031,8 @@ describe("a pod-wide read: asked in the document, ticked once, held with no spac
       scope: "pod",
       workspaceId: null,
       workspaceName: null,
+      projectId: null,
+      place: { kind: "pod" },
     });
     const row = await keyRow(first.access_token);
     expect(await unpinned(row.id)).toEqual([[DECISIONS]]);

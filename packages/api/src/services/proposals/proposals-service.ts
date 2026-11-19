@@ -38,6 +38,7 @@ import {
   isCompositeProposalData,
   isNestedEnvelope,
 } from "@synap-core/types/proposals";
+import { findPodRegistrationCode } from "@synap-core/types/proposals/capability-run";
 import type { ProposalStatusFilter } from "../../routers/hub-protocol/rest/_codecs/proposal.js";
 import type { GraphRedecision } from "./redecide-graph-revision.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
@@ -399,6 +400,11 @@ export const PROTECTED_ENVELOPE_FIELDS = [
 export const PINNED_PLACEMENT_FIELDS = [
   "resolvedWorkspaceId",
   "resolvedHomeWorkspaceId",
+  // `workspacePlacement` — the rung of the space ladder that placed a
+  // proposed session start (W3); the approval stamps it on the session, and a
+  // ladder rung widens an app grant's reach over it (D2 a). A revise that could
+  // plant or change it would widen that reach after the person read the card.
+  "workspacePlacement",
 ] as const;
 
 /** The pinned placement field a patch would CHANGE at either level, or null. */
@@ -771,6 +777,14 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `\`${key}\` is a credential; it cannot be changed from the review.`,
+        });
+      }
+      // The review shows this argument with its pod registration code masked
+      // (plan a640c5bb B1): an edit of that text would drop the code.
+      if (findPodRegistrationCode(currentParams[key])) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `\`${key}\` carries a pod registration code; it cannot be changed from the review.`,
         });
       }
       was[key] = currentParams[key];

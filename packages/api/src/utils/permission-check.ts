@@ -5086,6 +5086,28 @@ async function verifyWorkspaceAccess(opts: {
 }
 
 /**
+ * Would the gate's membership check admit this write in `workspaceId`? The
+ * same check (`verifyWorkspaceAccess`, track-space grant included), asked
+ * before a door picks a space: the session space ladder
+ * (`resolveSessionWorkspacePlacement`) places a start only where this says
+ * yes, so the ladder and the gate cannot disagree.
+ */
+export async function gateAdmitsWorkspace(opts: {
+  userId: string;
+  agentUserId?: string;
+  workspaceId: string;
+  subjectType: string;
+  action: string;
+  data?: Record<string, unknown>;
+}): Promise<boolean> {
+  const result = await verifyWorkspaceAccess({
+    ...opts,
+    requiredPermission: requiredPermissionFor(opts.action),
+  });
+  return result.allowed;
+}
+
+/**
  * Park a WHOLE multi-step write on a workspace join BEFORE any of it is
  * written (finding 590ca76a). A door whose one call makes several writes (a
  * capture graph) cannot let the gate decide at each write: the first write
@@ -5218,9 +5240,13 @@ export async function requestWorkspaceJoin(opts: {
     grant &&
     !grant.scopes.some((scope) => {
       const place = placeBeyondPodWideReads(scope);
+      // A project pin reads here as it did before projects were a place
+      // (no space narrowing); its projects narrow at `permits` (W1).
       return (
         place !== null &&
-        (place.kind === "unbounded" || place.ids.includes(workspaceId))
+        (place.kind === "unbounded" ||
+          place.kind === "projects" ||
+          place.ids.includes(workspaceId))
       );
     })
   ) {

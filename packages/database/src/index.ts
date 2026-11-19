@@ -60,6 +60,7 @@ export * from "./utils/document-body-text.js";
 export * from "./utils/entity-project-membership.js";
 export * from "./utils/project-guardrails.js";
 export * from "./utils/reserved-profile-slugs.js";
+export * from "./utils/project-twins.js";
 export * from "./utils/profile-slug-precedence.js";
 export * from "./utils/request-write-context.js";
 export * from "./utils/api-usage.js";
@@ -92,6 +93,7 @@ export * from "./utils/live-run-status.js";
 export * from "./utils/worker-enablement.js";
 export * from "./utils/worker-target-result.js";
 export * from "./utils/resolve-session-project.js";
+export * from "./utils/resolve-session-workspace.js";
 export * from "./utils/session-spawn.js";
 export * from "./utils/resolve-or-create-agent-proposal-session.js";
 export * from "./utils/agent-proposal-session-memo.js";
@@ -353,6 +355,8 @@ export {
 // A template's `meta.intent` → `settings.intent` (object-first homes).
 export {
   projectTemplateIntent,
+  readStoredIntent,
+  type StoredSpaceIntent,
   workspaceIntentDefinitionSchema,
   type WorkspaceIntentDefinition,
 } from "./utils/workspace-intent.js";
@@ -488,6 +492,8 @@ export {
 export { declaredLifecycleProfilesStatement } from "./services/lifecycle/project-lifecycle-columns.js";
 export { expireProposalsStaleAfterMove } from "./services/lifecycle/stale-proposals.js";
 export {
+  SessionStageConflictError,
+  sessionStageIs,
   setSessionStatus,
   writeSessionPatch,
   type SetSessionStatusInput,

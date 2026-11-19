@@ -39,6 +39,12 @@ type Writer = Pick<Db, "insert" | "update" | "delete" | "select">;
 export const SCHEDULE_ROLE = "schedule";
 /** The role of the automation the playbook canvas saved (`playbooks.saveFlow`). */
 export const FLOW_ROLE = "flow";
+/**
+ * The role of a LINK's automation: a `run_ended` activator compiled to a rule
+ * ("when a run of X ends, start this playbook", `playbook-links.ts`). The
+ * other activators' automations carry `activator`.
+ */
+export const LINK_ROLE = "link";
 /** The two roles `flow_automation_id` stood for: the playbook's driving automation. */
 export const DRIVER_ROLES: readonly string[] = [SCHEDULE_ROLE, FLOW_ROLE];
 

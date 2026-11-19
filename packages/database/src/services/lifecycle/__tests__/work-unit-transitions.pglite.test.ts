@@ -450,11 +450,35 @@ describe("a session that ENDS takes its pending stage gates with it", () => {
   }
   const proposalRow = async (id: string) =>
     (
-      await pg.query<{ status: string; data: Record<string, unknown> }>(
-        `SELECT status, data FROM proposals WHERE id = $1`,
+      await pg.query<{
+        status: string;
+        data: Record<string, unknown>;
+        reviewed_by: string | null;
+        reviewed_at: Date | null;
+      }>(
+        `SELECT status, data, reviewed_by, reviewed_at FROM proposals WHERE id = $1`,
         [id]
       )
     ).rows[0]!;
+  /** A gate whose approval FAILED: the person clicked approve, it could not apply. */
+  async function failedGate(sessionId: string, data: object = {}) {
+    const r = await pg.query<{ id: string }>(
+      `INSERT INTO proposals (target_type, target_id, proposal_type, data, status, session_id, reviewed_by, reviewed_at)
+       VALUES ('focus_session', $1, 'playbook.stage_gate', $2::jsonb, 'approval_failed', $4::uuid, $3, now())
+       RETURNING id`,
+      [
+        sessionId,
+        JSON.stringify({
+          stageKey: "draft",
+          failure: { errorClass: "conflict" },
+          ...data,
+        }),
+        OWNER,
+        sessionId,
+      ]
+    );
+    return r.rows[0]!.id;
+  }
 
   for (const to of ["closed", "failed", "cancelled"] as const) {
     it(`${to}: its pending stage gate is EXPIRED and says why`, async () => {
@@ -528,6 +552,49 @@ describe("a session that ENDS takes its pending stage gates with it", () => {
     expect((await proposalRow(closedHandOff)).status).toBe("pending");
     // A second pass finds nothing left to expire.
     expect(await expireOrphanedStageGates(db)).toEqual([]);
+  });
+
+  it("a FAILED gate of an ended run is expired too, by the sweep and by the end, naming no person", async () => {
+    // Census bcef4627 group G: gates 1836fd6e, 28c3b2e2, 88431e30 of runs
+    // closed on 9 Nov, approved and failed (class `conflict`, kept off the
+    // lapse clock): their only way out was a person's reject.
+    const swept = await failedGate(await session("closed"));
+    const live = await failedGate(await session("paused"));
+    const partly = await failedGate(await session("closed"), {
+      planFailure: {
+        compensation: { notCompensated: [{ ref: "$op1", reason: "x" }] },
+      },
+    });
+    const ending = await session("paused");
+    const atTheEnd = await failedGate(ending);
+
+    expect(await expireOrphanedStageGates(db)).toEqual([swept]);
+    await setSessionStatus(db, {
+      sessionId: ending,
+      from: ["paused"],
+      to: "cancelled",
+      actor: { kind: "system" },
+    });
+
+    for (const [gate, endedAs] of [
+      [swept, "closed"],
+      [atTheEnd, "cancelled"],
+    ] as const) {
+      const g = await proposalRow(gate);
+      expect(g.status).toBe("expired");
+      expect(g.data).toMatchObject({
+        expiredBy: "session_ended",
+        sessionEndedAs: endedAs,
+        ended: { reason: "session_ended" },
+      });
+      // Nobody reviewed the end: not the person whose approve failed.
+      expect(g.reviewed_by).toBeNull();
+      expect(g.reviewed_at).toBeNull();
+    }
+    // A live run keeps its failed gate; a plan that partly applied stays
+    // failed so a person sees what landed.
+    expect((await proposalRow(live)).status).toBe("approval_failed");
+    expect((await proposalRow(partly)).status).toBe("approval_failed");
   });
 
   it("a pause or a resume expires nothing", async () => {

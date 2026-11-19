@@ -146,6 +146,7 @@ import {
 import { AWAITED_GATE_PROPOSAL_TYPES, readCriteria } from "@synap/playbooks";
 import type { PROPOSE_REASON } from "@synap/governance-policy";
 import { grantWriteDenial } from "../../utils/grant-write-check.js";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { checkProvideRef } from "./provide-ref.js";
@@ -1051,7 +1052,9 @@ export type AnswerSessionSlotResult =
 /**
  * The grant request an ANSWER is, for the key half of both answer doors (tRPC
  * `focusSessions.answerOutput`, Hub `POST /focus-sessions/:id/outputs/answer`):
- * an update of the session IN ITS OWN SPACE AND PROJECT. Without them a key
+ * an update of the session IN ITS OWN SPACE AND PROJECT (a project-only
+ * session: in a space its project uses, `sessionGrantWorkspaceId`). Without
+ * them a key
  * bounded to some spaces — a person's "Sign in with Synap" token — could
  * answer nowhere, and one with a pinned project would fail closed everywhere.
  * Read before the owner floor on purpose: a session the caller cannot answer
@@ -1079,16 +1082,22 @@ export async function answerGrantWrite(sessionId: string): Promise<{
           .select({
             workspaceId: focusSessions.workspaceId,
             projectId: focusSessions.projectId,
+            metadata: focusSessions.metadata,
           })
           .from(focusSessions)
           .where(eq(focusSessions.id, sessionId))
           .limit(1)
       : [];
-  return {
-    subjectType: "focus_session",
-    action: "update",
-    workspaceId: row?.workspaceId ?? null,
+  const write = {
+    subjectType: "focus_session" as const,
+    action: "update" as const,
     projectId: row?.projectId ?? null,
+  };
+  return {
+    ...write,
+    // A project-only session counts in its project's spaces (founder, 18 Nov
+    // 2026): the ONE rule, `session-counted-spaces.ts`.
+    workspaceId: row ? await sessionGrantWorkspaceId(row, write, grant) : null,
   };
 }
 

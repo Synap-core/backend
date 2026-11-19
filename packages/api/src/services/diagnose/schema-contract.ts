@@ -25,20 +25,21 @@
  * whose profile is a reserved slug (`project`), answers recall with the
  * project's stale facts while the table holds the current ones. A reserved
  * slug at write time cannot clean rows written before it; this invariant makes
- * them visible. It repairs nothing: what happens to such an entity (and the
- * relations that point at its id) is a person's call.
+ * them visible. The repair is the `retireProjectTwins` conversion (founder
+ * approval d95793d1): it soft-deletes them by the same predicate and keeps
+ * every relation that points at their id (the project's membership).
  */
 
 import {
   db,
+  sql,
   and,
   eq,
   or,
   inArray,
-  isNull,
-  entities,
-  projects,
   isReservedProfileSlug,
+  selectProjectTwins,
+  type ProjectTwinRow,
   profiles,
   profileProperties,
   propertyDefs,
@@ -71,14 +72,11 @@ export interface ActiveProfileRow {
   workspaceId: string | null;
 }
 
-/** A live entity that twins a project. */
-export interface ProjectTwinEntity {
-  entityId: string;
-  title: string | null;
-  workspaceId: string | null;
-  /** `id_is_a_project`: its id is a `projects.id`. `reserved_kind`: its profile slug is reserved. */
-  reasons: Array<"id_is_a_project" | "reserved_kind">;
-}
+/**
+ * A live entity that twins a project. `id_is_a_project`: its id is a
+ * `projects.id`. `reserved_kind`: its profile slug is reserved.
+ */
+export type ProjectTwinEntity = ProjectTwinRow;
 
 /** A slug held by two or more active rows. */
 export interface TwinGroup {
@@ -266,7 +264,7 @@ export function summarizeSchemaContract(
         inert:
           "an inert retirement matches no link — already converged, or never present; the schema cannot tell which",
         projectTwins:
-          "live entities whose id is a projects row (left behind by migration 0151) or whose kind is a reserved slug: recall answers from them, not from the projects table. Repairing one (and the relations pointing at its id) is a person's decision.",
+          "live entities whose id is a projects row (left behind by migration 0151) or whose kind is a reserved slug: recall answers from them, not from the projects table. The retireProjectTwins conversion retires them at the next boot and keeps the relations pointing at their id.",
       },
     },
   };
@@ -289,52 +287,14 @@ export function visibleProfileWhere(userId: string) {
 }
 
 /**
- * The caller's live entities that twin a project: id equal to a `projects.id`,
- * or a profile on a reserved slug (`isReservedProfileSlug`, the write paths'
- * door, so no second list of slugs here). Owner-floored.
+ * The caller's live entities that twin a project. The predicate is
+ * `selectProjectTwins` (@synap/database), the one the `retireProjectTwins`
+ * conversion retires by. Owner-floored.
  */
 export async function readProjectTwins(
   userId: string
 ): Promise<ProjectTwinEntity[]> {
-  const profileRows = await db
-    .select({ id: profiles.id, slug: profiles.slug })
-    .from(profiles);
-  const reservedProfileIds = profileRows
-    .filter((p) => isReservedProfileSlug(p.slug))
-    .map((p) => p.id);
-  const rows = await db
-    .select({
-      entityId: entities.id,
-      title: entities.title,
-      workspaceId: entities.workspaceId,
-      profileId: entities.profileId,
-      projectId: projects.id,
-    })
-    .from(entities)
-    .leftJoin(projects, eq(projects.id, entities.id))
-    .where(
-      and(
-        eq(entities.userId, userId),
-        isNull(entities.deletedAt),
-        or(
-          eq(projects.id, entities.id),
-          reservedProfileIds.length > 0
-            ? inArray(entities.profileId, reservedProfileIds)
-            : undefined
-        )
-      )
-    );
-  return rows.map((r) => ({
-    entityId: r.entityId,
-    title: r.title,
-    workspaceId: r.workspaceId,
-    reasons: [
-      ...(r.projectId ? (["id_is_a_project"] as const) : []),
-      ...(r.profileId && reservedProfileIds.includes(r.profileId)
-        ? (["reserved_kind"] as const)
-        : []),
-    ],
-  }));
+  return selectProjectTwins(sql, { userId });
 }
 
 /** DB tier: read visible active profiles, and every link on the system ones. */

@@ -127,6 +127,8 @@ import {
   shouldDropPin,
 } from "../playbooks/pinned-subject.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
+import { FOLLOWED_VIA_METADATA_KEY } from "./follow-markers.js";
 
 const logger = createLogger({ module: "complete-focus-session" });
 
@@ -632,6 +634,13 @@ export async function completeFocusSession(
     userId: params.userId,
     agentUserId: params.agentUserId,
     workspaceId: session.workspaceId,
+    // The key's grant: a project-only session counts in its project's spaces
+    // (`session-counted-spaces.ts`); governance stays at its home.
+    grantWorkspaceId: await sessionGrantWorkspaceId(session, {
+      subjectType: "focus_session",
+      action: "update",
+      data: { id: sessionId },
+    }),
     // Attribute + honor pack-mode escape: stamp would force-propose without
     // ignoreSessionForcePropose; both must be set for lifecycle complete.
     sessionId,
@@ -1116,6 +1125,15 @@ export async function completeFocusSession(
     // Additive: reactors that do not know it ignore it.
     verdict,
     ...(closedNotDone ? { closedNotDone } : {}),
+    // How the run ended, as a playbook link reads it (`run_ended`): `done`
+    // only when it closed with no required work left open; and whether the
+    // session was only ATTACHED to its playbook, not run under it.
+    closedAs:
+      updated.status === "closed" && !closedNotDone ? "done" : "not_done",
+    attached:
+      (updated.metadata as Record<string, unknown> | null)?.[
+        FOLLOWED_VIA_METADATA_KEY
+      ] != null,
   };
 
   await logEvent(params.userId, FOCUS_SESSION_CLOSED_EVENT_TYPE, eventData, {

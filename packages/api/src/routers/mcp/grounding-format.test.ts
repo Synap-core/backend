@@ -60,12 +60,15 @@ describe("formatGrounding", () => {
     // the workspaceId") pinned the pre-inversion prose and went red at that
     // commit — unnoticed, because the full suite is rarely run. Assert the rule
     // that ships today, and keep asserting BOTH halves so a future one-sided
-    // reword can't quietly drop the write guidance again.
-    expect(out).toMatch(/For WRITES pass kind\/profile/);
-    expect(out).toMatch(
-      /omit workspaceId unless you deliberately pin one space/
+    // reword can't quietly drop the write guidance again: one omit rule for
+    // reads and writes, and what a write passes instead.
+    expect(out).toMatch(/Pin workspaceId only on purpose/);
+    expect(out).toMatch(/writes: kind \+ roles as facets/);
+    // W3 (plan 8daa514b): a session is not a record; its space comes from
+    // its chain.
+    expect(out).toContain(
+      "a session's space comes from its playbook, subject, parent session, project or your focus"
     );
-    expect(out).toMatch(/For READS omit workspaceId/);
   });
 
   it("keeps the projects preamble, but never re-teaches the lens concept", () => {
@@ -101,7 +104,7 @@ describe("formatGrounding", () => {
     expect(ids.every((id) => id.length === 36)).toBe(true);
     expect(out).toMatch(/…and \d+ more/);
     // The write rule survives the cut — it is what the model applies to the ids.
-    expect(out).toMatch(/For WRITES pass kind\/profile/);
+    expect(out).toMatch(/writes: kind \+ roles as facets/);
   });
 
   it("points at orient for the hidden spaces' purposes when it fits", () => {

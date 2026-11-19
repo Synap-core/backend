@@ -25,7 +25,7 @@ import type {
 } from "@synap/jobs/utils/reaction-effects.js";
 import type { PlannedWrite } from "@synap/jobs/utils/reactions.js";
 import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
-import { slotStatusOf } from "@synap-core/types/units";
+import { checkedOutputKeys, slotStatusOf } from "@synap-core/types/units";
 import {
   RECENTLY_CLOSED_MS,
   outcomeRefOfProposal,
@@ -104,8 +104,8 @@ export const meetOutcomesReactionEffect: ReactionEffect = {
       const slots: ExpectedOutput[] = Array.isArray(s.expectedOutputs)
         ? (s.expectedOutputs as ExpectedOutput[])
         : [];
-      const criterionKeys = new Set(readCriteria(s.criteria).map((c) => c.key));
-      for (const pick of selectSlotsMetByRef(slots, ref, criterionKeys)) {
+      const checkedKeys = checkedOutputKeys(readCriteria(s.criteria));
+      for (const pick of selectSlotsMetByRef(slots, ref, checkedKeys)) {
         const label = slots[pick.index]!.label || pick.key;
         writes.push({
           target: { subjectType: "slot", subjectId: `${s.id}/${pick.key}` },

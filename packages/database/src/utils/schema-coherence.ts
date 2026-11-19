@@ -1214,6 +1214,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "approved_requests",
     addedBy: "0309_apps.sql",
   },
+  // apps.approved_access — the approval in its v2 form (0434, app permissions
+  // W2). Missing means every app read and approval write would 42703.
+  {
+    table: "apps",
+    column: "approved_access",
+    addedBy: "0434_apps_approved_access.sql",
+  },
   // apps.removed_at — "Remove for good" (0312). Missing means every app read
   // (`listForOwner` filters on it) would 42703.
   {
@@ -2257,6 +2264,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "compute_leases",
     column: "release_verb",
     addedBy: "0431_compute_need_and_leases.sql",
+  },
+  {
+    table: "compute_leases",
+    column: "registration_code_hash",
+    addedBy: "0432_compute_lease_kept.sql",
   },
 
   // Document passages (0358b) — a document body as recall-sized units, and

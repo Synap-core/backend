@@ -72,6 +72,12 @@ export type Place = {
 		...string[]
 	];
 	readonly kind: "spaces";
+} | {
+	readonly ids: readonly [
+		string,
+		...string[]
+	];
+	readonly kind: "projects";
 };
 export interface KeyDraft {
 	/** What the person calls it. Required. */
@@ -892,6 +898,8 @@ export interface GoalCriterionView {
 	stageKey?: string;
 	checkKind?: CriterionCheckMeaning;
 	about?: CriterionAbout;
+	/** The key of the session output this criterion checks (absent = none named). */
+	outputKey?: string;
 	/** The judge's stored decision — `null` until one is made. */
 	acceptance: GoalCriterionAcceptance | null;
 	mark: GoalCriterionMark | null;
@@ -2775,6 +2783,26 @@ export interface SessionOutcome<P extends ProducedItemLike = ProducedItemLike> {
 	/** Criterion check detail, when it names one. */
 	capability?: string;
 	evidenceKey?: string;
+	/**
+	 * A slot's criteria: every criterion naming it by `outputKey` (rule 7), in
+	 * declared order. Absent on an outcome no criterion checks. `verify`,
+	 * `verdict`, `stageKey`, `capability` and `evidenceKey` above read the first
+	 * criterion (and the deciding verdict), as they did when one could.
+	 */
+	criteria?: OutcomeCriterion[];
+}
+/** One criterion under the output it checks. */
+export interface OutcomeCriterion {
+	/** The criterion's key (its evaluations' `criterionKey`). */
+	key: string;
+	statement: string;
+	verify: OutcomeVerify;
+	required: boolean;
+	/** Its current verdict is `pass`. */
+	met: boolean;
+	verdict: OutcomeVerdict | null;
+	state: UnitStateView;
+	stageKey?: string;
 }
 /** What an input asks the person for. */
 export type SessionInputNeed = 
@@ -4432,6 +4460,8 @@ export interface WorkspaceIntentSettings {
 	 * one of `produces`; absent = none declared (a library never has one).
 	 */
 	primary?: string;
+	/** The kinds of `produces` that are helpers (`SpaceKindAs`); absent = none. */
+	helpers?: string[];
 	source: "template";
 }
 export interface WorkspaceSettings {
@@ -6580,27 +6610,6 @@ export interface CatalogSyncStamp {
 	 */
 	retirementsUnreported?: true;
 }
-/**
- * Apps — a developer's application identity (App Connect v1, 2026-10-06).
- *
- * The object a developer registers is an APPLICATION; its `public_id`
- * (`app_<uuid>`) is the app's stable id AND the `client_id` its grant carries
- * (`grants.client_id`). The bearer is an API key (`api_keys`), unchanged — an
- * app never holds a secret of its own beyond the key minted for it.
- *
- * `approved_requests` is what the app ASKED for and a human APPROVED
- * (`[{ permission, workspaceId }]`); it is the exact list the key issue turns
- * into grants — ONE per workspace, never their cross product
- * (`grantsForApprovedRequests`, services/app-connect.ts; client_id = public_id).
- * It is written ONLY by the `app/connect` approval executor — never at register
- * time, so a proposal with no plaintext and a key minted only on demand means
- * no secret ever rests in a proposal.
- *
- * The app acts as its own agent user (`agent_user_id`, 0313) — see
- * `ensureAppAgent` (api services/app-connect.ts).
- *
- * ONE write door: `AppRepository` (repositories/app-repository.ts).
- */
 /**
  * One entry of `apps.approved_requests` — a permission bounded to a workspace,
  * or, with `workspaceId: null`, a POD-WIDE read ("everywhere in your pod",
@@ -10163,7 +10172,7 @@ export interface ProposalToolRunParameter {
 	label: string;
 	/** What the verb's schema says the argument is, when it says. */
 	description?: string;
-	/** The value the agent passed, whole. Absent when `secret`. */
+	/** The value the agent passed, whole (a pod registration code in it masked). Absent when `secret`. */
 	value?: unknown;
 	/** The argument names a credential: its value never leaves the pod. */
 	secret?: true;
@@ -12125,6 +12134,7 @@ declare const PROCESS_AUTOMATION_ROLES: readonly [
 	"schedule",
 	"flow",
 	"activator",
+	"link",
 	"member"
 ];
 export type ProcessAutomationRole = (typeof PROCESS_AUTOMATION_ROLES)[number] | (string & {});
@@ -13330,7 +13340,7 @@ declare const TRIGGER_SUBJECT_CATEGORIES: readonly [
 	"inbox_item"
 ];
 export type TriggerSubjectCategory = (typeof TRIGGER_SUBJECT_CATEGORIES)[number];
-export type ActionVerb = "approved" | "completed" | "created" | "deleted" | "received" | "rejected" | "transitioned" | "updated";
+export type ActionVerb = "approved" | "closed" | "completed" | "created" | "deleted" | "received" | "rejected" | "transitioned" | "updated";
 export type ConditionOperator = "changed_to" | "contains" | "greater_than" | "is" | "is_false" | "is_not" | "is_true" | "is_within" | "less_than" | "starts_with";
 export interface ConditionRow {
 	id: string;
@@ -15798,11 +15808,21 @@ export interface PlaybookActivator {
 	 * `count` — at least `min` things sit in `status` (always per_moment).
 	 * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
 	 * `manual` — a button, never by itself: compiles no rule.
+	 * `run_ended` — a LINK: a run of the playbook named in `playbook` ended;
+	 *   the new run works on the same subject.
 	 * Mirror of `WorkerActivator` (`@synap-core/types/workers`); this package
 	 * is dependency-free, the pod's zod schema (`playbook-process.ts`) is
 	 * `satisfies` both.
 	 */
-	on: "count" | "created" | "enters_status" | "manual" | "schedule";
+	on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
+	/**
+	 * Required for `run_ended`, and only it: the playbook whose run ending
+	 * starts this one, by name (the catalog's spelling) or id, in the same
+	 * space or pod-wide.
+	 */
+	playbook?: string;
+	/** `run_ended` only: `done` or `not_done` (`WORKER_RUN_OUTCOMES`); absent = any end. */
+	outcome?: "done" | "not_done";
 	/** Required for `enters_status` / `count`; optional for `schedule`. */
 	status?: string;
 	/** Required for `schedule`. */
@@ -16240,6 +16260,8 @@ export interface SessionCriterion {
 	checkKind?: CriterionCheckMeaning$1;
 	/** R7 — about the result (absent = result) or the method. */
 	about?: CriterionAbout$1;
+	/** The key of the session output this criterion checks (absent = none named). */
+	outputKey?: string;
 }
 /**
  * The normalized shape the Phase-1 adapters produce from builtin IS tools,
@@ -19910,6 +19932,51 @@ export interface OpenBlocker extends DependencyNodeRef {
 	/** Its display name, when the reader may see it. */
 	title?: string | null;
 }
+export interface CriterionScore {
+	key: string;
+	statement: string;
+	required: boolean;
+	/** Closed sessions that declared this criterion. */
+	sessions: number;
+	passed: number;
+	failed: number;
+	unmeasured: number;
+	/** passed / (passed + failed); null when nothing was measured. */
+	passRate: number | null;
+	overrides: number;
+}
+export interface PlaybookScorecard {
+	runs: {
+		attached: number;
+		closed: number;
+		/** Closed sessions with at least one evaluation row. */
+		evaluated: number;
+		/**
+		 * The split of `total` by HOW the session came to be a run of this
+		 * playbook. `instantiated + attached === total`, always — both numbers are
+		 * surfaced so a reader can see what the criteria scores are made of.
+		 * A criterion's pass rate above counts BOTH populations; the lessons
+		 * scanner re-projects over instantiated rows alone before proposing an
+		 * edit to the playbook (see {@link ScorecardSessionRow.attached}).
+		 */
+		instantiated: number;
+		reopened: number;
+		total: number;
+	};
+	escalations: number;
+	overrides: number;
+	criteria: CriterionScore[];
+}
+/** A compact scorecard for a CATALOG row — a few numbers, never the full table. */
+export interface CompactPlaybookScorecard {
+	closedRuns: number;
+	evaluatedRuns: number;
+	reopenedRuns: number;
+	overrides: number;
+	escalations: number;
+	/** Pass rate per criterion key; `null` = nothing measured yet. */
+	passRate: Record<string, number | null>;
+}
 /** The identity a card needs: the kind slug, its display name, its icon. */
 export interface EntityProfileRef {
 	/** Profile slug (`entities.type` mirrors it when the profile row is absent). */
@@ -20780,6 +20847,31 @@ export interface ContinuationNextMove {
 	/** The person or thing a `waiting_on` move waits on, when the reader may read it. */
 	entityId?: string;
 }
+/** One earlier successful run of the same playbook. */
+export interface PacketPrecedentItem {
+	sessionId: string;
+	/** `resolveSessionTitle`, as every session name. */
+	title: string;
+	closedAt: string | null;
+	/** The tools and skills it recorded using (`session --used-->`). */
+	used: string[];
+}
+/**
+ * PRECEDENTS: how the reader's own earlier runs of the playbook this session
+ * follows went, within the learning window: its compact scorecard (`null` =
+ * no closed run) and its newest successful runs (every required criterion
+ * passed), each with what it used. A failed read is `unavailable`, never "no
+ * precedent".
+ */
+export type PacketPrecedents = {
+	playbookId: string;
+	runs: PacketSection<PacketPrecedentItem>;
+	scorecard: CompactPlaybookScorecard | null;
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export interface ContinuationPacket {
 	version: 1;
 	session: {
@@ -20978,6 +21070,11 @@ export interface ContinuationPacket {
 		reason: string;
 		status: "unavailable";
 	} | null;
+	/**
+	 * How the reader's earlier runs of the same playbook went (see
+	 * {@link PacketPrecedents}). `null` = the session follows no playbook.
+	 */
+	precedents: PacketPrecedents | null;
 	/**
 	 * The PRs and branches this session recorded as outcomes, declaration
 	 * order (see {@link PacketWorkUnitItem}). Derived from the row itself — an
@@ -22760,6 +22857,10 @@ export type ReactionDo =
  | {
 	effect: "reach_stage_status";
 }
+/** Advance the session to its next stage (the one advance door, W6). */
+ | {
+	effect: "advance_stage";
+}
 /**
  * Roll the parent up (decision D5): when every non-lost part is done and
  * at least one is, the parent moves to `to`, else to its next status
@@ -23113,6 +23214,16 @@ export interface AutomationCard {
 		kind: "add" | "none" | "run";
 	};
 }
+export type EnableManyItemResult = {
+	id: string;
+	kind: "skill" | "tool";
+	ok: true;
+} | {
+	error: string;
+	id: string;
+	kind: "skill" | "tool";
+	ok: false;
+};
 export interface CreateCapabilityResult {
 	capabilityKey: string;
 	created: {
@@ -26750,6 +26861,18 @@ export type AnswerExpectedOutputResult = {
 	/** `true` ⇒ the slot was the person's and is now back with the agent. */
 	handedBack: boolean;
 	kind: string;
+	/**
+	 * A NO to an orchestrator's `plan-approval` (decision D-O2): the
+	 * orchestrator was closed (`cancelled`, "Plan declined") through the
+	 * one close door, or why not. The held sessions resume either way (the
+	 * answer ends their wait). Absent for every other answer.
+	 */
+	planDeclined?: {
+		closed: true;
+	} | {
+		closed: false;
+		error: string;
+	};
 	session: {
 		agentIds: string[];
 		channelId: string | null;
@@ -26992,41 +27115,6 @@ export interface RunnerOffer {
  * waits for the person to accept it (decision 3), so it has not started yet.
  */
 export type AlreadyRunningReason = "draft_awaiting_acceptance" | "live_run";
-export interface CriterionScore {
-	key: string;
-	statement: string;
-	required: boolean;
-	/** Closed sessions that declared this criterion. */
-	sessions: number;
-	passed: number;
-	failed: number;
-	unmeasured: number;
-	/** passed / (passed + failed); null when nothing was measured. */
-	passRate: number | null;
-	overrides: number;
-}
-export interface PlaybookScorecard {
-	runs: {
-		attached: number;
-		closed: number;
-		/** Closed sessions with at least one evaluation row. */
-		evaluated: number;
-		/**
-		 * The split of `total` by HOW the session came to be a run of this
-		 * playbook. `instantiated + attached === total`, always — both numbers are
-		 * surfaced so a reader can see what the criteria scores are made of.
-		 * A criterion's pass rate above counts BOTH populations; the lessons
-		 * scanner re-projects over instantiated rows alone before proposing an
-		 * edit to the playbook (see {@link ScorecardSessionRow.attached}).
-		 */
-		instantiated: number;
-		reopened: number;
-		total: number;
-	};
-	escalations: number;
-	overrides: number;
-	criteria: CriterionScore[];
-}
 /** What the run door answers for a one-shot run. */
 export interface GeneratedRunAnswer {
 	runId: string;
@@ -33346,6 +33434,46 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message?: undefined;
 				result: {} | null;
 				skillId: string;
+			};
+		}>;
+		enableMany: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+				skillIds?: string[] | undefined;
+				toolIds?: string[] | undefined;
+			};
+			meta: object;
+			output: {
+				results: EnableManyItemResult[];
 			};
 		}>;
 		enrichEntity: import("@trpc/server").TRPCMutationProcedure<{
@@ -40120,6 +40248,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						onApproved: string | null;
 						subjectStatus: string | null;
 					}[];
+					startsAfter: {
+						outcome: "done" | "not_done" | null;
+						playbookId: string;
+						playbookName: string;
+					}[];
 					undeclaredStatuses: string[];
 					version: number;
 					workers: {
@@ -40137,6 +40270,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileSlug: string;
 				property: string;
 				space: {
+					helpers: string[];
 					primaryOutput: string | null;
 					produces: string[];
 				} | null;
@@ -40814,7 +40948,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | string[] | null | undefined;
 				q?: string | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
+				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -42110,7 +42244,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
+				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -42368,6 +42502,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
+					outputKey?: string | undefined;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 					statement: string;
@@ -43160,6 +43295,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
+						outputKey?: string | undefined;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
 						statement: string;
@@ -47253,6 +47389,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string;
 					name: string;
 					produces: {
+						as?: "helper" | undefined;
 						beingWorked: number | null;
 						columns: {
 							category: "active" | "done" | "lost" | "open" | "paused" | null;
@@ -50089,11 +50226,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
 					mode?: "propose" | "run" | undefined;
-					on: "count" | "created" | "enters_status" | "manual" | "schedule";
+					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 					only?: {
 						in: string[];
 						property: string;
 					} | undefined;
+					outcome?: "done" | "not_done" | undefined;
+					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
 					unless?: {
@@ -50117,6 +50256,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
+					outputKey?: string | undefined;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 					statement: string;
@@ -50518,6 +50658,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
+						outputKey?: string | undefined;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
 						statement: string;
@@ -50718,11 +50859,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						maxPendingApprovals?: number | undefined;
 						min?: number | undefined;
 						mode?: "propose" | "run" | undefined;
-						on: "count" | "created" | "enters_status" | "manual" | "schedule";
+						on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 						only?: {
 							in: string[];
 							property: string;
 						} | undefined;
+						outcome?: "done" | "not_done" | undefined;
+						playbook?: string | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
 						status?: string | undefined;
 						unless?: {
@@ -50731,6 +50874,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
+					entityId?: string | undefined;
 				} | undefined;
 				tools?: string[] | undefined;
 			};
@@ -51517,11 +51661,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
 					mode?: "propose" | "run" | undefined;
-					on: "count" | "created" | "enters_status" | "manual" | "schedule";
+					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 					only?: {
 						in: string[];
 						property: string;
 					} | undefined;
+					outcome?: "done" | "not_done" | undefined;
+					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
 					unless?: {
@@ -51541,6 +51687,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
+					outputKey?: string | undefined;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 					statement: string;
@@ -51942,6 +52089,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
+						outputKey?: string | undefined;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
 						statement: string;
@@ -52142,11 +52290,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						maxPendingApprovals?: number | undefined;
 						min?: number | undefined;
 						mode?: "propose" | "run" | undefined;
-						on: "count" | "created" | "enters_status" | "manual" | "schedule";
+						on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 						only?: {
 							in: string[];
 							property: string;
 						} | undefined;
+						outcome?: "done" | "not_done" | undefined;
+						playbook?: string | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
 						status?: string | undefined;
 						unless?: {
@@ -52155,6 +52305,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
+					entityId?: string | undefined;
 				} | undefined;
 				tools?: string[] | undefined;
 			};
@@ -52775,7 +52926,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				request: {
 					id: string;
-					kind: "app_connection_request" | "device_enroll" | "device_link" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "recovery_codes" | "skill" | "tool" | "totp_enroll" | "trusted_issuer";
+					kind: "app_connection_request" | "capability_batch" | "device_enroll" | "device_link" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "recovery_codes" | "skill" | "tool" | "totp_enroll" | "trusted_issuer";
 				};
 			} | {
 				action: {
@@ -53143,6 +53294,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				approvalsOff: readonly string[];
 				changedAt: string | null;
 				changedBy: string | null;
+				graceSecondsLeft: number | null;
 				mode: PresenceMode;
 			};
 		}>;
@@ -60427,7 +60579,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
-				tool: Tool;
+				tool: {
+					approved: boolean;
+					authBinding: ToolAuthBinding;
+					capabilities: ToolVerbCatalogEntry[];
+					config: unknown;
+					createdAt: Date;
+					createdBy: string;
+					credentialRef: string | null;
+					description: string | null;
+					executor: ToolExecutorRef;
+					id: string;
+					inputSchema: unknown;
+					kind: ToolKind;
+					metadata: unknown;
+					name: string;
+					status: "active" | "error" | "inactive";
+					updatedAt: Date;
+					workspaceId: string | null;
+				};
 			};
 		}>;
 		setAuthBinding: import("@trpc/server").TRPCMutationProcedure<{
@@ -60664,6 +60834,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
+					outputKey?: string | undefined;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 					statement: string;
@@ -60750,6 +60921,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
+					outputKey?: string | undefined;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 					statement: string;
@@ -62197,7 +62369,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
 					mode: "propose" | "run";
-					on: "count" | "created" | "enters_status" | "manual" | "schedule";
+					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
+					outcome?: "done" | "not_done" | undefined;
+					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
 				} | null;
@@ -62881,11 +63055,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							maxPendingApprovals?: number | undefined;
 							min?: number | undefined;
 							mode?: "propose" | "run" | undefined;
-							on: "count" | "created" | "enters_status" | "manual" | "schedule";
+							on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 							only?: {
 								in: string[];
 								property: string;
 							} | undefined;
+							outcome?: "done" | "not_done" | undefined;
+							playbook?: string | undefined;
 							size?: "per_moment" | "per_thing" | undefined;
 							status?: string | undefined;
 							unless?: {
@@ -62904,6 +63080,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							};
 							checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 							key: string;
+							outputKey?: string | undefined;
 							required?: boolean | undefined;
 							stageKey?: string | undefined;
 							statement: string;
@@ -63306,6 +63483,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								};
 								checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 								key: string;
+								outputKey?: string | undefined;
 								required?: boolean | undefined;
 								stageKey?: string | undefined;
 								statement: string;
@@ -63506,11 +63684,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								maxPendingApprovals?: number | undefined;
 								min?: number | undefined;
 								mode?: "propose" | "run" | undefined;
-								on: "count" | "created" | "enters_status" | "manual" | "schedule";
+								on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 								only?: {
 									in: string[];
 									property: string;
 								} | undefined;
+								outcome?: "done" | "not_done" | undefined;
+								playbook?: string | undefined;
 								size?: "per_moment" | "per_thing" | undefined;
 								status?: string | undefined;
 								unless?: {
@@ -63519,6 +63699,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 							}[] | undefined;
 							humanOnlyStatuses?: string[] | undefined;
+							entityId?: string | undefined;
 						} | undefined;
 						tools?: string[] | undefined;
 					}[] | undefined;
@@ -63590,6 +63771,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						primary?: string | undefined;
 						produces?: {
+							as?: "helper" | "output" | undefined;
 							profile: string;
 						}[] | undefined;
 					} | undefined;
@@ -63914,6 +64096,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						primary?: string | undefined;
 						produces?: {
+							as?: "helper" | "output" | undefined;
 							profile: string;
 						}[] | undefined;
 					} | undefined;

@@ -21,8 +21,11 @@
  *     an expiry, a withdrawal) and when a pause that names a wait is recorded
  *     (the Inngest trap: an answer given BEFORE the wait began must still
  *     resume it, at once); the hourly sweep re-checks every wait hold. Met = the slot of a session the hold's
- *     OWNER owns carries an answer, or the proposal (filed under a session the
- *     owner owns) is no longer pending (`waitHoldsMet`).
+ *     OWNER owns carries an answer, or that session ENDED (closed, cancelled,
+ *     failed) without one — nobody will answer it now, so the wait is over,
+ *     as a proposal's is when it expires — or the proposal (filed under a
+ *     session the owner owns) is no longer pending (`waitHoldsMet`). A
+ *     session's end sends `waits` for its slots (the reactor below).
  *
  * A passed `reviewBy` is NOT a move: it is a signal the watcher reads
  * (`CurrentHold.reviewDue`). The holds are read with the one helper
@@ -64,7 +67,10 @@ import {
 import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
 import { createLogger } from "@synap-core/core";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
-import type { SessionStatus } from "@synap-core/types/focus-sessions";
+import {
+  isTerminalSessionStatus,
+  type SessionStatus,
+} from "@synap-core/types/focus-sessions";
 import {
   holdWaitSlotMatches,
   holdWokenBy,
@@ -319,7 +325,7 @@ function waitNamed(
 async function waitHoldsMet(
   held: readonly CurrentHold[],
   on: NonNullable<HoldResumeJobData["waits"]> = {}
-): Promise<Array<{ h: CurrentHold; moves: string }>> {
+): Promise<Array<{ h: CurrentHold; moves: string; ended?: true }>> {
   const waits = held.flatMap((h) => {
     const until = h.hold.until;
     if (!until || !("moves" in until)) return [];
@@ -345,6 +351,7 @@ async function waitHoldsMet(
           .select({
             id: focusSessions.id,
             userId: focusSessions.userId,
+            status: focusSessions.status,
             expectedOutputs: focusSessions.expectedOutputs,
           })
           .from(focusSessions)
@@ -383,7 +390,13 @@ async function waitHoldsMet(
           typeof slot.answer?.answeredAt === "string" &&
           slot.answer.answeredBy === s.userId
       );
-      return met ? [{ h, moves }] : [];
+      if (met) return [{ h, moves }];
+      // The asking session ended without the answer: the wait is over (an
+      // orchestrator closed before its plan-approval never strands the
+      // sessions it held).
+      return isTerminalSessionStatus(s.status)
+        ? [{ h, moves, ended: true as const }]
+        : [];
     }
     const p = decided.get(ref.proposalId);
     return p && p.ownerId === h.userId && p.status !== "pending"
@@ -417,7 +430,7 @@ export async function handleHoldResume(
         await listHolds(db, { awaitingWaitRefs: true }, now),
         data.waits
       )
-    ).map(({ h, moves }) => ({ h, reason: waitReason(moves) }));
+    ).map(({ h, moves, ended }) => ({ h, reason: waitReason(moves, ended) }));
   } else if (data.devFact) {
     const i = data.devFact.indexOf(":");
     held = devFact
@@ -469,7 +482,7 @@ export async function handleHoldResume(
         reason: devFactReason(moves),
       })),
       ...(waits.status === "fulfilled" ? waits.value : []).map(
-        ({ h, moves }) => ({ h, reason: waitReason(moves) })
+        ({ h, moves, ended }) => ({ h, reason: waitReason(moves, ended) })
       ),
     ];
   }
@@ -516,7 +529,8 @@ function devFactReason(moves: string): string {
   return `What it waited on (${moves}) is in.`;
 }
 
-function waitReason(moves: string): string {
+function waitReason(moves: string, ended?: boolean): string {
+  if (ended) return `What it waited on (${moves}) ended without an answer.`;
   return moves.startsWith("answer:")
     ? `The person answered what it waited on (${moves}).`
     : `What it waited on (${moves}) was decided.`;
@@ -690,6 +704,22 @@ export const holdResumeReactor: Reactor = {
       until && typeof until === "object" && "moves" in until
         ? parseHoldWaitRef(String((until as { moves: unknown }).moves))
         : null;
+    // A session ENDED: the holds that wait on one of its slots
+    // (`answer:<id>/…`) are checked now — an end without the answer is over.
+    if (
+      payload.subjectType === "focus_session" &&
+      (d.category === "done" || d.category === "lost")
+    ) {
+      await boss.send(
+        HOLD_RESUME_QUEUE,
+        {
+          waits: { sessionId: payload.subjectId },
+        } satisfies HoldResumeJobData,
+        payload.eventId
+          ? { singletonKey: `hold-resume:ended:${payload.eventId}` }
+          : {}
+      );
+    }
     // A proposal moved: the holds that wait on it as a WAIT (`proposal:<id>`)
     // are checked now, through the owner-floored wait read, whatever moved it
     // (an expiry, a withdrawal, an approval).

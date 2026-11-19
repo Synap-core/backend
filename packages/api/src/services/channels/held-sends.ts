@@ -254,14 +254,15 @@ export async function withdrawDraftsSentOutside(args: {
     );
     return [];
   }
-  const reason = `Sent from ${args.provider} directly; this draft was not needed.`;
+  // Why it ended is `sent_outside` (the end line says it); never a sentence
+  // stored as `withdrawReason`, which reads as its author's own words.
   const rows = await transitionProposal(db, {
     to: ProposalStatus.WITHDRAWN,
     from: [ProposalStatus.PENDING],
     ended: { reason: "sent_outside" },
     set: {
       updatedAt: new Date(),
-      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${reason}::text, 'closedByMessageId', ${args.messageId}::text)`,
+      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('closedByMessageId', ${args.messageId}::text)`,
     },
     where: and(
       eq(proposals.proposalType, SEND_TYPE),

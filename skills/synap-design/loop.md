@@ -45,6 +45,10 @@ frame (section 1b). This section is the rules of a frame's page, the Puck data e
 - A `children` prop of type ReactNode is a slot that holds an array of blocks. Other ReactNode props
   (`label`, `title`) are plain text. A frame's page is slots only: no `zones`. `root.props` holds page settings only.
 - No hex, rgb, px or font family in a prop; colour, spacing and type come from components and tokens.
+- A canvas design (schema-version 3) lays each frame's page on a column grid: `Section` blocks hold it
+  (12 / 8 / 4 columns by the frame's width), a block in a Section or Grid takes `span` and `hide` per width
+  class, and a frame with `pageOf` shows another frame's page at its own width. The full shape is in
+  `designing-with-real-components`.
 - Motion is not in the props. List it in the design's `motion` property as
   `[{ "trigger": "enter", "target": "SpatialPanel-1", "preset": "fade-rise" }]` with named presets only.
 - Lay out every state the screen has: empty, loading, failed, full, long content. Each empty state is

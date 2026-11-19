@@ -80,6 +80,24 @@ describe("readCriteria", () => {
     ]);
     expect(loose).toEqual(ok);
   });
+
+  // W1 (work model): the output a criterion checks survives every read; a
+  // blank or non-string one reads as none named.
+  it("round-trips outputKey; a blank or non-string one is dropped, the criterion kept", () => {
+    const stored = { ...ok, outputKey: "pr-backend" };
+    const [c] = readCriteria(JSON.parse(JSON.stringify([stored])));
+    expect(c).toEqual(stored);
+    for (const outputKey of ["", "  ", 3, null]) {
+      expect(readCriteria([{ ...ok, outputKey }])).toEqual([ok]);
+    }
+  });
+
+  it("a stage criterion keeps its outputKey through collectPlaybookCriteria", () => {
+    const [c] = collectPlaybookCriteria({
+      stages: [{ key: "pr", criteria: [{ ...ok, outputKey: "pr-backend" }] }],
+    });
+    expect(c).toEqual({ ...ok, outputKey: "pr-backend", stageKey: "pr" });
+  });
 });
 
 describe("collectPlaybookCriteria", () => {

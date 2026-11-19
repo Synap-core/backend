@@ -18647,6 +18647,10 @@
                                         "about": {
                                           "type": "string",
                                           "enum": ["result", "method"]
+                                        },
+                                        "outputKey": {
+                                          "type": "string",
+                                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                         }
                                       },
                                       "required": ["key", "statement", "check"],
@@ -19881,6 +19885,10 @@
                                   "about": {
                                     "type": "string",
                                     "enum": ["result", "method"]
+                                  },
+                                  "outputKey": {
+                                    "type": "string",
+                                    "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                   }
                                 },
                                 "required": ["key", "statement", "check"],
@@ -19946,7 +19954,8 @@
                                           "enters_status",
                                           "count",
                                           "schedule",
-                                          "manual"
+                                          "manual",
+                                          "run_ended"
                                         ]
                                       },
                                       "status": {
@@ -19963,6 +19972,15 @@
                                         "type": "integer",
                                         "minimum": 2,
                                         "maximum": 10000
+                                      },
+                                      "playbook": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "outcome": {
+                                        "type": "string",
+                                        "enum": ["done", "not_done"]
                                       },
                                       "size": {
                                         "type": "string",
@@ -20032,6 +20050,10 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
+                                },
+                                "entityId": {
+                                  "type": "string",
+                                  "format": "uuid"
                                 }
                               },
                               "additionalProperties": {}
@@ -20048,7 +20070,8 @@
                                       "enters_status",
                                       "count",
                                       "schedule",
-                                      "manual"
+                                      "manual",
+                                      "run_ended"
                                     ]
                                   },
                                   "status": {
@@ -20065,6 +20088,15 @@
                                     "type": "integer",
                                     "minimum": 2,
                                     "maximum": 10000
+                                  },
+                                  "playbook": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": ["done", "not_done"]
                                   },
                                   "size": {
                                     "type": "string",
@@ -23944,6 +23976,10 @@
                                         "about": {
                                           "type": "string",
                                           "enum": ["result", "method"]
+                                        },
+                                        "outputKey": {
+                                          "type": "string",
+                                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                         }
                                       },
                                       "required": ["key", "statement", "check"],
@@ -25178,6 +25214,10 @@
                                   "about": {
                                     "type": "string",
                                     "enum": ["result", "method"]
+                                  },
+                                  "outputKey": {
+                                    "type": "string",
+                                    "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                   }
                                 },
                                 "required": ["key", "statement", "check"],
@@ -25243,7 +25283,8 @@
                                           "enters_status",
                                           "count",
                                           "schedule",
-                                          "manual"
+                                          "manual",
+                                          "run_ended"
                                         ]
                                       },
                                       "status": {
@@ -25260,6 +25301,15 @@
                                         "type": "integer",
                                         "minimum": 2,
                                         "maximum": 10000
+                                      },
+                                      "playbook": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "outcome": {
+                                        "type": "string",
+                                        "enum": ["done", "not_done"]
                                       },
                                       "size": {
                                         "type": "string",
@@ -25329,6 +25379,10 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
+                                },
+                                "entityId": {
+                                  "type": "string",
+                                  "format": "uuid"
                                 }
                               },
                               "additionalProperties": {}
@@ -25345,7 +25399,8 @@
                                       "enters_status",
                                       "count",
                                       "schedule",
-                                      "manual"
+                                      "manual",
+                                      "run_ended"
                                     ]
                                   },
                                   "status": {
@@ -25362,6 +25417,15 @@
                                     "type": "integer",
                                     "minimum": 2,
                                     "maximum": 10000
+                                  },
+                                  "playbook": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": ["done", "not_done"]
                                   },
                                   "size": {
                                     "type": "string",
@@ -31456,6 +31520,10 @@
                               "about": {
                                 "type": "string",
                                 "enum": ["result", "method"]
+                              },
+                              "outputKey": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                               }
                             },
                             "required": ["key", "statement", "check"],
@@ -32557,7 +32625,8 @@
                                 "enters_status",
                                 "count",
                                 "schedule",
-                                "manual"
+                                "manual",
+                                "run_ended"
                               ]
                             },
                             "status": {
@@ -32574,6 +32643,15 @@
                               "type": "integer",
                               "minimum": 2,
                               "maximum": 10000
+                            },
+                            "playbook": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "outcome": {
+                              "type": "string",
+                              "enum": ["done", "not_done"]
                             },
                             "size": {
                               "type": "string",
@@ -32640,7 +32718,8 @@
                           "maxLength": 200
                         },
                         "maxItems": 50
-                      }
+                      },
+                      "entityId": { "type": "string", "format": "uuid" }
                     },
                     "additionalProperties": {},
                     "description": "The kind this playbook runs ON, e.g. { profileSlug: 'crm-lead' }. A profileSlug that resolves to no profile is refused."
@@ -32718,6 +32797,10 @@
                         "about": {
                           "type": "string",
                           "enum": ["result", "method"]
+                        },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                         }
                       },
                       "required": ["key", "statement", "check"],
@@ -48338,6 +48421,10 @@
                         "about": {
                           "type": "string",
                           "enum": ["result", "method"]
+                        },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                         }
                       },
                       "required": ["key", "statement", "check"],
@@ -50763,7 +50850,7 @@
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Start an orchestrator over several running sessions",
-        "description": "Files ONE governed write (focus_session/orchestrate). On approval (or at once for a person): an orchestrator session (goal = the brief, a merged-plan deliverable, the person's plan-approval slot), one `orchestrated_by` link per picked session, each running one paused until the person answers plan-approval, and a handoff note in each room. Same service as tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
+        "description": "Files ONE governed write (focus_session/orchestrate). On approval (or at once for a person): an orchestrator session (goal = the brief, a merged-plan deliverable, the person's plan-approval slot), one `orchestrated_by` link per picked session, each running one paused until the person answers plan-approval, and a handoff note in each room. Until then a held session changes no stage. A yes resumes them; a no resumes them as they were and cancels the orchestrator ('Plan declined'); an orchestrator that ends unanswered releases them. 403 when a picked session is outside the key's grant or bound workspace (nothing written). Same service as tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -51940,6 +52027,25 @@
                             },
                             "required": ["open", "onOlderVersion"]
                           },
+                          "startsAfter": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "playbookId": { "type": "string" },
+                                "playbookName": { "type": "string" },
+                                "outcome": {
+                                  "type": ["string", "null"],
+                                  "enum": ["done", "not_done", null]
+                                }
+                              },
+                              "required": [
+                                "playbookId",
+                                "playbookName",
+                                "outcome"
+                              ]
+                            }
+                          },
                           "workers": {
                             "type": "array",
                             "items": {
@@ -51982,6 +52088,7 @@
                           "owns",
                           "undeclaredStatuses",
                           "runs",
+                          "startsAfter",
                           "workers"
                         ]
                       }
@@ -51993,9 +52100,13 @@
                         "produces": {
                           "type": "array",
                           "items": { "type": "string" }
+                        },
+                        "helpers": {
+                          "type": "array",
+                          "items": { "type": "string" }
                         }
                       },
-                      "required": ["primaryOutput", "produces"]
+                      "required": ["primaryOutput", "produces", "helpers"]
                     },
                     "totals": {
                       "type": "object",
@@ -52940,14 +53051,21 @@
     "/brand/kit": {
       "get": {
         "tags": ["Brand"],
-        "summary": "The caller's brand kit (json, css, frame-md or od-design-system)",
-        "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
+        "summary": "The caller's brand kit (json, css, frame-md, od-design-system, dtcg or synap-css)",
+        "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. `dtcg` and `synap-css` render the brand's approved DTCG token set instead (the file, or its `--synap-*` declarations as JSON `{vars, light, dark}` with no selector), hashed by that set; a brand with none renders `{}` and empty declarations. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "enum": ["json", "css", "frame-md", "od-design-system"],
+              "enum": [
+                "json",
+                "css",
+                "frame-md",
+                "od-design-system",
+                "dtcg",
+                "synap-css"
+              ],
               "default": "json"
             },
             "required": false,
@@ -52977,7 +53095,14 @@
                   "properties": {
                     "format": {
                       "type": "string",
-                      "enum": ["json", "css", "frame-md", "od-design-system"]
+                      "enum": [
+                        "json",
+                        "css",
+                        "frame-md",
+                        "od-design-system",
+                        "dtcg",
+                        "synap-css"
+                      ]
                     },
                     "content": { "type": "string" },
                     "hash": { "type": "string" },
@@ -54260,7 +54385,8 @@
                               "received",
                               "completed",
                               "approved",
-                              "rejected"
+                              "rejected",
+                              "closed"
                             ]
                           },
                           "conditions": {
@@ -54643,7 +54769,8 @@
                               "received",
                               "completed",
                               "approved",
-                              "rejected"
+                              "rejected",
+                              "closed"
                             ]
                           },
                           "conditions": {

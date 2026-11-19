@@ -18,6 +18,7 @@ import {
   DEFAULT_WORKER_MAX_PENDING_APPROVALS,
   WORKER_MAX_PENDING_APPROVALS_CEILING,
   WORKER_SKIP_REASONS,
+  isLinkActivatorKey,
   skippedByOnly,
   skippedByUnless,
 } from "@synap-core/types/workers";
@@ -39,6 +40,7 @@ import {
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import { resolveInputMapping, resolveTemplate } from "../template-resolve.js";
 import { findInFlightRunSession } from "../../utils/run-in-flight.js";
+import { linkWouldLoop } from "../../utils/link-lineage.js";
 import { logger } from "../automation-executor-logger.js";
 import { isUuid } from "@synap-core/types/property-render";
 import type {
@@ -336,6 +338,31 @@ export async function executePlaybookRun(
     };
   }
 
+  // ── A LINK (`run_ended`): never start a playbook already in its chain. ─────
+  // The run-time loop guard (`utils/link-lineage.ts`): a loop the write door
+  // could not see (a rename, an install) files nothing and starts nothing.
+  // Before every mode, like `unless` / `only`.
+  const isLink = isLinkActivatorKey(data.worker?.key);
+  const endedSessionId = (
+    context.trigger.payload.data as { sessionId?: unknown } | undefined
+  )?.sessionId;
+  if (
+    isLink &&
+    isUuid(data.playbookId ?? "") &&
+    typeof endedSessionId === "string" &&
+    (await linkWouldLoop({ endedSessionId, playbookId: data.playbookId! }))
+  ) {
+    logger.warn(
+      { playbookId: data.playbookId, endedSessionId },
+      "playbook_run: a link would start a playbook already in its chain — skipped"
+    );
+    return {
+      status: "skipped",
+      reason: WORKER_SKIP_REASONS.linkLoop,
+      endedSessionId,
+    };
+  }
+
   // ── PROPOSE: file the governed proposal and STOP. ──────────────────────────
   // Returns before the scheduler and before the runner — the two places a
   // session can be born — so a propose-mode node cannot start anything. Pinned
@@ -487,7 +514,13 @@ export async function executePlaybookRun(
     ? {
         automationRunId: automationContext.automationRunId,
         automationId: automationContext.automationId,
-        chainDepth: automationContext.chainDepth ?? 0,
+        // A link hop does not deepen the chain: a run a link starts carries
+        // the depth of the run that ended, so a chain of playbooks is bounded
+        // by the link guard above (`LINK_CHAIN_MAX`), not cut at the generic
+        // depth floor (MAX_CHAIN_DEPTH, 3). Any other hop still counts.
+        chainDepth: isLink
+          ? Math.max((automationContext.chainDepth ?? 0) - 1, 0)
+          : (automationContext.chainDepth ?? 0),
         rootRunId:
           automationContext.rootRunId ?? automationContext.automationRunId,
         chainAutomationIds: automationContext.chainAutomationIds ?? [],

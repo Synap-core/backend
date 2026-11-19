@@ -8,7 +8,8 @@
  *
  * `approved_requests` is what the app ASKED for and a human APPROVED
  * (`[{ permission, workspaceId }]`); it is the exact list the key issue turns
- * into grants — ONE per workspace, never their cross product
+ * into grants — never their cross product: its lossless v2 lift when it has
+ * one (`approved_access`, at most four scopes), else one per workspace
  * (`grantsForApprovedRequests`, services/app-connect.ts; client_id = public_id).
  * It is written ONLY by the `app/connect` approval executor — never at register
  * time, so a proposal with no plaintext and a key minted only on demand means
@@ -30,6 +31,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type { AppAccess } from "@synap-core/types/grants";
 import { users } from "./users.js";
 
 /**
@@ -49,6 +51,17 @@ export interface AppApprovedRequest {
    */
   scope?: "space" | "pod";
 }
+
+/**
+ * `apps.approved_access` (0434, app permissions W2): the connection's access
+ * in its v2 form — what it may do, and where, per tier (`AppAccess`,
+ * `@synap-core/types/grants`). Until the consent screen writes it (W3) it is
+ * only ever the LIFT of `approved_requests` (`liftApprovedRequests`), kept in
+ * step by `AppRepository` on every approval write; null when there is no
+ * approval or when the lift would change what the app may do (it re-consents
+ * and keeps its pairs). Read through `parseAppAccess`, never by hand.
+ */
+export type { AppAccess as AppApprovedAccess } from "@synap-core/types/grants";
 
 // The pod-wide read rule lives in `@synap-core/types/grants` (pod-wide.ts), so
 // the holder reader, pod admin and the api share one definition.
@@ -87,6 +100,11 @@ export const apps = pgTable(
     approvedRequests: jsonb("approved_requests").$type<
       AppApprovedRequest[] | null
     >(),
+    /**
+     * The approval in its v2 form (0434): `{version: 2, permissions, read,
+     * write}`, or null (none, or re-consent). See `AppApprovedAccess` above.
+     */
+    approvedAccess: jsonb("approved_access").$type<AppAccess | null>(),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()

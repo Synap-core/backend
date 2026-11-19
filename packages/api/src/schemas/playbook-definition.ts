@@ -27,7 +27,10 @@
 
 import { z } from "zod";
 import { AskSchema } from "@synap-core/types/ask";
-import { validateGuidanceList } from "@synap-core/types/guidance";
+import {
+  podLocalGuidanceProblem,
+  validateGuidanceList,
+} from "@synap-core/types/guidance";
 import {
   findDroppedParamEntries,
   isRunToolName,
@@ -309,6 +312,42 @@ export const playbookRequiredIntentsSchema = z
  * the validator does not know (an `id`) is refused by it, not silently
  * stripped. The update door applies the same schema.
  */
+/**
+ * What a PACKAGE playbook may not carry: a
+ * pod-local reference, i.e. a guidance `entity:<id>` ref or a dedicated
+ * record (`subjectProfile.entityId`). An id names one record of one pod; on
+ * the installing pod it means nothing. The package doors
+ * (`packagePlaybookDefinitionSchema`, the browser `createFromDefinition`)
+ * refine their playbooks with this; the catalog validator refuses the same
+ * two.
+ */
+export function refusePodLocalPlaybookRefs(
+  pb: { guidance?: unknown; subjectProfile?: unknown },
+  ctx: z.RefinementCtx
+): void {
+  if (Array.isArray(pb.guidance)) {
+    pb.guidance.forEach((item, i) => {
+      const problem = podLocalGuidanceProblem(item);
+      if (problem) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["guidance", i],
+          message: problem,
+        });
+      }
+    });
+  }
+  const sp = pb.subjectProfile as { entityId?: unknown } | null | undefined;
+  if (sp && typeof sp === "object" && sp.entityId !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["subjectProfile", "entityId"],
+      message:
+        "subjectProfile.entityId names one record of one pod, so it cannot travel in a package: dedicate the playbook to a record after it is installed",
+    });
+  }
+}
+
 export const playbookGuidanceSchema = z
   .array(
     z.looseObject({
@@ -412,7 +451,9 @@ export const packagePlaybookDefinitionSchema = playbookDefinitionSchema
   .superRefine((def, ctx) => {
     // A package travels to other pods: an agent id or a playbook id names
     // something on THIS pod only. A role or an engine is portable; a step
-    // that is a playbook is not carried by a package yet.
+    // that is a playbook is not carried by a package yet. Nor is a guidance
+    // `entity:<id>` ref or a dedicated record.
+    refusePodLocalPlaybookRefs(def, ctx);
     if (runnerNamesAgentId(def.runner)) {
       ctx.addIssue({
         code: "custom",

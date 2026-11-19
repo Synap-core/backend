@@ -59,6 +59,7 @@ import {
   playbookAutomations,
   playbookEnrollments,
   entities,
+  profiles,
   secrets,
   vaultGrants,
   workspaceMembers,
@@ -111,6 +112,10 @@ import {
 } from "../schemas/playbook-runner.js";
 import { recordPlaybookVersion } from "../services/playbooks/playbook-versions.js";
 import { resolveStageUses } from "../services/playbooks/stage-uses.js";
+import {
+  findPlaybookLinkCycle,
+  playbookLinkCycleMessage,
+} from "../services/playbooks/playbook-links.js";
 import type { RunChoice } from "@synap-core/types/agents";
 import {
   mapRunnerAtRun,
@@ -141,10 +146,13 @@ import {
   explainPinnedIdRejection,
   parsePinnedEntityIds,
   isPinnedStrategy,
+  dedicatedSubjectId,
   subjectProfileSlug,
 } from "../services/playbooks/pinned-subject.js";
 import { loadVisibleEntitiesById } from "../services/playbooks/pinned-subject-query.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { findDuplicateCandidates } from "../services/duplicates/find-duplicate-candidates.js";
 import type { DuplicateCheck } from "@synap-core/types/proposals";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
@@ -518,6 +526,35 @@ function foldProcessDeclarationsOrRefuse(
       throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
     }
     throw err;
+  }
+}
+
+/**
+ * A playbook's links and steps must not start each other in a loop
+ * (`findPlaybookLinkCycle`): refused at the write door, before the gate,
+ * over the definition as it will be stored.
+ */
+async function assertNoPlaybookLinkCycle(self: {
+  id: string | null;
+  name: string;
+  workspaceId: string | null;
+  subjectProfile: unknown;
+  stages: unknown;
+}): Promise<void> {
+  const { activators } = readPlaybookProcess(self.subjectProfile);
+  // A playbook nothing new starts (no link, no step that uses one, and on a
+  // create no id another step could use) can close no loop: no read.
+  const starts =
+    activators.some((a) => a.on === "run_ended") ||
+    (Array.isArray(self.stages) &&
+      self.stages.some((s) => !!(s as { uses?: unknown } | null)?.uses));
+  if (!starts && self.id === null) return;
+  const cycle = await findPlaybookLinkCycle({ ...self, activators });
+  if (cycle) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: playbookLinkCycleMessage(cycle),
+    });
   }
 }
 
@@ -1393,13 +1430,56 @@ const playbookEnrollmentsRouter = router({
  */
 async function assertSubjectProfileResolves(
   db: Parameters<typeof assertKnownProfileSlug>[0],
-  subjectProfile: unknown
+  subjectProfile: unknown,
+  reader?: { userId: string }
 ): Promise<void> {
   if (!subjectProfile || typeof subjectProfile !== "object") return;
   const slug = (subjectProfile as { profileSlug?: unknown }).profileSlug;
   if (typeof slug !== "string" || slug.length === 0) return;
   // Throws TRPCError NOT_FOUND naming the slug and pointing at list_profiles.
   await assertKnownProfileSlug(db, slug);
+  const dedicated = dedicatedSubjectId(subjectProfile);
+  if (!dedicated) return;
+  // An activator compiles per KIND, so on a playbook dedicated to one record
+  // it would fire on every record of the kind. Run it on its record instead.
+  const activators = (subjectProfile as { activators?: unknown }).activators;
+  if (
+    Array.isArray(activators) &&
+    activators.some((a) => (a as { on?: unknown } | null)?.on !== "manual")
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A playbook dedicated to one record (subjectProfile.entityId) takes no activator: an activator fires on every record of the kind. Remove the activators, or the dedicated record.",
+    });
+  }
+  // The record is one the writer can read, of the playbook's kind. A
+  // revision of a pending proposal names no reader: its approval replays
+  // through `update`, which checks it then.
+  if (!reader) return;
+  const [row] = await db
+    .select({ kind: profiles.slug })
+    .from(entities)
+    .leftJoin(profiles, eq(profiles.id, entities.profileId))
+    .where(
+      and(
+        eq(entities.id, dedicated),
+        isNull(entities.deletedAt),
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId: reader.userId,
+        })
+      )
+    )
+    .limit(1);
+  if (row?.kind !== slug) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `subjectProfile.entityId names no ${resolveObjectNoun(slug).toLowerCase()} you can read`,
+    });
+  }
 }
 
 /**
@@ -1418,10 +1498,12 @@ async function assertSubjectProfileResolves(
 export async function assertPlaybookDefinitionWritable(
   database: Parameters<typeof assertKnownProfileSlug>[0],
   write: { goalTemplate?: unknown; params?: unknown; subjectProfile?: unknown },
-  previous?: { goalTemplate: unknown; params: unknown }
+  previous?: { goalTemplate: unknown; params: unknown },
+  /** The writer, whose floor a dedicated record is read under. */
+  reader?: { userId: string }
 ): Promise<void> {
   if (write.subjectProfile !== undefined) {
-    await assertSubjectProfileResolves(database, write.subjectProfile);
+    await assertSubjectProfileResolves(database, write.subjectProfile, reader);
   }
   if (!previous) {
     assertGoalPlaceholdersDeclared({
@@ -1569,6 +1651,9 @@ export async function matchPlaybooks(
   const forStrip = input.purpose === "entity-actions";
   const applicable = rows.filter((r) => {
     const row = r as Playbook;
+    // A playbook dedicated to one record is offered for that record only.
+    const dedicated = dedicatedSubjectId(row.subjectProfile);
+    if (dedicated && dedicated !== input.entityId?.toLowerCase()) return false;
     if (entityProperties) {
       const verdict = evaluateSubjectFilter(
         subjectFilterOf(row),
@@ -2086,13 +2171,25 @@ export const playbooksRouter = router({
       // INSIDE `subjectProfile` — folded ONCE, here, so the gate payload, the
       // approval replay and the insert all carry the same stored shape.
       input.subjectProfile = foldProcessDeclarationsOrRefuse(input);
+      await assertNoPlaybookLinkCycle({
+        id: input.proposedPlaybookId ?? null,
+        name: input.name,
+        workspaceId: ctx.workspaceId ?? null,
+        subjectProfile: input.subjectProfile,
+        stages: input.stages,
+      });
       // Dangling `subjectProfile` slugs and goal placeholders no run will
       // fill are refused here, before the gate.
-      await assertPlaybookDefinitionWritable(await getDb(), {
-        goalTemplate: input.goalTemplate,
-        params: input.params,
-        subjectProfile: input.subjectProfile,
-      });
+      await assertPlaybookDefinitionWritable(
+        await getDb(),
+        {
+          goalTemplate: input.goalTemplate,
+          params: input.params,
+          subjectProfile: input.subjectProfile,
+        },
+        undefined,
+        { userId: ctx.userId }
+      );
       // The ONE tools list (plan 08e4fba7 decisions 3-4): the deprecated
       // `requiredIntents` and stage `grants` fold into `tools` ONCE, here, so
       // the gate payload, the approval replay and the insert carry the stored
@@ -2488,6 +2585,23 @@ export const playbooksRouter = router({
           humanOnlyStatuses: input.humanOnlyStatuses,
         }) as typeof input.subjectProfile;
       }
+      // 2b'. A loop of links / steps is refused (the create door's rule):
+      // on a change of what it follows, its steps or its name, and when it
+      // becomes active again (an archived playbook was outside the walk).
+      if (
+        input.subjectProfile !== undefined ||
+        input.name !== undefined ||
+        input.stages !== undefined ||
+        (input.status === "active" && existing.status !== "active")
+      ) {
+        await assertNoPlaybookLinkCycle({
+          id: existing.id,
+          name: input.name ?? existing.name,
+          workspaceId: existing.workspaceId,
+          subjectProfile: input.subjectProfile ?? existing.subjectProfile,
+          stages: input.stages ?? existing.stages,
+        });
+      }
 
       // 2b. A patch that REPOINTS the subject must name a slug that resolves —
       // same guard and same reason as the create door. Only when the field is
@@ -2504,7 +2618,8 @@ export const playbooksRouter = router({
           params: input.params,
           subjectProfile: input.subjectProfile,
         },
-        existing
+        existing,
+        { userId: ctx.userId }
       );
       // 2c'. A step that IS a playbook: checked and PINNED before the gate
       // (same reason as the create door).
