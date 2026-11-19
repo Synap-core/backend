@@ -20,6 +20,7 @@ const read = (rel: string) =>
 
 const CONSENT = "app/oauth/consent/ConsentForm.tsx";
 const CONSENT_PAGE = "app/oauth/consent/page.tsx";
+const CHOICES = "app/oauth/consent/AccessChoices.tsx";
 const CONNECTIONS = "app/my-connections/page.tsx";
 const APP_PAGE = "app/apps/[publicId]/page.tsx";
 
@@ -36,7 +37,7 @@ function sourceFiles(dir: string): string[] {
 
 describe("pod-app surfaces", () => {
   it("the files this guards exist", () => {
-    for (const f of [CONSENT, CONSENT_PAGE, CONNECTIONS, APP_PAGE]) {
+    for (const f of [CONSENT, CONSENT_PAGE, CHOICES, CONNECTIONS, APP_PAGE]) {
       expect(existsSync(join(APP_ROOT, f)), f).toBe(true);
     }
   });
@@ -50,30 +51,41 @@ describe("pod-app surfaces", () => {
 
   it("consent: Allow is disabled by the shared rule, and says why", () => {
     const src = read(CONSENT);
-    expect(src).toMatch(/blockedReason=\{allowBlockedReason\(/);
+    expect(src).toMatch(/blockedReason=\{draftBlockedReason\(/);
     expect(src).toMatch(/isDisabled=\{busy \|\| blockedReason !== null\}/);
     expect(src).toMatch(/aria-describedby=\{\s*blockedReason/);
   });
 
-  it("consent: a section selects through the shared narrow-only rule, and the width is the model's", () => {
+  it("consent: the draft starts from the shared rule and Allow sends it within the offer; the width is the model's", () => {
     const src = read(CONSENT);
-    expect(src).toMatch(/toggleSection\(s, app\.permissions, section\)/);
+    expect(src).toMatch(
+      /reconsentDraft\(heldAccessOf\(app\.approved\), offer\)/
+    );
+    expect(src).toMatch(/toApprovedPairs\(draft, offer\)/);
     expect(src).toMatch(/width=\{consentWidth\(params\.clientId\)\}/);
   });
 
-  it("consent: rows set a level and a space through the shared narrow-only rules, from the app's templates", () => {
-    const src = read(CONSENT);
-    expect(src).toMatch(
-      /initialSelection\(\s*app\.permissions,\s*app\.approved,\s*app\.templates\s*\)/
-    );
-    expect(src).toMatch(
-      /setObjectLevel\(\s*s,\s*app\.permissions,\s*row,\s*level,\s*app\.templates\s*\)/
-    );
-    expect(src).toMatch(
-      /toggleObjectSpace\(\s*s,\s*app\.permissions,\s*row,\s*workspaceId\s*\)/
-    );
+  it("consent: every choice goes through the shared narrow-only rules; the pod-wide kinds are the server's list", () => {
+    // Prettier may break a call over lines: compare without that layout.
+    const src = read(CHOICES)
+      .replace(/\s+/g, " ")
+      .replace(/\( /g, "(")
+      .replace(/ \)/g, ")");
+    for (const rule of [
+      "setRowLevel(draft, row, level)",
+      "toggleKind(draft, row, kind)",
+      "toggleAllKinds(draft, row)",
+      "setReadSpacesMode(draft, offer,",
+      "toggleReadSpace(draft, s.workspaceId)",
+      "toggleReadProject(draft, p.projectId)",
+      'toggleWritePlace(draft, "space", s.workspaceId)',
+      'toggleWritePlace(draft, "project", p.projectId)',
+    ]) {
+      expect(src, rule).toContain(rule);
+    }
     // The pod-wide note is the server's list, never a hand list of kinds.
-    expect(src).toMatch(/app\.podWideKinds\.includes\(row\.kind\)/);
+    expect(src).toMatch(/podWideKinds\.includes\(row\.kind\)/);
+    expect(read(CONSENT)).toMatch(/podWideKinds=\{app\.podWideKinds\}/);
   });
 
   it("consent: the invalid-request hint comes from the client kind", () => {

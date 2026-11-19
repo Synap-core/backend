@@ -11,6 +11,7 @@ import {
   permissionLabel,
   POD_WIDE_HEADING,
 } from "../../oauth/consent/consent-model";
+import type { ConsentOffer } from "../../oauth/consent/consent-access";
 
 export { EVERYWHERE_IN_POD, POD_WIDE_HEADING };
 
@@ -129,6 +130,35 @@ export function keepWithout(
     .map((p) => ({ permission: p.permission, workspaceId: p.workspaceId }));
   if (keep.length === approved.length || keep.length === 0) return null;
   return keep;
+}
+
+/**
+ * The app page's offer while its page reads only what the app HOLDS (today's
+ * `pod_app`): each held permission, in the spaces it holds it in, pod-wide
+ * where it holds it pod-wide. The access lines can then only take away, the
+ * narrow door's rule (`apps.narrow`). Widening within what the app asked
+ * (decision fc37f740 Q2) needs the asked offer, which the W3d contract adds.
+ */
+export function heldOffer(approved: readonly PodAppPair[]): ConsentOffer {
+  const items = new Map<string, ConsentOffer["items"][number]>();
+  for (const pair of approved) {
+    const item = items.get(pair.permission) ?? {
+      permission: pair.permission,
+      reason: null,
+      kindGroup: null,
+      spaces: [],
+      projects: [],
+      podWide: false,
+    };
+    if (pair.workspaceId === null) item.podWide = true;
+    else if (!item.spaces.some((s) => s.workspaceId === pair.workspaceId))
+      item.spaces.push({
+        workspaceId: pair.workspaceId,
+        workspaceName: pair.workspaceName ?? "a space you no longer see",
+      });
+    items.set(pair.permission, item);
+  }
+  return { items: [...items.values()], templates: [], projectsOffered: false };
 }
 
 /** What confirming "Apply automatically" says, and how hard it asks. */
