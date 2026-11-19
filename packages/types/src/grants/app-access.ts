@@ -44,8 +44,12 @@ import {
   type GrantRequest,
 } from "./grammar.js";
 import {
+  assertNeverPlace,
+  parsePlace,
   parseRequestPlace,
   PlaceError,
+  placeProjectIds,
+  placeSpaceIds,
   type PlaceRequestLike,
 } from "./reach.js";
 
@@ -394,9 +398,11 @@ function probesFor(
       add(actions, segs[2]);
     } else add(actions, segs[1]);
   }
+  // The places the scopes name, read through THE parse (`parsePlace`).
   for (const s of scopes) {
-    for (const id of s.workspaceIds ?? []) add(spaces, id);
-    for (const id of s.projectIds ?? []) add(projects, id);
+    const place = parsePlace(s, "app");
+    for (const id of placeSpaceIds(place)) add(spaces, id);
+    for (const id of placeProjectIds(place)) add(projects, id);
   }
   subjects.push(OTHER);
   actions.push(OTHER_VERB);
@@ -525,13 +531,10 @@ function permitDiffs(
         const row = matches.get(p)!;
         for (let r = 0; r < row.length; r++) if (row[r]) any[r] = 1;
       }
+      // The scope's own limits, asked through `permits` (any request: `*`).
       const at = places.map((pl) =>
         permits(
-          {
-            permissions: ["*"],
-            workspaceIds: s.workspaceIds ?? null,
-            projectIds: s.projectIds ?? null,
-          },
+          { ...s, permissions: ["*"] },
           {
             subject: OTHER,
             action: OTHER_VERB,
@@ -597,12 +600,27 @@ function placementOf(
   const out = new Map<string, "viewer" | "editor">();
   for (const s of scopes) {
     const role = s.permissions.every(isReadPermission) ? "viewer" : "editor";
-    const keys = [
-      ...(s.workspaceIds ?? []).map((id) => `space:${id}`),
-      ...(s.projectIds ?? []).map((id) => `project:${id}`),
-    ];
-    for (const k of keys.length > 0 ? keys : ["pod"])
-      if (out.get(k) !== "editor") out.set(k, role);
+    // Where it stands, read through THE parse. A scope with no space or
+    // project is the pod (a pod-wide read) or, for a document's read off
+    // the pod-wide list, "anywhere": both stand at the pod here; what they
+    // permit there is compared by `permits`.
+    const place = parsePlace(s, "app");
+    let keys: string[];
+    switch (place.kind) {
+      case "spaces":
+        keys = place.ids.map((id) => `space:${id}`);
+        break;
+      case "projects":
+        keys = place.ids.map((id) => `project:${id}`);
+        break;
+      case "pod":
+      case "unbounded":
+        keys = ["pod"];
+        break;
+      default:
+        keys = assertNeverPlace(place);
+    }
+    for (const k of keys) if (out.get(k) !== "editor") out.set(k, role);
   }
   return out;
 }
