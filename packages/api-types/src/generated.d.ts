@@ -20829,7 +20829,7 @@ export interface ContinuationNextMove {
 	/** The person or thing a `waiting_on` move waits on, when the reader may read it. */
 	entityId?: string;
 }
-/** One earlier successful run of the same playbook (plan W8 D7a). */
+/** One earlier successful run of the same playbook. */
 export interface PacketPrecedentItem {
 	sessionId: string;
 	/** `resolveSessionTitle`, as every session name. */
@@ -20839,14 +20839,15 @@ export interface PacketPrecedentItem {
 	used: string[];
 }
 /**
- * HOW OTHERS DID IT — the playbook this session follows, as the reader's own
- * earlier runs of it went: its compact scorecard (`null` = no closed run yet)
- * and its newest successful runs (every required criterion passed), each with
- * what it used. A failed read is `unavailable`, never "no precedent".
+ * PRECEDENTS: how the reader's own earlier runs of the playbook this session
+ * follows went, within the learning window: its compact scorecard (`null` =
+ * no closed run) and its newest successful runs (every required criterion
+ * passed), each with what it used. A failed read is `unavailable`, never "no
+ * precedent".
  */
-export type PacketHowOthersDidIt = {
+export type PacketPrecedents = {
 	playbookId: string;
-	precedents: PacketSection<PacketPrecedentItem>;
+	runs: PacketSection<PacketPrecedentItem>;
 	scorecard: CompactPlaybookScorecard | null;
 	status: "ok";
 } | {
@@ -21053,9 +21054,9 @@ export interface ContinuationPacket {
 	} | null;
 	/**
 	 * How the reader's earlier runs of the same playbook went (see
-	 * {@link PacketHowOthersDidIt}). `null` = the session follows no playbook.
+	 * {@link PacketPrecedents}). `null` = the session follows no playbook.
 	 */
-	howOthersDidIt: PacketHowOthersDidIt | null;
+	precedents: PacketPrecedents | null;
 	/**
 	 * The PRs and branches this session recorded as outcomes, declaration
 	 * order (see {@link PacketWorkUnitItem}). Derived from the row itself — an
