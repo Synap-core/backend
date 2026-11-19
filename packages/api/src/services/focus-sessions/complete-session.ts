@@ -128,7 +128,7 @@ import {
 } from "../playbooks/pinned-subject.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
-import { FOLLOWED_VIA_METADATA_KEY } from "./follow-playbook.js";
+import { FOLLOWED_VIA_METADATA_KEY } from "./follow-markers.js";
 
 const logger = createLogger({ module: "complete-focus-session" });
 

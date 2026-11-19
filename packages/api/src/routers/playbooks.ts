@@ -538,6 +538,13 @@ async function assertNoPlaybookLinkCycle(self: {
   stages: unknown;
 }): Promise<void> {
   const { activators } = readPlaybookProcess(self.subjectProfile);
+  // A playbook nothing new starts (no link, no step that uses one, and on a
+  // create no id another step could use) can close no loop: no read.
+  const starts =
+    activators.some((a) => a.on === "run_ended") ||
+    (Array.isArray(self.stages) &&
+      self.stages.some((s) => !!(s as { uses?: unknown } | null)?.uses));
+  if (!starts && self.id === null) return;
   const cycle = await findPlaybookLinkCycle({ ...self, activators });
   if (cycle) {
     throw new TRPCError({
