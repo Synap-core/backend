@@ -1532,3 +1532,53 @@ describe("the work graph and timeline doors: an app reads them under its grant (
     });
   });
 });
+
+describe("a PROJECT pin is narrowed like a space pin (app-permission plan W1)", () => {
+  const S = "11111111-1111-4111-8111-111111111111";
+  const PERMS = [
+    "session.read",
+    "proposal.read",
+    "channel.read",
+    "view.read",
+    "track.read",
+    "project.read",
+    "entity.read",
+  ];
+  const IN_PROJECT = key({ permissions: PERMS, projectIds: ["p1"] });
+  const IN_SPACE = key({ permissions: PERMS, workspaceIds: ["w1"] });
+
+  it.each([
+    // Seamed list doors: the grant clause narrows each row (`projectReach`).
+    ["GET", "/focus-sessions"],
+    ["GET", "/proposals"],
+    ["GET", "/views"],
+    ["GET", "/channels"],
+    ["GET", "/tracks"],
+    ["GET", "/projects"],
+    // A narrowed door: the row read through the grant-aware predicate.
+    ["GET", `/focus-sessions/${S}`],
+  ] as const)("%s %s admits a project pin as it admits a space pin", (m, path) => {
+    expect(restDoorAllowed(m, path, IN_SPACE)).toBe(true);
+    expect(restDoorAllowed(m, path, IN_PROJECT)).toBe(true);
+  });
+
+  it("an aggregate READS door refuses a project pin as it refuses a space pin", () => {
+    for (const tool of ["synap_list_sessions", "synap_list_proposals"]) {
+      expect(mcpToolAllowed(tool, true, IN_SPACE)).toBe(false);
+      expect(mcpToolAllowed(tool, true, IN_PROJECT)).toBe(false);
+    }
+    // The seamed MCP lists pass both.
+    for (const tool of ["synap_list_tracks", "synap_list_views"]) {
+      expect(mcpToolAllowed(tool, true, IN_SPACE)).toBe(true);
+      expect(mcpToolAllowed(tool, true, IN_PROJECT)).toBe(true);
+    }
+  });
+
+  it("events stay fail-closed on a project pin (no project path)", () => {
+    expect(
+      workReleaseReach(
+        key({ permissions: ["event.read", "session.read"], projectIds: ["p1"] })
+      ).snapshotSpaces
+    ).toEqual([]);
+  });
+});

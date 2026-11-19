@@ -2596,7 +2596,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           subjectType: "focus_session",
           action: "update",
           data: { id },
+          ...(trackFiling ? { filesIntoProject: true } : {}),
         }),
+        // A person's goal filing rides this patch and files the session into
+        // the goal's project: checked where it lives now with no project (the
+        // filing rule, `grant-write-check.ts`).
+        ...(trackFiling ? { grantFilesIntoProject: true } : {}),
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",

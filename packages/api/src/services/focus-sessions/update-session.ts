@@ -2667,6 +2667,8 @@ export async function updateFocusSession(
     criteriaChange ? params : { ...params, criteria: undefined },
     { trackFilingWithoutUses }
   );
+  // The patch files the session into or out of a project (or a goal of one).
+  const filesIntoProject = params.projectId !== undefined || !!trackFiling;
   const perm = filingAlone
     ? ({ granted: true, autoApprovedProposalId: filingReceiptId } as const)
     : await checkPermissionOrPropose({
@@ -2679,7 +2681,11 @@ export async function updateFocusSession(
           subjectType: "focus_session",
           action: "update",
           data: { id: sessionId },
+          ...(filesIntoProject ? { filesIntoProject: true } : {}),
         }),
+        // A person's own filing rides this patch: checked where the session
+        // lives now with no project (the filing rule, `grant-write-check.ts`).
+        ...(filesIntoProject ? { grantFilesIntoProject: true } : {}),
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",

@@ -1066,6 +1066,13 @@ export interface PermissionCheckBaseOpts {
    */
   grantWorkspaceId?: string | null;
   /**
+   * This write files the row into or out of a project (a session's filing):
+   * rung 0 checks it where the row lives now with NO project, so a key pinned
+   * to projects never covers it (`grant-write-check.ts`, the filing rule).
+   * Rung 0 only.
+   */
+  grantFilesIntoProject?: boolean;
+  /**
    * A NAMED permission that also permits this write at rung 0 (the key's
    * grant), when the door's act is narrower than its gate subject/action:
    * `package.install` for a template apply (`workspace.create` /
@@ -1688,6 +1695,7 @@ async function evaluatePermission(
     projectId,
     data: data as Record<string, unknown> | undefined,
     namedPermission: opts.grantNamedPermission,
+    ...(opts.grantFilesIntoProject ? { filesIntoProject: true } : {}),
   });
   const beyondGrant =
     !!grantDenied && !!opts.proposeBeyondGrant && !!agentUserId;

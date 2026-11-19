@@ -30,13 +30,34 @@
  *               door read off its type (`event.ci.create`).
  *   workspace = the gate's workspaceId
  *   entity    = data.id / data.entityId
- *   projects  = the gate's projectId / data.projectId (unknown → a
- *               project-restricted grant fails closed)
+ *   projects  = WHERE THE ROW LIVES NOW, never where a caller says it is or
+ *               sends it (app-permission plan 8189ae7c, W1, "the filing
+ *               rule"): for a stored entity, the projects it is filed in
+ *               (`belongs_to_project`); for a stored session, its
+ *               `project_id`; else the gate's projectId, and `data.projectId`
+ *               only for a CREATE (where the new row lands). A write that
+ *               files a row into or out of a project (`filesIntoProject`,
+ *               `project.file_entities`, a `belongs_to_project` edge) carries
+ *               no project: a project pin never covers it, so an app grant
+ *               never decides what a project holds. Unknown → a
+ *               project-restricted grant fails closed.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { db, eq, getRequestGrant, type KeyGrant } from "@synap/database";
-import { entities, profiles } from "@synap/database/schema";
+import {
+  and,
+  db,
+  eq,
+  getRequestGrant,
+  type KeyGrant,
+} from "@synap/database";
+import {
+  entities,
+  focusSessions,
+  profiles,
+  projects,
+  relations,
+} from "@synap/database/schema";
 import { grantRequestKey, grantRequestKeys } from "@synap/governance-policy";
 import {
   patternMatches,
@@ -58,6 +79,14 @@ export interface GrantWriteInput {
    * filing (`package.install`, services/template-apply/propose.ts).
    */
   namedPermission?: NamedGrantPermission;
+  /**
+   * This write FILES a row into a project, or takes it out of one (a
+   * session's `projectId`, a record's `belongs_to_project` edge). It is
+   * checked where the row lives now with NO project: a scope pinned to
+   * projects never covers it, whatever it holds in them (the filing rule,
+   * see the module doc).
+   */
+  filesIntoProject?: boolean;
 }
 
 /** A door's named permission (`<subject>.<action>`) and the space it lands in. */
@@ -153,14 +182,69 @@ export function recordGrantDenial(
 const str = (v: unknown): string | undefined =>
   typeof v === "string" && v.length > 0 ? v : undefined;
 
-async function storedKind(entityId: string): Promise<string | undefined> {
+/** The project-membership edge (utils/project-scope.ts `BELONGS_TO_PROJECT`). */
+const BELONGS_TO_PROJECT = "belongs_to_project";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A stored entity's kind and the live projects it is filed in; undefined = no row. */
+async function storedEntity(
+  entityId: string,
+  withProjects: boolean
+): Promise<{ kind: string | undefined; projectIds: string[] } | undefined> {
   const [row] = await db
     .select({ slug: profiles.slug, type: entities.type })
     .from(entities)
     .leftJoin(profiles, eq(entities.profileId, profiles.id))
     .where(eq(entities.id, entityId))
     .limit(1);
-  return row?.slug ?? row?.type ?? undefined;
+  if (!row) return undefined;
+  const kind = row.slug ?? row.type ?? undefined;
+  if (!withProjects) return { kind, projectIds: [] };
+  const filed = await db
+    .select({ id: relations.targetEntityId })
+    .from(relations)
+    .innerJoin(projects, eq(projects.id, relations.targetEntityId))
+    .where(
+      and(
+        eq(relations.type, BELONGS_TO_PROJECT),
+        eq(relations.sourceEntityId, entityId)
+      )
+    );
+  return {
+    kind,
+    projectIds: [
+      ...new Set(filed.map((f) => f.id).filter((id): id is string => !!id)),
+    ],
+  };
+}
+
+/** A stored session's project (null = none); undefined = no row. */
+async function storedSessionProject(
+  sessionId: string
+): Promise<string | null | undefined> {
+  if (!UUID.test(sessionId)) return undefined;
+  const [row] = await db
+    .select({ projectId: focusSessions.projectId })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, sessionId))
+    .limit(1);
+  return row ? (row.projectId ?? null) : undefined;
+}
+
+/**
+ * Does this write file a row into or out of a project? `filesIntoProject`
+ * from the door, the filing door itself (`project/file_entities`), or a
+ * `belongs_to_project` edge written or removed as a link or a relation.
+ */
+export function writeFilesIntoProject(input: GrantWriteInput): boolean {
+  if (input.filesIntoProject) return true;
+  const data = input.data ?? {};
+  if (input.subjectType === "project" && input.action === "file_entities")
+    return true;
+  return (
+    data.linkType === BELONGS_TO_PROJECT ||
+    (input.subjectType === "relation" && data.type === BELONGS_TO_PROJECT)
+  );
 }
 
 /**
@@ -168,19 +252,38 @@ async function storedKind(entityId: string): Promise<string | undefined> {
  * two for a kind convert (the stored kind it leaves AND the kind it becomes).
  */
 export async function grantRequestsForWrite(
-  input: GrantWriteInput
+  input: GrantWriteInput,
+  /**
+   * The grant it is checked against, when known: the stored row's projects
+   * are read only when one of its scopes is pinned to projects (no other
+   * scope looks at them).
+   */
+  grant?: KeyGrant
 ): Promise<GrantRequest[]> {
+  const readsProjects =
+    !grant || grant.scopes.some((scope) => !!scope.projectIds);
   const data = input.data ?? {};
   const { subject, action } = grantRequestKey(input.subjectType, input.action);
   const entityId = str(data.id) ?? str(data.entityId);
   const requestedKind = str(data.profileSlug) ?? str(data.type);
   let qualifier: string | undefined;
   let convertsTo: string | undefined;
+  // Where the row lives now, read here (see the module doc): set for a
+  // stored entity or session, else undefined (the door's own place).
+  let storedProjectIds: string[] | null | undefined;
   if (subject === "entity") {
-    const stored = entityId ? await storedKind(entityId) : undefined;
+    const row = entityId
+      ? await storedEntity(entityId, readsProjects)
+      : undefined;
+    const stored = row?.kind;
     qualifier = stored ?? requestedKind;
     if (stored && requestedKind && requestedKind !== stored)
       convertsTo = requestedKind;
+    if (row && readsProjects)
+      storedProjectIds = row.projectIds.length ? row.projectIds : null;
+  } else if (subject === "session" && entityId && readsProjects) {
+    const project = await storedSessionProject(entityId);
+    if (project !== undefined) storedProjectIds = project ? [project] : null;
   } else if (subject === "capability" && action === "run") {
     // Only a RUN is qualified by intent; a create/attach body's `intent` is
     // the caller's data, never the request key.
@@ -190,14 +293,25 @@ export async function grantRequestsForWrite(
     // (`ci.workflow.completed` → `ci`); none → only an every-family grant.
     qualifier = str(data.family);
   }
-  const projectId = str(input.projectId) ?? str(data.projectId);
+  // `data.projectId` is where a NEW row lands; on any other write it is
+  // where the caller sends the row, never where it is.
+  const doorProjectId =
+    str(input.projectId) ??
+    (action === "create" ? str(data.projectId) : undefined);
+  const projectIds = writeFilesIntoProject(input)
+    ? null
+    : storedProjectIds !== undefined
+      ? storedProjectIds
+      : doorProjectId
+        ? [doorProjectId]
+        : null;
   const req: GrantRequest = {
     subject,
     qualifier: qualifier ?? null,
     action,
     workspaceId: input.workspaceId ?? null,
     entityId: entityId ?? null,
-    projectIds: projectId ? [projectId] : null,
+    projectIds,
   };
   return convertsTo ? [req, { ...req, qualifier: convertsTo }] : [req];
 }
@@ -229,7 +343,7 @@ export async function grantDeniedKey(
   const actions = grantRequestKeys(input.subjectType, input.action).map(
     (k) => k.action
   );
-  for (const req of await grantRequestsForWrite(input)) {
+  for (const req of await grantRequestsForWrite(input, grant)) {
     // ANY one scope must permit the WHOLE request on its own — scopes never
     // combine (one scope's kind with another's workspace is the cross product).
     if (
