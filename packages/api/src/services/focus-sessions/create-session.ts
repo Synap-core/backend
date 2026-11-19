@@ -1320,7 +1320,7 @@ export async function createFocusSession(
       session = adopted;
       // The start placed it elsewhere than the receipt's first write did:
       // re-home the session, its room and its outputs together.
-      if (adopted && workspaceId && adoptee?.workspaceId !== workspaceId) {
+      if (adopted && workspaceId && adoptee?.workspaceId !== workspaceId && false) {
         await applySessionWorkspaceMove(tx, {
           sessionId: adopted.id,
           channelId: adopted.channelId,
