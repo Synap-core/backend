@@ -11,7 +11,11 @@ import {
   permissionLabel,
   POD_WIDE_HEADING,
 } from "../../oauth/consent/consent-model";
-import type { ConsentOffer } from "../../oauth/consent/consent-access";
+import {
+  isWriteTier,
+  type ConsentOffer,
+  type NamedAppAccess,
+} from "../../oauth/consent/consent-access";
 
 export { EVERYWHERE_IN_POD, POD_WIDE_HEADING };
 
@@ -31,6 +35,12 @@ export interface PodAppInfo {
   domain: string;
   verified: boolean;
   approved: PodAppPair[];
+  /**
+   * The connection's AppAccess v2 with names (W3d, backend#1197), when the
+   * pod sends it; it is the truth over `approved` (which cannot hold a
+   * project).
+   */
+  access?: NamedAppAccess | null;
   connected_at: string | Date | null;
   last_used_at: string | Date | null;
   write_mode: {
@@ -159,6 +169,53 @@ export function heldOffer(approved: readonly PodAppPair[]): ConsentOffer {
     items.set(pair.permission, item);
   }
   return { items: [...items.values()], templates: [], projectsOffered: false };
+}
+
+/**
+ * The app page's offer from the named access (W3d): each permission in its
+ * tier's places, pod-wide for a read under "all". Narrow-only, as
+ * `heldOffer`: the page can take away what it holds, nothing more.
+ */
+export function heldOfferOfAccess(access: NamedAppAccess): ConsentOffer {
+  return {
+    items: access.permissions.map((permission) => {
+      const tier = isWriteTier(permission) ? access.write : access.read;
+      const spaces = tier.spaces === "all" ? [] : tier.spaces;
+      const projects = tier.projects === "all" ? [] : tier.projects;
+      return {
+        permission,
+        reason: null,
+        kindGroup: null,
+        spaces: spaces.map((s) => ({
+          workspaceId: s.id,
+          workspaceName: s.name,
+          templateSlug: s.templateSlug,
+        })),
+        projects: projects.map((p) => ({
+          projectId: p.id,
+          projectName: p.name,
+          workspaceId: p.workspaceId,
+        })),
+        podWide: !isWriteTier(permission) && tier.spaces === "all",
+      };
+    }),
+    templates: [],
+    projectsOffered: false,
+  };
+}
+
+/**
+ * The access names a project (outside "All spaces", which includes every
+ * project): pairs cannot carry it, so until `apps.updateAccess` exists the
+ * page must not save over it (a save through `apps.narrow` would drop it).
+ */
+export function accessNamesProject(access: NamedAppAccess): boolean {
+  const read = access.read;
+  return (
+    (read.spaces !== "all" &&
+      (read.projects === "all" || read.projects.length > 0)) ||
+    access.write.projects.length > 0
+  );
 }
 
 /** What confirming "Apply automatically" says, and how hard it asks. */

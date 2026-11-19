@@ -12,7 +12,8 @@ import { Radio, RadioGroup } from "@heroui/react";
 import { LEVEL_WORDS, type AccessLevel } from "./consent-model";
 
 export const LEVEL_GROUP = {
-  base: "shrink-0 gap-0",
+  // ml-auto: when a row wraps on a phone, the control stays on the right.
+  base: "ml-auto shrink-0 gap-0",
   wrapper:
     "flex-nowrap gap-0.5 rounded-lg p-0.5 ring-1 ring-inset ring-default-500",
 } as const;
@@ -43,6 +44,15 @@ export const CONSENT_CHECKBOX = {
   wrapper: "before:border-default-500",
 } as const;
 
+/**
+ * Every radio of the consent (In's Spaces / Projects): its unselected ring in
+ * `default-500`, as `CONSENT_CHECKBOX` (HeroUI's own ring is near the card's
+ * colour in light: under WCAG 1.4.11's 3:1). 5.0:1 dark, 4.6:1 light.
+ */
+export const CONSENT_RADIO = {
+  wrapper: "border-default-500",
+} as const;
+
 export function LevelControl({
   label,
   levels,
@@ -53,7 +63,8 @@ export function LevelControl({
   /** The group's accessible name: what it sets, for which object. */
   label: string;
   levels: readonly AccessLevel[];
-  level: AccessLevel;
+  /** null: no single level (a mixed F4 row); nothing is selected. */
+  level: AccessLevel | null;
   isDisabled?: boolean;
   onChange: (level: AccessLevel) => void;
 }) {
@@ -61,7 +72,7 @@ export function LevelControl({
     <RadioGroup
       orientation="horizontal"
       aria-label={label}
-      value={level}
+      value={level ?? ""}
       isDisabled={isDisabled}
       onValueChange={(v) => onChange(v as AccessLevel)}
       classNames={LEVEL_GROUP}

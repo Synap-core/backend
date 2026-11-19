@@ -2,38 +2,42 @@
 
 /**
  * The SHORT consent (plan 647ebfd4 option C; design A "short ask"): a pod
- * app already connected asks for ONE MORE thing (`synap_ask`). Only what it
- * asks now is shown, marked New, with the developer's reason and the raw
- * permission; "In" and "It changes things in" show their current answer,
- * marked Unchanged. Allowing ADDS the asked pairs to what the app holds;
- * nothing it holds is changed here. Taking access back stays on its page.
+ * app already connected asks for ONE MORE thing. Only what it asks now is
+ * shown, marked New, in the words "It can" uses ("Edit tasks in Builder"),
+ * with the developer's reason; the raw permission sits in the developer fold.
+ * "In" and "It changes things in" show their current answer, Unchanged.
+ * Allowing ADDS what it asks; nothing it holds changes here.
  *
- * One exception (decision fc37f740 Q4): when the app changes nothing yet and
- * now asks to, where it may is a new choice, and the picker appears here
- * (`writePlace`, wired once the W3d contract carries it).
- *
- * Every line naming a permission and a space comes from the server's ask
- * (`getOAuthConsentContext().app.ask`) through the one summary door
- * (`summarizeAppConnectRequest`), never written here.
+ * Two sources (W3d contract v1.1): the contract's `app.access.ask` when the
+ * pod sends it (only for a connection that names a project), else today's
+ * `app.ask` (pairs, each at the place the app asked). On the contract's ask,
+ * a place the connection does not hold is unavailable and Allow refuses it,
+ * so the screen blocks Allow and says why. Q4: when it changes nothing yet
+ * and now asks to, where it may is a new choice: the picker appears, starts
+ * on the ask's own space (tagged Asked), and lists only places it can
+ * already look in.
  */
 
-import { useId, useMemo } from "react";
+import { useId } from "react";
 import Link from "next/link";
 import { Alert, Button, Chip } from "@heroui/react";
-import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
+import { permissionLabel } from "./consent-model";
 import {
+  andList,
   draftOf,
   heldAccessOf,
   inPhrase,
+  isWriteTier,
   needsWritePlace,
-  offerOf,
-  placeNames,
+  readParts,
   writePhrase,
-  type ConsentAppWire,
+  accessOfNamed,
+  type ConsentContract,
   type ConsentDraft,
+  type ConsentOffer,
 } from "./consent-access";
 import { ConsentLine, ConsentLines } from "./ConsentLine";
-import { WriteChoices } from "./AccessChoices";
+import { Disclosure, WriteChoices } from "./AccessChoices";
 import { consentT } from "./copy";
 import type { Step } from "./ConsentForm";
 
@@ -48,35 +52,113 @@ export interface ConsentAsk {
   connectionPublicId: string | null;
 }
 
-/** The app as the short consent reads it: its offer and what it holds. */
-export type AskApp = ConsentAppWire & {
-  approved: ReadonlyArray<{ permission: string; workspaceId: string | null }>;
-};
+/** One short ask, from either source, as the screen draws it. */
+export interface AskView {
+  /** One line per permission it asks: its words, reason and raw permission. */
+  lines: Array<{
+    permission: string;
+    /** "Edit tasks", in the vocabulary's words. */
+    what: string;
+    /** Where it would hold, from the ask's pairs; null: where it works now. */
+    where: string[] | null;
+    reason: string | null;
+  }>;
+  /** What it asked that cannot be given. */
+  unavailable: string[];
+  /** The contract's ask: Allow refuses an unavailable item (v1.1). */
+  unavailableBlocks: boolean;
+  connectionPublicId: string | null;
+  /** Q4: it changes nothing yet and asks to. */
+  needsWritePlace: boolean;
+  /** The spaces the ask itself names: pre-ticked and tagged Asked. */
+  askedSpaceIds: string[];
+}
 
-/** How many distinct permissions an ask names (its title counts them). */
-export function askCount(ask: ConsentAsk): number {
-  return new Set(ask.pairs.map((p) => p.permission)).size;
+/** The short ask from the contract when present, else from today's pairs. */
+export function askViewOf(input: {
+  ask: ConsentAsk | null;
+  contract: ConsentContract | null;
+  offer: ConsentOffer;
+}): AskView | null {
+  const { ask, contract, offer } = input;
+  const reasonOf = (permission: string) =>
+    offer.items.find((i) => i.permission === permission)?.reason ?? null;
+  if (contract?.ask) {
+    const a = contract.ask;
+    return {
+      lines: a.adds.map((x) => ({
+        permission: x.permission,
+        what: permissionLabel(x.permission),
+        where: null,
+        reason: x.reason?.trim() || reasonOf(x.permission),
+      })),
+      unavailable: [...a.unavailable],
+      unavailableBlocks: true,
+      connectionPublicId: a.connectionPublicId,
+      needsWritePlace: a.needsWritePlace,
+      askedSpaceIds: [],
+    };
+  }
+  if (!ask) return null;
+  const lines: AskView["lines"] = [];
+  for (const p of ask.pairs) {
+    const known = lines.find((l) => l.permission === p.permission);
+    if (known) {
+      if (!known.where!.includes(p.workspaceName))
+        known.where!.push(p.workspaceName);
+    } else
+      lines.push({
+        permission: p.permission,
+        what: permissionLabel(p.permission),
+        where: [p.workspaceName],
+        reason: reasonOf(p.permission),
+      });
+  }
+  return {
+    lines,
+    unavailable: [...ask.unavailable],
+    unavailableBlocks: false,
+    connectionPublicId: ask.connectionPublicId,
+    needsWritePlace: false,
+    askedSpaceIds: [...new Set(ask.pairs.map((p) => p.workspaceId))],
+  };
+}
+
+/**
+ * Where the connection works now, for the Unchanged lines: the contract's
+ * `current` (projects included) when present, else the lift of its pairs.
+ */
+export function askCurrentOf(
+  app: {
+    approved: ReadonlyArray<{ permission: string; workspaceId: string | null }>;
+  },
+  contract: ConsentContract | null
+): ConsentDraft | null {
+  if (contract?.current) return draftOf(accessOfNamed(contract.current));
+  const held = heldAccessOf(app.approved);
+  return held.kind === "access" ? draftOf(held.access) : null;
 }
 
 export function AskConsent({
-  app,
   appName,
-  ask,
+  view,
+  offer,
+  current,
+  names,
   busy,
   step,
   onDecide,
   writePlace = null,
 }: {
-  app: AskApp;
   appName: string;
-  ask: ConsentAsk;
+  view: AskView;
+  offer: ConsentOffer;
+  current: ConsentDraft | null;
+  names: Readonly<Record<string, string>>;
   busy: boolean;
   step: Step;
   onDecide: (approve: boolean) => void;
-  /**
-   * The app changes nothing yet and now asks to (Q4): the place it may, a
-   * new choice. null while the contract does not carry it.
-   */
+  /** Q4's picker, when the ask needs a first write place. */
   writePlace?: {
     draft: ConsentDraft;
     onChange: (next: ConsentDraft) => void;
@@ -84,71 +166,65 @@ export function AskConsent({
 }) {
   const t = consentT();
   const id = useId();
-  const offer = useMemo(() => offerOf(app), [app]);
-  const names = placeNames(offer);
-  const held = useMemo(() => heldAccessOf(app.approved), [app.approved]);
-  const current = held.kind === "access" ? draftOf(held.access) : null;
-  const lines = summarizeAppConnectRequest({
-    appName,
-    requests: ask.pairs,
-    mode: "add",
-  }).lines;
   const failed = step.kind === "error" ? step.message : null;
   const writes = writePlace
     ? writePlace.draft.write.spaces.length +
       writePlace.draft.write.projects.length
     : 1;
-  const blocked = writePlace && writes === 0 ? t("ask.blocked") : null;
+  const blocked =
+    view.unavailableBlocks && view.unavailable.length > 0
+      ? t("ask.unavailableBlocked")
+      : writePlace && writes === 0
+        ? t("ask.blocked")
+        : null;
   const unchanged = { text: t("mark.unchanged"), tone: "default" as const };
+  // A line's place: the ask's own spaces, else where it works now.
+  const whereOf = (line: AskView["lines"][number]) => {
+    if (line.where) return t("place.in", { name: andList(line.where) });
+    if (!current) return "";
+    if (isWriteTier(line.permission)) {
+      const w = writePhrase(current, names);
+      return w ? t("place.in", { name: w }) : "";
+    }
+    return readParts(current, names) === "all"
+      ? t("place.everywhere")
+      : t("place.in", { name: inPhrase(current, names) });
+  };
+  // Q4: only places it can already look in.
+  const within = current
+    ? current.read.spaces === "all"
+      ? { spaces: "all" as const, projects: "all" as const }
+      : { spaces: current.read.spaces, projects: current.read.projects }
+    : undefined;
   return (
     <div className="flex flex-col gap-5">
       <ul className="flex flex-col divide-y divide-foreground/10 rounded-lg bg-foreground/[0.03] px-4 py-1 ring-1 ring-inset ring-foreground/10">
-        {lines.map((line) => {
-          const pairs = ask.pairs.filter(
-            (p) => p.workspaceId === line.workspaceId
-          );
-          const reasons = [
-            ...new Set(
-              pairs
-                .map(
-                  (p) =>
-                    offer.items.find((i) => i.permission === p.permission)
-                      ?.reason ?? null
-                )
-                .filter((r): r is string => !!r)
-            ),
-          ];
-          return (
-            <li
-              key={line.workspaceId ?? line.where}
-              className="flex flex-col gap-0.5 py-2.5"
-            >
-              <span className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium text-foreground/90">
-                  {line.text}
-                </span>
-                <Chip size="sm" variant="flat" color="primary">
-                  {t("mark.new")}
-                </Chip>
+        {view.lines.map((line) => (
+          <li key={line.permission} className="flex flex-col gap-0.5 py-2.5">
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-foreground/90">
+                {t("ask.line", { what: line.what, where: whereOf(line) })}
               </span>
-              {reasons.map((r) => (
-                <span
-                  key={r}
-                  className="text-pretty text-xs leading-relaxed text-foreground/75"
-                >
-                  {/* The developer's words, as text: why it asks. */}
-                  <span className="text-foreground/65">
-                    {t("reason.prefix")}{" "}
-                  </span>
-                  {r}
+              <Chip size="sm" variant="flat" color="primary">
+                {t("mark.new")}
+              </Chip>
+            </span>
+            {line.reason ? (
+              <span className="text-pretty text-xs leading-relaxed text-foreground/75">
+                {/* The developer's words, as text: why it asks. */}
+                <span className="text-foreground/65">
+                  {t("reason.prefix")}{" "}
                 </span>
-              ))}
+                {line.reason}
+              </span>
+            ) : null}
+            <Disclosure label={t("dev.toggle")}>
               <span className="font-mono text-[11px] text-foreground/65">
-                {[...new Set(pairs.map((p) => p.permission))].join(" · ")}
+                {line.permission}
               </span>
-            </li>
-          );
-        })}
+            </Disclosure>
+          </li>
+        ))}
       </ul>
 
       {current || writePlace ? (
@@ -167,6 +243,9 @@ export function AskConsent({
               <strong className="font-medium">{t("ask.pickFor")}</strong>
               <span className="text-xs text-foreground/65">
                 {t("ask.newChoice")}
+                {within && within.spaces !== "all"
+                  ? ` ${t("ask.withinIn")}`
+                  : ""}
               </span>
               <div className="pt-2">
                 <WriteChoices
@@ -174,6 +253,8 @@ export function AskConsent({
                   offer={offer}
                   isDisabled={busy}
                   onChange={writePlace.onChange}
+                  asked={view.askedSpaceIds}
+                  within={within}
                 />
               </div>
             </ConsentLine>
@@ -186,19 +267,40 @@ export function AskConsent({
       ) : null}
 
       <div className="flex flex-col gap-1">
-        {ask.unavailable.length > 0 ? (
-          <p className="text-xs leading-relaxed text-foreground/65">
-            {t("ask.unavailable")}
-          </p>
+        {view.unavailable.length > 0 ? (
+          <div className="flex flex-col gap-1">
+            <p className="text-xs leading-relaxed text-foreground/75">
+              {view.unavailableBlocks
+                ? t("ask.unavailableBlocked")
+                : t("ask.unavailable")}
+            </p>
+            {view.unavailableBlocks ? (
+              <ul className="flex flex-col gap-1">
+                {view.unavailable.map((u) => (
+                  <li
+                    key={u}
+                    className="flex items-center justify-between gap-3 text-xs text-foreground/80"
+                  >
+                    {permissionLabel(u.split("@")[0] ?? u)}
+                    <Chip size="sm" variant="flat">
+                      {t("cant.notGiven")}
+                    </Chip>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
         ) : null}
         <p className="text-pretty text-xs leading-relaxed text-foreground/65">
           {t("ask.keeps")}
-          {ask.connectionPublicId ? (
+          {/* Q4 changes where it works: the "never changes" sentence would
+              contradict the picker above (U4). */}
+          {view.connectionPublicId && !writePlace ? (
             <>
               {" "}
               {t("ask.stays")}{" "}
               <Link
-                href={`/apps/${encodeURIComponent(ask.connectionPublicId)}`}
+                href={`/apps/${encodeURIComponent(view.connectionPublicId)}`}
                 className="text-foreground/75 underline underline-offset-2"
               >
                 {t("ask.page")}

@@ -54,9 +54,9 @@ export function ConsentLine({
   return (
     <div
       data-line={line}
-      className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 px-3 py-2.5 sm:grid-cols-[8.5rem_minmax(0,1fr)_auto]"
+      className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 px-3 py-2.5 sm:grid-cols-[10.5rem_minmax(0,1fr)_auto]"
     >
-      <dt className="col-span-2 flex min-h-6 flex-wrap items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65 sm:col-span-1 sm:min-h-10">
+      <dt className="col-span-2 flex min-h-6 flex-wrap items-center gap-1.5 whitespace-nowrap text-xs font-medium uppercase tracking-[0.04em] text-foreground/65 sm:col-span-1 sm:min-h-10">
         {label}
         {mark ? (
           <Chip

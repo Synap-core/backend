@@ -7,16 +7,20 @@
  * the pure rules of `consent-access`, so nothing here can widen the offer.
  */
 
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Checkbox, Chip, Radio, RadioGroup } from "@heroui/react";
 import { Check, ChevronRight } from "lucide-react";
 import {
   KINDS_ROW,
   andList,
+  isWriteTier,
+  midSentence,
   notEverywhere,
   readChoices,
   readProjectsMode,
   rowLevel,
+  setKindLevel,
+  setPermission,
   setReadProjectsMode,
   setReadSpacesMode,
   setRowLevel,
@@ -43,50 +47,82 @@ import {
   type ActsAs,
   type ConsentObject,
 } from "./consent-model";
-import { CONSENT_CHECKBOX, LevelControl } from "./LevelControl";
+import {
+  CONSENT_CHECKBOX,
+  CONSENT_RADIO,
+  LevelControl,
+} from "./LevelControl";
 import { KindsGroupRow } from "./KindsGroupRow";
 import { consentT } from "./copy";
 
 type OnChange = (next: ConsentDraft) => void;
 
 const CAPTION = "text-pretty text-xs leading-relaxed text-foreground/65";
+const LEGEND = "text-sm font-medium text-foreground";
+/** Focus is an outline only (ui-rules), never a ring over a removed outline. */
+const FOCUS =
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus";
 
-/** The developer's reasons and the raw permissions of a row, said once each. */
-function RowDetail({ row }: { row: ConsentObject }) {
-  const t = consentT();
-  const reasons = [
-    ...new Set(
-      row.permissions
-        .map((p) => p.reason?.trim())
-        .filter((r): r is string => !!r)
-    ),
-  ];
+/** One disclosure: a chevron that points right, and down (90°) when open. */
+export function Disclosure({
+  label,
+  children,
+  className = "",
+}: {
+  label: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
   return (
-    <>
-      {reasons.map((r) => (
-        <p
-          key={r}
-          className="text-pretty text-xs leading-relaxed text-foreground/75"
-        >
-          {/* The developer's words, as text: why it asks. */}
-          <span className="text-foreground/65">{t("reason.prefix")} </span>
-          {r}
-        </p>
-      ))}
-      <p className="break-words font-mono text-[11px] leading-relaxed text-foreground/65">
-        {row.permissions.map((p) => p.permission).join(" · ")}
-      </p>
-    </>
+    <div className={`flex flex-col ${className}`}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((o) => !o)}
+        className={`-mx-1 flex min-h-10 items-center gap-1 self-start rounded-md px-1 text-xs text-foreground/75 hover:text-foreground ${FOCUS}`}
+      >
+        <ChevronRight
+          aria-hidden
+          className={`h-3.5 w-3.5 shrink-0 ${open ? "rotate-90" : ""}`}
+        />
+        {label}
+      </button>
+      <div id={id} hidden={!open} className={open ? "flex flex-col" : "hidden"}>
+        {children}
+      </div>
+    </div>
   );
 }
 
 /** "Pillars, Journey stages, Series, Platforms +7 more": what it also sees. */
 function alsoSeeNames(draft: ConsentDraft, row: ConsentObject): string {
+  const t = consentT();
   const given = row.members.filter((m) => rowLevel(draft, m) !== "off");
   const names = (given.length > 0 ? given : row.members).map((m) => m.label);
   return names.length <= 4
-    ? names.join(", ")
-    : `${names.slice(0, 4).join(", ")} +${names.length - 4} more`;
+    ? andList(names)
+    : andList([...names.slice(0, 3), t("can.more", { n: names.length - 3 })]);
+}
+
+/**
+ * A row's words: its decision line, what it also sees, or what it may do,
+ * said once ("Edit jobs", not "Edit jobs and read jobs": a write includes
+ * reading what it writes).
+ */
+function rowWords(
+  draft: ConsentDraft,
+  row: ConsentObject,
+  actsAs: ActsAs
+): string {
+  if (row.key === ALSO_SEE) return alsoSeeNames(draft, row);
+  if (row.decisions) return decideLine(row, actsAs);
+  const perms = row.permissions.map((p) => p.permission);
+  const writes = perms.filter(isWriteTier);
+  const said = (writes.length > 0 ? writes : perms).map(permissionLabel);
+  return andList(said.map((l, i) => (i === 0 ? l : midSentence(l))));
 }
 
 /** One object row of "It can": its name and words, its level, its detail. */
@@ -105,22 +141,17 @@ function CanObjectRow({
   isDisabled: boolean;
   onChange: OnChange;
 }) {
+  const t = consentT();
   const id = useId();
   const [open, setOpen] = useState(false);
   const folded = row.key === ALSO_SEE;
-  const words = folded
-    ? alsoSeeNames(draft, row)
-    : row.decisions
-      ? decideLine(row, actsAs)
-      : andList(
-          row.permissions.map((p, i) => {
-            // "Edit jobs and read jobs": one sentence, so later verbs are lower case.
-            const label = permissionLabel(p.permission);
-            return i === 0 || /^[A-Z]{2}/.test(label)
-              ? label
-              : label.charAt(0).toLowerCase() + label.slice(1);
-          })
-        );
+  const reasons = [
+    ...new Set(
+      row.permissions
+        .map((p) => p.reason?.trim())
+        .filter((r): r is string => !!r)
+    ),
+  ];
   return (
     <li className="flex flex-col py-1" data-object={row.key}>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
@@ -129,17 +160,19 @@ function CanObjectRow({
           aria-expanded={open}
           aria-controls={`${id}-detail`}
           onClick={() => setOpen((o) => !o)}
-          className="-mx-1 flex min-h-10 min-w-0 flex-1 basis-40 items-center gap-1.5 rounded-md px-1 text-left hover:bg-foreground/[0.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          className={`-mx-1 flex min-h-10 min-w-0 flex-1 basis-40 items-center gap-1.5 rounded-md px-1 text-left hover:bg-foreground/[0.04] ${FOCUS}`}
         >
           <ChevronRight
             aria-hidden
-            className={`h-4 w-4 shrink-0 text-foreground/65 transition-transform ${open ? "rotate-90" : ""}`}
+            className={`h-4 w-4 shrink-0 text-foreground/65 ${open ? "rotate-90" : ""}`}
           />
           <span className="flex min-w-0 flex-col">
             <span className="text-sm font-medium text-foreground/90">
               {row.label}
             </span>
-            <span className="text-xs text-foreground/65">{words}</span>
+            <span className="text-xs text-foreground/65">
+              {rowWords(draft, row, actsAs)}
+            </span>
           </span>
         </button>
         <LevelControl
@@ -172,10 +205,50 @@ function CanObjectRow({
           </ul>
         ) : (
           <>
-            <RowDetail row={row} />
+            {reasons.map((r) => (
+              <p
+                key={r}
+                className="text-pretty text-xs leading-relaxed text-foreground/75"
+              >
+                {/* The developer's words, as text: why it asks. */}
+                <span className="text-foreground/65">
+                  {t("reason.prefix")}{" "}
+                </span>
+                {r}
+              </p>
+            ))}
             {podWideKind(row) && draft.read.spaces !== "all" ? (
               <p className={CAPTION}>{podWideNote(row)}</p>
             ) : null}
+            {/* One permission at a time (create posts, not delete them):
+                today's Customize, inside the row it belongs to. */}
+            <Disclosure label={t("fine.toggle")}>
+              <div
+                role="group"
+                aria-label={t("fine.label", { object: row.label })}
+                className="flex flex-col"
+              >
+                {row.permissions.map((p) => (
+                  <Checkbox
+                    key={p.permission}
+                    size="sm"
+                    classNames={CONSENT_CHECKBOX}
+                    isDisabled={isDisabled}
+                    isSelected={draft.permissions.has(p.permission)}
+                    onValueChange={(on) =>
+                      onChange(setPermission(draft, p.permission, on))
+                    }
+                  >
+                    <span className="text-sm text-foreground/85">
+                      {permissionLabel(p.permission)}{" "}
+                      <span className="font-mono text-[11px] text-foreground/65">
+                        {p.permission}
+                      </span>
+                    </span>
+                  </Checkbox>
+                ))}
+              </div>
+            </Disclosure>
           </>
         )}
       </div>
@@ -216,9 +289,13 @@ export function CanChoices({
               row={row}
               draft={draft}
               appName={appName}
+              podWideKinds={podWideKinds}
               isDisabled={isDisabled}
               onSetLevel={(level) => onChange(setRowLevel(draft, row, level))}
               onToggleKind={(kind) => onChange(toggleKind(draft, row, kind))}
+              onSetKindLevel={(kind, level) =>
+                onChange(setKindLevel(draft, row, kind, level))
+              }
               onToggleAll={() => onChange(toggleAllKinds(draft, row))}
             />
           ) : (
@@ -238,7 +315,41 @@ export function CanChoices({
   );
 }
 
-const LEGEND = "text-sm font-medium text-foreground";
+/** A checklist of places, under the radio that reveals it. */
+function PlaceChecks({
+  label,
+  places,
+  isSelected,
+  onToggle,
+  isDisabled,
+}: {
+  label: string;
+  places: ReadonlyArray<{ id: string; name: string }>;
+  isSelected: (id: string) => boolean;
+  onToggle: (id: string) => void;
+  isDisabled: boolean;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className="grid grid-cols-1 gap-x-4 pl-7 min-[400px]:grid-cols-2"
+    >
+      {places.map((p) => (
+        <Checkbox
+          key={p.id}
+          size="sm"
+          classNames={CONSENT_CHECKBOX}
+          isDisabled={isDisabled}
+          isSelected={isSelected(p.id)}
+          onValueChange={() => onToggle(p.id)}
+        >
+          <span className="text-sm text-foreground/85">{p.name}</span>
+        </Checkbox>
+      ))}
+    </div>
+  );
+}
 
 /** "In": Spaces (All / Only the spaces I pick), then Projects, then the union. */
 export function InChoices({
@@ -255,73 +366,76 @@ export function InChoices({
   onChange: OnChange;
 }) {
   const t = consentT();
+  const id = useId();
   const choices = readChoices(offer);
   const all = draft.read.spaces === "all";
   const [pickingProjects, setPickingProjects] = useState(false);
   const projectsMode = readProjectsMode(draft, pickingProjects);
-  const spaceBoxes =
-    !all && choices.spaces.length > 0 ? (
-      <div
-        role="group"
-        aria-label={t("in.spaces")}
-        className="grid grid-cols-1 gap-x-4 pl-7 min-[400px]:grid-cols-2"
-      >
-        {choices.spaces.map((s) => (
-          <Checkbox
-            key={s.workspaceId}
-            size="sm"
-            classNames={CONSENT_CHECKBOX}
-            isDisabled={isDisabled}
-            isSelected={
-              draft.read.spaces !== "all" &&
-              draft.read.spaces.includes(s.workspaceId)
-            }
-            onValueChange={() =>
-              onChange(toggleReadSpace(draft, s.workspaceId))
-            }
-          >
-            <span className="text-sm text-foreground/85">
-              {s.workspaceName}
-            </span>
-          </Checkbox>
-        ))}
-      </div>
-    ) : null;
+  const spaces = choices.spaces.map((s) => ({
+    id: s.workspaceId,
+    name: s.workspaceName,
+  }));
+  const spaceChecks = (
+    <PlaceChecks
+      label={t("in.pickSpaces")}
+      places={spaces}
+      isDisabled={isDisabled}
+      isSelected={(sid) =>
+        draft.read.spaces !== "all" && draft.read.spaces.includes(sid)
+      }
+      onToggle={(sid) => onChange(toggleReadSpace(draft, sid))}
+    />
+  );
+  const projectChecks = (
+    <PlaceChecks
+      label={t("in.pickProjects")}
+      places={choices.projects.map((p) => ({
+        id: p.projectId,
+        name: p.projectName,
+      }))}
+      isDisabled={isDisabled}
+      isSelected={(pid) =>
+        draft.read.projects !== "all" && draft.read.projects.includes(pid)
+      }
+      onToggle={(pid) => onChange(toggleReadProject(draft, pid))}
+    />
+  );
   const missing = notEverywhere(draft, rows, offer);
   return (
     <div className="flex flex-col gap-4">
-      <div
-        role="group"
-        className="flex flex-col gap-1"
-        aria-label={t("in.spaces")}
-      >
-        <p className={LEGEND} aria-hidden>
+      <div role="group" aria-labelledby={`${id}-sp`} className="flex flex-col gap-1">
+        <p id={`${id}-sp`} className={LEGEND}>
           {t("in.spaces")}
         </p>
         {choices.everywhere && choices.spaces.length > 0 ? (
-          <>
-            <RadioGroup
-              aria-label={t("in.spaces")}
-              value={all ? "all" : "pick"}
-              isDisabled={isDisabled}
-              onValueChange={(v) =>
-                onChange(setReadSpacesMode(draft, offer, v as "all" | "pick"))
-              }
+          <RadioGroup
+            aria-labelledby={`${id}-sp`}
+            value={all ? "all" : "pick"}
+            isDisabled={isDisabled}
+            onValueChange={(v) =>
+              onChange(setReadSpacesMode(draft, offer, v as "all" | "pick"))
+            }
+          >
+            <Radio
+              value="all"
+              classNames={CONSENT_RADIO}
+              description={t("in.allSpacesHint")}
             >
-              <Radio value="all" description={t("in.allSpacesHint")}>
-                {t("in.allSpaces")}
-              </Radio>
-              <Radio value="pick">{t("in.pickSpaces")}</Radio>
-            </RadioGroup>
-            {spaceBoxes}
-          </>
+              {t("in.allSpaces")}
+            </Radio>
+            <Radio value="pick" classNames={CONSENT_RADIO}>
+              {t("in.pickSpaces")}
+            </Radio>
+            {/* The checklist sits under the choice that reveals it. */}
+            {!all ? spaceChecks : null}
+          </RadioGroup>
         ) : choices.everywhere ? (
           <p className="text-sm text-foreground/85">
             {t("in.allSpaces")}{" "}
             <span className={CAPTION}>{t("in.allSpacesHint")}</span>
           </p>
         ) : choices.spaces.length > 0 ? (
-          <div className="-ml-7">{spaceBoxes}</div>
+          <div className="-ml-7">{spaceChecks}</div>
         ) : (
           <p className={CAPTION}>{t("blocked.noSpace")}</p>
         )}
@@ -338,10 +452,10 @@ export function InChoices({
       {offer.projectsOffered ? (
         <div
           role="group"
+          aria-labelledby={`${id}-pr`}
           className="flex flex-col gap-1"
-          aria-label={t("in.projects")}
         >
-          <p className={LEGEND} aria-hidden>
+          <p id={`${id}-pr`} className={LEGEND}>
             {t("in.projects")}
           </p>
           {all ? (
@@ -350,64 +464,44 @@ export function InChoices({
                 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary"
                 aria-hidden
               />
-              {t("in.everyProject")}
+              {t("in.allIncludesProjects")}
             </p>
           ) : (
-            <>
-              <RadioGroup
-                aria-label={t("in.projects")}
-                value={projectsMode}
-                isDisabled={isDisabled}
-                onValueChange={(v) => {
-                  setPickingProjects(v === "pick");
-                  onChange(
-                    setReadProjectsMode(draft, v as "all" | "pick" | "none")
-                  );
-                }}
+            <RadioGroup
+              aria-labelledby={`${id}-pr`}
+              value={projectsMode}
+              isDisabled={isDisabled}
+              onValueChange={(v) => {
+                setPickingProjects(v === "pick");
+                onChange(
+                  setReadProjectsMode(draft, v as "all" | "pick" | "none")
+                );
+              }}
+            >
+              <Radio
+                value="all"
+                classNames={CONSENT_RADIO}
+                description={
+                  choices.projects.length > 0
+                    ? t("in.allProjectsHint")
+                    : t("in.allProjectsNoneYet")
+                }
               >
-                <Radio
-                  value="all"
-                  description={
-                    choices.projects.length > 0
-                      ? t("in.allProjectsHint")
-                      : t("in.allProjectsNoneYet")
-                  }
-                >
-                  {t("in.allProjects")}
+                {t("in.allProjects")}
+              </Radio>
+              {choices.projects.length > 0 ? (
+                <Radio value="pick" classNames={CONSENT_RADIO}>
+                  {t("in.pickProjects")}
                 </Radio>
-                {choices.projects.length > 0 ? (
-                  <Radio value="pick">{t("in.pickProjects")}</Radio>
-                ) : null}
-                <Radio value="none">{t("in.noProjects")}</Radio>
-              </RadioGroup>
-              {projectsMode === "pick" && choices.projects.length > 0 ? (
-                <div
-                  role="group"
-                  aria-label={t("in.projects")}
-                  className="grid grid-cols-1 gap-x-4 pl-7 min-[400px]:grid-cols-2"
-                >
-                  {choices.projects.map((p) => (
-                    <Checkbox
-                      key={p.projectId}
-                      size="sm"
-                      classNames={CONSENT_CHECKBOX}
-                      isDisabled={isDisabled}
-                      isSelected={
-                        draft.read.projects !== "all" &&
-                        draft.read.projects.includes(p.projectId)
-                      }
-                      onValueChange={() =>
-                        onChange(toggleReadProject(draft, p.projectId))
-                      }
-                    >
-                      <span className="text-sm text-foreground/85">
-                        {p.projectName}
-                      </span>
-                    </Checkbox>
-                  ))}
-                </div>
               ) : null}
-            </>
+              {/* Directly under "Only the projects I pick", as for spaces. */}
+              {projectsMode === "pick" && choices.projects.length > 0
+                ? projectChecks
+                : null}
+              <Radio value="none" classNames={CONSENT_RADIO}>
+                {t("in.noProjects")}
+              </Radio>
+            </RadioGroup>
           )}
         </div>
       ) : null}
@@ -421,37 +515,54 @@ export function InChoices({
   );
 }
 
-/** "It changes things in": a list of spaces and projects, never everywhere. */
+/**
+ * "It changes things in": a list of spaces and projects, never everywhere.
+ * `asked` marks the places the app asked for (its templates, or a short
+ * ask's own space); `within` limits the list (a short ask offers only places
+ * it can already look in).
+ */
 export function WriteChoices({
   draft,
   offer,
   isDisabled = false,
   onChange,
+  asked,
+  within,
 }: {
   draft: ConsentDraft;
   offer: ConsentOffer;
   isDisabled?: boolean;
   onChange: OnChange;
+  asked?: readonly string[];
+  within?: { spaces: readonly string[] | "all"; projects: readonly string[] | "all" };
 }) {
   const t = consentT();
   const choices = writeChoices(offer);
+  const keep = (list: readonly string[] | "all" | undefined, id: string) =>
+    !list || list === "all" || list.includes(id);
+  const spaces = choices.spaces.filter((s) =>
+    keep(within?.spaces, s.workspaceId)
+  );
+  const projects = choices.projects.filter((p) =>
+    keep(within?.projects, p.projectId)
+  );
   const viewOnly = viewOnlySpaces(offer);
-  if (choices.spaces.length + choices.projects.length === 0) {
+  const isAsked = (s: { workspaceId: string; templateSlug?: string | null }) =>
+    asked
+      ? asked.includes(s.workspaceId)
+      : !!s.templateSlug && offer.templates.includes(s.templateSlug);
+  if (spaces.length + projects.length === 0) {
     return <p className={CAPTION}>{t("write.noPlace")}</p>;
   }
   return (
     <div className="flex flex-col gap-3">
-      {choices.spaces.length > 0 ? (
-        <div
-          role="group"
-          aria-label={t("write.spaces")}
-          className="flex flex-col"
-        >
+      {spaces.length > 0 ? (
+        <div role="group" aria-label={t("write.spaces")} className="flex flex-col">
           <p className={LEGEND} aria-hidden>
-            {t("write.spaces")}
+            {t("in.spaces")}
           </p>
           <div className="grid grid-cols-1 gap-x-4 min-[400px]:grid-cols-2">
-            {choices.spaces.map((s) => (
+            {spaces.map((s) => (
               <Checkbox
                 key={s.workspaceId}
                 size="sm"
@@ -464,8 +575,7 @@ export function WriteChoices({
               >
                 <span className="flex items-center gap-1.5 text-sm text-foreground/85">
                   {s.workspaceName}
-                  {s.templateSlug &&
-                  offer.templates.includes(s.templateSlug) ? (
+                  {isAsked(s) ? (
                     <Chip size="sm" variant="flat">
                       {t("write.asked")}
                     </Chip>
@@ -476,17 +586,17 @@ export function WriteChoices({
           </div>
         </div>
       ) : null}
-      {choices.projects.length > 0 ? (
+      {projects.length > 0 ? (
         <div
           role="group"
           aria-label={t("write.projects")}
           className="flex flex-col"
         >
           <p className={LEGEND} aria-hidden>
-            {t("write.projects")}
+            {t("in.projects")}
           </p>
           <div className="grid grid-cols-1 gap-x-4 min-[400px]:grid-cols-2">
-            {choices.projects.map((p) => (
+            {projects.map((p) => (
               <Checkbox
                 key={p.projectId}
                 size="sm"
@@ -505,7 +615,7 @@ export function WriteChoices({
           </div>
         </div>
       ) : null}
-      {viewOnly.length > 0 ? (
+      {viewOnly.length > 0 && !within ? (
         <p className={CAPTION}>
           {t("write.viewOnly", {
             names: andList(viewOnly.map((s) => s.workspaceName)),
