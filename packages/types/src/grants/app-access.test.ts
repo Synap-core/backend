@@ -21,11 +21,13 @@ import { describe, expect, it } from "vitest";
 import {
   accessPairKey,
   appAccessWithin,
+  appScopesCompareCost,
   candidateAccess,
   expandAppAccess,
   grantScopesForAccess,
   isPodWideReadPermission,
   KindsRequestError,
+  LIFT_PROBE_BUDGET,
   liftApprovedRequests,
   pairsOfRequests,
   parseAppAccess,
@@ -37,6 +39,7 @@ import {
   permits,
   PlaceError,
   sameAppAccess,
+  scopesOfPairs,
   type AppAccess,
   type GrantRequest,
 } from "./index.js";
@@ -175,6 +178,28 @@ const ASKED = [
 ];
 const R_ALL_KINDS = "entity.read"; // a read, pod-wide readable, covers R_NOTE
 const FULL = "*"; // a write by tier (its action is not `read`), covers everything
+const R_STAR_READ = "entity.*.read"; // a read NOT on the pod-wide list
+const W_ALL_ENTITY = "entity.*"; // a write by tier, covers R_STAR_READ
+
+/**
+ * What a v2 DOCUMENT itself says, as scopes: each of its pairs
+ * (`expandAppAccess`) where it stands, with no pod-wide filter (review of
+ * #1196: a stored `approved_access` must not name a read its grants drop).
+ */
+function documentScopes(access: AppAccess): Scope[] {
+  return expandAppAccess(access).flatMap((p): Scope[] => {
+    switch (p.where.kind) {
+      case "space":
+        return [{ permissions: [p.permission], workspaceIds: [p.where.id] }];
+      case "project":
+        return [{ permissions: [p.permission], projectIds: [p.where.id] }];
+      case "pod":
+        return [{ permissions: [p.permission] }];
+      default:
+        return [];
+    }
+  });
+}
 
 /** Did the pre-W3c lift (exact keys) refuse this approval? */
 function keyLiftRefuses(approved: readonly Pair[]): boolean {
@@ -211,6 +236,12 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
       [R_ALL_KINDS, R_NOTE, W_NOTE],
       true,
     ],
+    // A read OFF the pod-wide list, covered by a write in its space, beside a
+    // pod-wide read (review of #1196): "all" grants would drop it while the
+    // v2 document still names it at the pod.
+    ["a phantom candidate: entity.*.read, *, entity.note.read", [R_STAR_READ, FULL, R_NOTE], false],
+    ["a phantom candidate: track.read, *, entity.note.read", [R_TRACK, FULL, R_NOTE], false],
+    ["a phantom candidate: entity.*.read, entity.*, entity.note.read", [R_STAR_READ, W_ALL_ENTITY, R_NOTE], false],
   ] as const) {
     it(`every subset of ${label} × {A, B, pod}: same permits, same placement`, () => {
       let lifted = 0;
@@ -228,6 +259,11 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
         if ("access" in result) {
           lifted += 1;
           if (keyLiftRefuses(approved)) liftedByMeaning += 1;
+          // The DOCUMENT says what its grants say: its own pairs permit
+          // exactly what the pairs permitted (review of #1196).
+          expect(permitsTable(documentScopes(result.access), ASKED), ctx).toEqual(
+            permitsTable(before, ASKED)
+          );
           expect(
             grantScopesForAccess(result.access).length
           ).toBeLessThanOrEqual(4);
@@ -298,6 +334,49 @@ describe("liftApprovedRequests — never wider, never narrower (exhaustive)", ()
     const r = liftApprovedRequests(approved);
     expect("access" in r && grantScopesForAccess(r.access)).toEqual(grants);
     expect(sameReach(w2Grants(approved), legacyGrants(approved))).toBe(true);
+  });
+
+  // Rules out: a v2 document wider than its grants (review of #1196).
+  it("refuses a phantom: * and entity.*.read in A, entity.note.read pod-wide", () => {
+    const approved = [
+      { permission: FULL, workspaceId: A },
+      { permission: R_STAR_READ, workspaceId: A },
+      { permission: R_NOTE, workspaceId: null },
+    ];
+    // Its grants alone would say the same as the pairs ("all" drops
+    // entity.*.read, and * covers it in A)...
+    const candidate = candidateAccess(pairsOfRequests(approved).pairs);
+    expect(sameReach(grantScopesForAccess(candidate), legacyGrants(approved))).toBe(true);
+    // ...but the document would read every kind at the pod.
+    expect(candidate.read.spaces).toBe("all");
+    expect(candidate.permissions).toContain(R_STAR_READ);
+    const r = liftApprovedRequests(approved);
+    expect("reconsent" in r && r.reconsent.reason).toBe("widens");
+    if ("reconsent" in r)
+      expect(r.reconsent.widens).toContainEqual({
+        permission: R_STAR_READ,
+        where: { kind: "pod" },
+      });
+    // So "entity.read in all" is never within it.
+    const everyKind: AppAccess = {
+      version: 2,
+      permissions: [R_ALL_KINDS],
+      read: { spaces: "all", projects: [] },
+      write: { spaces: [], projects: [] },
+    };
+    expect(appAccessWithin(everyKind, candidate)).toBe(true); // the old hole
+    expect("access" in r).toBe(false); // closed: the candidate is never stored
+  });
+
+  // Rules out: a subsumed read off the pod-wide list refused when nothing is
+  // phantom (entity.read at the pod covers entity.*.read: they are one pattern).
+  it("a read off the list that a granted pod-wide read covers is no phantom", () => {
+    const r = liftApprovedRequests([
+      { permission: R_ALL_KINDS, workspaceId: null },
+      { permission: R_STAR_READ, workspaceId: A },
+      { permission: FULL, workspaceId: A },
+    ]);
+    expect("access" in r).toBe(true);
   });
 
   // Rules out: subsumption read as "anything a pattern covers lifts".
@@ -640,10 +719,15 @@ describe("appAccessWithin — v2 against v2, place by place", () => {
   // that form. What must hold is soundness: "within" never lets an approval
   // permit, or place the app, beyond its ask. Where both lifts are exact by
   // key (every lift before W3c), it is still the pair comparison exactly.
-  it("is sound whenever both sides lift, and the pair comparison on exact lifts (exhaustive)", () => {
+  it.each([
+    ["entity.note.read, entity.note.create, entity.read", [R_NOTE, W_NOTE, R_ALL_KINDS]],
+    // `*` and a read off the pod-wide list (review of #1196): the phantom
+    // `entity.*.read` at the pod must never let "entity.read in all" in.
+    ["entity.read, entity.*.read, *, entity.note.read", [R_ALL_KINDS, R_STAR_READ, FULL, R_NOTE]],
+  ] as const)("is sound whenever both sides lift, and the pair comparison on exact lifts (exhaustive: %s)", (_label, perms) => {
     // Each subset once: its lift, whether the lift is exact by key, and what
     // its grants permit and where they place the app.
-    const rows = [...subsets(universe([R_NOTE, W_NOTE, R_ALL_KINDS]))].flatMap(
+    const rows = [...subsets(universe([...perms]))].flatMap(
       (pairs) => {
         const r = liftApprovedRequests(pairs);
         if (!("access" in r)) return [];
@@ -774,6 +858,97 @@ describe("permissionsForKinds (F4)", () => {
   ])("refuses %s", (_label, permission, kinds) => {
     expect(() => permissionsForKinds(permission, kinds)).toThrow(
       KindsRequestError
+    );
+  });
+});
+
+describe("liftApprovedRequests — bounded work (LIFT_PROBE_BUDGET, review of #1196)", () => {
+  const kinds = (n: number, prefix = "k") =>
+    Array.from({ length: n }, (_, i) => `${prefix}${i}`);
+  const pairsOf = (perms: string[], spaces: Array<string | null>) =>
+    spaces.flatMap((workspaceId) =>
+      perms.map((permission) => ({ permission, workspaceId }))
+    );
+  const costOfLift = (pairs: Pair[]) => {
+    const p = pairsOfRequests(pairs).pairs;
+    return appScopesCompareCost(
+      scopesOfPairs(p),
+      grantScopesForAccess(candidateAccess(p))
+    );
+  };
+
+  it("F4 at its cap (48 entries × 64 kinds) fails closed: re-consent, too-large", () => {
+    // 3 072 per-kind reads pod-wide, and the same kinds created in a space.
+    const reads = kinds(48 * 64).map((k) => `entity.${k}.read`);
+    const creates = kinds(48 * 64).map((k) => `entity.${k}.create`);
+    const approved = [...pairsOf(reads, [null]), ...pairsOf(creates, [A])];
+    expect(costOfLift(approved)).toBeGreaterThan(LIFT_PROBE_BUDGET);
+    const started = Date.now();
+    const r = liftApprovedRequests(approved);
+    expect("reconsent" in r && r.reconsent.reason).toBe("too-large");
+    // Refused before any work: the budget is checked first.
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("the pod's real shapes fit well inside the budget", () => {
+    // synap-chat as it asks today: 36 pod-wide reads, 8 asks per space.
+    const chatPod = [
+      ...["playbook", "session", "proposal", "automation", "view", "channel", "project"].map(
+        (s) => `${s}.read`
+      ),
+      ...kinds(29).map((k) => `entity.${k}.read`),
+    ];
+    const chatSpace = [
+      "playbook.run",
+      "session.update",
+      "agent.read",
+      "track.read",
+      "entity.read",
+      "document.read",
+      "relation.read",
+      "chat.stream",
+    ];
+    const chat = [...pairsOf(chatPod, [null]), ...pairsOf(chatSpace, [A, B])];
+    // Content Studio: 46 asks in each of 3 template spaces.
+    const studioPerms = kinds(23, "c").flatMap((k) => [
+      `entity.${k}.read`,
+      `entity.${k}.create`,
+    ]);
+    const studio = pairsOf(studioPerms, [A, B, "space-c"]);
+    // One F4 entry at its cap (64 kinds) read pod-wide, created in 2 spaces.
+    const f4 = [
+      ...pairsOf(kinds(64).map((k) => `entity.${k}.read`), [null]),
+      ...pairsOf(kinds(64).map((k) => `entity.${k}.create`), [A, B]),
+    ];
+    for (const [label, pairs, max] of [
+      ["synap-chat", chat, LIFT_PROBE_BUDGET / 2],
+      ["Content Studio", studio, LIFT_PROBE_BUDGET / 2],
+      ["one F4 entry at its cap", f4, LIFT_PROBE_BUDGET],
+    ] as const) {
+      expect(costOfLift(pairs), label).toBeLessThan(max);
+      const r = liftApprovedRequests(pairs);
+      expect("reconsent" in r && r.reconsent.reason, label).not.toBe("too-large");
+    }
+    expect("access" in liftApprovedRequests(studio)).toBe(true);
+    expect("access" in liftApprovedRequests(f4)).toBe(true);
+  });
+
+  it("a verdict-only lift stops at the first difference, with the same verdict", () => {
+    const widening = [
+      ...pairsOf(kinds(40).map((k) => `entity.${k}.read`), [A]),
+      ...pairsOf(kinds(40).map((k) => `entity.${k}.create`), [B]),
+      ...pairsOf(["entity.x.read"], [B]),
+    ];
+    const full = liftApprovedRequests(widening);
+    const quick = liftApprovedRequests(widening, { examples: false });
+    expect("reconsent" in full).toBe(true);
+    expect("reconsent" in quick).toBe(true);
+    if ("reconsent" in quick)
+      expect(quick.reconsent.widens.length + quick.reconsent.narrows.length).toBe(1);
+    // And a lift is the same lift either way.
+    const uniform = pairsOf(["entity.note.read", "entity.note.create"], [A, B]);
+    expect(liftApprovedRequests(uniform, { examples: false })).toEqual(
+      liftApprovedRequests(uniform)
     );
   });
 });

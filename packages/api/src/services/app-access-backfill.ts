@@ -84,7 +84,13 @@ export async function backfillAppAccess(opts: {
     written: 0,
     already: 0,
     changed: 0,
-    reconsent: { total: 0, unplaceable: 0, widens: 0, narrows: 0 },
+    reconsent: {
+      total: 0,
+      unplaceable: 0,
+      widens: 0,
+      narrows: 0,
+      "too-large": 0,
+    },
     rows: [],
   };
 
@@ -101,7 +107,9 @@ export async function backfillAppAccess(opts: {
           ? say("would allow", widens[0])
           : reason === "narrows" && narrows[0]
             ? say("would lose", narrows[0])
-            : "holds a pair no app may hold (a write with no space)";
+            : reason === "too-large"
+              ? "too large to compare within the lift's budget (fail closed)"
+              : "holds a pair no app may hold (a write with no space)";
       report.rows.push({ ...base, outcome: "reconsent", reason, example });
       continue;
     }

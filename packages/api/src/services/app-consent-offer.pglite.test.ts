@@ -51,6 +51,7 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import {
+  kindGroupIndex,
   kindGroupOf,
   oauthAppOffer,
   oauthAppProjectOffer,
@@ -250,6 +251,30 @@ describe("kindGroupOf — the entry a permission was declared in (F4)", () => {
     expect(kindGroupOf("entity.deal.read", groups)).toBeNull();
     expect(kindGroupOf("entity.read", groups)).toBeNull();
     expect(kindGroupOf("entity.task.read", [])).toBeNull();
+  });
+
+  // Rules out: a malformed cached row failing the consent (review of #1196).
+  it("a malformed group names nothing and never throws", () => {
+    const malformed = [
+      null,
+      "entity.read",
+      { permission: "entity.read", kinds: null },
+      { permission: "entity.read" },
+      { permission: 42, kinds: ["note"] },
+      { permission: "entity.read", kinds: [null, 3] },
+      { permission: "entity.read", kinds: "note" },
+    ];
+    expect(() => kindGroupIndex(malformed)).not.toThrow();
+    expect(kindGroupIndex(malformed).size).toBe(0);
+    expect(kindGroupOf("entity.note.read", malformed)).toBeNull();
+    expect(kindGroupIndex(null).size).toBe(0);
+    // A good group beside malformed ones still answers.
+    expect(
+      kindGroupOf("entity.note.read", [
+        ...malformed,
+        { permission: "entity.read", kinds: ["note"] },
+      ])
+    ).toEqual({ permission: "entity.read", kinds: ["note"] });
   });
 
   // Rules out: a cached group trusted as written (it is expanded again).

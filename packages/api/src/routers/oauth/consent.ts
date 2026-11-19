@@ -50,7 +50,7 @@ import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 import {
   connectOAuthApp,
   currentOAuthApproval,
-  kindGroupOf,
+  kindGroupIndex,
   oauthAppOffer,
   oauthAppPodWideKinds,
   oauthAppPodWideOffer,
@@ -979,6 +979,7 @@ export async function getOAuthConsentContext(
   // "Records: N kinds") and the projects it may be given in (W3c). A copy
   // cached before 0437 has no grouping: its kinds show one per row.
   const kindGroups = req.client.requestedKindGroups ?? [];
+  const groupOf = kindGroupIndex(kindGroups);
   const offer = await oauthAppOffer(callerUserId, perSpace, {
     kindGroups,
     projects: true,
@@ -1002,7 +1003,7 @@ export async function getOAuthConsentContext(
       podWide: podWide.map((permission) => ({
         permission,
         reason: reasonFor(req.client, permission),
-        kindGroup: kindGroupOf(permission, kindGroups),
+        kindGroup: groupOf.get(permission) ?? null,
       })),
       approved: await currentOAuthApproval(callerUserId, req.client.clientId),
       templates: req.client.requestedTemplates ?? [],

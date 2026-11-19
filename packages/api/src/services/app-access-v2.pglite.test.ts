@@ -252,6 +252,16 @@ const FIXTURES: Record<string, { pairs: Pair[]; lifts: boolean }> = {
     ],
     lifts: true,
   },
+  // Review of #1196: the "all" grants drop entity.*.read (not pod-wide) and
+  // * covers it in CONTENT, so the GRANTS match, but the v2 document would
+  // name entity.*.read at the pod: it must never be stored.
+  "a read off the pod-wide list under * beside a pod-wide read": {
+    pairs: [
+      ...inEach(["*", "entity.*.read"], [CONTENT]),
+      ...podWide(["entity.note.read"]),
+    ],
+    lifts: false,
+  },
   "a forged or stale row: writes with no space": {
     pairs: [
       ...inEach(["entity.note.read"], [CONTENT]),

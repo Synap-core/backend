@@ -108,7 +108,6 @@ import {
   pairsOfRequests,
   pairsWithin,
   expandAppAccess,
-  KindsRequestError,
   parseAppAccess,
   parsePlace,
   parseRequestPlace,
@@ -688,7 +687,7 @@ const isAccessForm = (form: AppApprovalForm): form is AppAccess =>
 /** The v2 form of an approval: itself, or the lossless lift of its pairs. */
 function accessOfForm(form: AppApprovalForm): AppAccess | null {
   if (isAccessForm(form)) return form;
-  const lifted = liftApprovedRequests(form);
+  const lifted = liftApprovedRequests(form, { examples: false });
   return "access" in lifted ? lifted.access : null;
 }
 
@@ -789,7 +788,7 @@ export function appApprovalWithinAsked(args: {
 export function grantsForApprovedRequests(
   approved: readonly AppApprovedRequest[]
 ): GrantInput[] {
-  const lifted = liftApprovedRequests(approved);
+  const lifted = liftApprovedRequests(approved, { examples: false });
   return "access" in lifted
     ? grantScopesForAccess(lifted.access)
     : grantsForPairs(approved);
@@ -826,7 +825,7 @@ function accessSaysPairs(
   access: AppAccess,
   pairs: readonly AppApprovedRequest[]
 ): boolean {
-  const lifted = liftApprovedRequests(pairs);
+  const lifted = liftApprovedRequests(pairs, { examples: false });
   return "access" in lifted && sameAppAccess(access, lifted.access);
 }
 
@@ -1427,34 +1426,55 @@ export interface OAuthAppOfferItem {
 
 /** What else the consent screen's offer carries (each additive). */
 export interface OAuthAppOfferOptions {
-  /** The cached document's kinds grouping (`requestedKindGroups`, F4). */
-  kindGroups?: readonly RequestedKindGroup[];
+  /**
+   * The cached document's kinds grouping (`requestedKindGroups`, F4). Read
+   * defensively (`kindGroupIndex`): a malformed row names no group.
+   */
+  kindGroups?: readonly unknown[];
   /** Offer projects beside the spaces (W3c). */
   projects?: boolean;
 }
 
 /**
+ * Each permission a cached kinds grouping (`requestedKindGroups`, F4)
+ * declares, to the entry it was declared in. Built once per offer. Each
+ * group is expanded again (`permissionsForKinds`) rather than trusted, so a
+ * group can only ever name the permissions it expands to. A malformed group
+ * (not an object, no permission string, kinds that are not a list of kind
+ * slugs, a kind-specific or non-record permission) names NONE: its kinds
+ * then show one row each, never a failed consent. The first group that
+ * declares a permission keeps it.
+ */
+export function kindGroupIndex(
+  groups: readonly unknown[] | null | undefined
+): ReadonlyMap<string, OAuthAppKindGroup> {
+  const out = new Map<string, OAuthAppKindGroup>();
+  for (const raw of Array.isArray(groups) ? groups : []) {
+    if (!raw || typeof raw !== "object") continue;
+    const { permission, kinds } = raw as Record<string, unknown>;
+    if (typeof permission !== "string" || !Array.isArray(kinds)) continue;
+    let expanded: string[];
+    try {
+      expanded = permissionsForKinds(permission, kinds);
+    } catch {
+      // KindsRequestError, or anything a malformed row throws: no group.
+      continue;
+    }
+    const group = { permission, kinds: kinds as string[] };
+    for (const p of expanded) if (!out.has(p)) out.set(p, group);
+  }
+  return out;
+}
+
+/**
  * The entry a permission was declared in, when that entry listed its kinds
- * (`requestedKindGroups`, F4), or null. Each group is expanded again
- * (`permissionsForKinds`) rather than trusted, so a group can only ever name
- * the permissions it expands to; one that does not expand names none.
+ * (F4), or null (`kindGroupIndex`, for one permission).
  */
 export function kindGroupOf(
   permission: string,
-  groups: readonly RequestedKindGroup[]
+  groups: readonly unknown[] | null | undefined
 ): OAuthAppKindGroup | null {
-  for (const g of groups) {
-    let expanded: string[];
-    try {
-      expanded = permissionsForKinds(g.permission, g.kinds);
-    } catch (err) {
-      if (err instanceof KindsRequestError) continue;
-      throw err;
-    }
-    if (expanded.includes(permission))
-      return { permission: g.permission, kinds: [...g.kinds] };
-  }
-  return null;
+  return kindGroupIndex(groups).get(permission) ?? null;
 }
 
 /**
@@ -1554,6 +1574,9 @@ export async function oauthAppOffer(
   const projectOffer = options.projects
     ? await oauthAppProjectOffer(ownerUserId)
     : null;
+  const kindGroups = options.kindGroups
+    ? kindGroupIndex(options.kindGroups)
+    : null;
   return permissions.map((permission) => ({
     permission,
     workspaces: rows
@@ -1563,9 +1586,7 @@ export async function oauthAppOffer(
         workspaceName: r.name,
         templateSlug: r.templateSlug ?? null,
       })),
-    ...(options.kindGroups
-      ? { kindGroup: kindGroupOf(permission, options.kindGroups) }
-      : {}),
+    ...(kindGroups ? { kindGroup: kindGroups.get(permission) ?? null } : {}),
     ...(projectOffer
       ? {
           projects: isReadPermission(permission)
