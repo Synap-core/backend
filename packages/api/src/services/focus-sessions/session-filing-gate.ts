@@ -141,9 +141,8 @@ export async function gateSessionFiling(p: {
     action: "update",
     source: "intelligence",
     // Filing into or out of a project (or a goal, which files into its
-    // project) is checked where the session lives now with NO project: a key
-    // pinned to projects never decides what a project holds (the filing
-    // rule, `grant-write-check.ts`).
+    // project) needs a write where the session lives now, with NO project: a
+    // project write never covers it (the filing rule, `grant-write-check.ts`).
     ...(p.filing.projectId !== undefined || p.filing.trackFiling
       ? { grantFilesIntoProject: true }
       : {}),

@@ -1,6 +1,7 @@
 /**
  * The filing rule at the package apply (app-permission plan 8189ae7c, W1
- * review): an app grant never decides what a project holds. An app that
+ * review): filing a record into a project needs a write on it where it
+ * lives now, and a project write never covers the edge. An app that
  * applies a package into a space with a `projectId` used to file EVERY record
  * of the space into the project, right after the `uses` door had refused it.
  *

@@ -1,7 +1,18 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, transitionProposal } from "@synap/database";
+import {
+  db,
+  eq,
+  getDb,
+  getRequestGrant,
+  proposals,
+  transitionProposal,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import { applyProjectFiling } from "../../../services/projects/file-entities.js";
+import {
+  applyProjectFiling,
+  assertGrantMayFile,
+  loadProjectFilingPlan,
+} from "../../../services/projects/file-entities.js";
 import { stampMaterialized } from "../../../services/proposals/stamp-materialized.js";
 import {
   registerProposalExecutor,
@@ -57,6 +68,20 @@ export async function approveProjectFiling(
   if (!ownerUserId) {
     throw refuse(
       "the proposal records no owner (subject_user_id), so whose records these are cannot be established."
+    );
+  }
+
+  // DEFENCE IN DEPTH (the filing rule, W1 review N1): an approval run under
+  // a key's grant files only records that grant may write where they are now
+  // (`assertGrantMayFile`). The decide fence already refuses a project pin
+  // (`proposalIsFiling`); this holds even if a door forgets it.
+  if (getRequestGrant()) {
+    await assertGrantMayFile(
+      await loadProjectFilingPlan(await getDb(), {
+        userId: ownerUserId,
+        projectId,
+        entityIds,
+      })
     );
   }
 

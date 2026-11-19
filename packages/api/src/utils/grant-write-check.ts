@@ -35,8 +35,9 @@
  *               rule"), first match wins:
  *                 1. a FILING (`filesIntoProject`, `project.file_entities`, a
  *                    `belongs_to_project` link or relation) carries no
- *                    project: a project pin never covers it, so an app grant
- *                    never decides what a project holds;
+ *                    project: a project write never covers the
+ *                    `belongs_to_project` edge; filing needs a write on the
+ *                    row where it lives now;
  *                 2. `storedProjectIds`, the row's projects as the DOOR read
  *                    them from the row itself (the gate's
  *                    `grantProjectIdIsStored`);

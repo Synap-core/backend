@@ -25,10 +25,11 @@
  * follows its entity, an edge both of its ends, a session's room its
  * session, who is on a goal the goal). A channel is in P only as the room of
  * a session of P. Each table says so
- * in `projectReach`; a table without one still fails closed. Being IN P is
- * never an app's call: the write gate (grant-write-check.ts) reads a row's
- * project where it lives now, and a project pin never covers filing a row
- * into or out of a project (`filesIntoProject`).
+ * in `projectReach`; a table without one still fails closed. THE FILING
+ * RULE keeps this safe: filing a row into a project needs a write on that row
+ * where it lives now, and a project write never covers the
+ * `belongs_to_project` edge (grant-write-check.ts reads a row's project where
+ * it lives now; a filing carries no project, `filesIntoProject`).
  *
  * SPACE REACH (founder "option 1", 2026-10-23). A grant restricted to spaces
  * X reads what a MEMBER of X reads there, not only the rows stamped with X: a

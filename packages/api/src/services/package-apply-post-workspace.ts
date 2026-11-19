@@ -1330,8 +1330,9 @@ export async function applyPackagePostWorkspace(
         .select({ id: entities.id })
         .from(entities)
         .where(eq(entities.workspaceId, workspaceId));
-      // THE FILING RULE (app-permission plan 8189ae7c, W1): an app grant
-      // never decides what a project holds. The `uses` door refused an app
+      // THE FILING RULE (app-permission plan 8189ae7c, W1): filing a record
+      // into a project needs a write on it where it lives now; a project
+      // write never covers the edge. The `uses` door refused an app
       // (`app_grant`): honour it and file nothing. Under any other key's
       // grant, only the records it may write where they are now
       // (`existingEntitiesGrantMayFile`). A person (no grant) files them all.

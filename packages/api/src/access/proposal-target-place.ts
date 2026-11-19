@@ -15,6 +15,8 @@
  *   - `track`         → the goal's `project_id` is P;
  *   - `project`       → the project is P.
  * Any other target type is in no project: a project pin fails closed on it.
+ * A FILING proposal ({@link proposalIsFiling}) is in no project either: a
+ * project pin never decides what a project holds.
  *
  * Two halves, side by side so they cannot drift: the READ clause
  * ({@link proposalTargetInProjectsWhere}, `grant-read.ts`) and the DECIDE
@@ -141,17 +143,65 @@ export async function proposalTargetProjectIds(proposal: {
 }
 
 /**
+ * Does deciding this proposal FILE a row into or out of a project? Then it has
+ * no project for a key's pin (the filing rule, mirroring
+ * `writeFilesIntoProject` in `utils/grant-write-check.ts`): a key pinned to P
+ * never approves, rejects, undoes or reopens what P holds. A filing is
+ *   - `project.file_entities` (target the project: its place would be P);
+ *   - a link or relation of type `belongs_to_project` (file or unfile);
+ *   - a session update whose patch carries `projectId` or `trackId`.
+ * Reads the request-shaped payload (`data.data`) and a receipt's flat one.
+ */
+export function proposalIsFiling(proposal: {
+  targetType?: string | null;
+  proposalType?: string | null;
+  data?: unknown;
+}): boolean {
+  const outer =
+    proposal.data && typeof proposal.data === "object"
+      ? (proposal.data as Record<string, unknown>)
+      : {};
+  const inner =
+    outer.data && typeof outer.data === "object"
+      ? (outer.data as Record<string, unknown>)
+      : outer;
+  const kind = `${proposal.proposalType ?? ""} ${String(outer.changeType ?? "")}`;
+  if (proposal.targetType === "project" && /file_entities/.test(kind))
+    return true;
+  if (
+    inner.linkType === BELONGS_TO_PROJECT ||
+    outer.linkType === BELONGS_TO_PROJECT ||
+    (proposal.targetType === "relation" && inner.type === BELONGS_TO_PROJECT)
+  )
+    return true;
+  return (
+    proposal.targetType === "focus_session" &&
+    ("projectId" in inner || "trackId" in inner)
+  );
+}
+
+/**
  * The proposal with `targetProjectIds` set for the decision fence
  * (`assertMayDecideProposalAt`): read only when a scope of the request's key
  * is pinned to projects (no other scope looks at it); null otherwise.
  */
 export async function withProposalTargetPlace<
-  T extends { targetType?: string | null; targetId?: string | null },
+  T extends {
+    targetType?: string | null;
+    targetId?: string | null;
+    proposalType?: string | null;
+    data?: unknown;
+  },
 >(
   proposal: T,
   grant: KeyGrant | undefined = getRequestGrant()
 ): Promise<T & { targetProjectIds: string[] | null }> {
-  if (!grant || !grant.scopes.some((scope) => !!scope.projectIds)) {
+  if (
+    !grant ||
+    !grant.scopes.some((scope) => !!scope.projectIds) ||
+    // A filing has no project: no project pin decides it.
+    proposalIsFiling(proposal)
+  ) {
     return { ...proposal, targetProjectIds: null };
   }
   const ids = await proposalTargetProjectIds(proposal);

@@ -72,7 +72,11 @@ import {
   existingEntitiesGrantMayFile,
   fileEntitiesGoverned,
 } from "../services/projects/file-entities.js";
-import { withProposalTargetPlace } from "./proposal-target-place.js";
+import {
+  proposalIsFiling,
+  withProposalTargetPlace,
+} from "./proposal-target-place.js";
+import { approveProjectFiling } from "../routers/proposals/executors/project-filing.js";
 import { assertMayDecideProposalAt } from "../routers/proposals/review-authority.js";
 import { startOrchestrator } from "../services/focus-sessions/start-orchestrator.js";
 import { gateSessionFiling } from "../services/focus-sessions/session-filing-gate.js";
@@ -762,5 +766,155 @@ describe("a non-create write is placed by its STORED row, never the door's proje
     expect((decision as { reason: string }).reason).toMatch(
       /grant does not allow/
     );
+  });
+});
+
+describe("a FILING proposal is never decided by a project pin (W1 review N1)", () => {
+  const APPROVER: GrantScope = {
+    permissions: ["proposal.approve", "proposal.reject", "project.read"],
+    projectIds: [P],
+  };
+  /** A pending proposal; returns the row as the decision doors load it. */
+  const pending = async (
+    targetType: string,
+    targetId: string,
+    proposalType: string,
+    inner: Record<string, unknown>,
+    changeType: string
+  ) => {
+    const id = randomUUID();
+    await q(
+      `insert into proposals (id, created_by, status, workspace_id, project_id, target_type, target_id, proposal_type, data, subject_user_id)
+       values ($1,$2,'pending',$3,$4,$5,$6,$7,$8::jsonb,$2)`,
+      [
+        id,
+        ALICE,
+        W,
+        P,
+        targetType,
+        targetId,
+        proposalType,
+        JSON.stringify({ changeType, data: inner }),
+      ]
+    );
+    const [row] = (
+      await q(
+        `select id, workspace_id as "workspaceId", project_id as "projectId", target_type as "targetType", target_id as "targetId", proposal_type as "proposalType", data, subject_user_id as "subjectUserId", agent_user_id as "agentUserId", status from proposals where id = $1`,
+        [id]
+      )
+    ).rows as Array<Record<string, unknown>>;
+    return row as Record<string, unknown> & { id: string };
+  };
+  const decide = (
+    row: Record<string, unknown>,
+    verb: "approve" | "reject",
+    act: string,
+    scope: GrantScope | null = APPROVER
+  ) => {
+    const run = async () =>
+      assertMayDecideProposalAt(
+        verb,
+        act,
+        await withProposalTargetPlace(row as never)
+      );
+    return (scope ? runWithGrant(grantOfScope(scope), run) : run()).then(
+      () => null,
+      (e: unknown) => (e as Error).message
+    );
+  };
+
+  it("filing records INTO P (project.file_entities, target = P): refused to approve, reject and undo", async () => {
+    const row = await pending(
+      "project",
+      P,
+      "project.file_entities",
+      { id: P, projectId: P, entityIds: [E.n] },
+      "file_entities"
+    );
+    expect(proposalIsFiling(row)).toBe(true);
+    expect(await decide(row, "approve", "approve")).toMatch(/may not approve/);
+    expect(await decide(row, "approve", "undo")).toMatch(/may not undo/);
+    expect(await decide(row, "reject", "reject")).toMatch(/may not reject/);
+  });
+
+  it("a session update that files (trackId / projectId) is refused, though its session is in P", async () => {
+    const row = await pending(
+      "focus_session",
+      SESS.p,
+      "focus_session.update",
+      { id: SESS.p, trackId: TRACK.p },
+      "update"
+    );
+    expect(proposalIsFiling(row)).toBe(true);
+    expect(await decide(row, "approve", "approve")).toMatch(/may not approve/);
+    expect(await decide(row, "reject", "reopen")).toMatch(/may not reopen/);
+  });
+
+  it("CONTROL — the same key decides a session update of P that files nothing; a person decides the filing", async () => {
+    const plain = await pending(
+      "focus_session",
+      SESS.p,
+      "focus_session.update",
+      { id: SESS.p, progress: 40 },
+      "update"
+    );
+    expect(proposalIsFiling(plain)).toBe(false);
+    expect(await decide(plain, "approve", "approve")).toBeNull();
+    const filing = await pending(
+      "project",
+      P,
+      "project.file_entities",
+      { id: P, projectId: P, entityIds: [E.n] },
+      "file_entities"
+    );
+    expect(await decide(filing, "approve", "approve", null)).toBeNull();
+  });
+
+  it("DEFENCE IN DEPTH — the filing executor refuses under a key that may not write the record; a person's approval files it", async () => {
+    const record = randomUUID();
+    await q(
+      `insert into entities (id, type, user_id, workspace_id) values ($1,'task',$2,$3)`,
+      [record, ALICE, W]
+    );
+    const row = await pending(
+      "project",
+      P,
+      "project.file_entities",
+      { id: P, projectId: P, entityIds: [record] },
+      "file_entities"
+    );
+    const deps = {
+      emitProposalReviewed: () => undefined,
+      reportProposalOutcome: () => undefined,
+    };
+    const args = {
+      proposal: row,
+      payload: null,
+      userId: ALICE,
+      input: { proposalId: row.id },
+      ctx: {},
+      deps,
+    } as never;
+    const refused = await runWithGrant(
+      grantOfScope({
+        permissions: ["proposal.approve", "entity.read"],
+        workspaceIds: [W],
+      }),
+      () => approveProjectFiling(args, false)
+    ).then(
+      () => null,
+      (e: unknown) => e as { code?: string; message: string }
+    );
+    expect(refused?.code).toBe("FORBIDDEN");
+    const edges = async () =>
+      (
+        await q(
+          `select id from relations where type = 'belongs_to_project' and source_entity_id = $1`,
+          [record]
+        )
+      ).rows;
+    expect(await edges()).toEqual([]);
+    await approveProjectFiling(args, false);
+    expect(await edges()).toHaveLength(1);
   });
 });
