@@ -96,9 +96,10 @@ function pick<T extends { id: string; name: string; workspaceId: string | null }
   ref: string,
   rows: readonly T[]
 ): T | undefined {
+  const name = ref.toLowerCase();
   const hits = isUuid(ref)
     ? rows.filter((r) => r.id === ref)
-    : rows.filter((r) => r.name.toLowerCase() === ref.toLowerCase());
+    : rows.filter((r) => r.name.toLowerCase() === name);
   return hits.find((r) => r.workspaceId !== null) ?? hits[0];
 }
 
