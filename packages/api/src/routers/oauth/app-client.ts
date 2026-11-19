@@ -281,6 +281,8 @@ export async function appSignInReach(
           return place.ids.every((id) => reach.has(id));
         case "unbounded":
           return false; // an app never holds one
+        case "projects":
+          return false; // a pair names no project (W2: projects are v2 only)
         default:
           return assertNeverPlace(place);
       }

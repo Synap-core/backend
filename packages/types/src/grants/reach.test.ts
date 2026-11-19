@@ -13,6 +13,7 @@ import {
   placeKey,
   placeBeyondPodWideReads,
   PlaceError,
+  placeProjectIds,
   placeSpaceIds,
   requestScopeOf,
   withAppRequestScope,
@@ -21,6 +22,10 @@ import {
 
 const spaces = (...ids: string[]): Place => ({
   kind: "spaces",
+  ids: ids as [string, ...string[]],
+});
+const projects = (...ids: string[]): Place => ({
+  kind: "projects",
   ids: ids as [string, ...string[]],
 });
 
@@ -38,13 +43,42 @@ describe("parsePlace", () => {
     expect(parsePlace({ permissions: ["entity.note.update"] }, "app")).toEqual({
       kind: "unbounded",
     });
-    // A project narrowing makes it no pod-wide read either.
+    // A project narrowing makes it no pod-wide read either: it is the
+    // projects place (W2), for any holder.
     expect(
       parsePlace(
         { permissions: ["entity.note.read"], projectIds: ["p1"] },
         "app"
       )
-    ).toEqual({ kind: "unbounded" });
+    ).toEqual({ kind: "projects", ids: ["p1"] });
+  });
+
+  // Rules out: a project-pinned scope read as "anywhere" (W2: projects are a place).
+  it("no space but named projects: the projects, whoever holds it", () => {
+    for (const holder of ["app", "key", "agent"] as const)
+      expect(
+        parsePlace(
+          { permissions: ["entity.note.update"], projectIds: ["p2", "p1", "p2"] },
+          holder
+        )
+      ).toEqual({ kind: "projects", ids: ["p2", "p1"] });
+    // Spaces AND projects stay the spaces (the projects narrow inside them).
+    expect(
+      parsePlace(
+        { permissions: [], workspaceIds: ["a"], projectIds: ["p1"] },
+        "key"
+      )
+    ).toEqual(spaces("a"));
+    // An empty project list pins nothing here, as before (never a throw).
+    expect(
+      parsePlace({ permissions: ["entity.note.read"], projectIds: [] }, "app")
+    ).toEqual({ kind: "pod" });
+    expect(() =>
+      parsePlace({ permissions: [], projectIds: [""] }, "key")
+    ).toThrow(PlaceError);
+    expect(
+      placeBeyondPodWideReads({ permissions: ["entity.note.read"], projectIds: ["p"] })
+    ).toEqual({ kind: "projects", ids: ["p"] });
   });
 
   it("named spaces, deduplicated in order", () => {
@@ -122,6 +156,41 @@ describe("parseRequestPlace", () => {
     expect(requestScopeOf({ kind: "pod" })).toBe("pod");
     expect(requestScopeOf(spaces("a"))).toBe("space");
     expect(requestScopeOf({ kind: "unbounded" })).toBeNull();
+    expect(requestScopeOf(projects("p"))).toBeNull();
+  });
+
+  it("a request pinned to a project (no space, no scope) is the projects place", () => {
+    expect(
+      parseRequestPlace(
+        { permission: "entity.note.update", workspaceId: null, projectId: "p" },
+        "app"
+      )
+    ).toEqual(projects("p"));
+    expect(() =>
+      parseRequestPlace(
+        { permission: "entity.note.read", workspaceId: "ws", projectId: "p" },
+        "app"
+      )
+    ).toThrow(PlaceError);
+    expect(() =>
+      parseRequestPlace(
+        {
+          permission: "entity.note.read",
+          workspaceId: null,
+          projectId: "p",
+          scope: "pod",
+        },
+        "app"
+      )
+    ).toThrow(PlaceError);
+    // An app's PAIR never holds a project: its projects are its v2 access.
+    expect(() =>
+      withAppRequestScope({
+        permission: "entity.note.read",
+        workspaceId: null,
+        projectId: "p",
+      })
+    ).toThrow(PlaceError);
   });
 });
 
@@ -141,6 +210,36 @@ describe("place algebra", () => {
     expect(meetPlaces({ kind: "pod" }, spaces("a"))).toEqual(spaces("a"));
     expect(meetPlaces(spaces("a", "b"), spaces("b", "c"))).toEqual(spaces("b"));
     expect(meetPlaces(spaces("a"), spaces("b"))).toBeNull();
+  });
+
+  // Rules out: a project read as inside (or around) a space (F3: a union).
+  it("projects: covered by the pod and anywhere, never by spaces, and never covering them", () => {
+    expect(placeCovers({ kind: "pod" }, projects("p"))).toBe(true);
+    expect(placeCovers({ kind: "unbounded" }, projects("p"))).toBe(true);
+    expect(placeCovers(projects("p", "q"), projects("q"))).toBe(true);
+    expect(placeCovers(projects("p"), projects("p", "q"))).toBe(false);
+    expect(placeCovers(spaces("a"), projects("a"))).toBe(false);
+    expect(placeCovers(projects("a"), spaces("a"))).toBe(false);
+    expect(placeCovers(projects("p"), { kind: "pod" })).toBe(false);
+  });
+
+  it("projects join and meet like spaces; with spaces, the join is the pod and the meet the projects", () => {
+    expect(joinPlaces(projects("p"), projects("q", "p"))).toEqual(
+      projects("p", "q")
+    );
+    expect(joinPlaces(spaces("a"), projects("p"))).toEqual({ kind: "pod" });
+    expect(joinPlaces(projects("p"), { kind: "unbounded" })).toEqual({
+      kind: "unbounded",
+    });
+    expect(meetPlaces(projects("p", "q"), projects("q"))).toEqual(projects("q"));
+    expect(meetPlaces(projects("p"), projects("q"))).toBeNull();
+    expect(meetPlaces(spaces("a"), projects("p"))).toEqual(projects("p"));
+    expect(meetPlaces({ kind: "pod" }, projects("p"))).toEqual(projects("p"));
+    expect(placeKey(projects("q", "p"))).toBe(placeKey(projects("p", "q")));
+    expect(placeKey(projects("a"))).not.toBe(placeKey(spaces("a")));
+    expect(placeSpaceIds(projects("p"))).toEqual([]);
+    expect(placeProjectIds(projects("p"))).toEqual(["p"]);
+    expect(placeProjectIds(spaces("a"))).toEqual([]);
   });
 
   it("a place key ignores the order of its spaces", () => {

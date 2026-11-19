@@ -44,6 +44,10 @@ import {
   InvalidPermissionError,
 } from "@synap/governance-policy/grants";
 import { isPodWideReadPermission } from "@synap/database/schema";
+import {
+  KindsRequestError,
+  permissionsForKinds,
+} from "@synap-core/types/grants";
 
 import {
   resolvePublicIssuerEndpoint,
@@ -98,7 +102,11 @@ export const CIMD_REREAD_FLOOR_MS = 60 * 1000;
 
 const CIMD_MAX_REDIRECT_URIS = 8;
 const CIMD_MAX_CLIENT_NAME_LENGTH = 100;
-/** 48 (founder 2026-10-27; was 32, which Content Studio filled). Mirrored by the SDK's `MAX_REQUESTS`. */
+/**
+ * 48 (founder 2026-10-27; was 32, which Content Studio filled). Mirrored by
+ * the SDK's `MAX_REQUESTS`. It counts ENTRIES (decision 51ad8d1e F4): one
+ * entry that lists its kinds counts once, however many kinds it names.
+ */
 const CIMD_MAX_REQUESTS = 48;
 const CIMD_MAX_REASON_LENGTH = 200;
 const CIMD_MAX_TEMPLATES = 8;
@@ -216,6 +224,29 @@ function requestScope(permission: string, scope: unknown): "space" | "pod" {
     );
   }
   return "pod";
+}
+
+/**
+ * The permissions one `synap_requests` entry asks: its `permission`, or,
+ * with `kinds`, that permission once per kind (`permissionsForKinds`,
+ * decision 51ad8d1e F4). `kinds` must be a non-empty array of kind slugs on
+ * an every-kind record permission (`entity.read`, `entity.create`…).
+ */
+function entryPermissions(permission: string, kinds: unknown): string[] {
+  if (kinds === undefined) return [permission];
+  if (!Array.isArray(kinds)) {
+    throw new ClientMetadataError(
+      `synap_requests kinds must be an array of kind slugs (for ${permission})`
+    );
+  }
+  try {
+    return permissionsForKinds(permission, kinds);
+  } catch (err) {
+    if (err instanceof KindsRequestError) {
+      throw new ClientMetadataError(`synap_requests: ${err.message}`);
+    }
+    throw err;
+  }
 }
 
 /** Removed from a reason: they could make it read as something else. */
@@ -390,7 +421,10 @@ export function validateClientMetadataDocument(
           "each synap_requests entry must be an object"
         );
       }
-      const { permission, reason, scope } = r as Record<string, unknown>;
+      const { permission, reason, scope, kinds } = r as Record<
+        string,
+        unknown
+      >;
       if (typeof permission !== "string") {
         throw new ClientMetadataError(
           "each synap_requests entry needs a permission string"
@@ -404,19 +438,26 @@ export function validateClientMetadataDocument(
           `synap_requests reason must be a string of at most ${CIMD_MAX_REASON_LENGTH} characters`
         );
       }
-      assertAppPermission(permission);
-      const asked = requestScope(permission, scope);
-      const before = scopeOf.get(permission);
-      if (before && before !== asked) {
-        throw new ClientMetadataError(
-          `synap_requests: "${permission}" is declared both pod-wide and per space; declare it once`
-        );
-      }
-      scopeOf.set(permission, asked);
-      if (!requestedPermissions.includes(permission)) {
-        requestedPermissions.push(permission);
-        const shown = typeof reason === "string" ? displayReason(reason) : "";
-        if (shown) requestedReasons.set(permission, shown);
+      // One entry may list its kinds (F4): `{permission: "entity.read",
+      // kinds: ["note", "task"]}` asks `entity.note.read` and
+      // `entity.task.read`, each checked and granted per kind (D4), with the
+      // entry's reason and scope. Without `kinds`, the entry is one
+      // permission, as before.
+      for (const one of entryPermissions(permission, kinds)) {
+        assertAppPermission(one);
+        const asked = requestScope(one, scope);
+        const before = scopeOf.get(one);
+        if (before && before !== asked) {
+          throw new ClientMetadataError(
+            `synap_requests: "${one}" is declared both pod-wide and per space; declare it once`
+          );
+        }
+        scopeOf.set(one, asked);
+        if (!requestedPermissions.includes(one)) {
+          requestedPermissions.push(one);
+          const shown = typeof reason === "string" ? displayReason(reason) : "";
+          if (shown) requestedReasons.set(one, shown);
+        }
       }
     }
   }

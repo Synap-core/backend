@@ -585,6 +585,9 @@ describe("I2 — the key is exactly the consented subset; narrowing works, widen
         workspaceName: "Brand",
         templateSlug: "content-os",
         scope: "space",
+        // Additive since app permissions W2.
+        projectId: null,
+        place: { kind: "spaces", ids: [BRAND] },
       },
     ]);
     expect(body.synap_user).toEqual({ id: OWNER, name: "Ada" });

@@ -104,4 +104,55 @@ describe("accessModel — per tier, where", () => {
     ]);
     expect(d.tiers.change).toEqual([]);
   });
+
+});
+
+describe("accessModel — projects (app permissions W2)", () => {
+  const pg = (permissions: string[], projectIds: string[]): GrantDraft => ({
+    permissions,
+    workspaceIds: null,
+    projectIds,
+  });
+  const projectNames = { ...names, acme: "Acme", beta: "Beta" };
+  const sayP = (grants: GrantDraft[], holder: "app" | "key" = "app") =>
+    describeAccess(accessModel(grants, holder), { names: projectNames })
+      .sentence;
+
+  // Rules out: a project-pinned grant said with no place ("anywhere").
+  it("a project grant says its project by name", () => {
+    expect(sayP([pg(["entity.note.read"], ["acme"])])).toBe(
+      `Reads ${plural("note")} in project Acme.`
+    );
+    expect(sayP([pg(["entity.note.read"], ["acme", "beta"])], "key")).toBe(
+      `Reads ${plural("note")} in projects Acme and Beta.`
+    );
+  });
+
+  it("an unnamed project is never its raw id", () => {
+    expect(
+      describeAccess(accessModel([pg(["entity.note.read"], ["zz"])], "app"))
+        .sentence
+    ).toBe(`Reads ${plural("note")} in a project.`);
+  });
+
+  // Rules out: a space and a project merged into one place (F3: a union).
+  it("a space and a project are named apart", () => {
+    expect(
+      sayP([g(["entity.note.read"], ["s"]), pg(["entity.note.create"], ["acme"])])
+    ).toBe(
+      `Reads ${plural("note")} in Sales; changes ${plural("note")} in project Acme.`
+    );
+  });
+
+  it("projects that reach the same things read as one place", () => {
+    expect(
+      sayP([pg(["entity.note.read"], ["acme"]), pg(["entity.note.read"], ["beta"])])
+    ).toBe(`Reads ${plural("note")} in projects Acme and Beta.`);
+  });
+
+  it("full access in a space and a project names both", () => {
+    expect(sayP([g(["*"], ["s"]), pg(["*"], ["acme"])], "key")).toBe(
+      `${GRANT_FULL_ACCESS_SENTENCE} in Sales and in project Acme.`
+    );
+  });
 });
