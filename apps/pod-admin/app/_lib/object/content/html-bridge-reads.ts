@@ -228,7 +228,7 @@ export async function readForPage(
       return client.focusSessions.getLean.query({
         id: required(op, "an id", str(p.id)),
       });
-    case "process.of":
+    case "playbook.process":
       return client.playbooks.process.query({
         playbookId: required(op, "a playbookId", str(p.playbookId)),
       });

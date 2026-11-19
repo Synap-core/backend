@@ -77,15 +77,13 @@ export const CELL_BRIDGE_SDK = `(function () {
     },
     opens: Object.freeze(${JSON.stringify(FRAME_OPEN_KINDS)}),
     open: function (kind, id) {
-      try {
-        parentWindow.postMessage(
-          {
-            type: "${FRAME_SURFACE_OPEN_TYPE}",
-            surface: { kind: "object", objectKind: String(kind), objectId: String(id) }
-          },
-          "*"
-        );
-      } catch (err) {}
+      parentWindow.postMessage(
+        {
+          type: "${FRAME_SURFACE_OPEN_TYPE}",
+          surface: { kind: "object", objectKind: String(kind), objectId: String(id) }
+        },
+        "*"
+      );
     }
   });
 })();`;

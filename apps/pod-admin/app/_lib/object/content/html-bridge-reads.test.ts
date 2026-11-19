@@ -298,7 +298,9 @@ describe("the page bridge — through the console's own client", () => {
     const { calls, posted, send } = wired(SPACE);
     const spoof = { workspaceId: "other", projectId: "p9", limit: 5 };
     await send(query("sessions.get", { id: "s1", ...spoof }));
-    await send(query("process.of", { playbookId: "pb1", ...spoof }, "q2"));
+    await send(
+      query("playbook.process", { playbookId: "pb1", ...spoof }, "q2")
+    );
     await send(
       query("playbook.scorecard", { playbookId: "pb1", ...spoof }, "q3")
     );
@@ -331,7 +333,7 @@ describe("the page bridge — through the console's own client", () => {
     ]);
     const { calls, posted, send } = wired(SPACE, refused);
     await send(query("sessions.get", { id: "s1" }));
-    await send(query("process.of", { playbookId: "pb1" }, "q2"));
+    await send(query("playbook.process", { playbookId: "pb1" }, "q2"));
     await send(query("playbook.scorecard", { playbookId: "pb1" }, "q3"));
     await send(query("project.pillars", { id: "p1" }, "q4"));
     expect(calls).toHaveLength(4);

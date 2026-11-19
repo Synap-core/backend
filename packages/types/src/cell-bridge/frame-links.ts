@@ -22,6 +22,8 @@
  * already refuses that), is not a click on a link and is not intercepted.
  */
 
+import { isUuid } from "../property-render/structured-value.js";
+
 export const FRAME_NAVIGATE_TYPE = "synap:navigate" as const;
 
 /** Frame → host: the reader clicked a link in the page. */
@@ -145,9 +147,6 @@ export interface FrameOpenMessage {
   surface: { kind: "object"; objectKind: FrameOpenKind; objectId: string };
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * An open message, validated, or null: a kind of `FRAME_OPEN_KINDS` and a
  * uuid, nothing else. Whatever else the frame put on the surface (a `url`, a
@@ -165,8 +164,7 @@ export function parseFrameOpen(data: unknown): FrameOpenMessage | null {
   if (
     typeof objectKind !== "string" ||
     !(FRAME_OPEN_KINDS as readonly string[]).includes(objectKind) ||
-    typeof objectId !== "string" ||
-    !UUID_RE.test(objectId)
+    !isUuid(objectId)
   ) {
     return null;
   }

@@ -38,6 +38,7 @@ import {
   type Ref,
   type RefObject,
 } from "react";
+import { useTheme } from "next-themes";
 import { trpc } from "../../../../lib/trpc";
 import { humanizeBytes } from "../../../../lib/format";
 import { SectionCard } from "../../../(admin)/components/section-card";
@@ -164,7 +165,9 @@ export function HtmlFrame({
   // A card written for the widget host gets its `SynapWidget` here (a preview,
   // with no bridge, also gets a sample entity): see `widget-compat`.
   // `tokens`: the console's own `--synap-*` values, so a page drawn with
-  // `var(--synap-…)` wears the reader's theme (`frameTokensCss`).
+  // `var(--synap-…)` wears the reader's theme (`frameTokensCss`). Read again
+  // when the console's theme changes, which runs the page again.
+  const { resolvedTheme } = useTheme();
   const srcDoc = useMemo(
     () =>
       wrapHtmlForFrame(withWidgetCompat(html, { sample: !bridge }), {
@@ -179,7 +182,8 @@ export function HtmlFrame({
                 getComputedStyle(document.body)
               ),
       }),
-    [html, bridge]
+    // `resolvedTheme` is not read here: `getComputedStyle` reads its effect.
+    [html, bridge, resolvedTheme]
   );
 
   useEffect(() => {

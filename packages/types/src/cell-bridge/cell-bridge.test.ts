@@ -381,7 +381,7 @@ describe("the read allowlist", () => {
         "documents.get",
         "flow.of",
         "sessions.get",
-        "process.of",
+        "playbook.process",
         "playbook.scorecard",
         "project.pillars",
       ].sort()
@@ -393,7 +393,11 @@ describe("the read allowlist", () => {
     const spoof = { workspaceId: "w", projectId: "p", trackId: "t", limit: 5 };
     expect(pickBridgeParams("sessions.get", { id, ...spoof })).toEqual({ id });
     expect(
-      pickBridgeParams("process.of", { playbookId: id, id: "x", ...spoof })
+      pickBridgeParams("playbook.process", {
+        playbookId: id,
+        id: "x",
+        ...spoof,
+      })
     ).toEqual({ playbookId: id });
     expect(
       pickBridgeParams("playbook.scorecard", { playbookId: id, ...spoof })
