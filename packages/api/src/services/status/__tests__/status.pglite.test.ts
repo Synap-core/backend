@@ -1726,6 +1726,21 @@ describe('include: ["work"] — where its work stands', () => {
     { key: "draft", name: "Draft" },
     { key: "publish", name: "Publish" },
   ];
+  // What the gated run must yield: a brief delivered, slides delivered but
+  // held by the criterion that checks them (never graded), a post still owed.
+  const GATED_OUTPUTS = [
+    { key: "brief", label: "Brief", kind: "document", status: "done" },
+    { key: "slides", label: "Slides", kind: "document", status: "done" },
+    { key: "post", label: "Post", kind: "document" },
+  ];
+  const GATED_CRITERIA = [
+    {
+      key: "every-slide-picture",
+      statement: "Every slide has a picture",
+      check: { kind: "judge" },
+      outputKey: "slides",
+    },
+  ];
 
   beforeAll(async () => {
     await q(
@@ -1769,9 +1784,17 @@ describe('include: ["work"] — where its work stands', () => {
     );
     const gatedPlaybook = randomUUID();
     await q(
-      `insert into focus_sessions (id, user_id, goal, title, status, origin, expected_outputs, metadata, playbook_id, channel_id, stages, current_stage, started_at, created_at, updated_at)
-       values ($1, $2, 'Ship it', 'Ship it', 'active', 'playbook', '[]'::jsonb, '{}'::jsonb, $3, $4, $5::jsonb, 'draft', now(), now(), now())`,
-      [S_GATED, ME, gatedPlaybook, randomUUID(), JSON.stringify(GATED)]
+      `insert into focus_sessions (id, user_id, goal, title, status, origin, expected_outputs, criteria, metadata, playbook_id, channel_id, stages, current_stage, started_at, created_at, updated_at)
+       values ($1, $2, 'Ship it', 'Ship it', 'active', 'playbook', $6::jsonb, $7::jsonb, '{}'::jsonb, $3, $4, $5::jsonb, 'draft', now(), now(), now())`,
+      [
+        S_GATED,
+        ME,
+        gatedPlaybook,
+        randomUUID(),
+        JSON.stringify(GATED),
+        JSON.stringify(GATED_OUTPUTS),
+        JSON.stringify(GATED_CRITERIA),
+      ]
     );
     await q(
       `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, definition_snapshot, started_at)
@@ -1841,6 +1864,40 @@ describe('include: ["work"] — where its work stands', () => {
       stopped.stages.status === "ok" &&
         stopped.stages.items.map((s) => s.position)
     ).toEqual(["done", "current", "left", "left"]);
+  });
+
+  it("each item carries its run's outcomes, as synap_get_session reads them", async () => {
+    const [gated] = (await workOf(S_GATED)).items;
+    expect(gated!.outcomes).toEqual({
+      status: "ok",
+      counts: { met: 1, total: 3 },
+      items: [
+        expect.objectContaining({
+          key: "brief",
+          label: "Brief",
+          kind: "document",
+          met: true,
+          state: "done",
+        }),
+        expect.objectContaining({
+          key: "slides",
+          kind: "document",
+          met: false,
+          criteria: [
+            expect.objectContaining({
+              key: "every-slide-picture",
+              label: "Every slide has a picture",
+              met: false,
+              outputKey: "slides",
+            }),
+          ],
+        }),
+        expect.objectContaining({ key: "post", met: false }),
+      ],
+    });
+    // A session that declares nothing says so: an empty list, not unavailable.
+    const stopped = (await workOf(S_STOPPED)).items[0]!;
+    expect(stopped.outcomes).toMatchObject({ status: "ok", items: [] });
   });
 
   it("a session asked about lists itself; a run without include carries no work", async () => {
