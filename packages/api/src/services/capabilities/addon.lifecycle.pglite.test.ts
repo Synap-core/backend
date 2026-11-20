@@ -128,7 +128,10 @@ vi.mock("../../utils/split-brain-service.js", () => ({
 vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
 vi.mock("../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 
-import { applyMarketInstall } from "./marketplace-install.js";
+import {
+  applyCapabilityDefinition,
+  applyMarketInstall,
+} from "./marketplace-install.js";
 import { createCapabilityFromDefinition } from "./create-from-definition.js";
 import { uninstallCapability } from "./uninstall-capability.js";
 
@@ -359,6 +362,37 @@ describe("market.install of a capability honours what it requires", () => {
     ]);
     expect(await containersByKey("space-base")).toHaveLength(1);
     expect((await containerByKey("space-base-addon"))!.workspace_id).toBe(WS);
+  });
+});
+
+describe("every capability apply door honours what it requires", () => {
+  it("the shared apply step (tRPC capabilities.install, Hub POST /capabilities/apply) installs the base first", async () => {
+    h.catalog = {
+      scraper: {
+        key: "scraper",
+        name: "Scraper",
+        vault: [],
+        tools: [{ name: "scraper_api", kind: "api" }],
+        skills: [skill("scraper_run", "pod", ["scraper_api"])],
+      },
+    };
+    const result = await applyCapabilityDefinition(
+      {
+        key: "scraper-pages",
+        name: "Scraper pages",
+        extends: "scraper",
+        vault: [],
+        tools: [],
+        skills: [skill("scraper_page", "pod", ["scraper_api"])],
+      },
+      {},
+      { userId: UID, workspaceId: null, authenticated: true } as never
+    );
+    expect(await containerByKey("scraper")).toBeDefined();
+    expect(await containerByKey("scraper-pages")).toBeDefined();
+    expect(result.dependencies).toEqual([
+      expect.objectContaining({ slug: "scraper", action: "installed" }),
+    ]);
   });
 });
 

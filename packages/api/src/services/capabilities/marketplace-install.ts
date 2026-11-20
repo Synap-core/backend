@@ -565,6 +565,10 @@ export const capabilityInstallParamsSchema = z.record(z.string(), z.unknown());
  * the two collection fields the applier iterates unguarded and threads
  * install-time `params` into the governed `createCapabilityFromDefinition`.
  *
+ * What the package `require`s is installed FIRST, here, so every door honours
+ * it (`ensureCapabilityDependencies`); the result lists the resolved
+ * dependencies when there were any.
+ *
  * It then provisions the inbound webhook of every installed tool a provider
  * calls back (`provisionInstalledToolWebhooks`) and returns each URL with the
  * one manual step on the provider's side, so every install door shows it. Only
@@ -576,7 +580,13 @@ export async function applyCapabilityDefinition(
   params: Record<string, unknown> | undefined,
   ctx: Context,
   opts: CreateCapabilityOptions = {}
-): Promise<CreateCapabilityResult & { webhooks: InstalledToolWebhook[] }> {
+): Promise<
+  CreateCapabilityResult & {
+    webhooks: InstalledToolWebhook[];
+    dependencies?: ResolvedPackageDependency[];
+  }
+> {
+  const dependencies = await ensureCapabilityDependencies(definition, ctx);
   const result = await createCapabilityFromDefinition(
     // A CP capability PACKAGE arrives wrapped (`{capability:{…}}`): unwrap it
     // here, where every door converges (`capabilityElementOf`).
@@ -595,7 +605,11 @@ export async function applyCapabilityDefinition(
     result.created.tools,
     requireUserId(ctx.userId)
   );
-  return { ...result, webhooks };
+  return {
+    ...result,
+    webhooks,
+    ...(dependencies.length > 0 ? { dependencies } : {}),
+  };
 }
 
 /**
@@ -612,14 +626,24 @@ export async function applyCapabilityDefinition(
  * is still absent refuses the install, naming what to install first, before
  * anything of this capability is written. Other kinds of dependency are
  * reported as the resolver resolved them.
+ *
+ * The dependencies install under the caller's own authority: its user, the
+ * space it installs into (or the pod), and its agent when an agent acts, so
+ * the governed applier proposes for an agent exactly as for the install itself.
  */
 async function ensureCapabilityDependencies(
   definition: unknown,
-  input: Pick<ApplyMarketInstallInput, "slug" | "userId" | "workspaceId">,
-  displayName: string
+  ctx: Context
 ): Promise<ResolvedPackageDependency[]> {
   const declared = capabilityDependenciesOf(definition);
   if (declared.length === 0) return [];
+  const element = capabilityElementOf(definition) as {
+    key?: unknown;
+    name?: unknown;
+  } | null;
+  const key = typeof element?.key === "string" ? element.key : undefined;
+  const displayName =
+    typeof element?.name === "string" ? element.name : (key ?? "This tool");
   if (declared.some((d) => (d.relation ?? "require") === "compose")) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -630,9 +654,10 @@ async function ensureCapabilityDependencies(
     await import("../package-dependency-resolver.js");
   const { installed } = await resolvePackageDependencies({
     definition: { dependencies: declared },
-    userId: input.userId,
-    selfSlug: input.slug,
-    workspaceId: input.workspaceId,
+    userId: requireUserId(ctx.userId),
+    agentUserId: ctx.agentUserId ?? undefined,
+    selfSlug: key,
+    workspaceId: ctx.workspaceId ?? null,
   });
   const absent = installed.filter(
     (d) => d.kind === "capability" && d.action === "required-absent"
@@ -1381,14 +1406,9 @@ export async function applyMarketInstall(
       workspaceId: input.workspaceId,
       workspaceRole,
     } as unknown as Context;
-    // What it requires is installed FIRST, through the ONE dependency resolver
-    // the template kinds use, under this install's authority (an agent's
-    // install reaches here only once a person approved it).
-    const dependencies = await ensureCapabilityDependencies(
-      definition,
-      input,
-      entry?.name ?? input.slug
-    );
+    // What it requires is installed first, inside the shared apply step, under
+    // this install's authority (an agent's install reaches here only once a
+    // person approved it).
     const result = await applyCapabilityDefinition(
       definition,
       input.params,
@@ -1401,7 +1421,7 @@ export async function applyMarketInstall(
       key: result.capabilityKey,
       created: result.created,
       webhooks: result.webhooks,
-      ...(dependencies.length > 0 ? { dependencies } : {}),
+      ...(result.dependencies ? { dependencies: result.dependencies } : {}),
     };
   }
 
