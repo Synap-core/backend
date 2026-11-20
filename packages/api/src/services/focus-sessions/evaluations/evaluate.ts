@@ -129,6 +129,12 @@ export interface CriterionRunOutcome {
   verdict?: EvaluationVerdict;
   reason?: string;
   escalated?: boolean;
+  /**
+   * Set on a `skipped` judge criterion when no judge could run (a quota 429,
+   * a timeout, the provider down): nothing was said about the work, so a
+   * check gate holds on it without sending the run back (`onFail`).
+   */
+  unavailable?: true;
 }
 
 export type EvaluateSessionResult =
@@ -462,6 +468,7 @@ export async function evaluateSession(
                 key: c.key,
                 status: "skipped",
                 reason: v?.rationale || "No judge could grade this criterion.",
+                unavailable: true,
               });
               continue;
             }
@@ -473,13 +480,23 @@ export async function evaluateSession(
         } catch (err) {
           const reason = `The judge could not run: ${err instanceof Error ? err.message : String(err)}`;
           for (const c of group)
-            results.push({ key: c.key, status: "skipped", reason });
+            results.push({
+              key: c.key,
+              status: "skipped",
+              reason,
+              unavailable: true,
+            });
         }
       }
     } catch (err) {
       const reason = `The judge could not run: ${err instanceof Error ? err.message : String(err)}`;
       for (const c of judged)
-        results.push({ key: c.key, status: "skipped", reason });
+        results.push({
+          key: c.key,
+          status: "skipped",
+          reason,
+          unavailable: true,
+        });
     }
   }
 

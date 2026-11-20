@@ -138,7 +138,12 @@ function advance(toStage: string) {
 
 beforeEach(() => {
   evaluateCalls.length = 0;
-  evaluation = { status: "evaluated", criteria: [], evaluations: [] };
+  evaluation = {
+    status: "evaluated",
+    results: [],
+    criteria: [],
+    evaluations: [],
+  };
   updates.length = 0;
   proposalCalls.length = 0;
   updateReturns = [{ id: SESSION_ID }];
@@ -294,6 +299,7 @@ describe("check gate", () => {
   it("evaluates the stage being LEFT, and passes without pausing or filing", async () => {
     evaluation = {
       status: "evaluated",
+      results: [],
       criteria: buildCriteria,
       evaluations: [{ criterionKey: "tests", verdict: "pass" }],
     };
@@ -314,6 +320,7 @@ describe("check gate", () => {
   it("a failing required criterion pauses the session — and files NO proposal", async () => {
     evaluation = {
       status: "evaluated",
+      results: [],
       criteria: buildCriteria,
       evaluations: [{ criterionKey: "tests", verdict: "fail" }],
     };
@@ -327,6 +334,71 @@ describe("check gate", () => {
     expect(updates).toHaveLength(1);
     expect(updates[0].status).toBe("paused");
     expect(proposalCalls).toHaveLength(0);
+  });
+
+  it("a judge that could not run HOLDS, marked unmeasured, not failed (881e0b61)", async () => {
+    const judged = {
+      key: "review",
+      statement: "The change is reviewed",
+      check: { kind: "judge" },
+      stageKey: "build",
+    };
+    evaluation = {
+      status: "evaluated",
+      results: [
+        {
+          key: "review",
+          status: "skipped",
+          reason: "The judge could not run: HTTP 429 Token quota exceeded",
+          unavailable: true,
+        },
+      ],
+      criteria: [...buildCriteria, judged],
+      evaluations: [{ criterionKey: "tests", verdict: "pass" }],
+    };
+    const result = await advance("ship");
+    // Unmeasured is still not passed: the run holds.
+    expect(result).toMatchObject({
+      kind: "check",
+      passed: false,
+      failing: ["review"],
+      unavailable: ["review"],
+      paused: true,
+    });
+    expect(updates[0].status).toBe("paused");
+    expect((result as { reason?: string }).reason).toMatch(
+      /unmeasured, not failed .*429.*grades them/
+    );
+  });
+
+  it("a judge that could not run on a criterion an earlier grade FAILED is not marked unavailable", async () => {
+    const judged = {
+      key: "review",
+      statement: "The change is reviewed",
+      check: { kind: "judge" },
+      stageKey: "build",
+    };
+    evaluation = {
+      status: "evaluated",
+      results: [
+        {
+          key: "review",
+          status: "skipped",
+          reason: "The judge could not run: HTTP 429",
+          unavailable: true,
+        },
+      ],
+      criteria: [...buildCriteria, judged],
+      evaluations: [
+        { criterionKey: "tests", verdict: "pass" },
+        { criterionKey: "review", verdict: "fail" },
+      ],
+    };
+    const result = await advance("ship");
+    expect(result).toMatchObject({ passed: false, failing: ["review"] });
+    expect(
+      (result as { unavailable?: string[] }).unavailable
+    ).toBeUndefined();
   });
 
   it("an evaluation that did not RUN holds the gate — it never reads as clean", async () => {

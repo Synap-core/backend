@@ -206,6 +206,50 @@ describe("advanceSessionStage — process hooks", () => {
     expect(h.writes.map((w) => w.toStage)).toEqual(["draft"]);
   });
 
+  it("a check gate held ONLY because the judge could not run holds, never returns to onFail (881e0b61)", async () => {
+    (h.proc as { stages: Array<Record<string, unknown>> }).stages[1]!.gate = {
+      kind: "check",
+    };
+    h.gates.push({
+      kind: "check",
+      stageKey: "review",
+      passed: false,
+      failing: ["k"],
+      unavailable: ["k"],
+      paused: true,
+    });
+    const r = await advanceSessionStage({
+      session: SESSION,
+      toStage: "review",
+      userId: "u",
+      stageWrite: "door",
+    });
+    expect(r.onFail).toBeUndefined();
+    expect(h.updates.some((u) => u.status === "active")).toBe(false);
+    expect(h.writes).toEqual([]);
+  });
+
+  it("a check gate with a judge-unavailable key AND a failing one still returns to onFail", async () => {
+    (h.proc as { stages: Array<Record<string, unknown>> }).stages[1]!.gate = {
+      kind: "check",
+    };
+    h.gates.push({
+      kind: "check",
+      stageKey: "review",
+      passed: false,
+      failing: ["k", "j"],
+      unavailable: ["j"],
+      paused: true,
+    });
+    const r = await advanceSessionStage({
+      session: SESSION,
+      toStage: "review",
+      userId: "u",
+      stageWrite: "door",
+    });
+    expect(r.onFail).toEqual({ toStage: "draft" });
+  });
+
   it("a holding check gate WITHOUT onFail just holds (today's behaviour)", async () => {
     const review = (h.proc as { stages: Array<Record<string, unknown>> })
       .stages[1]!;
