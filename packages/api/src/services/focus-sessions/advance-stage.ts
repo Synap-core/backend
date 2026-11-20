@@ -512,7 +512,10 @@ export async function advanceSessionStage(
     // A HOLDING check gate whose stage declares `onFail` returns the run there
     // (un-paused, through this same door) instead of leaving it parked. The
     // hold's `metadata.checkGate` record stays — it is why the run went back.
-    if (!input.viaOnFail) {
+    // Not when the AI judge could not run (`notJudged`): nothing failed, so
+    // the run stays held at the gate until the owner grades or a later
+    // evaluation passes (founder, 20 Nov 2026: hold, never send back).
+    if (!input.viaOnFail && !gate.notJudged) {
       const back = await returnToOnFailStage({ ...input, fromStage });
       if (back) result.onFail = { toStage: back };
     }

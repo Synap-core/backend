@@ -52,6 +52,10 @@ import {
 } from "@synap/intelligence-client";
 import { createLogger } from "@synap-core/core";
 import type { EvaluationVerdict } from "@synap-core/types/focus-sessions";
+import {
+  describeAiFailure,
+  type AiFailureClass,
+} from "../../../utils/ai-failure.js";
 import { executeCapability } from "../../capabilities/execute-capability.js";
 import {
   CHECK_GATE_METADATA_KEY,
@@ -129,6 +133,13 @@ export interface CriterionRunOutcome {
   verdict?: EvaluationVerdict;
   reason?: string;
   escalated?: boolean;
+  /**
+   * Set on a `skipped` judge criterion when the judge could not run: the AI
+   * failure class, read by the one failure door (`utils/ai-failure.ts`). It is
+   * not a verdict on the work, so a check gate whose only misses carry it
+   * holds the stage instead of sending the run back (`stage-gate.ts`).
+   */
+  failureClass?: AiFailureClass;
 }
 
 export type EvaluateSessionResult =
@@ -471,15 +482,11 @@ export async function evaluateSession(
             });
           }
         } catch (err) {
-          const reason = `The judge could not run: ${err instanceof Error ? err.message : String(err)}`;
-          for (const c of group)
-            results.push({ key: c.key, status: "skipped", reason });
+          results.push(...judgeCouldNotRun(sessionId, group, err));
         }
       }
     } catch (err) {
-      const reason = `The judge could not run: ${err instanceof Error ? err.message : String(err)}`;
-      for (const c of judged)
-        results.push({ key: c.key, status: "skipped", reason });
+      results.push(...judgeCouldNotRun(sessionId, judged, err));
     }
   }
 
@@ -513,6 +520,36 @@ export async function evaluateSession(
     await advanceOnGrade({ sessionId, criterionKeys: passed });
   }
   return { status: "evaluated", results, resumed, ...after };
+}
+
+/**
+ * The skipped results of criteria the judge could not grade because the call
+ * failed. The reason is the failure in words from the one failure door
+ * (`describeAiFailure`: the IS's own classification when it sent one), never
+ * the raw HTTP body, which stays in the log. Its class rides along so the
+ * check gate can tell "the AI could not run" from a verdict.
+ */
+function judgeCouldNotRun(
+  sessionId: string,
+  criteria: readonly SessionCriterion[],
+  err: unknown
+): CriterionRunOutcome[] {
+  const failure = describeAiFailure(err);
+  logger.warn(
+    {
+      sessionId,
+      failureClass: failure.class,
+      err: err instanceof Error ? err.message : String(err),
+    },
+    "the judge could not run"
+  );
+  const reason = `The AI judge could not run: ${failure.message}`;
+  return criteria.map((c): CriterionRunOutcome => ({
+    key: c.key,
+    status: "skipped",
+    reason,
+    failureClass: failure.class,
+  }));
 }
 
 /**
