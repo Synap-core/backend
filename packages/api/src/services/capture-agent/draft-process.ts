@@ -123,7 +123,6 @@ export async function draftProcessForKind(input: {
       authorAgentMetadata: users.agentMetadata,
     })
     .from(playbooks)
-    // The author: the agent that wrote it (its actor), else its owner.
     .leftJoin(
       users,
       eq(

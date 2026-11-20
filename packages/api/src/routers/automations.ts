@@ -892,11 +892,11 @@ async function proposeAgentActivation(
 /**
  * W-B3 (supervision plan, founder Q-B1): an agent archives an automation on
  * its own, without a proposal, only when it is the agent's OWN work that NEVER
- * RAN — the agent made it (its actor, `automations.agent_user_id`; the owner
- * is the person) and the `automation_runs` ledger holds no row for it
- * (`loadRunCounts`, the warden's "never fired" read). Nothing it did can be
- * lost, and the row stays (`archived` is a soft state). Anything else — a
- * person's automation, another agent's, or one that ever ran — proposes.
+ * RAN — the agent authored it (its actor) and the `automation_runs` ledger
+ * holds no row for it (`loadRunCounts`, the warden's "never fired" read).
+ * Nothing it did can be lost, and the row stays (`archived` is a soft state).
+ * Anything else — a person's automation, another agent's, or one that ever
+ * ran — proposes.
  */
 export function agentArchivesDirectly(input: {
   actorAgentUserId: string | null;
@@ -959,11 +959,7 @@ async function gateAgentAutomationChange(
 async function insertAutomationAfterGovernance(
   database: AutomationDatabase,
   input: AutomationMaterializationInput,
-  /**
-   * The row's owner (the person) and actor (the agent), as `ownerAndActor`
-   * derives them from whoever wrote it: only that function yields this shape,
-   * so a caller cannot store an agent as the owner.
-   */
+  /** From `ownerAndActor`: never an agent as the owner. */
   owner: OwnerAndActor,
   stableId?: string,
   /**
@@ -1075,16 +1071,9 @@ async function insertAutomationAfterGovernance(
 export async function materializeAutomationForPrincipal(input: {
   database: AutomationDatabase;
   definition: AutomationMaterializationInput;
-  /**
-   * Who the automation is FOR: a person, or the agent / pod-wide agent key
-   * acting — the door stores the person it stands for as the owner
-   * (`ownerAndActor`), the runtime principal of every run.
-   */
+  /** Who it is for; an agent id is stored as its person (`ownerAndActor`). */
   createdBy: string;
-  /**
-   * The agent that authored it, stored as the actor. Present (or `createdBy`
-   * itself an agent) ⇒ forced `draft`, unless `approved`.
-   */
+  /** The authoring agent (the actor). An agent author ⇒ `draft`, unless `approved`. */
   agentUserId?: string | undefined;
   /**
    * A person APPROVED this exact definition (proposal approval): the approval
@@ -1115,19 +1104,14 @@ export async function materializeAutomationForPrincipal(input: {
 }
 
 /**
- * Canonical materialization path for an already-approved AI proposal.
- * It repeats current catalog validation, owns the automation by the person the
- * proposal was filed for (`ownerId`: `proposals.subject_user_id`, never the
- * approver), records the agent as its actor, and converges retries on the
- * proposal's stable target id. The approval is the review, so the author's
- * status is kept (`approved`).
+ * Materialize an approved AI proposal: re-validate, own it by the person it
+ * was filed for (`proposals.subject_user_id`, never the approver), record the
+ * agent as actor, converge retries on the proposal's target id.
  */
 export async function materializeApprovedAutomation(input: {
   database: AutomationDatabase;
   definition: AutomationMaterializationInput;
-  /** The person the proposal was filed for (or the agent: resolved to its person). */
   ownerId: string;
-  /** The agent that authored it (the actor); null for a person's batch. */
   agentUserId: string | null;
   stableId: string;
 }): Promise<string | null> {
@@ -2584,7 +2568,6 @@ export const automationsRouter = router({
       // The authenticated agent governs, never only the input (an agent key
       // omitting `agentUserId` must still propose / be bounded by its grant).
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
-      // The person owns it; the agent (if one acts) is its actor.
       const owner = await ownerAndActor(database, ctx.userId!, agentUserId);
       await assertKeyMayActAsFlowOwner({ ...ctx, agentUserId });
 

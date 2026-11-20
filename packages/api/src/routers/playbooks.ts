@@ -2395,7 +2395,6 @@ export const playbooksRouter = router({
       // callers both miss the peek and race the insert — the unique index makes
       // the loser a unique-violation, and we return the winner instead of a 500
       // or a second clone (mirrors insertPendingProposal / rememberFact).
-      // The person owns the playbook; an agent that wrote it is its actor.
       const owner = await ownerAndActor(
         database,
         ctx.userId,

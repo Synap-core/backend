@@ -310,12 +310,8 @@ export async function executeOutputStep(
         };
       }
 
-      // Attribution: the row is the OWNER's (the person the automation runs
-      // for); when an agent authored the automation, that agent is the write's
-      // actor, so the materialized row's provenance is honest (it once
-      // defaulted to "human", mis-attributing agent-authored automation
-      // writes). We only reach this direct-write branch after the governance
-      // gate GRANTED.
+      // Attribution: the owner's row, with the authoring agent (if any) as
+      // its actor. Reached only after the governance gate GRANTED.
       // `correlationId` is carried on the SAME provenance object the document
       // path already uses, so the entity and its body land with identical run
       // attribution — "which run produced this?" is answerable for both.

@@ -125,19 +125,11 @@ export interface AutomationGovernanceOpts {
    */
   lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
   /**
-   * The automation's OWNER (automation.createdBy): the person it runs for.
-   * RBAC is the owner's role, and a proposal it files is floored on the owner.
+   * The automation's owner (`createdBy`), the person it runs for: RBAC and the
+   * proposal floor.
    */
   ownerId: string;
-  /**
-   * The automation's ACTOR (automation.agent_user_id, carried on the run as
-   * `automationContext.actorAgentUserId`): the agent that authored it, null
-   * for a person's own. The agent governance ladder judges the ACTOR — an
-   * agent-authored automation's write that needs approval for that agent still
-   * proposes, although the automation runs as the person. Absent → the ladder
-   * judges `ownerId` (a person resolves `not-agent`; a humanless agent that
-   * still owns its row is judged as itself).
-   */
+  /** The authoring agent (`agent_user_id`): the ladder judges it, else `ownerId`. */
   actorAgentUserId?: string | null;
   workspaceId: string;
   subjectType: string;
@@ -215,15 +207,12 @@ export async function checkAutomationWriteOrPropose(
     nodeId,
     producerAgentUserId,
   } = opts;
-  // Who the ladder judges: the agent that authored the automation, else its
-  // owner (see `actorAgentUserId`).
   const governedId = opts.actorAgentUserId || ownerId;
 
   // Map action → required RBAC permission (canonical map in @synap/governance-policy).
   const requiredPermission = requiredPermissionFor(action);
 
-  // 1. RBAC: the OWNER's workspace role gates the action — the person the
-  //    automation runs for, whoever authored it.
+  // 1. RBAC: the owner's workspace role gates the action.
   const rbac = await verifyPermission({
     db,
     userId: ownerId,
@@ -281,15 +270,9 @@ export async function checkAutomationWriteOrPropose(
     // shows the right principal). If the producer does not resolve as an agent
     // user (a human/system producer), there is no agent in the chain after all
     // and we fall through to the human-RBAC grant, exactly as before.
-    // PRECISE INVARIANT (the `!== governedId` gate matters): this branch is
-    // only reached when the governed principal resolved `not-agent` (a person's
-    // own automation). When an agent authored it, we never get here —
-    // `gov.decision` was `execute`/`propose`/`deny` above and the ACTOR's
-    // ladder already governed the write; the producer cross-check is
-    // deliberately skipped. So the effect is "governed against the ACTOR when
-    // an agent authored it, else against the PRODUCER." The `!== governedId`
-    // term additionally no-ops the degenerate case where the same agent is both
-    // actor and producer (the actor's ladder already covered it).
+    // Reached only for a person's own automation: an agent-authored one was
+    // governed by its actor's ladder above. `!== governedId` no-ops an actor
+    // that is also the producer.
     const producerInChain =
       typeof producerAgentUserId === "string" &&
       producerAgentUserId.length > 0 &&
@@ -367,7 +350,6 @@ export async function checkAutomationWriteOrPropose(
   if (gov.decision === "propose") {
     return proposeAutomationWrite({
       agentUserId: governedId,
-      // OWNER FLOOR (0248): the person the automation runs for reviews it.
       subjectUserId: ownerId,
       workspaceId,
       subjectType,
@@ -965,9 +947,7 @@ async function proposeAutomationWrite(opts: {
  * second card is visible and rejectable, never a silent double run).
  */
 export async function proposeRulePlaybookRun(opts: {
-  /** The person the rule runs for: the proposal is filed for them. */
   ownerId: string;
-  /** The agent that authored the rule (its actor), null for a person's own. */
   actorAgentUserId?: string | null;
   workspaceId: string;
   automationId: string;
@@ -1197,11 +1177,7 @@ async function fileRulePlaybookRunProposal(
     subjectId,
   } = opts;
 
-  // Attribution: an agent-authored rule proposes AS that agent, its actor (the
-  // Reactions queue, the scorecard and the approval replay all read
-  // `agentUserId`); a person's own rule's proposal is their standing
-  // instruction, so it carries no agent — the same split `openRunSession`
-  // makes for run sessions. Filed for the owner (the person) either way.
+  // An agent-authored rule proposes as its agent; a person's own carries none.
   const agentUserId = opts.actorAgentUserId ?? null;
 
   const targetId = playbookId ?? randomUUID();

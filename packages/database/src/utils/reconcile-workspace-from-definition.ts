@@ -1653,8 +1653,6 @@ export async function reconcileWorkspaceFromDefinition(
           triggerType: auto.triggerType,
           triggerConfig: auto.triggerConfig ?? {},
         });
-        // The person owns it; an agent that installed the definition is its
-        // actor (`ownerAndActor`).
         const owner = await ownerAndActor(dbConn, userId);
         try {
           await dbConn.insert(automations).values({

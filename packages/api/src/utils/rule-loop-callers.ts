@@ -56,11 +56,7 @@ export interface RuleLoopCallerContext {
    * auto-grant rather than filing a second proposal.
    */
   userId: string;
-  /**
-   * The person the batch was filed for (`proposals.subject_user_id`), who
-   * OWNS the automations it materializes; `userId` when absent (a direct
-   * write: the writer is that person).
-   */
+  /** Owner of the automations it makes: the proposal's subject, else `userId`. */
   ownerUserId?: string | null;
   /** Workspace the materialized config belongs to (null = pod-wide). */
   workspaceId: string | null;
@@ -314,7 +310,6 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
             },
             status: "draft",
           },
-          // The person owns it; the batch's author, when an agent, is its actor.
           ownerId: ownerUserId,
           agentUserId: skillAuthor.agentUserId,
           stableId,

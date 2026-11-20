@@ -58,9 +58,8 @@ export async function automationOwnerHasSpaceAccess(
 }
 
 /**
- * Pause every active automation of the space that runs for `userId`: the ones
- * they own, which includes every automation their agents authored (an agent is
- * only ever the actor, consolidation W1). Returns how many were paused.
+ * Pause every active automation of the space that runs for `userId` (their
+ * agents' included: the person owns them). Returns how many were paused.
  */
 export async function pauseAutomationsOfRemovedMember(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)

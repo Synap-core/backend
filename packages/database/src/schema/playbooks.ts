@@ -48,17 +48,9 @@ export const playbooks = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     /** Nullable = pod-wide. */
     workspaceId: uuid("workspace_id"),
-    /**
-     * The OWNER: the person this playbook belongs to (0442/0443). An
-     * agent-authored playbook is owned by the person the agent works for; the
-     * agent is `agentUserId`. Holds an agent id only for a humanless agent
-     * nobody installed.
-     */
+    /** Owner: the person it belongs to (an agent only if nobody installed it). */
     createdBy: text("created_by").notNull(),
-    /**
-     * The ACTOR: the agent that authored this playbook, NULL for a person's
-     * (0442). FK to `users` (ON DELETE SET NULL) in the migration.
-     */
+    /** Actor: the agent that authored it, null for a person's own (0442). FK in SQL. */
     agentUserId: text("agent_user_id"),
     name: text("name").notNull(),
     description: text("description"),

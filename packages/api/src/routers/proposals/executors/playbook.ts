@@ -104,11 +104,9 @@ export function registerPlaybookExecutors(): void {
   // (object-proposal manifest W1) A gated playbook RAW create lands here on
   // approval (the promote path emits `playbook/promote` — its own executor
   // below — so this key materializes exactly one shape). Materializes via the
-  // SAME playbooksRouter.create the direct path uses — re-run as the PERSON
-  // the proposal was filed for (`subjectUserId`, never the approver; the
-  // approver must still be a member) with NO agentUserId + no source, so the
-  // gate grants on that person's role; the authoring agent is then stamped as
-  // the playbook's actor.
+  // SAME playbooksRouter.create the direct path uses — re-run as the person
+  // the proposal was filed for (never the approver) with NO agentUserId + no
+  // source, so the gate grants on that person's role.
   // The propose gate widened `data` to the full create input (goalTemplate is
   // required by createInputSchema).
   //
@@ -156,8 +154,6 @@ export function registerPlaybookExecutors(): void {
           message: "No workspace access",
         });
       }
-      // The person the proposal was filed for owns the playbook (a pre-0248
-      // proposal has no subject: its agent stands for its person).
       const owner = await ownerAndActor(
         db,
         proposal.subjectUserId ?? proposal.agentUserId ?? userId,
@@ -251,10 +247,8 @@ export function registerPlaybookExecutors(): void {
         createArgs as Parameters<typeof playbookCaller.create>[0]
       );
       assertApplied(created);
-      // The replay carries no agent (so it applies, never re-proposes): the
-      // agent that wrote it is recorded as the actor here. Only on the row
-      // this approval made (its proposal's id), never on a same-name playbook
-      // that already existed.
+      // The replay carries no agent (so it applies), so the actor is stamped
+      // here — only on the row this approval made, never on a same-name one.
       if (owner.agentUserId && created.playbook?.id === proposal.targetId) {
         await db
           .update(playbooks)

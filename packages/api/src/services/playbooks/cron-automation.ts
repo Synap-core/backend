@@ -250,13 +250,8 @@ export function buildPlaybookRunFlowDefinition(
 }
 
 export interface CronAutomationCtx {
-  /**
-   * Who wrote the playbook change. The backing automation is owned by the
-   * person this stands for and records the agent as its actor
-   * (`ownerAndActor`).
-   */
+  /** Who wrote the change; the backing automation is owned by its person. */
   userId: string;
-  /** The agent that wrote the playbook change, if one did. */
   agentUserId?: string | null;
   /**
    * The write did NOT change the playbook's `schedule` or `status` (an

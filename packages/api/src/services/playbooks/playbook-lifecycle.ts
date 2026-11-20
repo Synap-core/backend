@@ -1041,7 +1041,6 @@ export async function promoteSessionToPlaybook(
     const slug = subject?.type?.trim();
     if (slug) subjectProfile = { profileSlug: slug };
   }
-  // The person owns the playbook; the agent promoting it is its actor.
   const owner = await ownerAndActor(db, input.userId, input.agentUserId);
   let playbook: Playbook;
   let reused = false;

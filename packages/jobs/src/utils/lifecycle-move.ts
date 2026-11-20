@@ -165,7 +165,7 @@ export async function moveStatusFromAutomation(input: {
   reason?: string;
   automationContext?: SideEffectPayload["automationContext"] & {
     focusSessionId?: string | null;
-    /** The automation's actor (see ExecutionPayload): the ladder judges it. */
+    /** The authoring agent: the ladder judges it. */
     actorAgentUserId?: string | null;
   };
   stepRunId?: string;

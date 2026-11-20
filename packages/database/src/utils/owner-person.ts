@@ -59,17 +59,11 @@ export async function personOfOwner(
 }
 
 /**
- * THE owner and actor of a row a principal writes (consolidation W1, founder
- * decision: a person owns everything, an agent is only the actor). Every door
- * that inserts an automation or a playbook stamps what this answers, so a
- * caller handing it an agent id cannot make the agent the owner:
- *  - `ownerId`: the person `principalId` stands for (an agent → the person
- *    who created it, or, for a humanless agent nobody installed, the agent
- *    itself); a person or a system id → itself;
- *  - `agentUserId`: the agent that acted — `agentUserId` when given, else
- *    `principalId` when it is an agent, else `null` (a person's own write).
- *
- * A FAILED read throws; it never reads as "no person".
+ * The owner and actor of a row `principalId` writes: a person owns it, the
+ * agent is only the actor. Every automation and playbook insert stamps this,
+ * so a caller handing in an agent id cannot make the agent the owner.
+ * `ownerId` falls back to `principalId` for a system id or an agent nobody
+ * installed. A failed read throws.
  */
 export interface OwnerAndActor {
   ownerId: string;

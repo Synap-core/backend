@@ -35,7 +35,7 @@ export interface AutomationObservation {
     chainDepth: number;
     rootRunId?: string;
     chainAutomationIds?: string[];
-    /** The automation's actor (the agent that authored it), null for a person's. */
+    /** The authoring agent, null for a person's own. */
     actorAgentUserId?: string | null;
   };
 }

@@ -331,20 +331,13 @@ async function executeAutomationFlow(params: {
     logger.error({ runId }, "Automation run not found");
     return {};
   }
-  // THE ACTOR of this automation (the agent that authored it; null for a
-  // person's own), read from the row, never from the job payload. The run
-  // executes as the OWNER (`ownerId`, the person); every governed write it
-  // makes is judged by the actor's ladder (see ExecutionPayload).
   const actorAgentUserId = automation.agentUserId ?? null;
   const automationContext: ExecutionPayload["automationContext"] = {
     ...payloadAutomationContext,
     actorAgentUserId,
   };
-  // CONFUSED-DEPUTY GUARD, per automation: the automation's OWN actor
-  // producing its trigger is not a confused deputy (its ladder already governs
-  // the writes, exactly as when the agent was the owner); any other agent in
-  // the chain still is. Children and delay-resumptions get the chain's raw
-  // producer and decide against their own actor.
+  // Confused-deputy guard: the automation's own agent producing its trigger is
+  // not a deputy. Children and resumptions decide on the raw chain producer.
   const producerAgentUserId =
     chainProducerAgentUserId && chainProducerAgentUserId !== actorAgentUserId
       ? chainProducerAgentUserId
@@ -487,9 +480,7 @@ async function executeAutomationFlow(params: {
   let sessionOwned = automationContext.focusSessionOwned ?? false;
   let runSuspended = false;
 
-  // The agent this run records for its writes: the automation's actor (the
-  // identity `openRunSession` stamps as the session's `startedByAgentId`), or
-  // none for a person's own automation. The session itself is the OWNER's.
+  // Stamped as the session's `startedByAgentId`; the session is the owner's.
   const runAgentUserId = actorAgentUserId;
 
   if (!isPlaybookDelegate && !runSessionId) {
@@ -1861,8 +1852,7 @@ async function executeAutomationFlow(params: {
                 },
                 // The producer stays in the causal chain across sub_automation
                 // delegation — a chained child's THEN-actions are still governed
-                // against the agent that fired the ROOT trigger (decided against
-                // the CHILD's own actor).
+                // against the agent that fired the ROOT trigger.
                 producerAgentUserId: chainProducerAgentUserId,
               });
 

@@ -15,11 +15,9 @@
  * itself again, and the owner is named as the hop's producer, as
  * `emitSideEffects` names the actor of every governed event.
  *
- * An agent-authored automation (its actor, `automationContext
- * .actorAgentUserId`) makes that agent the fact's `agentUserId` and the hop's
- * producer, so the event is attributed to it and the dev-loop sweep the fact
- * starts runs GOVERNED as that agent, like the trigger hop; a person's own
- * automation leaves it unset (the sweep runs as the person).
+ * An agent-authored automation (`actorAgentUserId`) names that agent on the
+ * event and as the hop's producer, so the sweep runs governed as it; a
+ * person's own leaves it unset.
  */
 
 import { checkDevLoopPayload } from "@synap-core/types";

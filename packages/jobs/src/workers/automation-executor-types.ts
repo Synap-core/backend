@@ -36,15 +36,9 @@ export interface ExecutionPayload {
      *  existing active session) — only the owner closes it at genuine finish. */
     focusSessionOwned?: boolean;
     /**
-     * The ACTOR of the automation this run executes: the agent that authored
-     * it (`automations.agent_user_id`), null for a person's own. Set by the
-     * executor from the row it loads (never trusted from a job payload), and
-     * re-set for each `sub_automation` child from the child's own row.
-     *
-     * The run executes as the OWNER (the person: RBAC, visibility, session,
-     * roster, AI principal); its governed writes are judged by the ACTOR's
-     * ladder (`checkAutomationWriteOrPropose`), so an agent-authored
-     * automation's write that needs approval for that agent still proposes.
+     * The automation's authoring agent (`agent_user_id`), set by the executor
+     * from the row, never from the payload. The run executes as the owner;
+     * its governed writes are judged by this agent's ladder.
      */
     actorAgentUserId?: string | null;
   };

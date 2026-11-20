@@ -163,22 +163,9 @@ export const automations = pgTable(
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {
       onDelete: "cascade",
     }),
-    /**
-     * The OWNER: the person this automation runs for (0442/0443). Never an
-     * agent once the person is known: an agent-authored automation is owned
-     * by the person the agent works for, and the agent is `agentUserId`.
-     * RBAC, visibility, the run session, the runner roster and the AI
-     * principal read the owner. Holds an agent id only for a humanless agent
-     * nobody installed (no `users.created_by_user_id`).
-     */
+    /** Owner: the person it runs for (an agent only if nobody installed it). */
     createdBy: text("created_by").notNull(),
-    /**
-     * The ACTOR: the agent that authored this automation, or NULL for one a
-     * person authored (0442). The governance ladder, the draft floor and
-     * "the agent's own work" read the actor, never the owner. The FK to
-     * `users` (ON DELETE SET NULL) is in 0442, kept off this definition like
-     * `entities.agent_user_id` to avoid a schema import cycle.
-     */
+    /** Actor: the agent that authored it, null for a person's own (0442). FK in SQL. */
     agentUserId: text("agent_user_id"),
 
     // Definition

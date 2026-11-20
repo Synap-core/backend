@@ -58,8 +58,7 @@ export function registerAutomationExecutors(): void {
         await import("../../automations.js");
       await materializeApprovedAutomation({
         database: db,
-        // A pre-0248 proposal has no subject: its author stands for the
-        // person (the door resolves an agent to the person it works for).
+        // Pre-0248 proposals have no subject: the agent resolves to its person.
         ownerId: proposal.subjectUserId ?? automationAuthorId,
         agentUserId: automationAuthorId,
         stableId: proposal.targetId,

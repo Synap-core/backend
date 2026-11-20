@@ -1214,9 +1214,7 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "approved_requests",
     addedBy: "0309_apps.sql",
   },
-  // automations / playbooks .agent_user_id — the actor (0442, consolidation
-  // W1). Missing means every automation and playbook read (Drizzle names every
-  // column) and the governance ladder's actor read would 42703.
+  // The actor column (0442): every automation and playbook read names it.
   {
     table: "automations",
     column: "agent_user_id",

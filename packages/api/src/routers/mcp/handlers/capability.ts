@@ -989,10 +989,8 @@ export const capabilityHandlers: McpHandlerMap = {
             await import("../../../services/capabilities/capability-registry.js");
           const caps = await listCapabilities({
             workspaceId: requestedWorkspaceId ?? null,
-            // The EXECUTION identity: the OWNER `automations.create` will
-            // stamp (the person, `ownerAndActor`), under whom a capability node
-            // resolves at run time — `visibleSkillsWhere` has a per-user tier,
-            // so validating as anyone else would FALSE-REJECT or FALSE-ACCEPT.
+            // The run identity: the owner `automations.create` will stamp
+            // (`visibleSkillsWhere` has a per-user tier).
             userId: (await ownerAndActor(db, userId, agentUserId)).ownerId,
           });
           const verbIds = new Set<string>();
