@@ -51,6 +51,23 @@ const FLOW = {
   ],
   edges: [],
 };
+const DATA_CONTRACT = {
+  version: 1,
+  mode: "react",
+  gets: [
+    {
+      id: "manual-input",
+      label: "Manual request",
+      origin: "manual",
+      event: "The person starts it",
+      nodeIds: ["n1"],
+    },
+  ],
+  stores: [],
+  reacts: [
+    { id: "run", label: "Run the process", kind: "process", nodeIds: ["n1"] },
+  ],
+};
 
 async function insertProposal(p: {
   status: string;
@@ -104,6 +121,7 @@ describe("stampLanded — what an approval made, written once", () => {
         triggerType: "manual",
         triggerConfig: {},
         flowDefinition: FLOW,
+        metadata: { dataContract: DATA_CONTRACT },
       },
     };
     const proposalId = randomUUID();
