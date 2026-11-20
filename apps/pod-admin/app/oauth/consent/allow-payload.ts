@@ -12,6 +12,7 @@
  *    server says it needs one (Q4).
  */
 import {
+  writeChoices,
   toAccess,
   toApprovedPairs,
   type ConsentContract,
@@ -69,14 +70,17 @@ export function allowPayload(input: {
   const { app, contract, offer, draft, askWrite } = input;
   if (!app) return {};
   if (contract?.ask) {
-    return contract.ask.needsWritePlace && askWrite
-      ? {
-          askWritePlace: {
-            spaces: [...askWrite.write.spaces],
-            projects: [...askWrite.write.projects],
-          },
-        }
-      : {};
+    if (!contract.ask.needsWritePlace || !askWrite) return {};
+    // Only places the offer lets it change things in (never "all").
+    const choices = offer ? writeChoices(offer) : null;
+    const spaces = choices?.spaces.map((s) => s.workspaceId) ?? [];
+    const projects = choices?.projects.map((p) => p.projectId) ?? [];
+    return {
+      askWritePlace: {
+        spaces: askWrite.write.spaces.filter((id) => spaces.includes(id)),
+        projects: askWrite.write.projects.filter((id) => projects.includes(id)),
+      },
+    };
   }
   if (app.ask) {
     return {

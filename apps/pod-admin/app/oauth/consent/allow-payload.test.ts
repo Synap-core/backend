@@ -160,6 +160,20 @@ describe("what Allow sends", () => {
         askWrite,
       })
     ).toEqual({ askWritePlace: { spaces: ["w-a"], projects: [] } });
+    // Filtered to the offer: a place it may not change things in is never sent (N4).
+    const outside = {
+      ...askWrite,
+      write: { spaces: ["w-a", "w-elsewhere"], projects: ["p-x"] },
+    };
+    expect(
+      allowPayload({
+        app: { ask: PAIRS },
+        contract: needs,
+        offer,
+        draft: null,
+        askWrite: outside,
+      })
+    ).toEqual({ askWritePlace: { spaces: ["w-a"], projects: [] } });
     expect(
       allowPayload({
         app: { ask: null },

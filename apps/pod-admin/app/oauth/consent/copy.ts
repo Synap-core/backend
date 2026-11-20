@@ -100,7 +100,8 @@ export const en = {
     "Pick each place. There is no “everywhere” for changes.",
   "write.noPlace": "You have no space where it could make changes.",
   "kinds.count": "{n, plural, one {# kind} other {# kinds}}",
-  "kinds.all": "All {n} kinds it asked for",
+  "kinds.all":
+    "{n, plural, one {The # kind it asked for} other {All # kinds it asked for}}",
   "kinds.someOn": "{on} of {n} on",
   "kinds.label": "Kinds of records",
   "kinds.access": "{kind}: access",
@@ -121,7 +122,8 @@ export const en = {
   "reconsent.allowNew": "Allow the new ones",
   "reconsent.wider": "Wider",
   "reconsent.narrower": "Narrower",
-  "reconsent.keepKinds": "Keep to the {n} kinds",
+  "reconsent.keepKinds":
+    "{n, plural, one {Keep to the # kind} other {Keep to the # kinds}}",
   "reconsent.turnOffEverywhere": "Turn {what} off everywhere",
   "reconsent.noLonger": "no longer {where}",
   "reconsent.nowhere": "nowhere",
@@ -191,6 +193,8 @@ export const en = {
     "Synap now keeps one “where” per app. Below is its access in that form; nothing changes until you confirm it here, or at its next sign-in.",
   "page.saved": "Access changed",
   "page.saveFailed": "Couldn’t change its access",
+  "page.undoChanged": "It changed since, so nothing was undone.",
+  "page.undone": "Change undone",
   "page.unsaved": "You have unsaved changes.",
   "page.discard": "Discard",
   "page.keepEditing": "Keep editing",
@@ -286,7 +290,8 @@ export const fr: Catalog<typeof en> = {
   "write.noPlace":
     "Vous n’avez aucun espace où il pourrait faire des modifications.",
   "kinds.count": "{n, plural, one {# type} other {# types}}",
-  "kinds.all": "Les {n} types demandés",
+  "kinds.all":
+    "{n, plural, one {Le # type demandé} other {Les # types demandés}}",
   "kinds.someOn": "{on} sur {n} activés",
   "kinds.label": "Types de fiches",
   "kinds.access": "{kind} : accès",
@@ -307,7 +312,8 @@ export const fr: Catalog<typeof en> = {
   "reconsent.allowNew": "Autoriser les nouveautés",
   "reconsent.wider": "Plus large",
   "reconsent.narrower": "Plus étroit",
-  "reconsent.keepKinds": "S’en tenir aux {n} types",
+  "reconsent.keepKinds":
+    "{n, plural, one {S’en tenir au # type} other {S’en tenir aux # types}}",
   "reconsent.turnOffEverywhere": "Désactiver partout : {what}",
   "reconsent.noLonger": "ne vaut plus {where}",
   "reconsent.nowhere": "nulle part",
@@ -382,6 +388,8 @@ export const fr: Catalog<typeof en> = {
     "Synap garde désormais un seul « où » par app. Voici son accès sous cette forme ; rien ne change avant votre confirmation ici, ou à sa prochaine connexion.",
   "page.saved": "Accès modifié",
   "page.saveFailed": "Impossible de modifier son accès",
+  "page.undoChanged": "Il a changé depuis, rien n’a donc été annulé.",
+  "page.undone": "Modification annulée",
   "page.unsaved": "Vous avez des modifications non enregistrées.",
   "page.discard": "Abandonner",
   "page.keepEditing": "Continuer",

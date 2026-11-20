@@ -14,10 +14,12 @@
  * (`/api/apps?publicId=…` → `apps.get`), which is self-scoped server-side, so a
  * public id that is not the caller's returns 404 rather than someone else's app.
  *
- * A POD APP (spec 17 PB4 — it connected at the pod's sign-in door) is shown by
- * its domain and tier, and its page holds the connection's two settings: what
- * it may touch, per space, where the person can take a permission or a whole
- * space away (narrow: `PATCH /api/apps` → `apps.narrow`, no new consent), and
+ * A POD APP (spec 17 PB4 — it connected at the pod's sign-in door) is named as
+ * the consent names it (a Synap app by its name, any other app by its
+ * domain), and its page holds the connection's two settings: what it may do
+ * and where (design A's three lines over `apps.accessOffer`, saved through
+ * `apps.updateAccess` with proof of presence and an Undo receipt; it may
+ * narrow, widen within its ask, and hold projects), and
  * "Apply automatically" (`apps.setWriteMode`, off until the person turns it on
  * here — never at consent; turning it on is confirmed, `writeModeConfirm`).
  * A pod app's page carries none of App Connect's developer detail (the id to

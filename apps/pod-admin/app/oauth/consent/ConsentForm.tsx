@@ -82,7 +82,12 @@ import {
 } from "./consent-access";
 import { AccessLines } from "./AccessLines";
 import { consentT } from "./copy";
-import { AskConsent, askCurrentOf, askViewOf } from "./AskConsent";
+import {
+  AskConsent,
+  askCurrentOf,
+  askHeading,
+  askViewOf,
+} from "./AskConsent";
 import { allowPayload, showsErrorScreen } from "./allow-payload";
 
 export interface ConsentParams {
@@ -416,9 +421,14 @@ export function ConsentForm({
               identity={identity}
               title={
                 askView
-                  ? // The contract's title names every place (v1.2).
-                    (contract?.ask?.title ??
-                    t("ask.title", { name: appName, n: askView.lines.length }))
+                  ? // The contract's title names every place (v1.2), but
+                    // only a Synap app's: an unverified app goes by its domain.
+                    askHeading({
+                      verified: app.verified,
+                      serverTitle: contract?.ask?.title,
+                      appName,
+                      count: askView.lines.length,
+                    })
                   : t(confirming ? "title.confirm" : "title.connect", {
                       name: appName,
                     })

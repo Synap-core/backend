@@ -140,6 +140,22 @@ export function askCurrentOf(
 }
 
 /**
+ * The short ask's heading (row 9, review N1): the server's title only for an
+ * app Synap checked; an unverified app is named by its domain in the
+ * screen's own words, never by a title built from the name it chose.
+ */
+export function askHeading(input: {
+  verified: boolean;
+  serverTitle: string | null | undefined;
+  /** The domain for an unverified app, its name for a Synap app. */
+  appName: string;
+  count: number;
+}): string {
+  if (input.verified && input.serverTitle) return input.serverTitle;
+  return consentT()("ask.title", { name: input.appName, n: input.count });
+}
+
+/**
  * An unavailable item in words: `entity.track.read@all` (v1.2: a read that
  * cannot ride All spaces) → "Read goals everywhere in your pod"; another
  * place or none → its permission's words.
