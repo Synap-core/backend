@@ -82,12 +82,7 @@ import {
 } from "./consent-access";
 import { AccessLines } from "./AccessLines";
 import { consentT } from "./copy";
-import {
-  AskConsent,
-  askCurrentOf,
-  askHeading,
-  askViewOf,
-} from "./AskConsent";
+import { AskConsent, askCurrentOf, askHeading, askViewOf } from "./AskConsent";
 import { allowPayload, showsErrorScreen } from "./allow-payload";
 
 export interface ConsentParams {
