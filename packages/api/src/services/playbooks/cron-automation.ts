@@ -60,9 +60,6 @@ const logger = createLogger({ module: "playbook-cron-automation" });
  * newest-wins keep rule: case-insensitive on name, NULL workspace = pod-wide
  * (the unique index's COALESCE sentinel), ordered updated_at DESC so a concurrent
  * 23505 recovery converges on the same winner the migration's soft-archive kept.
- *
- * Used by this module's 23505 recovery, so a playbook-written automation
- * resolves a name clash the same way the automations router does.
  */
 export async function findNonArchivedAutomationByName(
   db: Awaited<ReturnType<typeof getDb>>,
