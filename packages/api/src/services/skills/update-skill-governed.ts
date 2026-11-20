@@ -16,9 +16,15 @@
  * already resets approval when one of them changes and the `skill/update`
  * replay re-derives that reset, so an edit to what a skill runs is never live
  * until it is approved again.
+ *
+ * `category` rides it too (decision D1, proposal 8d04d49e): `category: "rule"`
+ * makes an instruction skill a rule, pushed into every piece of work in its
+ * scope. Same gate as every other field; `skillCategoryChangeProblem` is the
+ * one check, shared with `skills.update`.
  */
 import { and, db, eq, skills } from "@synap/database";
-import { skillsRouter } from "../../routers/skills.js";
+import { skillKindAfterUpdate, skillsRouter } from "../../routers/skills.js";
+import { skillCategoryChangeProblem } from "../rules/index.js";
 import { resolveRequiredToolNames } from "./required-tool-names.js";
 import { visibleSkillsAnyWorkspaceWhere } from "./visibility.js";
 
@@ -33,6 +39,9 @@ export interface SkillUpdatePatch {
   /** Tool NAMES, resolved under the skill's own workspace lens. The set
    *  REPLACES the declared one. */
   requiredTools?: string[];
+  /** `"rule"` = a guideline pushed into every piece of work in its scope
+   *  (instruction skills only); any other value is a free-form tag. */
+  category?: string;
   /** WHY this edit — shown to the reviewer when an agent's edit is proposed. */
   reasoning?: string;
 }
@@ -65,6 +74,8 @@ export async function updateSkillGoverned(input: {
       id: skills.id,
       kind: skills.kind,
       workspaceId: skills.workspaceId,
+      category: skills.category,
+      metadata: skills.metadata,
     })
     .from(skills)
     .where(
@@ -87,6 +98,14 @@ export async function updateSkillGoverned(input: {
         "This skill is documentation only (an instruction skill): it carries no code. Create a code skill with synap_create_skill instead.",
     };
   }
+  const categoryProblem = skillCategoryChangeProblem({
+    nextCategory: patch.category,
+    currentCategory: row.category,
+    metadata: row.metadata,
+    kind: skillKindAfterUpdate(patch, row.kind),
+    currentKind: row.kind,
+  });
+  if (categoryProblem) return { status: "invalid", message: categoryProblem };
   let requiredToolIds: string[] | undefined;
   if (requiredTools !== undefined) {
     const resolved = await resolveRequiredToolNames({

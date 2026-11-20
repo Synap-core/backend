@@ -305,6 +305,135 @@ export function readRuleMetadata(
 }
 
 /**
+ * How a rule row is held (decision D1, founder, 20 Nov 2026, proposal
+ * 8d04d49e: a rule is a guideline PUSHED into every piece of work in its
+ * scope; one store, `skills`, `category: "rule"`).
+ *
+ *   - `loop`  — written by the rule loop (`createRuleGoverned`): `metadata.rule`
+ *     carries intent, scope, lineage, and maybe a sentence it compiled into an
+ *     automation, a seed, a reaction.
+ *   - `prose` — a skill marked `category: "rule"` with NO `metadata.rule`
+ *     (`rules/start-here`, `rules/ui-rules`…): its words are its body, its scope
+ *     is the row's own `scope` / `workspaceId`. It has no automation, no
+ *     reaction, no seed and no worker, so the rule-loop readers that compile,
+ *     activate or run rules skip it; the list and read doors show it as a rule.
+ *
+ * Every reader of `category: "rule"` is classified in
+ * `__tripwires__/prose-rule-readers.test.ts`.
+ */
+export type RuleForm = "loop" | "prose";
+
+/** The columns a rule reader needs to tell the two forms apart. */
+export interface RuleRowLike {
+  category: string | null;
+  metadata: unknown;
+  name: string;
+  body?: string | null;
+  description?: string | null;
+  scope: "pod" | "user" | "workspace";
+  workspaceId: string | null;
+  createdAt?: Date | string | null;
+}
+
+/**
+ * A PROSE rule: `category: "rule"` and no `metadata.rule` key at all. A row
+ * whose `metadata.rule` is present but malformed is a broken LOOP rule, never a
+ * prose one: it stays unreadable (`readRuleMetadata` → null), as before.
+ */
+export function isProseRule(
+  row: Pick<RuleRowLike, "category" | "metadata">
+): boolean {
+  if (row.category !== RULE_CATEGORY) return false;
+  const bag = row.metadata as Record<string, unknown> | null | undefined;
+  const blob = bag?.[RULE_METADATA_KEY];
+  return blob === undefined || blob === null;
+}
+
+/**
+ * THE read of a rule row for a door that LISTS or SHOWS rules: the loop blob
+ * when there is one, else the prose rule's view (its words, its scope, no
+ * behaviour). Null for a row that is not a rule, or a loop rule whose blob
+ * does not parse. A door that compiles, activates or runs rules reads
+ * `readRuleMetadata` instead, which a prose rule never satisfies.
+ */
+export function readRuleView(
+  row: RuleRowLike
+): { form: RuleForm; rule: RuleMetadata } | null {
+  if (isProseRule(row)) {
+    const intent =
+      row.body?.trim() || row.description?.trim() || row.name.trim();
+    const createdAt =
+      row.createdAt instanceof Date
+        ? row.createdAt.toISOString()
+        : (row.createdAt ?? new Date(0).toISOString());
+    return {
+      form: "prose",
+      rule: {
+        v: 1,
+        intent,
+        scope: {
+          kind: row.scope,
+          ...(row.scope === "workspace" && row.workspaceId
+            ? { workspaceId: row.workspaceId }
+            : {}),
+        },
+        behaviours: [],
+        createdAt,
+      },
+    };
+  }
+  const loop = readRuleMetadata(
+    row.metadata as Record<string, unknown> | null | undefined
+  );
+  return loop ? { form: "loop", rule: loop } : null;
+}
+
+/**
+ * What a rule-loop edit door answers for a prose rule: its words are its skill
+ * body, and it has no review date, automation or draft state to change.
+ */
+export const PROSE_RULE_EDIT_MESSAGE =
+  "This is a prose rule: its words are its skill body, and it has no review date, automation or draft state. Change its words with synap_update_skill.";
+
+/**
+ * Why a `category` change on a skill is refused, or null when it is fine. One
+ * rule for every door that writes `skills.category` (tRPC `skills.update`, and
+ * `updateSkillGoverned` behind MCP `synap_update_skill`):
+ *   - a rule is a guideline in words, so only an `instruction` skill becomes
+ *     one (a code skill is never pushed into an agent's context);
+ *   - a LOOP rule keeps its category: dropping it would hide the rule from
+ *     every rule door while its automation keeps running.
+ */
+export function skillCategoryChangeProblem(input: {
+  /** The category the write sends; undefined = left alone. */
+  nextCategory: string | undefined;
+  currentCategory: string | null;
+  metadata: unknown;
+  /** The kind the write leaves the skill with. */
+  kind: string;
+  currentKind: string;
+}): string | null {
+  const { nextCategory, currentCategory } = input;
+  const categoryChanges =
+    nextCategory !== undefined && nextCategory !== currentCategory;
+  if (!categoryChanges && input.kind === input.currentKind) return null;
+  if (
+    (nextCategory ?? currentCategory) === RULE_CATEGORY &&
+    input.kind !== "instruction"
+  ) {
+    return "Only a documentation skill (kind instruction) can be a rule: a rule is a guideline in words, pushed into the work in its scope.";
+  }
+  if (
+    categoryChanges &&
+    currentCategory === RULE_CATEGORY &&
+    !isProseRule({ category: currentCategory, metadata: input.metadata })
+  ) {
+    return "This rule was made by the rule loop (it carries an intent and may run an automation), so its category stays 'rule'. Change it with synap_update_rule.";
+  }
+  return null;
+}
+
+/**
  * Re-validate a stored scope blob. Same contract as `readRuleRouting`: stored
  * JSONB is DATA, so an unrecognised `kind` degrades to the narrowest honest
  * answer (`pod` — what the row already defaulted to before `projectId`

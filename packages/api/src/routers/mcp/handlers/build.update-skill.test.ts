@@ -28,6 +28,8 @@ vi.mock("@synap/database", async (importOriginal) => {
             id: h.existing.id,
             kind: h.existing.kind,
             workspaceId: h.existing.workspaceId,
+            category: h.existing.category ?? null,
+            metadata: h.existing.metadata ?? null,
           },
         ]
       : [];
@@ -207,6 +209,79 @@ describe("synap_update_skill", () => {
 
     expect(r.isError).toBe(true);
     expect(r.text).toContain("1 to 300");
+    expect(h.permCalls).toHaveLength(0);
+  });
+});
+
+// Decision D1 (proposal 8d04d49e): `category: "rule"` makes a documentation
+// skill a rule, pushed into every piece of work in its scope. The MCP door
+// carries it through the SAME gate as every other field.
+describe("synap_update_skill — category", () => {
+  it("an agent marking a skill a rule goes through the gate, which sees the change", async () => {
+    h.perm = { proposalId: "prop-rule" };
+    const r = await call({ slug: "biz/house-style", category: "rule" }, AGENT);
+
+    expect(JSON.parse(r.text)).toMatchObject({
+      status: "proposed",
+      proposalId: "prop-rule",
+    });
+    expect(h.permCalls).toHaveLength(1);
+    expect(h.permCalls[0]).toMatchObject({
+      subjectType: "skill",
+      action: "update",
+      data: { id: SKILL_ID, category: "rule" },
+    });
+    expect(h.sets).toHaveLength(0);
+  });
+
+  it("a granted change writes the category", async () => {
+    const r = await call({ id: SKILL_ID, category: "rule" }, AGENT);
+
+    expect(JSON.parse(r.text)).toEqual({
+      status: "updated",
+      skillId: SKILL_ID,
+    });
+    expect(h.sets[0]).toMatchObject({ category: "rule" });
+  });
+
+  it("refuses 'rule' on a code skill, before the gate", async () => {
+    h.existing = { ...h.existing!, kind: "code", code: "return 1;" };
+    const r = await call({ id: SKILL_ID, category: "rule" }, AGENT);
+
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("documentation skill");
+    expect(h.permCalls).toHaveLength(0);
+  });
+
+  it("refuses to take a rule-loop rule out of the rules, before the gate", async () => {
+    h.existing = {
+      ...h.existing!,
+      category: "rule",
+      metadata: {
+        rule: { intent: "Tag every new lead", scope: { kind: "pod" } },
+      },
+    };
+    const r = await call({ id: SKILL_ID, category: "custom" }, AGENT);
+
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("synap_update_rule");
+    expect(h.permCalls).toHaveLength(0);
+  });
+
+  it("lets a prose rule go back to a plain skill, through the gate", async () => {
+    h.perm = { proposalId: "prop-unrule" };
+    h.existing = { ...h.existing!, category: "rule", metadata: null };
+    const r = await call({ id: SKILL_ID, category: "custom" }, AGENT);
+
+    expect(JSON.parse(r.text)).toMatchObject({ status: "proposed" });
+    expect(h.permCalls[0]).toMatchObject({ data: { category: "custom" } });
+  });
+
+  it("refuses an empty category in words", async () => {
+    const r = await call({ id: SKILL_ID, category: "  " }, AGENT);
+
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("category");
     expect(h.permCalls).toHaveLength(0);
   });
 });

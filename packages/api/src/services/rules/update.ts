@@ -68,9 +68,11 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { classifyRuleIntent } from "../knowledge/classify-intent.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import {
+  PROSE_RULE_EDIT_MESSAGE,
   RULE_CATEGORY,
   RULE_METADATA_KEY,
   buildRuleMetadata,
+  isProseRule,
   linkRuleHalves,
   readRuleMetadata,
   ruleNameFromIntent,
@@ -229,8 +231,9 @@ export async function updateRuleGoverned(
   if (!existing) {
     return {
       status: "denied",
-      reason:
-        "This skill is categorised as a rule but carries no rule metadata, so there is nothing to edit.",
+      reason: isProseRule(row)
+        ? PROSE_RULE_EDIT_MESSAGE
+        : "This skill is categorised as a rule but carries no rule metadata, so there is nothing to edit.",
     };
   }
 

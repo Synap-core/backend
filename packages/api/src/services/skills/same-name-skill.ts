@@ -8,10 +8,12 @@
  * "In scope" is what an agent working there can see — the same three-tier
  * `visibleSkillsWhere` lens the run and load doors read — so a twin it would
  * be ambiguous with is found, and another member's private skill is not.
- * Rules are skills rows too but have their own door (`synap_create_rule`) and
- * are never run by name, so they are left out.
+ * Rule-loop rules are skills rows too but have their own door
+ * (`synap_create_rule`) and are never run by name, so they are left out. A
+ * PROSE rule (decision D1: `category: "rule"`, no `metadata.rule`) is a skill
+ * written and changed through the skill doors, so a twin of it counts.
  */
-import { and, db, eq, ne, or, isNull } from "@synap/database";
+import { and, db, drizzleSql, eq, ne, or, isNull } from "@synap/database";
 import { skills } from "@synap/database/schema";
 import { visibleSkillsWhere } from "./visibility.js";
 
@@ -26,7 +28,11 @@ export async function sameNameSkill(params: {
     .where(
       and(
         eq(skills.name, params.name),
-        or(isNull(skills.category), ne(skills.category, "rule")),
+        or(
+          isNull(skills.category),
+          ne(skills.category, "rule"),
+          drizzleSql`${skills.metadata}->'rule' IS NULL`
+        ),
         visibleSkillsWhere(params.userId, params.workspaceId, {
           includeExpired: true,
         })

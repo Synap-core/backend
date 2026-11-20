@@ -435,6 +435,24 @@ describe("refusals and misses", () => {
     expect(result.status).toBe("denied");
   });
 
+  it("refuses a PROSE rule and names the door that edits it (decision D1)", async () => {
+    // category 'rule', no `metadata.rule`: its words are its skill body. This
+    // door rebuilds `metadata.rule`, so editing here would turn a guideline
+    // skill into a rule-loop row behind the person's back.
+    storedRow = {
+      id: RULE_ID,
+      category: "rule",
+      metadata: { autoLoad: false },
+    };
+    const result = await update({ sentence: GOOD_SENTENCE });
+    expect(result).toMatchObject({
+      status: "denied",
+      reason: expect.stringContaining("synap_update_skill"),
+    });
+    expect(skillUpdates).toHaveLength(0);
+    expect(materializeCalls).toHaveLength(0);
+  });
+
   it("refuses — and writes NOTHING — when the automation door rejects", async () => {
     // The door validates against the live catalog: checks the pure compiler
     // cannot make. A failure there means the edited rule cannot run, so the rule

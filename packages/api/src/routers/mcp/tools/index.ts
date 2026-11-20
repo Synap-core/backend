@@ -7432,6 +7432,11 @@ export const tools = {
               description: "One line: what it does + when to use it.",
             },
             name: { type: "string", description: "New display name." },
+            category: {
+              type: "string",
+              description:
+                "'rule' = a guideline pushed into all work in its scope (documentation skills only).",
+            },
             code: {
               type: "string",
               description:
