@@ -11,11 +11,7 @@ import {
   permissionLabel,
   POD_WIDE_HEADING,
 } from "../../oauth/consent/consent-model";
-import {
-  isWriteTier,
-  type ConsentOffer,
-  type NamedAppAccess,
-} from "../../oauth/consent/consent-access";
+import type { NamedAppAccess } from "../../oauth/consent/consent-access";
 
 export { EVERYWHERE_IN_POD, POD_WIDE_HEADING };
 
@@ -41,6 +37,8 @@ export interface PodAppInfo {
    * project).
    */
   access?: NamedAppAccess | null;
+  /** Its old pairs cannot become v2 as they are (Q3): "Needs your review". */
+  reconsent?: { reason: string } | null;
   connected_at: string | Date | null;
   last_used_at: string | Date | null;
   write_mode: {
@@ -140,82 +138,6 @@ export function keepWithout(
     .map((p) => ({ permission: p.permission, workspaceId: p.workspaceId }));
   if (keep.length === approved.length || keep.length === 0) return null;
   return keep;
-}
-
-/**
- * The app page's offer while its page reads only what the app HOLDS (today's
- * `pod_app`): each held permission, in the spaces it holds it in, pod-wide
- * where it holds it pod-wide. The access lines can then only take away, the
- * narrow door's rule (`apps.narrow`). Widening within what the app asked
- * (decision fc37f740 Q2) needs the asked offer, which the W3d contract adds.
- */
-export function heldOffer(approved: readonly PodAppPair[]): ConsentOffer {
-  const items = new Map<string, ConsentOffer["items"][number]>();
-  for (const pair of approved) {
-    const item = items.get(pair.permission) ?? {
-      permission: pair.permission,
-      reason: null,
-      kindGroup: null,
-      spaces: [],
-      projects: [],
-      podWide: false,
-    };
-    if (pair.workspaceId === null) item.podWide = true;
-    else if (!item.spaces.some((s) => s.workspaceId === pair.workspaceId))
-      item.spaces.push({
-        workspaceId: pair.workspaceId,
-        workspaceName: pair.workspaceName ?? "a space you no longer see",
-      });
-    items.set(pair.permission, item);
-  }
-  return { items: [...items.values()], templates: [], projectsOffered: false };
-}
-
-/**
- * The app page's offer from the named access (W3d): each permission in its
- * tier's places, pod-wide for a read under "all". Narrow-only, as
- * `heldOffer`: the page can take away what it holds, nothing more.
- */
-export function heldOfferOfAccess(access: NamedAppAccess): ConsentOffer {
-  return {
-    items: access.permissions.map((permission) => {
-      const tier = isWriteTier(permission) ? access.write : access.read;
-      const spaces = tier.spaces === "all" ? [] : tier.spaces;
-      const projects = tier.projects === "all" ? [] : tier.projects;
-      return {
-        permission,
-        reason: null,
-        kindGroup: null,
-        spaces: spaces.map((s) => ({
-          workspaceId: s.id,
-          workspaceName: s.name,
-          templateSlug: s.templateSlug,
-        })),
-        projects: projects.map((p) => ({
-          projectId: p.id,
-          projectName: p.name,
-          workspaceId: p.workspaceId,
-        })),
-        podWide: !isWriteTier(permission) && tier.spaces === "all",
-      };
-    }),
-    templates: [],
-    projectsOffered: false,
-  };
-}
-
-/**
- * The access names a project (outside "All spaces", which includes every
- * project): pairs cannot carry it, so until `apps.updateAccess` exists the
- * page must not save over it (a save through `apps.narrow` would drop it).
- */
-export function accessNamesProject(access: NamedAppAccess): boolean {
-  const read = access.read;
-  return (
-    (read.spaces !== "all" &&
-      (read.projects === "all" || read.projects.length > 0)) ||
-    access.write.projects.length > 0
-  );
 }
 
 /** What confirming "Apply automatically" says, and how hard it asks. */

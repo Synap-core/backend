@@ -37,7 +37,7 @@ import {
   Switch,
   addToast,
 } from "@heroui/react";
-import { ArrowLeft, Ban, Info, Minus, Trash2 } from "lucide-react";
+import { ArrowLeft, Ban, Trash2 } from "lucide-react";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { CopyButton } from "../../_lib/copy-button";
 import { HostName } from "../../_lib/host-name";
@@ -54,11 +54,6 @@ import {
 import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import {
-  approvalBySpace,
-  EVERYWHERE_IN_POD,
-  keepWithout,
-  placePhrase,
-  POD_WIDE_HEADING,
   podAppOf,
   podAppRevokeNote,
   tierLabel,
@@ -66,7 +61,6 @@ import {
   type PodAppInfo,
 } from "../_lib/pod-app-view";
 import { AppAccessSection, drawsAccessLines } from "../_lib/app-access-section";
-import { consentT } from "../../oauth/consent/copy";
 
 type LoadState = "loading" | "ready" | "missing" | "error";
 
@@ -452,40 +446,10 @@ function AppDetail({
   );
 }
 
-/** What `PATCH /api/apps` answers when it refuses. */
-async function patchApp(
-  body: Record<string, unknown>
-): Promise<{ ok: true; data: unknown } | { ok: false; error: string }> {
-  try {
-    const res = await fetch("/api/apps", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = (await res.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    if (!res.ok) {
-      return { ok: false, error: data?.error ?? `Failed (${res.status}).` };
-    }
-    return { ok: true, data };
-  } catch {
-    return { ok: false, error: "Network error." };
-  }
-}
-
-/** A pair (or a whole space) the person is about to take away. */
-interface PendingDrop {
-  permission?: string;
-  /** null: the reads it was given everywhere in the pod. */
-  workspaceId: string | null;
-  /** "Create posts in Brand" / "everything in Brand". */
-  what: string;
-}
-
 /**
- * A pod app's two settings: what it may touch per space (each can be taken
- * away; the last one is Revoke's) and how its changes land.
+ * A pod app's two settings: what it may do and where (the design A lines,
+ * `apps.accessOffer` + `apps.updateAccess`: narrow, widen within its ask,
+ * projects, with an Undo receipt) and how its changes land.
  */
 function PodAppSettings({
   app,
@@ -496,8 +460,6 @@ function PodAppSettings({
   pod: PodAppInfo;
   onChanged: () => void;
 }) {
-  const [drop, setDrop] = useState<PendingDrop | null>(null);
-  const [narrowing, setNarrowing] = useState(false);
   const [mode, setMode] = useState(pod.write_mode);
   const [switching, setSwitching] = useState(false);
   // With the proof of presence (W3 slice 3): a sensitive action, so it goes
@@ -507,35 +469,6 @@ function PodAppSettings({
   const [confirmOn, setConfirmOn] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const onConfirm = writeModeConfirm(true, pod);
-  const spaces = approvalBySpace(pod.approved);
-  const keep = drop ? keepWithout(pod.approved, drop) : null;
-  // Its pairs fit one access (design A): the three lines. Otherwise the
-  // per-space list stays, and the new form is confirmed at its next sign-in.
-  const fits = drawsAccessLines(pod);
-  const t = consentT();
-
-  async function confirmDrop() {
-    if (!keep) return;
-    setNarrowing(true);
-    const r = await patchApp({
-      publicId: app.public_id,
-      action: "narrow",
-      approved: keep,
-    });
-    setNarrowing(false);
-    setDrop(null);
-    if (!r.ok) {
-      addToast({
-        title: "Couldn't change its access",
-        description: r.error,
-        color: "danger",
-      });
-      return;
-    }
-    addToast({ title: "Access narrowed", color: "default" });
-    onChanged();
-  }
-
   async function switchMode(on: boolean) {
     setSwitching(true);
     try {
@@ -570,131 +503,13 @@ function PodAppSettings({
 
   return (
     <>
-      {fits ? (
-        <AppAccessSection
-          pod={pod}
-          // A Synap app by its name, any other app by its domain (as the consent).
-          appName={pod.verified ? app.name : pod.domain}
-          onNarrow={async (approved) => {
-            const r = await patchApp({
-              publicId: app.public_id,
-              action: "narrow",
-              approved,
-            });
-            if (r.ok) onChanged();
-            return r.ok ? { ok: true } : { ok: false, error: r.error };
-          }}
-        />
-      ) : (
-        <section className="mt-6" aria-labelledby="pod-reach">
-          {/* Only pairs that do not fit one access have something to confirm. */}
-          {pod.approved.length > 0 ? (
-            <div
-              role="note"
-              className="mb-3 flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
-            >
-              <Info
-                className="mt-0.5 h-4 w-4 shrink-0 text-foreground/75"
-                aria-hidden
-              />
-              <div className="flex flex-col gap-0.5">
-                <p className="text-sm font-medium text-foreground">
-                  {t("page.confirmLaterTitle")}
-                </p>
-                <p className="text-pretty text-xs text-foreground/75">
-                  {t("page.confirmLater")}
-                </p>
-              </div>
-            </div>
-          ) : null}
-          <h2
-            id="pod-reach"
-            className="mb-2 text-sm font-medium text-foreground"
-          >
-            What it may touch
-          </h2>
-          <ul className="flex flex-col gap-3">
-            {spaces.map((space) => (
-              <li
-                key={space.workspaceId ?? "pod"}
-                className="rounded-lg border border-foreground/10 bg-content1 px-4 py-3"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium text-foreground/85">
-                    {space.workspaceId === null
-                      ? POD_WIDE_HEADING
-                      : space.workspaceName}
-                  </p>
-                  {spaces.length > 1 ? (
-                    <Button
-                      size="sm"
-                      variant="light"
-                      className="min-h-10 text-foreground/70"
-                      onPress={() =>
-                        setDrop({
-                          workspaceId: space.workspaceId,
-                          what:
-                            space.workspaceId === null
-                              ? `everything it reads ${EVERYWHERE_IN_POD}`
-                              : `everything in ${space.workspaceName}`,
-                        })
-                      }
-                    >
-                      {space.workspaceId === null
-                        ? "Remove these reads"
-                        : "Remove this space"}
-                    </Button>
-                  ) : null}
-                </div>
-                <ul className="mt-1 flex flex-col">
-                  {space.permissions.map((p) => {
-                    const pair = {
-                      permission: p.permission,
-                      workspaceId: space.workspaceId,
-                    };
-                    const removable = keepWithout(pod.approved, pair) !== null;
-                    return (
-                      <li
-                        key={p.permission}
-                        className="flex min-h-10 items-center justify-between gap-3"
-                      >
-                        <span className="text-xs text-foreground/75">
-                          {p.label}{" "}
-                          <span className="font-mono text-xs text-foreground/65">
-                            {p.permission}
-                          </span>
-                        </span>
-                        {removable ? (
-                          <Button
-                            size="sm"
-                            variant="light"
-                            isIconOnly
-                            className="min-h-10 min-w-10"
-                            aria-label={`Remove ${p.label} ${placePhrase(space)}`}
-                            onPress={() =>
-                              setDrop({
-                                ...pair,
-                                what: `${p.label} ${placePhrase(space)}`,
-                              })
-                            }
-                          >
-                            <Minus size={15} />
-                          </Button>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-2 max-w-2xl text-pretty text-xs text-foreground/65">
-            Taking something away applies now, with no new consent: the
-            app&apos;s current access stops, and the next one it gets no longer
-            includes it. To remove everything, revoke it.
-          </p>
-        </section>
-      )}
+      <AppAccessSection
+        pod={pod}
+        publicId={app.public_id}
+        // A Synap app by its name, any other app by its domain (as the consent).
+        appName={pod.verified ? app.name : pod.domain}
+        onChanged={onChanged}
+      />
 
       <section className="mt-6" aria-labelledby="pod-writes">
         <h2
@@ -719,21 +534,6 @@ function PodAppSettings({
           />
         </div>
       </section>
-
-      <ConfirmModal
-        isOpen={drop !== null}
-        onClose={() => setDrop(null)}
-        onConfirm={() => void confirmDrop()}
-        title={`Remove ${drop?.what ?? "this"}?`}
-        consequence={
-          <p>
-            {pod.domain} loses it now. Its current access stops; the next one it
-            gets carries only what is left.
-          </p>
-        }
-        confirmLabel="Remove"
-        isPending={narrowing}
-      />
 
       {onConfirm ? (
         <ConfirmModal

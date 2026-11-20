@@ -2,89 +2,128 @@
 
 /**
  * A pod app's access on its page (design A, the app page): the same three
- * lines as the consent ("It can", "In", "It changes things in"), each a
- * door showing its value. A line's sheet edits a copy; Save applies it.
+ * lines as the consent ("It can", "In", "It changes things in"), each a door
+ * showing its value. A line's sheet edits a copy; Save applies it through
+ * `apps.updateAccess` (W3d, with proof of presence): it may narrow, widen
+ * within what the app ASKED (decision fc37f740 Q2) and hold projects. A save
+ * shows a receipt with Undo (the previous access, saved again).
  *
- * The truth is `pod_app.access` (W3d) when the pod sends it, else the lift
- * of its pairs. The page only takes away, through the narrow door
- * (`apps.narrow`, pairs): a save that takes something away is confirmed
- * first. Pairs cannot carry a project, so while the access names one the
- * lines are read-only and say why (a save would drop it). Widening within
- * the ask (Q2) and the receipt's Undo come with `apps.updateAccess`.
- *
- * A connection whose pairs do not fit one v2 access, with no `access`, is
- * not drawn here: the page keeps its per-space list (Q3).
+ * The offer is `apps.accessOffer`: what it asked and the places the person
+ * may give now. A connection whose old pairs do not fit one access
+ * (`reconsent`, Q3) is shown in its proposed form, with Confirm.
  */
 
 import { useMemo, useState } from "react";
-import { addToast } from "@heroui/react";
-import { ConfirmModal } from "../../(admin)/components/confirm-modal";
+import { Button, addToast, closeToast } from "@heroui/react";
+import { Info } from "lucide-react";
+import { trpc } from "../../../lib/trpc";
+import { useUpdateAppAccess } from "../../_lib/presence/use-sensitive-actions";
+import { UNDO_WINDOW_MS } from "../../_lib/receipt/decision-receipt";
 import { AccessLines } from "../../oauth/consent/AccessLines";
+import { accessInput, type AccessInput } from "../../oauth/consent/allow-payload";
 import {
   accessOfNamed,
   canRows,
   draftHeadline,
   draftOf,
-  heldAccessOf,
   namesOfNamed,
+  offerOfContract,
   placeNames,
-  toApprovedPairs,
+  toAccess,
   type ConsentDraft,
 } from "../../oauth/consent/consent-access";
 import { consentT } from "../../oauth/consent/copy";
-import {
-  accessNamesProject,
-  heldOffer,
-  heldOfferOfAccess,
-  type PodAppInfo,
-} from "./pod-app-view";
-
-/** The section draws this connection: it has a v2 access, or pairs that fit one. */
-export function drawsAccessLines(pod: PodAppInfo): boolean {
-  return !!pod.access || heldAccessOf(pod.approved).kind === "access";
-}
+import { readableError } from "../../../lib/format";
+import type { PodAppInfo } from "./pod-app-view";
 
 export function AppAccessSection({
   pod,
+  publicId,
   appName,
-  onNarrow,
+  onChanged,
 }: {
   pod: PodAppInfo;
+  publicId: string;
   /** A Synap app by its name, any other app by its domain (as the consent). */
   appName: string;
-  /** Keep only these pairs (`PATCH /api/apps`, `narrow`); the page reloads. */
-  onNarrow: (
-    keep: Array<{ permission: string; workspaceId: string | null }>
-  ) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** The page reloads its row (Connected's mark, the write mode). */
+  onChanged: () => void;
 }) {
   const t = consentT();
-  const named = pod.access ?? null;
-  const offer = useMemo(
-    () => (named ? heldOfferOfAccess(named) : heldOffer(pod.approved)),
-    [named, pod.approved]
+  const offerQ = trpc.apps.accessOffer.useQuery(
+    { publicId },
+    { retry: false, refetchOnWindowFocus: false }
   );
-  const draft = useMemo<ConsentDraft | null>(() => {
-    if (named) return draftOf(accessOfNamed(named));
-    const held = heldAccessOf(pod.approved);
-    return held.kind === "access" ? draftOf(held.access) : null;
-  }, [named, pod.approved]);
+  const update = useUpdateAppAccess();
+  const [saving, setSaving] = useState(false);
+  const data = offerQ.data ?? null;
+  const offer = useMemo(
+    () => (data ? offerOfContract(data) : null),
+    [data]
+  );
+  const held = data?.reconsent?.proposed ?? data?.current ?? pod.access ?? null;
+  const draft = useMemo<ConsentDraft | null>(
+    () => (held ? draftOf(accessOfNamed(held)) : null),
+    [held]
+  );
   const names = useMemo(
-    () => ({ ...namesOfNamed(named), ...placeNames(offer) }),
-    [named, offer]
+    () => ({
+      ...namesOfNamed(pod.access),
+      ...namesOfNamed(data?.current),
+      ...namesOfNamed(data?.reconsent?.proposed),
+      ...(offer ? placeNames(offer) : {}),
+    }),
+    [pod.access, data, offer]
   );
   // A Synap app decides as the person; any other app acts as its own agent.
   const actsAs = pod.verified ? "person" : "agent";
-  const rows = useMemo(() => canRows(offer, actsAs), [offer, actsAs]);
-  const locked = !!named && accessNamesProject(named);
-  const [pending, setPending] = useState<{
-    keep: Array<{ permission: string; workspaceId: string | null }>;
-  } | null>(null);
-  const [saving, setSaving] = useState(false);
-  if (!draft) return null;
+  const rows = useMemo(
+    () => (offer ? canRows(offer, actsAs) : []),
+    [offer, actsAs]
+  );
+
+  async function apply(next: AccessInput, previous: AccessInput | null) {
+    setSaving(true);
+    try {
+      await update.mutateAsync({ publicId, access: next });
+      void offerQ.refetch();
+      onChanged();
+      const holder: { key: string | null } = { key: null };
+      holder.key = addToast({
+        title: t("page.saved"),
+        color: "default",
+        timeout: previous ? UNDO_WINDOW_MS : undefined,
+        endContent: previous ? (
+          <Button
+            size="sm"
+            variant="flat"
+            className="min-h-10"
+            onPress={() => {
+              if (holder.key) closeToast(holder.key);
+              void apply(previous, null);
+            }}
+          >
+            {t("reconsent.undo")}
+          </Button>
+        ) : undefined,
+      });
+    } catch (err) {
+      addToast({
+        title: t("page.saveFailed"),
+        description:
+          readableError((err as { message?: string }).message) ??
+          t("act.tryAgain"),
+        color: "danger",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   function save(next: ConsentDraft) {
-    const keep = toApprovedPairs(next, offer);
-    if (keep.length === 0) {
+    if (!offer) return;
+    const access = toAccess(next, offer);
+    if (access.permissions.length === 0) {
       addToast({
         title: t("page.saveFailed"),
         description: t("page.revokeInstead"),
@@ -92,20 +131,10 @@ export function AppAccessSection({
       });
       return;
     }
-    setPending({ keep });
-  }
-
-  async function applyPending() {
-    if (!pending) return;
-    setSaving(true);
-    const r = await onNarrow(pending.keep);
-    setSaving(false);
-    setPending(null);
-    addToast(
-      r.ok
-        ? { title: t("page.saved"), color: "default" }
-        : { title: t("page.saveFailed"), description: r.error, color: "danger" }
-    );
+    const previous = data?.current
+      ? accessInput(accessOfNamed(data.current))
+      : null;
+    void apply(accessInput(access), previous);
   }
 
   return (
@@ -113,47 +142,84 @@ export function AppAccessSection({
       <h2 id="pod-access" className="text-sm font-medium text-foreground">
         {t("page.heading")}
       </h2>
-      <p className="text-pretty text-sm leading-relaxed text-foreground/85">
-        {draftHeadline(draft, offer, rows, names)}
-      </p>
-      <AccessLines
-        mode="page"
-        appName={appName}
-        declaredPlaces
-        draft={draft}
-        offer={offer}
-        rows={rows}
-        actsAs={actsAs}
-        podWideKinds={[]}
-        names={names}
-        onSave={save}
-        isDisabled={saving}
-        readOnly={locked}
-      />
-      <p className="max-w-2xl text-pretty text-xs text-foreground/65">
-        {locked ? t("page.projectsLocked") : t("page.narrowOnly")}
-      </p>
-      {locked ? (
-        // A door, not a dead end: the app's own site, where it connects again.
-        <a
-          href={`https://${pod.domain}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="self-start text-sm text-foreground/85 underline underline-offset-2"
+      {offerQ.isError ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-danger/10 px-3.5 py-3 ring-1 ring-inset ring-danger/30"
         >
-          {t("page.reconnect", { name: appName })}
-        </a>
+          <span className="text-sm text-foreground">{t("page.offerFailed")}</span>
+          <Button
+            size="sm"
+            variant="flat"
+            className="min-h-10"
+            isLoading={offerQ.isFetching}
+            onPress={() => void offerQ.refetch()}
+          >
+            {t("act.tryAgain")}
+          </Button>
+        </div>
       ) : null}
-      <ConfirmModal
-        isOpen={pending !== null}
-        onClose={() => setPending(null)}
-        onConfirm={() => void applyPending()}
-        title={t("page.confirmTitle", { name: appName })}
-        consequence={<p>{t("page.confirmBody", { name: appName })}</p>}
-        confirmLabel={t("page.takeAway")}
-        confirmColor="danger"
-        isPending={saving}
-      />
+      {data?.reconsent ? (
+        <div
+          role="note"
+          className="flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
+        >
+          <Info
+            className="mt-0.5 h-4 w-4 shrink-0 text-foreground/80"
+            aria-hidden
+          />
+          <div className="flex flex-col gap-1.5">
+            <p className="text-sm font-medium text-foreground">
+              {t("page.confirmLaterTitle")}
+            </p>
+            <p className="text-pretty text-xs text-foreground/80">
+              {t("page.confirmHere")}
+            </p>
+            {offer && draft ? (
+              <Button
+                size="sm"
+                color="primary"
+                className="min-h-10 self-start"
+                isLoading={saving}
+                onPress={() => save(draft)}
+              >
+                {t("act.confirm")}
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      {draft && offer ? (
+        <>
+          <p className="text-pretty text-sm leading-relaxed text-foreground/85">
+            {draftHeadline(draft, offer, rows, names)}
+          </p>
+          <AccessLines
+            mode="page"
+            appName={appName}
+            declaredPlaces
+            draft={draft}
+            offer={offer}
+            rows={rows}
+            actsAs={actsAs}
+            podWideKinds={[]}
+            names={names}
+            onSave={save}
+            isDisabled={saving}
+          />
+          <p className="max-w-2xl text-pretty text-xs text-foreground/65">
+            {t("page.applies")}
+          </p>
+        </>
+      ) : offerQ.isLoading ? (
+        <div aria-busy="true" className="h-24 rounded-lg bg-foreground/10 motion-safe:animate-pulse">
+          <span className="sr-only" role="status">
+            {t("loading.label")}
+          </span>
+        </div>
+      ) : !offerQ.isError ? (
+        <p className="text-xs text-foreground/65">{t("page.nothing")}</p>
+      ) : null}
     </section>
   );
 }

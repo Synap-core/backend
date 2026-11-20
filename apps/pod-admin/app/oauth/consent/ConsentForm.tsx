@@ -305,10 +305,13 @@ export function ConsentForm({
         {
           ...params,
           approve,
-          // Spread, not written inline: the generated input type gains
-          // `access` / `askWritePlace` with W3d's PR (#1197); until then an
-          // older pod ignores them.
-          ...payload,
+          // Typed fields of the decide input (W3d, #1197): today's pairs, the
+          // v2 access, or a short ask's first write place (`allowPayload`).
+          ...(payload.approved ? { approved: payload.approved } : {}),
+          ...(payload.access ? { access: payload.access } : {}),
+          ...(payload.askWritePlace
+            ? { askWritePlace: payload.askWritePlace }
+            : {}),
           // An app sign-in is approved for exactly what this screen showed.
           appSignInFingerprint: context.data?.appSignIn?.fingerprint,
         },
@@ -413,7 +416,9 @@ export function ConsentForm({
               identity={identity}
               title={
                 askView
-                  ? t("ask.title", { name: appName, n: askView.lines.length })
+                  ? // The contract's title names every place (v1.2).
+                    (contract?.ask?.title ??
+                    t("ask.title", { name: appName, n: askView.lines.length }))
                   : t(confirming ? "title.confirm" : "title.connect", {
                       name: appName,
                     })

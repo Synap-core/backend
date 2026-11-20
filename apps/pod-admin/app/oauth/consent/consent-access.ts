@@ -17,6 +17,8 @@
  * payload) plugs in here, not in the components.
  */
 
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@synap-core/api-types";
 import {
   APP_ACCESS_VERSION,
   expandAppAccess,
@@ -1339,81 +1341,32 @@ export function sameDraft(a: ConsentDraft, b: ConsentDraft): boolean {
   );
 }
 
-// ─── The W3d consent contract (pod document be6caecc, v1) ────────────────────
+// ─── The W3d consent contract (pod document be6caecc, v1.2) ──────────────────
 //
 // `getOAuthConsentContext().app.access` (and, for the app page,
 // `apps.accessOffer`): the asked permissions, the places the person may give,
 // what the connection holds now, the re-consent and the short ask, all with
-// names. Typed here from the contract until the backend's generated types
-// carry it; `contractOf` reads it at run time, so an older pod (no `access`)
-// keeps today's offer.
+// names. Typed FROM the generated router types (backend#1197), so a change on
+// the server is a type error here; `contractOf` still reads it at run time,
+// so an older pod (no `access`) keeps today's offer.
 
-export interface NamedSpace {
-  id: string;
-  name: string;
-  templateSlug: string | null;
-}
-export interface NamedProject {
-  id: string;
-  name: string;
-  workspaceId: string | null;
-}
-export interface NamedAppAccess {
-  version: 2;
-  permissions: string[];
-  read: { spaces: "all" | NamedSpace[]; projects: "all" | NamedProject[] };
-  write: { spaces: NamedSpace[]; projects: NamedProject[] };
-}
-export interface ContractAsked {
-  permission: string;
-  tier: "read" | "write";
-  reason: string | null;
-  kindGroup: KindGroup | null;
-  /** May be given with read.spaces "all" (declared pod-wide). */
-  allSpaces: boolean;
-  /** false: the person can give it nowhere (the can't-give fold). */
-  offerable: boolean;
-}
-export interface ContractPlace {
-  kind: "space" | "pod" | "project";
-  id: string | null;
-  name: string;
-}
-export interface ContractReconsent {
-  reason: "widens" | "narrows" | "unplaceable" | "too-large";
-  was: Array<{ permission: string; place: ContractPlace }>;
-  proposed: NamedAppAccess;
-}
-export interface ContractAsk {
-  title: string;
-  adds: Array<{
-    permission: string;
-    tier: "read" | "write";
-    reason: string | null;
-    kindGroup: KindGroup | null;
-  }>;
-  needsWritePlace: boolean;
-  unavailable: string[];
-  connectionPublicId: string | null;
-}
-export interface ConsentContract {
-  asked: { permissions: ContractAsked[]; templates: string[] };
-  places: {
-    read: {
-      allSpaces: boolean;
-      spaces: NamedSpace[];
-      projects: NamedProject[];
-    };
-    write: {
-      spaces: NamedSpace[];
-      projects: NamedProject[];
-      suggestedSpaceIds: string[];
-    };
-  };
-  current: NamedAppAccess | null;
-  reconsent: ContractReconsent | null;
-  ask: ContractAsk | null;
-}
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+/** The consent context's v2 block (`OAuthAppAccessConsent`). */
+export type ConsentContract = NonNullable<
+  NonNullable<
+    RouterOutputs["apiKeys"]["getOAuthConsentContext"]["app"]
+  >["access"]
+>;
+/** A v2 access with names (`NamedAppAccess`). */
+export type NamedAppAccess = NonNullable<ConsentContract["current"]>;
+export type NamedSpace = NamedAppAccess["write"]["spaces"][number];
+export type NamedProject = NamedAppAccess["write"]["projects"][number];
+/** Why a connection asks again (`ReconsentView`). */
+export type ContractReconsent = NonNullable<ConsentContract["reconsent"]>;
+/** The v2 short ask (`OAuthAppAccessAsk`). */
+export type ContractAsk = NonNullable<ConsentContract["ask"]>;
+/** The app page's `apps.accessOffer` answer: the same blocks, no ask. */
+export type AccessOfferView = RouterOutputs["apps"]["accessOffer"];
 
 /** The contract's block on an app, when this pod sends it. */
 export function contractOf(
@@ -1432,7 +1385,7 @@ export function contractOf(
  * The launch's `space_hint` lists that space first (order only, never sent).
  */
 export function offerOfContract(
-  c: ConsentContract,
+  c: Pick<ConsentContract, "asked" | "places">,
   spaceHint?: string | null
 ): ConsentOffer {
   const ordered = (list: readonly NamedSpace[]) => {
@@ -1515,7 +1468,9 @@ export function wasPairs(
  * What the contract says the connection holds: its current access, or the
  * re-consent's proposed form with what changes (now / was, from `was`).
  */
-export function heldOfContract(c: ConsentContract): HeldAccess {
+export function heldOfContract(
+  c: Pick<ConsentContract, "current" | "reconsent">
+): HeldAccess {
   if (c.reconsent) {
     const was = wasPairs(c.reconsent);
     const local = heldAccessOf(was);
@@ -1538,7 +1493,7 @@ export function heldOfContract(c: ConsentContract): HeldAccess {
  * words).
  */
 export function contractDraft(
-  c: ConsentContract,
+  c: Pick<ConsentContract, "places" | "current" | "reconsent">,
   offer: ConsentOffer,
   opts: { verified?: boolean } = {}
 ): ConsentDraft {
@@ -1556,7 +1511,9 @@ export function contractDraft(
 }
 
 /** What a contract connection already holds, by permission (new asks are the rest). */
-export function heldPermissionsOf(c: ConsentContract): Set<string> | undefined {
+export function heldPermissionsOf(
+  c: Pick<ConsentContract, "current" | "reconsent">
+): Set<string> | undefined {
   const a = c.reconsent?.proposed ?? c.current;
   return a ? new Set(a.permissions) : undefined;
 }

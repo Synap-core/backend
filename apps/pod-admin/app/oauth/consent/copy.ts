@@ -181,25 +181,21 @@ export const en = {
   "ask.unavailable":
     "It also asked for something none of your spaces can hold; that part is left out.",
   "ask.keeps": "What it already has stays as it is.",
+  "connected.needsReview": "Needs your review",
   "page.heading": "Access",
-  "page.narrowOnly":
-    "A change applies now: its current access stops, and the next one carries only what you left. You can take things away here; to give more, it asks again.",
-  "page.projectsLocked":
-    "It also reaches projects, which this page can’t change yet. To change its access, connect it again from the app, or revoke it below.",
-  "page.reconnect": "Open {name} to connect it again",
+  "page.applies":
+    "A change applies now: its current access stops, and the next one carries what you saved. It can never get more than it asked for; to give more, it asks again.",
+  "page.offerFailed": "Couldn’t read what it asked for. Nothing was changed.",
+  "page.nothing": "It has no access yet.",
+  "page.confirmHere":
+    "Synap now keeps one “where” per app. Below is its access in that form; nothing changes until you confirm it here, or at its next sign-in.",
   "page.saved": "Access changed",
   "page.saveFailed": "Couldn’t change its access",
   "page.unsaved": "You have unsaved changes.",
   "page.discard": "Discard",
   "page.keepEditing": "Keep editing",
-  "page.confirmTitle": "Take this away from {name}?",
-  "page.confirmBody":
-    "{name} loses it now. Its current access stops; the next one carries only what is left. To give it back, it asks again.",
-  "page.takeAway": "Take away",
   "page.revokeInstead": "To take everything away, revoke it.",
   "page.confirmLaterTitle": "One thing to confirm",
-  "page.confirmLater":
-    "It keeps working as before. You confirm the new form the next time you sign in to it.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -375,25 +371,21 @@ export const fr: Catalog<typeof en> = {
   "ask.unavailable":
     "Il a aussi demandé quelque chose qu’aucun de vos espaces ne peut accueillir ; cette partie est laissée de côté.",
   "ask.keeps": "Ce qu’il a déjà reste tel quel.",
+  "connected.needsReview": "À vérifier",
   "page.heading": "Accès",
-  "page.narrowOnly":
-    "Une modification s’applique tout de suite : son accès actuel s’arrête, et le suivant ne contient que ce que vous avez laissé. Vous pouvez retirer des accès ici ; pour en donner plus, il redemande.",
-  "page.projectsLocked":
-    "Il atteint aussi des projets, que cette page ne peut pas encore modifier. Pour changer son accès, reconnectez-le depuis l’app, ou révoquez-le plus bas.",
-  "page.reconnect": "Ouvrir {name} pour le reconnecter",
+  "page.applies":
+    "Une modification s’applique tout de suite : son accès actuel s’arrête, et le suivant contient ce que vous avez enregistré. Il ne peut jamais obtenir plus que ce qu’il a demandé ; pour donner plus, il redemande.",
+  "page.offerFailed": "Impossible de lire ce qu’il a demandé. Rien n’a été modifié.",
+  "page.nothing": "Il n’a encore aucun accès.",
+  "page.confirmHere":
+    "Synap garde désormais un seul « où » par app. Voici son accès sous cette forme ; rien ne change avant votre confirmation ici, ou à sa prochaine connexion.",
   "page.saved": "Accès modifié",
   "page.saveFailed": "Impossible de modifier son accès",
   "page.unsaved": "Vous avez des modifications non enregistrées.",
   "page.discard": "Abandonner",
   "page.keepEditing": "Continuer",
-  "page.confirmTitle": "Retirer cet accès à {name} ?",
-  "page.confirmBody":
-    "{name} le perd tout de suite. Son accès actuel s’arrête ; le suivant ne contient que ce qui reste. Pour le lui rendre, il redemande.",
-  "page.takeAway": "Retirer",
   "page.revokeInstead": "Pour tout retirer, révoquez-le.",
   "page.confirmLaterTitle": "Un point à confirmer",
-  "page.confirmLater":
-    "Il continue de fonctionner comme avant. Vous confirmerez la nouvelle forme à votre prochaine connexion.",
 };
 
 /** The consent's translator, in the ambient catalog locale. */

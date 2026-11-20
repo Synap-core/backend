@@ -64,7 +64,8 @@ describe("pod-app surfaces", () => {
     );
     // What Allow sends comes from ONE pure rule (tested in allow-payload.test).
     expect(src).toMatch(/allowPayload\(\{/);
-    expect(src).toMatch(/\.\.\.payload,/);
+    expect(src).toMatch(/access: payload\.access/);
+    expect(src).toMatch(/approved: payload\.approved/);
     expect(read(PAYLOAD)).toMatch(/toApprovedPairs\(draft, offer\)/);
     expect(src).toMatch(/width=\{consentWidth\(params\.clientId\)\}/);
   });
