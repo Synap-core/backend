@@ -60,7 +60,7 @@ import {
   writeModeConfirm,
   type PodAppInfo,
 } from "../_lib/pod-app-view";
-import { AppAccessSection, drawsAccessLines } from "../_lib/app-access-section";
+import { AppAccessSection } from "../_lib/app-access-section";
 
 type LoadState = "loading" | "ready" | "missing" | "error";
 

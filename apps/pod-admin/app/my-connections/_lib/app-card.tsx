@@ -33,7 +33,10 @@ import {
 } from "../../apps/_lib/pod-app-view";
 
 /** A v2 access in the card's words: one phrase per tier and place. */
-export function accessSentence(appName: string, access: NamedAppAccess): string {
+export function accessSentence(
+  appName: string,
+  access: NamedAppAccess
+): string {
   return summarizeAppAccessProposal({
     appName,
     access: accessOfNamed(access),

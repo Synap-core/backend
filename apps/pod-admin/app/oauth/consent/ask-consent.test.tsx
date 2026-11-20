@@ -172,6 +172,8 @@ describe("the short consent", () => {
             tier: "read",
             reason: "To list tasks.",
             kindGroup: null,
+            allSpaces: false,
+            offerable: true,
           },
         ],
         needsWritePlace: false,

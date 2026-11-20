@@ -20,7 +20,10 @@ import { trpc } from "../../../lib/trpc";
 import { useUpdateAppAccess } from "../../_lib/presence/use-sensitive-actions";
 import { UNDO_WINDOW_MS } from "../../_lib/receipt/decision-receipt";
 import { AccessLines } from "../../oauth/consent/AccessLines";
-import { accessInput, type AccessInput } from "../../oauth/consent/allow-payload";
+import {
+  accessInput,
+  type AccessInput,
+} from "../../oauth/consent/allow-payload";
 import {
   accessOfNamed,
   canRows,
@@ -57,10 +60,7 @@ export function AppAccessSection({
   const update = useUpdateAppAccess();
   const [saving, setSaving] = useState(false);
   const data = offerQ.data ?? null;
-  const offer = useMemo(
-    () => (data ? offerOfContract(data) : null),
-    [data]
-  );
+  const offer = useMemo(() => (data ? offerOfContract(data) : null), [data]);
   const held = data?.reconsent?.proposed ?? data?.current ?? pod.access ?? null;
   const draft = useMemo<ConsentDraft | null>(
     () => (held ? draftOf(accessOfNamed(held)) : null),
@@ -147,7 +147,9 @@ export function AppAccessSection({
           role="alert"
           className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-danger/10 px-3.5 py-3 ring-1 ring-inset ring-danger/30"
         >
-          <span className="text-sm text-foreground">{t("page.offerFailed")}</span>
+          <span className="text-sm text-foreground">
+            {t("page.offerFailed")}
+          </span>
           <Button
             size="sm"
             variant="flat"
@@ -212,7 +214,10 @@ export function AppAccessSection({
           </p>
         </>
       ) : offerQ.isLoading ? (
-        <div aria-busy="true" className="h-24 rounded-lg bg-foreground/10 motion-safe:animate-pulse">
+        <div
+          aria-busy="true"
+          className="h-24 rounded-lg bg-foreground/10 motion-safe:animate-pulse"
+        >
           <span className="sr-only" role="status">
             {t("loading.label")}
           </span>

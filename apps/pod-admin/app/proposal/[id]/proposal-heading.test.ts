@@ -173,7 +173,11 @@ describe("the review page heading", () => {
 describe("the card of a v2 app approval (W3d contract v1.2)", () => {
   it("reads data.access, projects included, with the names the filing door wrote", () => {
     const { appConnect } = proposalHeading(
-      { targetType: "app", targetName: "Content Studio", proposalType: "connect" },
+      {
+        targetType: "app",
+        targetName: "Content Studio",
+        proposalType: "connect",
+      },
       {
         name: "Content Studio",
         access: {

@@ -63,10 +63,7 @@ import {
 } from "@synap-core/types/membrane";
 import type { AppRow } from "../apps/_lib/app-view";
 import { AppCard } from "./_lib/app-card";
-import {
-  podAppOf,
-  podAppRevokeNote,
-} from "../apps/_lib/pod-app-view";
+import { podAppOf, podAppRevokeNote } from "../apps/_lib/pod-app-view";
 
 /** How many rows a list shows before it offers "Show all N" (ui-composition §4). */
 const LIST_CAP = 6;
@@ -84,7 +81,6 @@ type ConnectionKey = UnifiedKey & {
 };
 
 /** Human label for a key's `hubId` — mirrors ConnectForm's integration list. */
-
 
 function connectionLabel(hubId: string | null | undefined): string {
   if (!hubId) return "Personal access token";
