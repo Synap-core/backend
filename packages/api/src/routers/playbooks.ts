@@ -66,8 +66,11 @@ import {
   links,
   loadFacetSlugsBatch,
   isUniqueViolation,
+  ownerAndActor,
+  verifyPermission,
   type FlowDefinition,
 } from "@synap/database";
+import { requiredPermissionFor } from "@synap/governance-policy";
 import type {
   Playbook,
   PlaybookRun,
@@ -2314,6 +2317,30 @@ export const playbooksRouter = router({
       // caller who may not write must never learn whether the playbook exists,
       // nor receive its row. Only a caller that would have been permitted (to
       // execute OR to propose) reaches the lookup.
+      // The person it is filed for owns it; the agent that wrote it (here, or
+      // the proposal an approval replays) is its actor.
+      const owner = await ownerAndActor(
+        await getDb(),
+        ctx.userId,
+        input.agentUserId ?? ctx.approvedAuthorAgentUserId
+      );
+      // An agent files for its person, never for the approver: a person who
+      // may not create playbooks here cannot have one filed in their name.
+      if (input.agentUserId && ctx.workspaceId) {
+        const allowed = await verifyPermission({
+          db: await getDb(),
+          userId: owner.ownerId,
+          workspace: { id: ctx.workspaceId },
+          requiredPermission: requiredPermissionFor("create"),
+        });
+        if (!allowed.allowed) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "The person this agent works for cannot create playbooks in this space.",
+          });
+        }
+      }
       const isAiCaller =
         Boolean(input.agentUserId) ||
         input.source === "ai" ||
@@ -2403,7 +2430,8 @@ export const playbooksRouter = router({
             .values({
               id: playbookId,
               workspaceId: ctx.workspaceId,
-              createdBy: input.agentUserId ?? ctx.userId,
+              createdBy: owner.ownerId,
+              agentUserId: owner.agentUserId,
               name: input.name,
               description: input.description ?? null,
               goalTemplate: input.goalTemplate,
@@ -2471,7 +2499,8 @@ export const playbooksRouter = router({
         // S1: a scheduled playbook maintains ONE backing cron automation (its
         // `schedule` row in playbook_automations) that the cron scheduler fires.
         await materializePlaybookCronAutomation(created, {
-          userId: input.agentUserId ?? ctx.userId,
+          userId: ctx.userId,
+          agentUserId: owner.agentUserId,
         });
 
         // W6 Layer-2 context skill — persist the AI-generated "how to run this
@@ -2894,7 +2923,8 @@ export const playbooksRouter = router({
           wantsSchedule(input.schedule) !== wantsSchedule(existing.schedule)) ||
         (input.status !== undefined && input.status !== existing.status);
       await materializePlaybookCronAutomation(updated, {
-        userId: input.agentUserId ?? ctx.userId,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
         preserveArming: !armingChanged,
       });
 
@@ -2998,7 +3028,8 @@ export const playbooksRouter = router({
       // call the backing cron automation stayed `active` with a live nextRunAt
       // and kept firing a playbook nothing else would surface.
       await materializePlaybookCronAutomation(archived as Playbook, {
-        userId: input.agentUserId ?? ctx.userId,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
       });
       // Same rule for what STARTS it: an archived playbook declares no live
       // activator, so this pass retires its activator rules.

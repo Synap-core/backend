@@ -61,6 +61,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
+    // The owner door's users read is not this suite's subject (the journey
+    // tests run the real one): the writer stands for itself.
+    ownerAndActor: vi.fn(
+      async (_db: unknown, ownerId: string, agentUserId?: string | null) => ({
+        ownerId,
+        agentUserId: agentUserId ?? null,
+      })
+    ),
     // The visibility registry resolves `playbooks` through the MODULE-LEVEL
     // `db` (`query: () => db.query.playbooks`), not through `getDb()`, so the
     // getDb stub below cannot intercept the scoped playbook read. Overriding

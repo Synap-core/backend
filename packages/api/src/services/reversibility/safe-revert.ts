@@ -1222,7 +1222,10 @@ async function tearDownArchivedPlaybooks(
     .from(playbooks)
     .where(inArray(playbooks.id, ids));
   for (const row of rows) {
-    await materializePlaybookCronAutomation(row, { userId: row.createdBy });
+    await materializePlaybookCronAutomation(row, {
+      userId: row.createdBy,
+      agentUserId: row.agentUserId,
+    });
     await convergePlaybookActivatorsSafely({
       playbookId: row.id,
       userId: row.createdBy,

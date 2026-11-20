@@ -35,6 +35,12 @@ export interface ExecutionPayload {
     /** True when this run created the session fresh (vs. reusing a channel's
      *  existing active session) — only the owner closes it at genuine finish. */
     focusSessionOwned?: boolean;
+    /**
+     * The automation's authoring agent (`agent_user_id`), set by the executor
+     * from the row, never from the payload. The run executes as the owner;
+     * its governed writes are judged by this agent's ladder.
+     */
+    actorAgentUserId?: string | null;
   };
   /** For delay resumption: skip nodes that were already executed */
   completedNodeIds?: string[];

@@ -64,6 +64,7 @@ import {
 } from "../repositories/profile-repository.js";
 import { type ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
+import { ownerAndActor } from "./owner-person.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
 import {
   buildStoredConstraints,
@@ -1652,10 +1653,12 @@ export async function reconcileWorkspaceFromDefinition(
           triggerType: auto.triggerType,
           triggerConfig: auto.triggerConfig ?? {},
         });
+        const owner = await ownerAndActor(dbConn, userId);
         try {
           await dbConn.insert(automations).values({
             workspaceId,
-            createdBy: userId,
+            createdBy: owner.ownerId,
+            agentUserId: owner.agentUserId,
             name: auto.name,
             description: auto.description,
             triggerType: auto.triggerType,

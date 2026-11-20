@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => ({
   materializeEntity: vi.fn(),
   gate: vi.fn(),
   // Queue of rows each successive db.select(...).limit() resolves to, in call
-  // order (dedupe lookup when `dedupeBy` is set, then the owner-user lookup).
+  // order (the dedupe lookup when `dedupeBy` is set).
   selectRows: [] as unknown[][],
 }));
 
@@ -91,12 +91,18 @@ const automationContext = {
   chainAutomationIds: [] as string[],
 };
 
-const runEntityCreate = (config: Record<string, unknown>) =>
+const AGENT = "agent-author-1";
+
+/** `actor`: the agent that authored the automation (none: a person's own). */
+const runEntityCreate = (
+  config: Record<string, unknown>,
+  actor: string | null = null
+) =>
   executeOutputStep(
     { outputType: "entity_create", config },
     context(),
     WORKSPACE,
-    automationContext,
+    { ...automationContext, actorAgentUserId: actor },
     OWNER,
     OWNER,
     { nodeId: "node-ec", stepRunId: "sr-1" }
@@ -122,9 +128,6 @@ describe("entity_create — optional long-form body", () => {
   });
 
   it("(a) body ABSENT — no body door touched, no id pre-minted, no documentId", async () => {
-    // owner-user lookup
-    mocks.selectRows = [[{ userType: "human" }]];
-
     const result = await runEntityCreate({
       profileSlug: "report",
       title: "No body",
@@ -145,7 +148,6 @@ describe("entity_create — optional long-form body", () => {
   });
 
   it("(a2) whitespace-only body is treated as absent", async () => {
-    mocks.selectRows = [[{ userType: "human" }]];
     await runEntityCreate({
       profileSlug: "report",
       title: "T",
@@ -156,15 +158,17 @@ describe("entity_create — optional long-form body", () => {
   });
 
   it("(b) long body — document created under the pre-minted id AND linked via entities.documentId", async () => {
-    mocks.selectRows = [[{ userType: "agent" }]];
     mocks.setBody.mockResolvedValue({ documentId: "doc-99" });
 
-    const result = await runEntityCreate({
-      profileSlug: "report",
-      title: "AI Report",
-      properties: { status: "final" },
-      body: LONG_BODY,
-    });
+    const result = await runEntityCreate(
+      {
+        profileSlug: "report",
+        title: "AI Report",
+        properties: { status: "final" },
+        body: LONG_BODY,
+      },
+      AGENT
+    );
 
     expect(mocks.setBody).toHaveBeenCalledTimes(1);
     const bodyArgs = mocks.setBody.mock.calls[0][0];
@@ -172,10 +176,11 @@ describe("entity_create — optional long-form body", () => {
     expect(bodyArgs.userId).toBe(OWNER);
     expect(bodyArgs.workspaceId).toBe(WORKSPACE);
     expect(bodyArgs.title).toBe("AI Report");
-    // Provenance travels verbatim — an agent-owned automation stays ai_agent.
+    // Provenance travels verbatim — an agent-authored automation's write is
+    // the agent's (ai_agent), on the person's row.
     expect(bodyArgs.provenance).toMatchObject({
       createdByKind: "ai_agent",
-      agentUserId: OWNER,
+      agentUserId: AGENT,
       createdByUserId: OWNER,
       correlationId: "root-run-1",
     });
@@ -197,7 +202,6 @@ describe("entity_create — optional long-form body", () => {
   });
 
   it("(c) short body — inline branch: properties.content set, NO document linked", async () => {
-    mocks.selectRows = [[{ userType: "human" }]];
     mocks.setBody.mockResolvedValue({ inlineContent: "short note" });
 
     const result = await runEntityCreate({
@@ -271,22 +275,22 @@ describe("entity_create — optional long-form body", () => {
   // The document has carried `correlationId: rootRunId` since the body wave;
   // the entity's provenance dropped it, so "which run produced this entity?"
   // had no answer. Both halves of the write must name the same run.
-  it("(f) stamps the run id as correlationId on the entity's provenance — agent owner", async () => {
-    mocks.selectRows = [[{ userType: "agent" }]];
-
-    await runEntityCreate({ profileSlug: "report", title: "Run-stamped" });
+  it("(f) stamps the run id as correlationId on the entity's provenance — agent author", async () => {
+    await runEntityCreate(
+      { profileSlug: "report", title: "Run-stamped" },
+      AGENT
+    );
 
     const opts = mocks.materializeEntity.mock.calls[0][1];
     expect(opts.provenance).toMatchObject({
       createdByKind: "ai_agent",
-      agentUserId: OWNER,
+      agentUserId: AGENT,
+      createdByUserId: OWNER,
       correlationId: "root-run-1",
     });
   });
 
   it("(f2) stamps correlationId for a human-owned automation too (system provenance)", async () => {
-    mocks.selectRows = [[{ userType: "human" }]];
-
     await runEntityCreate({ profileSlug: "report", title: "Run-stamped 2" });
 
     expect(mocks.materializeEntity.mock.calls[0][1].provenance).toMatchObject({

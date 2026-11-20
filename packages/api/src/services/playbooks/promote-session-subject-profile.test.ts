@@ -12,7 +12,18 @@ const mockGetDb = vi.hoisted(() => vi.fn());
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
-  return { ...actual, getDb: mockGetDb };
+  return {
+    ...actual,
+    // The owner door's users read is not this suite's subject (the journey
+    // tests run the real one): the writer stands for itself.
+    ownerAndActor: vi.fn(
+      async (_db: unknown, ownerId: string, agentUserId?: string | null) => ({
+        ownerId,
+        agentUserId: agentUserId ?? null,
+      })
+    ),
+    getDb: mockGetDb,
+  };
 });
 
 vi.mock("../links/links-service.js", () => ({

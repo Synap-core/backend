@@ -50,10 +50,10 @@ export type CapabilityExecutorInput = {
   } | null;
   suppressProposal?: boolean;
   /**
-   * The automation run this step belongs to: its session and the agent the
-   * run records for its writes (`openRunSession`'s `startedByAgentId`, null for
-   * a person's automation). Handed to builtin verbs only (`document.update`
-   * writes as that agent in that session, decision D4); never the gate.
+   * The automation run this step belongs to: its session and the agent that
+   * authored the automation (null for a person's own). Builtin verbs write as
+   * that agent in that session (decision D4); skill resolution also sees the
+   * agent's own user-scope skills. Never the gate.
    */
   automationRun?: { sessionId: string; agentUserId: string | null } | null;
 };

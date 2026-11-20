@@ -487,7 +487,8 @@ async function readNeverFiredAutomations(
       .from(automations)
       .where(
         and(
-          eq(automations.createdBy, agentUserId),
+          // The agent's own automations: those it authored (their actor).
+          eq(automations.agentUserId, agentUserId),
           inArray(automations.status, FIRING_STATUSES),
           inArray(automations.triggerType, PRODUCER_BACKED_TRIGGERS)
         )

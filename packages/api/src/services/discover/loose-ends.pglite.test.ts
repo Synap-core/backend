@@ -120,15 +120,16 @@ async function proposal(agent: string, createdAt: string): Promise<string> {
   return id;
 }
 
+/** An automation an agent authored: the person owns it, the agent is its actor. */
 async function automation(
-  createdBy: string,
+  agentUserId: string,
   triggerType: string
 ): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into automations (id, name, created_by, status, trigger_type, run_count, trigger_config, created_at, updated_at)
-     values ($1, 'Nightly digest', $2, 'active', $3, 0, '{}'::jsonb, $4, $4)`,
-    [id, createdBy, triggerType, OLD]
+    `insert into automations (id, name, created_by, agent_user_id, status, trigger_type, run_count, trigger_config, created_at, updated_at)
+     values ($1, 'Nightly digest', $2, $3, 'active', $4, 0, '{}'::jsonb, $5, $5)`,
+    [id, PERSON, agentUserId, triggerType, OLD]
   );
   return id;
 }

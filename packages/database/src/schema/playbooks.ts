@@ -48,8 +48,10 @@ export const playbooks = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     /** Nullable = pod-wide. */
     workspaceId: uuid("workspace_id"),
-    /** Owning principal — human user id or agent-user id. */
+    /** Owner: the person it belongs to (an agent only if nobody installed it). */
     createdBy: text("created_by").notNull(),
+    /** Actor: the agent that authored it, null for a person's own (0442). FK in SQL. */
+    agentUserId: text("agent_user_id"),
     name: text("name").notNull(),
     description: text("description"),
     /** Goal template (reuses the intelligence_commands @{arg:…} grammar). */

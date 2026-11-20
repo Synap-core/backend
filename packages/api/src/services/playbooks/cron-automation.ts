@@ -33,6 +33,7 @@ import {
   drizzleSql,
   automations,
   isUniqueViolation,
+  ownerAndActor,
   type FlowDefinition,
 } from "@synap/database";
 import type { Playbook } from "@synap/database/schema";
@@ -246,8 +247,9 @@ export function buildPlaybookRunFlowDefinition(
 }
 
 export interface CronAutomationCtx {
-  /** Acting principal — stamped as the automation's createdBy. */
+  /** Who wrote the change; the backing automation is owned by its person. */
   userId: string;
+  agentUserId?: string | null;
   /**
    * The write did NOT change the playbook's `schedule` or `status` (an
    * adoption / metadata merge / text edit). Then this reconcile may refresh the
@@ -393,13 +395,15 @@ export async function materializePlaybookCronAutomation(
   // the INSERT collides with the still-non-archived paused row of the same
   // `<name> (schedule)`. Re-arm that surviving row instead of 500-ing on the dup.
   const insertName = `${playbook.name} (schedule)`;
+  const owner = await ownerAndActor(db, ctx.userId, ctx.agentUserId);
   let automationId: string | null = null;
   try {
     const [created] = await db
       .insert(automations)
       .values({
         workspaceId: playbook.workspaceId,
-        createdBy: ctx.userId,
+        createdBy: owner.ownerId,
+        agentUserId: owner.agentUserId,
         name: insertName,
         description: `Scheduled run of playbook "${playbook.name}"`,
         triggerType: "cron",

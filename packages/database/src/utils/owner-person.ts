@@ -58,6 +58,32 @@ export async function personOfOwner(
   return personOfRow(owner);
 }
 
+export interface OwnerAndActor {
+  ownerId: string;
+  agentUserId: string | null;
+}
+
+/**
+ * The owner and actor of a row `principalId` writes: a person owns it, the
+ * agent is only the actor. Every automation and playbook insert stamps this,
+ * so a caller handing in an agent id cannot make the agent the owner.
+ * `ownerId` falls back to `principalId` for a system id or an agent nobody
+ * installed. A failed read throws.
+ */
+export async function ownerAndActor(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
+  database: any,
+  principalId: string,
+  agentUserId?: string | null
+): Promise<OwnerAndActor> {
+  const person = await personOfOwner(database, principalId);
+  const isAgent = person !== undefined && person !== principalId;
+  return {
+    ownerId: person ?? principalId,
+    agentUserId: agentUserId || (isAgent ? principalId : null),
+  };
+}
+
 /**
  * {@link personOfOwner} for many owner ids in ONE read. An id with no users row
  * is absent from the map (a system owner: `undefined`, as above).

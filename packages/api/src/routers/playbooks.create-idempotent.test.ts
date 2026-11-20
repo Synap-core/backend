@@ -82,6 +82,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return {
     ...actual,
+    // The owner door's users read is not this suite's subject (the journey
+    // tests run the real one): the writer stands for itself.
+    ownerAndActor: vi.fn(
+      async (_db: unknown, ownerId: string, agentUserId?: string | null) => ({
+        ownerId,
+        agentUserId: agentUserId ?? null,
+      })
+    ),
     db: mockDb,
     getDb: mockGetDb,
     and: vi.fn((...c: unknown[]) => ({ and: c })),

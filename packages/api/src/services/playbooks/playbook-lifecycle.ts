@@ -64,6 +64,7 @@ import {
   skills,
   tools,
   insertFocusSessionRow,
+  ownerAndActor,
 } from "@synap/database";
 import type { Playbook, FocusSession } from "@synap/database/schema";
 import {
@@ -1040,6 +1041,7 @@ export async function promoteSessionToPlaybook(
     const slug = subject?.type?.trim();
     if (slug) subjectProfile = { profileSlug: slug };
   }
+  const owner = await ownerAndActor(db, input.userId, input.agentUserId);
   let playbook: Playbook;
   let reused = false;
   try {
@@ -1048,7 +1050,8 @@ export async function promoteSessionToPlaybook(
         .insert(playbooks)
         .values({
           workspaceId: session.workspaceId,
-          createdBy: input.userId,
+          createdBy: owner.ownerId,
+          agentUserId: owner.agentUserId,
           name,
           description: input.description ?? null,
           goalTemplate,

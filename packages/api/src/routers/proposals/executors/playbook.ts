@@ -10,6 +10,7 @@ import {
   getWorkspaceMembership,
   setRunStatus,
   transitionProposal,
+  ownerAndActor,
 } from "@synap/database";
 import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 // `createLinks` is the ONE link door and it lives in @synap/api, not
@@ -101,8 +102,9 @@ export function registerPlaybookExecutors(): void {
   // (object-proposal manifest W1) A gated playbook RAW create lands here on
   // approval (the promote path emits `playbook/promote` — its own executor
   // below — so this key materializes exactly one shape). Materializes via the
-  // SAME playbooksRouter.create the direct path uses — re-run as the APPROVER
-  // with NO agentUserId + no source, so the gate auto-grants for the operator.
+  // SAME playbooksRouter.create the direct path uses — re-run as the person
+  // the proposal was filed for (never the approver) with NO agentUserId + no
+  // source, so the gate grants on that person's role.
   // The propose gate widened `data` to the full create input (goalTemplate is
   // required by createInputSchema).
   //
@@ -150,13 +152,30 @@ export function registerPlaybookExecutors(): void {
           message: "No workspace access",
         });
       }
+      const owner = await ownerAndActor(
+        db,
+        proposal.subjectUserId ?? proposal.agentUserId ?? userId,
+        proposal.agentUserId
+      );
+      const ownerMembership =
+        owner.ownerId === userId
+          ? membership
+          : await getWorkspaceMembership(db, workspaceId, owner.ownerId);
+      if (!ownerMembership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "The person this playbook was proposed for is not a member of its space.",
+        });
+      }
       const { playbooksRouter } = await import("../../playbooks.js");
       const playbookCaller = playbooksRouter.createCaller({
         db,
         authenticated: true as const,
-        userId,
+        userId: owner.ownerId,
         workspaceId,
-        workspaceRole: membership.role,
+        workspaceRole: ownerMembership.role,
+        approvedAuthorAgentUserId: owner.agentUserId,
       } as unknown as Context);
       const createArgs = {
         ...(isLikelyUUID(proposal.targetId)
