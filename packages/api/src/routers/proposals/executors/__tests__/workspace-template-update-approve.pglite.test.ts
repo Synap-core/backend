@@ -79,6 +79,12 @@ vi.mock("@synap/database", async (importOriginal) => {
       views: { wouldOrphan: [] },
     }),
     pendingTemplateDataChanges: async () => h.pendingDataChanges,
+    // PGlite is one connection and `actual.sql` is a real pool: the lock door
+    // (a reserved pool connection) has nothing to pin here, so it just runs.
+    // Unmocked, every apply took a real Postgres connection (green only where
+    // one listens, ECONNREFUSED on the devbox).
+    withAdvisoryLock: async (_k1: string, _k2: string, fn: () => unknown) =>
+      fn(),
     // A FRESH create's layer-1 engine runs on the database package's own
     // client (not this PGlite): stand it in with the row it would write,
     // following its contract (left "pending", the version handed back). A
