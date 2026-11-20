@@ -667,9 +667,9 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
 }
 
 /**
- * The statuses subject-idempotency must NOT reuse: the terminal set
- * (`TERMINAL_SESSION_STATUSES`) plus `scheduled`. Idempotency-by-subject reuses
- * an existing (playbook, subject) session instead of dispatching a fresh run.
+ * Idempotency-by-subject reuses an existing (playbook, subject) session instead
+ * of dispatching a fresh run, except in these statuses: the terminal set
+ * (`TERMINAL_SESSION_STATUSES`) plus `scheduled`.
  *
  * Every in-flight state (active, paused, stale, forming) is reused, so a stuck
  * subject is not re-dispatched by every daily cron (Stellar runaway: reuse on

@@ -6,7 +6,8 @@
  * `triggerConfig.cron` — but `handleAutomationCronScheduler` /
  * `healUnscheduledCronAutomations` (`jobs/src/workers/automation-cron-scheduler.ts`)
  * and `insertAutomationAfterGovernance` / the `automations.activate` mutation
- * (`api/src/routers/automations.ts`) all read `triggerConfig.expression`. A cron
+ * (`api/src/routers/automations.ts`, through the cron clock `nextCronRunAtFor`,
+ * `shared-utils/src/cron.ts`) all read `triggerConfig.expression`. A cron
  * automation compiled by the shared grammar got `nextRunAt: null` and NEVER
  * FIRED — silently, because `triggerToSentence` read `.cron` straight back, so
  * the editor round-tripped perfectly and hid the miss. WHEN-side twin of the
@@ -17,8 +18,9 @@
  * happened one level up (the WRITER key was never checked against what
  * anything actually reads). Both sides are parsed out of source:
  *   • the writer's key set  ← `toBackendTrigger`'s own cron-branch `triggerConfig: {…}` literal, in THIS file
- *   • the reader key sets   ← every `triggerConfig(?.|.)expression`-shaped access inside
- *                             the cron-gated code paths of the scheduler and the router
+ *   • the reader key sets   ← every `triggerConfig(?.|.)x` access in the scheduler, and
+ *                             every `config.x` the clock `nextCronRunAtFor` reads (the
+ *                             router's cron doors call it; asserted below)
  * Renaming either side without the other turns this test red.
  *
  * Idiom precedent in this repo:
@@ -46,6 +48,7 @@ const ROUTER_SRC_PATH = resolve(
   BACKEND,
   "packages/api/src/routers/automations.ts"
 );
+const CLOCK_SRC_PATH = resolve(BACKEND, "packages/shared-utils/src/cron.ts");
 
 /** Balanced-brace slice starting at the FIRST `{` at or after `fromIndex`. */
 function balancedBlockFrom(src: string, fromIndex: number): string {
@@ -92,34 +95,10 @@ function triggerConfigWriteKeys(block: string): Set<string> {
   return names;
 }
 
-/**
- * Every `triggerConfig` PROPERTY READ (`triggerConfig.x` / `triggerConfig?.x` /
- * `input.triggerConfig.x` / `existing.triggerConfig` bound to a local then
- * `.x`'d two lines later — handled by also matching the local var name) found
- * anywhere in `src`, restricted to blocks textually gated by a
- * `triggerType === "cron"` (or `triggerType, "cron"`) condition — i.e. code that
- * only runs for a cron automation, which is the only case `expression` matters.
- */
-function cronGatedTriggerConfigReadKeys(src: string): Set<string> {
-  const keys = new Set<string>();
-  for (const m of src.matchAll(/triggerType\s*===?\s*["']cron["']/g)) {
-    const gated = balancedBlockFrom(src, m.index! + m[0].length);
-    // Direct `triggerConfig.x` / `triggerConfig?.x` reads inside the gate.
-    for (const km of gated.matchAll(
-      /\btriggerConfig\s*\??\.\s*([A-Za-z_$][\w$]*)/g
-    )) {
-      keys.add(km[1]);
-    }
-    // `const triggerConfig = <expr>.triggerConfig as …` rebinding, still inside
-    // the same gated block, followed later by `triggerConfig?.x`. Already
-    // covered by the pattern above since it matches the bound name too.
-  }
-  return keys;
-}
-
 const sentenceSrc = readFileSync(SENTENCE_SRC_PATH, "utf8");
 const schedulerSrc = readFileSync(SCHEDULER_SRC_PATH, "utf8");
-const routerSrc = readFileSync(ROUTER_SRC_PATH, "utf8");
+const routerSrc = stripComments(readFileSync(ROUTER_SRC_PATH, "utf8"), "ts");
+const clockSrc = readFileSync(CLOCK_SRC_PATH, "utf8");
 
 const WRITER_KEYS = triggerConfigWriteKeys(
   blockAfter(stripComments(sentenceSrc, "ts"), 'trigger.triggerType === "cron"')
@@ -129,13 +108,20 @@ const SCHEDULER_READ_KEYS = new Set(
     ...schedulerSrc.matchAll(/\btriggerConfig\s*\??\.\s*([A-Za-z_$][\w$]*)/g),
   ].map((m) => m[1])
 );
-const ROUTER_READ_KEYS = cronGatedTriggerConfigReadKeys(routerSrc);
+/** The keys the cron clock reads off a stored `triggerConfig` (its `config.x`). */
+const CLOCK_READ_KEYS = new Set(
+  [
+    ...blockAfter(clockSrc, "export function nextCronRunAtFor").matchAll(
+      /\bconfig\s*\??\.\s*([A-Za-z_$][\w$]*)/g
+    ),
+  ].map((m) => m[1])
+);
 
 describe("TRIPWIRE: cron `triggerConfig` writer satisfies every cron-firing reader", () => {
   it("parses a non-empty contract from EVERY side (the derivation itself works)", () => {
     expect(WRITER_KEYS.size).toBeGreaterThan(0);
     expect(SCHEDULER_READ_KEYS.size).toBeGreaterThan(0);
-    expect(ROUTER_READ_KEYS.size).toBeGreaterThan(0);
+    expect(CLOCK_READ_KEYS.size).toBeGreaterThan(0);
   });
 
   it("the scheduler's key is what toBackendTrigger's cron branch writes", () => {
@@ -149,19 +135,26 @@ describe("TRIPWIRE: cron `triggerConfig` writer satisfies every cron-firing read
     ).toEqual([]);
   });
 
-  it("the router's (create/activate) key is what toBackendTrigger's cron branch writes", () => {
-    const missing = [...ROUTER_READ_KEYS].filter((k) => !WRITER_KEYS.has(k));
+  it("the router's cron doors (create/update/activate) read it through the clock", () => {
+    // Every door that stamps nextRunAt calls the clock; none reads the keys itself.
+    expect(
+      [...routerSrc.matchAll(/\bnextCronRunAtFor\(/g)].length
+    ).toBeGreaterThanOrEqual(3);
+    expect(routerSrc).not.toMatch(/\btriggerConfig\s*\??\.\s*expression\b/);
+  });
+
+  it("the clock's (router's) keys are what toBackendTrigger's cron branch writes", () => {
+    const missing = [...CLOCK_READ_KEYS].filter((k) => !WRITER_KEYS.has(k));
     expect(
       missing,
-      `routers/automations.ts reads triggerConfig.${JSON.stringify(missing)} inside ` +
-        `a triggerType==="cron" gate, but toBackendTrigger's cron branch never ` +
-        `writes ${JSON.stringify(missing)}.`
+      `nextCronRunAtFor (shared-utils/src/cron.ts) reads triggerConfig.${JSON.stringify(missing)}, ` +
+        `but toBackendTrigger's cron branch never writes ${JSON.stringify(missing)}.`
     ).toEqual([]);
   });
 
   it("`expression` specifically is covered (the exact key of the original defect)", () => {
     expect(SCHEDULER_READ_KEYS.has("expression")).toBe(true);
-    expect(ROUTER_READ_KEYS.has("expression")).toBe(true);
+    expect(CLOCK_READ_KEYS.has("expression")).toBe(true);
     expect(WRITER_KEYS.has("expression")).toBe(true);
   });
 });
