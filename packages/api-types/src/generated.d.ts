@@ -11836,6 +11836,11 @@ export interface ReconcileReport {
 				profile: string;
 				property: string;
 			}>;
+			/** The template's `initialStatus`, filled on a lifecycle that had none. */
+			initial?: Array<{
+				profile: string;
+				status: string;
+			}>;
 			refused: Array<{
 				profile: string;
 				reason: string;

@@ -76,6 +76,7 @@ import {
   declareLifecycle,
   withLifecycleOptions,
 } from "../services/lifecycle/declare-lifecycle.js";
+import { setLifecycleInitialStatus } from "../services/lifecycle/lifecycle-def-guard.js";
 import type {
   PropertyDef,
   PropertyValueType,
@@ -282,6 +283,8 @@ export interface ReconcileReport {
     lifecycles?: {
       declared: Array<{ profile: string; property: string }>;
       refused: Array<{ profile: string; reason: string }>;
+      /** The template's `initialStatus`, filled on a lifecycle that had none. */
+      initial?: Array<{ profile: string; status: string }>;
     };
     /** Template type differs from the live type — NOT changed; needs a decision. */
     conflicts: Array<{
@@ -1013,6 +1016,31 @@ export async function reconcileWorkspaceFromDefinition(
           profile: profile.slug,
           property: profile.lifecycle.property,
         });
+      }
+      // The status new things start in, through the lifecycle door (the link
+      // default every birth door reads). Fill-only: an initial a person set
+      // since, or another door, is kept.
+      const initialStatus = profile.lifecycle.initialStatus;
+      if (
+        initialStatus &&
+        (declared.status === "declared" || declared.status === "unchanged")
+      ) {
+        const initial = await setLifecycleInitialStatus(dbConn, {
+          propertyDefId: declared.propertyDefId,
+          initialStatus,
+          onlyWhenUnset: true,
+        });
+        if (initial.status === "refused") {
+          report.properties.lifecycles!.refused.push({
+            profile: profile.slug,
+            reason: `initialStatus: ${initial.reason}`,
+          });
+        } else if (initial.status === "changed") {
+          (report.properties.lifecycles!.initial ??= []).push({
+            profile: profile.slug,
+            status: initialStatus,
+          });
+        }
       }
     }
   }

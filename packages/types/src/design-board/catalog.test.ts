@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   catalogSchema,
+  catalogView,
   composeAppCatalog,
   readDesignCatalog,
   readKitCatalog,
@@ -180,6 +181,44 @@ describe("readKitCatalog (a client app's kit)", () => {
     expect(composeAppCatalog(synap.catalog, k.catalog)).toMatchObject({
       ok: false,
       error: expect.stringMatching(/both as a component and as a canvas block/),
+    });
+  });
+});
+
+describe("catalogView: what design.catalog shows of the two halves", () => {
+  const read = readDesignCatalog(good);
+  if (!read.ok) throw new Error(read.error);
+  const catalog = read.catalog;
+
+  it("summary: every block's prop names and kinds, no select options", () => {
+    const v = catalogView(catalog, { detail: "summary" });
+    expect(v).toEqual({
+      detail: "summary",
+      components: { SpatialButton: { variant: "select", children: "slot" } },
+      layout: { Stack: { gap: "select", children: "slot" } },
+    });
+    expect(JSON.stringify(v)).not.toContain("space-100");
+  });
+
+  it("full: every prop spec, as the snapshot holds it", () => {
+    expect(catalogView(catalog, { detail: "full" })).toEqual({
+      detail: "full",
+      components: catalog.components,
+      layout: catalog.layout,
+    });
+  });
+
+  it("components: only the named blocks, in full, from either half; a name the catalog lacks is listed, never dropped", () => {
+    expect(
+      catalogView(catalog, {
+        detail: "summary",
+        components: ["Stack", "Nope", "Stack"],
+      })
+    ).toEqual({
+      detail: "full",
+      components: {},
+      layout: { Stack: catalog.layout.Stack },
+      unknown: ["Nope"],
     });
   });
 });

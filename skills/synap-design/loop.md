@@ -135,7 +135,14 @@ there: say so, and fall back to section 2.
   (a slot is a prop of kind `slot`, with `allow` when it takes only some blocks), the canvas blocks
   (`layout`: Section, Box, Stack, Row, Grid, Heading, Text, Motion; their spacing, radius and colour
   props take token steps), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets.
-  Read it before you design; never guess a component or a prop value.
+  It answers in two steps, because the whole catalog is longer than one tool reply:
+  - `design.catalog {}` (`detail: "summary"`, the default): every block with its prop names and their
+    kind (`text`, `select`, `slot`, `list`...), no select options.
+  - `design.catalog {components: ["Section", "Stack", "Heading", "SpatialCard", ...]}`: the blocks you
+    will use, kit components and canvas blocks alike, with their full specs (the select options, a
+    list's item fields, what a slot takes). A name the catalog does not have comes back in `unknown`.
+  Read both before you design; never guess a component or a prop value. `detail: "full"` is the whole
+  catalog at once: too long for one reply, do not ask for it.
 - **`design.read {designId}`** (read): the design (`status`, `updatedAt`, `appId`, whether it is
   `editable`), its `board`, an outline per frame (width class, columns, block ids and types), and
   `dropped`: what the catalog cannot place. Keep `updatedAt`: it is your `baseUpdatedAt`.
