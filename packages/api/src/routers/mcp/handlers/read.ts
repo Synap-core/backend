@@ -1052,6 +1052,13 @@ export const readHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const wsId = args.workspaceId as string | undefined;
     const wantFull = (args.detail as string | undefined) === "full";
+    // Filter to these kind slugs (the Hub `profileSlugs` filter).
+    const slugList = Array.isArray(args.slugs)
+      ? args.slugs
+          .filter((s): s is string => typeof s === "string" && s.length > 0)
+          .slice(0, 50)
+      : [];
+    const slugFilter = slugList.length ? { profileSlugs: slugList } : {};
 
     /**
      * Map a raw profile row to the lightweight digest shape (`read-lean.ts`:
@@ -1115,6 +1122,7 @@ export const readHandlers: McpHandlerMap = {
       const result = await caller.profiles.listProfiles({
         userId,
         workspaceId: wsId,
+        ...slugFilter,
       });
       // BOTH lenses: the pod-wide base layer (`null`) AND the workspace's own
       // defs. Reading the workspace lens alone returned every overridden
@@ -1168,7 +1176,7 @@ export const readHandlers: McpHandlerMap = {
     const perWs = await Promise.all(
       wsIds.map((id) =>
         caller.profiles
-          .listProfiles({ userId, workspaceId: id })
+          .listProfiles({ userId, workspaceId: id, ...slugFilter })
           .then((res) =>
             res.profiles.map(
               (p) =>

@@ -51,7 +51,7 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
    | one playbook's page           | `{ target: { kind: "playbook", id }, slot: "detail", cellKey }`                   | `detail`                              |
    | one view's page               | `{ target: { kind: "view", id }, slot: "detail", cellKey }`                       | `detail`                              |
 
-   `scope`: `workspace` (default, needs `workspaceId`) = in that space only; `pod` = everywhere (for one object: its own page, the usual choice); `user` = only you (not for a capability). The cell must exist (yours from `synap_create_cell` may still be pending: bind it in the same breath). `clear: true` (no `cellKey`) unbinds the slot. An applied bind replies `nowBound`, what the page shows now; an agent's bind is a proposal.
+   `scope`: `workspace` (default, needs `workspaceId`) = in that space only; `pod` = everywhere (for one object: its own page, the usual choice); `user` = only you (not for a capability). The cell must exist (yours from `synap_create_cell` may still be pending: bind the `typeKey` its reply returns, in the same breath; an accented name is folded, `Page cédant` -> `generated:page-cedant`). `clear: true` (no `cellKey`) unbinds the slot. An applied bind replies `nowBound`, what the page shows now; an agent's bind is a proposal.
 
 5. An agent's define lands as a proposal: `status: "proposed"` is success; pass on `reviewUrl`, never retry.
 

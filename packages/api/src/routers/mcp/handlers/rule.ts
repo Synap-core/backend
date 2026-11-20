@@ -202,6 +202,7 @@ export const ruleHandlers: McpHandlerMap = {
       ...(parsed.data.expiresAt ? { expiresAt: parsed.data.expiresAt } : {}),
       automationIds: [],
       ...(sentence ? { sentence } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
@@ -278,6 +279,7 @@ export const ruleHandlers: McpHandlerMap = {
           ? { draft: parsed.data.draft }
           : {}),
         automationIds: [],
+        ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       });
       return ok(result);
     } catch (err) {

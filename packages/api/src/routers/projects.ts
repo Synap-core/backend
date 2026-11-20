@@ -521,6 +521,8 @@ export const projectsRouter = router({
          * to "trpc"; the MCP handler forwards "mcp". Only labels metadata.
          */
         door: z.enum(["trpc", "hub-rest", "mcp"]).optional(),
+        /** WHY — shown to the reviewer when an agent's create is proposed. */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -548,6 +550,7 @@ export const projectsRouter = router({
         homeWorkspaceId: input.homeWorkspaceId,
         usedWorkspaceIds: input.usedWorkspaceIds,
         evidenceEntityIds: input.evidenceEntityIds,
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
       });
 
       if (outcome.status === "deduped") return outcome;

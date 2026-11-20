@@ -1162,6 +1162,7 @@ export const capabilitiesRouter = router({
         userId: ctx.userId,
         connectionSelector: input.connectionSelector,
         idempotencyKey: input.idempotencyKey,
+        reasoning: input.reasoning,
         channelId: input.channelId ?? null,
         sourceMessageId: input.sourceMessageId ?? null,
         sessionId: input.sessionId ?? null,

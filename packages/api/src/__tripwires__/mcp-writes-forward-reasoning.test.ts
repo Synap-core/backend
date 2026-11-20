@@ -25,13 +25,16 @@ import { join, dirname, resolve } from "path";
  *   2. it calls `<something>Caller.<router>.<mutation>(` where that Hub
  *      procedure's own input declares `reasoning: z.string()`.
  *
- * WHAT THIS DOES NOT COVER, measured: a tool that reaches the gate through a
- * plain imported SERVICE function rather than the gate or a Hub caller — today
- * `synap_start_session` / `synap_complete_session` / `synap_update_session`
- * (services/focus-sessions/*, which reach `checkPermissionOrPropose` but expose
- * no `reasoning` parameter to forward one INTO). Verified by widening the scan
- * to one-level import resolution: exactly those three appear, and no other.
- * Closing them means teaching those services a `reasoning` parameter first.
+ * THE THIRD MEMBERSHIP RULE (added when 11 governed tools were found with no
+ * `reasoning`, tickets 642d57e5 and the consolidation root-cause R5): a tool that
+ * reaches the gate through a tRPC caller procedure or an imported SERVICE
+ * function. The first two rules could not see them: `skillsCaller.create(`,
+ * `rulesCaller.createRule(`, `projectCaller.create(`, `updateSkillGoverned(`,
+ * `executeCapability(` never name the gate in the handler. So the scan now
+ * follows calls up to {@link MAX_HOPS} deep (handler -> caller procedure or
+ * imported function -> ... ) and a tool is gated when any function it can reach
+ * calls the gate. Over-approximating by design: a tool it wrongly adds fails
+ * loudly and gets fixed or argued, a tool it misses stays silent forever.
  *
  * NEGATIVE CONTROL (run before landing): remove the `reasoning` forward at
  * `handlers/entity.ts:97` from `synap_create_entity` and this fails with
@@ -128,6 +131,73 @@ function hubProceduresAcceptingReasoning(): Set<string> {
   return out;
 }
 
+/** The calls that make a function a governance gate (a proposal can be filed). */
+const GATE_RE = /\b(?:checkPermissionOrPropose|createPendingProposal)\(/;
+const MAX_HOPS = 4;
+
+/** Static AND `await import(...)` relative imports of a file, local name -> path. */
+function resolveAllRelativeImports(file: string): Map<string, string> {
+  const out = resolveRelativeImports(file);
+  const src = readFileSync(file, "utf8");
+  for (const m of src.matchAll(
+    /\{([^}]*)\}\s*=\s*await\s+import\(\s*"(\.[^"]+)"\s*\)/g
+  )) {
+    let target = resolve(dirname(file), m[2].replace(/\.js$/, ".ts"));
+    if (!existsSync(target)) target = target.replace(/\.ts$/, "/index.ts");
+    if (!existsSync(target)) continue;
+    for (const part of m[1].split(",")) {
+      const [orig, alias] = part.trim().split(/\s*:\s*/);
+      if (orig) out.set((alias ?? orig).trim(), target);
+    }
+  }
+  return out;
+}
+
+/** A named member of a file: a top-level function or a router procedure. */
+const memberCache = new Map<string, Map<string, string>>();
+function memberOf(file: string, name: string): string | undefined {
+  let members = memberCache.get(file);
+  if (!members) {
+    const src = readFileSync(file, "utf8");
+    members = new Map([
+      ...memberBlocks(
+        src,
+        /^ {2}(\w+):\s*(?:public|protected|scoped|\w+)Procedure/gm
+      ),
+      ...memberBlocks(src, /^(?:export )?(?:async )?function (\w+)/gm),
+    ]);
+    memberCache.set(file, members);
+  }
+  return members.get(name);
+}
+
+/**
+ * Does `block` (text living in `file`) reach a governance gate within `hops`
+ * calls? Follows imported functions (`fn(`) and tRPC callers
+ * (`const c = someRouter.createCaller(...)`, then `c.proc(`).
+ */
+function reachesGate(block: string, file: string, hops: number): boolean {
+  if (GATE_RE.test(block)) return true;
+  if (hops <= 0) return false;
+  const imports = resolveAllRelativeImports(file);
+  for (const [name, target] of imports) {
+    if (!new RegExp(`\\b${name}\\(`).test(block)) continue;
+    const member = memberOf(target, name);
+    if (member && reachesGate(member, target, hops - 1)) return true;
+  }
+  for (const m of block.matchAll(/\b(\w+)\s*=\s*(\w+)\.createCaller\(/g)) {
+    const routerFile = imports.get(m[2]);
+    if (!routerFile) continue;
+    for (const call of block.matchAll(
+      new RegExp(`\\b${m[1]}\\.(\\w+)\\(`, "g")
+    )) {
+      const proc = memberOf(routerFile, call[1]);
+      if (proc && reachesGate(proc, routerFile, hops - 1)) return true;
+    }
+  }
+  return false;
+}
+
 interface GatedTool {
   tool: string;
   file: string;
@@ -161,6 +231,9 @@ function deriveGatedTools(): GatedTool[] {
       for (const m of block.matchAll(/\b\w*[Cc]aller\.(\w+)\.(\w+)\(/g)) {
         const key = `${m[1]}.${m[2]}`;
         if (reasoningProcs.has(key) && !via.includes(key)) via.push(key);
+      }
+      if (via.length === 0 && reachesGate(block, path, MAX_HOPS)) {
+        via.push("a service or caller procedure that files proposals");
       }
       if (via.length > 0) gated.push({ tool, file: entry, body: block, via });
     }
@@ -199,6 +272,15 @@ describe("tripwire: every governed MCP write carries a reason", () => {
     expect(byName.get("synap_promote_cell_to_renderer")?.via).toContain(
       "profiles.setRenderer"
     );
+    // Rule 3, on both of its shapes: a tRPC caller procedure
+    // (`rulesCaller.createRule` -> `createRuleGoverned` -> the gate) and an
+    // imported service function (`executeCapability`).
+    for (const tool of ["synap_create_rule", "synap_run_capability"]) {
+      expect(
+        byName.get(tool)?.via.join(),
+        `${tool} must be found through its service or caller procedure`
+      ).toMatch(/service or caller procedure/);
+    }
   });
 
   it("every gated tool's handler forwards `reasoning` to the gate", () => {
@@ -220,7 +302,7 @@ describe("tripwire: every governed MCP write carries a reason", () => {
     const offenders = gated
       .filter(
         (g) =>
-          !/readReasoning\(args\)/.test(g.body) &&
+          !/readReasoning\((?:ctx\.)?args\)/.test(g.body) &&
           !/args\s*\.\s*reasoning\b/.test(g.body)
       )
       .map(
@@ -253,7 +335,12 @@ describe("tripwire: every governed MCP write carries a reason", () => {
         declStart,
         nextTool === -1 ? toolsSrc.length : nextTool
       );
-      if (declStart === -1 || !/\n\s*reasoning: \{/.test(decl)) {
+      // A schema DERIVED from a shared contract (`*_JSON_SCHEMA`) has no literal
+      // `reasoning:`; the manifest assertion above proves what it emits.
+      if (
+        declStart === -1 ||
+        !(/\n\s*reasoning: \{/.test(decl) || /_JSON_SCHEMA\b/.test(decl))
+      ) {
         missing.push(`${g.tool} (tools/index.ts)`);
       }
     }

@@ -546,6 +546,7 @@ export const workspaceHandlers: McpHandlerMap = {
     const result = await projectCaller.create({
       name: args.name as string,
       description: args.description as string | undefined,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       // Provenance: this create came through the MCP door.
       door: "mcp",
       // Gravity evidence — the tRPC create enforces ≥5 caller-visible ids for

@@ -1021,7 +1021,7 @@ export const tools = {
               type: "array",
               items: { type: "object" },
               description:
-                "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading.",
+                "View filters {field, operator, value}, ANDed (max 10). field: title, type, status, createdAt, updatedAt, or a property of profileSlug (bare name or properties.<name>). See skill system/synap/reading.",
             },
             includeFacets: {
               type: "boolean",
@@ -1394,6 +1394,11 @@ export const tools = {
               enum: ["full"],
               description:
                 "Pass 'full' to receive complete profile rows (including renderer and uiHints columns) and full relation-type rows (displayName, description, isDirectional, inverseLabel). Omit for the lean digest (default): profile digests plus relation-type slugs grouped by lens.",
+            },
+            slugs: {
+              type: "array",
+              items: { type: "string" },
+              description: "Only these kind slugs (max 50).",
             },
             limit: {
               type: "number",
@@ -4078,6 +4083,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why you make this write, shown to the reviewer.",
+            },
             name: { type: "string", description: "Playbook display name." },
             goalTemplate: {
               type: "string",
@@ -4871,6 +4880,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why you make this write, shown to the reviewer.",
+            },
             name: { type: "string", description: "Project display name" },
             description: { type: "string" },
             workspaceId: {
@@ -6791,6 +6804,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why you make this write, shown to the reviewer.",
+            },
             capabilityKey: {
               type: "string",
               description:
@@ -6846,6 +6863,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why you make this write, shown to the reviewer.",
+            },
             toolName: {
               type: "string",
               description:
@@ -6991,6 +7012,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why you make this write, shown to the reviewer.",
+            },
             name: { type: "string", description: "Automation display name." },
             description: {
               type: "string",
@@ -7067,6 +7092,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why you make this write, shown to the reviewer.",
+            },
             intent: {
               type: "string",
               description:
@@ -7115,6 +7144,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why you make this write, shown to the reviewer.",
+            },
             ruleId: {
               type: "string",
               description:
@@ -7264,6 +7297,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why you make this write, shown to the reviewer.",
+            },
             name: {
               type: "string",
               description:
@@ -7373,6 +7410,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why you make this write, shown to the reviewer.",
+            },
             slug: {
               type: "string",
               description: "The skill's slug (e.g. 'biz/business-plan').",

@@ -39,6 +39,7 @@ import {
   and,
   db,
   eq,
+  inArray,
   isNull,
   or,
   drizzleSql,
@@ -260,8 +261,8 @@ export async function readExistingPlaybookApp(
   userId: string
 ): Promise<ExistingPlaybookApp> {
   const names = playbookAppNames(facts);
-  const { cellTypeKeyFor } = await import("../cells/define-cell.js");
-  const cellKey = cellTypeKeyFor(names.cell);
+  const { cellTypeKeysFor } = await import("../cells/define-cell.js");
+  const cellKeys = cellTypeKeysFor(names.cell);
   const [pipeline] = await db
     .select({ id: views.id })
     .from(views)
@@ -285,11 +286,11 @@ export async function readExistingPlaybookApp(
     )
     .limit(1);
   const [cell] = await db
-    .select({ id: widgetDefinitions.id })
+    .select({ id: widgetDefinitions.id, typeKey: widgetDefinitions.typeKey })
     .from(widgetDefinitions)
     .where(
       and(
-        eq(widgetDefinitions.typeKey, cellKey),
+        inArray(widgetDefinitions.typeKey, cellKeys),
         eq(widgetDefinitions.isActive, true),
         or(
           eq(widgetDefinitions.workspaceId, facts.workspaceId),
@@ -316,7 +317,7 @@ export async function readExistingPlaybookApp(
   return {
     pipelineViewId: pipeline?.id ?? null,
     bentoViewId: bento?.id ?? null,
-    cellKey: cell ? cellKey : null,
+    cellKey: cell?.typeKey ?? null,
     bound: bound ? { source: bound.source, cellKey: boundCellKey } : null,
   };
 }

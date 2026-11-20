@@ -174,6 +174,9 @@ export const installationHandlers: McpHandlerMap = {
         action,
         version,
         ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+        ...(readReasoning(ctx.args)
+          ? { reasoning: readReasoning(ctx.args) }
+          : {}),
         fromCatalog: true,
       });
       if (out.status !== "refused") return ok(out);

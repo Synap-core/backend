@@ -119,6 +119,16 @@ export const CapabilityExecuteInput = z.object({
       "A stable key correlating retries of THIS logical run, so an external-send verb is at-most-once. Omitted → a content hash is derived."
     ),
   /**
+   * WHY this run — shown to the reviewer on the proposal an ungranted run
+   * files. A first-class field: riding inside `parameters` would reach the
+   * verb's own args and be refused as an unknown parameter.
+   */
+  reasoning: z
+    .string()
+    .max(2000)
+    .optional()
+    .describe("Why you run this, shown to the reviewer."),
+  /**
    * Instruction-provenance (rung 2.55): the acting channel of this agent turn.
    * A run triggered from an untrusted-origin channel (external / bridge) force-
    * proposes instead of auto-running. Tighten-only and server-classified — an
@@ -199,6 +209,7 @@ export const MCP_AGENT_PARAMS = [
   "workspaceId",
   "connectionSelector",
   "idempotencyKey",
+  "reasoning",
 ] as const;
 
 export const CapabilityExecuteAgentInput = CapabilityExecuteInput.pick(
