@@ -775,7 +775,7 @@ describe("span, start and hide per width class: every block has them, checked by
     });
     const past = block({
       span: { expanded: 4 },
-      start: { expanded: 10, compact: 5, medium: 2 },
+      start: { expanded: 10, medium: 2 },
     });
     if (!past.ok) throw new Error("fixture");
     expect(past.board.frames[0]!.page.content[0]!.props).toMatchObject({
