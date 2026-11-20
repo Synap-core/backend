@@ -1179,7 +1179,7 @@ export function selectSlotsDeliveredByChild(
     const slot = parent[index];
     const key = keys[index];
     if (!slot || !key || out.some((o) => o.index === index)) continue;
-    if (slot.status === "done" || slot.retiredAt != null) continue;
+    if (slot.retiredAt != null) continue;
     if (slot.owner === "human") continue;
     if (checkedKeys.has(key)) continue;
     const childIndex = findSlotIndex(

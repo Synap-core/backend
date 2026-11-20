@@ -693,7 +693,6 @@ export async function buildWorkGraph(
   const servesEdges: WorkGraphEdge[] =
     serves.status === "ok"
       ? serves.value
-          .filter((e) => goalIds.has(e.trackId))
           .map((e) => ({
             kind: "serves" as const,
             from: e.sessionId,
