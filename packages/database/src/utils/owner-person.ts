@@ -76,6 +76,25 @@ export async function personsOfOwners(
 }
 
 /**
+ * The agents `personId` operates: every `userType = 'agent'` row whose person
+ * (`users.createdByUserId`, as {@link personOfOwner} reads it) is `personId`.
+ * One read. A FAILED read throws.
+ */
+export async function agentsOfPerson(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
+  database: any,
+  personId: string
+): Promise<string[]> {
+  const agents = (await database
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(eq(users.userType, "agent"), eq(users.createdByUserId, personId))
+    )) as Array<{ id: string }>;
+  return agents.map((a) => a.id);
+}
+
+/**
  * Every user id that acts AS the same person as `actorId`: that person and each
  * agent they own (decision 782c862e: "agent-created automations fire on your
  * events too"). An agent acting for person P counts as P, so an event recorded
@@ -92,11 +111,6 @@ export async function actorsOfSamePerson(
 ): Promise<string[]> {
   const person = await personOfOwner(database, actorId);
   if (!person) return [actorId];
-  const agents = (await database
-    .select({ id: users.id })
-    .from(users)
-    .where(
-      and(eq(users.userType, "agent"), eq(users.createdByUserId, person))
-    )) as Array<{ id: string }>;
-  return Array.from(new Set([person, actorId, ...agents.map((a) => a.id)]));
+  const agents = await agentsOfPerson(database, person);
+  return Array.from(new Set([person, actorId, ...agents]));
 }
