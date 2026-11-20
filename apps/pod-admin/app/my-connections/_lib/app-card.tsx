@@ -111,7 +111,15 @@ export function AppCard({
           {pod?.reconsent && !app.revoked_at ? (
             // Its old pairs do not fit one access (Q3): a mark, and its page
             // shows the proposed form with Confirm.
-            <Chip size="sm" variant="flat" color="warning" className="shrink-0">
+            // Ink on the tinted fill: HeroUI's tone-coloured text on its own
+            // /20 fill fails 4.5:1 (axe, light and dark).
+            <Chip
+              size="sm"
+              variant="flat"
+              color="warning"
+              className="shrink-0"
+              classNames={{ content: "text-foreground" }}
+            >
               {consentT()("connected.needsReview")}
             </Chip>
           ) : view.showChip ? (
@@ -120,6 +128,7 @@ export function AppCard({
               variant="flat"
               color={chipColor(view.tone)}
               className="shrink-0"
+              classNames={{ content: "text-foreground" }}
             >
               {view.label}
             </Chip>
