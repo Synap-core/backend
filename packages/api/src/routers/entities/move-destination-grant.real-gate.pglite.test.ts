@@ -21,7 +21,8 @@
  * Rows, each ruling out a wrong outcome:
  *  - a key whose grant names only A cannot move a record from A into C (its
  *    person is an owner of both): refused, nothing moved, nothing filed;
- *  - a key BOUND to A cannot move into C: refused, nothing moved;
+ *  - a key BOUND to A cannot move into C, nor move a record of C into A:
+ *    refused, nothing moved (a bound key moves nothing between spaces);
  *  - an agent member of A only cannot move a record into B: the move is a
  *    pending proposal for the person (who can write in B), nothing moved;
  *  - CONTROL: an agent member of A and C, under a grant naming A and C,
@@ -161,12 +162,12 @@ function ddlFor(table: PgTable): string {
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
-async function seedNoteInA(title: string): Promise<string> {
+async function seedNote(title: string, workspaceId = A): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties)
      values ($1, $2, $3, $4, 'note', $5, '{}'::jsonb)`,
-    [id, OWNER, A, NOTE_PROFILE, title]
+    [id, OWNER, workspaceId, NOTE_PROFILE, title]
   );
   return id;
 }
@@ -249,7 +250,7 @@ beforeAll(async () => {
 
 describe("moving records into a space checks the destination (TF-1)", () => {
   it("SECURITY: a key whose grant names only A cannot move a record from A into C", async () => {
-    const id = await seedNoteInA("Pinned-key note");
+    const id = await seedNote("Pinned-key note");
 
     const out = await runWithGrant(grantIn(A), () =>
       moveEntitiesDoor(keyActor(), { entityIds: [id], workspaceId: C })
@@ -270,7 +271,7 @@ describe("moving records into a space checks the destination (TF-1)", () => {
   });
 
   it("SECURITY: a key bound to A cannot move a record into C", async () => {
-    const id = await seedNoteInA("Bound-key note");
+    const id = await seedNote("Bound-key note");
 
     await expect(
       moveEntitiesDoor(keyActor({ keyType: "user_pat", keyWorkspaceId: A }), {
@@ -284,8 +285,23 @@ describe("moving records into a space checks the destination (TF-1)", () => {
     expect(await spaceOf(id)).toBe(A);
   });
 
+  it("SECURITY: a key bound to A cannot pull a record of C into A", async () => {
+    const id = await seedNote("A note of Gamma", C);
+
+    await expect(
+      moveEntitiesDoor(keyActor({ keyType: "user_pat", keyWorkspaceId: A }), {
+        entityIds: [id],
+        workspaceId: A,
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/every record it moves must be in it/),
+    });
+    expect(await spaceOf(id)).toBe(C);
+  });
+
   it("SECURITY: an agent that is no member of B cannot move a record into B: the person reviews the move", async () => {
-    const id = await seedNoteInA("Agent note");
+    const id = await seedNote("Agent note");
 
     const out = await runWithActingAgent(AGENT, () =>
       moveEntitiesDoor(keyActor({ agentUserId: AGENT }), {
@@ -308,7 +324,7 @@ describe("moving records into a space checks the destination (TF-1)", () => {
   });
 
   it("CONTROL: an agent member of A and C, under a grant naming A and C, moves the record", async () => {
-    const id = await seedNoteInA("Granted both ways");
+    const id = await seedNote("Granted both ways");
 
     const out = await runWithGrant(grantIn(A, C), () =>
       runWithActingAgent(AGENT, () =>
@@ -324,7 +340,7 @@ describe("moving records into a space checks the destination (TF-1)", () => {
   });
 
   it("CONTROL: the person signed in (no key, no agent) still moves a record into B", async () => {
-    const id = await seedNoteInA("The person's own move");
+    const id = await seedNote("The person's own move");
     const { entitiesRouter } = await import("../entities.js");
 
     const caller = entitiesRouter.createCaller({

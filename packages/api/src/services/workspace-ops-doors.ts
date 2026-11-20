@@ -22,15 +22,20 @@
 
 import { TRPCError } from "@trpc/server";
 import {
+  and,
   db,
   eq,
+  inArray,
+  isNull,
   profiles,
   type WorkspacePrimarySurface,
 } from "@synap/database";
+import { entities } from "@synap/database/schema";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
 import { resolveConfinedWorkspace } from "../routers/hub-protocol/confine-workspace.js";
 import { workspacesRouter } from "../routers/workspaces.js";
 import { entitiesRouter } from "../routers/entities.js";
+import { entityWriteVisibleWhere } from "../routers/entities/helpers.js";
 import { profilesRouter } from "../routers/profiles.js";
 import { projectsRouter } from "../routers/projects.js";
 
@@ -114,9 +119,12 @@ export async function setStartPageDoor(
 
 /**
  * Move entities into a workspace (best-effort per entity). A key bound to a
- * workspace moves records only into it (403 otherwise, TF-1): the procedure
- * takes the destination from its input, and the binding confines only the
- * caller context's workspace.
+ * workspace moves records only into it and only out of it (403 otherwise,
+ * nothing written; TF-1, the binding check #1138 gives the orchestrator):
+ * the procedure takes both spaces from the records and its input, and the
+ * binding confines only the caller context's workspace. So a bound key moves
+ * nothing between spaces. A record its person cannot write is left to the
+ * procedure, which reports it not found (no existence oracle).
  */
 export async function moveEntitiesDoor(
   actor: WorkspaceOpsActor,
@@ -127,6 +135,24 @@ export async function moveEntitiesDoor(
     actor.keyWorkspaceId,
     input.workspaceId
   );
+  if (actor.keyWorkspaceId) {
+    const sources = await db
+      .select({ workspaceId: entities.workspaceId })
+      .from(entities)
+      .where(
+        and(
+          inArray(entities.id, input.entityIds),
+          isNull(entities.deletedAt),
+          entityWriteVisibleWhere(actor.userId)
+        )
+      );
+    if (sources.some((r) => r.workspaceId !== actor.keyWorkspaceId)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `This key is confined to workspace ${actor.keyWorkspaceId}: every record it moves must be in it.`,
+      });
+    }
+  }
   const ctx = await callerCtx(actor, null);
   return entitiesRouter.createCaller(ctx).moveToWorkspace({
     entityIds: input.entityIds,
