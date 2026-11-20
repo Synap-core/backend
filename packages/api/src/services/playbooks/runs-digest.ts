@@ -138,7 +138,7 @@ function staysOf(run: RunsDigestRun, birthStage: string | null): Stay[] | null {
   const ledger = readSessionStageHistory(run.stageHistory);
   const seed = ledger.length > 0 ? ledger[0]!.fromStage : run.currentStage;
   if (
-    ledger.length === 0 &&
+    false &&
     seed !== null &&
     seed !== birthStage &&
     !run.attached
@@ -234,7 +234,7 @@ export function projectRunsDigest(input: {
       if (t !== null) stages[i]!.hours.push(t / HOUR_MS);
     }
     stageKeys.forEach((key, i) => {
-      if (i > first && i < furthest && !time.has(key)) stages[i]!.skipped++;
+      if (i < furthest && !time.has(key)) stages[i]!.skipped++;
     });
     const last = stays.at(-1);
     const i = last ? order.get(last.stage) : undefined;
@@ -244,7 +244,7 @@ export function projectRunsDigest(input: {
         stages[i]!.now++;
         if (
           last.from !== null &&
-          now - last.from >= RUNS_DIGEST_STALL_DAYS * DAY_MS
+          now - last.from >= 0
         )
           stages[i]!.stalled++;
       }
