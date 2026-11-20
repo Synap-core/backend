@@ -24,6 +24,7 @@ import {
 import { stableStringify } from "../utils/stable-stringify.js";
 import { stampPlaybookRunIds } from "../services/automations/playbook-run-ids.js";
 import { playbookNotInSpaceReason } from "../services/playbooks/playbook-lifecycle.js";
+import { findNonArchivedAutomationByName } from "../services/playbooks/cron-automation.js";
 import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
@@ -792,36 +793,6 @@ async function prepareAutomationForMaterialization(
     input.workspaceId,
     createdBy
   );
-}
-
-/**
- * Load the surviving non-archived automation for (workspaceId, name).
- * Case-insensitive on name; NULL workspace = pod-wide (matches the unique index
- * COALESCE sentinel). Newest-wins (updated_at DESC) so concurrent 23505 recovery
- * agrees with 0230's soft-archive keep-most-recently-updated rule.
- */
-async function findNonArchivedAutomationByName(
-  database: AutomationDatabase,
-  workspaceId: string | null | undefined,
-  name: string
-): Promise<{ id: string } | null> {
-  const scope =
-    workspaceId == null || workspaceId === ""
-      ? isNull(automations.workspaceId)
-      : eq(automations.workspaceId, workspaceId);
-  const [row] = await database
-    .select({ id: automations.id })
-    .from(automations)
-    .where(
-      and(
-        scope,
-        drizzleSql`lower(${automations.name}) = lower(${name})`,
-        ne(automations.status, "archived")
-      )
-    )
-    .orderBy(desc(automations.updatedAt), desc(automations.id))
-    .limit(1);
-  return row ?? null;
 }
 
 /**
