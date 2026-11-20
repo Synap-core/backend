@@ -54,13 +54,17 @@ export function sameAccess(a: AccessInput, b: AccessInput): boolean {
       projects === "all" ||
       projects.length > 0;
     const writePlace = x.write.spaces.length + x.write.projects.length > 0;
-    const sorted = (l: string[] | "all") => (l === "all" ? "all" : [...l].sort());
+    const sorted = (l: string[] | "all") =>
+      l === "all" ? "all" : [...l].sort();
     return JSON.stringify({
       permissions: x.permissions
         .filter((p) => (isReadPermission(p) ? readPlace : writePlace))
         .sort(),
       read: { spaces: sorted(x.read.spaces), projects: sorted(projects) },
-      write: { spaces: sorted(x.write.spaces), projects: sorted(x.write.projects) },
+      write: {
+        spaces: sorted(x.write.spaces),
+        projects: sorted(x.write.projects),
+      },
     });
   };
   return norm(a) === norm(b);
