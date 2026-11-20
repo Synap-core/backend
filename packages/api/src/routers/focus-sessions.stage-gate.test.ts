@@ -89,6 +89,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 vi.mock("@synap/events", () => ({ emitSideEffects: async () => undefined }));
+// The orchestrator hold (D-O1) is its own rule with its own suite
+// (`start-orchestrator.pglite.test.ts`); nothing here is orchestrated.
+vi.mock("@synap/jobs/utils/orchestrator-hold.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  orchestratorHolding: async () => null,
+}));
 // The stage runner (slice 3) has its own suite (`stage-runner.pglite.test.ts`);
 // here only WHETHER the advance enters the stage is asserted.
 const entered: Array<{ stageKey: string; cause: unknown }> = [];

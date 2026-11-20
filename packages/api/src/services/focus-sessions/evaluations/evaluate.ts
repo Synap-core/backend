@@ -35,6 +35,7 @@ import {
   and,
   eq,
   drizzleSql,
+  listHolds,
   setSessionStatus,
 } from "@synap/database";
 import {
@@ -43,6 +44,7 @@ import {
   type SessionCriterion,
 } from "@synap/playbooks";
 import { deriveSlotKeys } from "../slot-keys.js";
+import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import {
   isJudgeRequestRefused,
   judgeSessionCriteria,
@@ -102,8 +104,8 @@ export interface EvaluateSessionParams {
   /**
    * Restrict to the criteria a fact is ABOUT: a criterion whose key, or whose
    * evidence key, is listed. The event re-check (`dev-loop/recheck-criteria.ts`)
-   * passes the outcome keys a fact just moved, so a merge re-grades the
-   * criteria on that PR and never the rest of the session.
+   * passes the criteria about the outcome a fact just moved, so a merge
+   * re-grades the criteria on that PR and never the rest of the session.
    */
   criterionKeys?: ReadonlyArray<string>;
   /**
@@ -112,6 +114,12 @@ export interface EvaluateSessionParams {
    * tRPC `evaluate`) set it; absent ⇒ a spent criterion stays the agent's work.
    */
   escalate?: boolean;
+  /**
+   * The check of a stage gate, inside an advance (`stage-gate.ts`): the
+   * gate reads the grades itself, so this evaluation neither resumes a held
+   * gate nor advances the step (that would advance twice in one move).
+   */
+  asGateCheck?: boolean;
 }
 
 export interface CriterionRunOutcome {
@@ -186,22 +194,24 @@ export function capabilityVerdict(
 
 /**
  * The outcome a criterion checks, as a capability parameter: the session's
- * slot with the criterion's key, `{ outcome: {key, kind, label, ref?} }`, or
- * nothing when there is none. Pure.
+ * slot the criterion names by `outputKey`, `{ outcome: {key, kind, label,
+ * ref?} }`, or nothing when it names none the session holds. Pure.
  */
 export function outcomeParameter(
   expectedOutputs: unknown,
-  criterionKey: string
+  criterion: Pick<SessionCriterion, "outputKey">
 ): { outcome?: { key: string; kind: string; label: string; ref?: unknown } } {
+  const outputKey = criterion.outputKey;
+  if (!outputKey) return {};
   const slots = Array.isArray(expectedOutputs)
     ? (expectedOutputs as ExpectedOutput[])
     : [];
-  const index = deriveSlotKeys(slots).indexOf(criterionKey);
+  const index = deriveSlotKeys(slots).indexOf(outputKey);
   const slot = index === -1 ? undefined : slots[index];
   if (!slot) return {};
   return {
     outcome: {
-      key: criterionKey,
+      key: outputKey,
       kind: slot.kind,
       label: slot.label,
       ...(slot.ref ? { ref: slot.ref } : {}),
@@ -324,10 +334,10 @@ export async function evaluateSession(
         parameters: {
           sessionId,
           criterionKey: c.key,
-          // The outcome this criterion checks (same key), with its `ref`, so
-          // a verb that reads the world (a GitHub PR read) can find WHAT to
-          // check without a second lookup (plan v5 T2).
-          ...outcomeParameter(session.expectedOutputs, c.key),
+          // The outcome this criterion checks (`outputKey`), with its `ref`,
+          // so a verb that reads the world (a GitHub PR read) can find WHAT
+          // to check without a second lookup (plan v5 T2).
+          ...outcomeParameter(session.expectedOutputs, c),
         },
         workspaceId: session.workspaceId,
         userId,
@@ -400,11 +410,27 @@ export async function evaluateSession(
         try {
           const judge = (m: string) =>
             judgeSessionCriteria(svc.endpoint, svc.serviceApiKey, {
-              criteria: group.map((c) => ({
-                key: c.key,
-                statement: c.statement,
-                ...(c.check.hint ? { hint: c.check.hint } : {}),
-              })),
+              criteria: group.map((c) => {
+                // The output it checks, so the judge grades that output.
+                const { outcome } = outcomeParameter(
+                  session.expectedOutputs,
+                  c
+                );
+                return {
+                  key: c.key,
+                  statement: c.statement,
+                  ...(c.check.hint ? { hint: c.check.hint } : {}),
+                  ...(outcome
+                    ? {
+                        output: {
+                          key: outcome.key,
+                          kind: outcome.kind,
+                          label: outcome.label,
+                        },
+                      }
+                    : {}),
+                };
+              }),
               material: m,
               ...(typeof modelId === "string" && modelId
                 ? { excludeModel: modelId }
@@ -470,11 +496,22 @@ export async function evaluateSession(
     session.criteria,
     await listSessionEvaluations({ sessionId, userId })
   );
+  if (params.asGateCheck) {
+    return { status: "evaluated", results, resumed: false, ...after };
+  }
   const resumed = await resumeCheckGateIfMet({
     sessionId,
     userId,
     summary: after,
   });
+  // A pass may complete the stage's work: the step moves on by itself (W6).
+  const passed = results
+    .filter((r) => r.status === "recorded" && r.verdict === "pass")
+    .map((r) => r.key);
+  if (!resumed && passed.length > 0) {
+    const { advanceOnGrade } = await import("../advance-if-stage-met.js");
+    await advanceOnGrade({ sessionId, criterionKeys: passed });
+  }
   return { status: "evaluated", results, resumed, ...after };
 }
 
@@ -596,6 +633,14 @@ export async function gradeCriterionAsOwner(params: {
     sessionId: params.sessionId,
     userId: params.userId,
   });
+  // A pass may complete the stage's work: the step moves on by itself (W6).
+  if (!resumed && params.verdict === "pass") {
+    const { advanceOnGrade } = await import("../advance-if-stage-met.js");
+    await advanceOnGrade({
+      sessionId: params.sessionId,
+      criterionKeys: [params.criterionKey],
+    });
+  }
   return { out, resumed };
 }
 
@@ -637,12 +682,32 @@ export async function gradeCriterionAfterAct(params: {
 }
 
 /**
+ * Is the session's CURRENT hold the check gate's own (`check:<stageKey>`,
+ * the hold `applyCheckGate` records)? `metadata.checkGate` outlives the hold
+ * it explains (an `onFail` return keeps it, a person's resume leaves it), so
+ * only the hold says the gate is what holds the session now: a session a
+ * person paused, or a run that stopped to wait on them, is never released
+ * by its outcomes.
+ */
+export async function heldByCheckGate(
+  sessionId: string,
+  stageKey: string
+): Promise<boolean> {
+  const [hold] = await listHolds(db, {
+    subjects: [{ subjectType: "focus_session", subjectId: sessionId }],
+  });
+  return hold?.hold.ref === `check:${stageKey}`;
+}
+
+/**
  * The RESUME half of a `check` stage gate (services/playbooks/stage-gate.ts):
  * a session paused by a check gate goes back to `active` once every required
- * criterion of the stage it left passes. Called after every evaluation and every
- * human grade — re-running the check IS the resume, no proposal involved.
- * Guarded on `status = 'paused'` so a session a person paused for another reason
- * (no `checkGate` record) is never resumed by it. Resuming writes the judged
+ * outcome of the stage it left is met (`checkGateFailing`). Called after every
+ * evaluation and every human grade, and by the step rule when an outcome
+ * settles (W6) — re-running the check IS the resume, no proposal involved.
+ * Guarded on `status = 'paused'` AND the gate's own hold being the current one
+ * ({@link heldByCheckGate}), so a session paused for another reason is never
+ * resumed by it, even with a stale `checkGate` record. Resuming writes the judged
  * stage's `onApproved`, then the gated stage's `subjectStatus` (the pass the
  * advance door was waiting for).
  */
@@ -663,7 +728,9 @@ export async function resumeCheckGateIfMet(params: {
   if (
     !session ||
     session.status !== "paused" ||
-    typeof gate?.fromStage !== "string"
+    typeof gate?.fromStage !== "string" ||
+    typeof gate.stageKey !== "string" ||
+    !(await heldByCheckGate(session.id, gate.stageKey))
   ) {
     return false;
   }
@@ -676,7 +743,20 @@ export async function resumeCheckGateIfMet(params: {
         userId: params.userId,
       })
     );
-  if (checkGateFailing(summary, gate.fromStage).length > 0) return false;
+  const proc = await loadSessionProcess({
+    sessionId: session.id,
+    playbookId: session.playbookId,
+  });
+  const failing = checkGateFailing(
+    {
+      stages: proc?.stages ?? [],
+      expectedOutputs: session.expectedOutputs,
+      criteria: summary.criteria,
+      evaluations: summary.evaluations,
+    },
+    gate.fromStage
+  );
+  if (failing.length > 0) return false;
   // The check gate's own release: the system's move.
   const { rows: resumed } = await setSessionStatus(db, {
     sessionId: session.id,

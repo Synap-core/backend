@@ -8,8 +8,10 @@
  *            stage with the statuses it owns (`subjectStatusOwner`, the
  *            runtime's own stage ↔ status rule: the status it ENTERS and the
  *            one its approved work REACHES, decision D2), its gate, the flow's
- *            executor and enabled workers, and its open runs, marked when
- *            they run a frozen copy older than the live flow;
+ *            executor and enabled workers, its open runs, marked when
+ *            they run a frozen copy older than the live flow, and the
+ *            playbooks whose run end starts it (`startsAfter`, its live
+ *            links: `readPlaybookLinksInto`), so a chain reads as edges;
  *   cards    the things by state with who works them (`readBoard`, the
  *            board door's own body: same lens, grouping, windows, stuck rule,
  *            unclassified column, `workedBy`) and each card's next step
@@ -47,6 +49,7 @@ import {
   or,
   playbookRuns,
   playbooks,
+  readStoredIntent,
   workspaces,
 } from "@synap/database";
 import {
@@ -70,6 +73,7 @@ import {
   listEnabledWorkers,
   type EnabledWorker,
 } from "../playbooks/workers.js";
+import { readPlaybookLinksInto } from "../playbooks/playbook-links.js";
 import { nextPathStep } from "../status/next-move.js";
 import { readThingBlockers } from "../status/thing-blockers.js";
 import { boardLensInput, readBoard, type BoardReader } from "./board.js";
@@ -138,23 +142,26 @@ function stageRefOf(
 export async function readSpaceOutputs(
   userId: string,
   workspaceId: string
-): Promise<{ primaryOutput: string | null; produces: string[] }> {
+): Promise<{
+  primaryOutput: string | null;
+  produces: string[];
+  /** Kinds of `produces` the template marks helpers (worked, not an output). */
+  helpers: string[];
+}> {
   const visible = await getUserWorkspaceIds(userId);
   if (!visible.includes(workspaceId))
-    return { primaryOutput: null, produces: [] };
+    return { primaryOutput: null, produces: [], helpers: [] };
   const [row] = await db
     .select({ settings: workspaces.settings })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
-  const intent = (row?.settings as { intent?: unknown } | null)?.intent as
-    { primary?: unknown; produces?: unknown } | null | undefined;
-  const raw = intent?.primary;
-  const primary = typeof raw === "string" && raw.trim() ? raw.trim() : null;
-  const produces = Array.isArray(intent?.produces)
-    ? intent.produces.filter((s): s is string => typeof s === "string")
-    : [];
-  return { primaryOutput: primary, produces };
+  const intent = readStoredIntent(row?.settings);
+  return {
+    primaryOutput: intent?.primary ?? null,
+    produces: intent?.produces ?? [],
+    helpers: intent?.helpers ?? [],
+  };
 }
 
 export async function readFlowOf(
@@ -240,6 +247,12 @@ export async function readFlowOf(
     lensWorkspaceId ? readSpaceOutputs(ctx.userId, lensWorkspaceId) : null,
   ]);
 
+  // Each flow's live links in: the playbooks whose run end starts it.
+  const linksInto = await readPlaybookLinksInto(
+    pbRows.map((p) => p.id),
+    scopedDb(AccessContext.from(ctx)).predicate(playbooks)
+  );
+
   // Open runs per flow, and those on a frozen copy older than the live one.
   const runsBy = new Map<string, { open: number; onOlderVersion: number }>();
   if (pbRows.length > 0) {
@@ -324,6 +337,7 @@ export async function readFlowOf(
       owns,
       undeclaredStatuses: [...undeclared],
       runs: runsBy.get(pb.id) ?? { open: 0, onOlderVersion: 0 },
+      startsAfter: linksInto.get(pb.id) ?? [],
       workers: workers
         .filter((w) => w.playbookId === pb.id)
         .map((w) => ({

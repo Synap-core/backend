@@ -1,5 +1,5 @@
 import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
-import { stampSlotKeys } from "@synap-core/types/units";
+import { nameSharedKeyOutputs, stampSlotKeys } from "@synap-core/types/units";
 import { db } from "../client-pg.js";
 import { focusSessions, type FocusSession } from "../schema/focus-sessions.js";
 import { stampProbeMarker } from "./request-write-context.js";
@@ -128,8 +128,11 @@ export function derivedSessionTitle(row: {
  */
 export function sessionDefinitionColumns(
   playbook: SessionDefinition | null | undefined,
-  expectedOutputs: readonly unknown[] | undefined
+  expectedOutputs: readonly unknown[] | undefined,
+  criteria: readonly unknown[] | undefined
 ) {
+  // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
+  const slots = stampSlotKeys([...(expectedOutputs ?? [])]);
   return {
     playbookId: playbook?.id ?? null,
     // SNAPSHOTTED at birth, like criteria and slots: editing the playbook
@@ -138,8 +141,10 @@ export function sessionDefinitionColumns(
     // "Seeded from the playbook's first stage on instantiation" (the column's
     // contract); a stageless playbook leaves it NULL.
     currentStage: firstStageKey(playbook?.stages),
-    // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
-    expectedOutputs: stampSlotKeys([...(expectedOutputs ?? [])]) as never[],
+    expectedOutputs: slots as never[],
+    // A criterion sharing a slot's key names it (`outputKey`, W4): the input
+    // normalisation of every criteria write door, here for every birth.
+    criteria: [...nameSharedKeyOutputs(criteria ?? [], slots)] as never[],
   };
 }
 
@@ -179,14 +184,17 @@ export async function insertFocusSessionRow(
     trackStage: trackId ? (row.trackStage ?? null) : null,
     subjectEntityId: row.subjectEntityId ?? null,
     templateId: row.templateId ?? null,
-    ...sessionDefinitionColumns(row.playbook, row.expectedOutputs),
+    ...sessionDefinitionColumns(
+      row.playbook,
+      row.expectedOutputs,
+      row.criteria
+    ),
     // Typed origin (migration 0240): the door says who authored the row from
     // its own typed inputs, never from the metadata bag.
     origin: row.origin,
     channelId: row.channelId ?? null,
     agentIds: row.agentIds ?? [],
     status: row.status ?? "active",
-    criteria: [...(row.criteria ?? [])] as never[],
     oneLivePerSubject: row.oneLivePerSubject === true,
     // D8: a test-key request's session is a probe (no-op outside that scope).
     metadata: stampProbeMarker(metadata),

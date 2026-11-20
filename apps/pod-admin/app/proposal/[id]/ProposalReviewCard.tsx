@@ -17,11 +17,14 @@
  *         lines; a possible twin under it, each a door ("Looks like");
  *       why, as ONE mark (the reason's short label, its sentence on press),
  *         then the requester's own note, labelled as theirs and clamped;
- *       the decision bar, pinned to the bottom, with who decides. A create
- *         with a record twin has no plain Approve: its verbs ARE the approve
- *         (Fill empty fields · Use existing · Overwrite · Keep both); a
- *         capture graph's Approve sends one choice per item. "Can't be undone"
- *         is the one consequence marked — undo is the default;
+ *       the decision bar, pinned to the bottom: ONE row of verbs, Approve
+ *         and Reject as split buttons whose chevrons hold "always allow" /
+ *         "never allow" (founder, 17 Nov 2026, on a phone). A create with a
+ *         record twin has no plain Approve: its verbs ARE the approve (Fill
+ *         empty fields · Use existing · Overwrite · Keep both); a capture
+ *         graph's Approve sends one choice per item. "Can't be undone" is
+ *         said on the first press of Approve (`ApproveConfirm`) — undo is
+ *         the default;
  *       Advanced (ids + raw request), collapsed, last.
  *
  * This file owns provenance and the ONE "Advanced". Hosts draw only their
@@ -39,7 +42,13 @@
 
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
-import { Button, Popover, PopoverContent, PopoverTrigger } from "@heroui/react";
+import {
+  Button,
+  ButtonGroup,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@heroui/react";
 import {
   Check,
   Clock,
@@ -88,6 +97,7 @@ import { DocumentUpdateChanges } from "./DocumentUpdateChanges";
 import { UpdatedDoor } from "./UpdatedDoor";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu, RejectNeverMenu } from "./AlwaysApproveMenu";
+import { ApproveConfirm, approvePressAct } from "./ApproveConfirm";
 import { proposalPageT, type OutcomeKey } from "./copy";
 import { DeferredWritesList } from "./DeferredWritesList";
 import { FailedApproval } from "./FailedApproval";
@@ -117,7 +127,10 @@ import {
 import { useProposalStory } from "../../_lib/request/use-proposal-story";
 import { REQUEST_CATALOGS } from "../../_lib/request/copy";
 import { useConsoleLocale, useT } from "../../../lib/i18n/locale-provider";
-import { DecisionFooter } from "../../_lib/request/decision-footer";
+import {
+  DecisionFooter,
+  RecordedInAuditLog,
+} from "../../_lib/request/decision-footer";
 import { RefuseSheet, RefuseTrigger } from "../../_lib/request/refuse-sheet";
 import { proposalSetupBlock, type SetupBlock } from "./proposal-setup-model";
 import {
@@ -467,6 +480,9 @@ function Outcome({
           </span>
         )}
         {created && <CreatedDoor created={created} />}
+        {/* Where the decision is kept, said once it is made (it left the
+            bar before it, founder 17 Nov 2026). */}
+        <RecordedInAuditLog />
       </div>
     </div>
   );
@@ -639,6 +655,8 @@ function DecisionButtons({
   stopTwins?: readonly ApprovalRunTwin[] | null;
 }) {
   const [rejecting, setRejecting] = useState(false);
+  // An irreversible Approve, pressed once: the verbs become its named confirm.
+  const [confirming, setConfirming] = useState(false);
   const [pickedId, setPickedId] = useState<string | null>(null);
   // A rule menu decides through its own calls (approve or reject, then a
   // rule): the bar holds every verb while either it or a menu is deciding.
@@ -676,6 +694,9 @@ function DecisionButtons({
       onPress={() => setRejecting(true)}
     />
   );
+  /* The twin verbs approve in one press each, with no confirm step: there
+     "Can't be undone" stays a mark beside Reject. The plain Approve says it
+     on its first press instead (`ApproveConfirm`). */
   const undoChip = undo && <DisclosedMark mark={undo} icon={TriangleAlert} />;
 
   if (stopTwins && stopTwins.length > 0 && mode.kind !== "twin-verbs") {
@@ -736,70 +757,123 @@ function DecisionButtons({
     waiting = missing.length > 0;
   }
 
+  // A tool run's text edited before approving goes on its revision chain
+  // (`decision.approveWithChanges`, main): the verb says so.
   const withEdits =
     toolEdits !== null && Object.keys(toolEdits).length > 0 && !resume;
-  // A tool run's policy menus are the advanced part: behind Details.
-  const policyMenus =
-    reviewToolRun(p.review) !== null
-      ? (menus: ReactNode) => (
-          <details data-tool-run-policy="" className="text-[12.5px]">
-            <summary className="min-h-11 cursor-pointer select-none py-2.5 font-medium text-foreground/70">
-              {t("toolRun.details")}
-            </summary>
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              {menus}
-            </div>
-          </details>
-        )
-      : (menus: ReactNode) => <>{menus}</>;
+  const verb = withEdits
+    ? t("toolRun.approveWithChanges")
+    : resolveActionLabel(resume ? "resume" : "approve");
+  const approve = () =>
+    withEdits
+      ? decision.approveWithChanges({ ...toolEdits }, choice)
+      : decision.approve(choice);
+  if (confirming && undo) {
+    return (
+      <ApproveConfirm
+        verb={verb}
+        undo={undo}
+        loading={decision.approving}
+        disabled={busy || waiting || setupBlock !== null}
+        onConfirm={approve}
+        onCancel={() => setConfirming(false)}
+      />
+    );
+  }
+  /* Never widen autonomy beside the approval of something that acts on its
+     own: that moment is for reading it, not for "always". */
+  const mayAlways =
+    mayRule &&
+    mode.kind === "plain" &&
+    !pageOnlyReasonActs(proposalPageOnlyReason(p));
+  // "Never" narrows, so it stays beside a change that acts on its own.
+  const mayNever = mayRule && mode.kind === "plain";
+  // A tool run's policy menus are the advanced part: behind Details, never
+  // in the row (main, the tool-run card).
+  const menusInDetails = reviewToolRun(p.review) !== null;
 
+  /* ONE row at every width. In a narrow bar (a phone, founder 17 Nov 2026)
+     Approve and Reject are split buttons, each chevron opening its rule
+     menu, and the verbs drop their glyph or the two groups wrap at 390 px.
+     In a wide bar (desktop, founder 18 Nov 2026: "keep the full row with
+     approve always & reject always") the four are labelled buttons. Both
+     forms are rendered; the BAR's width picks one (`.rq-verbs` in
+     globals.css: a container query, so the docked panel follows its own
+     width, not the window's). Without a menu the verb is a plain button. */
+  const ruleProps = {
+    proposal: p,
+    disabled: busy,
+    onRunningChange: setRuleRunning,
+    onDone: onDecided,
+  };
+  const rowAlways = mayAlways && !menusInDetails;
+  const rowNever = mayNever && !menusInDetails;
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button
-        color="success"
-        className="min-h-11"
-        startContent={<Check size={16} />}
-        isLoading={decision.approving}
-        isDisabled={busy || waiting || setupBlock !== null}
-        // The primary verb, at the same size as Refuse beside it (S8).
-        aria-describedby={setupBlock ? "review-setup-block" : undefined}
-        onPress={() =>
-          withEdits
-            ? decision.approveWithChanges({ ...toolEdits }, choice)
-            : decision.approve(choice)
-        }
-      >
-        {withEdits
-          ? t("toolRun.approveWithChanges")
-          : resolveActionLabel(resume ? "resume" : "approve")}
-      </Button>
-      {rejectButton}
-      {mayRule &&
-        mode.kind === "plain" &&
-        policyMenus(
-          <>
-            {/* Never widen autonomy beside the approval of something that
-                acts on its own: that moment is for reading it, not for
-                "always". */}
-            {!pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
-              <AlwaysApproveMenu
-                proposal={p}
-                disabled={busy}
-                onRunningChange={setRuleRunning}
-                onDone={onDecided}
-              />
-            )}
-            {/* "Never" narrows, so it stays beside a change that acts on its
-                own. */}
-            <RejectNeverMenu
-              proposal={p}
-              disabled={busy}
-              onRunningChange={setRuleRunning}
-              onDone={onDecided}
+    <div className="flex flex-col gap-1.5">
+      <div className="rq-verbs">
+        <div
+          data-decision-verbs=""
+          className="flex flex-wrap items-center gap-2"
+        >
+          <ButtonGroup>
+            <Button
+              color="success"
+              className="min-h-11 px-3 sm:px-4"
+              startContent={
+                <Check size={16} className="rq-lead hidden sm:block" />
+              }
+              isLoading={decision.approving}
+              isDisabled={busy || waiting || setupBlock !== null}
+              aria-describedby={setupBlock ? "review-setup-block" : undefined}
+              onPress={() =>
+                approvePressAct(undo) === "confirm"
+                  ? setConfirming(true)
+                  : approve()
+              }
+            >
+              {verb}
+            </Button>
+            {rowAlways ? (
+              <AlwaysApproveMenu {...ruleProps} className="rq-split-only" />
+            ) : null}
+          </ButtonGroup>
+          <ButtonGroup>
+            {rejectButton}
+            {rowNever ? (
+              <RejectNeverMenu {...ruleProps} className="rq-split-only" />
+            ) : null}
+          </ButtonGroup>
+          {rowAlways ? (
+            <AlwaysApproveMenu
+              {...ruleProps}
+              trigger="labelled"
+              className="rq-full-only"
             />
-          </>
-        )}
-      {undoChip}
+          ) : null}
+          {rowNever ? (
+            <RejectNeverMenu
+              {...ruleProps}
+              trigger="labelled"
+              className="rq-full-only"
+            />
+          ) : null}
+        </div>
+      </div>
+      {menusInDetails && (mayAlways || mayNever) ? (
+        <details data-tool-run-policy="" className="text-[12.5px]">
+          <summary className="min-h-11 cursor-pointer select-none py-2.5 font-medium text-foreground/70">
+            {t("toolRun.details")}
+          </summary>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {mayAlways ? (
+              <AlwaysApproveMenu {...ruleProps} trigger="labelled" />
+            ) : null}
+            {mayNever ? (
+              <RejectNeverMenu {...ruleProps} trigger="labelled" />
+            ) : null}
+          </div>
+        </details>
+      ) : null}
       {waiting && (
         <span className="text-[12px] text-foreground/70">
           {t("decide.pickFirst")}
@@ -1153,7 +1227,6 @@ export function ProposalReviewBody({
   const reason = reasonMark(p.governanceReason);
   const reasonComputer = askingComputer(p);
   const undo = undoMark(p.revertable);
-  const { actor } = proposalRequesterParts({ ...p, agentActorName: agentName });
 
   /* A single create's twins sit under its own card; a graph item's sit inside
      that item's card, with its choice. */
@@ -1219,24 +1292,10 @@ export function ProposalReviewBody({
         }
         footer={
           <DecisionFooter
-            identity={identity}
             className={`${actionable ? "sticky" : ""} ${barClassName}`}
-            consequence={
-              actionable && !applying ? (
-                <>
-                  {/* Flat: what approving does is said here, once. */}
-                  {flat && (
-                    <span data-story-after="approve">
-                      {rt("story.approveDoes", { change: heading })}{" "}
-                    </span>
-                  )}
-                  {/* The requester is named by the head, once. */}
-                  {actor?.role === "agent"
-                    ? rt("refuse.proposalConsequenceAgent")
-                    : rt("refuse.proposalConsequenceAnyone")}
-                </>
-              ) : undefined
-            }
+            /* No sentence under the verbs (founder, 17 Nov 2026): what
+               approving does is the title and the head; what rejecting does
+               is said in the Reject step. */
             verbs={
               applying && run ? (
                 <>

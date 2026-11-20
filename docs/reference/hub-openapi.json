@@ -6943,6 +6943,97 @@
           "revokedAt"
         ]
       },
+      "DesignCatalog": {
+        "type": "object",
+        "properties": {
+          "kitId": { "type": "string" },
+          "hash": { "type": "string" },
+          "components": { "type": "object", "additionalProperties": {} },
+          "layout": { "type": "object", "additionalProperties": {} },
+          "grid": { "type": "object", "additionalProperties": {} },
+          "frames": {},
+          "generatedAt": { "type": "string" },
+          "appId": { "type": "string" },
+          "kit": {
+            "type": "object",
+            "properties": {
+              "kitId": { "type": "string" },
+              "hash": { "type": "string" },
+              "react": { "type": "string" },
+              "files": { "type": "object", "additionalProperties": {} },
+              "canvas": {}
+            },
+            "required": ["kitId", "hash", "react", "files"]
+          }
+        },
+        "required": ["kitId", "hash", "components", "layout", "grid"]
+      },
+      "DesignKitFile": {
+        "type": "object",
+        "properties": {
+          "kitId": { "type": "string" },
+          "hash": { "type": "string" },
+          "part": { "type": "string", "enum": ["js", "css"] },
+          "sha256": { "type": "string" },
+          "bytes": { "type": "integer" },
+          "content": { "type": "string" }
+        },
+        "required": ["kitId", "hash", "part", "sha256", "bytes", "content"]
+      },
+      "ApplyDesignReply": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "created",
+              "revised",
+              "proposed",
+              "refused",
+              "conflict"
+            ]
+          }
+        },
+        "required": ["status"],
+        "additionalProperties": {}
+      },
+      "ApplyDesignRequest": {
+        "type": "object",
+        "properties": {
+          "designId": { "type": "string", "format": "uuid" },
+          "baseUpdatedAt": { "type": "string", "minLength": 1 },
+          "ops": {
+            "type": "array",
+            "items": { "type": "object", "additionalProperties": {} },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "acceptDrops": { "type": "boolean" }
+        },
+        "required": ["ops"],
+        "additionalProperties": false
+      },
+      "DesignRead": {
+        "type": "object",
+        "properties": {
+          "design": { "type": "object", "additionalProperties": {} },
+          "board": {},
+          "frames": { "type": "array", "items": {} },
+          "migrated": { "type": "boolean" },
+          "dropped": { "type": "array", "items": {} },
+          "droppedText": { "type": "array", "items": { "type": "string" } },
+          "catalog": { "type": "object", "additionalProperties": {} }
+        },
+        "required": [
+          "design",
+          "frames",
+          "migrated",
+          "dropped",
+          "droppedText",
+          "catalog"
+        ]
+      },
       "Skill": {
         "type": "object",
         "properties": {
@@ -18647,6 +18738,10 @@
                                         "about": {
                                           "type": "string",
                                           "enum": ["result", "method"]
+                                        },
+                                        "outputKey": {
+                                          "type": "string",
+                                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                         }
                                       },
                                       "required": ["key", "statement", "check"],
@@ -19881,6 +19976,10 @@
                                   "about": {
                                     "type": "string",
                                     "enum": ["result", "method"]
+                                  },
+                                  "outputKey": {
+                                    "type": "string",
+                                    "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                   }
                                 },
                                 "required": ["key", "statement", "check"],
@@ -19946,7 +20045,8 @@
                                           "enters_status",
                                           "count",
                                           "schedule",
-                                          "manual"
+                                          "manual",
+                                          "run_ended"
                                         ]
                                       },
                                       "status": {
@@ -19963,6 +20063,15 @@
                                         "type": "integer",
                                         "minimum": 2,
                                         "maximum": 10000
+                                      },
+                                      "playbook": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "outcome": {
+                                        "type": "string",
+                                        "enum": ["done", "not_done"]
                                       },
                                       "size": {
                                         "type": "string",
@@ -20032,6 +20141,10 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
+                                },
+                                "entityId": {
+                                  "type": "string",
+                                  "format": "uuid"
                                 }
                               },
                               "additionalProperties": {}
@@ -20048,7 +20161,8 @@
                                       "enters_status",
                                       "count",
                                       "schedule",
-                                      "manual"
+                                      "manual",
+                                      "run_ended"
                                     ]
                                   },
                                   "status": {
@@ -20065,6 +20179,15 @@
                                     "type": "integer",
                                     "minimum": 2,
                                     "maximum": 10000
+                                  },
+                                  "playbook": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": ["done", "not_done"]
                                   },
                                   "size": {
                                     "type": "string",
@@ -23944,6 +24067,10 @@
                                         "about": {
                                           "type": "string",
                                           "enum": ["result", "method"]
+                                        },
+                                        "outputKey": {
+                                          "type": "string",
+                                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                         }
                                       },
                                       "required": ["key", "statement", "check"],
@@ -25178,6 +25305,10 @@
                                   "about": {
                                     "type": "string",
                                     "enum": ["result", "method"]
+                                  },
+                                  "outputKey": {
+                                    "type": "string",
+                                    "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                   }
                                 },
                                 "required": ["key", "statement", "check"],
@@ -25243,7 +25374,8 @@
                                           "enters_status",
                                           "count",
                                           "schedule",
-                                          "manual"
+                                          "manual",
+                                          "run_ended"
                                         ]
                                       },
                                       "status": {
@@ -25260,6 +25392,15 @@
                                         "type": "integer",
                                         "minimum": 2,
                                         "maximum": 10000
+                                      },
+                                      "playbook": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "outcome": {
+                                        "type": "string",
+                                        "enum": ["done", "not_done"]
                                       },
                                       "size": {
                                         "type": "string",
@@ -25329,6 +25470,10 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
+                                },
+                                "entityId": {
+                                  "type": "string",
+                                  "format": "uuid"
                                 }
                               },
                               "additionalProperties": {}
@@ -25345,7 +25490,8 @@
                                       "enters_status",
                                       "count",
                                       "schedule",
-                                      "manual"
+                                      "manual",
+                                      "run_ended"
                                     ]
                                   },
                                   "status": {
@@ -25362,6 +25508,15 @@
                                     "type": "integer",
                                     "minimum": 2,
                                     "maximum": 10000
+                                  },
+                                  "playbook": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": ["done", "not_done"]
                                   },
                                   "size": {
                                     "type": "string",
@@ -31456,6 +31611,10 @@
                               "about": {
                                 "type": "string",
                                 "enum": ["result", "method"]
+                              },
+                              "outputKey": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                               }
                             },
                             "required": ["key", "statement", "check"],
@@ -32557,7 +32716,8 @@
                                 "enters_status",
                                 "count",
                                 "schedule",
-                                "manual"
+                                "manual",
+                                "run_ended"
                               ]
                             },
                             "status": {
@@ -32574,6 +32734,15 @@
                               "type": "integer",
                               "minimum": 2,
                               "maximum": 10000
+                            },
+                            "playbook": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "outcome": {
+                              "type": "string",
+                              "enum": ["done", "not_done"]
                             },
                             "size": {
                               "type": "string",
@@ -32640,7 +32809,8 @@
                           "maxLength": 200
                         },
                         "maxItems": 50
-                      }
+                      },
+                      "entityId": { "type": "string", "format": "uuid" }
                     },
                     "additionalProperties": {},
                     "description": "The kind this playbook runs ON, e.g. { profileSlug: 'crm-lead' }. A profileSlug that resolves to no profile is refused."
@@ -32718,6 +32888,10 @@
                         "about": {
                           "type": "string",
                           "enum": ["result", "method"]
+                        },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                         }
                       },
                       "required": ["key", "statement", "check"],
@@ -48424,6 +48598,10 @@
                         "about": {
                           "type": "string",
                           "enum": ["result", "method"]
+                        },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                         }
                       },
                       "required": ["key", "statement", "check"],
@@ -50849,7 +51027,7 @@
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Start an orchestrator over several running sessions",
-        "description": "Files ONE governed write (focus_session/orchestrate). On approval (or at once for a person): an orchestrator session (goal = the brief, a merged-plan deliverable, the person's plan-approval slot), one `orchestrated_by` link per picked session, each running one paused until the person answers plan-approval, and a handoff note in each room. Same service as tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
+        "description": "Files ONE governed write (focus_session/orchestrate). On approval (or at once for a person): an orchestrator session (goal = the brief, a merged-plan deliverable, the person's plan-approval slot), one `orchestrated_by` link per picked session, each running one paused until the person answers plan-approval, and a handoff note in each room. Until then a held session changes no stage. A yes resumes them; a no resumes them as they were and cancels the orchestrator ('Plan declined'); an orchestrator that ends unanswered releases them. 403 when a picked session is outside the key's grant or bound workspace (nothing written). Same service as tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -52026,6 +52204,25 @@
                             },
                             "required": ["open", "onOlderVersion"]
                           },
+                          "startsAfter": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "playbookId": { "type": "string" },
+                                "playbookName": { "type": "string" },
+                                "outcome": {
+                                  "type": ["string", "null"],
+                                  "enum": ["done", "not_done", null]
+                                }
+                              },
+                              "required": [
+                                "playbookId",
+                                "playbookName",
+                                "outcome"
+                              ]
+                            }
+                          },
                           "workers": {
                             "type": "array",
                             "items": {
@@ -52068,6 +52265,7 @@
                           "owns",
                           "undeclaredStatuses",
                           "runs",
+                          "startsAfter",
                           "workers"
                         ]
                       }
@@ -52079,9 +52277,13 @@
                         "produces": {
                           "type": "array",
                           "items": { "type": "string" }
+                        },
+                        "helpers": {
+                          "type": "array",
+                          "items": { "type": "string" }
                         }
                       },
-                      "required": ["primaryOutput", "produces"]
+                      "required": ["primaryOutput", "produces", "helpers"]
                     },
                     "totals": {
                       "type": "object",
@@ -53026,14 +53228,22 @@
     "/brand/kit": {
       "get": {
         "tags": ["Brand"],
-        "summary": "The caller's brand kit (json, css, frame-md or od-design-system)",
-        "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
+        "summary": "The caller's brand kit (json, css, frame-md, od-design-system, dtcg, synap-css or css-shadcn)",
+        "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. `dtcg`, `synap-css` and `css-shadcn` render the brand's approved DTCG token set instead (the file, its `--synap-*` declarations, or its shadcn variables for a client app's kit, as JSON `{vars, light, dark}` with no selector), hashed by that set; a brand with none renders `{}` and empty declarations. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "enum": ["json", "css", "frame-md", "od-design-system"],
+              "enum": [
+                "json",
+                "css",
+                "frame-md",
+                "od-design-system",
+                "dtcg",
+                "synap-css",
+                "css-shadcn"
+              ],
               "default": "json"
             },
             "required": false,
@@ -53063,7 +53273,15 @@
                   "properties": {
                     "format": {
                       "type": "string",
-                      "enum": ["json", "css", "frame-md", "od-design-system"]
+                      "enum": [
+                        "json",
+                        "css",
+                        "frame-md",
+                        "od-design-system",
+                        "dtcg",
+                        "synap-css",
+                        "css-shadcn"
+                      ]
                     },
                     "content": { "type": "string" },
                     "hash": { "type": "string" },
@@ -53132,6 +53350,312 @@
                     "projectId"
                   ]
                 }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/catalog": {
+      "get": {
+        "tags": ["Designs"],
+        "summary": "The design catalog the pod checks designs against",
+        "description": "The installed `design` capability's catalog snapshot: the kit (`kitId`, `hash`), its components and their props, the canvas blocks (`layout`), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets. With `appId`, the catalog of that app's designs: when the app names its own kit (`design-kit`), the kit's components with Synap's canvas blocks, a hash naming both, and `kit` (React major, the two code files' sha256, how a dropped block starts). 412 when no catalog is installed or the app's kit cannot be read (never an empty catalog, never Synap's in place of the app's).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "The app (devplane_app) whose designs to check: its own kit when it names one (`design-kit`), else Synap's."
+            },
+            "required": false,
+            "description": "The app (devplane_app) whose designs to check: its own kit when it names one (`design-kit`), else Synap's.",
+            "name": "appId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The catalog",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DesignCatalog" }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an app",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such app",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "No catalog installed, or the app's kit cannot be read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/kit": {
+      "get": {
+        "tags": ["Designs"],
+        "summary": "One code file of an app's component kit",
+        "description": "The bytes of an app's kit.js (`part=js`) or kit.css (`part=css`), as its catalog (the app's `design-kit` file) names them, for the Design app to load on its own origin through its Hub proxy. Read through the caller's read floor (the app, then each file). The bytes are checked against the sha256 the catalog pins: other bytes are refused (422 `DESIGN_KIT_BYTES_MISMATCH`), never served. Answered as JSON (`content` is the file's text, `sha256` its pinned hash), never as served code, so the pod's origin never runs or applies it; the Design app checks the hash again before it loads it. 404 when the app has no kit.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "appId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "enum": ["js", "css"] },
+            "required": true,
+            "name": "part",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file's text and its hash",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DesignKitFile" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such app, or no kit",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "The kit cannot be read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "422": {
+            "description": "The bytes are not the pinned ones (DESIGN_KIT_BYTES_MISMATCH)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/apply": {
+      "post": {
+        "tags": ["Designs"],
+        "summary": "Change a design (or create one) through typed ops",
+        "description": "The ops of design.apply, applied in order, all or nothing, checked against the installed catalog. `designId` + `baseUpdatedAt` (the `updatedAt` GET /designs/:id returned) change a design; no `designId` and a first op `create_design` make one. The write goes through the entity door with the caller's own governance and the key's grant (`entity.ui-design.update` / `.create`). 200 applied / created / revised (a design past its review becomes a new draft revision) / proposed (`status` says which), 409 `DESIGN_CHANGED` changed since it was read (`updatedAt` is its time now), 422 `DESIGN_OP_REFUSED` (`opIndex`, `reasons`, `catalogHash`), 403 the grant does not allow it, 412 no catalog installed.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ApplyDesignRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied, created, revised or proposed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApplyDesignReply" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApplyDesignReply" }
+              }
+            }
+          },
+          "412": {
+            "description": "No catalog installed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApplyDesignReply" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/{id}": {
+      "get": {
+        "tags": ["Designs"],
+        "summary": "Read one design",
+        "description": "design.read: the design (status, `updatedAt` to send back as `baseUpdatedAt`, appId, whether it may be edited), its board, an outline per frame (width class, columns, block ids and types) and what the installed catalog cannot place (`dropped`). Read through the key's grant: a design it does not reach is a 404.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DesignRead" }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Not a canvas yet",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Unreadable board",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
@@ -54346,7 +54870,8 @@
                               "received",
                               "completed",
                               "approved",
-                              "rejected"
+                              "rejected",
+                              "closed"
                             ]
                           },
                           "conditions": {
@@ -54729,7 +55254,8 @@
                               "received",
                               "completed",
                               "approved",
-                              "rejected"
+                              "rejected",
+                              "closed"
                             ]
                           },
                           "conditions": {

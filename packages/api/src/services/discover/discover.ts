@@ -600,6 +600,7 @@ function lensConceptNote(projectCount: number): string {
   return (
     `WRITE by kind/profile (+ roles as facets when known) — omit workspaceId unless deliberately pinning; ` +
     `server places via installed profile metadata (never invent a workspace name). ` +
+    `Unless you pin workspaceId, a session's space comes from its playbook, subject, parent session, project or your focus. ` +
     `READ by name/id/role across everything you can access; pass workspaceId only to narrow a list. ` +
     (projectCount > 0
       ? // The project lens is the half agents never reach for. Measured: project

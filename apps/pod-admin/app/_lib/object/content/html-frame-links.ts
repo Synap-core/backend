@@ -11,10 +11,12 @@
 
 import {
   parseFrameNavigate,
+  parseFrameOpen,
   resolveFrameLink,
   type FrameLinkAction,
 } from "@synap-core/types/cell-bridge";
 import { publicPodUrl } from "../../../../lib/public-pod-url";
+import { objectPage } from "./markdown-model";
 
 /** What the host knows and can do; the browser's own is `browserFrameLinkEnv`. */
 export interface FrameLinkEnv {
@@ -49,6 +51,30 @@ export function handleFrameLink(
   if (action.action === "here") env.here(action.href);
   else if (action.action === "newTab") env.newTab(action.href);
   return action;
+}
+
+/**
+ * The "open this" intent (`window.synap.open(kind, id)`, `parseFrameOpen`):
+ * the object's console page (`objectPage`, the one door content links use),
+ * in the reader's own tab. Like a console link, it never opens while the
+ * browser says the reader did not act. Null when it is not an open message
+ * from THIS frame, or when the console has no page for it.
+ */
+export function handleFrameOpen(
+  event: { source: unknown; data: unknown },
+  frameWindow: unknown,
+  env: FrameLinkEnv
+): FrameLinkAction | null {
+  if (!frameWindow || event.source !== frameWindow) return null;
+  const open = parseFrameOpen(event.data);
+  if (!open) return null;
+  const href = objectPage(open.surface.objectKind, open.surface.objectId);
+  if (!href) return null;
+  if (env.activated() === false) {
+    return { action: "ignore", reason: "not-activated" };
+  }
+  env.here(href);
+  return { action: "here", href };
 }
 
 type UserActivation = { isActive: boolean };

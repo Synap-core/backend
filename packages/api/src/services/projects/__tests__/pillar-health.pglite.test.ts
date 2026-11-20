@@ -16,8 +16,9 @@
  *     counts once, a child session spawned under a goal's session counts;
  *   - `readProjectPillars`: a contributing goal changes nothing in the
  *     pillar's health, a dropped primary goal leaves it, a paused primary
- *     goal stalls its pillar, the root is the worst pillar, and a space
- *     with no declared-lifecycle kind says so.
+ *     goal stalls its pillar, the root is the worst pillar, a space
+ *     with no declared-lifecycle kind says so, and a kind the space declares
+ *     a HELPER is not the pillar's output.
  *
  * Only `getEffectiveLifecycle` is stubbed (its own suites prove it).
  */
@@ -116,6 +117,7 @@ import {
   readScopeRollup,
 } from "../../status/status-rollup.js";
 import {
+  indicatorOf,
   readProjectPillarFields,
   readProjectPillars,
 } from "../pillar-health.js";
@@ -787,6 +789,47 @@ describe("readProjectPillars — the derived read", () => {
 
   it("another user's project is null, never empty pillars", async () => {
     expect(await readProjectPillars("user-stranger", P)).toBeNull();
+  });
+
+  it("a kind the space declares a HELPER is not the pillar's output", async () => {
+    // Through the real read: Sales declaring its deals a helper drops them
+    // from its indicator (the first test reads them there without it).
+    const [{ settings }] = (
+      await q(`select settings from workspaces where id = $1`, [W_SALES])
+    ).rows as Array<{ settings: unknown }>;
+    await q(`update workspaces set settings = $1::jsonb where id = $2`, [
+      JSON.stringify({
+        intent: {
+          label: "Sales",
+          produces: ["deal"],
+          helpers: ["deal"],
+          source: "template",
+        },
+      }),
+      W_SALES,
+    ]);
+    try {
+      const read = await readProjectPillars(ME, P);
+      const sales = read!.pillars.find((p) => p.workspaceId === W_SALES)!;
+      expect(sales.indicator).toEqual({ declared: false, kinds: [] });
+    } finally {
+      await q(`update workspaces set settings = $1::jsonb where id = $2`, [
+        JSON.stringify(settings ?? {}),
+        W_SALES,
+      ]);
+    }
+    // The rule itself: a helper with things is left out; a declared output
+    // with none is still listed.
+    const counts = { open: 2, active: 0, paused: 0, done: 0, lost: 0 };
+    expect(
+      indicatorOf(
+        [
+          { kind: "story", byCategory: counts, stuck: 0 },
+          { kind: "feature", byCategory: counts, stuck: 1 },
+        ] as Parameters<typeof indicatorOf>[0],
+        { outputs: ["feature", "release"], helpers: ["story"] }
+      ).kinds.map((k) => k.kind)
+    ).toEqual(["feature", "release"]);
   });
 });
 

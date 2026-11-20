@@ -17,9 +17,11 @@ import { randomUUID } from "crypto";
 import { APP_PUBLIC_ID_PREFIX } from "@synap-core/types/membrane";
 import {
   assertNeverPlace,
+  liftApprovedRequests,
   parseRequestPlace,
   PlaceError,
   withAppRequestScope,
+  type AppAccess,
   type Place,
 } from "@synap-core/types/grants";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -129,11 +131,32 @@ export function readAppConnectRequests(raw: unknown): AppApprovedRequest[] {
       case "unbounded":
         // An app never holds a part with no space beyond a pod-wide read.
         break;
+      case "projects":
+        // A pair names no project (`parseRequestPlace` reads none here): an
+        // app's projects live in its v2 access (`approved_access`).
+        break;
       default:
         assertNeverPlace(place);
     }
   }
   return out;
+}
+
+/**
+ * The v2 form of an approval (`apps.approved_access`, 0434), kept in step
+ * with `approved_requests` on EVERY write of it: the lossless lift
+ * (`liftApprovedRequests`), or null when there is no approval or when the
+ * lift would change what the app may do (it then re-consents and every
+ * reader keeps its pairs). Until the consent screen writes v2 itself (W3),
+ * this is the only writer of the column besides the backfill, which applies
+ * the same rule.
+ */
+export function approvedAccessOf(
+  approvedRequests: readonly AppApprovedRequest[] | null
+): AppAccess | null {
+  if (approvedRequests === null) return null;
+  const lifted = liftApprovedRequests(approvedRequests, { examples: false });
+  return "access" in lifted ? lifted.access : null;
 }
 
 /** Thrown by `rename` when the owner already has an app of that name. */
@@ -275,6 +298,7 @@ export class AppRepository {
       // signs no one in until its owner registers redirect URIs again.
       if (existing.revokedAt || existing.removedAt) {
         patch.approvedRequests = null;
+        patch.approvedAccess = null;
         patch.redirectUris = [];
       }
       if (input.description !== undefined)
@@ -344,7 +368,12 @@ export class AppRepository {
       if (!existing.revokedAt && !existing.removedAt) return existing;
       const [row] = await this.db
         .update(apps)
-        .set({ revokedAt: null, removedAt: null, approvedRequests: null })
+        .set({
+          revokedAt: null,
+          removedAt: null,
+          approvedRequests: null,
+          approvedAccess: null,
+        })
         .where(eq(apps.id, existing.id))
         .returning();
       return row;
@@ -550,7 +579,10 @@ export class AppRepository {
     );
     const [row] = await this.db
       .update(apps)
-      .set({ approvedRequests })
+      .set({
+        approvedRequests,
+        approvedAccess: approvedAccessOf(approvedRequests),
+      })
       .where(eq(apps.id, appId))
       .returning();
     return row ?? null;
@@ -589,7 +621,10 @@ export class AppRepository {
       }
       const [row] = await tx
         .update(apps)
-        .set({ approvedRequests: merged })
+        .set({
+          approvedRequests: merged,
+          approvedAccess: approvedAccessOf(merged),
+        })
         .where(eq(apps.id, appId))
         .returning();
       return row ?? null;

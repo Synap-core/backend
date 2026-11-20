@@ -95,6 +95,7 @@ import {
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import {
+  readCriteria,
   resolveStageGate,
   stageOnApproved,
   type ExpectedOutput,
@@ -237,6 +238,14 @@ export async function writeStageSubjectStatus(input: {
    * it just reached ({@link writeGatePassStatuses}).
    */
   expectedFrom?: string;
+  /**
+   * Who moves it, when not the person or agent who advanced: the `system`
+   * for a step that advanced by itself (W6). Its caller has already ruled
+   * out a value only a person may move to.
+   */
+  actor?: StatusMoveActor;
+  /** The move that caused this one, stamped on the transition. */
+  cause?: TransitionCause;
 }): Promise<StageSubjectStatusOutcome> {
   const { session } = input;
   if (!session.subjectEntityId)
@@ -276,13 +285,16 @@ export async function writeStageSubjectStatus(input: {
       process: { ...proc, statusProperty: proc.statusProperty },
       value,
       reason: reasoning,
-      actor: input.agentUserId
-        ? {
-            kind: "agent",
-            userId: input.userId,
-            agentUserId: input.agentUserId,
-          }
-        : { kind: "human", userId: input.userId },
+      actor:
+        input.actor ??
+        (input.agentUserId
+          ? {
+              kind: "agent",
+              userId: input.userId,
+              agentUserId: input.agentUserId,
+            }
+          : { kind: "human", userId: input.userId }),
+      ...(input.cause ? { cause: input.cause } : {}),
       // A stage that pauses its subject: it waits on the stage (W4).
       pauseHold: {
         on: "thing",
@@ -460,6 +472,9 @@ export async function writeGatePassStatuses(input: {
   fromStage?: string | null;
   userId: string;
   agentUserId?: string | null;
+  /** Who moves the subject, when not the approver (a step that advanced by itself). */
+  actor?: StatusMoveActor;
+  cause?: TransitionCause;
 }): Promise<{
   reached?: StageSubjectStatusOutcome;
   entered: StageSubjectStatusOutcome;
@@ -482,6 +497,8 @@ export async function writeGatePassStatuses(input: {
                 agentUserId: input.agentUserId,
               }
             : { kind: "person", userId: input.userId },
+          ...(input.actor ? { actor: input.actor } : {}),
+          ...(input.cause ? { cause: input.cause } : {}),
         })
       )
     : undefined;
@@ -491,6 +508,8 @@ export async function writeGatePassStatuses(input: {
     userId: input.userId,
     agentUserId: input.agentUserId ?? null,
     ...(reached?.status === "written" ? { expectedFrom: reached.value } : {}),
+    ...(input.actor ? { actor: input.actor } : {}),
+    ...(input.cause ? { cause: input.cause } : {}),
   });
   return { ...(reached ? { reached } : {}), entered };
 }
@@ -519,7 +538,7 @@ async function stageLeftForGate(
  * APPROVAL SIGNAL 1, the PLAN: a slot of the session was just settled
  * (approved, attested, answered, evidenced, merged, met by its ref). Which
  * stages does that approve? A stage that declares an `onApproved` and
- * outputs, every one of them now delivered ({@link stageOutputsApproved}).
+ * outputs, every one of them now met ({@link stageOutputsApproved}).
  * The stages judged: the one the run stands on, and every EARLIER stage that
  * declares one of the `settled` slots — a run may move on before its slot
  * settles (a pull request merged after the run reached the next stage), and
@@ -552,6 +571,7 @@ export async function stagesApprovedBySettledSlots(input: {
       userId: focusSessions.userId,
       currentStage: focusSessions.currentStage,
       expectedOutputs: focusSessions.expectedOutputs,
+      criteria: focusSessions.criteria,
     })
     .from(focusSessions)
     .where(eq(focusSessions.id, input.sessionId))
@@ -576,6 +596,21 @@ export async function stagesApprovedBySettledSlots(input: {
     return at >= 0 ? [x, { key: x.key, label: slots[at]?.label ?? null }] : [x];
   });
   const declaring = new Set(stagesDeclaringSlots(proc.stages, named));
+  // "Approved" is the stage reading's "met" (W6): an output a required
+  // criterion checks is approved only when that criterion passes (D4 a).
+  const criteria = readCriteria(row.criteria);
+  const { listSessionEvaluations } = await import("./evaluations/record.js");
+  const work = {
+    expectedOutputs: slots,
+    criteria,
+    evaluations:
+      criteria.length > 0
+        ? await listSessionEvaluations({
+            sessionId: row.id,
+            userId: row.userId,
+          })
+        : [],
+  };
   const stages: Array<{ stageKey: string; stageName: string; value: string }> =
     [];
   for (const stage of proc.stages.slice(0, at + 1)) {
@@ -583,7 +618,7 @@ export async function stagesApprovedBySettledSlots(input: {
     const value = stageOnApproved(stage);
     if (!key || !value) continue;
     if (key !== row.currentStage && !declaring.has(key)) continue;
-    if (!stageOutputsApproved(proc.stages, key, slots)) continue;
+    if (!stageOutputsApproved(proc.stages, key, work)) continue;
     stages.push({ stageKey: key, stageName: stage.name ?? key, value });
   }
   return {

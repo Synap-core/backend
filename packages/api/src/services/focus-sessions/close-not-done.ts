@@ -45,6 +45,7 @@
  * blocks on criteria" (complete-session.ts); a person's close keeps it.
  */
 import {
+  checkedOutputKeys,
   deriveSlotKeys,
   isDeliverableOutstanding,
 } from "@synap-core/types/units";
@@ -201,6 +202,7 @@ export function openRequiredWork(args: {
     statement: string;
     required?: boolean;
     check?: { kind?: string };
+    outputKey?: string;
   }>;
   latest: ReadonlyArray<{
     criterionKey: string;
@@ -231,7 +233,9 @@ export function openRequiredWork(args: {
     if (!isCriterionRequired(c)) continue;
     const current = latestOf.get(c.key);
     if (current?.verdict === "pass") continue;
-    if (args.agentMovable.has(c.key) && !humanSlotKeys.has(c.key)) {
+    // A check on the person's own slot is theirs to make.
+    const onHumanSlot = !!c.outputKey && humanSlotKeys.has(c.outputKey);
+    if (args.agentMovable.has(c.key) && !onHumanSlot) {
       criteria.push({
         key: c.key,
         statement: c.statement,
@@ -243,7 +247,7 @@ export function openRequiredWork(args: {
       key: c.key,
       statement: c.statement,
       waitingOn:
-        c.check?.kind === "human" || humanSlotKeys.has(c.key)
+        c.check?.kind === "human" || onHumanSlot
           ? "person_check"
           : current?.evaluatorKind === "human"
             ? "person_graded"
@@ -251,7 +255,7 @@ export function openRequiredWork(args: {
     });
   }
 
-  const criterionKeys = new Set(args.criteria.map((c) => c.key));
+  const checkedKeys = checkedOutputKeys(args.criteria);
   const outcomes: OpenOutcomeAtClose[] = [];
   const owedByPerson: OpenOutcomeAtClose[] = [];
   slots.forEach((raw, i) => {
@@ -267,8 +271,8 @@ export function openRequiredWork(args: {
       owedByPerson.push({ key, label });
       return;
     }
-    // Judged by its criterion (one outcome, two stores): listed there.
-    if (key && criterionKeys.has(key)) return;
+    // Checked by a REQUIRED criterion (`outputKey`): listed there.
+    if (key && checkedKeys.has(key)) return;
     // Awaiting the person's review: the agent's claim, or its proposal in
     // pack mode. Listed, never refusing.
     const awaiting: AwaitingPerson | null =

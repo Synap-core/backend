@@ -49,6 +49,7 @@ import {
   apps,
   oauthAuthorizationCodes,
   profiles,
+  projects,
   users,
   webhookSubscriptions,
   workspaceMembers,
@@ -56,6 +57,7 @@ import {
   KEY_PREFIXES,
   isPodWideReadPermission,
   type AppApprovedRequest,
+  type RequestedKindGroup,
 } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
@@ -95,14 +97,26 @@ import { isSynapApp, type PodAppActsAs } from "../routers/oauth/config.js";
 import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
 import { assertPresencePass, type PresencePass } from "./presence/pass.js";
+import { AccessContext } from "../access/context.js";
+import { projectVisibleWhere } from "../access/project-visibility.js";
 import {
+  appAccessWithin,
   assertNeverPlace,
   EVERYWHERE_IN_POD,
+  grantScopesForAccess,
+  liftApprovedRequests,
+  pairsOfRequests,
+  pairsWithin,
+  expandAppAccess,
+  parseAppAccess,
   parsePlace,
   parseRequestPlace,
   permissionWithin,
   PlaceError,
+  permissionsForKinds,
+  sameAppAccess,
   withAppRequestScope,
+  type AppAccess,
   type Place,
 } from "@synap-core/types/grants";
 
@@ -664,14 +678,59 @@ const touchesAsked = (fields: unknown): boolean => {
   );
 };
 
+/** An approval in either form: the old pairs, or a v2 access (W2). */
+export type AppApprovalForm = readonly AppApprovedRequest[] | AppAccess;
+
+const isAccessForm = (form: AppApprovalForm): form is AppAccess =>
+  !Array.isArray(form);
+
+/** The v2 form of an approval: itself, or the lossless lift of its pairs. */
+function accessOfForm(form: AppApprovalForm): AppAccess | null {
+  if (isAccessForm(form)) return form;
+  const lifted = liftApprovedRequests(form, { examples: false });
+  return "access" in lifted ? lifted.access : null;
+}
+
 /**
  * approved ⊆ asked for an APP, place by place. An app's ask with no space is a
  * pod-wide read (decision e1b59d38 "B"): it covers that same pod-wide read and
  * never the read in one space, so a forged consent cannot turn "read decisions
  * everywhere" into "member of FINANCE". An AI's ask with no space does cover
  * any space (`requestsWithin`, agent-connect).
+ *
+ * Two sets of pairs are compared as pairs (`pairRequestsWithin`), the rule
+ * every approval was checked by before W2. With a v2 form on either side
+ * (W2), approved is within asked when v2 against v2 says so place by place
+ * (`appAccessWithin`, the pairs side lifted by `liftApprovedRequests`), or
+ * when every pair of approved (a v2 form expanded) is within asked's pairs
+ * at its own place, as the pair rule reads them. Both answers are sound, so
+ * either suffices; a pair no app may hold is within nothing.
+ *
+ * Why pairs stay pairs: the lift compares by MEANING (W3c), so the v2 form
+ * of an ask may hold a space read through its pod-wide read
+ * (`entity.note.read` pod-wide and in A, where the app also writes, lifts to
+ * reads in All spaces). Read back as v2 that ask no longer names
+ * `entity.note.read` in A, and an approval of exactly that pair would be
+ * refused although it was asked. The pair rule never loses it.
  */
 export function appRequestsWithin(
+  approved: AppApprovalForm,
+  asked: AppApprovalForm
+): boolean {
+  if (!isAccessForm(approved) && !isAccessForm(asked))
+    return pairRequestsWithin(approved, asked);
+  if (!isAccessForm(approved) && pairsOfRequests(approved).unplaceable.length)
+    return false;
+  const a = accessOfForm(approved);
+  const b = accessOfForm(asked);
+  if (a && b && appAccessWithin(a, b)) return true;
+  const pairs = (form: AppApprovalForm) =>
+    isAccessForm(form) ? expandAppAccess(form) : pairsOfRequests(form).pairs;
+  return pairsWithin(pairs(approved), pairs(asked));
+}
+
+/** The pair comparison (each approved pair within the asked ones at its space). */
+function pairRequestsWithin(
   approved: readonly AppApprovedRequest[],
   asked: readonly AppApprovedRequest[]
 ): boolean {
@@ -708,16 +767,76 @@ export function appApprovalWithinAsked(args: {
 }
 
 /**
- * The grants an app's key carries for what its owner approved: ONE grant per
- * workspace, holding exactly the permissions approved IN that workspace, plus
- * ONE grant with no workspace for the pod-wide reads, if any.
+ * The grants an app's key carries for what its owner approved (pairs: an
+ * app's `approved_requests`, or a person's sign-in reach).
+ *
+ * The pairs are read as their v2 access when they lift
+ * (`liftApprovedRequests`, W2): at most four scopes — reads in the read
+ * spaces, reads in the read projects, writes in the write spaces, writes in
+ * the write projects (`grantScopesForAccess`). A lift is lossless, so these
+ * scopes give the app exactly the reach the per-space grants below give: the
+ * same permits and the same spaces, as viewer or editor (types
+ * `grants/app-access.test.ts` compares both on every subset of four pair
+ * universes, subsumption included; `app-access-v2.pglite.test.ts` on
+ * fixtures). Pairs that do not lift (a re-consent) keep the per-space grants.
  *
  * Never one grant of (all permissions × all workspaces): approving "create
  * People in Sales" and "read Notes in Finance" would then also allow creating
- * People in Finance — a reach nobody approved. The key may act where ANY one
- * grant permits (`KeyGrant`), so each pair stays bounded to its own workspace.
+ * People in Finance — a reach nobody approved. Both forms keep each pair
+ * bounded to its own place.
  */
 export function grantsForApprovedRequests(
+  approved: readonly AppApprovedRequest[]
+): GrantInput[] {
+  const lifted = liftApprovedRequests(approved, { examples: false });
+  return "access" in lifted
+    ? grantScopesForAccess(lifted.access)
+    : grantsForPairs(approved);
+}
+
+/**
+ * The grants for an app's approval as STORED: its v2 access
+ * (`approved_access`) when it holds a valid one, else its pairs, lifted at
+ * read time when they lift, else the per-space grants (a re-consent row
+ * keeps today's behaviour).
+ *
+ * Until the consent screen writes v2 itself (W3), v2 is DERIVED from the
+ * pairs (`AppRepository` writes both; the backfill lifts old rows). A stored
+ * v2 that no longer says what the pairs say was left behind by a write that
+ * bypassed the repository (a raw UPDATE of `approved_requests`): the pairs
+ * win, never the stale v2. W3 turns this round when v2 is written first.
+ */
+export function grantsForApp(app: {
+  approvedRequests: readonly AppApprovedRequest[] | null;
+  approvedAccess?: unknown;
+}): GrantInput[] {
+  const stored = parseAppAccess(app.approvedAccess ?? null);
+  const pairs = app.approvedRequests ?? [];
+  // Empty pairs are an approval of nothing (a revoke, a revived app): a v2
+  // left beside them must not re-attach the old reach, so it wins only when
+  // it says exactly what the pairs say.
+  if (stored && accessSaysPairs(stored, pairs))
+    return grantScopesForAccess(stored);
+  return grantsForApprovedRequests(pairs);
+}
+
+/** Does `access` allow exactly the (permission, place) pairs `pairs` hold? */
+function accessSaysPairs(
+  access: AppAccess,
+  pairs: readonly AppApprovedRequest[]
+): boolean {
+  const lifted = liftApprovedRequests(pairs, { examples: false });
+  return "access" in lifted && sameAppAccess(access, lifted.access);
+}
+
+/**
+ * The per-space grants of a set of pairs: ONE grant per workspace, holding
+ * exactly the permissions approved IN that workspace, plus ONE grant with no
+ * workspace for the pod-wide reads, if any. What every app got before W2,
+ * and what pairs that do not lift still get. The key may act where ANY one
+ * grant permits (`KeyGrant`), so each pair stays bounded to its own workspace.
+ */
+export function grantsForPairs(
   approved: readonly AppApprovedRequest[]
 ): GrantInput[] {
   const byWorkspace = new Map<string, Set<string>>();
@@ -742,6 +861,9 @@ export function grantsForApprovedRequests(
         break;
       case "unbounded":
         // A write with no space: an app never holds one (dropped).
+        break;
+      case "projects":
+        // A pair names no project: an app's projects are its v2 access.
         break;
       default:
         assertNeverPlace(place);
@@ -866,19 +988,28 @@ async function syncAppAgentMemberships(
  * active grant set, so a re-run with the same approval changes nothing.
  */
 async function setApprovedReach(args: {
-  app: { publicId: string; ownerUserId: string };
+  app: {
+    publicId: string;
+    ownerUserId: string;
+    /** The approval's v2 form (`apps.approved_access`), read first. */
+    approvedAccess?: unknown;
+  };
   agentUserId: string;
   approved: readonly AppApprovedRequest[];
   apiKeyIds: readonly string[];
 }): Promise<void> {
   const owner = args.app.ownerUserId;
   await syncAppAgentMemberships(args.agentUserId, owner, args.approved);
+  const grants = grantsForApp({
+    approvedRequests: args.approved,
+    approvedAccess: args.app.approvedAccess,
+  });
   for (const apiKeyId of args.apiKeyIds) {
     await attachGrantsOrRevoke({
       apiKeyId,
       principalUserId: args.agentUserId,
       onBehalfOf: owner,
-      grants: grantsForApprovedRequests(args.approved),
+      grants,
       expiresAt: null,
       createdBy: owner,
       clientId: args.app.publicId,
@@ -962,6 +1093,15 @@ async function narrowAppPersonTokens(
     const kept: AppApprovedRequest[] = [];
     let before = 0;
     for (const scope of live) {
+      if (scope.projectIds != null || scope.entityIds != null) {
+        // No pair names a project or an object, so a pinned scope is never
+        // kept as pairs: re-minted from them it would lose its pin and widen
+        // (a scope pinned to projects read as a pod-wide read; one pinned to
+        // spaces AND projects read as those whole spaces). The token is
+        // re-derived without it.
+        before += scope.permissions.length;
+        continue;
+      }
       // A scope with no space holds the pod-wide reads (`workspaceId: null`);
       // anything else in it has no approved pair, so it is not kept.
       const place = parsePlace(scope, "app");
@@ -1242,6 +1382,17 @@ export const APP_OAUTH_ACCESS_TTL_SECONDS = 60 * 60;
 export const APP_OAUTH_DEAD_KEYS_KEPT = 2;
 const APP_OAUTH_KEY_SWEEP_BATCH = 100;
 
+/** One `synap_requests` entry that listed its kinds (F4), as declared. */
+export type OAuthAppKindGroup = RequestedKindGroup;
+
+/** A project the consenting person may give an app a permission in. */
+export interface OAuthAppOfferProject {
+  projectId: string;
+  projectName: string;
+  /** Its home space, or null for a project that lives in no space. */
+  workspaceId: string | null;
+}
+
 /** One permission a pod app asks for, and the spaces it may be given in. */
 export interface OAuthAppOfferItem {
   permission: string;
@@ -1255,6 +1406,130 @@ export interface OAuthAppOfferItem {
      */
     templateSlug: string | null;
   }>;
+  /**
+   * With `kindGroups` (the consent screen): the entry this permission was
+   * declared in when that entry listed its kinds (F4: `{permission:
+   * "entity.read", kinds}`), else null. Items that share one draw as ONE row
+   * ("Records: N kinds"). Display only: the permission is still given and
+   * checked per kind (D4).
+   */
+  kindGroup?: OAuthAppKindGroup | null;
+  /**
+   * With `projects` (the consent screen, app permissions W3c): the projects
+   * the person may give this permission in, by name — every project they can
+   * see for a read, only those they may write in for anything else
+   * (`oauthAppProjectOffer`). Offered only: no consent mints a project grant
+   * yet.
+   */
+  projects?: OAuthAppOfferProject[];
+}
+
+/** What else the consent screen's offer carries (each additive). */
+export interface OAuthAppOfferOptions {
+  /**
+   * The cached document's kinds grouping (`requestedKindGroups`, F4). Read
+   * defensively (`kindGroupIndex`): a malformed row names no group.
+   */
+  kindGroups?: readonly unknown[];
+  /** Offer projects beside the spaces (W3c). */
+  projects?: boolean;
+}
+
+/**
+ * Each permission a cached kinds grouping (`requestedKindGroups`, F4)
+ * declares, to the entry it was declared in. Built once per offer. Each
+ * group is expanded again (`permissionsForKinds`) rather than trusted, so a
+ * group can only ever name the permissions it expands to. A malformed group
+ * (not an object, no permission string, kinds that are not a list of kind
+ * slugs, a kind-specific or non-record permission) names NONE: its kinds
+ * then show one row each, never a failed consent. The first group that
+ * declares a permission keeps it.
+ */
+export function kindGroupIndex(
+  groups: readonly unknown[] | null | undefined
+): ReadonlyMap<string, OAuthAppKindGroup> {
+  const out = new Map<string, OAuthAppKindGroup>();
+  for (const raw of Array.isArray(groups) ? groups : []) {
+    if (!raw || typeof raw !== "object") continue;
+    const { permission, kinds } = raw as Record<string, unknown>;
+    if (typeof permission !== "string" || !Array.isArray(kinds)) continue;
+    let expanded: string[];
+    try {
+      expanded = permissionsForKinds(permission, kinds);
+    } catch {
+      // KindsRequestError, or anything a malformed row throws: no group.
+      continue;
+    }
+    const group = { permission, kinds: kinds as string[] };
+    for (const p of expanded) if (!out.has(p)) out.set(p, group);
+  }
+  return out;
+}
+
+/**
+ * The entry a permission was declared in, when that entry listed its kinds
+ * (F4), or null (`kindGroupIndex`, for one permission).
+ */
+export function kindGroupOf(
+  permission: string,
+  groups: readonly unknown[] | null | undefined
+): OAuthAppKindGroup | null {
+  return kindGroupIndex(groups).get(permission) ?? null;
+}
+
+/**
+ * The projects a person may give an app a permission in (app permissions
+ * W3c; offered only, nothing mints a project grant yet):
+ *  - `readable`: every project they can SEE (`projectVisibleWhere`, THE
+ *    project visibility predicate: a member of its home space, the owner of a
+ *    project in no space, or a member of the project), except an archived
+ *    project or one whose home space is archived (nothing works there);
+ *  - `writable`: of those, the projects whose home space they may WRITE in
+ *    (`spacesOwnerMayWriteIn`, the rule the space offer and
+ *    `assertOwnerMayGrant` use), and the projects in no space they OWN (the
+ *    owner floor such a project's writes gate on). A project role alone
+ *    (`project_members`) gives no write here: a project's own writes are
+ *    gated on its home space.
+ * Sorted by name.
+ */
+export async function oauthAppProjectOffer(ownerUserId: string): Promise<{
+  readable: OAuthAppOfferProject[];
+  writable: OAuthAppOfferProject[];
+}> {
+  const rows = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      workspaceId: projects.workspaceId,
+      userId: projects.userId,
+    })
+    .from(projects)
+    .leftJoin(workspaces, eq(workspaces.id, projects.workspaceId))
+    .where(
+      and(
+        projectVisibleWhere(AccessContext.operator({ userId: ownerUserId })),
+        ne(projects.status, "archived"),
+        isNull(workspaces.archivedAt)
+      )
+    );
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  const homes = [
+    ...new Set(rows.flatMap((r) => (r.workspaceId ? [r.workspaceId] : []))),
+  ];
+  const mayWrite = await spacesOwnerMayWriteIn(ownerUserId, homes);
+  const offer = (r: (typeof rows)[number]): OAuthAppOfferProject => ({
+    projectId: r.id,
+    projectName: r.name,
+    workspaceId: r.workspaceId ?? null,
+  });
+  return {
+    readable: rows.map(offer),
+    writable: rows
+      .filter((r) =>
+        r.workspaceId ? mayWrite.has(r.workspaceId) : r.userId === ownerUserId
+      )
+      .map(offer),
+  };
 }
 
 /**
@@ -1263,10 +1538,16 @@ export interface OAuthAppOfferItem {
  * for a read, only the spaces they may WRITE in (`spacesOwnerMayWriteIn`, the
  * rule `assertOwnerMayGrant` enforces) for anything else. The person ticks a
  * subset; the offer is what that subset is checked against.
+ *
+ * The consent screen also asks (`options`, each additive, W3c): each item's
+ * kinds group (F4), and the projects it may be given in, by the same read /
+ * write rule (`oauthAppProjectOffer`). Without options the items are exactly
+ * as before.
  */
 export async function oauthAppOffer(
   ownerUserId: string,
-  permissions: readonly string[]
+  permissions: readonly string[],
+  options: OAuthAppOfferOptions = {}
 ): Promise<OAuthAppOfferItem[]> {
   const readable = await getUserWorkspaceIds(ownerUserId);
   const rows =
@@ -1290,6 +1571,12 @@ export async function oauthAppOffer(
         rows.map((r) => r.id)
       )
     : new Set<string>();
+  const projectOffer = options.projects
+    ? await oauthAppProjectOffer(ownerUserId)
+    : null;
+  const kindGroups = options.kindGroups
+    ? kindGroupIndex(options.kindGroups)
+    : null;
   return permissions.map((permission) => ({
     permission,
     workspaces: rows
@@ -1299,6 +1586,14 @@ export async function oauthAppOffer(
         workspaceName: r.name,
         templateSlug: r.templateSlug ?? null,
       })),
+    ...(kindGroups ? { kindGroup: kindGroups.get(permission) ?? null } : {}),
+    ...(projectOffer
+      ? {
+          projects: isReadPermission(permission)
+            ? projectOffer.readable
+            : projectOffer.writable,
+        }
+      : {}),
   }));
 }
 

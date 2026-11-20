@@ -21,6 +21,7 @@ import {
   type CriterionCheckMeaning,
 } from "@synap/playbooks";
 import { checkCriterionMeaning } from "@synap-core/types/units";
+import { DECLARED_SLOT_KEY_RE } from "../services/focus-sessions/slot-keys.js";
 
 export const sessionCriterionSchema = z
   .strictObject({
@@ -58,6 +59,18 @@ export const sessionCriterionSchema = z
     about: z
       .enum(CRITERION_ABOUT as readonly [CriterionAbout, ...CriterionAbout[]])
       .optional(),
+    /**
+     * The key of the session output this criterion checks: THE pairing of a
+     * criterion with an output (`criteriaByOutput`, `@synap-core/types/units`;
+     * work-model W1, W4). The same alphabet as a declared slot key.
+     */
+    outputKey: z
+      .string()
+      .regex(DECLARED_SLOT_KEY_RE, {
+        message:
+          "outputKey must be an output key (a lowercase slug: a-z, 0-9, -)",
+      })
+      .optional(),
   })
   .superRefine((c, ctx) => {
     // R5: the declared meaning must fit the check that carries it.
@@ -67,6 +80,15 @@ export const sessionCriterionSchema = z
         code: "custom",
         message: incoherent,
         path: ["checkKind"],
+      });
+    }
+    // A criterion about HOW the work is done checks no output (W4).
+    if (c.about === "method" && c.outputKey) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          'A criterion about the method names no output: drop outputKey or set about to "result"',
+        path: ["outputKey"],
       });
     }
     if (c.check.kind === "capability" && !c.check.capability) {

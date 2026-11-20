@@ -27,15 +27,23 @@
  *      The host loop that applies these rules is here too, written once
  *      (`createCellBridgeHost`, `host.ts`): pod admin's and the desktop's
  *      HTML pages both run it, each with its own frame and read door.
- *   4. Read-only HERE. A host on this contract (pod admin's and the desktop's
- *      HTML pages) refuses every `synap:mutate` (`CELL_BRIDGE_WRITE_REFUSED`). The desktop
- *      and phone hosts of MODULE cells are not read-only: they answer
- *      `SynapWidget.mutate` (create / update / delete an entity, create a
- *      relation) through the viewer's own session, each write governed by the
- *      pod (browser `createViewFrameHandlers.ts`, relay `useCellFrameHandlers.ts`).
+ *   4. Read-only for a PAGE. A host of a stored HTML page (pod admin's and
+ *      the desktop's) refuses every `synap:mutate` (`CELL_BRIDGE_WRITE_REFUSED`).
+ *      A MODULE frame (`module-frame.ts`, its host `frame-host.ts`) may ask
+ *      the typed writes of `write-ops.ts` (create / update / delete an
+ *      entity, create a relation); the host checks the payload, stamps the
+ *      frame's identity and its own lens, and sends it to the pod's governed
+ *      door, which decides (applied, proposed or denied).
  *   5. Nothing secret crosses: no token, no pod URL, no key is sent into the
  *      frame — only the answer to what the page asked.
- *   6. Links, when a host asks (the `links` option of `wrapHtmlForFrame`,
+ *   6. Opening an object: `window.synap.open(kind, id)` posts
+ *      `synap:surface:open` with the object's kind and id only
+ *      (`parseFrameOpen`, `frame-links.ts`); the host opens it through its own
+ *      route table. No address crosses, in either direction.
+ *   7. Tokens, when a host hands them in (the `tokens` option of
+ *      `wrapHtmlForFrame`, built by `frameTokensCss`): the host's `--synap-*`
+ *      values in the reader's theme, as the frame's first style.
+ *   8. Links, when a host asks (the `links` option of `wrapHtmlForFrame`,
  *      `frame-links.ts`). A clicked http(s) link does NOT navigate the frame:
  *      the frame posts `synap:navigate` and the host decides (`resolveFrameLink`):
  *      a console `/open/…` link in the reader's own tab, anything else in a new
@@ -63,6 +71,7 @@ export {
   cellBridgeReadRefusal,
   isCellBridgeReadOp,
   pickBridgeParams,
+  projectPillarsAnswer,
   type CellBridgeParamValue,
   type CellBridgeReadOp,
 } from "./read-ops.js";
@@ -77,9 +86,11 @@ export {
   CELL_FRAME_CSP_DIRECTIVES,
   CELL_FRAME_MAX_BYTES,
   CELL_FRAME_SANDBOX,
+  FRAME_TOKEN_PREFIX,
   buildCellFrameCsp,
   buildCellModuleFrameCsp,
   cellFrameHeadBlock,
+  frameTokensCss,
   htmlByteLength,
   wrapHtmlForFrame,
   type CellFrameOptions,
@@ -87,10 +98,15 @@ export {
 export {
   CELL_FRAME_LINK_DOOR,
   FRAME_NAVIGATE_TYPE,
+  FRAME_OPEN_KINDS,
+  FRAME_SURFACE_OPEN_TYPE,
   parseFrameNavigate,
+  parseFrameOpen,
   resolveFrameLink,
   type FrameLinkAction,
   type FrameNavigateMessage,
+  type FrameOpenKind,
+  type FrameOpenMessage,
 } from "./frame-links.js";
 export { frameExternalOrigins } from "./external-origins.js";
 export {
@@ -111,6 +127,7 @@ export {
   CELL_BRIDGE_MAX_ANSWER_CHARS,
   CELL_BRIDGE_MAX_IN_FLIGHT,
   cellBridgeAnswer,
+  cellBridgeErrorText,
   createCellBridgeHost,
   type CellBridgeEventLike,
   type CellBridgeHostOptions,
@@ -118,3 +135,61 @@ export {
 } from "./host.js";
 export { CELL_BRIDGE_SDK } from "./sdk.js";
 export { narrowHomeToSpace } from "./home-lens.js";
+export {
+  FRAME_BLOB_URLS_SCRIPT,
+  FRAME_IMPORT_MAP_SCRIPT,
+  FRAME_INIT_QUEUE_SCRIPT,
+} from "./frame-scripts.js";
+export { SYNAP_VIEW_SDK, SYNAP_WIDGET_SDK } from "./frame-sdks.js";
+export {
+  CELL_FRAME_MOUNT_TIMEOUT_MS,
+  CELL_FRAME_READY_TIMEOUT_MS,
+  CELL_MODULE_FRAME_SANDBOX,
+  buildCellModuleFrameSrcdoc,
+  cellModuleHostModulesRefusal,
+  cellModuleNeedsJsxDev,
+  cellModuleNeedsKit,
+  cellModuleNetworkRefusal,
+  utf8ToBase64,
+  type CellFrameHostModules,
+  type CellFrameInitContext,
+  type CellFrameModuleInputs,
+  type CellFrameQueryHint,
+  type CellFrameWorkspaceScope,
+  type CellModuleFrameInput,
+} from "./module-frame.js";
+export {
+  CELL_FRAME_MAX_ERROR_CHARS,
+  CELL_FRAME_MAX_HEIGHT,
+  CELL_FRAME_MAX_TOAST_CHARS,
+  parseCellFrameMessage,
+  type CellFrameHostMessage,
+  type CellFrameNavigationTarget,
+  type CellFrameSurfaceRequest,
+} from "./messages.js";
+export {
+  CELL_BRIDGE_MAX_PROPERTIES_CHARS,
+  CELL_BRIDGE_MAX_PROPERTY_KEYS,
+  CELL_BRIDGE_MAX_WRITE_STRING,
+  CELL_BRIDGE_WRITE_NEEDS_TYPE,
+  CELL_BRIDGE_WRITE_OPS,
+  CELL_BRIDGE_WRITE_OP_NAMES,
+  cellBridgeUnknownWrite,
+  cellBridgeWriteRefusal,
+  isCellBridgeWriteOp,
+  pickBridgeWritePayload,
+  type CellBridgeJsonValue,
+  type CellBridgeMutateResult,
+  type CellBridgeWriteOp,
+  type CellBridgeWritePayload,
+} from "./write-ops.js";
+export {
+  CELL_FRAME_NO_READS,
+  CELL_FRAME_NO_WRITES,
+  createCellFrameHost,
+  type CellFrameHostOptions,
+  type CellFrameIdentity,
+  type CellFrameLens,
+  type CellFrameStatus,
+  type CellFrameWriteRequest,
+} from "./frame-host.js";

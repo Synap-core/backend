@@ -19,7 +19,10 @@ import {
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
-import { placeBeyondPodWideReads } from "@synap-core/types/grants";
+import {
+  spacesCoveredWhole,
+  spacesOfScopeRows,
+} from "@synap-core/types/grants";
 import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
 import {
@@ -1066,6 +1069,21 @@ export interface PermissionCheckBaseOpts {
    */
   grantWorkspaceId?: string | null;
   /**
+   * This write files the row into or out of a project (a session's filing):
+   * rung 0 checks it where the row lives now with NO project, so a key pinned
+   * to projects never covers it (`grant-write-check.ts`, the filing rule).
+   * Rung 0 only.
+   */
+  grantFilesIntoProject?: boolean;
+  /**
+   * `projectId` is the row's STORED project, read by the door from the row
+   * itself (a goal's project, a session's): rung 0 checks a key's project
+   * pin against it. Without this flag a non-create write's `projectId` is a
+   * lens or a provenance tag, which never places a row for a key's grant
+   * (`grant-write-check.ts`, the filing rule). Rung 0 only.
+   */
+  grantProjectIdIsStored?: boolean;
+  /**
    * A NAMED permission that also permits this write at rung 0 (the key's
    * grant), when the door's act is narrower than its gate subject/action:
    * `package.install` for a template apply (`workspace.create` /
@@ -1688,6 +1706,10 @@ async function evaluatePermission(
     projectId,
     data: data as Record<string, unknown> | undefined,
     namedPermission: opts.grantNamedPermission,
+    ...(opts.grantFilesIntoProject ? { filesIntoProject: true } : {}),
+    ...(opts.grantProjectIdIsStored
+      ? { storedProjectIds: projectId ? [projectId] : null }
+      : {}),
   });
   const beyondGrant =
     !!grantDenied && !!opts.proposeBeyondGrant && !!agentUserId;
@@ -5024,6 +5046,28 @@ async function verifyWorkspaceAccess(opts: {
 }
 
 /**
+ * Would the gate's membership check admit this write in `workspaceId`? The
+ * same check (`verifyWorkspaceAccess`, track-space grant included), asked
+ * before a door picks a space: the session space ladder
+ * (`resolveSessionWorkspacePlacement`) places a start only where this says
+ * yes, so the ladder and the gate cannot disagree.
+ */
+export async function gateAdmitsWorkspace(opts: {
+  userId: string;
+  agentUserId?: string;
+  workspaceId: string;
+  subjectType: string;
+  action: string;
+  data?: Record<string, unknown>;
+}): Promise<boolean> {
+  const result = await verifyWorkspaceAccess({
+    ...opts,
+    requiredPermission: requiredPermissionFor(opts.action),
+  });
+  return result.allowed;
+}
+
+/**
  * Park a WHOLE multi-step write on a workspace join BEFORE any of it is
  * written (finding 590ca76a). A door whose one call makes several writes (a
  * capture graph) cannot let the gate decide at each write: the first write
@@ -5122,6 +5166,35 @@ export type WorkspaceJoinRequestResult =
     }
   | { status: "refused"; workspaceId: string; reason: string };
 
+/**
+ * Why a key pinned to projects or records does not ask to join a space: it
+ * covers no space whole, but a write of one of its rows there still files the
+ * join (the gate's membership-miss branch), so it is told that, never that it
+ * cannot write there.
+ */
+const PINNED_JOIN_REFUSAL =
+  "This key is limited to projects or records, not to this whole space, so it " +
+  "cannot ask to join the space on its own. Writing one of its records in this " +
+  "space files the join request for the person, with that write. Nothing was filed.";
+
+/**
+ * A scope pinned to named projects or records, holding more than reads, whose
+ * rows may sit in `workspaceId`: pinned with no space, or inside that space.
+ */
+function pinnedRowsMaySitIn(
+  scope: Parameters<typeof spacesOfScopeRows>[0],
+  workspaceId: string
+): boolean {
+  if (!scope.projectIds?.length && !scope.entityIds?.length) return false;
+  if (!scope.permissions.some((p) => !p.endsWith(".read"))) return false;
+  const rows = spacesOfScopeRows(scope);
+  return (
+    rows !== null &&
+    rows !== "anywhere" &&
+    (rows.length === 0 || rows.includes(workspaceId))
+  );
+}
+
 /** Said with a filed (or reused) join request. */
 const WORKSPACE_JOIN_REQUESTED_MESSAGE =
   "A workspace JOIN request is pending the person's review (a pending one for " +
@@ -5137,11 +5210,16 @@ const WORKSPACE_JOIN_REQUESTED_MESSAGE =
  * an archived space refused, a pending join reused), so a write made after
  * this request is kept on that join and replayed with the rest.
  *
- * Refused before anything is filed when the key's grant does not reach the
- * space for anything beyond pod-wide reads (THE reach parse,
- * `placeBeyondPodWideReads`; a grant of pod-wide reads only reaches none): the
- * gate's rung 0 would deny every write there whatever the membership, so a
- * join would only put a card in front of the person that changes nothing.
+ * Refused before anything is filed when no scope of the key's grant covers
+ * the WHOLE space beyond pod-wide reads (`spacesCoveredWhole`). A scope of
+ * other spaces, or of pod-wide reads only, would be denied every write there
+ * by the gate's rung 0, so a join would put a card in front of the person
+ * that changes nothing. A scope pinned to projects or objects covers no
+ * space whole (decision 51ad8d1e F3), so it does not ask for one on its own;
+ * its rows may still sit in the space, and a write of one of them there
+ * meets the gate's membership-miss branch, which files the join WITH that
+ * write. The refusal says so (`pinnedJoinRefusal`), never that the key
+ * cannot write there.
  * An archived space is refused, a member's included: no agent writes there.
  */
 export async function requestWorkspaceJoin(opts: {
@@ -5155,18 +5233,23 @@ export async function requestWorkspaceJoin(opts: {
   if (
     grant &&
     !grant.scopes.some((scope) => {
-      const place = placeBeyondPodWideReads(scope);
+      // A join is a membership of the WHOLE space: only a scope that covers
+      // it whole counts, never one pinned to projects or objects.
+      const spaces = spacesCoveredWhole(scope);
       return (
-        place !== null &&
-        (place.kind === "unbounded" || place.ids.includes(workspaceId))
+        spaces === "anywhere" ||
+        (spaces !== null && spaces.includes(workspaceId))
       );
     })
   ) {
     return {
       status: "refused",
       workspaceId,
-      reason:
-        "This key's grant does not reach this space, so joining it would not let you write there. The person can add the space to this key's permissions, or give you a key that has it. Nothing was filed.",
+      reason: grant.scopes.some((scope) =>
+        pinnedRowsMaySitIn(scope, workspaceId)
+      )
+        ? PINNED_JOIN_REFUSAL
+        : "This key's grant does not reach this space, so joining it would not let you write there. The person can add the space to this key's permissions, or give you a key that has it. Nothing was filed.",
     };
   }
   const [ws] = await db

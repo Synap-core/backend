@@ -158,6 +158,9 @@ describe("template intent — every install door carries it", () => {
       label: "Product",
       produces: ["devplane_feature", "devplane_story", "ui-design"],
       primary: "devplane_feature",
+      // A story and a UI design are worked here to serve the feature: the
+      // catalog marks them `as: helper` (synap-app e30933512, 19 Nov 2026).
+      helpers: ["devplane_story", "ui-design"],
       source: "template",
     });
   });

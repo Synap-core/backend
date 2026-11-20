@@ -969,6 +969,168 @@ describe("synap_requests[].scope: a pod-wide READ of one kind, nothing else (dec
   });
 });
 
+// ─── F4: one request lists its kinds (decision 51ad8d1e, app permissions W2) ─
+
+describe("synap_requests[].kinds: one entry, many kinds, granted per kind (F4)", () => {
+  const asked = (...entries: Array<Record<string, unknown>>) =>
+    validateClientMetadataDocument(doc({ synap_requests: entries }), CLIENT_ID);
+
+  it("expands to one permission per kind, with the entry's reason and scope", () => {
+    const v = asked(
+      {
+        permission: "entity.read",
+        kinds: ["note", "task", "note"],
+        scope: "pod",
+        reason: "To answer from your records",
+      },
+      { permission: "entity.create", kinds: ["note"] }
+    );
+    expect(v.requestedPermissions).toEqual([
+      "entity.note.read",
+      "entity.task.read",
+      "entity.note.create",
+    ]);
+    expect(v.requestedPodWide).toEqual([
+      "entity.note.read",
+      "entity.task.read",
+    ]);
+    expect(v.requestedReasons["entity.task.read"]).toBe(
+      "To answer from your records"
+    );
+    // The SAME check every key door runs passes on each expanded permission.
+    expect(() => assertPermissions(v.requestedPermissions)).not.toThrow();
+  });
+
+  // W3c: the consent shows "Records: N kinds", which only the grouping can
+  // draw once the permissions are expanded per kind.
+  it("keeps each entry that lists kinds as declared, beside the expanded permissions", () => {
+    const v = asked(
+      {
+        permission: "entity.read",
+        kinds: ["note", "task", "note"],
+        scope: "pod",
+      },
+      { permission: "entity.decision.read", scope: "pod" },
+      { permission: "entity.create", kinds: ["note"] }
+    );
+    expect(v.requestedKindGroups).toEqual([
+      { permission: "entity.read", kinds: ["note", "task"] },
+      { permission: "entity.create", kinds: ["note"] },
+    ]);
+    // An entry with no kinds is no group.
+    expect(
+      asked({ permission: "entity.decision.read" }).requestedKindGroups
+    ).toEqual([]);
+  });
+
+  // Rules out: the grouping lost between the parse and the cache.
+  it("the cached copy keeps the grouping, and a copy without one still reads", async () => {
+    serve({
+      body: JSON.stringify(
+        doc({
+          synap_requests: [
+            {
+              permission: "entity.read",
+              kinds: ["note", "task"],
+              scope: "pod",
+            },
+          ],
+        })
+      ),
+    });
+    const store = memoryStore();
+    const client = await resolveCimdClient(CLIENT_ID, ISSUER, store, {
+      lookup: publicDns,
+    });
+    expect(client.requestedKindGroups).toEqual([
+      { permission: "entity.read", kinds: ["note", "task"] },
+    ]);
+    expect(store.rows.get(CLIENT_ID)!.requestedKindGroups).toEqual([
+      { permission: "entity.read", kinds: ["note", "task"] },
+    ]);
+    // A copy cached before 0437 has no grouping: it still answers.
+    const old = { ...store.rows.get(CLIENT_ID)! };
+    delete old.requestedKindGroups;
+    store.rows.set(CLIENT_ID, old);
+    m.httpsRequest.mockReset();
+    const cached = await resolveCimdClient(CLIENT_ID, ISSUER, store, {
+      lookup: publicDns,
+    });
+    expect(m.httpsRequest).not.toHaveBeenCalled();
+    expect(cached.requestedKindGroups).toBeUndefined();
+    expect(cached.requestedPermissions).toEqual([
+      "entity.note.read",
+      "entity.task.read",
+    ]);
+  });
+
+  // Rules out: the cap counting kinds (29 kinds in one entry is one entry).
+  it("the 48 cap counts entries, not kinds", () => {
+    const kinds = Array.from({ length: 60 }, (_, i) => `kind${i}`);
+    const v = asked(
+      { permission: "entity.read", kinds },
+      ...Array.from({ length: 47 }, (_, i) => ({
+        permission: `entity.k${i}.update`,
+      }))
+    );
+    expect(v.requestedPermissions).toHaveLength(60 + 47);
+    expect(() =>
+      asked(
+        { permission: "entity.read", kinds: ["note"] },
+        ...Array.from({ length: 48 }, (_, i) => ({
+          permission: `entity.k${i}.update`,
+        }))
+      )
+    ).toThrow(/at most 48/);
+  });
+
+  it("keeps the old shape (no kinds) working beside it", () => {
+    const v = asked(
+      { permission: "entity.decision.read", scope: "pod" },
+      { permission: "entity.read", kinds: ["note"], scope: "pod" }
+    );
+    expect(v.requestedPodWide).toEqual([
+      "entity.decision.read",
+      "entity.note.read",
+    ]);
+  });
+
+  it.each([
+    [
+      "kinds that is not an array",
+      { permission: "entity.read", kinds: "note" },
+    ],
+    ["an empty kinds list", { permission: "entity.read", kinds: [] }],
+    [
+      "a kind that is not a slug",
+      { permission: "entity.read", kinds: ["No te"] },
+    ],
+    ["a kind that is not a string", { permission: "entity.read", kinds: [3] }],
+    [
+      "kinds on a kind-specific permission",
+      { permission: "entity.note.read", kinds: ["task"] },
+    ],
+    ["kinds on another subject", { permission: "playbook.read", kinds: ["x"] }],
+    ["kinds on full access", { permission: "*", kinds: ["note"] }],
+    [
+      "more kinds than one entry may list",
+      {
+        permission: "entity.read",
+        kinds: Array.from({ length: 65 }, (_, i) => `k${i}`),
+      },
+    ],
+  ])("refuses %s", (_label, entry) => {
+    expect(() => asked(entry)).toThrow(ClientMetadataError);
+  });
+
+  // Rules out: kinds smuggling a write past the pod-wide read rule.
+  it("a listed write asked pod-wide is refused, as one permission would be", () => {
+    expect(() =>
+      asked({ permission: "entity.update", kinds: ["note"], scope: "pod" })
+    ).toThrow(/cannot be asked pod-wide/);
+  });
+});
+
 // ─── `person`: a native app that signs a person in (founder, 2026-11-05) ────
 //
 // Each refused row names the wrong rule it rules out; the CONTROL rows are

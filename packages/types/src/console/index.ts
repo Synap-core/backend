@@ -38,12 +38,24 @@ export const CONSOLE_PAGES = {
   review: { path: "/review", audience: "member", focus: true, verb: "review" },
   // Jobs (`/sessions`) and Runs (`/runs`) left the console (founder, 16 Nov
   // 2026): the work is done in the apps, so no client links to them.
+  // Rules: the guidelines pushed into every piece of work in their scope
+  // (founder, 19 Nov 2026, document b387ca45 §9). What runs by itself is
+  // `automations`; who may act without asking is `governance` (Approvals).
   rules: { path: "/rules", audience: "admin", focus: true, verb: "see-all" },
-  agents: { path: "/agents", audience: "admin", focus: true, verb: "see-all" },
-  governance: {
-    path: "/governance/agents",
+  automations: {
+    path: "/automations",
     audience: "admin",
-    focus: false,
+    focus: true,
+    verb: "see-all",
+  },
+  agents: { path: "/agents", audience: "admin", focus: true, verb: "see-all" },
+  // Approvals (D5): the one page where who × what × where → auto / ask /
+  // never is read, filtered and taken back. Kept under its old id so client
+  // links (`{ page: "governance" }`) keep landing on it.
+  governance: {
+    path: "/approvals",
+    audience: "admin",
+    focus: true,
     verb: "manage",
   },
   computers: {

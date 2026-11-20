@@ -38,6 +38,22 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: drizzle(client, { schema: { proposals: actual.proposals as never } }),
     eventRepository: { append: async () => undefined },
+    // Placement lives with `openRunSession` (same package connection): the
+    // stub echoes what the door hands it, like the run stub below.
+    resolveRunSessionPlacement: async (
+      _db: unknown,
+      input: {
+        workspaceId?: string | null;
+        workspaceRung?: string | null;
+        projectId?: string | null;
+      }
+    ) => ({
+      projectId: input.projectId ?? null,
+      workspace: {
+        workspaceId: input.workspaceId ?? null,
+        rung: input.workspaceId ? (input.workspaceRung ?? "explicit") : null,
+      },
+    }),
     openRunSession: async (input: {
       userId: string;
       goal: string;

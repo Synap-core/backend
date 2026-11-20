@@ -52,6 +52,8 @@ import {
   resolveProjectForPackInstall,
 } from "../../../services/resolve-project-for-pack-install.js";
 import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
+
 import {
   getDb,
   sql,
@@ -82,6 +84,23 @@ import { templateDocumentsSchema } from "../../../schemas/template-document.js";
 import { appliedPackageVersion } from "../../../services/applied-package-version.js";
 import { layerTwoFailedSentence } from "../../../services/template-health.js";
 import { isPodAdmin } from "../../../utils/workspace-role.js";
+
+/**
+ * The key half of the engagement surface write (`projects.settings.layout`):
+ * a direct write on the project row is `project.update` where the project
+ * lives, under the calling key's grant (W1 review). null = allowed.
+ */
+function projectSurfaceGrantDenial(
+  projectId: string,
+  workspaceId: string | null
+): Promise<string | null> {
+  return grantWriteDenial({
+    subjectType: "project",
+    action: "update",
+    workspaceId,
+    data: { id: projectId },
+  });
+}
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
 
@@ -1013,21 +1032,39 @@ export function registerPackagesRoutes(app: HubHono): void {
           if (body.projectSurface && typeof body.projectSurface === "object") {
             const dbConn = await getDb();
             const [existing] = await dbConn
-              .select({ settings: projects.settings })
+              .select({
+                settings: projects.settings,
+                workspaceId: projects.workspaceId,
+              })
               .from(projects)
               .where(eq(projects.id, resolved.projectId))
               .limit(1);
-            const prev = (existing?.settings ?? {}) as Record<string, unknown>;
-            const projectRepo = new ProjectRepository(
-              dbConn,
-              new EventRepository(sql)
-            );
-            await projectRepo.update(
+            // A direct write on the project row: under a key's grant it is
+            // `project.update` where the project lives (W1 review). Refused,
+            // the install goes on without the surface and says so.
+            const denied = await projectSurfaceGrantDenial(
               resolved.projectId,
-              { settings: { ...prev, layout: body.projectSurface } },
-              userId
+              existing?.workspaceId ?? null
             );
-            result.projectSurfaceApplied = true;
+            if (denied) {
+              result.projectSurfaceApplied = false;
+              result.projectSurfaceWithheld = denied;
+            } else {
+              const prev = (existing?.settings ?? {}) as Record<
+                string,
+                unknown
+              >;
+              const projectRepo = new ProjectRepository(
+                dbConn,
+                new EventRepository(sql)
+              );
+              await projectRepo.update(
+                resolved.projectId,
+                { settings: { ...prev, layout: body.projectSurface } },
+                userId
+              );
+              result.projectSurfaceApplied = true;
+            }
           }
           return { projectId: resolved.projectId };
         },

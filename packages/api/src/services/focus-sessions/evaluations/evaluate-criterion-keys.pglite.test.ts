@@ -232,7 +232,7 @@ describe("evaluateSession is bounded to the stages the session has reached", () 
 });
 
 describe("outcomeParameter — what a capability check is told about the outcome", () => {
-  it("hands the slot with the criterion's key, ref included", async () => {
+  it("hands the slot the criterion names by outputKey, ref included", async () => {
     const { outcomeParameter } = await import("./evaluate.js");
     const slots = [
       { kind: "document", label: "Spec", key: "spec" },
@@ -243,7 +243,7 @@ describe("outcomeParameter — what a capability check is told about the outcome
         ref: { url: "https://github.com/Synap-core/backend/pull/255" },
       },
     ];
-    expect(outcomeParameter(slots, "pr-backend-255")).toEqual({
+    expect(outcomeParameter(slots, { outputKey: "pr-backend-255" })).toEqual({
       outcome: {
         key: "pr-backend-255",
         kind: "pull_request",
@@ -251,7 +251,9 @@ describe("outcomeParameter — what a capability check is told about the outcome
         ref: { url: "https://github.com/Synap-core/backend/pull/255" },
       },
     });
-    expect(outcomeParameter(slots, "nope")).toEqual({});
-    expect(outcomeParameter(null, "spec")).toEqual({});
+    expect(outcomeParameter(slots, { outputKey: "nope" })).toEqual({});
+    expect(outcomeParameter(null, { outputKey: "spec" })).toEqual({});
+    // Sharing the key pairs nothing: no outputKey, no outcome (W4).
+    expect(outcomeParameter(slots, {})).toEqual({});
   });
 });

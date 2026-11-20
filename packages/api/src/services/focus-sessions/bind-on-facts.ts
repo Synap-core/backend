@@ -35,7 +35,6 @@ import {
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { loadVisibleProject } from "../projects/load-visible-project.js";
 import {
   getLinksFor,
   resolveGrantedCapabilities,
@@ -80,8 +79,6 @@ export interface BindOnFactsInput {
   phase: "start" | "update";
   title: string | null;
   workspaceId: string | null;
-  /** The session's project: its home space is the session's when it has none. */
-  projectId?: string | null;
   subjectEntityId: string | null;
   parentSessionId: string | null;
 }
@@ -90,7 +87,6 @@ export interface BindOnFactsInput {
 export async function loadBindingFacts(input: {
   userId: string;
   workspaceId: string | null;
-  projectId?: string | null;
   title: string | null;
   subjectEntityId: string | null;
   parentSessionId: string | null;
@@ -120,12 +116,10 @@ export async function loadBindingFacts(input: {
 
   // The subject was floored by the door that set it (`isOutputRefVisible`).
   let subject: BindingSituation["subject"] = null;
-  let subjectWorkspaceId: string | null = null;
   if (input.subjectEntityId && isUuid(input.subjectEntityId)) {
     const [row] = await db
       .select({
         kind: profiles.slug,
-        workspaceId: entities.workspaceId,
         properties: entities.properties,
       })
       .from(entities)
@@ -134,10 +128,10 @@ export async function loadBindingFacts(input: {
       .limit(1);
     if (row) {
       subject = {
+        id: input.subjectEntityId.toLowerCase(),
         kind: row.kind ?? null,
         properties: (row.properties as Record<string, unknown> | null) ?? {},
       };
-      subjectWorkspaceId = row.workspaceId ?? null;
     }
   }
 
@@ -160,27 +154,14 @@ export async function loadBindingFacts(input: {
     parent = row ?? null;
   }
 
-  // A project session has no space of its own (most agent starts are
-  // project-scoped): its subject's space, else its project's home space, is
-  // where its playbooks live. Without the project's, every space-scoped
-  // playbook read as "another space" and the parent and main-red rungs never
-  // bound a project session with no subject (lane ops-p-binding, 2026-11-17).
-  let projectWorkspaceId: string | null = null;
-  if (
-    !input.workspaceId &&
-    !subjectWorkspaceId &&
-    input.projectId &&
-    isUuid(input.projectId)
-  ) {
-    const project = await loadVisibleProject(db, input.projectId, input.userId);
-    projectWorkspaceId = project?.workspaceId ?? null;
-  }
-
+  // The session's own space: the session space ladder placed it from the
+  // same chain (playbook, subject, parent, project home, focus) and only where
+  // the actor may work (W3). Binding reads that placement; it keeps no ladder
+  // of its own.
   return {
     situation: {
       title: input.title,
-      workspaceId:
-        input.workspaceId ?? subjectWorkspaceId ?? projectWorkspaceId,
+      workspaceId: input.workspaceId,
       subject,
       parent,
     },
@@ -304,7 +285,6 @@ export async function rebindOnFirstFact(input: {
     origin?: string | null;
     title: string | null;
     workspaceId: string | null;
-    projectId?: string | null;
     subjectEntityId: string | null;
     metadata: unknown;
   };
@@ -344,7 +324,6 @@ export async function rebindOnFirstFact(input: {
       phase: "update",
       title: session.title,
       workspaceId: session.workspaceId,
-      projectId: session.projectId ?? null,
       subjectEntityId: session.subjectEntityId,
       // The `spawned_from` edge, read-only: a lane's parent may follow a
       // playbook (rung 3). Never a close path (`session-detour-pop.test.ts`).

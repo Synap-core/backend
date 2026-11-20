@@ -1214,6 +1214,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "approved_requests",
     addedBy: "0309_apps.sql",
   },
+  // apps.approved_access — the approval in its v2 form (0434, app permissions
+  // W2). Missing means every app read and approval write would 42703.
+  {
+    table: "apps",
+    column: "approved_access",
+    addedBy: "0434_apps_approved_access.sql",
+  },
   // apps.removed_at — "Remove for good" (0312). Missing means every app read
   // (`listForOwner` filters on it) would 42703.
   {
@@ -1259,6 +1266,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "oauth_clients",
     column: "requested_pod_wide",
     addedBy: "0379_oauth_client_requested_pod_wide.sql",
+  },
+  // The kinds grouping of a pod app's requests (0437, F4): every client read
+  // selects it, as above.
+  {
+    table: "oauth_clients",
+    column: "requested_kind_groups",
+    addedBy: "0437_oauth_client_requested_kind_groups.sql",
   },
   // Pod app refresh tokens (0339). /token's refresh grant and /revoke read
   // and write them, and revoking an app revokes them: without the table the

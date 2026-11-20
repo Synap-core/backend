@@ -368,7 +368,7 @@ const SECTION_ROWS: Record<string, (s: DiagnoseSection) => RowBody | null> = {
                 label: name,
                 meta: "rule never ran",
                 exit: consoleRoute(
-                  navHref("rules", { filter: "never-ran", focus: id })
+                  navHref("automations", { filter: "never-ran", focus: id })
                 ),
               },
             ]

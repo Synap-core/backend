@@ -1,9 +1,12 @@
 /**
- * `synap_start_session` starts in the workspace the adapter resolved for the
- * call (`lensWorkspaceId`: `?workspaceId=`, or the agent's workspace focus,
- * access-checked), unless the caller named one. It used to pass the raw
- * `args.workspaceId` only, so a start ignored the focus the agent's own
- * captures were placed by (plan A2-a, 2026-10-29).
+ * `synap_start_session` passes the service ONLY the space the caller pinned
+ * (`confinedWorkspaceId`: its `workspaceId`, or the connector's
+ * `?workspaceId=`, confined to a bound service key's space). The agent's
+ * workspace focus is NOT folded in: it is the LAST rung of the space ladder
+ * (`resolveSessionWorkspacePlacement`, W3 decision D1 a), below the
+ * playbook's, the subject's, the parent's and the project's home space, and
+ * the service reads it itself. Folded in here (plan A2-a, 2026-10-29) it was
+ * passed as explicit and beat every fact.
  *
  * No database: the service is mocked at its module seam, which is where this
  * door's job ends.
@@ -19,7 +22,7 @@ vi.mock("../../../services/focus-sessions/create-session.js", () => ({
 import { sessionHandlers } from "./session.js";
 import type { McpToolContext } from "./shared.js";
 
-const LENS = "33333333-3333-4333-8333-333333333333";
+const FOCUS = "33333333-3333-4333-8333-333333333333";
 const NAMED = "44444444-4444-4444-8444-444444444444";
 
 function ctx(
@@ -53,14 +56,23 @@ beforeEach(() => {
   });
 });
 
-describe("synap_start_session — the workspace lens", () => {
-  it("starts in the lens workspace when the caller names none", async () => {
-    expect(await startedIn(ctx({}, { lensWorkspaceId: LENS }))).toBe(LENS);
+describe("synap_start_session — only a pinned space is explicit", () => {
+  it("the agent's focus (the adapter's lens) is not passed as explicit", async () => {
+    expect(
+      await startedIn(
+        ctx({}, { requestedWorkspaceId: FOCUS, lensWorkspaceId: FOCUS })
+      )
+    ).toBeUndefined();
   });
 
-  it("an explicit workspaceId still wins over the lens", async () => {
+  it("the space the caller pinned is passed as explicit", async () => {
     expect(
-      await startedIn(ctx({ workspaceId: NAMED }, { lensWorkspaceId: LENS }))
+      await startedIn(
+        ctx(
+          { workspaceId: NAMED },
+          { confinedWorkspaceId: NAMED, lensWorkspaceId: NAMED }
+        )
+      )
     ).toBe(NAMED);
   });
 

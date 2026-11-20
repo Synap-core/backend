@@ -190,6 +190,7 @@ export type ContinueSession = Pick<
   | "userId"
   | "workspaceId"
   | "projectId"
+  | "metadata"
   | "status"
   | "playbookId"
   | "stages"
@@ -237,6 +238,8 @@ export async function continueCheck<R extends { status: string }>(input: {
     subjectType: "focus_session",
     action: "update",
     projectId: session.projectId ?? null,
+    // Read from the row: where the session lives now (`grant-write-check.ts`).
+    storedProjectIds: session.projectId ? [session.projectId] : null,
   };
   const denial = await input.grantDenial({
     ...write,
@@ -246,6 +249,7 @@ export async function continueCheck<R extends { status: string }>(input: {
       {
         workspaceId: session.workspaceId ?? null,
         projectId: session.projectId ?? null,
+        metadata: session.metadata,
       },
       write
     ),

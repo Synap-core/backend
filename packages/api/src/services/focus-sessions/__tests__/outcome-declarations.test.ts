@@ -41,15 +41,15 @@ describe("outcomes → storage → projection (round trip)", () => {
   ]);
   const { expectedOutputs, criteria } = splitOutcomes(declared);
 
-  it("a fact is a criterion only; a deliverable is a slot; verify beyond evidence adds a criterion under the SAME key", () => {
+  it("a fact is a criterion only; a deliverable is a slot; verify beyond evidence adds a criterion NAMING the slot (outputKey)", () => {
     expect(expectedOutputs.map((s) => s.key)).toEqual([
       "audit",
       "plan",
       "founder-approval",
     ]);
-    expect(criteria.map((c) => [c.key, c.check.kind])).toEqual([
-      ["typecheck-passes", "capability"],
-      ["plan", "judge"],
+    expect(criteria.map((c) => [c.key, c.check.kind, c.outputKey])).toEqual([
+      ["typecheck-passes", "capability", undefined],
+      ["plan", "judge", "plan"],
     ]);
   });
 

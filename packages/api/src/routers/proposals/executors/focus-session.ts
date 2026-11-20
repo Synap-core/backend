@@ -28,10 +28,12 @@ import {
   appendSessionStageHistory,
   startedByAgentPatch,
   insertFocusSessionRow,
+  workspacePlacementPatchFromProposal,
+  getRequestGrant,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { isTrackClosed } from "@synap-core/types/units";
+import { isTrackClosed, nameSharedKeyOutputs } from "@synap-core/types/units";
 import { resolveTrackStatusLabel } from "@synap-core/types/vocabulary";
 import {
   registerProposalExecutor,
@@ -59,6 +61,7 @@ import {
   sessionTwinLockKey,
 } from "../../../services/focus-sessions/find-open-session-twin.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { approvedSessionGoal } from "../../../services/focus-sessions/session-update-goal.js";
 import { isUndoableSessionPatch } from "../../../services/focus-sessions/session-undo.js";
 import {
@@ -288,6 +291,11 @@ export function registerFocusSessionExecutors(): void {
             : {}),
           // The proposing agent started it (orient's `handedToYou` leaves it out).
           ...startedByAgentPatch(proposal.agentUserId),
+          // The rung that placed it in its space, as the direct insert stamps it.
+          ...workspacePlacementPatchFromProposal(
+            innerData.workspacePlacement,
+            proposal.workspaceId
+          ),
         };
         // THE ONE row writer (`insert-focus-session.ts`). The fixed id is
         // conflict-safe: a row already at it writes nothing (zero rows).
@@ -888,6 +896,25 @@ export function registerFocusSessionExecutors(): void {
         ) {
           set.subjectEntityId = innerData.subjectEntityId;
         }
+        // DEFENCE IN DEPTH (the filing rule, W1 review N1): approving a
+        // filing under a key's grant needs a write on the session where it
+        // lives now, with no project (`filesIntoProject`). The decide fence
+        // already refuses a project pin (`proposalIsFiling`).
+        if (
+          getRequestGrant() &&
+          ("projectId" in innerData || "trackId" in innerData)
+        ) {
+          const denial = await grantWriteDenial({
+            subjectType: "focus_session",
+            action: "update",
+            workspaceId: session.workspaceId ?? null,
+            data: { id: sessionId },
+            filesIntoProject: true,
+          });
+          if (denial) {
+            throw new TRPCError({ code: "FORBIDDEN", message: denial });
+          }
+        }
         // FILING. Carried by `updateFocusSession`'s gate payload in the same
         // hunk as this arm. The target is re-floored at approval: the project
         // could have been removed or unshared since the proposal was filed, and
@@ -998,15 +1025,36 @@ export function registerFocusSessionExecutors(): void {
         // nothing. Parsed with the SAME strict schema the doors use, because
         // the payload may predate a schema change: a bad list is dropped and
         // REPORTED on `refusals`, never thrown over the rest of the patch.
-        if (innerData.criteria !== undefined) {
-          const criteriaRefusals: string[] = [];
-          const criteria = parseProposedCriteria(
-            innerData.criteria,
-            sessionId,
-            criteriaRefusals
-          );
-          if (criteriaRefusals.length === 0) set.criteria = criteria;
-          outputRefusals.push(...criteriaRefusals);
+        const criteriaRefusals: string[] = [];
+        const sentCriteria =
+          innerData.criteria !== undefined
+            ? parseProposedCriteria(
+                innerData.criteria,
+                sessionId,
+                criteriaRefusals
+              )
+            : undefined;
+        outputRefusals.push(...criteriaRefusals);
+        // A criterion sharing a slot's key names it (`outputKey`, W4), against
+        // the slots as this patch left them: the criteria it sent, or the
+        // stored ones when it changed only the slots.
+        const [after] = await db
+          .select({
+            expectedOutputs: focusSessions.expectedOutputs,
+            criteria: focusSessions.criteria,
+          })
+          .from(focusSessions)
+          .where(eq(focusSessions.id, sessionId))
+          .limit(1);
+        if (sentCriteria && criteriaRefusals.length === 0) {
+          set.criteria = [
+            ...nameSharedKeyOutputs(sentCriteria, after?.expectedOutputs),
+          ];
+        } else if (after && Array.isArray(after.criteria)) {
+          const stored = after.criteria as unknown[];
+          const named = nameSharedKeyOutputs(stored, after.expectedOutputs);
+          if (named !== stored)
+            set.criteria = [...named] as typeof set.criteria;
         }
 
         // Roster append. Carried by BOTH proposing doors (`update-session.ts`
@@ -1502,7 +1550,13 @@ async function instantiateApprovedPlaybook(args: {
     ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
       ? { goalOverride: innerData.prompt }
       : {}),
-    metadata: startedByAgentPatch(args.startedByAgentId),
+    metadata: {
+      ...startedByAgentPatch(args.startedByAgentId),
+      ...workspacePlacementPatchFromProposal(
+        innerData.workspacePlacement,
+        args.workspaceId
+      ),
+    },
   });
   return row ? [row] : [];
 }

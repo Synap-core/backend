@@ -151,3 +151,22 @@ describe("assertRunSubjectMatchesPlaybook", () => {
     await expect(check(randomUUID(), "post")).resolves.toBeUndefined();
   });
 });
+
+describe("a playbook dedicated to one record", () => {
+  const dedicated = (subjectId: string | null) =>
+    assertRunSubjectMatchesPlaybook({
+      subjectId,
+      subjectProfile: { profileSlug: "post", entityId: POST },
+      userId: USER,
+      workspaceId: WS,
+    });
+
+  it("runs on its record", async () => {
+    await expect(dedicated(POST)).resolves.toBeUndefined();
+  });
+
+  it("NEGATIVE: refuses another record of the kind, and a run with no subject", async () => {
+    await expect(dedicated(WEBINAR)).rejects.toThrow(/dedicated to one record/);
+    await expect(dedicated(null)).rejects.toThrow(/dedicated to one record/);
+  });
+});

@@ -38,11 +38,24 @@ const query = (operation: string, params: unknown = {}, id = "q1") => ({
 describe("the page bridge — through the console's own client", () => {
   const SPACE = "11111111-1111-4111-8111-111111111111";
 
-  function fakeClient() {
+  const PILLARS = {
+    mainGoal: null,
+    pillars: [{ trackId: "t1", health: "on_track" }],
+    rootHealth: { status: "unavailable" },
+  };
+  const LEAN = {
+    continuation: { detail: "lean", session: { id: "s1", title: "W" } },
+    outcomes: { status: "ok", counts: { met: 1, total: 2 } },
+    cost: null,
+  };
+
+  function fakeClient(refuse: ReadonlySet<string> = new Set()) {
     const calls: Array<{ path: string; input: unknown; opts: unknown }> = [];
     const proc = (path: string, answer: unknown) => ({
       query: async (input: unknown, opts?: unknown) => {
         calls.push({ path, input, opts });
+        // What the pod answers a viewer outside the read's floor.
+        if (refuse.has(path)) throw new Error(`${path}: not found`);
         return answer;
       },
     });
@@ -51,8 +64,16 @@ describe("the page bridge — through the console's own client", () => {
         list: proc("entities.list", { items: [] }),
         get: proc("entities.get", { entity: { id: "e1" } }),
       },
-      views: { list: proc("views.list", []) },
-      profiles: { list: proc("profiles.list", []) },
+      views: {
+        list: proc("views.list", []),
+        get: proc("views.get", { view: { id: "v1", type: "kanban" } }),
+        execute: proc("views.execute", { entities: [] }),
+      },
+      profiles: {
+        list: proc("profiles.list", []),
+        get: proc("profiles.get", { id: "pr1", slug: "deal" }),
+      },
+      propertyDefs: { list: proc("propertyDefs.list", []) },
       lifecycle: {
         board: proc("lifecycle.board", { columns: [] }),
         throughput: proc("lifecycle.throughput", { buckets: [] }),
@@ -61,20 +82,38 @@ describe("the page bridge — through the console's own client", () => {
           needsYou: { total: 3, bySpace: [{ workspaceId: SPACE, count: 1 }] },
         }),
         moving: proc("lifecycle.moving", { items: [] }),
+        get: proc("lifecycle.get", { profileSlug: "deal", options: [] }),
       },
       signals: {
         list: proc("signals.list", { items: [] }),
         count: proc("signals.count", { total: 0 }),
       },
-      focusSessions: { list: proc("focusSessions.list", []) },
+      focusSessions: {
+        list: proc("focusSessions.list", []),
+        getLean: proc("focusSessions.getLean", LEAN),
+      },
+      playbooks: {
+        process: proc("playbooks.process", { definition: { id: "pb1" } }),
+        scorecard: proc("playbooks.scorecard", { runs: { total: 3 } }),
+      },
+      projects: {
+        get: proc("projects.get", {
+          project: { id: "p1", name: "Not for the page" },
+          usedWorkspaces: [{ id: "w9" }],
+          ...PILLARS,
+        }),
+      },
       documents: { get: proc("documents.get", { content: "# hi" }) },
       flow: { of: proc("flow.of", { profileSlug: "deal", states: [] }) },
     };
     return { client: client as unknown as BridgeClient, calls };
   }
 
-  function wired(workspaceId: string | null) {
-    const { client, calls } = fakeClient();
+  function wired(
+    workspaceId: string | null,
+    refuse: ReadonlySet<string> = new Set()
+  ) {
+    const { client, calls } = fakeClient(refuse);
     const { frame, posted } = fakeFrame();
     const host = createCellBridgeHost({
       frameWindow: () => frame,
@@ -252,11 +291,174 @@ describe("the page bridge — through the console's own client", () => {
     for (const op of CELL_BRIDGE_READ_OP_NAMES) {
       const { calls, posted, send } = wired(SPACE);
       await send(
-        query(op, { profileSlug: "deal", id: "e1", documentId: "d1" })
+        query(op, {
+          profileSlug: "deal",
+          id: "e1",
+          documentId: "d1",
+          playbookId: "pb1",
+          identifier: "deal",
+          profileId: "pr1",
+        })
       );
       expect(calls.length, op).toBe(1);
       expect(posted[0]!.message, op).not.toHaveProperty("error");
     }
+  });
+
+  it("the work reads are each the procedure its own page reads, by id, with no lens", async () => {
+    const { calls, posted, send } = wired(SPACE);
+    const spoof = { workspaceId: "other", projectId: "p9", limit: 5 };
+    await send(query("sessions.get", { id: "s1", ...spoof }));
+    await send(
+      query("playbook.process", { playbookId: "pb1", ...spoof }, "q2")
+    );
+    await send(
+      query("playbook.scorecard", { playbookId: "pb1", ...spoof }, "q3")
+    );
+    await send(query("project.pillars", { id: "p1", ...spoof }, "q4"));
+    expect(calls.map((c) => [c.path, c.input])).toEqual([
+      ["focusSessions.getLean", { id: "s1" }],
+      ["playbooks.process", { playbookId: "pb1" }],
+      ["playbooks.scorecard", { playbookId: "pb1" }],
+      ["projects.get", { id: "p1", include: ["pillars"] }],
+    ]);
+    expect(posted.map((p) => p.message)).toEqual([
+      { type: "synap:query:result", id: "q1", data: LEAN },
+      {
+        type: "synap:query:result",
+        id: "q2",
+        data: { definition: { id: "pb1" } },
+      },
+      { type: "synap:query:result", id: "q3", data: { runs: { total: 3 } } },
+      // The pillars only: the project row is not this op's answer.
+      { type: "synap:query:result", id: "q4", data: PILLARS },
+    ]);
+  });
+
+  it("a work read the pod refuses this viewer reaches the page as that error, never empty", async () => {
+    const refused = new Set([
+      "focusSessions.getLean",
+      "playbooks.process",
+      "playbooks.scorecard",
+      "projects.get",
+    ]);
+    const { calls, posted, send } = wired(SPACE, refused);
+    await send(query("sessions.get", { id: "s1" }));
+    await send(query("playbook.process", { playbookId: "pb1" }, "q2"));
+    await send(query("playbook.scorecard", { playbookId: "pb1" }, "q3"));
+    await send(query("project.pillars", { id: "p1" }, "q4"));
+    expect(calls).toHaveLength(4);
+    expect(posted.map((p) => p.message)).toEqual([
+      {
+        type: "synap:query:result",
+        id: "q1",
+        error: "focusSessions.getLean: not found",
+      },
+      {
+        type: "synap:query:result",
+        id: "q2",
+        error: "playbooks.process: not found",
+      },
+      {
+        type: "synap:query:result",
+        id: "q3",
+        error: "playbooks.scorecard: not found",
+      },
+      {
+        type: "synap:query:result",
+        id: "q4",
+        error: "projects.get: not found",
+      },
+    ]);
+  });
+
+  it("a work read with no id is an error, and asks the pod nothing", async () => {
+    const { calls, posted, send } = wired(SPACE);
+    await send(query("sessions.get", { sessionId: "s1" }));
+    await send(query("playbook.scorecard", { id: "pb1" }, "q2"));
+    expect(calls).toEqual([]);
+    expect(posted.map((p) => p.message)).toEqual([
+      {
+        type: "synap:query:result",
+        id: "q1",
+        error: '"sessions.get" needs an id.',
+      },
+      {
+        type: "synap:query:result",
+        id: "q2",
+        error: '"playbook.scorecard" needs a playbookId.',
+      },
+    ]);
+  });
+
+  it("a view adapter's reads: the view by id, a kind, its fields and lifecycle IN the page's space", async () => {
+    const { calls, send } = wired(SPACE);
+    const spoof = { workspaceId: "other", projectId: "p9", filters: [1] };
+    await send(
+      query("views.get", { id: "v1", includeContent: false, ...spoof })
+    );
+    await send(query("views.execute", { id: "v1", ...spoof }, "q2"));
+    await send(query("profiles.get", { identifier: "deal", fill: true }, "q3"));
+    await send(
+      query("propertyDefs.list", { profileId: "pr1", ...spoof }, "q4")
+    );
+    await send(query("lifecycle.get", { profileSlug: "deal", ...spoof }, "q5"));
+    expect(calls).toEqual([
+      { path: "views.get", input: { id: "v1" }, opts: undefined },
+      { path: "views.execute", input: { id: "v1" }, opts: undefined },
+      {
+        path: "profiles.get",
+        input: { identifier: "deal" },
+        opts: { context: { workspaceId: SPACE } },
+      },
+      {
+        path: "propertyDefs.list",
+        input: { profileIds: ["pr1"] },
+        opts: { context: { workspaceId: SPACE } },
+      },
+      {
+        path: "lifecycle.get",
+        input: { profileSlug: "deal", workspaceId: SPACE },
+        opts: undefined,
+      },
+    ]);
+  });
+
+  it("a page in no space reads a kind's lifecycle at the pod's base, and its fields with no space", async () => {
+    const { calls, send } = wired(null);
+    await send(query("lifecycle.get", { profileSlug: "deal" }));
+    await send(query("propertyDefs.list", { profileId: "pr1" }, "q2"));
+    expect(calls.map((c) => [c.path, c.input, c.opts])).toEqual([
+      ["lifecycle.get", { profileSlug: "deal", workspaceId: null }, undefined],
+      ["propertyDefs.list", { profileIds: ["pr1"] }, undefined],
+    ]);
+  });
+
+  it("a view the pod refuses this viewer reaches the page as that error, never empty", async () => {
+    const { posted, send } = wired(SPACE, new Set(["views.execute"]));
+    await send(query("views.execute", { id: "v1" }));
+    expect(posted[0]!.message).toEqual({
+      type: "synap:query:result",
+      id: "q1",
+      error: "views.execute: not found",
+    });
+  });
+
+  it("a view adapter read missing its id asks the pod nothing", async () => {
+    const { calls, posted, send } = wired(SPACE);
+    await send(query("profiles.get", {}, "q2"));
+    expect(calls).toEqual([]);
+    expect(posted.map((p) => p.message.error)).toEqual([
+      '"profiles.get" needs an identifier.',
+    ]);
+  });
+
+  it("fields with no profileId are every field the space can see (the board asks with no input)", async () => {
+    const { calls, send } = wired(SPACE);
+    await send(query("propertyDefs.list", {}));
+    expect(calls.map((c) => [c.path, c.input])).toEqual([
+      ["propertyDefs.list", undefined],
+    ]);
   });
 
   it("a read missing what it needs is an error, and asks the pod nothing", async () => {

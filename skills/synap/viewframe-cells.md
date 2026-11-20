@@ -243,6 +243,35 @@ A board drawn from a playbook, in an HTML page (`window.synap.query`, the same o
 
 A failed read returns `{ error }`. Show it as a failure, never as an empty board. Moves still go through `update_entity` (the lifecycle property), so the status door and governance apply.
 
+#### Work reads (a view per type of work)
+
+A view per type of work (its state and plan, the work running now, what finished and what it showed, how the week went against the intent) reads ONE object by its id, the same read that object's own page makes. Each answers what this viewer may read; an object they cannot see is an error, never an empty answer. The id is a param; the space is not (the host still stamps it on the other reads).
+
+| Operation            | Params                     | Returns                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sessions.get`       | `id` (a session, required) | `{ continuation: { session: { id, displayTitle, goal, status, statusLabel, currentStage, progress }, nextMove, userMustDecide, openRoomQuestions, blockedBy, waitingOn, workUnits, room, gates, live, stageRuns }, outcomes: { status, counts: { met, total }, outcomes: [{ key, label, kind, owner, met, retired, state }], inputs: [{ key, label, need, open, answered, blocksOutcomeKey }] }, cost }`: what the session must yield (criteria are outcomes of kind `fact`), what it waits on from the person, its next move. `outcomes.status: "unavailable"` = not read, not empty |
+| `playbook.process`   | `playbookId` (required)    | `{ playbook, when, steps, checks: { criteria, gates }, moves, needs, skills, runs: { counts, recent }, health, unavailable }`: the playbook seen whole. A part named in `unavailable` was not read                                                                                                                                                                                                                                                                                                                                                                                    |
+| `playbook.scorecard` | `playbookId` (required)    | `{ runs: { total, closed, evaluated, reopened, instantiated, attached }, escalations, overrides, criteria: [{ key, statement, required, sessions, passed, failed, unmeasured, passRate, overrides }] }`: how this viewer's runs of it went. `passRate: null` = nothing measured, not 0                                                                                                                                                                                                                                                                                                |
+| `project.pillars`    | `id` (a project, required) | `{ mainGoal, pillars, rootHealth }`: where the project stands, pillar by pillar. A part that could not be read is `{ status: "unavailable" }`                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+
+#### Open an object from an HTML page
+
+A page knows no address: no pod URL reaches the frame. To open a session, an entity, a document, a playbook, a goal (`track`) or a proposal, ask the host by kind and id; it opens the object where it opens everywhere (the console's page, the app's route). Nothing comes back. Call it from a click: without one the host may ignore it.
+
+```html
+<button id="open">Open the session</button>
+<script>
+  document
+    .getElementById("open")
+    .addEventListener("click", () => window.synap.open("session", sessionId));
+  // window.synap.opens lists the kinds a page may open.
+</script>
+```
+
+#### Tokens in an HTML page
+
+The host writes its design tokens into the frame before the page: every `--synap-*` variable, at the value the reader's theme gives it (light, dark, a theme). Draw with `var(--synap-…)` and the page follows the reader's theme; never copy token values into the page, and never link a stylesheet (the frame loads nothing from the network). Your own styles still win where you set them.
+
 #### Mutations (governance-gated — return `{ status: "approved" | "proposed" | "denied" }`)
 
 ```js
