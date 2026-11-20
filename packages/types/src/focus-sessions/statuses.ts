@@ -114,7 +114,10 @@ export type TerminalSessionStatus = StatusOfCategory<
 export const TERMINAL_SESSION_STATUSES = sessionStatusesIn([
   "done",
   "lost",
-]) as readonly [TerminalSessionStatus, ...TerminalSessionStatus[]];
+]) as readonly TerminalSessionStatus[] as readonly [
+  TerminalSessionStatus,
+  ...TerminalSessionStatus[],
+];
 
 /**
  * Non-terminal statuses — a session still "in flight" for its owner: the
@@ -129,6 +132,21 @@ export const OPEN_SESSION_STATUSES: readonly OpenSessionStatus[] =
   sessionStatusesIn(["open", "active", "paused"]).filter(
     (s): s is OpenSessionStatus => s !== "stale"
   );
+
+/**
+ * Started and not ended — the `active` and `paused` categories: active,
+ * paused, stale. What an owed slot can still park a run on, what a needs-you
+ * read counts as a session still at work. (Not {@link OPEN_SESSION_STATUSES},
+ * which also holds the not-started `forming` / `scheduled` and leaves `stale`
+ * out; this set was once exported from `@synap/database` under that same
+ * name, with these other members.)
+ */
+export type UnderwaySessionStatus = StatusOfCategory<
+  typeof SESSION_STATUS_DECLARATION,
+  "active" | "paused"
+>;
+export const UNDERWAY_SESSION_STATUSES: readonly UnderwaySessionStatus[] =
+  sessionStatusesIn(["active", "paused"]);
 
 /**
  * How a session ENDED — its `closedAs`. "Delivered" means the work was done,

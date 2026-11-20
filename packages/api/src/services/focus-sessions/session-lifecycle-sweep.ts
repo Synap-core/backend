@@ -67,7 +67,7 @@ import {
   isDeliverableOutstanding,
   runStatusesIn,
 } from "@synap-core/types/units";
-import { sessionStatusesIn } from "@synap-core/types/focus-sessions";
+import { UNDERWAY_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { sessionKindWhere } from "./session-kind.js";
 import { attachNextMove } from "./session-path-sections.js";
@@ -88,7 +88,7 @@ const BATCH = 200;
  * Statuses an open session stands in that these moves may end: started and
  * not ended (the `active` and `paused` categories: active, paused, stale).
  */
-const OPEN = sessionStatusesIn(["active", "paused"]);
+const OPEN = UNDERWAY_SESSION_STATUSES;
 
 /**
  * SQL: a RUN session — the session kind's own predicate, NULL-safe. `NOT` of

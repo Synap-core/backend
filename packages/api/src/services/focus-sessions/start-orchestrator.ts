@@ -59,7 +59,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import {
   SESSION_TITLE_MAX,
-  sessionStatusesIn,
+  UNDERWAY_SESSION_STATUSES,
 } from "@synap-core/types/focus-sessions";
 import type { Hold } from "@synap-core/types/lifecycle";
 import type { ExpectedOutput, SlotAnswer } from "@synap/playbooks";
@@ -92,9 +92,7 @@ export const ORCHESTRATOR_PLAN_SLOT = "merged-plan";
  * `active` and `paused` categories), except the reaper's `stale` — a quiet
  * session is resumed first, then orchestrated.
  */
-const ORCHESTRATABLE = sessionStatusesIn(["active", "paused"]).filter(
-  (s) => s !== "stale"
-);
+const ORCHESTRATABLE = UNDERWAY_SESSION_STATUSES.filter((s) => s !== "stale");
 
 /** THE input, parsed by all three transports. */
 export const startOrchestratorInputSchema = z.object({

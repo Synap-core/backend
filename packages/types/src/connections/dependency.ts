@@ -304,11 +304,14 @@ export interface DependencyEdge {
  * What the caller knows about one node. `missing` = the row is gone (does not
  * block). `hidden` = it exists but the reader may not see it (still blocks,
  * reported without a name). `category` = an entity's lifecycle category, when
- * the reader resolved its kind's lifecycle. `title` = its display name.
+ * the reader resolved its kind's lifecycle. `closedAs` = how a session ended
+ * (`sessionClosedAs`), when the reader read it; absent on a closed session
+ * reads as delivered. `title` = its display name.
  */
 export interface DependencyNodeState {
   status?: string | null;
   category?: LifecycleCategory | null;
+  closedAs?: SessionClosedAs | null;
   title?: string | null;
   missing?: boolean;
   hidden?: boolean;
