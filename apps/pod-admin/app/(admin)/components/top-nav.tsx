@@ -37,6 +37,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { publicPodUrl } from "../../../lib/public-pod-url";
+import { clearPersistedQueryCache } from "../../../lib/query-persist";
 import { openIn, type AccountPage } from "../../../lib/open-in";
 import { useSecurityNudge } from "./recovery-codes-nudge";
 import { nudgeMarks } from "../../_lib/presence/ways-in/ways-in-model";
@@ -92,6 +93,8 @@ export function TopNav({
   const marked = nudgeMarks(nudge);
 
   const handleSignOut = async () => {
+    // What this browser kept of the pod leaves with the session.
+    await clearPersistedQueryCache();
     try {
       const res = await fetch(
         `${POD_URL}/.ory/kratos/public/self-service/logout/browser`,

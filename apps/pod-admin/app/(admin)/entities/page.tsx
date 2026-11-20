@@ -13,6 +13,7 @@
 
 import { addToast, Button, Checkbox } from "@heroui/react";
 import { Building2, Database, Globe, Trash2 } from "lucide-react";
+import { keepPreviousData } from "@tanstack/react-query";
 import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { trpc } from "../../../lib/trpc";
@@ -111,7 +112,8 @@ function EntitiesInner() {
       limit: LIMIT,
       offset,
     },
-    { staleTime: 15_000 }
+    // A search, filter or page change keeps the rows until the answer lands.
+    { placeholderData: keepPreviousData, staleTime: 15_000 }
   );
 
   // Reset offset when filters change

@@ -11,25 +11,46 @@
  * rare call that acts in one space names it per call (see the split link).
  */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { HeroUIProvider, ToastProvider } from "@heroui/react";
 import { ThemeProvider as NextThemesProvider } from "next-themes";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, httpLink, splitLink } from "@trpc/client";
 import SuperJSON from "superjson";
 import { trpc, POD_URL } from "../lib/trpc";
+import {
+  indexedDbQueryCacheStore,
+  keepQueryCache,
+  QUERY_CACHE_BUSTER,
+} from "../lib/query-persist";
 import { ConsoleLocaleProvider } from "../lib/i18n/locale-provider";
 import { PresenceProvider } from "./_lib/presence/presence-provider";
 
-export function Providers({ children }: { children: ReactNode }) {
+export function Providers({
+  children,
+  identityId,
+}: {
+  children: ReactNode;
+  /**
+   * The signed-in identity, from the proxy's `x-pod-admin-id` (null on the
+   * pages the proxy does not gate: sign-in, recovery, setup). Keys the query
+   * cache kept in this browser; with none, nothing is kept.
+   */
+  identityId: string | null;
+}) {
   // QueryClient + tRPC client created once per mount — `useState` keeps
   // them stable across re-renders without using a ref.
   const [queryClient] = useState(
     () =>
       new QueryClient({
         defaultOptions: {
+          // These mirror `QUERY_CACHE_DEFAULTS` in `@synap-core/sdk`
+          // (synap-app). Pod admin cannot import synap-app packages, so it
+          // keeps a copy: change both together. gcTime outlives staleTime so a
+          // page opened again within 30 min draws at once and refetches.
           queries: {
-            staleTime: 30_000,
+            staleTime: 60_000,
+            gcTime: 30 * 60_000,
             refetchOnWindowFocus: false,
             retry: 1,
           },
@@ -67,6 +88,17 @@ export function Providers({ children }: { children: ReactNode }) {
       ],
     });
   });
+
+  // What this browser kept for this identity comes back, then stays current
+  // (`lib/query-persist.ts`). Pages do not wait for it.
+  useEffect(() => {
+    const store = identityId ? indexedDbQueryCacheStore() : null;
+    if (!identityId || !store) return;
+    return keepQueryCache(queryClient, store, {
+      identityId,
+      buster: QUERY_CACHE_BUSTER,
+    });
+  }, [queryClient, identityId]);
 
   return (
     <NextThemesProvider
