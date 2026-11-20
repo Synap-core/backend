@@ -59,7 +59,7 @@ beforeAll(async () => {
   );
   await pg.query(
     `INSERT INTO links (workspace_id, from_type, from_id, to_type, to_id, link_type, metadata)
-     VALUES ($1, 'project', $2, 'workspace', $1, 'uses', '{"purpose":"Win clients"}'::jsonb)`,
+     VALUES ($1::uuid, 'project', $2, 'workspace', $1::text, 'uses', '{"purpose":"Win clients"}'::jsonb)`,
     [WS_HOME, P_HAS_EDGE]
   );
 }, 60_000);
