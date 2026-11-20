@@ -611,9 +611,11 @@ export function playbookNotInSpaceReason(
   if (!playbook.workspaceId || playbook.workspaceId === workspaceId) {
     return null;
   }
+  // Keeps the words "not visible in": the phrase this refusal has always
+  // carried, which tests and agents match on.
   return (
     `Playbook "${playbook.name}" (${playbook.id}) lives in space ${playbook.workspaceId}, ` +
-    `so it cannot run ${workspaceId ? `in space ${workspaceId}` : "outside its space"}: ` +
+    `so it is not visible in ${workspaceId ? `space ${workspaceId}` : "a run outside its space"}: ` +
     `run it in space ${playbook.workspaceId}.`
   );
 }

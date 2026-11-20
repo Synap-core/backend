@@ -195,7 +195,7 @@ describe("approving an agent's run proposal", () => {
     await expect(approve()).rejects.toMatchObject({
       code: "PRECONDITION_FAILED",
       message:
-        'Cannot apply this approval: Playbook "Evaluate tools" (pb-1) lives in space ws-home, so it cannot run in space ws-1: run it in space ws-home. Nothing was started.',
+        'Cannot apply this approval: Playbook "Evaluate tools" (pb-1) lives in space ws-home, so it is not visible in space ws-1: run it in space ws-home. Nothing was started.',
     });
     expect(h.updates).toBe(0);
     expect(h.runs).toHaveLength(0);
