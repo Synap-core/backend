@@ -79,6 +79,7 @@ import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "./capabilities/create-from-definition.js";
+import { findContainerByAddress } from "./capabilities/container-address.js";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
 import { createLogger } from "@synap-core/core";
 
@@ -218,6 +219,13 @@ export interface ResolvePackageDependenciesInput {
    * tRPC: `input.packageSlug`).
    */
   selfSlug?: string;
+  /**
+   * The space the package installs into (null or omitted: the whole pod). A
+   * `capability` dependency counts as present when it is installed for the
+   * whole pod or in this space — the scope an add-on's base must cover
+   * (`resolveAddOnBase`). Only capability presence reads it.
+   */
+  workspaceId?: string | null;
 }
 
 /** Outcome of resolving a single dependency (cached for diamond dedup). */
@@ -371,7 +379,8 @@ async function ensureCapabilityDependencyPresent(
   userId: string,
   resolved: Map<string, ResolveResult>,
   installed: ResolvedPackageDependency[],
-  agentUserId: string | undefined
+  agentUserId: string | undefined,
+  workspaceId: string | null
 ): Promise<ResolveResult> {
   // Namespaced cache key so a capability slug never collides with a workspace
   // subtype slug in the SHARED `resolved` map (diamond dedup across members).
@@ -390,6 +399,26 @@ async function ensureCapabilityDependencyPresent(
     });
     return res;
   };
+
+  // `require` means PRESENT: a container already installed at this template's
+  // address for the whole pod, or in the space being installed into, is
+  // `found` and left alone. Re-applying it pod-wide would mint a second
+  // container beside a space's own (an add-on in that space would then bind
+  // to the new, unconnected one).
+  const present =
+    (await findContainerByAddress(db, {
+      templateKey: slug,
+      workspaceId: null,
+    })) ??
+    (workspaceId
+      ? await findContainerByAddress(db, { templateKey: slug, workspaceId })
+      : undefined);
+  if (present) {
+    return record({
+      action: "found",
+      message: `Capability "${slug}" is already installed.`,
+    });
+  }
 
   // Resolve the capability template from the CP-synced catalog cache. Missing
   // from cache THROWS in `loadCapabilityTemplate` — catch it and degrade so the
@@ -717,7 +746,8 @@ async function ensureWorkspaceDependencyPresent(
           userId,
           resolved,
           installed,
-          agentUserId
+          agentUserId,
+          null
         );
         continue;
       }
@@ -947,7 +977,8 @@ export async function resolvePackageDependencies(
         userId,
         resolved,
         installed,
-        input.agentUserId
+        input.agentUserId,
+        input.workspaceId ?? null
       );
       continue;
     }

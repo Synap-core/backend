@@ -120,6 +120,9 @@ import {
   type CreateCapabilityResult,
 } from "./create-from-definition.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
+// Type-only: the resolver is imported dynamically at its call site (it imports
+// this module for its cell and skill dependencies).
+import type { ResolvedPackageDependency } from "../package-dependency-resolver.js";
 // Type-only (erased at runtime) — the applier itself is imported dynamically at
 // its call site, mirroring the approve-executors, so this module never pulls the
 // post-workspace layer graph into an eager import cycle.
@@ -155,7 +158,11 @@ import {
   type InstalledToolWebhook,
 } from "../webhooks/provision-inbound-webhook.js";
 import { requireUserId } from "../../utils/user-scoped.js";
-import { capabilityElementOf, skillElementOf } from "./package-element.js";
+import {
+  capabilityDependenciesOf,
+  capabilityElementOf,
+  skillElementOf,
+} from "./package-element.js";
 import { installAgentTemplate } from "../agent-templates/install.js";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
@@ -589,6 +596,65 @@ export async function applyCapabilityDefinition(
     requireUserId(ctx.userId)
   );
   return { ...result, webhooks };
+}
+
+/**
+ * Install what a capability package `require`s before the capability itself
+ * (`capabilityDependenciesOf`: its declared `dependencies`, and an add-on's
+ * base). The resolution is the ONE package-dependency resolver the template
+ * kinds run (`resolvePackageDependencies`): a dependency already installed for
+ * the whole pod or in the target space is `found`, a missing one installs from
+ * Synap's catalog through the governed capability applier.
+ *
+ * Where a template treats a dependency it could not install as non-fatal, a
+ * capability does not: its actions call the required tool by name and would
+ * fail only when they run ("Tool not found"). So a CAPABILITY dependency that
+ * is still absent refuses the install, naming what to install first, before
+ * anything of this capability is written. Other kinds of dependency are
+ * reported as the resolver resolved them.
+ */
+async function ensureCapabilityDependencies(
+  definition: unknown,
+  input: Pick<ApplyMarketInstallInput, "slug" | "userId" | "workspaceId">,
+  displayName: string
+): Promise<ResolvedPackageDependency[]> {
+  const declared = capabilityDependenciesOf(definition);
+  if (declared.length === 0) return [];
+  if (declared.some((d) => (d.relation ?? "require") === "compose")) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `"${displayName}" declares a compose dependency; a capability can only require what it needs. Nothing was installed.`,
+    });
+  }
+  const { resolvePackageDependencies } =
+    await import("../package-dependency-resolver.js");
+  const { installed } = await resolvePackageDependencies({
+    definition: { dependencies: declared },
+    userId: input.userId,
+    selfSlug: input.slug,
+    workspaceId: input.workspaceId,
+  });
+  const absent = installed.filter(
+    (d) => d.kind === "capability" && d.action === "required-absent"
+  );
+  if (absent.length > 0) {
+    const names = absent.map((d) => `"${d.slug}"`).join(", ");
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `"${displayName}" needs ${names} installed first, and ${
+        absent.length === 1 ? "it" : "they"
+      } could not be installed now: ${absent
+        .map((d) => d.message ?? d.slug)
+        .join(
+          " "
+        )} Install ${names}, then install "${displayName}" again. Nothing of "${displayName}" was installed.`,
+      cause: {
+        code: "CAPABILITY_DEPENDENCY_MISSING",
+        missing: absent.map((d) => d.slug),
+      },
+    });
+  }
+  return installed;
 }
 
 /**
@@ -1315,6 +1381,14 @@ export async function applyMarketInstall(
       workspaceId: input.workspaceId,
       workspaceRole,
     } as unknown as Context;
+    // What it requires is installed FIRST, through the ONE dependency resolver
+    // the template kinds use, under this install's authority (an agent's
+    // install reaches here only once a person approved it).
+    const dependencies = await ensureCapabilityDependencies(
+      definition,
+      input,
+      entry?.name ?? input.slug
+    );
     const result = await applyCapabilityDefinition(
       definition,
       input.params,
@@ -1327,6 +1401,7 @@ export async function applyMarketInstall(
       key: result.capabilityKey,
       created: result.created,
       webhooks: result.webhooks,
+      ...(dependencies.length > 0 ? { dependencies } : {}),
     };
   }
 
