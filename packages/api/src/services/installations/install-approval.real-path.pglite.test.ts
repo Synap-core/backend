@@ -582,3 +582,75 @@ describe("the pod's media-ffmpeg gained a recipe: an update asks, and approving 
     expect((await agentAsksUpdate()).status).toBe("approved");
   });
 });
+
+/**
+ * Ticket 370ee329: a person's "always approve" rule that is broad (`*`
+ * globally, or an `installation.*` glob) never lets an agent install on
+ * their computer by itself (decision c78d8bcf). Through the real MCP
+ * handler and the REAL gate with the rule stored: the ask is filed, and
+ * nothing is applied until the person approves it on the console (the
+ * executor's fresh sign-in, `widensCredential`).
+ *
+ * Negative control: without `installation.request` in the engine's human
+ * gate and without the door's forcePropose for an agent, the rule grants the
+ * ask and the door applies it at once (`approved`, an update queued).
+ */
+describe("a broad always-approve rule never applies an agent's install ask", () => {
+  async function agentAsksUpdateUnder(pattern: string) {
+    const ruleId = randomUUID();
+    await q(
+      `INSERT INTO governance_rules (id, principal_kind, scope_kind, target_kind, target_pattern, verdict, created_by)
+       VALUES ($1, 'any', 'pod', 'action', $2, 'auto', $3)`,
+      [ruleId, pattern, PERSON]
+    );
+    try {
+      const updatesBefore = (
+        await q(`SELECT id FROM host_jobs WHERE kind = 'update'`)
+      ).rows.length;
+      const res = await installationHandlers["synap_request_installation"]!({
+        toolName: "synap_request_installation",
+        args: {
+          capabilityKey: "media-ffmpeg",
+          computer: MAC,
+          action: "update",
+          version: `9.${randomUUID().slice(0, 4)}`,
+        },
+        userId: PERSON,
+        agentUserId: AGENT,
+        apiKeyScopes: ["mcp.read", "mcp.write"],
+      } as never);
+      const out = JSON.parse((res.content[0] as { text: string }).text) as {
+        status: string;
+        proposalId?: string;
+      };
+      const updatesAfter = (
+        await q(`SELECT id FROM host_jobs WHERE kind = 'update'`)
+      ).rows.length;
+      return {
+        status: out.status,
+        filed: out.proposalId
+          ? (await proposalRow(out.proposalId)).status
+          : null,
+        queued: updatesAfter - updatesBefore,
+      };
+    } finally {
+      await q(`DELETE FROM governance_rules WHERE id = $1`, [ruleId]);
+    }
+  }
+
+  it("a global rule (`*`, auto): proposed, pending, nothing queued", async () => {
+    expect(await agentAsksUpdateUnder("*")).toEqual({
+      status: "proposed",
+      filed: "pending",
+      queued: 0,
+    });
+  });
+
+  it("an `installation.*` rule: proposed, pending, nothing queued", async () => {
+    expect(await agentAsksUpdateUnder("installation.*")).toEqual({
+      status: "proposed",
+      filed: "pending",
+      queued: 0,
+    });
+  });
+});

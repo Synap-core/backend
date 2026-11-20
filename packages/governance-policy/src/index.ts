@@ -761,6 +761,24 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   // or a "make a rule from this" would compose.
   "trusted_issuer.trusted_issuer.widen_scopes" satisfies DirectProposalEventKey,
   "trusted_issuer.widen_scopes",
+  // CREDENTIAL WIDENINGS (ticket 370ee329). Each write below is approved by an
+  // executor that declares `widensCredential`: approving it is a person's act
+  // on the console, after a fresh sign-in (`assertFreshAuthentication`). A
+  // rule that executed it would skip both, so no rule may (tripwire
+  // `credential-writes-are-floored`, derived from the executors). An agent
+  // never installs on a computer by itself (decision c78d8bcf): its install
+  // ask reaches the gate, so this floor is live for it.
+  "installation.request" satisfies GateEventKey,
+  // Filed directly today (`createPendingProposal` / `insertPendingProposal`),
+  // so these never reach the engine: the floor holds the day one does, and
+  // refuses "Make a rule from this" for them.
+  "app.connect" satisfies GateEventKey,
+  "agent.connect" satisfies DirectProposalEventKey,
+  "vault.vault.request" satisfies DirectProposalEventKey,
+  "capability.capability.install" satisfies DirectProposalEventKey,
+  "capability.capability.update" satisfies DirectProposalEventKey,
+  "workspace.join" satisfies DirectProposalEventKey,
+  "webhook.inbound_source.connect" satisfies DirectProposalEventKey,
 ];
 
 /** `${targetType}.${proposalType}` for a direct proposal door. */
