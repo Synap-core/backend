@@ -43,7 +43,7 @@
       "minLength": 1
     },
     "reasoning": {
-      "description": "Why you run this, shown to the reviewer.",
+      "description": "Why, shown to the reviewer.",
       "type": "string",
       "maxLength": 2000
     },

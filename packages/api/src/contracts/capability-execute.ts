@@ -127,7 +127,7 @@ export const CapabilityExecuteInput = z.object({
     .string()
     .max(2000)
     .optional()
-    .describe("Why you run this, shown to the reviewer."),
+    .describe("Why, shown to the reviewer."),
   /**
    * Instruction-provenance (rung 2.55): the acting channel of this agent turn.
    * A run triggered from an untrusted-origin channel (external / bridge) force-
