@@ -61,7 +61,7 @@ import {
   type PlaybookStage,
 } from "@synap/playbooks";
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
-import { FOLLOWING_SESSION_STATUSES } from "@synap/jobs/utils/following-sessions.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { refuseAgentGateBypass } from "./gate-bypass-floor.js";
 import {
   advanceSessionStage,
@@ -115,7 +115,7 @@ export async function planSubjectMoveGates(input: {
     .where(
       and(
         eq(focusSessions.subjectEntityId, input.entityId),
-        inArray(focusSessions.status, [...FOLLOWING_SESSION_STATUSES]),
+        inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
         isNotNull(focusSessions.playbookId)
       )
     );

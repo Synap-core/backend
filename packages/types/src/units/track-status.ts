@@ -6,6 +6,7 @@
  * it, so every importer is unchanged.
  */
 import type { LifecycleCategory } from "../lifecycle/option.js";
+import { categoryOf } from "../lifecycle/category-sets.js";
 
 /**
  * A track's status — the stored option keys of its SYSTEM LIFECYCLE (work
@@ -71,8 +72,5 @@ export type TrackStatusIn<C extends LifecycleCategory> = {
 export function trackStatusCategory(
   status: string | null | undefined
 ): LifecycleCategory | null {
-  if (status == null) return null;
-  return Object.hasOwn(TRACK_STATUS_DECLARATION, status)
-    ? TRACK_STATUS_DECLARATION[status as TrackStatus].category
-    : null;
+  return categoryOf(TRACK_STATUS_DECLARATION, status);
 }

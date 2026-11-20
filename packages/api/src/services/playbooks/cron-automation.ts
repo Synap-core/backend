@@ -55,14 +55,11 @@ import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 const logger = createLogger({ module: "playbook-cron-automation" });
 
 /**
- * Load the surviving non-archived automation for (workspaceId, name).
- * Mirrors automations.ts's private `findNonArchivedAutomationByName` and 0230's
+ * Load the surviving non-archived automation for (workspaceId, name), the one
+ * read of a name clash for the automations router and this module. 0230's
  * newest-wins keep rule: case-insensitive on name, NULL workspace = pod-wide
  * (the unique index's COALESCE sentinel), ordered updated_at DESC so a concurrent
  * 23505 recovery converges on the same winner the migration's soft-archive kept.
- *
- * Used by this module's 23505 recovery, so a playbook-written automation
- * resolves a name clash the same way the automations router does.
  */
 export async function findNonArchivedAutomationByName(
   db: Awaited<ReturnType<typeof getDb>>,

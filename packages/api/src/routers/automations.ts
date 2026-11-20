@@ -24,6 +24,7 @@ import {
 import { stableStringify } from "../utils/stable-stringify.js";
 import { stampPlaybookRunIds } from "../services/automations/playbook-run-ids.js";
 import { playbookNotInSpaceReason } from "../services/playbooks/playbook-lifecycle.js";
+import { findNonArchivedAutomationByName } from "../services/playbooks/cron-automation.js";
 import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
@@ -130,7 +131,7 @@ import {
   isUnboundedFullAccess,
 } from "../access/grant-door-fence.js";
 import { TRPCError } from "@trpc/server";
-import { isCronTimezone, nextCronRunAt } from "@synap/shared-utils";
+import { isCronTimezone, nextCronRunAtFor } from "@synap/shared-utils";
 import {
   decodeDefinitionCursor,
   encodeDefinitionCursor,
@@ -795,36 +796,6 @@ async function prepareAutomationForMaterialization(
 }
 
 /**
- * Load the surviving non-archived automation for (workspaceId, name).
- * Case-insensitive on name; NULL workspace = pod-wide (matches the unique index
- * COALESCE sentinel). Newest-wins (updated_at DESC) so concurrent 23505 recovery
- * agrees with 0230's soft-archive keep-most-recently-updated rule.
- */
-async function findNonArchivedAutomationByName(
-  database: AutomationDatabase,
-  workspaceId: string | null | undefined,
-  name: string
-): Promise<{ id: string } | null> {
-  const scope =
-    workspaceId == null || workspaceId === ""
-      ? isNull(automations.workspaceId)
-      : eq(automations.workspaceId, workspaceId);
-  const [row] = await database
-    .select({ id: automations.id })
-    .from(automations)
-    .where(
-      and(
-        scope,
-        drizzleSql`lower(${automations.name}) = lower(${name})`,
-        ne(automations.status, "archived")
-      )
-    )
-    .orderBy(desc(automations.updatedAt), desc(automations.id))
-    .limit(1);
-  return row ?? null;
-}
-
-/**
  * D1 (S7, founder 2026-10-20): authoring, editing, arming or running a flow is
  * OWNER authority — the run executes as its author and carries no grant. A
  * PERSON's key may do it only with unbounded full access (`*`, no narrowing);
@@ -982,17 +953,10 @@ async function insertAutomationAfterGovernance(
     triggerType: input.triggerType,
     triggerConfig: input.triggerConfig,
   });
-  let nextRunAt: Date | null = null;
-  if (status === "active" && input.triggerType === "cron") {
-    const expression = input.triggerConfig.expression as string | undefined;
-    if (expression) {
-      nextRunAt = nextCronRunAt(
-        expression,
-        new Date(),
-        input.triggerConfig.timezone as string | undefined
-      );
-    }
-  }
+  const nextRunAt =
+    status === "active" && input.triggerType === "cron"
+      ? nextCronRunAtFor(input.triggerConfig, new Date())
+      : null;
 
   // Insert with 23505 recovery against automations_workspace_name_active_uq
   // (0230). Re-authoring the same automation (MCP create_automation, a capability
@@ -3002,16 +2966,10 @@ export const automationsRouter = router({
         storedTriggerType === "cron" &&
         (updates.status ?? existing.status) === "active"
       ) {
-        const triggerConfig = (updates.triggerConfig ??
-          existing.triggerConfig) as Record<string, unknown>;
-        const expression = triggerConfig?.expression as string | undefined;
-        updates.nextRunAt = expression
-          ? nextCronRunAt(
-              expression,
-              new Date(),
-              triggerConfig?.timezone as string | undefined
-            )
-          : null;
+        updates.nextRunAt = nextCronRunAtFor(
+          updates.triggerConfig ?? existing.triggerConfig,
+          new Date()
+        );
       }
 
       await database
@@ -3173,19 +3131,10 @@ export const automationsRouter = router({
       const proposed = await proposeAgentActivation(ctx.userId, existing);
       if (proposed) return proposed;
 
-      // For cron triggers, compute the next run time
-      let nextRunAt: Date | null = null;
-      if (existing.triggerType === "cron") {
-        const triggerConfig = existing.triggerConfig as Record<string, unknown>;
-        const cronExpression = triggerConfig?.expression as string | undefined;
-        if (cronExpression) {
-          nextRunAt = nextCronRunAt(
-            cronExpression,
-            new Date(),
-            triggerConfig?.timezone as string | undefined
-          );
-        }
-      }
+      const nextRunAt =
+        existing.triggerType === "cron"
+          ? nextCronRunAtFor(existing.triggerConfig, new Date())
+          : null;
 
       await database
         .update(automations)

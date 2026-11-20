@@ -78,8 +78,6 @@ export const LOOSE_ENDS_ITEMS = 5;
 export const READY_TO_CLOSE_SCAN_CAP = 50;
 /** Ended sessions read for their leftover asks before "at least this many". */
 const ENDED_SESSIONS_READ_CAP = 100;
-/** Statuses of a session still running: not ended, not an appointment. */
-const RUNNING_STATUSES = LIVE_RUN_SESSION_STATUSES;
 /** Ended without retiring its asks (`cancelled` retires them). */
 const ENDED_STATUSES = TERMINAL_SESSION_STATUSES.filter(
   (s) => s !== "cancelled"
@@ -336,7 +334,7 @@ async function readIdleSessions(
     const cutoff = new Date(now.getTime() - LOOSE_END_IDLE_DAYS * MS_PER_DAY);
     const where = and(
       agentOpenedSessionsWhere(userId, agentUserId),
-      inArray(focusSessions.status, [...RUNNING_STATUSES]),
+      inArray(focusSessions.status, [...LIVE_RUN_SESSION_STATUSES]),
       lt(focusSessions.updatedAt, cutoff),
       // Receipts (metadata.kind = the agent-proposal-package marker) are
       // bookkeeping the reaper closes, never a leftover to act on.
@@ -531,7 +529,7 @@ export async function readSessionsReadyToClose(p: {
       .where(
         and(
           agentOpenedSessionsWhere(p.userId, p.agentUserId),
-          inArray(focusSessions.status, [...RUNNING_STATUSES]),
+          inArray(focusSessions.status, [...LIVE_RUN_SESSION_STATUSES]),
           drizzleSql`jsonb_typeof(${focusSessions.expectedOutputs}) = 'array' AND jsonb_array_length(${focusSessions.expectedOutputs}) > 0`,
           notReceiptWhere()
         )

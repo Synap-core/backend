@@ -52,7 +52,7 @@ import {
   isOpenAgentSlot,
   type ContinuationNextMove,
 } from "./continuation-packet.js";
-import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "./session-statuses.js";
 import { mergeSessionMetadata } from "./session-metadata.js";
 import { attachNextMove } from "./session-path-sections.js";
 import { openLink } from "../../utils/deep-links.js";
@@ -545,10 +545,7 @@ export async function listSessionsOwingGrade(
     .where(
       and(
         eq(focusSessions.userId, userId),
-        inArray(
-          focusSessions.status,
-          OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
-        ),
+        inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
         drizzleSql`(CASE WHEN jsonb_typeof(${focusSessions.criteria}) = 'array' THEN jsonb_array_length(${focusSessions.criteria}) ELSE 0 END) > 0`
       )
     )

@@ -22,7 +22,7 @@ import {
 } from "@synap/database";
 import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
-import { nextCronRunAt } from "@synap/shared-utils";
+import { nextCronRunAtFor } from "@synap/shared-utils";
 // The expiry predicate + the rule back-reference reader, IMPORTED from the
 // event matcher in this same package rather than mirrored. Two firing doors
 // must agree on what "expired" means; a second copy is how they stop agreeing.
@@ -68,9 +68,7 @@ async function healUnscheduledCronAutomations(now: Date): Promise<void> {
     const triggerConfig = automation.triggerConfig as Record<string, unknown>;
     const expression = triggerConfig?.expression as string | undefined;
     const timezone = triggerConfig?.timezone as string | undefined;
-    const nextRunAt = expression
-      ? nextCronRunAt(expression, now, timezone)
-      : null;
+    const nextRunAt = nextCronRunAtFor(triggerConfig, now);
 
     if (!nextRunAt) {
       // TERMINAL, not a retry: the row can never leave the `isNull(nextRunAt)`
@@ -213,7 +211,6 @@ export async function handleAutomationCronScheduler(): Promise<void> {
     try {
       const triggerConfig = automation.triggerConfig as Record<string, unknown>;
       const cronExpression = triggerConfig?.expression as string;
-      const timezone = triggerConfig?.timezone as string | undefined;
 
       // Create run record.
       //
@@ -272,9 +269,7 @@ export async function handleAutomationCronScheduler(): Promise<void> {
       // Compute and set next run time. `runCount` is the executor's: it
       // counts a run once, when it ends (ticket 85133a81 — counting the
       // dispatch too doubled every automation's runs).
-      const nextRunAt = cronExpression
-        ? nextCronRunAt(cronExpression, now, timezone)
-        : null;
+      const nextRunAt = nextCronRunAtFor(triggerConfig, now);
 
       await db
         .update(automations)

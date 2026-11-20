@@ -11,18 +11,9 @@
 -- not one of its pillars. The door now stamps the EFFECTIVE home; this moves
 -- the data for the projects made before.
 --
--- SAFETY
---   • Data-only. No schema change, so no `0000_baseline_schema.sql` and no
---     `schema-coherence.ts` edit (this file adds no column).
---   • Idempotent via the `idx_links_unique_edge` unique index (spelled as its
---     column list: it is an index, not a named constraint). Re-running inserts
---     nothing; a project whose home edge already exists is skipped.
---   • Additive only: no UPDATE, no DELETE.
---   • Column-for-column what `linkProjectToWorkspace` writes through
---     `createLink`: `workspace_id` = the space, `metadata` '{}' (no purpose),
---     `created_by` NULL.
---   • Never an edge to a space that no longer exists (the door refuses
---     `workspace_not_found` the same way).
+-- Data-only and additive (no UPDATE, no DELETE); idempotent through the
+-- `idx_links_unique_edge` unique index. Writes what `linkProjectToWorkspace`
+-- writes (`metadata` '{}', `created_by` NULL), never to a deleted space.
 
 INSERT INTO links (workspace_id, from_type, from_id, to_type, to_id, link_type, metadata)
 SELECT

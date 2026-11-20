@@ -62,13 +62,6 @@ import { resolveProposalAction } from "./action.js";
 export type { Proposal, NewProposal } from "./row.js";
 
 /**
- * Proposal status as stored in the DB.
- * Includes "auto_approved" for whitelist-bypassed actions.
- */
-export type ProposalStatusString =
-  "pending" | "approved" | "rejected" | "auto_approved";
-
-/**
  * Status filter accepted by `proposals.list` tRPC procedure.
  * Uses "validated" as the public alias for "approved" (DB value).
  * Use this type anywhere a status filter is accepted by the API.

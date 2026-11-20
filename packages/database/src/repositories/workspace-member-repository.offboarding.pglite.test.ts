@@ -1,34 +1,11 @@
 /**
- * Finding 747c485f: removing a person from a space must also end the access of
- * the agents that act FOR that person there. The write gate checks the ACTING
- * agent's own membership (`verifyWorkspaceAccess` in api `permission-check.ts`
- * → `verifyPermission({ userId: agentUserId || userId })`), so an agent whose
- * row outlived its person's kept writing to the space.
- *
- * "Acting for" is the key fact (`api_keys.linked_user_id`, `agentsActingFor`),
- * not the creator (`users.created_by_user_id`): the Capture agent and the
- * Intelligence Service personas are created by the pod owner but serve every
- * member. The fixture rows that tell the two readings apart are the shared
- * agents (created by the removed person, no linked key: the creator reading
- * would remove them) and an agent the pod owner created for another member
- * (key linked to that member: the creator reading would remove it).
- *
- * Proved on PGlite through the REAL door every member removal goes through
- * (`WorkspaceMemberRepository.remove`) and the REAL membership step of the gate
- * (`verifyPermission`):
- *   1. after the person's removal, their agent is refused a write there, its
- *      row is gone and a removal event names it (and the person it left with);
- *   2. CONTROL: another member's agent, and the person's agent in ANOTHER
- *      space, keep their access;
- *   3. removing the pod owner removes their own agent but no shared agent
- *      (Capture shape, persona shape, pod-wide key) and no agent they created
- *      for someone else;
- *   4. migration 0440 deletes the rows earlier removals left behind (an agent
- *      with a key linked to a person who is not a member, a revoked key
- *      included), keeps every other agent, and a second run changes nothing.
- *
- * Cannot see: production Postgres, the HTTP door above the gate, the
- * track-space grant branch of `verifyWorkspaceAccess` (its own suite).
+ * Finding 747c485f: removing a person from a space also ends the access of the
+ * agents acting FOR them there (`api_keys.linked_user_id`, `agentsActingFor`),
+ * never of an agent its creator made for everyone (Capture, IS personas) or for
+ * another member. Proved on PGlite through the real door
+ * (`WorkspaceMemberRepository.remove`) and the gate's membership step
+ * (`verifyPermission`), with controls, and migration 0440's cleanup of rows
+ * earlier removals left behind (idempotent). Cannot see: production Postgres.
  */
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";

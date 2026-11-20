@@ -331,13 +331,6 @@ interface Candidate extends ActivityCursor {
 }
 
 /**
- * A session row is LIVE (clocked at its start, verb "started") until it ends:
- * every status that has not ended — `stale` included, it reads as paused
- * (founder, 2026-11-20). `scheduled` never reaches this feed.
- */
-const LIVE_SESSION_STATUSES = LIVE_RUN_SESSION_STATUSES;
-
-/**
  * A proposal filed into one of this track's sessions, or about the track
  * itself — a track stage gate (`target_type = 'track'`, no session), which a
  * session-only test left out of the track lens entirely.
@@ -705,7 +698,7 @@ async function readSessions<P extends Projection>(
   const actorId = drizzleSql<string>`coalesce(${agentId}, ${focusSessions.userId})`;
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
   if (actor === null) return none;
-  const live = inArray(focusSessions.status, [...LIVE_SESSION_STATUSES]);
+  const live = inArray(focusSessions.status, [...LIVE_RUN_SESSION_STATUSES]);
   const at = drizzleSql`case when ${live} then coalesce(${focusSessions.startedAt}, ${focusSessions.createdAt}) else coalesce(${focusSessions.closedAt}, ${focusSessions.updatedAt}) end`;
   const where = and(
     scopedDb(q.access).predicate(focusSessions),
@@ -1107,7 +1100,7 @@ async function enrich(
     }
 
     // session
-    const live = (LIVE_SESSION_STATUSES as readonly string[]).includes(
+    const live = (LIVE_RUN_SESSION_STATUSES as readonly string[]).includes(
       c.status
     );
     const action = live ? "start" : "close";

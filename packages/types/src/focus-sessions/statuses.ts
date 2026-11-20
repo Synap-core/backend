@@ -22,6 +22,7 @@
  */
 import type { LifecycleCategory } from "../lifecycle/option.js";
 import {
+  categoryOf,
   statusesInCategories,
   type StatusOfCategory,
 } from "../lifecycle/category-sets.js";
@@ -95,10 +96,7 @@ export function sessionStatusesIn<C extends LifecycleCategory>(
 export function sessionStatusCategory(
   status: string | null | undefined
 ): LifecycleCategory | null {
-  if (status == null) return null;
-  return Object.hasOwn(SESSION_STATUS_DECLARATION, status)
-    ? SESSION_STATUS_DECLARATION[status as SessionStatus].category
-    : null;
+  return categoryOf(SESSION_STATUS_DECLARATION, status);
 }
 
 /**
@@ -135,12 +133,20 @@ export const OPEN_SESSION_STATUSES: readonly OpenSessionStatus[] =
   );
 
 /**
+ * Open and not a mere appointment (`scheduled`): active, paused, forming. The
+ * sessions still being worked: where a write is filed, an input attached, a
+ * subject's status move followed.
+ */
+export type InFlightSessionStatus = Exclude<OpenSessionStatus, "scheduled">;
+export const IN_FLIGHT_SESSION_STATUSES: readonly InFlightSessionStatus[] =
+  OPEN_SESSION_STATUSES.filter(
+    (s): s is InFlightSessionStatus => s !== "scheduled"
+  );
+
+/**
  * Started and not ended — the `active` and `paused` categories: active,
  * paused, stale. What an owed slot can still park a run on, what a needs-you
- * read counts as a session still at work. (Not {@link OPEN_SESSION_STATUSES},
- * which also holds the not-started `forming` / `scheduled` and leaves `stale`
- * out; this set was once exported from `@synap/database` under that same
- * name, with these other members.)
+ * read counts as a session still at work.
  */
 export type UnderwaySessionStatus = StatusOfCategory<
   typeof SESSION_STATUS_DECLARATION,

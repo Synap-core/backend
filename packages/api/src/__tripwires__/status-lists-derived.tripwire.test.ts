@@ -16,9 +16,7 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * "the ended ones" calls `sessionStatusesIn([...categories])` /
  * `runStatusesIn(...)` (or a named set derived there), and names any
  * deliberate exception beside the derivation (`.filter((s) => s !==
- * "stale")`). A literal `["active", "paused", "stale"]` is how the pod came to
- * have two `OPEN_SESSION_STATUSES` with different members and ~25 subset
- * lists that each read `stale` their own way (status axis W0, 2026-11-20).
+ * "stale")`).
  *
  * ── WHAT IT SEES ────────────────────────────────────────────────────────────
  * After comments are stripped (`scripts/strip-comments.mjs`): an array
@@ -84,7 +82,7 @@ const BASELINE: Record<string, { count: number; why: string }> = {
   },
   "api/src/services/focus-sessions/advance-stage.ts": {
     count: 1,
-    why: "SUBJECT_LEADS (active, forming) differs from FOLLOWING_SESSION_STATUSES on `paused`; needs a decision, not a guess",
+    why: "SUBJECT_LEADS (active, forming) differs from IN_FLIGHT_SESSION_STATUSES on `paused`; needs a decision, not a guess",
   },
   "api/src/services/focus-sessions/session-status-filter.ts": {
     count: 1,

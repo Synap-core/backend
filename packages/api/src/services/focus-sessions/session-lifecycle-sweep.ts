@@ -85,12 +85,6 @@ const STALE_HOURS = workClockIn("stale", "hours");
 const BATCH = 200;
 
 /**
- * Statuses an open session stands in that these moves may end: started and
- * not ended (the `active` and `paused` categories: active, paused, stale).
- */
-const OPEN = UNDERWAY_SESSION_STATUSES;
-
-/**
  * SQL: a RUN session — the session kind's own predicate, NULL-safe. `NOT` of
  * a NULL is NULL, and a row with a NULL `origin` would vanish from every sweep
  * that negates it, so the reaper negates THIS (coalesced) form.
@@ -119,7 +113,7 @@ const nothingOwed = () =>
 export function metWorkSessionWhere(): SQL {
   return and(
     sessionKindWhere("work"),
-    inArray(focusSessions.status, [...OPEN]),
+    inArray(focusSessions.status, [...UNDERWAY_SESSION_STATUSES]),
     quietFor(MET_CLOSE_QUIET_HOURS),
     drizzleSql`jsonb_typeof(${focusSessions.expectedOutputs}) = 'array' AND jsonb_array_length(${focusSessions.expectedOutputs}) > 0`,
     drizzleSql`NOT ${outstandingSlotExistsIn(focusSessions.expectedOutputs)}`,
@@ -345,7 +339,7 @@ export function endedRunSessionWhere(): SQL {
     ))`;
   return and(
     runSessionWhere(),
-    inArray(focusSessions.status, [...OPEN]),
+    inArray(focusSessions.status, [...UNDERWAY_SESSION_STATUSES]),
     drizzleSql`(${automationEnded} OR ${playbookEnded} OR ${intakeEnded})`,
     nothingOwed(),
     // A run paused at its human stage gate has "ended" its turn, not its

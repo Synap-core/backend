@@ -573,7 +573,7 @@ async function staleStage(
     : null;
 }
 
-/** Session statuses process-sync's follow moves (`FOLLOWING_SESSION_STATUSES`). */
+/** Session statuses process-sync's follow moves (`IN_FLIGHT_SESSION_STATUSES`). */
 const SUBJECT_LEADS_STATUSES = new Set(["active", "forming"]);
 
 /**

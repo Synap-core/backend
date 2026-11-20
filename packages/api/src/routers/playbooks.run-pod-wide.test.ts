@@ -282,10 +282,8 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
   });
 
   it("(g2) explicit workspaceId naming ANOTHER space than the playbook's home is refused at filing, naming the fix (e93cf92b)", async () => {
-    // Until 20 Nov 2026 this was filed (and this test pinned it as correct,
-    // with `runPlaybook` mocked): the gate proposed a run in B for a playbook
-    // that lives in A, and the approval then failed in
-    // `resolveRunnablePlaybook`. Refused now before the gate, by that rule.
+    // Refused before the gate, by `resolveRunnablePlaybook`'s own rule: a run
+    // in B of a playbook that lives in A could only fail once approved.
     const caller = playbooksRouter.createCaller(ctxWith(null));
     await expect(
       caller.run({ playbookId: PB_ID, workspaceId: WS_B })

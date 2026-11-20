@@ -68,12 +68,14 @@ import {
   setSessionStatus,
   setRunStatus,
   oweSlotTransitions,
-  LIVE_RUN_STATUSES,
   workUnitActorOf,
   type WorkUnitActor,
 } from "@synap/database";
 import { WORKER_TARGET_REASONS } from "@synap-core/types/workers";
-import { isDeliverableOutstanding } from "@synap-core/types/units";
+import {
+  isDeliverableOutstanding,
+  LIVE_RUN_STATUSES,
+} from "@synap-core/types/units";
 import { ASK_LIMITS } from "@synap-core/types/ask";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";

@@ -23,10 +23,6 @@ import { inArray, notInArray, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { LIVE_RUN_STATUSES, type LiveRunStatus } from "@synap-core/types/units";
 
-// THE set lives on the run declaration (`@synap-core/types/units`
-// run-status.ts): the `active` and `paused` categories except `proposed`.
-export { LIVE_RUN_STATUSES, type LiveRunStatus };
-
 export function isLiveRunStatus(status: unknown): status is LiveRunStatus {
   return (LIVE_RUN_STATUSES as readonly unknown[]).includes(status);
 }
