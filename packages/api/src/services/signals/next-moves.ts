@@ -68,6 +68,7 @@ import { type AccessContext, scopedDb } from "../../access/index.js";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
+import { sessionStatusesIn } from "@synap-core/types/focus-sessions";
 import { readDependencyFacts } from "../links/dependency-links.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import type { rosterReadFor } from "../../access/session-visibility.js";
@@ -92,8 +93,10 @@ export const NEXT_MOVE_SKIPS_KEY = "nextMoveSkips";
  * on every scanned row, so the SQL can only ever be looser, never stricter.
  */
 const FOLDED_TASK_STATUS = drizzleSql<string>`regexp_replace(lower(trim(${entities.properties}->>'status')), '[[:space:]-]+', '_', 'g')`;
-/** Session statuses that were never begun — their verb is Start, not Resume. */
-const NOT_BEGUN_SESSION_STATUSES = new Set(["forming", "scheduled"]);
+/** Session statuses never begun (category `open`) — their verb is Start, not Resume. */
+const NOT_BEGUN_SESSION_STATUSES: ReadonlySet<string> = new Set(
+  sessionStatusesIn(["open"])
+);
 
 export type NextMoveSubRead =
   "tasks" | "steps" | "dependencies" | "skips" | "projects";

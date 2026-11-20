@@ -29,6 +29,7 @@
  */
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { workspaces } from "../schema/workspaces.js";
@@ -101,8 +102,13 @@ export function resolveClientKey(input: {
   );
 }
 
-/** Statuses a client's current session may hold (`scheduled` is a future slot). */
-const CLIENT_SESSION_STATUSES = ["active", "paused", "forming"] as const;
+/**
+ * Statuses a client's current session may hold: the pod's open statuses
+ * except `scheduled` (a future slot).
+ */
+const CLIENT_SESSION_STATUSES = OPEN_SESSION_STATUSES.filter(
+  (s) => s !== "scheduled"
+);
 
 export interface ClientSession {
   id: string;

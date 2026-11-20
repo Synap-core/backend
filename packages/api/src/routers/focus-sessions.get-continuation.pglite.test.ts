@@ -553,6 +553,7 @@ describe("focusSessions.get returns the continuation packet", () => {
           title: "Wire the Stripe webhook",
           status: "active",
           statusLabel: expect.any(String),
+          closedAs: null,
         },
       ],
     });
@@ -616,6 +617,7 @@ describe("focusSessions.get returns the continuation packet", () => {
           title: "Get the Stripe key",
           status: "closed",
           statusLabel: expect.any(String),
+          closedAs: "done",
         },
       ],
     });
@@ -717,12 +719,14 @@ describe("focusSessions.get returns the continuation packet", () => {
           title: "Launch billing",
           status: "active",
           statusLabel: expect.any(String),
+          closedAs: null,
         },
         {
           id: waitingClosed,
           title: "Old launch",
           status: "closed",
           statusLabel: expect.any(String),
+          closedAs: "done",
         },
       ],
     });
@@ -760,12 +764,14 @@ describe("focusSessions.get returns the continuation packet", () => {
           title: "Pricing page",
           status: "paused",
           statusLabel: expect.any(String),
+          closedAs: null,
         },
         {
           id: coordinatedClosed,
           title: "Old copy",
           status: "closed",
           statusLabel: expect.any(String),
+          closedAs: "done",
         },
       ],
     });
@@ -784,6 +790,7 @@ describe("focusSessions.get returns the continuation packet", () => {
           title: "Orchestrate the launch",
           status: "active",
           statusLabel: expect.any(String),
+          closedAs: null,
         },
       ],
     });

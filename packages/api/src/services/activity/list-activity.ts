@@ -107,7 +107,10 @@ import {
   type ActivitySource,
   type ParsedActivityActorFilter,
 } from "@synap-core/types/activity";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  LIVE_RUN_SESSION_STATUSES,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import {
   buildRequestFromProposal,
   type Proposal,
@@ -327,7 +330,12 @@ interface Candidate extends ActivityCursor {
   origin?: string | null;
 }
 
-const LIVE_SESSION_STATUSES = ["active", "paused", "forming"] as const;
+/**
+ * A session row is LIVE (clocked at its start, verb "started") until it ends:
+ * every status that has not ended — `stale` included, it reads as paused
+ * (founder, 2026-11-20). `scheduled` never reaches this feed.
+ */
+const LIVE_SESSION_STATUSES = LIVE_RUN_SESSION_STATUSES;
 
 /**
  * A proposal filed into one of this track's sessions, or about the track
@@ -697,7 +705,7 @@ async function readSessions<P extends Projection>(
   const actorId = drizzleSql<string>`coalesce(${agentId}, ${focusSessions.userId})`;
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
   if (actor === null) return none;
-  const live = drizzleSql`${focusSessions.status} in ('active', 'paused', 'forming')`;
+  const live = inArray(focusSessions.status, [...LIVE_SESSION_STATUSES]);
   const at = drizzleSql`case when ${live} then coalesce(${focusSessions.startedAt}, ${focusSessions.createdAt}) else coalesce(${focusSessions.closedAt}, ${focusSessions.updatedAt}) end`;
   const where = and(
     scopedDb(q.access).predicate(focusSessions),

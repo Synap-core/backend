@@ -53,25 +53,39 @@ export type FlowType =
   | "chat"
   | "agent_write";
 
-/** Normalised lifecycle across all ledgers. */
-export type RunStatus =
-  | "running"
-  | "completed"
-  | "failed"
-  | "proposed"
-  | "cancelled"
+/**
+ * Normalised lifecycle across all ledgers — THE list; the run doors' zod
+ * enums (tRPC `runs.list`, Hub REST `/runs`) are built from it.
+ */
+export const RUN_STATUSES = [
+  "running",
+  "completed",
+  "failed",
+  "proposed",
+  "cancelled",
   // 'skipped' (Wave 4.V3) — an automation run whose flow precondition gated it
   // out before any step ran. Only automation_runs produces it today.
-  | "skipped"
+  "skipped",
   // 'blocked_by_policy' — an automation run whose effect a governance verdict
   // refused (agent-produced trigger → human-owned automation → producer ladder /
   // policy floor blocked the THEN-action). A calm governance OUTCOME, not a
   // transport failure. Only automation_runs produces it today.
-  | "blocked_by_policy"
+  "blocked_by_policy",
   // 'waiting_on_you' (W2 calm) — a run the reaper found past its window with
   // its session still owing the person an open slot. Not failed, not running:
   // waiting on the human. automation_runs and playbook_runs produce it.
-  | "waiting_on_you";
+  "waiting_on_you",
+  // 'paused' — the `paused` lifecycle category for a ledger word the feed
+  // does not speak itself: a paused session, and a `stale` session or
+  // playbook run (the reaper found it quiet; it READS as paused everywhere,
+  // founder 2026-11-20). Not running, not ended.
+  "paused",
+] as const;
+export type RunStatus = (typeof RUN_STATUSES)[number];
+
+export function isRunStatus(v: string | null | undefined): v is RunStatus {
+  return v != null && (RUN_STATUSES as readonly string[]).includes(v);
+}
 
 /** One run, ledger-agnostic. */
 export interface UnifiedRun {

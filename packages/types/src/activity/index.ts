@@ -32,6 +32,7 @@ import {
 export * from "./heat.js";
 export * from "./speaker.js";
 import type { UnitGlyph, UnitTone } from "../units/state.js";
+import { sessionStatusCategory } from "../focus-sessions/statuses.js";
 
 // ── Outcome ─────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,10 @@ import type { UnitGlyph, UnitTone } from "../units/state.js";
  *   reverted  — it applied, then was undone.
  *   waiting   — a run the reaper found quiet while its session owes the person.
  *   running   — a live session / run.
- *   stopped   — cancelled, stale, skipped, withdrawn, expired, or refused by
+ *   paused    — a session / run in the `paused` category: paused by a person,
+ *               or `stale` (the reaper found it quiet). Not ended: it can pick
+ *               up again (founder, 2026-11-20: stale = paused everywhere).
+ *   stopped   — cancelled, skipped, withdrawn, expired, or refused by
  *               policy: it ended without failing and without succeeding.
  */
 export const ACTIVITY_OUTCOMES = [
@@ -57,6 +61,7 @@ export const ACTIVITY_OUTCOMES = [
   "reverted",
   "waiting",
   "running",
+  "paused",
   "stopped",
 ] as const;
 export type ActivityOutcome = (typeof ACTIVITY_OUTCOMES)[number];
@@ -84,6 +89,8 @@ const OUTCOME_VIEWS: Record<
   waiting: { tone: "primary", glyph: "person" },
   // The same mark as a `working` unit.
   running: { tone: "ai", glyph: "spark" },
+  // The same mark as a `paused` unit.
+  paused: { tone: "textMuted", glyph: "pause" },
   stopped: { tone: "textSecondary", glyph: "pause" },
 };
 
@@ -116,7 +123,11 @@ export function activityOutcomeForProposal(
   }
 }
 
-/** A run's status (the unified runs vocabulary) → the outcome. */
+/**
+ * A run's status (the unified runs vocabulary, or a stored run word) → the
+ * outcome. The `paused` category (the feed's `paused`, a stored `stale`)
+ * reads paused, by the declaration.
+ */
 export function activityOutcomeForRun(
   status: string | null | undefined
 ): ActivityOutcome {
@@ -132,26 +143,35 @@ export function activityOutcomeForRun(
     case "proposed":
       return "proposed";
     default:
-      // cancelled / skipped / blocked_by_policy / an unknown value.
-      return "stopped";
+      // paused / stale read paused; cancelled / skipped / blocked_by_policy /
+      // an unknown value stopped.
+      return sessionStatusCategory(status) === "paused" ? "paused" : "stopped";
   }
 }
 
-/** A work session's status → the outcome of its lifecycle row. */
+/**
+ * A work session's status → the outcome of its lifecycle row, read off the
+ * session declaration's CATEGORY: done succeeded, paused (paused, stale)
+ * paused, active running, lost failed (`failed`) or stopped (`cancelled`).
+ * `open` keeps its old reading until runs are born queued (status axis W2):
+ * `forming` running, `scheduled` (an appointment, never a run) stopped.
+ */
 export function activityOutcomeForSession(
   status: string | null | undefined
 ): ActivityOutcome {
-  switch (status) {
-    case "closed":
+  switch (sessionStatusCategory(status)) {
+    case "done":
       return "succeeded";
-    case "failed":
-      return "failed";
-    case "active":
     case "paused":
-    case "forming":
+      return "paused";
+    case "active":
       return "running";
+    case "open":
+      return status === "scheduled" ? "stopped" : "running";
+    case "lost":
+      return status === "failed" ? "failed" : "stopped";
     default:
-      // cancelled / stale / an unknown value.
+      // an unknown value.
       return "stopped";
   }
 }

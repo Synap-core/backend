@@ -62,6 +62,7 @@ import {
   isTerminalSessionStatus,
   type SessionStatus,
 } from "@synap-core/types/focus-sessions";
+import { runStatusesIn } from "@synap-core/types/units";
 import { createLogger } from "@synap-core/core";
 import {
   grantWriteDenial,
@@ -77,8 +78,13 @@ import {
 
 const logger = createLogger({ module: "continue-run" });
 
-/** The run statuses a run ENDED in (not live, not a draft, not cancelled). */
-const ENDED_RUN_STATUSES = ["completed", "failed"] as const;
+/**
+ * The run statuses a run ENDED in (categories `done` and `lost`), except
+ * `cancelled`: a cancel is the person's stop, never "stopped early".
+ */
+const ENDED_RUN_STATUSES = runStatusesIn(["done", "lost"]).filter(
+  (s) => s !== "cancelled"
+);
 
 /** What the Continue predicate reads, from the session and its newest run. */
 export interface ContinueFacts {

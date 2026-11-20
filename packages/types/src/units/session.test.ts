@@ -229,7 +229,13 @@ describe("sessionRowInput — one row of a project", () => {
 });
 
 describe("pathRowSessionFact — THE door every path surface reads a row through", () => {
-  const edges = (...items: Array<{ title: string; status: string }>) => ({
+  const edges = (
+    ...items: Array<{
+      title: string;
+      status: string;
+      closedAs?: "done" | "not_done" | null;
+    }>
+  ) => ({
     status: "ok" as const,
     items,
   });
@@ -257,6 +263,22 @@ describe("pathRowSessionFact — THE door every path surface reads a row through
     ).toBeNull();
     expect(openBlockerTitle({ status: "unavailable" })).toBeNull();
     expect(openBlockerTitle(null)).toBeNull();
+  });
+
+  it("a blocker CLOSED with required work open (closedAs not_done) still blocks the row", () => {
+    // Rules out "closed ⇒ delivered" (the retired SESSION_DELIVERED_STATUSES):
+    // the two rules disagree exactly on a closed blocker the wire marks
+    // not_done. A closed one marked done, or with no mark, still clears.
+    expect(
+      openBlockerTitle(
+        edges({ title: "Half done", status: "closed", closedAs: "not_done" })
+      )
+    ).toBe("Half done");
+    expect(
+      openBlockerTitle(
+        edges({ title: "d", status: "closed", closedAs: "done" })
+      )
+    ).toBeNull();
   });
 
   it("an open row waiting on an open session reads blocked on every path surface", () => {

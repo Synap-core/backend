@@ -119,7 +119,9 @@ import {
 import {
   resolveSessionTitle,
   readSuspendedNote,
+  sessionClosedAs,
   sessionStatusCategory,
+  type SessionClosedAs,
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
 import type { SessionCriterion } from "@synap/playbooks";
@@ -176,6 +178,7 @@ import {
   OPEN_SESSION_STATUSES,
   TERMINAL_SESSION_STATUSES,
 } from "./session-statuses.js";
+import { closedNotDoneRecordedSql } from "./session-closed-as.js";
 import {
   projectSessionKind,
   sessionKindWhere,
@@ -392,6 +395,13 @@ export interface PacketChildItem {
   title: string;
   status: string;
   statusLabel: string;
+  /**
+   * How it ENDED (`sessionClosedAs`): on a session-edge item (`blockedBy`,
+   * `unblocks`, parent, children), so a blocker that closed with required
+   * work open reads as not delivered (`openBlockerTitle`); `null` = not
+   * ended. Absent on items of other sections.
+   */
+  closedAs?: SessionClosedAs | null;
 }
 
 /**
@@ -1471,6 +1481,7 @@ async function readInboundSessions(
         title: focusSessions.title,
         goal: focusSessions.goal,
         status: focusSessions.status,
+        closedNotDone: closedNotDoneRecordedSql(),
       })
       .from(links)
       .innerJoin(focusSessions, join)
@@ -1490,6 +1501,7 @@ async function readInboundSessions(
       title: resolveSessionTitle(r),
       status: r.status,
       statusLabel: resolveStatusLabel(r.status),
+      closedAs: sessionClosedAs(r.status, r.closedNotDone),
     })),
   };
 }
@@ -1530,6 +1542,7 @@ async function readOutboundSessions(
         title: focusSessions.title,
         goal: focusSessions.goal,
         status: focusSessions.status,
+        closedNotDone: closedNotDoneRecordedSql(),
       })
       .from(links)
       .innerJoin(focusSessions, join)
@@ -1548,6 +1561,7 @@ async function readOutboundSessions(
       title: resolveSessionTitle(r),
       status: r.status,
       statusLabel: resolveStatusLabel(r.status),
+      closedAs: sessionClosedAs(r.status, r.closedNotDone),
     })),
   };
 }

@@ -26,6 +26,7 @@ import {
 import { resolveServiceName } from "../service-marks/index.js";
 import type { SessionPostIntent } from "./session-post.js";
 import { resolveUnitState, type UnitStateView } from "../units/state.js";
+import { LIVE_RUN_STATUSES } from "../units/run-status.js";
 import { workClockIn } from "../work-clock/index.js";
 
 /**
@@ -717,16 +718,10 @@ export const EXTERNAL_AGENT_STATUSES = [
 export type ExternalAgentStatus = (typeof EXTERNAL_AGENT_STATUSES)[number];
 
 /**
- * Run statuses a cancel can act on — a MIRROR of `LIVE_RUN_STATUSES`
- * (`@synap/database` utils/live-run-status.ts), which this leaf cannot import.
- * `services/agent-dispatch/__tests__/external-agent-live-mirror.test.ts` (packages/api) fails
- * when the two disagree.
+ * Run statuses a cancel can act on — `LIVE_RUN_STATUSES`, the run
+ * declaration's live set (`../units/run-status.ts`), no longer a mirror.
  */
-export const EXTERNAL_AGENT_LIVE_RUN_STATUSES = [
-  "running",
-  "waiting_on_you",
-  "stale",
-] as const;
+export const EXTERNAL_AGENT_LIVE_RUN_STATUSES = LIVE_RUN_STATUSES;
 
 /**
  * Consecutive failed status reads after which the task reads "Can't reach

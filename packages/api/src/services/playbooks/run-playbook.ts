@@ -109,6 +109,7 @@ import {
 import { readStoredRunChoice } from "../agent-dispatch/agent-assignment.js";
 import { resolveRunner } from "../agent-dispatch/runner.js";
 import type { RunOn } from "@synap-core/types/agents";
+import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
 import { refuseRunMissingTools } from "./run-tools-missing.js";
@@ -680,13 +681,10 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
  * daily; only once the run is terminally failed/closed — session in ('closed' |
  * 'failed' | 'cancelled') — is a new run allowed, so a subject always has a
  * legitimate path back to eligibility and is never permanently locked out.
- * Exported so a test can lock the SHAPE of this decision.
+ * It IS the terminal set (`TERMINAL_SESSION_STATUSES`, the declaration's
+ * `done` and `lost`). Exported so a test can lock the SHAPE of this decision.
  */
-export const IDEMPOTENCY_TERMINAL_SESSION_STATUSES = [
-  "closed",
-  "failed",
-  "cancelled",
-] as const;
+export const IDEMPOTENCY_TERMINAL_SESSION_STATUSES = TERMINAL_SESSION_STATUSES;
 
 /**
  * The statuses subject-idempotency must NOT reuse: the terminal set above, plus
