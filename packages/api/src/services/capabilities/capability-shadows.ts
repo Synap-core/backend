@@ -37,6 +37,7 @@ import {
   isNull,
   drizzleSql,
 } from "@synap/database";
+import { revokeHostSeeds } from "@synap/database/agent-governance";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
 
@@ -348,7 +349,7 @@ export async function retireCapabilityShadows(input: {
     // The auto approval rows naming a removed part by its id (a grant's, since
     // 0435) would match nothing again; take them back with the grants so the
     // approvals list does not keep a dead "runs on its own".
-    await tx
+    const revokedRules = await tx
       .update(governanceRules)
       .set({ revokedAt: new Date() })
       .where(
@@ -358,7 +359,13 @@ export async function retireCapabilityShadows(input: {
           eq(governanceRules.verdict, "auto"),
           isNull(governanceRules.revokedAt)
         )
-      );
+      )
+      .returning({ id: governanceRules.id });
+    // Their copies on an agent's box go with them (host-seed.ts).
+    await revokeHostSeeds(
+      tx,
+      revokedRules.map((r) => r.id)
+    );
   });
   return {
     retired: chosen.map((s) => ({ type: s.type, id: s.id, name: s.name })),

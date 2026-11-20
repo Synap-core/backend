@@ -13,6 +13,16 @@
  *   - revoking a grant (`capabilityGrants.revoke`, a retired part) takes back
  *     the auto rows on exactly that grant's agent × action × space, so a
  *     revoked pre-approval asks again, as it did when the grant held the mode.
+ *
+ * Both go through the doors every rule writer goes through:
+ *   - the FLOOR is a rung, not rows (`filterUncoveredActions`, Governance
+ *     Convergence Plan D2): a row whose action the code floor already covers
+ *     is never written. The rows here name a capability, and the floor holds
+ *     action patterns only, so nothing is dropped today; an `action` row
+ *     added here later is diffed like `seedHostRules` diffs its rows;
+ *   - the HOST SEED (host-seed.ts, decision c83e0661): an auto row for one
+ *     agent is written again for that agent's own box (`seedHostRules`), and
+ *     a revoked row's seed is taken back (`revokeHostSeeds`).
  */
 
 import {
@@ -21,9 +31,17 @@ import {
   inArray,
   isNull,
   type db,
+  filterUncoveredActions,
   SESSION_GRANT_CREATED_BY_PREFIX,
 } from "@synap/database";
-import { governanceRules } from "@synap/database/schema";
+import {
+  revokeHostSeeds,
+  seedHostRules,
+} from "@synap/database/agent-governance";
+import {
+  governanceRules,
+  type NewGovernanceRule,
+} from "@synap/database/schema";
 
 /** The pod handle or a transaction on it. */
 type Tx = Pick<typeof db, "select" | "insert" | "update">;
@@ -77,21 +95,33 @@ export async function writeSessionGrantApprovalRows(
   const have = new Set(existing.map((r) => r.targetPattern));
   const missing = [...new Set(input.partIds)].filter((id) => !have.has(id));
   if (missing.length === 0) return;
-  await tx.insert(governanceRules).values(
-    missing.map((id) => ({
-      principalKind: input.grantedTo ? ("agent" as const) : ("any" as const),
-      agentUserId: input.grantedTo,
-      principalClass: null,
-      scopeKind: input.workspaceId ? ("workspace" as const) : ("pod" as const),
-      workspaceId: input.workspaceId,
-      targetKind: "capability" as const,
-      targetPattern: id,
-      targetProfile: null,
-      verdict: "auto" as const,
-      createdBy: `${SESSION_GRANT_CREATED_BY_PREFIX}${input.sessionId}`,
-      expiresAt: null,
-    }))
+  const rows: NewGovernanceRule[] = missing.map((id) => ({
+    principalKind: input.grantedTo ? ("agent" as const) : ("any" as const),
+    agentUserId: input.grantedTo,
+    principalClass: null,
+    scopeKind: input.workspaceId ? ("workspace" as const) : ("pod" as const),
+    workspaceId: input.workspaceId,
+    targetKind: "capability" as const,
+    targetPattern: id,
+    targetProfile: null,
+    verdict: "auto" as const,
+    createdBy: `${SESSION_GRANT_CREATED_BY_PREFIX}${input.sessionId}`,
+    expiresAt: null,
+  }));
+  // The floor is a rung, not rows: an action the floor covers is not written
+  // (only an `action` target can restate it; these name a capability).
+  const uncovered = new Set(
+    filterUncoveredActions(
+      rows.filter((r) => r.targetKind === "action").map((r) => r.targetPattern)
+    )
   );
+  const toWrite = rows.filter(
+    (r) => r.targetKind !== "action" || uncovered.has(r.targetPattern)
+  );
+  if (toWrite.length === 0) return;
+  const written = await tx.insert(governanceRules).values(toWrite).returning();
+  // The same auto, for the agent's own box (none for an `any` row).
+  await seedHostRules(tx, written);
 }
 
 /**
@@ -104,8 +134,9 @@ export async function revokeGrantApprovalRows(
   grants: ReadonlyArray<GrantBinding & { grantableId: string }>
 ): Promise<void> {
   const now = new Date();
+  const revokedIds: string[] = [];
   for (const g of grants) {
-    await tx
+    const revoked = await tx
       .update(governanceRules)
       .set({ revokedAt: now })
       .where(
@@ -113,6 +144,10 @@ export async function revokeGrantApprovalRows(
           bindingWhere(g, [g.grantableId]),
           eq(governanceRules.verdict, "auto")
         )
-      );
+      )
+      .returning({ id: governanceRules.id });
+    revokedIds.push(...revoked.map((r) => r.id));
   }
+  // Their copies on the agent's box go with them.
+  await revokeHostSeeds(tx, revokedIds);
 }
