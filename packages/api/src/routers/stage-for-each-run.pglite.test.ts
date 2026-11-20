@@ -17,9 +17,10 @@
  *     its items in its goal; the parent pauses, its step row waits;
  *   - 70 items, batch 10: seven batches, never more than three running, the
  *     next one starting as one ends; the last close finishes the step;
- *   - a child that did not deliver (failed, cancelled, or closed with required
- *     work open): the step ends failed, the parent stops waiting on that
- *     child, stays on the step, and its agent is told which part did not;
+ *   - a child that did not deliver (failed, or closed with required work
+ *     open): the step ends failed, the parent stops waiting on that child,
+ *     stays on the step, and its agent is told which part did not; a
+ *     cancelled child is skipped: the step is done without it, the part listed;
  *   - a replayed close starts nothing and settles nothing twice;
  *   - `max` caps the items; a step that `uses` a playbook runs that playbook;
  *   - `over` naming no list: the step fails and the room says why;
@@ -600,6 +601,30 @@ describe("the children close", () => {
     expect(turns).toHaveLength(1);
     // The turn answers the room line it was told in (the door reads it).
     expect(turns[0]!.userMessageId).toBeTruthy();
+  });
+
+  it("one cancelled is skipped: the step is done without it and the part is listed", async () => {
+    const { sessionId, channelId } = await startParent(REVIEW, {
+      findingIds: ids(70),
+    });
+    const kids = await children(sessionId);
+    await endChild(kids[0]!.id, "closed");
+    await settleStageChild(kids[0]!.id);
+    await endChild(kids[1]!.id, "cancelled");
+    await settleStageChild(kids[1]!.id);
+    await endChild(kids[2]!.id, "closed");
+    expect(await settleStageChild(kids[2]!.id)).toEqual({
+      status: "fan_out_done",
+      failed: [],
+      toStage: "summarize",
+    });
+    expect((await stepRow(sessionId)).status).toBe("done");
+    expect((await session(sessionId)).current_stage).toBe("summarize");
+    const told = (await systemLines(channelId)).find((l) =>
+      l.startsWith("Step Review is done")
+    );
+    expect(told).toContain("part 2 skipped (cancelled)");
+    expect(told).toContain("SKIPPED (cancelled)");
   });
 
   it("one closed with required work open is not delivered: the step ends failed and names the child", async () => {
