@@ -227,6 +227,13 @@ describe("an approved playbook create keeps its proposal's id", () => {
     const out = await fileAndApprove(promised, gated.data);
     expect(await playbookIdsNamed("Prospect list A")).toEqual([promised]);
     expect((out as { primaryId?: string }).primaryId).toBe(promised);
+    // The person it was filed for owns it; the agent that wrote it is its
+    // actor (consolidation W1).
+    const { rows } = await q(
+      `select created_by, agent_user_id from playbooks where id = $1`,
+      [promised]
+    );
+    expect(rows).toEqual([{ created_by: OWNER, agent_user_id: AGENT }]);
   });
 
   it("a proposal filed before the gate minted an id is adopted too", async () => {
