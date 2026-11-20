@@ -31,7 +31,15 @@
 
 import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { getDb, eq, ne, drizzleSql } from "@synap/database";
+import {
+  getDb,
+  eq,
+  ne,
+  drizzleSql,
+  findPgError,
+  PG_UNIQUE_VIOLATION,
+  uniqueViolationConstraint,
+} from "@synap/database";
 import { rendererBundles, rendererHostModules } from "@synap/database/schema";
 import {
   rendererSetDigestText,
@@ -119,28 +127,12 @@ const HOST_MODULE_CONSTRAINTS = [
  * while this one ran): the one-set index or the (bundle, module) key.
  */
 function isHostModuleViolation(err: unknown): boolean {
-  for (
-    let e = err as
-      | {
-          code?: unknown;
-          constraint?: unknown;
-          message?: unknown;
-          cause?: unknown;
-        }
-      | undefined;
-    e;
-    e = e.cause as typeof e
-  ) {
-    if (
-      e.code === "23505" &&
-      HOST_MODULE_CONSTRAINTS.some(
-        (name) =>
-          e!.constraint === name || String(e!.message ?? "").includes(name)
-      )
-    )
-      return true;
-  }
-  return false;
+  const e = findPgError(err, PG_UNIQUE_VIOLATION);
+  if (!e) return false;
+  // A driver that names no constraint still names it in its message.
+  const name = uniqueViolationConstraint(err) ?? "";
+  const message = String((e as { message?: unknown }).message ?? "");
+  return HOST_MODULE_CONSTRAINTS.some((c) => name === c || message.includes(c));
 }
 
 /** Who holds the pod's host-module set now, read after a refused write. */
