@@ -2,8 +2,8 @@
 
 /**
  * One calibration pattern: "<agent> · <what happened>" as the title, how
- * often and how lately, its recent requests or objects as doors, its risk
- * as the mark's tone, and the ONE way to act (`CalibrationDecision`), drawn
+ * often (one neutral mark: risk orders the rows) and how lately, its recent
+ * requests or objects as doors, and the ONE way to act (`CalibrationDecision`), drawn
  * by the page through `onAct` so the writes and their receipts live in one
  * place.
  */
@@ -11,7 +11,10 @@
 import { Button } from "@heroui/react";
 import { Activity } from "lucide-react";
 import Link from "next/link";
-import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import {
+  resolveObjectNoun,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
 import { navHref } from "../../../../../lib/console-nav";
 import { formatRelative } from "../../../../../lib/format";
 import {
@@ -23,20 +26,11 @@ import { openIn } from "../../../../../lib/open-in";
 import type {
   CalibrationPattern,
   CalibrationSample,
-  Severity,
 } from "../../../../../lib/governance-calibration/calibration-model";
 import { ResourceRow } from "../../../components/resource-row";
-import type { StatusKind } from "../../../components/status-pill";
 import { en, fr } from "./copy";
 
 const CATALOGS = { en, fr };
-
-/** Risk as the mark's tone: a delete reads red, an admin act amber. */
-const SEVERITY_TONE: Record<Severity, StatusKind> = {
-  destructive: "down",
-  admin: "stale",
-  ordinary: "unknown",
-};
 
 const LINK_CLASS = "text-foreground/85 underline-offset-2 hover:underline";
 
@@ -94,7 +88,7 @@ export function PatternLine({
   const t = useT(CATALOGS);
   const locale = useConsoleLocale();
   const who = usePatternWho()(pattern);
-  const what = pattern.phrase || t("row.ranOnItsOwn");
+  const what = pattern.phrase || resolveStatusLabel("auto_approved", locale);
   const d = pattern.decision;
 
   const samples = pattern.samples.map((s, i) => {
@@ -129,7 +123,9 @@ export function PatternLine({
           </>
         }
         status={{
-          kind: SEVERITY_TONE[pattern.severity],
+          // One tone for every count: risk orders the rows (`rankPatterns`),
+          // so a single delete is not drawn louder than forty copies.
+          kind: "unknown",
           label: t("row.times", { count: pattern.count }),
         }}
         wrap

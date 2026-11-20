@@ -82,7 +82,11 @@ export function LimitLine({
     <div data-row-id={row.id} className="rounded-md transition-shadow">
       <ResourceRow
         Icon={Gauge}
-        primary={t("row.perDay", { count: row.limitValue })}
+        primary={
+          endsTonight
+            ? t("row.perDayUntilMidnight", { count: row.limitValue })
+            : t("row.perDay", { count: row.limitValue })
+        }
         secondary={
           <>
             {agentId ? (
@@ -97,7 +101,6 @@ export function LimitLine({
             )}
             {" · "}
             {where}
-            {endsTonight && <> · {t("row.untilMidnight")}</>}
             {/* The gate applies the limit it resolves; say when it is not this one. */}
             {inForce !== null && inForce !== row.limitValue && (
               <> · {t("row.otherInForce", { limit: inForce })}</>

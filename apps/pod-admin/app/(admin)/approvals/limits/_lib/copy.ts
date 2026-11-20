@@ -21,7 +21,8 @@ export const en = {
   "who.unnamed": "An agent",
   "where.pod": "Whole pod",
   "where.space": "A space",
-  "row.untilMidnight": "until midnight (UTC)",
+  "row.perDayUntilMidnight":
+    "{count, plural, one {# write a day} other {# writes a day}} until midnight (UTC)",
   "row.today": "{used} of {limit} today",
   "row.reached": "Reached today",
   "row.otherInForce": "Another limit applies: {limit} a day",
@@ -68,7 +69,8 @@ export const fr: Catalog<typeof en> = {
   "who.unnamed": "Un agent",
   "where.pod": "Tout le serveur",
   "where.space": "Un espace",
-  "row.untilMidnight": "jusqu’à minuit (UTC)",
+  "row.perDayUntilMidnight":
+    "{count, plural, one {# écriture par jour} other {# écritures par jour}} jusqu’à minuit (UTC)",
   "row.today": "{used} sur {limit} aujourd’hui",
   "row.reached": "Atteinte aujourd’hui",
   "row.otherInForce": "Une autre limite s’applique : {limit} par jour",

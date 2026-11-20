@@ -7,10 +7,15 @@
  * show them). Four patterns, one tab each (`?kind=`), opening on the most
  * alarming one that has rows (`defaultCalibrationKind`):
  *
- *   ungoverned  `diagnose.ungovernedWrites`        → Make it ask first
- *   rejected    `proposals.groups` (rejected)      → Mark expected (undone below)
- *   repeats     `proposals.groups` (pending)       → Review together
- *   auto        `proposals.list` (auto_approved)   → Its approval, or Make it ask first
+ *   ungoverned  "Ran with no receipt": `diagnose.ungovernedWrites`, agent
+ *               writes that EXECUTED with no proposal at all (nothing was
+ *               reviewed, no receipt)                 → Make it ask first
+ *   rejected    `proposals.groups` (rejected)       → Mark expected (undone below)
+ *   repeats     `proposals.groups` (pending)        → Review together
+ *   auto        "Auto-approved" (the vocabulary's status word): `proposals.list`
+ *               status auto_approved, requests the gate approved on their own
+ *               (an approval row or a pod default), each with its receipt
+ *                                                   → Its approval, or Make it ask first
  *
  * "Make it ask first" writes one approval row (this agent × this action, the
  * whole pod → asks first) through the sensitive-action door
@@ -26,6 +31,7 @@ import { ArrowLeft, EyeOff } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { navHref } from "../../../../lib/console-nav";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
@@ -246,6 +252,12 @@ function CalibrationInner() {
     return new Map(all.map((p) => [p.key, p]));
   }, [rejected.data, deps]);
 
+  // "Auto-approved" is the vocabulary's status word (the backend reads
+  // `status: auto_approved`); the other three are this page's own patterns.
+  const kindLabel = (k: CalibrationKind) =>
+    k === "auto"
+      ? resolveStatusLabel("auto_approved", locale)
+      : t(`kind.${k as Exclude<CalibrationKind, "auto">}`);
   const read = reads[kind];
   const kindSwitch = (
     <SegmentedChoice<CalibrationKind>
@@ -253,7 +265,7 @@ function CalibrationInner() {
       // A view switch, not a filter: the count is the card's, not the tab's.
       options={CALIBRATION_KINDS.map((k) => ({
         key: k,
-        label: t(`kind.${k}`),
+        label: kindLabel(k),
       }))}
       active={kind}
       onSelect={(next) => replaceParams((p) => p.set("kind", next))}
@@ -278,7 +290,7 @@ function CalibrationInner() {
       <div className="mb-4">{kindSwitch}</div>
 
       <ListCard
-        title={t(`kind.${kind}`)}
+        title={kindLabel(kind)}
         hint={t(`hint.${kind}`)}
         count={read.isError ? null : (rows[kind]?.length ?? null)}
         loading={rows[kind] === null && !read.isError}

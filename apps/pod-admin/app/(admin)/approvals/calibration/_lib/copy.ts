@@ -9,21 +9,20 @@ import type { Catalog } from "@synap-core/types/i18n";
 export const en = {
   title: "Calibration",
   description:
-    "What agents did that an approval could change: writes no request covered, requests you keep refusing, the same request waiting twice, and what ran without asking.",
+    "What agents did that an approval could change: writes that left no receipt, requests you keep refusing, the same request waiting twice, and requests approved on their own.",
   back: "Approvals",
   "kind.label": "Pattern",
-  "kind.ungoverned": "Ran with no request",
+  "kind.ungoverned": "Ran with no receipt",
   "kind.rejected": "Keeps getting refused",
   "kind.repeats": "Asked more than once",
-  "kind.auto": "Ran without asking",
   "hint.ungoverned":
-    "Writes an agent ran that no request or approval covered. Make it ask first to see the next one before it lands.",
+    "Writes an agent ran without going through a request: nothing was reviewed and no receipt was kept. Make it ask first to see the next one before it lands.",
   "hint.rejected":
     "Requests you refused twice or more. An approval cannot stop an agent from asking; mark them expected to stop seeing them here.",
   "hint.repeats":
     "The same change waiting more than once. An approval decides the next write, so review the copies together.",
   "hint.auto":
-    "Writes that ran on their own. Open the approval that let them, or make the agent ask first.",
+    "Requests that were approved without you, by an approval or a pod default. Each one has a receipt. Open the approval that let them, or make the agent ask first.",
   "list.failed": "Couldn’t load this pattern.",
   "list.empty.ungoverned": "Every agent write went through a request.",
   "list.empty.rejected": "No request was refused twice.",
@@ -33,7 +32,6 @@ export const en = {
   allClear: "All clear: nothing here calls for a new approval.",
   "row.agents": "{count, plural, one {# agent} other {# agents}}",
   "row.unknownAgent": "An agent",
-  "row.ranOnItsOwn": "Ran without asking",
   "row.times": "{count, plural, one {Once} other {# times}}",
   "row.last": "last {when}",
   "row.request": "Request {n}",
@@ -59,21 +57,20 @@ export const en = {
 export const fr: Catalog<typeof en> = {
   title: "Calibrage",
   description:
-    "Ce que les agents ont fait et qu’une approbation pourrait changer : des écritures qu’aucune demande ne couvrait, des demandes que vous refusez sans cesse, la même demande en attente deux fois, et ce qui s’est exécuté sans demander.",
+    "Ce que les agents ont fait et qu’une approbation pourrait changer : des écritures sans reçu, des demandes que vous refusez sans cesse, la même demande en attente deux fois, et des demandes approuvées sans vous.",
   back: "Approbations",
   "kind.label": "Motif",
-  "kind.ungoverned": "Exécuté sans demande",
+  "kind.ungoverned": "Exécuté sans reçu",
   "kind.rejected": "Toujours refusé",
   "kind.repeats": "Demandé plus d’une fois",
-  "kind.auto": "Exécuté sans demander",
   "hint.ungoverned":
-    "Des écritures qu’un agent a exécutées sans demande ni approbation. Faites-le demander d’abord pour voir la prochaine avant qu’elle ne s’applique.",
+    "Des écritures qu’un agent a exécutées sans passer par une demande : rien n’a été examiné et aucun reçu n’a été gardé. Faites-le demander d’abord pour voir la prochaine avant qu’elle ne s’applique.",
   "hint.rejected":
     "Des demandes refusées deux fois ou plus. Une approbation n’empêche pas un agent de demander ; marquez-les attendues pour ne plus les voir ici.",
   "hint.repeats":
     "La même modification en attente plus d’une fois. Une approbation décide de la prochaine écriture : examinez les copies ensemble.",
   "hint.auto":
-    "Des écritures exécutées seules. Ouvrez l’approbation qui les a permises, ou faites demander l’agent d’abord.",
+    "Des demandes approuvées sans vous, par une approbation ou un réglage par défaut du pod. Chacune a un reçu. Ouvrez l’approbation qui les a permises, ou faites demander l’agent d’abord.",
   "list.failed": "Impossible de charger ce motif.",
   "list.empty.ungoverned":
     "Toutes les écritures d’agents sont passées par une demande.",
@@ -84,7 +81,6 @@ export const fr: Catalog<typeof en> = {
   allClear: "Tout va bien : rien ici n’appelle une nouvelle approbation.",
   "row.agents": "{count, plural, one {# agent} other {# agents}}",
   "row.unknownAgent": "Un agent",
-  "row.ranOnItsOwn": "Exécuté sans demander",
   "row.times": "{count, plural, one {Une fois} other {# fois}}",
   "row.last": "dernière {when}",
   "row.request": "Demande {n}",
