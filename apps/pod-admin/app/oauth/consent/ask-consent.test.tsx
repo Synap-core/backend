@@ -217,3 +217,25 @@ describe("the short consent", () => {
     expect(out).toContain(">Try again<");
   });
 });
+
+describe("the short ask's heading (N1, row 9)", () => {
+  it("an unverified app is named by its domain, never by a title built from its own name", async () => {
+    const { askHeading } = await import("./AskConsent");
+    expect(
+      askHeading({
+        verified: false,
+        serverTitle: "Synap Chat asks to also read notes in Content OS",
+        appName: "studio.evil.example",
+        count: 1,
+      })
+    ).toBe("studio.evil.example asks for one more thing");
+    expect(
+      askHeading({
+        verified: true,
+        serverTitle: "Content Studio asks to also read notes in Content OS",
+        appName: "Content Studio",
+        count: 1,
+      })
+    ).toBe("Content Studio asks to also read notes in Content OS");
+  });
+});

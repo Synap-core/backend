@@ -158,3 +158,25 @@ describe("the app page's access lines", () => {
     expect(out).not.toContain('data-line="can"');
   });
 });
+
+describe("Undo never overwrites a change made in between (N2)", () => {
+  it("compares accesses as stored: All includes every project; a permission with no place is dropped", async () => {
+    const { sameAccess } = await import("./app-access-section");
+    const wrote = {
+      version: 2 as const,
+      permissions: ["entity.post.read", "entity.post.create"],
+      read: { spaces: "all" as const, projects: [] },
+      write: { spaces: [], projects: [] },
+    };
+    const stored = {
+      version: 2 as const,
+      permissions: ["entity.post.read"],
+      read: { spaces: "all" as const, projects: "all" as const },
+      write: { spaces: [], projects: [] },
+    };
+    expect(sameAccess(wrote, stored)).toBe(true);
+    expect(
+      sameAccess(wrote, { ...stored, write: { spaces: ["w-1"], projects: [] } })
+    ).toBe(false);
+  });
+});

@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  askAppName,
   isSynapApp,
   mapCpScopesToPodScopes,
   oauthKeyInstanceId,
@@ -146,5 +147,25 @@ describe("isSynapApp — the Synap label (and the review verbs) is origin-exact"
     ]) {
       expect(isSynapApp(id), id).toBe(false);
     }
+  });
+});
+
+describe("askAppName — the short ask names an unverified app by its domain (W3b N1)", () => {
+  it("a Synap app by its name", () => {
+    expect(
+      askAppName({
+        clientId: "https://studio.synap.live/oauth/client.json",
+        clientName: "Content Studio",
+      })
+    ).toBe("Content Studio");
+  });
+
+  it("any other app by its domain, never the name it chose", () => {
+    expect(
+      askAppName({
+        clientId: "https://studio.evil.example/oauth/client.json",
+        clientName: "Synap Chat",
+      })
+    ).toBe("studio.evil.example");
   });
 });

@@ -13,7 +13,7 @@
  * (`reconsent`, Q3) is shown in its proposed form, with Confirm.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Button, addToast, closeToast } from "@heroui/react";
 import { Info } from "lucide-react";
 import { trpc } from "../../../lib/trpc";
@@ -37,7 +37,34 @@ import {
 } from "../../oauth/consent/consent-access";
 import { consentT } from "../../oauth/consent/copy";
 import { readableError } from "../../../lib/format";
+import { isReadPermission } from "@synap-core/types/grants";
 import type { PodAppInfo } from "./pod-app-view";
+
+/**
+ * Two accesses give the same, as the server stores them: under All spaces
+ * every project is included (Q1), and a permission with no place in its tier
+ * is dropped (v1.2, nothing dormant).
+ */
+export function sameAccess(a: AccessInput, b: AccessInput): boolean {
+  const norm = (x: AccessInput) => {
+    const projects = x.read.spaces === "all" ? "all" : x.read.projects;
+    const readPlace =
+      x.read.spaces === "all" ||
+      x.read.spaces.length > 0 ||
+      projects === "all" ||
+      projects.length > 0;
+    const writePlace = x.write.spaces.length + x.write.projects.length > 0;
+    const sorted = (l: string[] | "all") => (l === "all" ? "all" : [...l].sort());
+    return JSON.stringify({
+      permissions: x.permissions
+        .filter((p) => (isReadPermission(p) ? readPlace : writePlace))
+        .sort(),
+      read: { spaces: sorted(x.read.spaces), projects: sorted(projects) },
+      write: { spaces: sorted(x.write.spaces), projects: sorted(x.write.projects) },
+    });
+  };
+  return norm(a) === norm(b);
+}
 
 export function AppAccessSection({
   pod,
@@ -59,6 +86,7 @@ export function AppAccessSection({
   );
   const update = useUpdateAppAccess();
   const [saving, setSaving] = useState(false);
+  const busy = useRef(false);
   const data = offerQ.data ?? null;
   const offer = useMemo(() => (data ? offerOfContract(data) : null), [data]);
   const held = data?.reconsent?.proposed ?? data?.current ?? pod.access ?? null;
@@ -82,15 +110,35 @@ export function AppAccessSection({
     [offer, actsAs]
   );
 
-  async function apply(next: AccessInput, previous: AccessInput | null) {
+  /**
+   * Save an access, then wait for the page to re-read it before anything
+   * else may be pressed (`busy`). An Undo saves the previous access again,
+   * but only if the access is still exactly what this Save wrote: a change
+   * made in between (another tab, the app asking again) is never overwritten.
+   */
+  async function apply(
+    next: AccessInput,
+    previous: AccessInput | null,
+    undoOf: AccessInput | null = null
+  ) {
+    if (busy.current) return;
+    busy.current = true;
     setSaving(true);
     try {
+      if (undoOf) {
+        const fresh = await offerQ.refetch();
+        const now = fresh.data?.current ?? null;
+        if (!now || !sameAccess(accessInput(accessOfNamed(now)), undoOf)) {
+          addToast({ title: t("page.undoChanged"), color: "warning" });
+          return;
+        }
+      }
       await update.mutateAsync({ publicId, access: next });
-      void offerQ.refetch();
+      await offerQ.refetch();
       onChanged();
       const holder: { key: string | null } = { key: null };
       holder.key = addToast({
-        title: t("page.saved"),
+        title: undoOf ? t("page.undone") : t("page.saved"),
         color: "default",
         timeout: previous ? UNDO_WINDOW_MS : undefined,
         endContent: previous ? (
@@ -100,7 +148,7 @@ export function AppAccessSection({
             className="min-h-10"
             onPress={() => {
               if (holder.key) closeToast(holder.key);
-              void apply(previous, null);
+              void apply(previous, null, next);
             }}
           >
             {t("reconsent.undo")}
@@ -116,6 +164,7 @@ export function AppAccessSection({
         color: "danger",
       });
     } finally {
+      busy.current = false;
       setSaving(false);
     }
   }
