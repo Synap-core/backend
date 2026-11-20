@@ -3,13 +3,14 @@
  * (`installOfficialRendererBundle`): the Control Plane is the delivery gate,
  * Synap's signed index the authenticity check. Nothing is installed on any
  * refusal.
- *   - no CONTROL_PLANE_URL (a self-hosted pod) → renderer_bundle_no_control_plane,
+ *   - no CONTROL_PLANE_URL (a pod no control plane knows) → renderer_bundle_no_control_plane,
  *     nothing fetched;
  *   - a CONTROL_PLANE_URL over plain http (but localhost / 127.0.0.1) →
  *     renderer_bundle_insecure_control_plane, no credential minted;
  *   - no pod-signed credential (none, or only the legacy key) →
  *     renderer_bundle_pod_not_enrolled, nothing fetched;
- *   - CP 403 OFFICIAL_BUNDLE_MANAGED_ONLY → renderer_bundle_managed_only;
+ *   - CP 403 OFFICIAL_BUNDLE_PLAN_REQUIRED → renderer_bundle_plan_required, and
+ *     CP 403 OFFICIAL_BUNDLE_POD_NOT_LIVE → renderer_bundle_pod_not_live;
  *   - CP 403 POD_JWT_REQUIRED → renderer_bundle_pod_not_enrolled;
  *   - AUTHENTICITY, through the real `assertOfficialDefinition` and
  *     `checkOfficialListing`: a definition the signed index lists under
@@ -70,9 +71,10 @@ import { officialContentHash } from "@synap/jobs/workers/marketplace-source-veri
 import {
   installOfficialRendererBundle,
   RENDERER_BUNDLE_INSECURE_CONTROL_PLANE,
-  RENDERER_BUNDLE_MANAGED_ONLY,
   RENDERER_BUNDLE_NO_CONTROL_PLANE,
+  RENDERER_BUNDLE_PLAN_REQUIRED,
   RENDERER_BUNDLE_POD_NOT_ENROLLED,
+  RENDERER_BUNDLE_POD_NOT_LIVE,
 } from "./official-renderer-bundle.js";
 
 const POD_JWT = {
@@ -244,12 +246,17 @@ describe("installOfficialRendererBundle: delivery", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("the control plane's managed-only refusal is the self-hosted refusal", async () => {
-    answer(403, { error: "no", code: "OFFICIAL_BUNDLE_MANAGED_ONLY" });
-    expect(await refusal(install())).toEqual({
-      code: "FORBIDDEN",
-      reason: RENDERER_BUNDLE_MANAGED_ONLY,
-    });
+  it("the control plane's plan and not-running refusals keep their own reasons", async () => {
+    for (const [code, reason] of [
+      ["OFFICIAL_BUNDLE_PLAN_REQUIRED", RENDERER_BUNDLE_PLAN_REQUIRED],
+      ["OFFICIAL_BUNDLE_POD_NOT_LIVE", RENDERER_BUNDLE_POD_NOT_LIVE],
+    ] as const) {
+      answer(403, { error: "no", code });
+      expect(await refusal(install()), code).toEqual({
+        code: "FORBIDDEN",
+        reason,
+      });
+    }
     expect(h.install).not.toHaveBeenCalled();
   });
 
