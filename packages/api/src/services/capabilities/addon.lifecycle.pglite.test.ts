@@ -403,7 +403,10 @@ describe("removing a base with add-ons installed", () => {
       /"Apify" has 2 add-ons installed.*"LinkedIn profiles", "Social posts"/
     );
     expect(await containerByKey("apify")).toBeDefined();
-    expect(await extendsEdges()).toHaveLength(3);
+    // Both add-ons still extend it (the other edges belong to other bases).
+    expect(
+      (await extendsEdges()).filter((e) => e.to_id === base.id)
+    ).toHaveLength(2);
   });
 
   it("removing an add-on removes its extends edge; once none is left the base can go", async () => {

@@ -936,6 +936,48 @@ async function ensureWorkspaceDependencyPresent(
 }
 
 /**
+ * A CAPABILITY package's dependencies (the capability apply step,
+ * `applyCapabilityDefinition`): the same capability branch the template graph
+ * runs (`ensureCapabilityDependencyPresent`: present pod-wide or in
+ * `workspaceId` is `found`, else installed through the governed applier,
+ * non-fatal), and nothing else. A capability installs only the capabilities
+ * it requires; any other kind it names is recorded `required-absent`, never
+ * installed from here, so a tool install never stands up a space, a cell or a
+ * skill (and never reaches what a template apply writes, such as members).
+ */
+export async function resolveCapabilityDependencies(input: {
+  dependencies: TemplateDependency[];
+  userId: string;
+  agentUserId?: string;
+  workspaceId?: string | null;
+}): Promise<ResolvedPackageDependency[]> {
+  const installed: ResolvedPackageDependency[] = [];
+  const resolved = new Map<string, ResolveResult>();
+  for (const dep of input.dependencies) {
+    const kind: PackageDependencyKind = dep.kind ?? "workspace";
+    if (kind === "capability") {
+      await ensureCapabilityDependencyPresent(
+        dep.slug,
+        input.userId,
+        resolved,
+        installed,
+        input.agentUserId,
+        input.workspaceId ?? null
+      );
+      continue;
+    }
+    installed.push({
+      slug: dep.slug,
+      kind,
+      relation: dep.relation ?? "require",
+      action: "required-absent",
+      message: `A tool installs only the tools it requires; ${kind} "${dep.slug}" is not installed with it. Install it on its own if it is needed.`,
+    });
+  }
+  return installed;
+}
+
+/**
  * Resolve a package's declared `dependencies[]` into the pod's template graph.
  * See the module header for full semantics.
  */

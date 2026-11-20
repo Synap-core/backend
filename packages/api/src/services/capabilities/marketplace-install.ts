@@ -615,10 +615,11 @@ export async function applyCapabilityDefinition(
 /**
  * Install what a capability package `require`s before the capability itself
  * (`capabilityDependenciesOf`: its declared `dependencies`, and an add-on's
- * base). The resolution is the ONE package-dependency resolver the template
- * kinds run (`resolvePackageDependencies`): a dependency already installed for
- * the whole pod or in the target space is `found`, a missing one installs from
- * Synap's catalog through the governed capability applier.
+ * base). The resolution is the package-dependency resolver's own capability
+ * branch, the one the template graph runs (`resolveCapabilityDependencies`): a
+ * dependency already installed for the whole pod or in the target space is
+ * `found`, a missing one installs from Synap's catalog through the governed
+ * capability applier. A tool installs only the tools it requires.
  *
  * Where a template treats a dependency it could not install as non-fatal, a
  * capability does not: its actions call the required tool by name and would
@@ -635,13 +636,16 @@ async function ensureCapabilityDependencies(
   definition: unknown,
   ctx: Context
 ): Promise<ResolvedPackageDependency[]> {
-  const declared = capabilityDependenciesOf(definition);
-  if (declared.length === 0) return [];
   const element = capabilityElementOf(definition) as {
     key?: unknown;
     name?: unknown;
   } | null;
   const key = typeof element?.key === "string" ? element.key : undefined;
+  // A package never requires itself.
+  const declared = capabilityDependenciesOf(definition).filter(
+    (d) => d.slug !== key
+  );
+  if (declared.length === 0) return [];
   const displayName =
     typeof element?.name === "string" ? element.name : (key ?? "This tool");
   if (declared.some((d) => (d.relation ?? "require") === "compose")) {
@@ -650,13 +654,12 @@ async function ensureCapabilityDependencies(
       message: `"${displayName}" declares a compose dependency; a capability can only require what it needs. Nothing was installed.`,
     });
   }
-  const { resolvePackageDependencies } =
+  const { resolveCapabilityDependencies } =
     await import("../package-dependency-resolver.js");
-  const { installed } = await resolvePackageDependencies({
-    definition: { dependencies: declared },
+  const installed = await resolveCapabilityDependencies({
+    dependencies: declared,
     userId: requireUserId(ctx.userId),
     agentUserId: ctx.agentUserId ?? undefined,
-    selfSlug: key,
     workspaceId: ctx.workspaceId ?? null,
   });
   const absent = installed.filter(

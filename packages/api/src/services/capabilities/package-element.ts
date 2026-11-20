@@ -61,8 +61,9 @@ export function capabilityElementOf(definition: unknown): unknown {
  * is derived again here because the capability feed the pod caches serves the
  * capability element alone, without the package's `dependencies`.
  *
- * Read by `market.install`'s capability branch, which hands them to the ONE
- * dependency resolver (`resolvePackageDependencies`).
+ * Read by the capability apply step (`applyCapabilityDefinition`), which
+ * hands them to the dependency resolver's capability branch
+ * (`resolveCapabilityDependencies`).
  */
 export function capabilityDependenciesOf(
   definition: unknown
