@@ -3381,12 +3381,9 @@ export const playbooksRouter = router({
         });
       }
 
-      // USABLE HERE — refused at FILING, by the run door's own rule
-      // (`playbookRunRefusal`, what `resolveRunnablePlaybook` applies when the
-      // run starts), never at approval: an explicit workspaceId naming another
-      // space than the playbook's home used to file a proposal that could only
-      // fail once approved (ticket e93cf92b). Folds into the can-apply
-      // registry of #1166 as its `playbook/run` entry.
+      // Usable here: refused at FILING by the run door's own rule
+      // (`playbookRunRefusal`, as `resolveRunnablePlaybook` applies it), so no
+      // proposal is filed that could only fail once approved.
       const notRunnable = playbookRunRefusal(playbook, runWorkspaceId);
       if (notRunnable) {
         throw new TRPCError({
