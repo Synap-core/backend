@@ -589,22 +589,50 @@ export async function resolveRunnablePlaybook(input: {
     );
   }
 
-  if (playbook.workspaceId && playbook.workspaceId !== input.workspaceId) {
-    throw new Error(
-      // Named for THIS function, not for `runPlaybook`: since the appointment
-      // producer (`materializeScheduledSession`) started sharing this door,
-      // that prefix sent whoever read the log looking at the wrong caller.
-      `resolveRunnablePlaybook: playbook ${playbook.id} not visible in workspace ${input.workspaceId}`
-    );
-  }
-
-  if (playbook.status === "archived" || playbook.status === "paused") {
-    throw new Error(
-      `Playbook "${playbook.name}" is ${playbook.status}, so it does not run. Set it active to run it again.`
-    );
-  }
+  const refusal = playbookRunRefusal(playbook, input.workspaceId);
+  if (refusal) throw new Error(refusal);
 
   return playbook;
+}
+
+/**
+ * Why `playbook` cannot be used in the space `workspaceId` (`null` = no
+ * space: a pod-wide caller), or `null` when it can. THE rule
+ * {@link resolveRunnablePlaybook} applies, exported so a door that already
+ * holds the row asks it BEFORE it files anything (`playbooks.run` before its
+ * gate, the `playbook/run` approval before its dispatch claim, the automation
+ * door before it stores a flow), instead of a second predicate (tickets
+ * e93cf92b, 6c15da33). A pod-wide playbook (no home) is usable everywhere.
+ */
+export function playbookNotInSpaceReason(
+  playbook: Pick<Playbook, "id" | "name" | "workspaceId">,
+  workspaceId: string | null
+): string | null {
+  if (!playbook.workspaceId || playbook.workspaceId === workspaceId) {
+    return null;
+  }
+  return (
+    `Playbook "${playbook.name}" (${playbook.id}) lives in space ${playbook.workspaceId}, ` +
+    `so it cannot run ${workspaceId ? `in space ${workspaceId}` : "outside its space"}: ` +
+    `run it in space ${playbook.workspaceId}.`
+  );
+}
+
+/**
+ * Why a run of `playbook` in `workspaceId` would be refused at the run door:
+ * {@link playbookNotInSpaceReason}, then a retired playbook (archived or
+ * paused). `null` = it runs.
+ */
+export function playbookRunRefusal(
+  playbook: Pick<Playbook, "id" | "name" | "workspaceId" | "status">,
+  workspaceId: string | null
+): string | null {
+  const away = playbookNotInSpaceReason(playbook, workspaceId);
+  if (away) return away;
+  if (playbook.status === "archived" || playbook.status === "paused") {
+    return `Playbook "${playbook.name}" is ${playbook.status}, so it does not run. Set it active to run it again.`;
+  }
+  return null;
 }
 
 /**

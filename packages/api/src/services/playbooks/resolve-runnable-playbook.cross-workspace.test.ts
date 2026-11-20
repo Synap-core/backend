@@ -33,7 +33,7 @@ function dbReturning(playbook: unknown) {
 }
 
 describe("resolveRunnablePlaybook cross-workspace floor", () => {
-  it("throws the founder's error when the run workspace disagrees with the playbook's home", async () => {
+  it("refuses when the run workspace disagrees with the playbook's home, naming where it lives and the fix", async () => {
     mockGetDb.mockResolvedValue(
       dbReturning({ id: PB_ID, name: "Weekly review", workspaceId: WS_A })
     );
@@ -41,7 +41,7 @@ describe("resolveRunnablePlaybook cross-workspace floor", () => {
     await expect(
       resolveRunnablePlaybook({ playbookId: PB_ID, workspaceId: WS_B })
     ).rejects.toThrow(
-      `resolveRunnablePlaybook: playbook ${PB_ID} not visible in workspace ${WS_B}`
+      `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it cannot run in space ${WS_B}: run it in space ${WS_A}.`
     );
   });
 

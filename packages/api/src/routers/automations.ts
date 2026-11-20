@@ -23,6 +23,7 @@ import {
 } from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
 import { stampPlaybookRunIds } from "../services/automations/playbook-run-ids.js";
+import { playbookNotInSpaceReason } from "../services/playbooks/playbook-lifecycle.js";
 import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
@@ -430,12 +431,22 @@ export function playbookValidationAccess(
   return workspaceId ? access.withLens(workspaceId) : access;
 }
 
+/** A playbook a flow's `playbook_run` node names BY ID, with its home. */
+type ReferencedPlaybook = {
+  id: string;
+  name: string;
+  workspaceId: string | null;
+};
+
 async function loadFlowValidationResolvers(
   database: Awaited<ReturnType<typeof getDb>>,
   flow: { nodes: Array<Record<string, unknown>>; edges: unknown[] },
   workspaceId: string | null | undefined,
   userId: string
-): Promise<FlowValidationResolvers> {
+): Promise<{
+  resolvers: FlowValidationResolvers;
+  playbooksById: ReferencedPlaybook[];
+}> {
   const verbIds = new Set<string>();
   const skillIds = new Set<string>();
   const skillNames = new Set<string>();
@@ -499,8 +510,9 @@ async function loadFlowValidationResolvers(
       ? await scopedDb(playbookValidationAccess(userId, workspaceId)).findMany<{
           id: string;
           name: string;
+          workspaceId: string | null;
         }>(playbooks, {
-          columns: { id: true, name: true },
+          columns: { id: true, name: true, workspaceId: true },
           where: and(
             // Archived playbooks are not referenceable, matching the OFFER door.
             ne(playbooks.status, "archived"),
@@ -524,16 +536,63 @@ async function loadFlowValidationResolvers(
   );
 
   return {
-    verbExists: (verbId) => foundSkillNames.has(verbId),
-    skillExists: ({ skillId, skillName }) =>
-      skillId
-        ? foundSkillIds.has(skillId)
-        : !!skillName && foundSkillNames.has(skillName),
-    playbookExists: ({ playbookId, playbookName }) =>
-      playbookId
-        ? foundPlaybookIds.has(playbookId)
-        : !!playbookName && foundPlaybookNames.has(playbookName),
+    resolvers: {
+      verbExists: (verbId) => foundSkillNames.has(verbId),
+      skillExists: ({ skillId, skillName }) =>
+        skillId
+          ? foundSkillIds.has(skillId)
+          : !!skillName && foundSkillNames.has(skillName),
+      playbookExists: ({ playbookId, playbookName }) =>
+        playbookId
+          ? foundPlaybookIds.has(playbookId)
+          : !!playbookName && foundPlaybookNames.has(playbookName),
+    },
+    playbooksById: playbookRows.filter((row) => playbookIds.has(row.id)),
   };
+}
+
+/**
+ * The space a flow's playbooks run in, for an automation filed in `workspaceId`
+ * (`null` = pod-wide). A playbook runs only in its home space (the run door's
+ * rule, `playbookNotInSpaceReason`), so a pod-wide automation naming a
+ * space-scoped playbook would fire runs that are refused everywhere but there
+ * (ticket 6c15da33).
+ *
+ *  - every playbook usable in `workspaceId` → `workspaceId` (nothing moves);
+ *  - a pod-wide automation whose space-scoped playbooks share ONE home → that
+ *    home (`adopted`): the automation is filed where its playbooks run;
+ *  - anything else → a refusal naming the fix.
+ *
+ * Only playbooks named BY ID are placed: a name-only node is resolved by name
+ * in the run's own space when it runs (`resolveRunnablePlaybook`).
+ */
+function placeFlowByPlaybooks(
+  referenced: ReferencedPlaybook[],
+  workspaceId: string | null
+): { workspaceId: string | null; adopted: boolean } {
+  if (referenced.every((pb) => !playbookNotInSpaceReason(pb, workspaceId))) {
+    return { workspaceId, adopted: false };
+  }
+  const homes = [
+    ...new Set(
+      referenced
+        .map((pb) => pb.workspaceId)
+        .filter((id): id is string => id !== null)
+    ),
+  ];
+  if (workspaceId === null && homes.length === 1) {
+    return { workspaceId: homes[0]!, adopted: true };
+  }
+  const away = referenced
+    .map((pb) => playbookNotInSpaceReason(pb, workspaceId))
+    .find((reason): reason is string => reason !== null)!;
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message:
+      homes.length > 1
+        ? `This automation names playbooks of ${homes.length} spaces (${homes.join(", ")}), and a playbook runs only in its own space: make one automation per space.`
+        : `${away} Create this automation in that space (workspaceId ${homes[0]}).`,
+  });
 }
 
 /**
@@ -704,7 +763,7 @@ async function prepareAutomationForMaterialization(
   assertValidAudience(input.triggerConfig);
   assertValidCronTimezone(input.triggerType, input.triggerConfig);
 
-  const resolvers = await loadFlowValidationResolvers(
+  const { resolvers, playbooksById } = await loadFlowValidationResolvers(
     database,
     input.flowDefinition,
     input.workspaceId,
@@ -715,6 +774,10 @@ async function prepareAutomationForMaterialization(
     throw new TRPCError({ code: "BAD_REQUEST", message: flowError });
   }
   assertFilteredAiFanout(input.flowDefinition);
+  // Filed where its playbooks run (6c15da33): BEFORE the gate, RBAC and the
+  // insert read `input.workspaceId`, so all of them see the adopted space.
+  const placed = placeFlowByPlaybooks(playbooksById, input.workspaceId ?? null);
+  if (placed.adopted) input.workspaceId = placed.workspaceId;
 
   // Normalize template-friendly skill names before either proposal storage or
   // final materialization, so every persisted flow dispatches by stable id.
@@ -2502,7 +2565,13 @@ export const automationsRouter = router({
       const createdBy = agentUserId ?? ctx.userId!;
       await assertKeyMayActAsFlowOwner({ ...ctx, agentUserId });
 
+      const askedWorkspaceId = input.workspaceId ?? null;
       await prepareAutomationForMaterialization(database, input, createdBy);
+      // Filed in the space its playbooks run in (6c15da33): said, never silent.
+      const placedNote =
+        input.workspaceId && input.workspaceId !== askedWorkspaceId
+          ? ` (filed in space ${input.workspaceId}, where its playbooks run)`
+          : "";
 
       // Governance membrane. AI agents (agentUserId set) route through
       // checkPermissionOrPropose; on "proposed" no row is written and the
@@ -2556,10 +2625,11 @@ export const automationsRouter = router({
           return {
             status: "proposed" as const,
             id: null as string | null,
-            message: proposedMessageFor(
-              perm.proposalType,
-              "Automation creation proposed for review"
-            ),
+            message:
+              proposedMessageFor(
+                perm.proposalType,
+                "Automation creation proposed for review"
+              ) + placedNote,
             proposalId: perm.proposalId,
           };
         }
@@ -2618,7 +2688,7 @@ export const automationsRouter = router({
         id: automationId,
         message: `Automation "${input.name}" created as ${
           forceDraft ? "draft" : (input.status ?? "draft")
-        }`,
+        }${placedNote}`,
         proposalId: null as string | null,
         ...(source
           ? {
@@ -2764,7 +2834,7 @@ export const automationsRouter = router({
       // is checked (a no-op update that omits flowDefinition is untouched, so
       // this never retroactively rejects an already-persisted automation).
       if (input.flowDefinition !== undefined) {
-        const updateFlowResolvers = await loadFlowValidationResolvers(
+        const updateFlow = await loadFlowValidationResolvers(
           database,
           input.flowDefinition,
           existing.workspaceId,
@@ -2772,7 +2842,7 @@ export const automationsRouter = router({
         );
         const updateFlowError = flowValidationErrorMessage(
           input.flowDefinition,
-          updateFlowResolvers
+          updateFlow.resolvers
         );
         if (updateFlowError) {
           throw new TRPCError({

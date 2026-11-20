@@ -689,12 +689,36 @@ export function registerPlaybookExecutors(): void {
       // arguments the gate discarded (see the ⚠️ note above).
       const playbook = await db.query.playbooks.findFirst({
         where: eq(playbooks.id, playbookId),
-        columns: { id: true, name: true, params: true, subjectProfile: true },
+        columns: {
+          id: true,
+          name: true,
+          params: true,
+          subjectProfile: true,
+          workspaceId: true,
+          status: true,
+        },
       });
       if (!playbook) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Playbook to run no longer exists",
+        });
+      }
+      // RESOLVED BEFORE THE DISPATCH CLAIM: a playbook the run door would
+      // refuse here (another space's, or retired since it was proposed) is
+      // refused by that same rule (`playbookRunRefusal`, what
+      // `resolveRunnablePlaybook` applies) BEFORE `dispatchExternalOnce`
+      // claims the proposal. Thrown inside the claim it kept the claim, and
+      // the next approval read "may already have reached the service" about
+      // a run that never started (ticket e93cf92b, same class as e74a086c).
+      // Imported lazily, as `resolveRunnablePlaybook` is above.
+      const { playbookRunRefusal } =
+        await import("../../../services/playbooks/playbook-lifecycle.js");
+      const notRunnable = playbookRunRefusal(playbook, workspaceId);
+      if (notRunnable) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Cannot apply this approval: ${notRunnable} Nothing was started.`,
         });
       }
       const declaredParams = Array.isArray(playbook.params)
