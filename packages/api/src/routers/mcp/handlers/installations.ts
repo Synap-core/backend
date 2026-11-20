@@ -23,7 +23,12 @@ import {
   requestInstallation,
   requestPodInstall,
 } from "../../../services/installations/request-installation.js";
-import { ok, requireScope, type McpHandlerMap } from "./shared.js";
+import {
+  ok,
+  readReasoning,
+  requireScope,
+  type McpHandlerMap,
+} from "./shared.js";
 import { fullUuidError } from "../tool-errors.js";
 
 /** Where a refused capability CAN go: its computer blocks, read once. */
