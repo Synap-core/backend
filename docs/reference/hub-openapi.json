@@ -48822,7 +48822,7 @@
                   },
                   "terminalStatus": {
                     "type": "string",
-                    "enum": ["closed", "cancelled", "failed"]
+                    "enum": ["closed", "failed", "cancelled"]
                   },
                   "questionDispositions": {
                     "type": "array",
