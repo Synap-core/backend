@@ -184,10 +184,12 @@ describe("cron scheduler — NULL nextRunAt self-healing", () => {
     expect(patch.nextRunAt).toBeInstanceOf(Date);
     // Strictly in the FUTURE — never a replay of the missed 8am slots.
     expect(patch.nextRunAt.getTime()).toBeGreaterThan(before);
-    // ...and it is the automation's own slot: 08:00 local, zero seconds.
-    expect(patch.nextRunAt.getHours()).toBe(8);
-    expect(patch.nextRunAt.getMinutes()).toBe(0);
-    expect(patch.nextRunAt.getSeconds()).toBe(0);
+    // ...and it is the automation's own slot: 08:00 in its zone, which is UTC
+    // when the trigger names none (never the worker's own clock: a machine in
+    // Paris used to read this row at 08:00 Paris, ticket 592930c8).
+    expect(patch.nextRunAt.getUTCHours()).toBe(8);
+    expect(patch.nextRunAt.getUTCMinutes()).toBe(0);
+    expect(patch.nextRunAt.getUTCSeconds()).toBe(0);
   });
 
   it("parks a row with a missing or unparseable cron expression in status=error instead of re-warning forever", async () => {
