@@ -30,6 +30,8 @@ export const en = {
   "toolRun.empty": "empty",
   "toolRun.yes": "Yes",
   "toolRun.no": "No",
+  "toolRun.returned": "What it returned",
+  "toolRun.returnedNote": "The run finished. This is what it handed back.",
   "read.notFound.title": "This request couldn’t be found",
   "read.notFound": "It may have been withdrawn, or the link is out of date.",
   "read.forbidden.title": "You don’t have access to this request",
@@ -143,6 +145,9 @@ export const fr: Catalog<typeof en> = {
   "toolRun.empty": "vide",
   "toolRun.yes": "Oui",
   "toolRun.no": "Non",
+  "toolRun.returned": "Ce qu’il a renvoyé",
+  "toolRun.returnedNote":
+    "L’exécution est terminée. Voici ce qu’elle a renvoyé.",
   "read.notFound.title": "Cette demande est introuvable",
   "read.notFound":
     "Elle a peut-être été retirée, ou le lien n’est plus à jour.",

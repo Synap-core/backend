@@ -254,3 +254,53 @@ describe("in French", () => {
     });
   });
 });
+
+/**
+ * One approved verb's run in the background (report 48dbf93b): said as a run,
+ * never as "Creating records: 0 of 1"; its failure is a failure with the
+ * pod's sentence, never a success; done opens the request, where the result is.
+ */
+describe("approvalProgressCopy — an approved run", () => {
+  const ONE: ApprovalRun = {
+    ...RUN,
+    kind: "run",
+    phase: null,
+    total: 1,
+    done: 0,
+    created: 0,
+    linked: 0,
+    failed: 0,
+  };
+
+  it("running reads as a run, busy, with no record counts", () => {
+    const copy = approvalProgressCopy(ONE);
+    expect(copy.title).toBe("Approved: running it now");
+    expect(copy.title).not.toMatch(/record/i);
+    expect(copy).toMatchObject({ busy: true, door: null });
+  });
+
+  it("done opens the request to see the result", () => {
+    const copy = approvalProgressCopy({ ...ONE, state: "succeeded", done: 1 });
+    expect(copy).toMatchObject({
+      tone: "success",
+      busy: false,
+      title: "Approved: the run finished",
+      doorLabel: "See the result",
+      door: { kind: "object", objectKind: "proposal", id: "p1" },
+    });
+  });
+
+  it("a failed run says so with the pod's sentence, and can be tried again", () => {
+    const copy = approvalProgressCopy({
+      ...ONE,
+      state: "failed",
+      error: "fal refused the aspect ratio",
+    });
+    expect(copy).toMatchObject({
+      tone: "danger",
+      title: "Approved, but the run failed",
+      detail: "fal refused the aspect ratio",
+      resumable: true,
+    });
+  });
+});
