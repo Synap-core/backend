@@ -270,12 +270,6 @@ export interface StageGateSubject {
 export interface CheckMeasure {
   failing: string[];
   reason?: string;
-  /**
-   * The failing keys no judge could grade this time (and no earlier grade
-   * failed): unmeasured, not failed. Every failing key here ⇒ the gate holds
-   * but never sends the run back (`onFail`).
-   */
-  unavailable?: string[];
 }
 
 export interface StageGateAdvance {
@@ -306,8 +300,6 @@ export interface CheckGateResult {
   paused: boolean;
   /** Why it held, in words — when the subject can say (a track does). */
   reason?: string;
-  /** See {@link CheckMeasure.unavailable}. */
-  unavailable?: string[];
 }
 
 export type StageGateOutcome =
@@ -409,11 +401,10 @@ async function applyCheckGate(
       paused: false,
     };
   }
-  const { failing, reason, unavailable } = await subject.checkFailing(fromStage);
+  const { failing, reason } = await subject.checkFailing(fromStage);
   if (failing.length === 0) {
     return { kind: "check", stageKey, passed: true, failing, paused: false };
   }
-  const extra = unavailable?.length ? { unavailable } : {};
   const paused = await subject.pause(
     {
       on: "thing",
@@ -428,7 +419,6 @@ async function applyCheckGate(
         fromStage,
         failing,
         ...(reason ? { reason } : {}),
-        ...extra,
       },
     }
   );
@@ -439,7 +429,6 @@ async function applyCheckGate(
     failing,
     paused,
     ...(reason ? { reason } : {}),
-    ...extra,
   };
 }
 
@@ -506,39 +495,6 @@ export function checkGateHold(
     reason: [
       `The check of "${fromStage}" did not pass: ${stage.unmet.join(", ")}.`,
       ...stage.unmetOutputs.map(owedOutputHint),
-    ].join(" "),
-  };
-}
-
-/**
- * Pure: mark the failing keys no judge could grade in this check
- * (`unavailable` on the evaluation's skip) and that no earlier grade failed,
- * and say so in the hold's reason, with the two ways out.
- */
-export function withUnavailableJudge(
-  measure: CheckMeasure,
-  results: ReadonlyArray<{ key: string; unavailable?: true; reason?: string }>,
-  evaluations: ReadonlyArray<{ criterionKey: string; verdict: string }>
-): CheckMeasure {
-  const failed = new Set(
-    evaluations.filter((e) => e.verdict === "fail").map((e) => e.criterionKey)
-  );
-  const skipped = new Map(
-    results.filter((r) => r.unavailable).map((r) => [r.key, r.reason])
-  );
-  const unavailable = measure.failing.filter(
-    (k) => skipped.has(k) && !failed.has(k)
-  );
-  if (unavailable.length === 0) return measure;
-  const why = skipped.get(unavailable[0]!) ?? "The judge could not run.";
-  return {
-    ...measure,
-    unavailable,
-    reason: [
-      measure.reason ??
-        `The check did not pass: ${measure.failing.join(", ")}.`,
-      `${unavailable.join(", ")} ${unavailable.length === 1 ? "is" : "are"} unmeasured, not failed (${why}).`,
-      "Evaluate the session again once the judge is back, or the person grades them.",
     ].join(" "),
   };
 }
@@ -650,18 +606,14 @@ export function sessionGateSubject(
         sessionId: params.sessionId,
         playbookId: params.playbookId ?? null,
       });
-      return withUnavailableJudge(
-        checkGateHold(
-          {
-            stages: proc?.stages ?? [],
-            expectedOutputs: row?.expectedOutputs ?? [],
-            criteria: result.criteria,
-            evaluations: result.evaluations,
-          },
-          fromStage
-        ),
-        result.results,
-        result.evaluations
+      return checkGateHold(
+        {
+          stages: proc?.stages ?? [],
+          expectedOutputs: row?.expectedOutputs ?? [],
+          criteria: result.criteria,
+          evaluations: result.evaluations,
+        },
+        fromStage
       );
     },
     proposal: {

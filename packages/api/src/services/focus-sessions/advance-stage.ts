@@ -95,10 +95,7 @@ import {
   refuseUndeclaredStage,
   type UndeclaredStageRefusal,
 } from "@synap/jobs/utils/stage-declared.js";
-import {
-  applyStageGateOnAdvance,
-  type CheckGateResult,
-} from "../playbooks/stage-gate.js";
+import { applyStageGateOnAdvance } from "../playbooks/stage-gate.js";
 import { mergeEnteredStageSlots } from "./stage-slots.js";
 import {
   writeGatePassStatuses,
@@ -515,9 +512,7 @@ export async function advanceSessionStage(
     // A HOLDING check gate whose stage declares `onFail` returns the run there
     // (un-paused, through this same door) instead of leaving it parked. The
     // hold's `metadata.checkGate` record stays — it is why the run went back.
-    // A hold only for want of a judge (a quota 429, the provider down) judged
-    // nothing: the run stays held here, never sent back (finding 881e0b61).
-    if (!input.viaOnFail && !heldOnlyForUnavailableJudge(gate)) {
+    if (!input.viaOnFail) {
       const back = await returnToOnFailStage({ ...input, fromStage });
       if (back) result.onFail = { toStage: back };
     }
@@ -658,21 +653,6 @@ async function mergeStageSlotsOnEntry(
     );
     return { error: err instanceof Error ? err.message : String(err) };
   }
-}
-
-/**
- * Pure: did the check hold ONLY because no judge could run? Then the work was
- * not judged, and a return to the stage's `onFail` would redo work nobody
- * found wanting: the run stays held, and a person's grade or a re-run of the
- * evaluation once the judge is back releases it (`resumeCheckGateIfMet`).
- */
-export function heldOnlyForUnavailableJudge(
-  check: Pick<CheckGateResult, "failing" | "unavailable">
-): boolean {
-  const unavailable = new Set(check.unavailable ?? []);
-  return (
-    check.failing.length > 0 && check.failing.every((k) => unavailable.has(k))
-  );
 }
 
 /**
