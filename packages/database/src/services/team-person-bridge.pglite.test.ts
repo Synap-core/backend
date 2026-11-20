@@ -64,7 +64,7 @@ import {
   entityFacets,
   profiles,
   profileProperties,
-  profileWorkspaceAccess,
+  spaceAccess,
   users,
   workspaceMembers,
 } from "../schema/index.js";
@@ -117,7 +117,7 @@ beforeAll(async () => {
     entityFacets,
     profiles,
     profileProperties,
-    profileWorkspaceAccess,
+    spaceAccess,
   ]) {
     await pg.exec(ddlFor(t as unknown as PgTable));
   }

@@ -485,7 +485,7 @@ export async function resolveProfileForApply(
     if (!opts.dryRun) {
       // NOT SWALLOWED — this grant is the whole reuse. We reached here because
       // step 1 proved the profile is NOT accessible from this workspace, and a
-      // `shared` row is reachable ONLY through the `profile_workspace_access`
+      // `shared` row is reachable ONLY through the `space_access`
       // join. So this insert is the single thing that makes the resolved profile
       // resolvable here. Swallowing it reported `reused: true` and a successful
       // provision while leaving the workspace holding a profile it cannot see —
@@ -528,7 +528,7 @@ export async function resolveProfileForApply(
 
     if (!opts.dryRun) {
       // ORDER IS LOAD-BEARING: a `shared` row is only reachable through the
-      // `profile_workspace_access` join, so the grants MUST land before the scope
+      // `space_access` join, so the grants MUST land before the scope
       // flip. Flipping first and then failing to grant would leave the owner
       // workspace with a profile it can no longer resolve — its entities would go
       // schema-less. `grantAccess` is onConflictDoNothing, so granting a row that

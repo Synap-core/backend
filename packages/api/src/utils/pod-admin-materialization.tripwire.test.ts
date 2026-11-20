@@ -10,7 +10,7 @@
  *      (2026-09-27) it keyed on `pod_members` alone and was independent of
  *      `workspace_members`. Decision B made it deliberately depend on space
  *      membership: a pod-wide facet shares only with a pod member in a space
- *      its ROLE is granted to (`profile_workspace_access` / the role's owning
+ *      its ROLE is granted to (`space_access` / the role's owning
  *      workspace). So a materialized member row DOES admit the roles granted
  *      to that space — accepted: an admin administering the space sees what the
  *      space was granted. What must never regress is that the share needs BOTH
@@ -51,20 +51,20 @@ const compile = (sql: SQL) => dialect.sqlToQuery(sql).sql.toLowerCase();
 
 // ── 1. READ FLOOR needs pod_members AND a role grant (decision B) ──────────
 describe("pod-shared read floor is grant-gated, never pod-membership alone", () => {
-  it("podSharedFacetWhere requires pod_members AND profile_workspace_access", () => {
+  it("podSharedFacetWhere requires pod_members AND space_access", () => {
     const sql = compile(
       podSharedFacetWhere(entities.workspaceId, entities.id, "user-x")
     );
     expect(sql).toContain("pod_members");
     expect(sql).toContain("entity_facets");
-    expect(sql).toContain("profile_workspace_access");
+    expect(sql).toContain("space_access");
   });
 
-  it("facetVisibilityConditions requires pod_members AND profile_workspace_access", () => {
+  it("facetVisibilityConditions requires pod_members AND space_access", () => {
     const conditions = facetVisibilityConditions({ userId: "user-x" });
     const sql = conditions.map(compile).join(" ");
     expect(sql).toContain("pod_members");
-    expect(sql).toContain("profile_workspace_access");
+    expect(sql).toContain("space_access");
   });
 });
 

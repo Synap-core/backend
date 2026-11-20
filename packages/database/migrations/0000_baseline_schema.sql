@@ -522,7 +522,7 @@ CREATE INDEX IF NOT EXISTS "idx_events_app_id"
   ON "events" ("app_id", "timestamp")
   WHERE "app_id" IS NOT NULL;
 
--- ─── 4. profiles + profile_workspace_access ──────────────────────────────────
+-- ─── 4. profiles + space_access ────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "profiles" (
   "id"               uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -638,19 +638,19 @@ DO $$ BEGIN
   END IF;
 END $$;
 
-CREATE TABLE IF NOT EXISTS "profile_workspace_access" (
-  "profile_id"    uuid NOT NULL REFERENCES "profiles"("id") ON DELETE CASCADE,
-  "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
-  "granted_at"    timestamp with time zone NOT NULL DEFAULT now(),
-  PRIMARY KEY ("profile_id", "workspace_id")
+-- space_access (0448, was profile_workspace_access): an object homed in one
+-- space shared with another. Its delete triggers are at the end of this file.
+CREATE TABLE IF NOT EXISTS "space_access" (
+  "object_type"  text NOT NULL,
+  "object_id"    uuid NOT NULL,
+  "workspace_id" uuid NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "granted_by"   text,
+  "granted_at"   timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT "space_access_pkey" PRIMARY KEY ("object_type", "object_id", "workspace_id")
 );
--- Ensure all columns exist on pre-existing tables (idempotent guard)
-ALTER TABLE "profile_workspace_access" ADD COLUMN IF NOT EXISTS "profile_id" uuid REFERENCES "profiles"("id") ON DELETE CASCADE;
-ALTER TABLE "profile_workspace_access" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE;
-ALTER TABLE "profile_workspace_access" ADD COLUMN IF NOT EXISTS "granted_at" timestamp with time zone DEFAULT now();
 
-CREATE INDEX IF NOT EXISTS "profile_workspace_access_workspace_idx"
-  ON "profile_workspace_access" ("workspace_id");
+CREATE INDEX IF NOT EXISTS "space_access_workspace_idx"
+  ON "space_access" ("workspace_id");
 
 -- ─── 5. relation_defs ────────────────────────────────────────────────────────
 -- Must come before property_defs (which references it)
@@ -6330,3 +6330,30 @@ BEGIN
       );
   END IF;
 END $$;
+
+-- space_access (0448): the grants of a deleted object go with it.
+CREATE OR REPLACE FUNCTION synap_space_access_forget_object()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  DELETE FROM "space_access"
+  WHERE "object_type" = TG_ARGV[0] AND "object_id" = OLD.id;
+  RETURN OLD;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_profiles_forget_space_access ON profiles;
+CREATE TRIGGER trg_profiles_forget_space_access
+  AFTER DELETE ON profiles
+  FOR EACH ROW EXECUTE FUNCTION synap_space_access_forget_object('profile');
+
+DROP TRIGGER IF EXISTS trg_playbooks_forget_space_access ON playbooks;
+CREATE TRIGGER trg_playbooks_forget_space_access
+  AFTER DELETE ON playbooks
+  FOR EACH ROW EXECUTE FUNCTION synap_space_access_forget_object('playbook');
+
+DROP TRIGGER IF EXISTS trg_skills_forget_space_access ON skills;
+CREATE TRIGGER trg_skills_forget_space_access
+  AFTER DELETE ON skills
+  FOR EACH ROW EXECUTE FUNCTION synap_space_access_forget_object('skill');

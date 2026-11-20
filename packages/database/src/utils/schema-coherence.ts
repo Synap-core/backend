@@ -68,6 +68,21 @@ interface RequiredColumn {
  * Keep this list in sync with 0099_schema_reconciliation.sql.
  */
 export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
+  {
+    table: "space_access",
+    column: "object_type",
+    addedBy: "0448_space_access.sql",
+  },
+  {
+    table: "space_access",
+    column: "object_id",
+    addedBy: "0448_space_access.sql",
+  },
+  {
+    table: "space_access",
+    column: "granted_by",
+    addedBy: "0448_space_access.sql",
+  },
   // Wave B3 provenance — tripwire on the KG core (0107). Checking 2 of the 5
   // per table is enough to confirm the migration ran (it adds all 5 together).
   //

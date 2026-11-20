@@ -32,7 +32,7 @@ describe("EntityRepository", () => {
     // create()/update() resolve the profile and its effective properties
     // (ProfileResolutionService) and fire-and-forget index the properties
     // (PropertyIndexService) — both hit tables the mock db above doesn't
-    // model (profiles, profile_workspace_access, property_defs, ...).
+    // model (profiles, space_access, property_defs, ...).
     // Stub them at the service boundary so the repository's own logic
     // (insert/update/delete + event emission) is what's under test here.
     vi.spyOn(

@@ -140,7 +140,7 @@ import {
   entities,
   governanceCeilings,
   profiles,
-  profileWorkspaceAccess,
+  spaceAccess,
   lifecycleTransitionOutbox,
 } from "@synap/database";
 import {
@@ -183,7 +183,7 @@ beforeAll(async () => {
     entities,
     governanceCeilings,
     profiles,
-    profileWorkspaceAccess,
+    spaceAccess,
   ])
     await h.client!.exec(ddlFor(t as PgTable));
   // The gate refuses an entity create whose kind does not resolve.
