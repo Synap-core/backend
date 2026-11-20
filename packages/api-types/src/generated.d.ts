@@ -8581,6 +8581,26 @@ export type Tool = typeof tools.$inferSelect;
 export type PlaybookExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
+		agentUserId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgText";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: [
+				string,
+				...string[]
+			];
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "agent_user_id";
+			notNull: false;
+			tableName: "playbooks";
+		}, {}, {}>;
 		channelSpec: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgJsonb";
@@ -33214,6 +33234,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				agentUserId: string | null;
 				createdAt: Date;
 				createdBy: string;
 				description: string | null;
@@ -33307,6 +33328,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				automations: {
+					agentUserId: string | null;
 					createdAt: Date;
 					createdBy: string;
 					description: string | null;
@@ -33350,6 +33372,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				automations: {
+					agentUserId: string | null;
 					createdAt: Date;
 					createdBy: string;
 					description: string | null;
@@ -51389,6 +51412,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				message: string;
 				playbook: {
+					agentUserId: string | null;
 					channelSpec: unknown;
 					createdAt: Date;
 					createdBy: string;
@@ -51510,6 +51534,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				agentUserId: string | null;
 				channelSpec: unknown;
 				createdAt: Date;
 				createdBy: string;
@@ -51606,6 +51631,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | undefined;
 			meta: object;
 			output: {
+				agentUserId: string | null;
 				channelSpec: unknown;
 				createdAt: Date;
 				createdBy: string;
@@ -51646,6 +51672,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				nextCursor: string | null;
 				playbooks: {
+					agentUserId: string | null;
 					channelSpec: unknown;
 					createdAt: Date;
 					createdBy: string;
@@ -51687,6 +51714,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				nextCursor: string | null;
 				playbooks: {
+					agentUserId: string | null;
 					channelSpec: unknown;
 					createdAt: Date;
 					createdBy: string;
@@ -51816,6 +51844,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				message: string;
 				playbook: {
+					agentUserId: string | null;
 					channelSpec: unknown;
 					createdAt: Date;
 					createdBy: string;
@@ -52786,6 +52815,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				message: string;
 				playbook: {
+					agentUserId: string | null;
 					channelSpec: unknown;
 					createdAt: Date;
 					createdBy: string;
@@ -52819,6 +52849,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				message: string;
 				playbook: {
+					agentUserId: string | null;
 					channelSpec: unknown;
 					createdAt: Date;
 					createdBy: string;
