@@ -4250,10 +4250,14 @@ _ue_min_from_check() {
 # is safe: the database runs on, unchanged. An OLDER image that lacks the
 # database's version cannot start it, and a rollback swaps images only — so an
 # update to such an image is refused before anything changes.
-# The extension is never updated automatically: `ALTER EXTENSION timescaledb
-# UPDATE` mid-update would make that update's rollback fatal, and after it the
+# The extension is not updated to the image's newest automatically: that could
+# be a version the OLD image lacks, which would make a rollback fatal, and the
 # live backend sessions still hold the old library. Behind the image = a notice
 # (here and in `synap doctor`); the procedure is deploy/runbooks/timescaledb-update.md.
+# ONE exception (_ue_tsdb_align): a newer image that DROPPED the version a
+# database runs (the 2.28.5 image has no 2.26.4 library) would be refused for
+# good, so the engine moves that database to the newest version BOTH images
+# ship, after the verified backup. The old image loads it too: rollback holds.
 
 # "<db>|<extversion>" per database that has the extension; non-zero on a failed read.
 _ue_tsdb_versions() {
@@ -4288,7 +4292,8 @@ _ue_image_tsdb_libs() { _ue_tsdb_libs_of "" docker run --rm --entrypoint sh "$1"
 # Refuses (records + returns 1) a release whose postgres image cannot load a
 # database's TimescaleDB version. Postgres must be running. <manifest>
 _ue_tsdb_check() {
-    local m="$1" img cur rows libs row db v
+    local m="$1" img cur rows libs row db v c dir runlibs target
+    UE_TSDB_ALIGN=""     # "<db>|<target>" lines _ue_tsdb_align moves after the backup
     img="$(jq -r '.images.SYNAP_IMAGE_POSTGRES // empty' "$m")"
     [ -n "$img" ] || return 0                              # no pin: compose keeps the image it has
     cur="$(_ue_env_get SYNAP_IMAGE_POSTGRES)"
@@ -4310,11 +4315,60 @@ _ue_tsdb_check() {
         [ -n "$row" ] || continue
         db="${row%%|*}"; v="${row#*|}"
         grep -qxF "$v" <<<"$libs" && continue
+        # The new image dropped this version's library. When the RUNNING image
+        # and the new one both ship a newer version, move the extension there
+        # (after the backup, _ue_tsdb_align): both images load it, so a rollback
+        # to the old image still starts the database.
+        c="$(_pgs_container)"; runlibs=""
+        if [ -n "$c" ] && [ "$c" != direct ]; then
+            dir="$(_pgs_psql "$c" synap "select setting from pg_config where name = 'PKGLIBDIR'" 2>/dev/null)"
+            if [[ "$dir" == /* ]]; then runlibs="$(_ue_tsdb_libs_of "$dir" docker exec "$c" sh)" || runlibs=""; fi
+        fi
+        target="$(comm -12 <(sort <<<"$libs") <(sort <<<"$runlibs") | sort -V | tail -n 1)"
+        if [ -n "$target" ] && [ "$(printf '%s\n%s\n' "$v" "$target" | sort -V | tail -n 1)" = "$target" ] && [ "$target" != "$v" ]; then
+            _ue_log "  database '${db}' runs TimescaleDB ${v}, which release ${UE_TO}'s postgres image no longer ships: it will be moved to ${target} (shipped by both images) after the backup."
+            UE_TSDB_ALIGN="${UE_TSDB_ALIGN}${db}|${target}"$'\n'
+            continue
+        fi
         _ue_err "release ${UE_TO}'s postgres image ships TimescaleDB up to $(tail -n 1 <<<"$libs"), but database '${db}' runs ${v}: postgres could not start it. Nothing was changed."
         _ue_err "Take a release whose postgres image carries TimescaleDB ${v} or newer."
         _ue_record aborted "$UE_FROM" "$UE_TO" "postgres image cannot load TimescaleDB ${v} (database ${db})" false
         return 1
     done <<<"$rows"
+    return 0
+}
+
+# Moves each database in UE_TSDB_ALIGN to its target version (the newest both
+# the running and the release's postgres image ship). Runs after the verified
+# backup and before anything is swapped: on failure the services are started
+# again and the update aborts with the pod as it was. The writers are stopped
+# first (their pooled sessions hold the old library); the ALTER runs in a fresh
+# `psql -X` session. Never to the image's newest: that could be a version the
+# old image lacks, and a rollback swaps images only.
+_ue_tsdb_align() {
+    [ -n "${UE_TSDB_ALIGN:-}" ] || return 0
+    local c svcs row db t failed=""
+    c="$(_pgs_container)"
+    svcs="$(docker compose ps --status running --services 2>/dev/null | grep -vx postgres)"
+    _ue_log "Moving the TimescaleDB extension (the release's postgres image no longer ships the version in use); services restart right after..."
+    # shellcheck disable=SC2086 # one word per service
+    [ -z "$svcs" ] || docker compose stop $svcs
+    while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        db="${row%%|*}"; t="${row#*|}"
+        if docker exec "$c" psql -X -U synap -d "$db" -v ON_ERROR_STOP=1 -c "ALTER EXTENSION timescaledb UPDATE TO '${t}'"; then
+            _ue_log "  database '${db}': TimescaleDB → ${t}"
+        else
+            failed="$db"; break
+        fi
+    done <<<"$UE_TSDB_ALIGN"
+    # shellcheck disable=SC2086
+    [ -z "$svcs" ] || docker compose start $svcs
+    if [ -n "$failed" ]; then
+        _ue_err "could not update the TimescaleDB extension of database '${failed}'. The services are running again; the pre-update backup is ${UE_BACKUP:-unavailable}."
+        _ue_record aborted "$UE_FROM" "$UE_TO" "TimescaleDB extension update failed (database ${failed})" false "${UE_BACKUP:-}"
+        return 1
+    fi
     return 0
 }
 
@@ -5181,6 +5235,7 @@ synap_update_engine() {
             _ue_record aborted "$UE_FROM" "$UE_TO" "pre-update backup failed" false
             exit 1
         }
+        _ue_tsdb_align || exit 1
     else
         _ue_warn "no postgres data yet (fresh pod) — no pre-update dump to take"
         level_before="0|"

@@ -159,6 +159,8 @@ case "$*" in
   "exec pg1 psql"*"from pg_database where not datistemplate"*) echo synap; exit 0 ;;
   "exec pg1 psql"*"from pg_config where name = 'PKGLIBDIR'"*) echo /usr/lib/postgresql/15/lib; exit 0 ;;
   "exec pg1 psql"*"where datallowconn and not datistemplate"*) printf '%s\n' postgres synap; exit 0 ;;
+  "exec pg1 psql -X "*"ALTER EXTENSION timescaledb UPDATE TO"*)
+    [ -n "${FAKE_ALTER_FAIL:-}" ] && { echo "ERROR: extension update failed (injected)" >&2; exit 1; }; exit 0 ;;
   "exec pg1 psql -U synap -d synap "*"extname = 'timescaledb'"*)
     [ -n "${FAKE_TSDB_READ_FAIL:-}" ] && { echo "psql: connection refused" >&2; exit 2; }
     echo "${FAKE_TSDB_EXT:-2.26.4}"; exit 0 ;;
@@ -619,6 +621,21 @@ FAKE_TSDB_EXT=2.28.3 FAKE_TSDB_LIBS_NEW="2.25.0 2.26.4" run_update --release "$R
   && cmp -s "$DEPLOY/.env" "$S/env.orig" && cmp -s "$DEPLOY/docker-compose.yml" "$S/compose.orig" \
   && ! grep -qE "pg_dump|run --rm backend-migrate" "$FAKE/log" && [ "$(cur_id)" = "$R1" ] \
   && ok "tsdbolder: an image that lacks the database's TimescaleDB is refused before anything changes" || { bad "tsdbolder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+# The new image dropped the database's version but the RUNNING image and the new
+# one share a newer one: the engine moves the extension there itself (after the
+# backup, writers stopped, a fresh psql -X), never beyond what the old image ships.
+setup tsdbalign r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
+FAKE_TSDB_EXT=2.26.4 FAKE_TSDB_LIBS="2.26.4 2.27.0 2.28.3" FAKE_TSDB_LIBS_NEW="2.27.0 2.28.3 2.28.5" run_update --release "$R2"; rc=$?
+a=$(grep -n "ALTER EXTENSION timescaledb UPDATE TO '2.28.3'" "$FAKE/log" | head -1 | cut -d: -f1); d=$(grep -n "pg_dump" "$FAKE/log" | head -1 | cut -d: -f1); m=$(grep -n "run --rm backend-migrate" "$FAKE/log" | head -1 | cut -d: -f1)
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && [ -n "$a" ] && [ -n "$d" ] && [ "$d" -lt "$a" ] && [ "$a" -lt "$m" ] \
+  && grep -q "compose stop" "$FAKE/log" && grep -q "compose start" "$FAKE/log" && ! grep -q "UPDATE TO '2.28.5'" "$FAKE/log" \
+  && ok "tsdbalign: a version the new image dropped is moved to the newest both images ship, after the backup and before the migration" || { bad "tsdbalign: rc=$rc a=$a d=$d m=$m"; show; }
+setup tsdbalignfail r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
+cp "$DEPLOY/docker-compose.yml" "$S/compose.orig"
+FAKE_ALTER_FAIL=1 FAKE_TSDB_EXT=2.26.4 FAKE_TSDB_LIBS="2.26.4 2.28.3" FAKE_TSDB_LIBS_NEW="2.28.3 2.28.5" run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "TimescaleDB extension update failed (database synap)" ] \
+  && cmp -s "$DEPLOY/.env" "$S/env.orig" && grep -q "compose start" "$FAKE/log" && ! grep -q "run --rm backend-migrate" "$FAKE/log" && [ "$(cur_id)" = "$R1" ] \
+  && ok "tsdbalignfail: a failed extension update restarts the services and aborts before any swap" || { bad "tsdbalignfail: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 setup tsdbmajor r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
 FAKE_TSDB_EXT=2.28.3 FAKE_TSDB_LIBS_NEW="2.25.0 2.26.4" FAKE_TSDB_OTHER_MAJOR="2.28.3" run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && [ "$(last reason)" = "postgres image cannot load TimescaleDB 2.28.3 (database synap)" ] \

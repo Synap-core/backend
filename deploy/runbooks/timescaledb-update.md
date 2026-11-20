@@ -10,7 +10,16 @@ at, and keeps working on the newer image. `synap doctor` and the end of
 · timescaledb: database 'synap' runs TimescaleDB 2.26.4; the postgres image ships up to 2.28.3. …
 ```
 
-Updating the extension is a person's step, in a maintenance window, because:
+One case is automatic. A newer postgres image can drop the library of an old
+version (the 2.28.5 image has no `timescaledb-2.26.4.so`), and a database still
+on that version could not start. `synap update` then moves that database, after
+the verified backup, to the newest version that BOTH the running and the new
+image ship (never beyond: the old image must still load it, since a rollback
+swaps images only). Writers are stopped for the `ALTER` and started again; if it
+fails the update aborts before any swap. Everything beyond that is the person's
+step below.
+
+Updating the extension to the image's newest is a person's step, in a maintenance window, because:
 
 - **It cannot be undone by an image swap.** After it, a postgres image that lacks
   the new version cannot start the database. A failed update rolls back by
