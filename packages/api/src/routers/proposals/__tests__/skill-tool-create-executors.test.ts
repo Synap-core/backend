@@ -268,8 +268,12 @@ describe("(B) tool/create approval materializes instead of no-op", () => {
     expect(TOOL_CREATE_BLOCK).toContain("alreadyApproved");
   });
 
-  it("it preserves the proposing agent as author", () => {
-    expect(TOOL_CREATE_BLOCK).toMatch(/createdBy:\s*proposal\.agentUserId/);
+  it("the person it was proposed for owns it; the proposing agent is its actor", () => {
+    expect(TOOL_CREATE_BLOCK).toMatch(
+      /ownerAndActor\(\s*db,\s*proposal\.subjectUserId \?\? proposal\.agentUserId \?\? userId,\s*proposal\.agentUserId\s*\)/
+    );
+    expect(TOOL_CREATE_BLOCK).toMatch(/createdBy:\s*owner\.ownerId/);
+    expect(TOOL_CREATE_BLOCK).toMatch(/agentUserId:\s*owner\.agentUserId/);
   });
 
   it("tools.create stores the FULL insert shape on the gate, not name-only", () => {

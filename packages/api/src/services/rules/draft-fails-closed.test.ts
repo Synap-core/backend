@@ -48,7 +48,12 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
-      select: () => ({ from: () => ({ where: async () => [] }) }),
+      // Awaited: no rows. `.limit`: the owner read finds no user.
+      select: () => ({
+        from: () => ({
+          where: () => Object.assign(Promise.resolve([]), { limit: async () => [] }),
+        }),
+      }),
       insert: () => ({
         values: (values: Record<string, unknown>) => {
           inserted.push(values);
