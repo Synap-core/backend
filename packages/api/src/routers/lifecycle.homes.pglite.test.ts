@@ -1314,6 +1314,51 @@ describe("homes — a key bounded by a grant", () => {
     }
   });
 
+  // A role stage lives on the FACET (a lead's stage, in CRM). A key that
+  // reads the person but not `facet.read` must not be told the stage: the
+  // thing is named by its own kind. CRM produces `lead` only, so with the
+  // facet hidden the identity falls back to the person.
+  const onCrm = (extra: string[] = []) =>
+    grantOf(["entity.person.read", "session.read", ...extra], [CRM]);
+
+  it("moving: a role stage the grant does not read never names the thing", async () => {
+    const erin = await person(CRM, "Erin");
+    await leadFacet(erin, CRM, "qualified", USER);
+    await session({ subject: erin, workspace: CRM, mins: 2 });
+    try {
+      const itemOf = async (extra?: string[]) =>
+        (await runWithGrant(onCrm(extra), () => caller().moving())).items.find(
+          (i) => i.entityId === erin
+        );
+      expect(await itemOf(["facet.read"])).toMatchObject({
+        profileSlug: "lead",
+        status: "qualified",
+        workspaceId: CRM,
+      });
+      expect(await itemOf()).toMatchObject({
+        profileSlug: "person",
+        status: null,
+      });
+    } finally {
+      await q(`update focus_sessions set status = 'closed'`);
+    }
+  });
+
+  it("left behind: a role stage the grant does not read never lists the thing", async () => {
+    const fay = await person(CRM, "Fay");
+    await leadFacet(fay, CRM, "qualified", USER);
+    await session({ subject: fay, workspace: CRM, status: "closed", mins: 2 });
+    const leftOf = async (extra?: string[]) =>
+      (
+        await runWithGrant(onCrm(extra), () => caller().moving())
+      ).leftBehind?.items.find((i) => i.entityId === fay);
+    expect(await leftOf(["facet.read"])).toMatchObject({
+      profileSlug: "lead",
+      status: "qualified",
+    });
+    expect(await leftOf()).toBeUndefined();
+  });
+
   it("moving refuses a key that reads no session (never 'nothing is moving')", async () => {
     await expect(
       runWithGrant(grantOf(["entity.deal.read"], [DEV]), () =>
