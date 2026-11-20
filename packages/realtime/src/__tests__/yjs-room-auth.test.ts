@@ -24,6 +24,15 @@
  *  4. The `initialize()` tripwire (unchanged): YSocketIO@1.1.3's constructor
  *     leaves `nsp` null; without `initialize()` every `/yjs|{room}` connection
  *     is answered "Invalid namespace", silently.
+ *
+ *  5. ROOM TICKETS (0438) — a pod app's `synap_rt_…` ticket opens ONE room
+ *     ONCE: another document, expired, reused, or another person's are
+ *     refused; a read ticket never writes (driven through the real hooks);
+ *     the socket gets the lesser of ticket and floor and ends with the app's
+ *     connection; `/presence` never takes a ticket. The ticket store is a
+ *     table here with the store's rules (claim: this document, unclaimed,
+ *     unexpired); the store itself runs on PGlite in
+ *     `packages/database/src/realtime-room-tickets.pglite.test.ts`.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -71,6 +80,17 @@ const mocks = vi.hoisted(() => ({
   byToken: vi.fn(),
   byCookie: vi.fn(),
   findDocument: vi.fn(),
+  tickets: new Map<
+    string,
+    {
+      userId: string;
+      documentId: string;
+      access: "read" | "edit";
+      apiKeyId: string;
+      expiresAt: number;
+      consumed: boolean;
+    }
+  >(),
 }));
 
 vi.mock("@synap/api/document-access", () => ({
@@ -117,6 +137,33 @@ vi.mock("@synap/database/person-devices", () => ({
   liveDeviceIds: async () => new Set<string>(),
 }));
 
+/** The ticket store, as a table with its rules (see header, item 5). */
+vi.mock("@synap/database/realtime-room-tickets", () => {
+  const live = (raw: string) => {
+    const t = mocks.tickets.get(raw);
+    return t && !t.consumed && t.expiresAt > Date.now() ? t : null;
+  };
+  return {
+    isRoomTicket: (raw: unknown) =>
+      typeof raw === "string" &&
+      raw.startsWith("synap_rt_") &&
+      raw.length > "synap_rt_".length,
+    peekRoomTicket: async (_db: unknown, raw: string) => {
+      const t = live(raw);
+      return t
+        ? { userId: t.userId, documentId: t.documentId, access: t.access }
+        : null;
+    },
+    claimRoomTicket: async (_db: unknown, raw: string, documentId: string) => {
+      const t = live(raw);
+      if (!t || t.documentId !== documentId) return null;
+      t.consumed = true;
+      return { userId: t.userId, access: t.access, apiKeyId: t.apiKeyId };
+    },
+    liveTicketConnections: async () => new Set<string>(),
+  };
+});
+
 import { Server as SocketIOServer } from "socket.io";
 import {
   authorizeRoomAccess,
@@ -127,6 +174,11 @@ import {
 } from "../yjs-server.js";
 import { declaredEditorSchema } from "../document-room.js";
 import { sweepDeviceSockets, trackedDeviceIds } from "../device-sockets.js";
+import {
+  sweepTicketSockets,
+  trackedTicketConnections,
+} from "../ticket-sockets.js";
+import { verifyHandshakeUser } from "../session-auth.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -358,6 +410,153 @@ describe("the /yjs handshake: identity is server-proven", () => {
     mocks.resolveAccess.mockRejectedValueOnce(new Error("connection refused"));
     const r = await connect(DOC, { userId: EDITOR, token: "tok-editor" });
     expect(r.err).toBeInstanceOf(Error);
+  });
+});
+
+// ─── Room tickets (0438) ─────────────────────────────────────────────────────
+
+let ticketSeq = 0;
+/** A ticket in the store; returns the raw ticket. */
+function ticket(
+  over: Partial<{
+    userId: string;
+    documentId: string;
+    access: "read" | "edit";
+    apiKeyId: string;
+    expiresAt: number;
+  }> = {}
+): string {
+  const raw = `synap_rt_${String(++ticketSeq).padStart(43, "t")}`;
+  mocks.tickets.set(raw, {
+    userId: EDITOR,
+    documentId: DOC,
+    access: "edit",
+    apiKeyId: "key-app-1",
+    expiresAt: Date.now() + 60_000,
+    consumed: false,
+    ...over,
+  });
+  return raw;
+}
+
+describe("a pod app's room ticket opens one room, once", () => {
+  it("an edit ticket of an editor opens its document's room as edit", async () => {
+    const r = await connect(DOC, { userId: EDITOR, token: ticket() });
+    expect(r.err).toBeUndefined();
+    expect(r.data.yjsAccess).toBe("edit");
+    // Never sent to Kratos.
+    expect(mocks.byToken).not.toHaveBeenCalled();
+  });
+
+  it("opens a board's whiteboard room too", async () => {
+    const r = await connect(`whiteboard-${BOARD}`, {
+      userId: EDITOR,
+      token: ticket({ documentId: BOARD }),
+    });
+    expect(r.err).toBeUndefined();
+    expect(r.data.yjsAccess).toBe("edit");
+  });
+
+  it("refuses a ticket made for ANOTHER document", async () => {
+    const r = await connect(DOC, {
+      userId: EDITOR,
+      token: ticket({ documentId: DOC_POD }),
+    });
+    expect(r.err).toBeInstanceOf(Error);
+    expect(r.data.yjsAccess).toBeUndefined();
+  });
+
+  it("refuses an EXPIRED ticket", async () => {
+    const r = await connect(DOC, {
+      userId: EDITOR,
+      token: ticket({ expiresAt: Date.now() - 1 }),
+    });
+    expect(r.err).toBeInstanceOf(Error);
+  });
+
+  it("refuses a REUSED ticket", async () => {
+    const raw = ticket();
+    expect((await connect(DOC, { userId: EDITOR, token: raw })).err).toBe(
+      undefined
+    );
+    const again = await connect(DOC, { userId: EDITOR, token: raw });
+    expect(again.err).toBeInstanceOf(Error);
+    expect(again.data.yjsAccess).toBeUndefined();
+  });
+
+  it("refuses a ticket presented under another person's id", async () => {
+    const r = await connect(DOC, {
+      userId: READER,
+      token: ticket({ userId: EDITOR }),
+    });
+    expect(r.err).toBeInstanceOf(Error);
+  });
+
+  it("a READ ticket never writes, even for the document's editor", async () => {
+    const r = await connect(DOC, {
+      userId: EDITOR,
+      token: ticket({ access: "read" }),
+    });
+    expect(r.err).toBeUndefined();
+    expect(r.data.yjsAccess).toBe("read");
+    // The access the gate set, through the real y-socket.io hooks.
+    const server = setupYjsServer({
+      io: new SocketIOServer(),
+    }) as unknown as { initSyncListeners: (s: any, d: Y.Doc) => void };
+    const doc = new Y.Doc();
+    const socket = fakeSocket(r.data.yjsAccess as "read");
+    server.initSyncListeners(socket, doc);
+    socket.handlers.get("sync-update")!(clientUpdate("hello"));
+    expect(doc.getText("t").toString()).toBe("");
+    expect(socket.emits).toContainEqual(["yjs-access", { access: "read" }]);
+  });
+
+  it("an edit ticket of a person whose floor is read is read-only", async () => {
+    const r = await connect(DOC, {
+      userId: READER,
+      token: ticket({ userId: READER }),
+    });
+    expect(r.err).toBeUndefined();
+    expect(r.data.yjsAccess).toBe("read");
+  });
+
+  it("refuses a ticket of a person the floor no longer admits", async () => {
+    const r = await connect(DOC, {
+      userId: STRANGER,
+      token: ticket({ userId: STRANGER }),
+    });
+    expect(r.err).toBeInstanceOf(Error);
+  });
+
+  it("a ticket socket closes when the app's connection ends", async () => {
+    await sweepTicketSockets(async () => new Set());
+    const r = await connect(DOC, {
+      userId: EDITOR,
+      token: ticket({ apiKeyId: "key-app-2" }),
+    });
+    expect(r.err).toBeUndefined();
+    expect(trackedTicketConnections()).toContain("key-app-2");
+    const socket = lastSocket!;
+    await sweepTicketSockets(async () => new Set(["key-app-other"]));
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
+    expect(trackedTicketConnections()).not.toContain("key-app-2");
+  });
+
+  it("CONTROL — a ticket socket of a standing connection stays open", async () => {
+    await sweepTicketSockets(async () => new Set());
+    await connect(DOC, {
+      userId: EDITOR,
+      token: ticket({ apiKeyId: "key-app-3" }),
+    });
+    const socket = lastSocket!;
+    await sweepTicketSockets(async () => new Set(["key-app-3"]));
+    expect(socket.disconnect).not.toHaveBeenCalled();
+  });
+
+  it("/presence never takes a ticket (the default handshake check)", async () => {
+    const r = await verifyHandshakeUser({ userId: EDITOR, token: ticket() });
+    expect(r.ok).toBe(false);
+    expect(mocks.byToken).not.toHaveBeenCalled();
   });
 });
 
