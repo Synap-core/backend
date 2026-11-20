@@ -330,6 +330,31 @@ describe("market.install of a capability honours what it requires", () => {
     ]);
   });
 
+  it("a required skill that is not installed refuses the install, naming it, with nothing written", async () => {
+    h.catalog = {};
+    await expect(
+      marketInstall("reporter", {
+        profiles: [],
+        capability: {
+          key: "reporter",
+          name: "Reporter",
+          vault: [],
+          tools: [{ name: "reporter_api", kind: "api" }],
+          skills: [skill("reporter_run", "pod", ["reporter_api"])],
+        },
+        dependencies: [
+          { slug: "weekly-digest", kind: "skill", relation: "require" },
+        ],
+      })
+    ).rejects.toThrow(
+      /"Reporter" needs "weekly-digest" installed first.*skill "weekly-digest" is not installed/
+    );
+    expect(await containerByKey("reporter")).toBeUndefined();
+    expect(
+      await rows(`select id from skills where name = 'reporter_run'`)
+    ).toEqual([]);
+  });
+
   it("a base installed in the target space counts as present there", async () => {
     // Installed in WS only (its action is space-scoped); not in the catalog.
     await createCapabilityFromDefinition(

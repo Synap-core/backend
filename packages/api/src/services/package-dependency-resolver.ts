@@ -940,10 +940,12 @@ async function ensureWorkspaceDependencyPresent(
  * `applyCapabilityDefinition`): the same capability branch the template graph
  * runs (`ensureCapabilityDependencyPresent`: present pod-wide or in
  * `workspaceId` is `found`, else installed through the governed applier,
- * non-fatal), and nothing else. A capability installs only the capabilities
- * it requires; any other kind it names is recorded `required-absent`, never
- * installed from here, so a tool install never stands up a space, a cell or a
- * skill (and never reaches what a template apply writes, such as members).
+ * non-fatal). A capability installs only the capabilities it requires: any
+ * other kind is only CHECKED present (a skill or a cell pod-wide, a space the
+ * person can see), never installed from here, so a tool install never stands
+ * up a space, a cell or a skill (and never reaches what a template apply
+ * writes, such as members). One that is not present, or a kind that cannot
+ * be checked, is `required-absent`; the caller refuses the install on it.
  */
 export async function resolveCapabilityDependencies(input: {
   dependencies: TemplateDependency[];
@@ -966,15 +968,51 @@ export async function resolveCapabilityDependencies(input: {
       );
       continue;
     }
+    const present = await siblingPresent(kind, dep.slug, input.userId);
     installed.push({
       slug: dep.slug,
       kind,
       relation: dep.relation ?? "require",
-      action: "required-absent",
-      message: `A tool installs only the tools it requires; ${kind} "${dep.slug}" is not installed with it. Install it on its own if it is needed.`,
+      action: present ? "found" : "required-absent",
+      message: present
+        ? `The ${kind} "${dep.slug}" is already installed.`
+        : present === false
+          ? `The ${kind} "${dep.slug}" is not installed, and a tool install does not install it.`
+          : `A tool cannot require a ${kind}: "${dep.slug}" cannot be checked.`,
     });
   }
   return installed;
+}
+
+/**
+ * Is a non-capability dependency present? A READ only: a skill by its slug
+ * pod-wide (the key `ensureSkillDependencyPresent` checks), a cell by its
+ * installed type key (`resolveInstalledFlag`), a space by its subtype among
+ * the spaces the person can see (`findWorkspaceBySubtype`, the `require`
+ * floor). `undefined` for a kind with no presence check.
+ */
+async function siblingPresent(
+  kind: PackageDependencyKind,
+  slug: string,
+  userId: string
+): Promise<boolean | undefined> {
+  if (kind === "skill") {
+    const [row] = await db
+      .select({ id: skills.id })
+      .from(skills)
+      .where(and(isNull(skills.workspaceId), eq(skills.slug, slug)))
+      .limit(1);
+    return !!row;
+  }
+  if (kind === "cell") {
+    const { resolveInstalledFlag } =
+      await import("./capabilities/marketplace-install.js");
+    return (await resolveInstalledFlag("cell", slug)) ?? false;
+  }
+  if (kind === "workspace") {
+    return !!(await findWorkspaceBySubtype(slug, userId, false));
+  }
+  return undefined;
 }
 
 /**

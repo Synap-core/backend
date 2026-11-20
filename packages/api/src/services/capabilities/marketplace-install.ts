@@ -622,11 +622,11 @@ export async function applyCapabilityDefinition(
  * capability applier. A tool installs only the tools it requires.
  *
  * Where a template treats a dependency it could not install as non-fatal, a
- * capability does not: its actions call the required tool by name and would
- * fail only when they run ("Tool not found"). So a CAPABILITY dependency that
- * is still absent refuses the install, naming what to install first, before
- * anything of this capability is written. Other kinds of dependency are
- * reported as the resolver resolved them.
+ * capability does not: its actions call what it requires by name and would
+ * fail only when they run ("Tool not found"). So ANY dependency that is still
+ * absent (a capability that could not be installed, or another kind that is
+ * not there) refuses the install, naming what to install first, before
+ * anything of this capability is written.
  *
  * The dependencies install under the caller's own authority: its user, the
  * space it installs into (or the pod), and its agent when an agent acts, so
@@ -662,9 +662,7 @@ async function ensureCapabilityDependencies(
     agentUserId: ctx.agentUserId ?? undefined,
     workspaceId: ctx.workspaceId ?? null,
   });
-  const absent = installed.filter(
-    (d) => d.kind === "capability" && d.action === "required-absent"
-  );
+  const absent = installed.filter((d) => d.action === "required-absent");
   if (absent.length > 0) {
     const names = absent.map((d) => `"${d.slug}"`).join(", ");
     throw new TRPCError({
