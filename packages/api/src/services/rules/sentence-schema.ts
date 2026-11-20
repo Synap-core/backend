@@ -36,6 +36,7 @@
  */
 
 import { z } from "zod";
+import { isCronTimezone } from "@synap/shared-utils";
 import type {
   ConditionRow,
   RuleSentenceValue,
@@ -160,7 +161,15 @@ const sentenceTriggerSchema = z.object({
   cronTime: z.string().optional(),
   cronDays: z.array(z.number()).optional(),
   cronDayOfMonth: z.number().optional(),
-  cronTimezone: z.string().optional(),
+  // Read by the scheduler (`nextCronRunAt`): a zone its clock does not know
+  // is refused here, before a proposal is filed.
+  cronTimezone: z
+    .string()
+    .refine(isCronTimezone, {
+      message:
+        'cronTimezone must be an IANA time zone name such as "Europe/Paris" or "UTC"',
+    })
+    .optional(),
 });
 
 const sentenceActionSchema = z.object({

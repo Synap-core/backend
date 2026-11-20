@@ -79,8 +79,8 @@ import {
 } from "@synap/database";
 import { readAutomationAudience } from "@synap-core/types/automations";
 import type { SQL } from "drizzle-orm";
-// Deep worker import, exactly like `automation-cron-scheduler.js` /
-// `automation-run-reaper.js` already are from this package. The four predicates
+// Deep worker import, exactly like `automation-run-reaper.js` already is
+// from this package. The four predicates
 // are the worker's OWN exports — pattern, filters, trigger-specific filters, and
 // the message-envelope derivation — so replay and live firing can never fork.
 import {

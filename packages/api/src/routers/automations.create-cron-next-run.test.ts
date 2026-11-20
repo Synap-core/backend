@@ -91,6 +91,55 @@ describe("automations.create — cron nextRunAt", () => {
     expect((nextRunAt as Date).getTime()).toBeGreaterThan(Date.now());
   });
 
+  it("reads the expression in the trigger's own zone (ticket 592930c8)", async () => {
+    // 06:50 Asia/Kolkata is 01:20 UTC; the zone used to be stored and never
+    // read, so the rule fired at 06:50 on the worker's clock. (A zone no dev
+    // box or CI runner sits in: the process clock cannot pass by luck.)
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-15T00:00:00Z"));
+    try {
+      const captured: { values?: Record<string, unknown> } = {};
+      mockGetDb.mockResolvedValue({
+        insert: vi.fn(() => insertChain(captured)),
+      });
+
+      const caller = automationsRouter.createCaller(callerCtx());
+      await caller.create({
+        name: "Morning brief, Kolkata",
+        triggerType: "cron",
+        triggerConfig: { expression: "50 6 * * *", timezone: "Asia/Kolkata" },
+        flowDefinition: CRON_FLOW,
+        status: "active",
+      });
+
+      expect((captured.values?.nextRunAt as Date).toISOString()).toBe(
+        "2026-01-15T01:20:00.000Z"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses a time zone the cron clock does not know, and writes nothing", async () => {
+    const insert = vi.fn(() => insertChain({}));
+    mockGetDb.mockResolvedValue({ insert });
+
+    const caller = automationsRouter.createCaller(callerCtx());
+    await expect(
+      caller.create({
+        name: "Morning brief, nowhere",
+        triggerType: "cron",
+        triggerConfig: { expression: "50 6 * * *", timezone: "Mars/Olympus" },
+        flowDefinition: CRON_FLOW,
+        status: "active",
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining('Unknown time zone "Mars/Olympus"'),
+    });
+    expect(insert).not.toHaveBeenCalled();
+  });
+
   it("leaves nextRunAt unset for a non-cron (event) active automation", async () => {
     const captured: { values?: Record<string, unknown> } = {};
     mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });

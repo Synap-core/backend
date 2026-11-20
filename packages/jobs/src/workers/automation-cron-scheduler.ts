@@ -5,8 +5,10 @@
  * When nextRunAt <= now(), creates an automation_runs record
  * and enqueues an automation-execute job.
  *
- * This is the single cron scheduler / cron-due parser for the pod
- * (computeNextRunAt). All autonomous cron behavior flows through automations.
+ * This is the single cron scheduler for the pod; the next slot of a row is
+ * `nextCronRunAt` (`@synap/shared-utils`), read in the row's
+ * `triggerConfig.timezone` (UTC when absent). All autonomous cron behavior
+ * flows through automations.
  */
 
 import {
@@ -20,6 +22,7 @@ import {
 } from "@synap/database";
 import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
+import { nextCronRunAt } from "@synap/shared-utils";
 // The expiry predicate + the rule back-reference reader, IMPORTED from the
 // event matcher in this same package rather than mirrored. Two firing doors
 // must agree on what "expired" means; a second copy is how they stop agreeing.
@@ -29,102 +32,6 @@ import {
 } from "./automation-trigger-matcher.js";
 
 const logger = createLogger({ module: "automation-cron-scheduler" });
-
-/**
- * Parse a 5-field cron expression and compute the next run time from a given base.
- * Supports: minute hour dayOfMonth month dayOfWeek
- *
- * Simple forward-scan implementation — walks forward a minute at a time to the
- * next matching slot.
- *
- * ⚠️ This said "checks the next 1440 minutes (24h)". The code scans
- * `366 * 24 * 60` — a YEAR. The stale number matters because it is exactly the
- * window in which `0 9 * * 1` (weekly) and `0 9 1 * *` (monthly) would return
- * `null`, and a `null` here is not a soft failure: the row can never leave the
- * `isNull(nextRunAt)` branch, so the rule NEVER FIRES and is marked
- * unschedulable. Someone reading the comment instead of the loop bound will
- * conclude those recurrences are broken. One person already did, briefly.
- *
- * ⚠️ TIMEZONE: the match below uses `getHours`/`getDate`/`getDay`/`getMonth` —
- * LOCAL getters — so an expression is interpreted in THIS PROCESS's timezone,
- * not the author's. The runtime image is `node:20-alpine` with no `ENV TZ` and
- * no TZ in the deploy config, so that is UTC in practice. There is no per-user
- * or per-workspace timezone anywhere on the automation cron path. Any surface
- * that lets someone pick a clock time MUST say which zone it means, or it is
- * quietly scheduling their rule for a different hour than the one they read.
- */
-function computeNextRunAt(cronExpr: string, fromDate: Date): Date | null {
-  const parts = cronExpr.trim().split(/\s+/);
-  if (parts.length !== 5) return null;
-
-  const [minExpr, hourExpr, domExpr, monthExpr, dowExpr] = parts;
-
-  function matchesCronField(
-    field: string,
-    value: number,
-    _max: number
-  ): boolean {
-    if (field === "*") return true;
-
-    // Handle */N step
-    if (field.startsWith("*/")) {
-      const step = parseInt(field.slice(2), 10);
-      return step > 0 && value % step === 0;
-    }
-
-    // Handle comma-separated values
-    const values = field.split(",");
-    for (const v of values) {
-      // Handle range N-M
-      if (v.includes("-")) {
-        const [start, end] = v.split("-").map(Number);
-        if (value >= start && value <= end) return true;
-        continue;
-      }
-      // Handle day-of-week names
-      const dayNames: Record<string, number> = {
-        SUN: 0,
-        MON: 1,
-        TUE: 2,
-        WED: 3,
-        THU: 4,
-        FRI: 5,
-        SAT: 6,
-      };
-      const resolved = dayNames[v.toUpperCase()] ?? parseInt(v, 10);
-      if (resolved === value) return true;
-    }
-    return false;
-  }
-
-  // Scan forward minute-by-minute for up to 366 days
-  const candidate = new Date(fromDate);
-  candidate.setSeconds(0, 0);
-  candidate.setMinutes(candidate.getMinutes() + 1); // Start from next minute
-
-  const maxAttempts = 366 * 24 * 60; // One year of minutes
-  for (let i = 0; i < maxAttempts; i++) {
-    const min = candidate.getMinutes();
-    const hour = candidate.getHours();
-    const dom = candidate.getDate();
-    const month = candidate.getMonth() + 1; // 1-indexed
-    const dow = candidate.getDay(); // 0=Sun
-
-    if (
-      matchesCronField(minExpr, min, 59) &&
-      matchesCronField(hourExpr, hour, 23) &&
-      matchesCronField(domExpr, dom, 31) &&
-      matchesCronField(monthExpr, month, 12) &&
-      matchesCronField(dowExpr, dow, 6)
-    ) {
-      return candidate;
-    }
-
-    candidate.setMinutes(candidate.getMinutes() + 1);
-  }
-
-  return null;
-}
 
 /**
  * Self-heal active cron automations whose `nextRunAt` is NULL.
@@ -137,7 +44,7 @@ function computeNextRunAt(cronExpr: string, fromDate: Date): Date | null {
  * one place that already owns `nextRunAt` and the cron parser.
  *
  * NO CATCH-UP: the healed row is stamped with its NEXT slot, computed forward
- * from `now` by the SAME `computeNextRunAt` the post-run update uses. Stamping
+ * from `now` by the SAME `nextCronRunAt` the post-run update uses. Stamping
  * a past slot (or firing immediately) would replay every missed occurrence — a
  * daily 8am automation dark for 8 days would burst 8 runs — which is exactly
  * what a scheduler must not do. This also matches what `activate` does: it
@@ -160,14 +67,17 @@ async function healUnscheduledCronAutomations(now: Date): Promise<void> {
   for (const automation of unscheduled) {
     const triggerConfig = automation.triggerConfig as Record<string, unknown>;
     const expression = triggerConfig?.expression as string | undefined;
-    const nextRunAt = expression ? computeNextRunAt(expression, now) : null;
+    const timezone = triggerConfig?.timezone as string | undefined;
+    const nextRunAt = expression
+      ? nextCronRunAt(expression, now, timezone)
+      : null;
 
     if (!nextRunAt) {
       // TERMINAL, not a retry: the row can never leave the `isNull(nextRunAt)`
       // set on its own, so warning-and-continuing re-warns every 60s forever
-      // (~1,440 identical lines/day/row). `computeNextRunAt` returns null for
-      // plausible author input (`@daily`, `L`, `0 8 * * 1#2`), so this is a
-      // config error the AUTHOR must see. Park it in the schema's existing
+      // (~1,440 identical lines/day/row). `nextCronRunAt` returns null for
+      // author input it cannot schedule (`@daily`, six fields, a zone it does
+      // not know), so this is a config error the AUTHOR must see. Park it in the schema's existing
       // failure state: `status: 'error'` drops it out of both the heal set and
       // the due set, and surfaces `errorMessage` in the UI. Recoverable through
       // the normal door — `automations.activate` (routers/automations.ts) sets
@@ -178,7 +88,7 @@ async function healUnscheduledCronAutomations(now: Date): Promise<void> {
         .set({
           status: "error",
           errorMessage: expression
-            ? `Unparseable cron expression: "${expression}". Only 5-field cron (minute hour day-of-month month day-of-week) is supported.`
+            ? `Unparseable cron schedule: "${expression}"${timezone ? ` in time zone "${timezone}"` : ""}. Only 5-field cron (minute hour day-of-month month day-of-week) in an IANA time zone is supported.`
             : "Cron automation has no trigger expression (triggerConfig.expression is missing).",
           updatedAt: new Date(),
         })
@@ -303,6 +213,7 @@ export async function handleAutomationCronScheduler(): Promise<void> {
     try {
       const triggerConfig = automation.triggerConfig as Record<string, unknown>;
       const cronExpression = triggerConfig?.expression as string;
+      const timezone = triggerConfig?.timezone as string | undefined;
 
       // Create run record.
       //
@@ -362,7 +273,7 @@ export async function handleAutomationCronScheduler(): Promise<void> {
       // counts a run once, when it ends (ticket 85133a81 — counting the
       // dispatch too doubled every automation's runs).
       const nextRunAt = cronExpression
-        ? computeNextRunAt(cronExpression, now)
+        ? nextCronRunAt(cronExpression, now, timezone)
         : null;
 
       await db
@@ -390,6 +301,3 @@ export async function handleAutomationCronScheduler(): Promise<void> {
     }
   }
 }
-
-// Export computeNextRunAt for use by the activate procedure
-export { computeNextRunAt };
