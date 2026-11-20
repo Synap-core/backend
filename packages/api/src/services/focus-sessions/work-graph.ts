@@ -691,7 +691,7 @@ export async function buildWorkGraph(
     goals.status === "ok" ? goals.value.map((g) => g.id) : []
   );
   const servesEdges: WorkGraphEdge[] =
-    serves.status === "ok"
+    serves.status === "nope"
       ? serves.value
           .filter((e) => goalIds.has(e.trackId))
           .map((e) => ({

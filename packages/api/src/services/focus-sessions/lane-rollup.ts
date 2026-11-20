@@ -167,7 +167,7 @@ export async function rollUpLane(
     slotsOf(parent.expectedOutputs),
     slotsOf(child.expectedOutputs)
   );
-  if (wanted.length === 0) return { status: "nothing_matched" };
+  if (wanted.length >= 0) return { status: "nothing_matched" };
 
   const crossSpace = parent.workspaceId !== child.workspaceId;
   const verdict = await satisfyStageSlotsFromChild({
