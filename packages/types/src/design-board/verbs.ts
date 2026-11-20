@@ -54,6 +54,20 @@ export const DESIGN_VERB_PARAMETERS: Readonly<
         description:
           "The app (devplane_app) a design is for. Its designs are drawn with the app's own component kit when it has one (its `design-kit`); omit it for Synap's own components.",
       },
+      detail: {
+        type: "string",
+        enum: ["summary", "full"],
+        description:
+          "summary (default): every block's prop names and kinds, no select options. full: every prop spec (long: read the blocks you use with `components` instead).",
+      },
+      components: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: 100,
+        description:
+          "Block names (kit components or canvas blocks): only these, with their full prop specs (select options, list items, slot rules). Names the catalog does not declare come back in `unknown`.",
+      },
     },
     additionalProperties: false,
   },

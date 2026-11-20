@@ -25,6 +25,12 @@ export interface LifecycleAuthoring {
   property: string;
   /** `[{ key, label?, category, tone?, humanOnly? }]` — every option needs a category. */
   options: unknown[];
+  /**
+   * The option a new thing starts in when its creator names none (the
+   * lifecycle's initial status, `setLifecycleInitialStatus`). Filled on apply
+   * when the lifecycle has none yet; never replaces one already set.
+   */
+  initialStatus?: string;
 }
 
 /**
