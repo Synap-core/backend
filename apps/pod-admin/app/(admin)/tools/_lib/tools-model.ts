@@ -324,6 +324,11 @@ export function addOnParentHref(baseId: string): string {
   return hrefOf("capability", baseId);
 }
 
+/** A tool's own page (`/open/capability/:id`): an approval's door to its tool. */
+export function capabilityPageHref(id: string): string {
+  return hrefOf("capability", id);
+}
+
 /**
  * Does the tool match the search? Every word of the query must appear in its
  * name, slug, description or one of its action labels (any case).

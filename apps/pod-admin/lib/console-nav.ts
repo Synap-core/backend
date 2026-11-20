@@ -242,14 +242,14 @@ export const CONSOLE_NAV = [
       {
         // Approvals (decision b387ca45 D5): who × what × where → runs on its
         // own / asks first / never, every row with where it came from and a
-        // way to take it back; the agent × work matrix is its Grid view.
+        // way to take it back; the agent × work matrix is its By work view.
         id: "approvals",
         href: "/approvals",
         label: "Approvals",
         icon: "Grid3x3",
         kind: "governance_rule",
         legacy: [
-          { source: "/governance/agents", destination: "/approvals?view=grid" },
+          { source: "/governance/agents", destination: "/approvals?view=work" },
           { source: "/governance" },
         ],
         audience: "admin",

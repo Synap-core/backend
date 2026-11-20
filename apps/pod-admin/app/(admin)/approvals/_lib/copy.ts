@@ -13,7 +13,8 @@ export const en = {
     "Which AI work runs on its own, which asks you first, and which never runs. Each line says where it came from and can be taken back.",
   "view.label": "View",
   "view.list": "List",
-  "view.grid": "Grid",
+  "view.grid": "By tool",
+  "view.work": "By work",
   "filter.agent": "Agent",
   "filter.tool": "Tool",
   "filter.verdict": "Verdict",
@@ -55,6 +56,14 @@ export const en = {
   "takeBack.done": "Taken back: {what}",
   "takeBack.failed": "Couldn’t take it back",
   "grid.agents": "Agents and how their writes land",
+  "toolsGrid.who": "Who",
+  "toolsGrid.everyAi": "Every AI",
+  "toolsGrid.why":
+    "Each cell is that agent’s own approvals on that tool. An empty cell has none: it follows Every AI. Open a tool to change or take one back.",
+  "toolsGrid.follows": "No approval of its own: it follows Every AI",
+  "toolsGrid.cellAria": "{who}: {mode}. Open the tool",
+  "toolsGrid.empty": "No approval names a tool yet.",
+  "toolsGrid.failed": "Couldn’t load the tools these approvals name.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -62,7 +71,8 @@ export const fr: Catalog<typeof en> = {
     "Le travail d’IA qui s’exécute seul, celui qui vous demande d’abord, et celui qui ne s’exécute jamais. Chaque ligne dit d’où elle vient et peut être retirée.",
   "view.label": "Vue",
   "view.list": "Liste",
-  "view.grid": "Grille",
+  "view.grid": "Par outil",
+  "view.work": "Par travail",
   "filter.agent": "Agent",
   "filter.tool": "Outil",
   "filter.verdict": "Verdict",
@@ -104,4 +114,13 @@ export const fr: Catalog<typeof en> = {
   "takeBack.done": "Retirée : {what}",
   "takeBack.failed": "Impossible de la retirer",
   "grid.agents": "Les agents et la façon dont leurs écritures s’appliquent",
+  "toolsGrid.who": "Qui",
+  "toolsGrid.everyAi": "Toutes les IA",
+  "toolsGrid.why":
+    "Chaque case montre les approbations propres de cet agent sur cet outil. Une case vide n’en a aucune\u00a0: il suit Toutes les IA. Ouvrez un outil pour en changer ou en retirer une.",
+  "toolsGrid.follows": "Aucune approbation propre\u00a0: il suit Toutes les IA",
+  "toolsGrid.cellAria": "{who}\u00a0: {mode}. Ouvrir l’outil",
+  "toolsGrid.empty": "Aucune approbation ne nomme encore d’outil.",
+  "toolsGrid.failed":
+    "Impossible de charger les outils que ces approbations nomment.",
 };
