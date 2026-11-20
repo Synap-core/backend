@@ -11,7 +11,7 @@
  * rare call that acts in one space names it per call (see the split link).
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { HeroUIProvider, ToastProvider } from "@heroui/react";
 import { ThemeProvider as NextThemesProvider } from "next-themes";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -91,7 +91,16 @@ export function Providers({
 
   // What this browser kept for this identity comes back, then stays current
   // (`lib/query-persist.ts`). Pages do not wait for it.
+  const lastIdentity = useRef(identityId);
   useEffect(() => {
+    // Another identity in this same tab (signed out, then in as someone
+    // else, without a full load): the queries in memory are the previous
+    // person's. Drop them before this identity's cache is kept, so they are
+    // never shown to, or written under, the new one.
+    if (lastIdentity.current !== identityId) {
+      if (lastIdentity.current !== null) queryClient.clear();
+      lastIdentity.current = identityId;
+    }
     const store = identityId ? indexedDbQueryCacheStore() : null;
     if (!identityId || !store) return;
     return keepQueryCache(queryClient, store, {
