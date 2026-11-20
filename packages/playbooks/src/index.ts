@@ -135,9 +135,10 @@ export interface CapabilityRef {
 export type GrantSubjectKind = GrantableKind | "secret";
 
 /**
- * What happens when a grant is exercised — the governance / execMode axis. The
- * same axis as `Capability.governance`; kept in lock-step with the
- * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
+ * How a capability runs for an agent — the governance / execMode axis. The
+ * same axis as `Capability.governance`. Since decision D2 (migration 0435) a
+ * grant carries none: an approval row (`governance_rules`) is the only
+ * "runs without asking", and a verb's effective mode is read from it.
  *   - `auto`    — run the capability directly.
  *   - `propose` — route the exercise through a reviewable proposal.
  *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
@@ -2489,11 +2490,13 @@ export interface Capability {
  * the AI can see, per verb, whether it is granted and at what exec-mode.
  */
 export interface CapabilityVerbState extends ToolVerb {
-  /** True when an active (non-revoked, non-expired) grant exists for the tool. */
+  /** True when an active (non-revoked, non-expired) grant exists for the tool: "may use". */
   granted: boolean;
   /**
-   * The effective exec-mode for this verb: the active grant's exec-mode when
-   * granted, else the verb's `govDefault`. This is what the gate would apply.
+   * The effective exec-mode for this verb: `auto` when the approval row for
+   * everyone on this verb (or its tool) says auto, else `propose` (decision
+   * D2: the row is the only "runs without asking"). What the gate applies to
+   * an agent with no row of its own.
    */
   effectiveExecMode: ExecMode;
   /**

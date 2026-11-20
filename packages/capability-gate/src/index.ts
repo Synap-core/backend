@@ -1,22 +1,25 @@
 /**
- * Capability-execution gate helper — WIRED (approval-state + grant + exec-mode).
+ * Capability-execution gate helper — WIRED (enabled state + approval row).
  *
- * The single resolution point that turns "an agent wants to RUN this granted
- * capability" into a governance verdict. It composes THREE signals:
+ * The single resolution point that turns "an agent wants to RUN this
+ * capability" into a governance verdict. It composes TWO signals:
  *
- *   (a) the capability's APPROVAL-STATE   → `capabilityGovernance`
+ *   (a) the capability's ENABLED state    → `capabilityGovernance`
  *       (from the tool/skill row's `approved` column)
- *   (b) GRANT EXISTENCE (the model's namesake) — for an agent run that is NOT an
- *       owner run, an ACTIVE `vault_grants` (capability) row must authorize this
- *       redeemer; NO grant → route to `propose` (a human reviews; never auto-run).
- *   (c) the GRANT's exec-mode             → `capabilityExecMode`
- *       (sourced from the grant ROW via `findCapabilityGrant`, NOT request input).
+ *   (b) the APPROVAL ROW (`governance_rules`, target `capability`) that best
+ *       matches this agent × this action (or its tool) × this space — the
+ *       ONLY answer to "may this run without asking?" (founder decisions D2
+ *       and D3, 19 Nov 2026, document b387ca45). Order: the floors, then the
+ *       ranked rows (a "Never" refuses; an "auto" runs; an "ask first" or no
+ *       row asks). A capability grant (`vault_grants`) means only "may use"
+ *       (scope, expiry, uses): the gate never reads it, and its retired
+ *       `exec_mode` became approval rows (migration 0435; the column is no
+ *       longer read, and its contract step drops it).
  *
- * It does DB READS (the tool/skill row when not passed in, plus a NON-CONSUMING
- * grant existence check) but performs NO writes — it neither consumes a grant nor
- * flips any status. The use-count is consumed separately at the dispatch point,
- * only when the final verdict is `run` (see external-dispatch.ts), so a run that
- * routes to propose/deny never spends a once-grant.
+ * It does DB READS (the tool/skill row when not passed in, the approval rows)
+ * but performs NO writes. A grant's use-count is consumed separately at the
+ * dispatch point, only when the final verdict is `run` (see
+ * external-dispatch.ts).
  *
  * It IS wired into the IS→backend capability-execute chokepoint
  * (`triggerProviderAction` in external-dispatch.ts). It no-ops for the operator
@@ -24,12 +27,12 @@
  *
  * Owner bypass: when `actorUserId` owns the capability AND the run is not an agent
  * run (mirrors the vault owner-bypass philosophy — a genuine human owner is never
- * gated on a grant for their OWN capability), the verdict is always `run`.
+ * gated on an approval row for their OWN capability), the verdict is always `run`.
  *
  * Part of the Playbooks & Capability Substrate (G4 — per-capability governance).
  *
  * HOME: this lives in `@synap/capability-gate` — a thin package depending ONLY on
- * `@synap/database` (grant resolver + tool/skill rows) and `@synap/governance-policy`
+ * `@synap/database` (approval-row resolver + tool/skill rows) and `@synap/governance-policy`
  * (the pure decision core). Both `@synap/api` AND `@synap/jobs` import it, so the
  * automation door (jobs) can run the FULL gate instead of an approved-only check.
  * It is NOT in `@synap/governance-policy` because that package is the PURE, I/O-free
@@ -44,7 +47,6 @@ import {
   gte,
   ne,
   drizzleSql,
-  findCapabilityGrant,
   getRequestGrant,
 } from "@synap/database";
 import {
@@ -116,8 +118,8 @@ export interface GateSkillRow {
    */
   intent?: string | null;
   /**
-   * The skill's `metadata` bag: its declared `proposeOnly` (no auto grant and
-   * no auto rule ever runs it) is read from here. Absent (not pre-loaded) →
+   * The skill's `metadata` bag: its declared `proposeOnly` (no auto approval
+   * row ever runs it) is read from here. Absent (not pre-loaded) →
    * the gate reads it when a widening is decided, never assumes none.
    */
   metadata?: Record<string, unknown> | null;
@@ -130,13 +132,6 @@ export interface GateCapabilityExecutionInput {
   tool?: GateToolRow | null;
   /** Pre-loaded skill row (skips the DB read) when kind === "skill". */
   skill?: GateSkillRow | null;
-  /**
-   * OPTIONAL legacy exec-mode override carried as JSONB `{ execMode }`. The grant
-   * ROW (`findCapabilityGrant`) is the SOURCE OF TRUTH for exec-mode; this field
-   * is only an explicit override for callers that already resolved a mode out of
-   * band. Absent (the normal case) → exec-mode comes from the grant row.
-   */
-  grantMetadata?: Record<string, unknown> | null;
   /** The human/agent principal performing the run (for owner-bypass). */
   actorUserId: string;
   /** The agent identity, when the run is agent-initiated. */
@@ -145,11 +140,11 @@ export interface GateCapabilityExecutionInput {
    * READ-ONLY capability marker — set for a capability whose execution only
    * READS (no mutation). Mirrors execute-provider-verb's `isReadMethod →
    * alreadyApproved:true`: a read is not a mutation, so once it clears the
-   * APPROVAL gate it never needs a grant and never proposes — its scope is
+   * APPROVAL gate it never needs an approval row and never proposes — its scope is
    * enforced downstream by the access layer (caller's row floor), NOT by this
    * governance gate. Builtin verbs have no HTTP method, so the caller
    * (executeCapability) sets this explicitly from the read-verb set. Absent
-   * (the normal case) → the full grant/propose ladder applies. It NEVER weakens
+   * (the normal case) → the full approval-row ladder applies. It NEVER weakens
    * the approval gate above (an unapproved read is still denied).
    */
   readOnly?: boolean;
@@ -168,8 +163,8 @@ export interface GateCapabilityExecutionInput {
    * The acting channel id, when this run happens in a channel context. Threaded
    * to the #4 instruction-provenance origin-trust resolver (`resolveOriginTrust`):
    * an untrusted-origin channel (EXTERNAL / bridge / `source`) force-proposes the
-   * run — it can never auto-run via grant exec-mode, an "auto" capability, OR a
-   * governance rule (tighten-only, owner-approved). Set it server-side from the
+   * run — it can never auto-run via an "auto" capability OR an "auto"
+   * approval row (tighten-only, owner-approved). Set it server-side from the
    * routing/turn seam, never from request-body fields; absent → no channel
    * context → the origin-trust signal no-ops.
    */
@@ -178,7 +173,7 @@ export interface GateCapabilityExecutionInput {
   issuer?: string | null;
   /**
    * Effective per-channel capability grant when the run happens inside a
-   * multiplayer channel — passed straight through so rung 2.6's tightening
+   * multiplayer channel — passed straight through so rung 2.7's tightening
    * invariant (a channel grant may only narrow an "auto" capability) applies.
    */
   channelCapabilities?: {
@@ -239,68 +234,48 @@ export type GateCapabilityDecision =
    * approval and policy denials, which carry only their sentence.
    */
   | { decision: "deny"; reason: string; reasonCode?: string }
+  /**
+   * No longer produced: it came only from a grant's `dry-run` exec mode,
+   * no longer read since 0435 (decision D2). Kept so the callers' preview branches
+   * (13 of them across api and jobs) are retired in their own change.
+   */
   | { decision: "dry-run" };
 
 /**
- * The persistable grant exec-mode (mirrors the `grant_exec_mode` pg enum +
- * `@synap/playbooks ExecMode`). `dry-run` is honored at THIS gate (short-circuit
- * to a preview); `auto`/`propose` flow into the policy. The retired
- * `propose-each`/`block` values are gone — `propose` covers what `propose-each`
- * meant, and deny comes from no-grant / not-approved, not a `block` exec-mode.
- */
-type GrantExecMode = "auto" | "propose" | "dry-run";
-
-/**
- * Coerce a loosely-typed grant `execMode` (from the grant ROW, or a legacy
- * metadata override) into the persistable exec-mode union.
- */
-function readGrantExecMode(raw: unknown): GrantExecMode | null {
-  if (raw === "auto" || raw === "propose" || raw === "dry-run") {
-    return raw;
-  }
-  return null;
-}
-
-/**
- * Resolve the governance verdict for executing a granted capability.
+ * Resolve the governance verdict for executing a capability.
  *
  * Resolution order:
+ *   0. The floors, each tighten-only: not enabled (`approved === false`)
+ *      → deny, for everyone; a person's "Never" (a `deny` row) → deny; an
+ *      untrusted origin, a pod file leaving, a trial session, an app's or an
+ *      intent's outward run → propose (or refuse). A declared read runs.
  *   1. Owner bypass — a GENUINE human owner run (`actorUserId` owns the
  *      capability AND no `agentUserId`) → `run`. An agent under the owner's
- *      identity is NOT owner-bypassed — it is grant-gated like any agent.
- *   2. GRANT EXISTENCE + exec-mode (the model's namesake) — for an agent run
- *      (`agentUserId` present) that is not an owner run, look up an ACTIVE
- *      capability grant for this redeemer (NON-CONSUMING). NO grant → consult a
- *      stored `governance_rules` capability rule (see `capabilityRuleAuthorizesRun`
- *      below); an ACTIVE `verdict:"auto"` rule authorizes the run WITH NO GRANT
- *      (Option B, D1 — docs/decisions/agent-governance.md, phase 2 D1). No rule either → `propose`
- *      (a human reviews; an ungranted, unruled capability must never auto-run).
- *      A grant → its `execMode` is the source of truth (`auto | propose |
- *      dry-run`); `dry-run` short-circuits to a preview before the policy call
- *      — a rule can NEVER override dry-run, it is checked strictly after.
- *   3. Approval-state — an UNAPPROVED capability is never auto-runnable for a
- *      non-owner → `capabilityGovernance = "propose"`; approved → "auto". This
- *      floor is absolute: `approved === false` denies above (step 0) BEFORE any
- *      grant/rule consultation, so a rule can never resurrect a disabled capability.
- *   4. `decideAgentPolicy` rung 2.6 maps the two signals to execute/propose/deny.
- *      A `propose` verdict here ALSO consults the capability rule (same helper)
- *      before falling through to a reviewable proposal.
+ *      identity is NOT owner-bypassed.
+ *   2. THE APPROVAL ROW — for an agent run, the best-ranked active
+ *      `governance_rules` capability row (`resolveCapabilityRule`, one read
+ *      per run): this agent (2) > its class (1) > anyone (0), plus a space
+ *      row (2) over a pod row (0), plus a row naming the action (3) over a
+ *      row naming its tool (2); on a tie the stricter verdict wins. `auto`
+ *      → the policy's capability rung (2.7) with exec mode `auto` (a
+ *      propose-only action still asks; the channel rung 7 is NOT applied,
+ *      as it never was to an auto rule);
+ *      `propose` or no row → propose (the posture default for a tool run).
+ *      Grants are never read: a grant means "may use", not "without asking".
+ *   3. A run with no agent (a person who is not the owner) keeps the policy's
+ *      enabled-state answer (`approved` → run).
  *
- * Reads the one tool/skill row (when not pre-loaded) + a non-consuming grant
- * existence check + (for an agent run) ONE `governance_rules` lookup, from
- * which both the "Never" refusal and the rule widening derive.
- * NO writes (use-count is consumed at the dispatch point only when the verdict
- * is `run`).
+ * Reads the one tool/skill row (when not pre-loaded) + (for an agent run)
+ * ONE `governance_rules` lookup, from which both the "Never" refusal and the
+ * "auto" derive. NO writes.
  *
- * KNOWN LIMITATION, NARROWED (2026-07-27): a capability rule MAY still be
- * keyed on the row `capabilityId`, and skills/tools are RE-CREATED with a new
- * id on reinstall (`execute-capability.ts:124-129`) — a rule authored against
- * the old id alone would silently stop matching after a reinstall, the same
- * staleness class `vault_grants` already has. Rules are now ALSO matchable by
- * the capability's stable VERB NAME (`tools.name`/`skills.name`, = `verbId` —
- * `scoreRuleTarget`'s `targetKind: "capability"` branch matches either), which
- * survives a reinstall — the UI should author "always approve this
- * capability" rules against the verb name, not the id, to be reinstall-safe.
+ * A capability rule MAY be keyed on the row `capabilityId`, which a reinstall
+ * re-creates with a new id (`execute-capability.ts:124-129`): a row authored
+ * against the old id alone stops matching after a reinstall. Rules are ALSO
+ * matchable by the capability's stable VERB NAME (`tools.name`/`skills.name`,
+ * = `verbId`), which survives a reinstall — author "always approve this
+ * action" rows against the verb name. The rows 0435 made from grants name the
+ * row id, exactly what each grant matched.
  */
 /**
  * The ONE approval predicate: approval refuses a run of this tool/skill row.
@@ -322,7 +297,7 @@ export async function gateCapabilityExecution(
 ): Promise<GateCapabilityDecision> {
   const decision = await decideCapabilityExecution(input);
   // ── COMPUTE SPEND CEILING (0430, founder 18 Nov 2026) — an agent's compute
-  //    start that would RUN (an auto grant, an auto rule) is proposed instead
+  //    start that would RUN (an auto approval row) is proposed instead
   //    when the day's started maximums plus this one pass the ceiling. Last,
   //    so it only ever turns a `run` into a review: tighten-only, like every
   //    axis. A person's own start is theirs to make.
@@ -392,8 +367,8 @@ async function decideCapabilityExecution(
   let verbName: string | null = null;
   // What the verb declares about widening (a skill only; a field left
   // `undefined` = not loaded yet): a propose-only intent (a public post) or a
-  // declared `metadata.proposeOnly` is never widened by a rule or an auto
-  // grant, whatever the verb is named (`capabilityVerbAllowsRuleWiden`).
+  // declared `metadata.proposeOnly` is never widened by an auto approval
+  // row, whatever the verb is named (`capabilityVerbAllowsRuleWiden`).
   let knownPosture: Partial<VerbPosture> = { intent: null, metadata: null };
 
   if (input.capabilityKind === "tool") {
@@ -520,8 +495,8 @@ async function decideCapabilityExecution(
   //       leaving the pod is a commitment the person confirms. It precedes the
   //       read-only short-circuit (a file verb is refused `readOnly` at install,
   //       but a verb authored elsewhere could claim it), the owner bypass (a
-  //       person token resolves as the person) and the grant/rule rungs (an
-  //       auto grant or an auto rule must not widen it). The person's own run
+  //       person token resolves as the person) and the approval rows (an
+  //       auto row must not widen it). The person's own run
   //       in the pod (no agent, no app) is untouched. Tighten-only.
   if (
     input.carriesPodFiles &&
@@ -532,12 +507,12 @@ async function decideCapabilityExecution(
 
   // ── READ-ONLY short-circuit — mirrors execute-provider-verb's
   //    `isReadMethod → alreadyApproved:true`. A read is not a mutation: once it
-  //    clears the APPROVAL gate above, it never needs a grant and never proposes.
+  //    clears the APPROVAL gate above, it never needs an approval row and never proposes.
   //    Its SCOPE is enforced downstream by the access layer (the caller's row
   //    floor), not by this governance gate — so a read can never leak
   //    cross-workspace rows here, and can never spawn a proposal. Applies to
   //    EVERY caller (operator AND agent), which is why it precedes owner-bypass
-  //    and the grant-existence check. WRITES leave `readOnly` unset and fall
+  //    and the approval rows. WRITES leave `readOnly` unset and fall
   //    through to the full ladder below.
   //
   // ⚠️ IT DOES **NOT** BYPASS ORIGIN TRUST. Resolved above, and an untrusted
@@ -554,7 +529,7 @@ async function decideCapabilityExecution(
   // ── 0.8 TRIAL RUN (design b199a3a4, slice 1b) — a run inside a trial
   //       session (the rule lab) is refused unless it is a declared read
   //       (returned above): nothing a trial does may land, for any caller,
-  //       whatever a grant or a rule would say. A session that cannot be read
+  //       whatever an approval row would say. A session that cannot be read
   //       refuses (fail closed). Tighten-only.
   const trialRefusal = await trialSessionWriteRefusal(input.sessionId);
   if (trialRefusal) {
@@ -580,7 +555,7 @@ async function decideCapabilityExecution(
   }
 
   // ── 1. Owner bypass — only a GENUINE human owner run (no agentUserId) skips the
-  //       grant. An agent acting under the owner's identity is grant-gated.
+  //       approval rows. An agent acting under the owner's identity meets them.
   const isOwnerRun =
     !input.agentUserId &&
     !!ownerId &&
@@ -592,105 +567,63 @@ async function decideCapabilityExecution(
 
   // ── 1.5 ORIGIN TRUST — RESOLVED AT 0.5 above (it must precede the read-only
   //       short-circuit). An untrusted-origin channel force-proposes: it can
-  //       NEVER auto-run via grant exec-mode, an "auto" capability, or a
-  //       governance rule. Owner runs returned above and are unaffected.
+  //       NEVER auto-run via an "auto" approval row or an "auto" capability.
+  //       Owner runs returned above and are unaffected.
   const originUntrusted = originTrust === "untrusted";
 
-  // ── 2. GRANT EXISTENCE + exec-mode (the model's namesake) ───────────────────
-  // For an agent run that is NOT an owner run, an ACTIVE capability grant must
-  // authorize this redeemer. NO grant → propose (a human reviews; an ungranted
-  // capability must NEVER auto-run). When a grant exists, its `execMode` is the
-  // SOURCE OF TRUTH for how the run is governed (auto | propose | dry-run).
-  // The lookup is NON-CONSUMING — the use is spent at the dispatch point only on
-  // a `run` verdict (so a propose/deny outcome never burns a once-grant).
-  let grantExecMode = readGrantExecMode(input.grantMetadata); // legacy override
+  // ── 2. THE APPROVAL ROW (decisions D2/D3) — the ONLY answer to "may this
+  //       agent run this without asking?". An `auto` row (resolved once above,
+  //       ranked, the stricter verdict winning a tie) sends the run through
+  //       the policy's capability rung with exec mode `auto`; an "ask first"
+  //       row or no row proposes. A grant is not read: it means "may use",
+  //       never "without asking".
+  //       CHANNEL RUNG 7 IS NOT APPLIED to an auto row: an auto rule never met
+  //       it before 0435, and with `can_act = false` on nearly every agent
+  //       membership (founder's pod, 19 Nov 2026: 4001 memberships in 2060
+  //       channels) applying it would stop auto rules in most rooms. Kept as
+  //       before by the lead's default (W1, D2 review); the founder decides
+  //       at review. No caller passes `channelCapabilities` today either.
+  let approvalMode: "auto" | null = null;
   if (input.agentUserId) {
-    // tool | skill | command are all grantable (findCapabilityGrant excludes only
-    // `secret`). An agent run of any of them requires an active grant.
-    const grant = await findCapabilityGrant(
-      input.capabilityKind,
-      input.capabilityId,
-      {
-        agentUserId: input.agentUserId,
-        workspaceId: input.workspaceId ?? null,
-      }
-    );
-    if (!grant.ok) {
-      // No active grant for this agent → consult a stored capability rule
-      // before proposing (Option B, D1: a rule can authorize a run with NO
-      // grant at all). No matching "auto" rule → route to a reviewable
-      // proposal (a human can approve the run); do NOT hard-deny.
-      // #4: an untrusted origin can NEVER be widened to run by a rule (rung
-      // 2.55 sits above rung 2.8) — skip the rule shortcut and propose.
-      if (
-        !originUntrusted &&
-        (await capabilityRuleAuthorizesRun(rule, verbName, verbPosture))
-      ) {
-        return { decision: "run" };
-      }
-      // The policy has NOT run on this path — it short-circuits above the
-      // verdict — so the rung-2.55 floor has to be named here or it is lost.
-      return buildProposeDecision(
-        input,
-        originUntrusted ? "UNTRUSTED_ORIGIN" : "CAPABILITY_PROPOSE"
-      );
+    if (originUntrusted) {
+      return buildProposeDecision(input, "UNTRUSTED_ORIGIN");
     }
-    // Grant row is the source of truth for exec-mode (override only if explicitly
-    // supplied via grantMetadata — normally absent).
-    grantExecMode = grantExecMode ?? readGrantExecMode(grant.execMode);
+    if (!(await capabilityRuleAuthorizesRun(rule, verbName, verbPosture))) {
+      return buildProposeDecision(input, "CAPABILITY_PROPOSE");
+    }
+    approvalMode = "auto";
   }
 
-  // "dry-run" is a grant-level preview switch with no policy rung — honor it
-  // before the verdict (the chokepoint stubs the actual external write).
-  if (grantExecMode === "dry-run") {
-    return { decision: "dry-run" };
-  }
-
-  // ── 3. derive the approval-state signal ─────────────────────────────────────
+  // ── 3. derive the enabled-state signal ──────────────────────────────────────
   const capabilityGovernance: "auto" | "propose" = approved
     ? "auto"
     : "propose";
 
-  // ── 4. delegate to the pure decision core (rung 2.6) ────────────────────────
-  // `dry-run` already short-circuited above, so only auto|propose reach the policy.
-  const policyExecMode: "auto" | "propose" | null =
-    grantExecMode === "auto" || grantExecMode === "propose"
-      ? grantExecMode
-      : null;
+  // ── 4. delegate to the pure decision core (capability rung 2.7) ─────────────
   const verdict = decideAgentPolicy({
     subjectType: CAPABILITY_RUN_PROPOSAL.targetType,
     action: CAPABILITY_RUN_PROPOSAL.proposalType,
     capabilityGovernance,
-    capabilityExecMode: policyExecMode,
-    channelCapabilities: input.channelCapabilities ?? undefined,
+    capabilityExecMode: approvalMode,
+    // An auto approval row skips the channel rung (see step 2); a person's
+    // run with no row keeps it, as before.
+    channelCapabilities:
+      approvalMode === "auto"
+        ? undefined
+        : (input.channelCapabilities ?? undefined),
     // #4: an untrusted origin downgrades a would-be-auto run to propose at rung
     // 2.55 (above the capability rung 2.7) inside the pure engine.
     originTrust,
   });
 
   if (verdict.verdict === "execute") {
-    // An auto grant must not publish. The rule path is refused inside
-    // capabilityRuleAuthorizesRun; this is the grant-execMode auto path.
-    if (!verbAllowsWiden(verbName, await verbPosture())) {
-      return buildProposeDecision(input, "CAPABILITY_PROPOSE");
-    }
     return { decision: "run" };
   }
   if (verdict.verdict === "deny") {
     return { decision: "deny", reason: verdict.reason };
   }
-  // propose — consult a stored capability rule (Option B) before falling
-  // through to a reviewable `capability/run` proposal. #4: an untrusted origin
-  // can NEVER be widened to run by a rule (rung 2.55 sits above rung 2.8).
-  if (
-    !originUntrusted &&
-    (await capabilityRuleAuthorizesRun(rule, verbName, verbPosture))
-  ) {
-    return { decision: "run" };
-  }
-  // The verdict already carries the structured cause (the policy emits
-  // UNTRUSTED_ORIGIN / ADMIN / DESTRUCTIVE_HARD_FLOOR itself). It was being
-  // dropped on the floor here; carry it through rather than re-deriving it.
+  // The verdict carries the structured cause (the policy emits
+  // UNTRUSTED_ORIGIN / CHANNEL_PROPOSE / CAPABILITY_PROPOSE itself).
   return buildProposeDecision(
     input,
     verdict.reasonCode ?? "CAPABILITY_PROPOSE"
@@ -786,17 +719,18 @@ async function resolveCapabilityRule(
     action: CAPABILITY_RUN_PROPOSAL.proposalType,
     capabilityId: input.capabilityId,
     capabilityVerbName: verbName,
+    // The tools this action belongs to: a row naming the tool covers it (D3).
+    capabilityKind: input.capabilityKind,
   });
 }
 
 /**
- * Does the run's capability rule widen an otherwise-`propose` run to `run`?
- * Option B / D1 (ratified 2026-07-27, docs/decisions/agent-governance.md,
- * phase 2 D1): an ACTIVE `verdict: "auto"` row authorizes it, even with no
- * grant. Callers must NEVER ask this for the `approved === false` deny floor
- * or the `dry-run` short-circuit — both are checked strictly BEFORE either
- * call site (see the resolution-order doc above), so a rule can never cross
- * those floors.
+ * Does the run's approval row let it run without asking? Option B / D1
+ * (ratified 2026-07-27, phase 2 D1): an ACTIVE `verdict: "auto"` row
+ * authorizes it, grant or no grant; since D2 (document b387ca45) it is the
+ * only thing that does. Never asked for the `approved === false` deny floor,
+ * checked strictly before, so a rule can never resurrect a disabled
+ * capability.
  *
  * Only a rule that NAMES this capability can authorize the run: the resolver
  * skips every broad `auto` row (`*`, a glob, the generic `capability.run`
@@ -846,9 +780,8 @@ async function readVerbPosture(
 
 /**
  * Build the `capability/run` propose decision (the proposal data the executor
- * re-enters on). Shared by the no-grant route and the policy `propose` verdict so
- * an ungranted agent run and a propose-mode grant produce the SAME reviewable
- * proposal shape.
+ * re-enters on). Shared by every route that asks, so each produces the SAME
+ * reviewable proposal shape.
  */
 function buildProposeDecision(
   input: GateCapabilityExecutionInput,

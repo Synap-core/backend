@@ -12,12 +12,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  *  - its pack declares `metadata.proposeOnly: true` (ticket 231020d4:
  *    `hcloud_delete_server` could be widened to run unattended).
  *
- * Each posture meets each widening: an auto grant, an auto rule with no grant,
- * and a row pre-loaded WITHOUT its intent and metadata (the gate must read
- * them, never assume none). Each posture has a control verb that runs.
+ * Each posture meets each widening: an auto approval row for everyone, one
+ * for this agent, and a row pre-loaded WITHOUT its intent and metadata (the
+ * gate must read them, never assume none). Since decision D2 an approval row
+ * is the only widening: the gate reads no grant. Each posture has a control verb that runs.
  */
 
-const findCapabilityGrantMock = vi.fn();
 const resolveGovernanceRuleMock = vi.fn();
 /** What the skills table holds for a row the run door did not pre-load. */
 const storedPosture = new Map<
@@ -50,7 +50,6 @@ const fakeDb = {
 vi.mock("@synap/database", () => ({
   getDb: async () => fakeDb,
   eq: (a: unknown, b: unknown) => ({ a, b }),
-  findCapabilityGrant: (...args: unknown[]) => findCapabilityGrantMock(...args),
   getRequestGrant: () => undefined,
 }));
 
@@ -131,31 +130,31 @@ const WIDENINGS: ReadonlyArray<{
   arrange: () => void;
 }> = [
   {
-    widening: "an auto grant",
+    widening: "an auto approval row for everyone",
     preloaded: true,
     arrange: () =>
-      findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" }),
+      resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" }),
   },
   {
-    widening: "an auto rule with no grant",
+    widening: "an auto approval row for this agent",
     preloaded: true,
-    arrange: () => {
-      findCapabilityGrantMock.mockResolvedValue({ ok: false });
-      resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" });
-    },
+    arrange: () =>
+      resolveGovernanceRuleMock.mockResolvedValue({
+        verdict: "auto",
+        matchedPattern: "agent-row",
+      }),
   },
   {
-    widening: "an auto grant on a row pre-loaded without its posture",
+    widening: "an auto approval row on a row pre-loaded without its posture",
     preloaded: false,
     arrange: () =>
-      findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" }),
+      resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" }),
   },
 ];
 
 const PROPOSES = { decision: "propose", proposalType: "run" };
 
 beforeEach(() => {
-  findCapabilityGrantMock.mockReset();
   resolveGovernanceRuleMock.mockReset();
   resolveGovernanceRuleMock.mockResolvedValue(undefined);
   storedPosture.clear();
@@ -173,7 +172,7 @@ describe("a floored verb never runs on its own", () => {
   }
 
   it('only a real boolean declares proposeOnly: false and "true" run', async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+    resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" });
     for (const proposeOnly of [false, "true"]) {
       expect(
         await agentRun(

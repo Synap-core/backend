@@ -209,6 +209,7 @@ import {
 } from "../services/playbooks/goal-references.js";
 import { findUnenabledPlaybookSkills } from "../services/playbooks/playbook-skill-preflight.js";
 import { proposeCapabilityEnable } from "../services/capabilities/propose-capability-enable.js";
+import { revokeGrantApprovalRows } from "../services/capabilities/grant-approval-rows.js";
 import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
 import {
   decodeDefinitionCursor,
@@ -759,6 +760,7 @@ const capabilityGrantsRouter = router({
           id: true,
           grantableType: true,
           grantableId: true,
+          grantedTo: true,
           workspaceId: true,
           revokedAt: true,
         },
@@ -796,10 +798,18 @@ const capabilityGrantsRouter = router({
       }
 
       if (!grant.revokedAt) {
-        await db
-          .update(vaultGrants)
-          .set({ revokedAt: new Date() })
-          .where(eq(vaultGrants.id, input.grantId));
+        await db.transaction(async (tx) => {
+          await tx
+            .update(vaultGrants)
+            .set({ revokedAt: new Date() })
+            .where(eq(vaultGrants.id, input.grantId));
+          // The grant's "runs without asking" is an approval row (decision
+          // D2): revoking the grant takes back the auto row on exactly its
+          // agent × action × space, so the agent asks again.
+          if (grant.grantableType !== "secret") {
+            await revokeGrantApprovalRows(tx, [grant]);
+          }
+        });
 
         auditLog({
           subjectType: "capability_grant",

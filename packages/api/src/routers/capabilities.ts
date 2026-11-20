@@ -80,6 +80,7 @@ import {
   listCapabilities,
   sectionCapabilities,
   DEFAULT_QUERY_LIMIT,
+  approvalVerdictForGrants,
 } from "../services/capabilities/capability-registry.js";
 import {
   buildProviderVerbSpec,
@@ -1746,19 +1747,19 @@ export const capabilitiesRouter = router({
       // Grants on the tool itself. Indexed by
       // (grantable_type, grantable_id, revoked_at) — the hot-path index.
       //
-      // FLOOR, not just a lens: a grant row names a principal (`grantedTo`), a
-      // scope and an exec-mode, so it is not public metadata. Unless the caller
+      // FLOOR, not just a lens: a grant row names a principal (`grantedTo`)
+      // and a scope, so it is not public metadata. Unless the caller
       // OWNS the tool, only grants the caller is a party to (issued them, or is
       // the grantee) are returned. A supplied workspace then NARROWS on top —
       // the same `or(isNull, eq)` shape the automation query uses, so pod-wide
       // grants are never dropped by the narrowing alone.
       const callerOwnsTool = tool.createdBy === userId;
-      const grantRows = await database
+      const grantRowsRead = await database
         .select({
           grantId: vaultGrants.id,
           grantedTo: vaultGrants.grantedTo,
+          workspaceId: vaultGrants.workspaceId,
           scope: vaultGrants.scope,
-          execMode: vaultGrants.execMode,
           expiresAt: vaultGrants.expiresAt,
         })
         .from(vaultGrants)
@@ -1782,6 +1783,24 @@ export const capabilitiesRouter = router({
           )
         )
         .orderBy(vaultGrants.createdAt);
+      // How each grant's agent runs this tool: the approval row (decision D2),
+      // never a column of the grant. Same wire shape as before (`execMode`).
+      const verdictByGrant = await approvalVerdictForGrants(
+        grantRowsRead.map((g) => ({
+          id: g.grantId,
+          grantableType: "tool",
+          grantableId: input.toolId,
+          grantedTo: g.grantedTo,
+          workspaceId: g.workspaceId,
+        }))
+      );
+      const grantRows = grantRowsRead.map((g) => ({
+        grantId: g.grantId,
+        grantedTo: g.grantedTo,
+        scope: g.scope,
+        execMode: verdictByGrant.get(g.grantId) ?? "propose",
+        expiresAt: g.expiresAt,
+      }));
 
       // The ONE honest per-connection number: literally the rows the detach
       // path flips to "disconnected" (capability-nango-sync.ts). `null` (not 0)

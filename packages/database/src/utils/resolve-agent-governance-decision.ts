@@ -24,6 +24,7 @@ import { channels, ChannelType } from "../schema/channels.js";
 import { entities } from "../schema/entities.js";
 import { profiles } from "../schema/profiles.js";
 import { focusSessions } from "../schema/focus-sessions.js";
+import { links } from "../schema/links.js";
 import {
   decideAgentPolicy,
   governanceLaneFor,
@@ -363,13 +364,16 @@ function principalEligible(
  * explicitly here.
  *
  * `target_kind: "capability"` rows match by exact `capabilityId` OR the
- * capability's stable VERB NAME (Phase 3, Option B — docs/decisions/agent-governance.md
- * phase 2 D1; verb-name matching added 2026-07-27 so a rule survives a reinstall,
+ * capability's stable VERB NAME (Option B, phase 2 D1, ratified 2026-07-27;
+ * verb-name matching added 2026-07-27 so a rule survives a reinstall,
  * which re-creates the skill/tool row with a new id — see capability-gate's
  * KNOWN LIMITATION note). Both are only threaded in from the capability-gate
  * call site (`gateCapabilityExecution` → `@synap/capability-gate`); every
  * other caller (chat-write door, automation door) never passes either, so a
- * capability rule never matches a plain data-write resolution.
+ * capability rule never matches a plain data-write resolution. A row naming
+ * the TOOL the action belongs to (`capabilityContainerIds`) scores 2.
+ * Since D2 (document b387ca45) these rows are the ONLY answer to "may this
+ * tool run without asking?": a grant means only "may use".
  */
 function scoreRuleTarget(
   rule: Pick<
@@ -386,7 +390,8 @@ function scoreRuleTarget(
   profileSlug: string | null | undefined,
   capabilityId?: string | null,
   capabilityVerbName?: string | null,
-  subject?: RuleSubject | null
+  subject?: RuleSubject | null,
+  capabilityContainerIds?: readonly string[] | null
 ): number | undefined {
   // A rule that NAMES one object (0420) matches only that object at the
   // version it was approved for, on its exact action, for an agent of the
@@ -438,10 +443,17 @@ function scoreRuleTarget(
   // stable verb name (preferred; reinstall-safe). Same score either way: both
   // are exact-identity matches for "this exact capability", just keyed
   // differently.
-  return (capabilityId != null && rule.targetPattern === capabilityId) ||
+  if (
+    (capabilityId != null && rule.targetPattern === capabilityId) ||
     (capabilityVerbName != null && rule.targetPattern === capabilityVerbName)
-    ? 3
-    : undefined;
+  ) {
+    return 3;
+  }
+  // A row naming the TOOL (the capability container the action is a member
+  // of, `member_of`) covers each of its actions, one step below a row naming
+  // the action itself (decision D3, document b387ca45: "everyone x this tool
+  // x pod -> auto" is one row; a row on one action outranks it).
+  return capabilityContainerIds?.includes(rule.targetPattern) ? 2 : undefined;
 }
 
 /**
@@ -476,6 +488,8 @@ export interface GovernedWriteDescriptor {
   workspaceId?: string | null;
   capabilityId?: string | null;
   capabilityVerbName?: string | null;
+  /** The tools (capability containers) the capability is a member of. */
+  capabilityContainerIds?: readonly string[] | null;
 }
 
 /**
@@ -533,7 +547,9 @@ export function draftRuleMatchesWrite(
     `${write.subjectType}.${write.action}`,
     write.profileSlug ?? null,
     write.capabilityId,
-    write.capabilityVerbName
+    write.capabilityVerbName,
+    null,
+    write.capabilityContainerIds
   );
   return score !== undefined;
 }
@@ -542,17 +558,27 @@ export function draftRuleMatchesWrite(
  * Does this matched row NAME the write (target score 3) rather than cover it
  * through a class, glob, `*` or profile-wide target? For a capability run the
  * exact action `capability.run` still covers every capability, so only a
- * capability-target row (that capability's id or verb name) names one.
+ * capability-target row names one: the action itself (its id or verb name),
+ * or the one tool it belongs to (D3: "this tool" is a named target, never a
+ * broad one).
  */
 function ruleNamesWrite(
   rule: Pick<GovernanceRuleCandidate, "targetKind">,
   targetScore: number,
   eventKey: string
 ): boolean {
-  if (targetScore !== 3) return false;
-  return eventKey === "capability.run"
-    ? rule.targetKind === "capability"
-    : true;
+  if (eventKey === CAPABILITY_RUN_EVENT_KEY) {
+    return rule.targetKind === "capability";
+  }
+  return targetScore === 3;
+}
+
+/** The event key of a tool run, the one write whose ties go to the stricter verdict. */
+const CAPABILITY_RUN_EVENT_KEY = "capability.run";
+
+/** Ask before run, refuse before ask: the stricter verdict wins a tool run's tie. */
+function verdictStrictness(verdict: GovernanceRuleVerdict): number {
+  return verdict === "deny" ? 2 : verdict === "propose" ? 1 : 0;
 }
 
 export interface ResolveGovernanceRuleInput {
@@ -584,6 +610,19 @@ export interface ResolveGovernanceRuleInput {
    * for every data-write door.
    */
   capabilityVerbName?: string | null;
+  /**
+   * The tools (capability containers, `capabilities.id`) the capability is a
+   * member of (`member_of`), so a row naming the tool covers each of its
+   * actions (target score 2, below a row naming the action). Passed by the
+   * capability-execution gate only.
+   */
+  capabilityContainerIds?: readonly string[] | null;
+  /**
+   * The capability's kind, when the caller is the capability-execution gate.
+   * With `capabilityId` and no `capabilityContainerIds`, the resolver reads
+   * the tools it is a member of itself (`member_of` links).
+   */
+  capabilityKind?: "tool" | "skill" | "command" | null;
   /**
    * Whether `principal_kind = 'agent'` rows are eligible to match at all.
    * Defaults to `true` (agent-scoped rows are considered whenever an
@@ -642,11 +681,12 @@ export interface GovernanceRuleMatch {
  * stays pure). Mirrors `findRedeemableGrant`'s (vault-resolver.ts) active
  * predicate: `revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`.
  *
- * Ranks every matching ACTIVE row by specificity — principal (agent=2, any=0)
- * + scope (workspace=2, pod=0) + target (exact action=3, profile=2, glob=1,
- * "*"=0) — and returns the top-ranked row's verdict, breaking ties by the
- * newest `created_at`. Returns `undefined` when no rule matches, so the
- * engine's rung 2.8 simply no-ops.
+ * Ranks every matching ACTIVE row by specificity — principal (agent=2,
+ * class=1, any=0) + scope (workspace=2, pod=0) + target (exact action or
+ * named tool action=3, profile or tool=2, glob=1, "*"=0) — and returns the
+ * top-ranked row's verdict, breaking ties by the newest `created_at` (a tool
+ * run: by the stricter verdict). Returns `undefined` when no rule matches, so
+ * the engine's rung 2.8 simply no-ops.
  *
  * A `deny` row (a person's "Never", 0381) ranks on the SAME score: a more
  * specific `auto` or `propose` outranks a broader deny (the person widened
@@ -667,11 +707,18 @@ export async function resolveGovernanceRule(
     profileSlug,
     capabilityId,
     capabilityVerbName,
+    capabilityContainerIds: givenContainerIds = null,
+    capabilityKind = null,
     includeAgentPrincipal = true,
     ownWorkOrganise = false,
     ruleSubject = null,
   } = input;
   const eventKey = `${subjectType}.${action}`;
+  const capabilityContainerIds =
+    givenContainerIds ??
+    (capabilityId && capabilityKind
+      ? await readCapabilityContainerIds(db, capabilityKind, capabilityId)
+      : null);
   // B3: the class may cover only an attributed write its door proved.
   const organise =
     ownWorkOrganise && !!agentUserId && isOwnOrganiseWrite(eventKey);
@@ -760,7 +807,8 @@ export async function resolveGovernanceRule(
           profileSlug,
           capabilityId,
           capabilityVerbName,
-          ruleSubject
+          ruleSubject,
+          capabilityContainerIds
         );
     if (targetScore === undefined) continue;
     const namesWrite = ruleNamesWrite(rule, targetScore, eventKey);
@@ -771,16 +819,25 @@ export async function resolveGovernanceRule(
     const principalScore = principalSpecificity(rule.principalKind);
     const scopeScore = rule.scopeKind === "workspace" ? 2 : 0;
     const score = principalScore + scopeScore + targetScore;
+    const tie = !!best && score === best.score;
+    // A tool run's tie goes to the STRICTER verdict, whatever the age (D2,
+    // document b387ca45): never > ask first > run. Every other write keeps
+    // "deny wins a tie, else the newest", which postures rely on (a later
+    // posture takes back an older grant of the same reach).
+    const stricter =
+      tie && eventKey === CAPABILITY_RUN_EVENT_KEY
+        ? verdictStrictness(rule.verdict) - verdictStrictness(best!.verdict)
+        : 0;
     const denyTie =
-      !!best &&
-      score === best.score &&
-      (rule.verdict === "deny") !== (best.verdict === "deny");
+      tie && (rule.verdict === "deny") !== (best!.verdict === "deny");
     if (
       !best ||
       score > best.score ||
-      (denyTie
-        ? rule.verdict === "deny"
-        : score === best.score && rule.createdAt > best.createdAt)
+      (stricter !== 0
+        ? stricter > 0
+        : denyTie
+          ? rule.verdict === "deny"
+          : tie && rule.createdAt > best.createdAt)
     ) {
       best = {
         id: rule.id,
@@ -805,6 +862,119 @@ export async function resolveGovernanceRule(
         ...(best.namesSubject ? { namesSubject: true as const } : {}),
       }
     : undefined;
+}
+
+/** One action a listing asks about: its row id, its verb name, its tools. */
+export interface CapabilityVerdictTarget {
+  key: string;
+  capabilityId?: string | null;
+  capabilityVerbName?: string | null;
+  capabilityContainerIds?: readonly string[] | null;
+}
+
+/**
+ * What EVERYONE gets on each listed action — the approval rows with no agent
+ * (`principal_kind = 'any'`), in the pod or in `workspaceId`, ranked exactly
+ * as `resolveGovernanceRule` ranks them for a tool run (scope, then the
+ * action over its tool, the stricter verdict winning a tie). ONE read for a
+ * whole listing. `undefined` for an action no such row names: it asks first.
+ *
+ * NOT the gate: a row for one agent or one class is not seen (a listing has
+ * no agent), and no floor is applied. A tool page or a catalog reads this to
+ * say "runs on its own" only when the row for everyone says so.
+ */
+export async function resolveEveryoneCapabilityVerdicts(input: {
+  db: DbHandle;
+  workspaceId?: string | null;
+  targets: readonly CapabilityVerdictTarget[];
+}): Promise<Map<string, GovernanceRuleVerdict>> {
+  const out = new Map<string, GovernanceRuleVerdict>();
+  if (input.targets.length === 0) return out;
+  const { db, workspaceId } = input;
+  const rows = (await db
+    .select({
+      scopeKind: governanceRules.scopeKind,
+      targetKind: governanceRules.targetKind,
+      targetPattern: governanceRules.targetPattern,
+      targetProfile: governanceRules.targetProfile,
+      verdict: governanceRules.verdict,
+    })
+    .from(governanceRules)
+    .where(
+      and(
+        isNull(governanceRules.revokedAt),
+        or(
+          isNull(governanceRules.expiresAt),
+          gt(governanceRules.expiresAt, new Date())
+        ),
+        eq(governanceRules.principalKind, "any"),
+        eq(governanceRules.targetKind, "capability"),
+        or(
+          eq(governanceRules.scopeKind, "pod"),
+          workspaceId
+            ? and(
+                eq(governanceRules.scopeKind, "workspace"),
+                eq(governanceRules.workspaceId, workspaceId)
+              )
+            : sql`false`
+        )
+      )
+    )) as Array<
+    Pick<
+      GovernanceRuleCandidate,
+      "scopeKind" | "targetKind" | "targetPattern" | "targetProfile" | "verdict"
+    >
+  >;
+  for (const t of input.targets) {
+    let best: { score: number; verdict: GovernanceRuleVerdict } | undefined;
+    for (const rule of rows) {
+      const targetScore = scoreRuleTarget(
+        rule,
+        CAPABILITY_RUN_EVENT_KEY,
+        null,
+        t.capabilityId ?? null,
+        t.capabilityVerbName ?? null,
+        null,
+        t.capabilityContainerIds ?? null
+      );
+      if (targetScore === undefined) continue;
+      const score = (rule.scopeKind === "workspace" ? 2 : 0) + targetScore;
+      if (
+        !best ||
+        score > best.score ||
+        (score === best.score &&
+          verdictStrictness(rule.verdict) > verdictStrictness(best.verdict))
+      ) {
+        best = { score, verdict: rule.verdict };
+      }
+    }
+    if (best) out.set(t.key, best.verdict);
+  }
+  return out;
+}
+
+/**
+ * The tools (capability containers) one action belongs to: its `member_of`
+ * links (`tool|skill|command --member_of--> capability`), the same graph
+ * `getCapabilityMemberParts` walks the other way.
+ */
+async function readCapabilityContainerIds(
+  db: DbHandle,
+  kind: "tool" | "skill" | "command",
+  id: string
+): Promise<string[]> {
+  const rows = (await db
+    .select({ toId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, kind),
+        eq(links.fromId, id),
+        eq(links.toType, "capability"),
+        eq(links.linkType, "member_of")
+      )
+    )) as Array<{ toId: string }>;
+  return rows.map((r) => r.toId);
 }
 
 export interface SyncAutoApproveRulesInput {

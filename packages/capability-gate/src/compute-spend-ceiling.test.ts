@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * the daily-write limit). An AGENT's compute start that would RUN is proposed
  * instead when the day's started maximums plus its own pass the
  * `compute_spend_daily_cents` ceiling. Each row rules out one wrong placement:
- *  - an auto grant would run it                 → the ceiling sits after the grant;
+ *  - an auto approval row would run it          → the ceiling sits after the row;
  *  - an auto rule would run it                  → the ceiling sits after the rule;
  *  - no ceiling set (null)                      → opt-in: nothing changes;
  *  - exactly at the ceiling                     → only PAST it proposes;
@@ -14,7 +14,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  *  - an already-proposed start                  → stays a proposal (tighten-only).
  */
 
-const findCapabilityGrantMock = vi.fn();
 const resolveGovernanceRuleMock = vi.fn();
 const resolveCeilingMock = vi.fn();
 let dayTotal = 0;
@@ -46,7 +45,6 @@ vi.mock("@synap/database", () => ({
   gte: (a: unknown, b: unknown) => ({ gte: [a, b] }),
   ne: (a: unknown, b: unknown) => ({ ne: [a, b] }),
   drizzleSql: () => ({ sql: true }),
-  findCapabilityGrant: (...args: unknown[]) => findCapabilityGrantMock(...args),
   getRequestGrant: () => undefined,
 }));
 
@@ -88,11 +86,10 @@ const PROPOSED_FOR_SPEND = {
 
 describe("gateCapabilityExecution — the compute spend ceiling", () => {
   beforeEach(() => {
-    findCapabilityGrantMock.mockReset();
-    // An ACTIVE auto grant: without the ceiling, this agent start would run.
-    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+    // An auto approval row (decision D2): without the ceiling, this agent
+    // start would run.
     resolveGovernanceRuleMock.mockReset();
-    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+    resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" });
     resolveCeilingMock.mockReset();
     resolveCeilingMock.mockResolvedValue({
       value: 1000,
@@ -114,15 +111,17 @@ describe("gateCapabilityExecution — the compute spend ceiling", () => {
     );
   });
 
-  it("an auto grant does not run a start past the ceiling (800 + 300 > 1000)", async () => {
+  it("an auto approval row does not run a start past the ceiling (800 + 300 > 1000)", async () => {
     expect(await gateCapabilityExecution(agentStart())).toMatchObject(
       PROPOSED_FOR_SPEND
     );
   });
 
-  it("an auto rule does not run it either", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
-    resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" });
+  it("an auto rule for this agent does not run it either", async () => {
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "auto",
+      matchedPattern: "provision_compute",
+    });
     expect(await gateCapabilityExecution(agentStart())).toMatchObject(
       PROPOSED_FOR_SPEND
     );
@@ -162,7 +161,7 @@ describe("gateCapabilityExecution — the compute spend ceiling", () => {
   });
 
   it("a start already proposed stays proposed for its own reason", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    resolveGovernanceRuleMock.mockResolvedValue(undefined);
     expect(await gateCapabilityExecution(agentStart())).toMatchObject({
       decision: "propose",
       reasonCode: "CAPABILITY_PROPOSE",

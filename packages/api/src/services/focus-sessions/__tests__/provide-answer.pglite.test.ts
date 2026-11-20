@@ -783,8 +783,8 @@ describe("provide asks — the server doors", () => {
     async function seedPermanentGrant(secretId: string): Promise<string> {
       const id = randomUUID();
       await q(
-        `insert into vault_grants (id, grantable_type, grantable_id, exec_mode, granted_to, workspace_id, scope, expires_at, max_uses, use_count, created_by)
-         values ($1, 'secret', $2, 'auto', $3, null, 'permanent', null, null, 4, $4)`,
+        `insert into vault_grants (id, grantable_type, grantable_id, granted_to, workspace_id, scope, expires_at, max_uses, use_count, created_by)
+         values ($1, 'secret', $2, $3, null, 'permanent', null, null, 4, $4)`,
         [id, secretId, AGENT, OWNER]
       );
       return id;
@@ -827,8 +827,8 @@ describe("provide asks — the server doors", () => {
       const permanent = await seedPermanentGrant(secretId);
       // A shorter grant beside it must not hide it (a first-match read did).
       await q(
-        `insert into vault_grants (id, grantable_type, grantable_id, exec_mode, granted_to, workspace_id, scope, expires_at, use_count, created_by)
-         values ($1, 'secret', $2, 'auto', $3, null, 'session', now() + interval '30 minutes', 0, $4)`,
+        `insert into vault_grants (id, grantable_type, grantable_id, granted_to, workspace_id, scope, expires_at, use_count, created_by)
+         values ($1, 'secret', $2, $3, null, 'session', now() + interval '30 minutes', 0, $4)`,
         [randomUUID(), secretId, AGENT, OWNER]
       );
       const { sessionId } = await seedSession([slotFor(secretAsk())]);
@@ -1063,8 +1063,8 @@ describe("provide asks — the server doors", () => {
       const insertPermanent = async (createdAt: string) => {
         const id = randomUUID();
         await q(
-          `insert into vault_grants (id, grantable_type, grantable_id, exec_mode, granted_to, workspace_id, scope, expires_at, max_uses, use_count, created_by, created_at)
-           values ($1, 'secret', $2, 'auto', $3, null, 'permanent', null, null, 0, $4, ${createdAt})`,
+          `insert into vault_grants (id, grantable_type, grantable_id, granted_to, workspace_id, scope, expires_at, max_uses, use_count, created_by, created_at)
+           values ($1, 'secret', $2, $3, null, 'permanent', null, null, 0, $4, ${createdAt})`,
           [id, secretId, AGENT, OWNER]
         );
         return id;

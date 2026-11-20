@@ -167,6 +167,7 @@ import {
   createLinks,
   getCapabilityMemberParts,
 } from "../services/links/links-service.js";
+import { writeSessionGrantApprovalRows } from "../services/capabilities/grant-approval-rows.js";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { emitSideEffects } from "@synap/events";
@@ -2871,14 +2872,16 @@ export const focusSessionsRouter = router({
         },
       ]);
 
-      // Write the ENFORCEMENT row alongside the `links{grants}` provenance edge
+      // Write the ENFORCEMENT rows alongside the `links{grants}` provenance edge
       // (G1 §4 convergence): the link is descriptive (graph view); the
-      // capability_grants row is what a delegated capability-execution gate
-      // consults at run time. Scope it to the session's workspace (and the
-      // specific agent when one was named). Session-grants are 'session' scope
-      // (unlimited within the session window) with execMode='auto'. The
-      // canonical wildcard firewall runs here too — a grant must bind to an
-      // agent and/or a workspace.
+      // capability grant says the agent MAY USE it, and the approval row
+      // (`governance_rules`, the ONE store the capability gate reads for "runs
+      // without asking", decision D2) says it runs without asking — the
+      // verdict the grant's `exec_mode = 'auto'` carried before 0435. Both
+      // are scoped to the session's workspace (and the specific agent when one
+      // was named). Session-grants are 'session' scope (unlimited within the
+      // session window). The canonical wildcard firewall runs here too — a
+      // grant must bind to an agent and/or a workspace.
       assertGrantScoped({
         grantedTo: input.agentUserId ?? null,
         workspaceId: session.workspaceId,
@@ -2915,17 +2918,25 @@ export const focusSessionsRouter = router({
           ? await getCapabilityMemberParts([input.capabilityId])
           : [{ kind: input.capabilityKind, id: input.capabilityId }];
       if (grantParts.length > 0) {
-        await db.insert(vaultGrants).values(
-          grantParts.map((p) => ({
-            grantableType: p.kind,
-            grantableId: p.id,
-            execMode: "auto" as const,
+        const workspaceId = session.workspaceId;
+        await db.transaction(async (tx) => {
+          await tx.insert(vaultGrants).values(
+            grantParts.map((p) => ({
+              grantableType: p.kind,
+              grantableId: p.id,
+              grantedTo: input.agentUserId ?? null,
+              workspaceId,
+              scope: "session" as const,
+              createdBy: ctx.userId,
+            }))
+          );
+          await writeSessionGrantApprovalRows(tx, {
             grantedTo: input.agentUserId ?? null,
-            workspaceId: session.workspaceId,
-            scope: "session" as const,
-            createdBy: ctx.userId,
-          }))
-        );
+            workspaceId,
+            sessionId: session.id,
+            partIds: grantParts.map((p) => p.id),
+          });
+        });
       }
 
       emitSideEffects({

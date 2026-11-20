@@ -778,11 +778,6 @@ export interface SendExternalMessageInput {
   sessionId?: string | null;
   playbookId?: string | null;
   /**
-   * The acting `grants`-link metadata (carrying the per-grant `execMode`), when
-   * the caller resolved a grant for this run. Threaded to the gate.
-   */
-  grantMetadata?: Record<string, unknown> | null;
-  /**
    * BYPASS CONTRACT (W3b): set ONLY by the `messaging.external.send` proposal
    * executor (the send is already past governance at proposal-approval time).
    * When `true`, the capability-execution gate is SKIPPED and the send dispatches
@@ -1720,7 +1715,6 @@ async function gateMessagingSend(
     capabilityId,
     tool:
       input.mustPropose && !seeded ? { ...toolRow, approved: null } : toolRow,
-    grantMetadata: input.grantMetadata ?? null,
     actorUserId: input.agentUserId ?? input.userId,
     agentUserId: input.agentUserId ?? null,
     workspaceId: input.workspaceId ?? null,
@@ -1973,11 +1967,6 @@ export interface TriggerProviderActionInput {
    * below (a non-owner `userId` is treated as a delegated agent → propose).
    */
   agentUserId?: string | null;
-  /**
-   * The acting `grants`-link metadata (carrying the per-grant `execMode`), when
-   * the caller resolved a grant for this run. Threaded to the gate.
-   */
-  grantMetadata?: Record<string, unknown> | null;
   /** Optional session/playbook context for the gate's proposal payload + audit. */
   sessionId?: string | null;
   playbookId?: string | null;
@@ -3500,7 +3489,6 @@ export async function triggerProviderAction(
         approved: tool.approved,
         createdBy: tool.createdBy,
       },
-      grantMetadata: input.grantMetadata ?? null,
       actorUserId: effectiveActorUserId,
       agentUserId: input.agentUserId ?? null,
       workspaceId: input.workspaceId ?? null,
