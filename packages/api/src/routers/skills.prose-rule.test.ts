@@ -128,7 +128,9 @@ describe("a prose rule in the rule read doors", () => {
   it("listRules lists it as a rule, beside a rule-loop rule", async () => {
     h.rows = [PROSE, LOOP];
     const { rules } = await caller().listRules({});
-    expect(rules.map((r) => [r.id, r.form])).toEqual([
+    expect(
+      rules.map((r: { id: string; form?: string }) => [r.id, r.form])
+    ).toEqual([
       [PROSE_ID, "prose"],
       [LOOP_ID, "loop"],
     ]);

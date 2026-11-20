@@ -14195,6 +14195,12 @@
           "description": "New display name."
         },
         {
+          "name": "category",
+          "type": "string",
+          "required": false,
+          "description": "'rule' = pushed into all work in scope"
+        },
+        {
           "name": "code",
           "type": "string",
           "required": false,
@@ -14249,6 +14255,10 @@
             "description": "One line: what it does + when to use it."
           },
           "name": { "type": "string", "description": "New display name." },
+          "category": {
+            "type": "string",
+            "description": "'rule' = pushed into all work in scope"
+          },
           "code": {
             "type": "string",
             "description": "Code skills: the full new source — it REPLACES the old code (send it whole, not a diff). Same runtime as synap_create_skill: the BODY of `async function(args, context)`. A documentation-only skill takes no code. An empty string clears it (the skill becomes documentation only)."

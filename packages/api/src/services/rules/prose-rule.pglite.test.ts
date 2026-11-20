@@ -187,7 +187,7 @@ describe("a prose rule in scope reaches the IS feed (the one push door)", () => 
       userId: USER,
       status: "active",
       approved: true,
-    })) as Array<{
+    })) as unknown as Array<{
       id: string;
       category: string | null;
       body: string | null;
