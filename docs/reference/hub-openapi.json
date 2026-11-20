@@ -55196,7 +55196,11 @@
                             "type": "string",
                             "enum": ["active", "proposed"]
                           },
-                          "proposalId": { "type": "string" }
+                          "proposalId": { "type": "string" },
+                          "form": {
+                            "type": "string",
+                            "enum": ["loop", "prose"]
+                          }
                         },
                         "required": [
                           "id",
