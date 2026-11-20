@@ -758,10 +758,9 @@ export async function sweepOrphanedFanOuts(): Promise<number> {
   return rows.length;
 }
 
-const failedParts = (fanOut: StageFanOut) =>
-  fanOut.children.flatMap((c, i) =>
-    c.status === "failed" || c.status === "cancelled" ? [i + 1] : []
-  );
+const partsWith = (fanOut: StageFanOut, status: "failed" | "cancelled") =>
+  fanOut.children.flatMap((c, i) => (c.status === status ? [i + 1] : []));
+const failedParts = (fanOut: StageFanOut) => partsWith(fanOut, "failed");
 
 /** One line per child for the join message (bounded). */
 async function joinLines(fanOut: StageFanOut): Promise<string[]> {
@@ -794,7 +793,7 @@ async function joinLines(fanOut: StageFanOut): Promise<string[]> {
           : "done"
         : c.status === "failed"
           ? `FAILED${c.error ? `: ${c.error}` : ""}`
-          : "CANCELLED";
+          : "SKIPPED (cancelled)";
     return `- part ${i + 1} (${countedNoun(c.items.length, "item")}): ${name}, ${what}`;
   });
   if (fanOut.children.length > JOIN_LINES_MAX) {
@@ -817,7 +816,7 @@ async function finishIfAllEnded(
   const [row] = await db
     .update(sessionStageRuns)
     .set({
-      status: drizzleSql`CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' <> 'done') THEN 'failed' ELSE 'done' END`,
+      status: drizzleSql`CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' NOT IN ('done', 'cancelled')) THEN 'failed' ELSE 'done' END`,
       endedAt: new Date(),
     })
     .where(
@@ -916,11 +915,17 @@ async function finishIfAllEnded(
     });
     toStage = next.key;
   }
-  const done = fanOut.children.length - failed.length;
+  const skipped = partsWith(fanOut, "cancelled");
+  const counted = fanOut.children.length - skipped.length;
+  const done = counted - failed.length;
+  const skippedNote =
+    skipped.length > 0
+      ? ` ${skipped.map((n) => `part ${n}`).join(", ")} skipped (cancelled).`
+      : "";
   const head =
     failed.length > 0
-      ? `Step ${stageName} failed: ${done} of ${countedNoun(fanOut.children.length, "run")} delivered; ${failed.map((n) => `part ${n}`).join(", ")} did not (closed with required work open, failed or cancelled).`
-      : `Step ${stageName} is done: all ${countedNoun(fanOut.children.length, "run")} delivered.`;
+      ? `Step ${stageName} failed: ${done} of ${countedNoun(counted, "run")} delivered; ${failed.map((n) => `part ${n}`).join(", ")} did not (closed with required work open, or failed).${skippedNote}`
+      : `Step ${stageName} is done: all ${countedNoun(counted, "run")} delivered.${skippedNote}`;
   const then =
     failed.length > 0
       ? "The run stays on this step: run the failed parts again, or move on when it is right to."
