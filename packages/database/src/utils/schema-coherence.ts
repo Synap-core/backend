@@ -1214,6 +1214,19 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "approved_requests",
     addedBy: "0309_apps.sql",
   },
+  // automations / playbooks .agent_user_id — the actor (0442, consolidation
+  // W1). Missing means every automation and playbook read (Drizzle names every
+  // column) and the governance ladder's actor read would 42703.
+  {
+    table: "automations",
+    column: "agent_user_id",
+    addedBy: "0442_owner_actor_columns.sql",
+  },
+  {
+    table: "playbooks",
+    column: "agent_user_id",
+    addedBy: "0442_owner_actor_columns.sql",
+  },
   // apps.approved_access — the approval in its v2 form (0434, app permissions
   // W2). Missing means every app read and approval write would 42703.
   {

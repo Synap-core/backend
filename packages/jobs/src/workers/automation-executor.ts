@@ -45,7 +45,6 @@ import {
   automationRuns,
   automationStepRuns,
   automationClaims,
-  users,
   drizzleSql,
   openRunSession,
   normalizeCommandNodeData,
@@ -299,9 +298,9 @@ async function executeAutomationFlow(params: {
     automationId,
     workspaceId,
     ownerId,
-    automationContext,
+    automationContext: payloadAutomationContext,
     completedNodeIds,
-    producerAgentUserId,
+    producerAgentUserId: chainProducerAgentUserId,
   } = params;
   const alreadyCompleted = new Set(completedNodeIds ?? []);
 
@@ -332,6 +331,24 @@ async function executeAutomationFlow(params: {
     logger.error({ runId }, "Automation run not found");
     return {};
   }
+  // THE ACTOR of this automation (the agent that authored it; null for a
+  // person's own), read from the row, never from the job payload. The run
+  // executes as the OWNER (`ownerId`, the person); every governed write it
+  // makes is judged by the actor's ladder (see ExecutionPayload).
+  const actorAgentUserId = automation.agentUserId ?? null;
+  const automationContext: ExecutionPayload["automationContext"] = {
+    ...payloadAutomationContext,
+    actorAgentUserId,
+  };
+  // CONFUSED-DEPUTY GUARD, per automation: the automation's OWN actor
+  // producing its trigger is not a confused deputy (its ladder already governs
+  // the writes, exactly as when the agent was the owner); any other agent in
+  // the chain still is. Children and delay-resumptions get the chain's raw
+  // producer and decide against their own actor.
+  const producerAgentUserId =
+    chainProducerAgentUserId && chainProducerAgentUserId !== actorAgentUserId
+      ? chainProducerAgentUserId
+      : null;
   // Manual runs execute under the authenticated workspace member who started
   // them. Scheduled/system runs retain the automation owner. This keeps the
   // generic workflow engine domain-agnostic while allowing shared workspaces
@@ -470,23 +487,10 @@ async function executeAutomationFlow(params: {
   let sessionOwned = automationContext.focusSessionOwned ?? false;
   let runSuspended = false;
 
-  // The agent this run writes as: the automation's runtime principal when it
-  // is an agent user (the identity `openRunSession` stamps as the session's
-  // `startedByAgentId`), else none (a person's automation acts as the person).
-  // Read where it is used: to open the session, and on a delay-resumption that
-  // still has capability steps to run (so they carry the same identity as the
-  // first pass did).
-  const needsRunAgent =
-    !isPlaybookDelegate &&
-    (!runSessionId || flow.nodes.some((n) => n.type === "capability"));
-  const [ownerUser] = needsRunAgent
-    ? await db
-        .select({ userType: users.userType })
-        .from(users)
-        .where(eq(users.id, ownerId))
-        .limit(1)
-    : [];
-  const runAgentUserId = ownerUser?.userType === "agent" ? ownerId : null;
+  // The agent this run records for its writes: the automation's actor (the
+  // identity `openRunSession` stamps as the session's `startedByAgentId`), or
+  // none for a person's own automation. The session itself is the OWNER's.
+  const runAgentUserId = actorAgentUserId;
 
   if (!isPlaybookDelegate && !runSessionId) {
     // Channel resolution — the ONE door shared with the run-narration path
@@ -1056,7 +1060,7 @@ async function executeAutomationFlow(params: {
                   // producer → an agent-produced trigger's post-delay THEN-actions
                   // auto-executed ungoverned under the human owner. Thread it so a
                   // `trigger → delay → entity_create` still PROPOSES after resume.
-                  producerAgentUserId,
+                  producerAgentUserId: chainProducerAgentUserId,
                 },
                 { startAfter: resumeAt }
               );
@@ -1857,8 +1861,9 @@ async function executeAutomationFlow(params: {
                 },
                 // The producer stays in the causal chain across sub_automation
                 // delegation — a chained child's THEN-actions are still governed
-                // against the agent that fired the ROOT trigger.
-                producerAgentUserId,
+                // against the agent that fired the ROOT trigger (decided against
+                // the CHILD's own actor).
+                producerAgentUserId: chainProducerAgentUserId,
               });
 
               // Return the child automation's output DIRECTLY (flat) — one rule.

@@ -59,6 +59,46 @@ export async function personOfOwner(
 }
 
 /**
+ * THE owner and actor of a row a principal writes (consolidation W1, founder
+ * decision: a person owns everything, an agent is only the actor). Every door
+ * that inserts an automation or a playbook stamps what this answers, so a
+ * caller handing it an agent id cannot make the agent the owner:
+ *  - `ownerId`: the person `principalId` stands for (an agent → the person
+ *    who created it, or, for a humanless agent nobody installed, the agent
+ *    itself); a person or a system id → itself;
+ *  - `agentUserId`: the agent that acted — `agentUserId` when given, else
+ *    `principalId` when it is an agent, else `null` (a person's own write).
+ *
+ * A FAILED read throws; it never reads as "no person".
+ */
+export interface OwnerAndActor {
+  ownerId: string;
+  agentUserId: string | null;
+}
+
+export async function ownerAndActor(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
+  database: any,
+  principalId: string,
+  agentUserId?: string | null
+): Promise<OwnerAndActor> {
+  const [row] = (await database
+    .select({
+      id: users.id,
+      userType: users.userType,
+      createdByUserId: users.createdByUserId,
+    })
+    .from(users)
+    .where(eq(users.id, principalId))
+    .limit(1)) as OwnerRow[];
+  const isAgent = row?.userType === "agent";
+  return {
+    ownerId: (row && personOfRow(row)) ?? principalId,
+    agentUserId: agentUserId || (isAgent ? principalId : null),
+  };
+}
+
+/**
  * {@link personOfOwner} for many owner ids in ONE read. An id with no users row
  * is absent from the map (a system owner: `undefined`, as above).
  */

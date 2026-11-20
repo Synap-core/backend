@@ -11,8 +11,10 @@ export function registerAutomationExecutors(): void {
   // (object-proposal manifest W1) A gated automation create (agent-authored —
   // the automations router only gates the `agentUserId` path) lands here on
   // approval. The canonical internal materializer re-validates the stored
-  // definition and data contract, preserves the originating agent as creator,
-  // and uses the proposal target id as the stable automation id. The propose
+  // definition and data contract, owns the automation by the person the
+  // proposal was filed for (`subjectUserId`, never the approver), records the
+  // originating agent as its actor, and uses the proposal target id as the
+  // stable automation id. The propose
   // gate widened `data` to the full create input, so triggerConfig /
   // flowDefinition / status / metadata / state all flow through
   // (flowDefinition is required).
@@ -56,6 +58,9 @@ export function registerAutomationExecutors(): void {
         await import("../../automations.js");
       await materializeApprovedAutomation({
         database: db,
+        // A pre-0248 proposal has no subject: its author stands for the
+        // person (the door resolves an agent to the person it works for).
+        ownerId: proposal.subjectUserId ?? automationAuthorId,
         agentUserId: automationAuthorId,
         stableId: proposal.targetId,
         definition: {

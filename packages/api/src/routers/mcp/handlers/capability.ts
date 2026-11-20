@@ -26,6 +26,7 @@ import {
   db,
   tools as toolsTable,
   ProfileResolutionService,
+  ownerAndActor,
 } from "@synap/database";
 import { defineProfile } from "../../hub-protocol/define-profile.js";
 import { proposePropertyDefRetire } from "../../../services/pod-hygiene/retire-property-def.js";
@@ -988,14 +989,11 @@ export const capabilityHandlers: McpHandlerMap = {
             await import("../../../services/capabilities/capability-registry.js");
           const caps = await listCapabilities({
             workspaceId: requestedWorkspaceId ?? null,
-            // The EXECUTION identity, not the bearer. `automations.create` sets
-            // `createdBy = agentUserId ?? ctx.userId`, and at run time a
-            // capability node resolves under that owner — `visibleSkillsWhere`
-            // has a per-user tier, so validating as the human would both
-            // FALSE-REJECT an agent-owned user-scoped skill and FALSE-ACCEPT a
-            // human-owned one that then throws "not found" mid-run. Keep this
-            // expression identical to the `createdBy` one below.
-            userId: agentUserId ?? userId,
+            // The EXECUTION identity: the OWNER `automations.create` will
+            // stamp (the person, `ownerAndActor`), under whom a capability node
+            // resolves at run time — `visibleSkillsWhere` has a per-user tier,
+            // so validating as anyone else would FALSE-REJECT or FALSE-ACCEPT.
+            userId: (await ownerAndActor(db, userId, agentUserId)).ownerId,
           });
           const verbIds = new Set<string>();
           const capabilityIds = new Set<string>();

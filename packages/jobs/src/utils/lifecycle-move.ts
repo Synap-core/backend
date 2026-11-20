@@ -165,6 +165,8 @@ export async function moveStatusFromAutomation(input: {
   reason?: string;
   automationContext?: SideEffectPayload["automationContext"] & {
     focusSessionId?: string | null;
+    /** The automation's actor (see ExecutionPayload): the ladder judges it. */
+    actorAgentUserId?: string | null;
   };
   stepRunId?: string;
   nodeId?: string;
@@ -211,6 +213,7 @@ export async function moveStatusFromAutomation(input: {
   const ctx = input.automationContext;
   const gate = await checkAutomationWriteOrPropose({
     ownerId: input.ownerId,
+    actorAgentUserId: input.automationContext?.actorAgentUserId,
     workspaceId: input.workspaceId,
     subjectType: "entity",
     action: "transition",

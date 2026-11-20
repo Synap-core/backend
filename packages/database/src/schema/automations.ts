@@ -163,7 +163,23 @@ export const automations = pgTable(
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {
       onDelete: "cascade",
     }),
+    /**
+     * The OWNER: the person this automation runs for (0442/0443). Never an
+     * agent once the person is known: an agent-authored automation is owned
+     * by the person the agent works for, and the agent is `agentUserId`.
+     * RBAC, visibility, the run session, the runner roster and the AI
+     * principal read the owner. Holds an agent id only for a humanless agent
+     * nobody installed (no `users.created_by_user_id`).
+     */
     createdBy: text("created_by").notNull(),
+    /**
+     * The ACTOR: the agent that authored this automation, or NULL for one a
+     * person authored (0442). The governance ladder, the draft floor and
+     * "the agent's own work" read the actor, never the owner. The FK to
+     * `users` (ON DELETE SET NULL) is in 0442, kept off this definition like
+     * `entities.agent_user_id` to avoid a schema import cycle.
+     */
+    agentUserId: text("agent_user_id"),
 
     // Definition
     name: text("name").notNull(),
@@ -248,6 +264,9 @@ export const automations = pgTable(
     triggerTypeIdx: index("automations_trigger_type_idx").on(table.triggerType),
     nextRunAtIdx: index("automations_next_run_at_idx").on(table.nextRunAt),
     createdByIdx: index("automations_created_by_idx").on(table.createdBy),
+    agentUserIdIdx: index("automations_agent_user_id_idx").on(
+      table.agentUserId
+    ),
     // Name-identity backstop (0230, mirrors playbooks_workspace_name_active_uq /
     // 0227): at-most-one non-archived automation per (workspace | pod-wide,
     // lower(name)). MCP create_automation re-authored the SAME automation into a

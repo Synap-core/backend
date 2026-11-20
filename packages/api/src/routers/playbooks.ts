@@ -66,6 +66,7 @@ import {
   links,
   loadFacetSlugsBatch,
   isUniqueViolation,
+  ownerAndActor,
   type FlowDefinition,
 } from "@synap/database";
 import type {
@@ -2394,6 +2395,12 @@ export const playbooksRouter = router({
       // callers both miss the peek and race the insert — the unique index makes
       // the loser a unique-violation, and we return the winner instead of a 500
       // or a second clone (mirrors insertPendingProposal / rememberFact).
+      // The person owns the playbook; an agent that wrote it is its actor.
+      const owner = await ownerAndActor(
+        database,
+        ctx.userId,
+        input.agentUserId
+      );
       let created: Playbook;
       let reused = false;
       try {
@@ -2403,7 +2410,8 @@ export const playbooksRouter = router({
             .values({
               id: playbookId,
               workspaceId: ctx.workspaceId,
-              createdBy: input.agentUserId ?? ctx.userId,
+              createdBy: owner.ownerId,
+              agentUserId: owner.agentUserId,
               name: input.name,
               description: input.description ?? null,
               goalTemplate: input.goalTemplate,
@@ -2471,7 +2479,8 @@ export const playbooksRouter = router({
         // S1: a scheduled playbook maintains ONE backing cron automation (its
         // `schedule` row in playbook_automations) that the cron scheduler fires.
         await materializePlaybookCronAutomation(created, {
-          userId: input.agentUserId ?? ctx.userId,
+          userId: ctx.userId,
+          agentUserId: input.agentUserId,
         });
 
         // W6 Layer-2 context skill — persist the AI-generated "how to run this
@@ -2894,7 +2903,8 @@ export const playbooksRouter = router({
           wantsSchedule(input.schedule) !== wantsSchedule(existing.schedule)) ||
         (input.status !== undefined && input.status !== existing.status);
       await materializePlaybookCronAutomation(updated, {
-        userId: input.agentUserId ?? ctx.userId,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
         preserveArming: !armingChanged,
       });
 
@@ -2998,7 +3008,8 @@ export const playbooksRouter = router({
       // call the backing cron automation stayed `active` with a live nextRunAt
       // and kept firing a playbook nothing else would surface.
       await materializePlaybookCronAutomation(archived as Playbook, {
-        userId: input.agentUserId ?? ctx.userId,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
       });
       // Same rule for what STARTS it: an archived playbook declares no live
       // activator, so this pass retires its activator rules.

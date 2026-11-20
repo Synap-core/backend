@@ -1183,6 +1183,8 @@ async function applyProposalApprovalInner(
           ...buildRuleLoopCallers({
             database: db,
             userId,
+            // The person the batch was filed for owns what it makes.
+            ownerUserId: proposal.subjectUserId,
             workspaceId: compositeCtx.workspaceId,
             auditSource: "rule_loop_approval",
             // The proposal's author (the actor `compositeCtx` already

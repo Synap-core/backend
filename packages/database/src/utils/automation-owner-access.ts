@@ -19,7 +19,7 @@
  * person leaving the space is what ends its access.
  */
 import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
-import { automations, users, workspaceMembers } from "../schema/index.js";
+import { automations, workspaceMembers } from "../schema/index.js";
 import { personOfOwner } from "./owner-person.js";
 import {
   AUTOMATION_AUDIENCE_KEY,
@@ -58,21 +58,15 @@ export async function automationOwnerHasSpaceAccess(
 }
 
 /**
- * Pause every active automation of the space that runs for `userId` (theirs,
- * or one of their agents'). Returns how many were paused.
+ * Pause every active automation of the space that runs for `userId`: the ones
+ * they own, which includes every automation their agents authored (an agent is
+ * only ever the actor, consolidation W1). Returns how many were paused.
  */
 export async function pauseAutomationsOfRemovedMember(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
   database: any,
   params: { workspaceId: string; userId: string }
 ): Promise<number> {
-  const agents: Array<{ id: string }> = await database
-    .select({ id: users.id })
-    .from(users)
-    .where(
-      and(eq(users.userType, "agent"), eq(users.createdByUserId, params.userId))
-    );
-  const owners = [params.userId, ...agents.map((a) => a.id)];
   const paused: Array<{ id: string }> = await database
     .update(automations)
     .set({
@@ -83,7 +77,7 @@ export async function pauseAutomationsOfRemovedMember(
     .where(
       and(
         eq(automations.workspaceId, params.workspaceId),
-        inArray(automations.createdBy, owners),
+        eq(automations.createdBy, params.userId),
         eq(automations.status, "active")
       )
     )

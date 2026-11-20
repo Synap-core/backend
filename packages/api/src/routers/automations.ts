@@ -103,9 +103,11 @@ import {
   getActingAgentUserId,
   getRequestGrant,
   isUniqueViolation,
+  ownerAndActor,
 } from "@synap/database";
 import type {
   AutomationTriggerConfig,
+  OwnerAndActor,
   FlowDefinition,
   OutputNodeDef,
 } from "@synap/database";
@@ -890,18 +892,18 @@ async function proposeAgentActivation(
 /**
  * W-B3 (supervision plan, founder Q-B1): an agent archives an automation on
  * its own, without a proposal, only when it is the agent's OWN work that NEVER
- * RAN — the agent made it (`createdBy`, the runtime principal of every
- * agent-authored automation) and the `automation_runs` ledger holds no row for
- * it (`loadRunCounts`, the warden's "never fired" read). Nothing it did can be
+ * RAN — the agent made it (its actor, `automations.agent_user_id`; the owner
+ * is the person) and the `automation_runs` ledger holds no row for it
+ * (`loadRunCounts`, the warden's "never fired" read). Nothing it did can be
  * lost, and the row stays (`archived` is a soft state). Anything else — a
  * person's automation, another agent's, or one that ever ran — proposes.
  */
 export function agentArchivesDirectly(input: {
-  createdBy: string | null;
+  actorAgentUserId: string | null;
   agentUserId: string;
   runs: number;
 }): boolean {
-  return input.createdBy === input.agentUserId && input.runs === 0;
+  return input.actorAgentUserId === input.agentUserId && input.runs === 0;
 }
 
 /**
@@ -957,7 +959,12 @@ async function gateAgentAutomationChange(
 async function insertAutomationAfterGovernance(
   database: AutomationDatabase,
   input: AutomationMaterializationInput,
-  createdBy: string,
+  /**
+   * The row's owner (the person) and actor (the agent), as `ownerAndActor`
+   * derives them from whoever wrote it: only that function yields this shape,
+   * so a caller cannot store an agent as the owner.
+   */
+  owner: OwnerAndActor,
   stableId?: string,
   /**
    * P2-3 (draft-state remedy): true for every agent-originated create — the
@@ -1008,7 +1015,8 @@ async function insertAutomationAfterGovernance(
       .values({
         ...(stableId ? { id: stableId } : {}),
         workspaceId: input.workspaceId ?? null,
-        createdBy,
+        createdBy: owner.ownerId,
+        agentUserId: owner.agentUserId,
         name: input.name,
         description: input.description,
         triggerType: input.triggerType,
@@ -1067,9 +1075,16 @@ async function insertAutomationAfterGovernance(
 export async function materializeAutomationForPrincipal(input: {
   database: AutomationDatabase;
   definition: AutomationMaterializationInput;
-  /** The row's `createdBy` — the runtime principal. */
+  /**
+   * Who the automation is FOR: a person, or the agent / pod-wide agent key
+   * acting — the door stores the person it stands for as the owner
+   * (`ownerAndActor`), the runtime principal of every run.
+   */
   createdBy: string;
-  /** Present ⇒ an AGENT authored this ⇒ forced `draft`, unless `approved`. */
+  /**
+   * The agent that authored it, stored as the actor. Present (or `createdBy`
+   * itself an agent) ⇒ forced `draft`, unless `approved`.
+   */
   agentUserId?: string | undefined;
   /**
    * A person APPROVED this exact definition (proposal approval): the approval
@@ -1080,40 +1095,47 @@ export async function materializeAutomationForPrincipal(input: {
   /** Converge retries on a caller-owned id (proposal target, rule id). */
   stableId?: string | undefined;
 }): Promise<string | null> {
+  const owner = await ownerAndActor(
+    input.database,
+    input.createdBy,
+    input.agentUserId
+  );
   await prepareAutomationForMaterialization(
     input.database,
     input.definition,
-    input.createdBy
+    owner.ownerId
   );
   return insertAutomationAfterGovernance(
     input.database,
     input.definition,
-    input.createdBy,
+    owner,
     input.stableId,
-    Boolean(input.agentUserId) && !input.approved
+    Boolean(owner.agentUserId) && !input.approved
   );
 }
 
 /**
  * Canonical materialization path for an already-approved AI proposal.
- * It repeats current catalog validation, preserves the agent as runtime
- * principal, and converges retries on the proposal's stable target id.
- *
- * Thin wrapper over `materializeAutomationForPrincipal`: the agent IS the
- * principal here, so the door's own rule forces `draft` — this path does not
- * pass a flag for it.
+ * It repeats current catalog validation, owns the automation by the person the
+ * proposal was filed for (`ownerId`: `proposals.subject_user_id`, never the
+ * approver), records the agent as its actor, and converges retries on the
+ * proposal's stable target id. The approval is the review, so the author's
+ * status is kept (`approved`).
  */
 export async function materializeApprovedAutomation(input: {
   database: AutomationDatabase;
   definition: AutomationMaterializationInput;
-  agentUserId: string;
+  /** The person the proposal was filed for (or the agent: resolved to its person). */
+  ownerId: string;
+  /** The agent that authored it (the actor); null for a person's batch. */
+  agentUserId: string | null;
   stableId: string;
 }): Promise<string | null> {
   return materializeAutomationForPrincipal({
     database: input.database,
     definition: input.definition,
-    createdBy: input.agentUserId,
-    agentUserId: input.agentUserId,
+    createdBy: input.ownerId,
+    agentUserId: input.agentUserId ?? undefined,
     approved: true,
     stableId: input.stableId,
   });
@@ -2562,11 +2584,16 @@ export const automationsRouter = router({
       // The authenticated agent governs, never only the input (an agent key
       // omitting `agentUserId` must still propose / be bounded by its grant).
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
-      const createdBy = agentUserId ?? ctx.userId!;
+      // The person owns it; the agent (if one acts) is its actor.
+      const owner = await ownerAndActor(database, ctx.userId!, agentUserId);
       await assertKeyMayActAsFlowOwner({ ...ctx, agentUserId });
 
       const askedWorkspaceId = input.workspaceId ?? null;
-      await prepareAutomationForMaterialization(database, input, createdBy);
+      await prepareAutomationForMaterialization(
+        database,
+        input,
+        owner.ownerId
+      );
       // Filed in the space its playbooks run in (6c15da33): said, never silent.
       const placedNote =
         input.workspaceId && input.workspaceId !== askedWorkspaceId
@@ -2659,11 +2686,11 @@ export const automationsRouter = router({
       // through to a firing state, so force draft regardless of the
       // requested `status`. The operator's own direct create (no
       // agentUserId) keeps its requested status untouched.
-      const forceDraft = Boolean(agentUserId);
+      const forceDraft = Boolean(owner.agentUserId);
       const automationId = await insertAutomationAfterGovernance(
         database,
         input,
-        createdBy,
+        owner,
         undefined,
         forceDraft
       );
@@ -3080,6 +3107,7 @@ export const automationsRouter = router({
           status: true,
           workspaceId: true,
           createdBy: true,
+          agentUserId: true,
         },
       });
       if (!existing) {
@@ -3107,7 +3135,7 @@ export const automationsRouter = router({
       const direct =
         agentUserId !== undefined &&
         agentArchivesDirectly({
-          createdBy: existing.createdBy,
+          actorAgentUserId: existing.agentUserId,
           agentUserId,
           runs: (await loadRunCounts([existing.id])).get(existing.id) ?? 0,
         });

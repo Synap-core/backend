@@ -56,6 +56,12 @@ export interface RuleLoopCallerContext {
    * auto-grant rather than filing a second proposal.
    */
   userId: string;
+  /**
+   * The person the batch was filed for (`proposals.subject_user_id`), who
+   * OWNS the automations it materializes; `userId` when absent (a direct
+   * write: the writer is that person).
+   */
+  ownerUserId?: string | null;
   /** Workspace the materialized config belongs to (null = pod-wide). */
   workspaceId: string | null;
   /** Audit provenance, e.g. "rule_loop_approval" / "rule_loop_capture". */
@@ -88,6 +94,7 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
   updateCaller: CompositeUpdateCaller;
 } {
   const { database, userId, workspaceId, auditSource, skillAuthor } = ctx;
+  const ownerUserId = ctx.ownerUserId ?? userId;
 
   return {
     // A playbook's UI: the generated cell, through the ONE cell door
@@ -307,7 +314,9 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
             },
             status: "draft",
           },
-          agentUserId: userId,
+          // The person owns it; the batch's author, when an agent, is its actor.
+          ownerId: ownerUserId,
+          agentUserId: skillAuthor.agentUserId,
           stableId,
         });
         if (!created) {

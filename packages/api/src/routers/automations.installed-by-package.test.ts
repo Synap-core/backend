@@ -34,6 +34,16 @@ import {
   materializeApprovedAutomation,
 } from "./automations.js";
 
+/**
+ * The owner door (`ownerAndActor`) reads the writer's users row; these fakes
+ * have none, so the writer stands for itself (a person).
+ */
+const NO_USERS = {
+  select: () => ({
+    from: () => ({ where: () => ({ limit: async () => [] }) }),
+  }),
+};
+
 function insertChain(captured: { values?: Record<string, unknown> }) {
   const chain = {
     values: vi.fn((v: Record<string, unknown>) => {
@@ -94,7 +104,10 @@ describe("installedByPackage is never the caller's to write", () => {
 
   it("a person's create drops it and keeps the rest", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
     await caller().create({
       name: "Digest",
       triggerType: "manual",
@@ -133,8 +146,12 @@ describe("installedByPackage is never the caller's to write", () => {
 
   it("an approved proposal carrying it (filed or revised before) materializes without it", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    const database = { insert: vi.fn(() => insertChain(captured)) };
+    const database = {
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    };
     await materializeApprovedAutomation({
+      ownerId: "person-1",
       database: database as never,
       agentUserId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       stableId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",

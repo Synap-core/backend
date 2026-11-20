@@ -2596,6 +2596,8 @@ CREATE TABLE IF NOT EXISTS "automations" (
   "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "created_by"      text    NOT NULL,
+  -- 0442: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"   text    REFERENCES "users"("id") ON DELETE SET NULL,
   "name"            text    NOT NULL,
   "description"     text,
   "trigger_type"    text    NOT NULL,
@@ -2648,6 +2650,9 @@ CREATE INDEX IF NOT EXISTS "automations_next_run_at_idx"
 
 CREATE INDEX IF NOT EXISTS "automations_created_by_idx"
   ON "automations" ("created_by");
+
+CREATE INDEX IF NOT EXISTS "automations_agent_user_id_idx"
+  ON "automations" ("agent_user_id");
 
 -- Name-identity backstop (0230): at-most-one non-archived automation per
 -- (workspace | pod-wide, lower(name)). NULL workspace coalesced to sentinel so
@@ -4452,6 +4457,8 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
   "id"               uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id"     uuid,
   "created_by"       text        NOT NULL,
+  -- 0442: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"    text        REFERENCES "users"("id") ON DELETE SET NULL,
   "name"             text        NOT NULL,
   "description"      text,
   "goal_template"    text        NOT NULL,
@@ -4472,6 +4479,7 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
 );
 CREATE INDEX IF NOT EXISTS "idx_playbooks_workspace_id" ON "playbooks" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_playbooks_status"       ON "playbooks" ("status");
+CREATE INDEX IF NOT EXISTS "idx_playbooks_agent_user_id" ON "playbooks" ("agent_user_id");
 -- TOCTOU race backstop (0227): at-most-one non-archived playbook per
 -- (workspace | pod-wide, lower(name)). NULL workspace coalesced to sentinel so
 -- pod-wide rows participate. Soft-archive of pre-existing name clones is only
