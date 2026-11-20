@@ -18183,10 +18183,16 @@ export type DeviceLinkStatus = (typeof DEVICE_LINK_STATUSES)[number];
  * request past its wait, or an approval nobody redeemed in time), never stored.
  */
 export type DeviceLinkReadStatus = DeviceLinkStatus | "expired";
+/**
+ * What the background applies: a large graph's `records`, or one approved
+ * verb's `run` (its copy says "running", never "creating records").
+ */
+export type ApprovalRunKind = "records" | "run";
 /** One attempt, as every reader sees it. */
 export interface ApprovalRunView {
 	runId: string;
 	proposalId: string;
+	kind: ApprovalRunKind;
 	/** `stalled` = stored `running`, but its heartbeat stopped. */
 	state: "failed" | "queued" | "running" | "stalled" | "succeeded";
 	phase: "entities" | "finishing" | "relations" | null;

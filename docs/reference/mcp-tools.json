@@ -2167,7 +2167,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Store file CONTENT you already have (text via `content`, or binary via `contentBase64`) as a `file` — ANY type, stored **as-is and NEVER read/analyzed**. Use for a report/CSV/image/PDF/etc. you generated or hold. Pass `attachToEntityId` to attach it to an existing entity instead of creating a new file. For a link you have (no bytes), use `synap_create_document` with `url`. Max 10MB inline; for a bigger file call `synap_request_upload`, PUT the bytes, then call this with `uploadToken`.",
+      "description": "Store a file as a `file` — ANY type, stored **as-is and NEVER read/analyzed**: text via `content`, binary via `contentBase64`, or `sourceUrl` (the pod downloads it: a generated image you have only as a URL). Pass `attachToEntityId` to attach it to an existing entity instead. To only reference a link, use `synap_create_document` with `url`. Max 10MB; bigger: `synap_request_upload`, PUT the bytes, then this with `uploadToken`.",
       "parameters": [
         {
           "name": "filename",
@@ -2194,6 +2194,12 @@
           "description": "Base64-encoded BINARY content. Mutually exclusive with `content`."
         },
         {
+          "name": "sourceUrl",
+          "type": "string",
+          "required": false,
+          "description": "An https URL the pod downloads (public hosts only, max 10MB). `filename`/`mimeType` are then optional."
+        },
+        {
           "name": "uploadToken",
           "type": "string",
           "required": false,
@@ -2216,7 +2222,7 @@
           "name": "sessionId",
           "type": "string",
           "required": false,
-          "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
+          "description": "OPTIONAL focus-session override: only when 2+ of your sessions are open, or to join another conversation's session. Omitted, the write is attributed automatically. A session not yours is ignored."
         },
         {
           "name": "expectedLabel",
@@ -2244,6 +2250,10 @@
             "type": "string",
             "description": "Base64-encoded BINARY content. Mutually exclusive with `content`."
           },
+          "sourceUrl": {
+            "type": "string",
+            "description": "An https URL the pod downloads (public hosts only, max 10MB). `filename`/`mimeType` are then optional."
+          },
           "uploadToken": {
             "type": "string",
             "description": "The `uploadToken` from `synap_request_upload`, after you PUT the bytes. Replaces `content`/`contentBase64`/`filename`/`mimeType`."
@@ -2259,7 +2269,7 @@
           },
           "sessionId": {
             "type": "string",
-            "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
+            "description": "OPTIONAL focus-session override: only when 2+ of your sessions are open, or to join another conversation's session. Omitted, the write is attributed automatically. A session not yours is ignored."
           },
           "expectedLabel": {
             "type": "string",

@@ -119,6 +119,7 @@ import {
 import { buildPlanCallers } from "../../utils/plan-callers.js";
 import { approvalIdempotency } from "../../services/proposals/approval-idempotency.js";
 import { handOffBackgroundApproval } from "../../services/proposals/approval-runs.js";
+import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../../services/proposals/proposal-class.js";
 import {
   buildMaterializedRecord,
   stampMaterialized,
@@ -659,11 +660,15 @@ export async function applyProposalApproval(args: {
     });
   }
 
-  // A LARGE graph is applied by the background job — every gate above has
-  // already run, here, in the request. A graph that is being applied right
-  // now is joined (background caller) or refused (synchronous caller), never
-  // applied a second time alongside.
-  if (isCompositeProposalData(args.proposal.data as StoredProposalData)) {
+  // A LARGE graph, or a run of a verb that declares itself async (report
+  // 48dbf93b: the run outlived the approve request), is applied by the
+  // background job — every gate above has already run, here, in the request.
+  // One being applied right now is joined (background caller) or refused
+  // (synchronous caller), never applied a second time alongside.
+  if (
+    isCompositeProposalData(args.proposal.data as StoredProposalData) ||
+    args.proposal.proposalType === CAPABILITY_RUN_PROPOSAL_TYPE
+  ) {
     const handedOff = await handOffBackgroundApproval({
       proposal: args.proposal,
       userId: args.userId,
