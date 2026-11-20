@@ -2205,6 +2205,14 @@ export async function updateFocusSession(
   ) {
     params = { ...params, workspaceId: undefined };
   }
+  // Criteria as they will be stored (an evidence check's key filled in): the
+  // write schema's own output. A malformed list is refused below.
+  if (params.criteria !== undefined) {
+    const parsed = sessionCriteriaSchema.safeParse(params.criteria);
+    if (parsed.success) {
+      params = { ...params, criteria: parsed.data as SessionCriterion[] };
+    }
+  }
   // The same for CRITERIA: carried to the membrane only when they DIFFER from
   // the stored list. An agent changing its own acceptance criteria is floored
   // to a proposal (`CRITERIA_CHANGE`, see `isFocusSessionCriteriaUpdate`), and

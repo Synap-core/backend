@@ -590,7 +590,7 @@ const PLAYBOOK_GUIDANCE_PROPERTY = {
 const PLAYBOOK_CRITERIA_PROPERTY = {
   type: "array",
   description:
-    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }.",
+    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
   items: { type: "object" },
 };
 
@@ -627,7 +627,7 @@ const SESSION_OUTCOMES_PROPERTY = {
       verify: {
         type: "object",
         description:
-          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` to post a named proof instead) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
+          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
         properties: {
           kind: {
             type: "string",
@@ -2960,7 +2960,7 @@ export const tools = {
             evidence: {
               type: "object",
               description:
-                'Evidence keyed by each criterion\'s evidenceKey (e.g. { typecheck: { passed: true, detail: "0 errors" } }).',
+                'Evidence keyed by each criterion\'s evidenceKey, which defaults to its key (e.g. { typecheck: { passed: true, detail: "0 errors" } }).',
               additionalProperties: {
                 type: "object",
                 properties: {
@@ -6717,7 +6717,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (an ungranted verb is PROPOSED for review when run, not refused). A verb carrying `blocked: "not_enabled"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, or synap_load_skill("catalog") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email"). ' +
+          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `effectiveExecMode` (propose = your run is filed for review, not refused). A verb carrying `blocked: "not_enabled"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, or synap_load_skill("catalog") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email"). ' +
           DENIED_BY_RULE_TOOL_NOTE,
         inputSchema: {
           type: "object",
@@ -6745,7 +6745,7 @@ export const tools = {
               // pod already stored, before the handler ever saw it. Unknown
               // slugs are rejected at runtime by isKnownIntent.
               description:
-                "Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this.",
+                "Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability), each with `enabled` (switched on in the pod) and `runPosture` (auto runs now, propose files a review). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this.",
             },
             limit: {
               type: "number",
@@ -6914,6 +6914,11 @@ export const tools = {
               type: "object",
               description:
                 'The verb\'s own runtime parameter schema using the shorthand type system, e.g. { query: "string", limit: "number?" }.',
+            },
+            readOnly: {
+              type: "boolean",
+              description:
+                "true when the call changes nothing anywhere (a lookup, even over POST): once the person approves the verb, agent runs skip review. Shown on the proposal; turning it on later needs approval again.",
             },
             workspaceId: {
               type: "string",

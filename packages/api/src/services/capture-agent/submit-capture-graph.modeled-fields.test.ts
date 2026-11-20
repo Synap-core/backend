@@ -49,6 +49,9 @@ effectiveProps.set("offer", [
 ]);
 effectiveProps.set("decision", [def("summary", "string", { maxLength: 500 })]);
 effectiveProps.set("finding", []);
+effectiveProps.set("verdict", [
+  { ...def("verdictStatus", "string"), isLifecycle: true },
+]);
 
 const fakeDb = {
   query: { relationDefs: { findMany: async () => [] } },
@@ -122,6 +125,26 @@ describe("capture dry run — what each kind models", () => {
         profileSlug: "decision",
         errors: [
           "Property 'summary': String length 612 is greater than maximum 500",
+        ],
+      },
+    ]);
+  });
+
+  it("refuses the kind's status field under another key, naming the right one", async () => {
+    const out = await run([
+      {
+        ref: "v",
+        profileSlug: "verdict",
+        title: "Go",
+        properties: { status: "accepted" },
+      },
+    ]);
+    expect(out.invalidEntities).toEqual([
+      {
+        label: "Go",
+        profileSlug: "verdict",
+        errors: [
+          "Property 'status' is not a field of this kind: its status field is 'verdictStatus'. Send the value as 'verdictStatus'.",
         ],
       },
     ]);

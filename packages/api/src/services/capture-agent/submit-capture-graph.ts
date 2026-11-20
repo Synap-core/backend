@@ -837,6 +837,7 @@ export async function preflightCaptureGraphOperations(
         ...(op.title !== undefined ? { title: op.title } : {}),
         profileDefaults:
           (profile.defaultValues as Record<string, unknown>) ?? {},
+        refuseMisnamedLifecycle: true,
       }
     );
     modeledFields[op.profileSlug] ??= modeled;

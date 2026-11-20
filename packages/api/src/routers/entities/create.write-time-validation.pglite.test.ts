@@ -131,6 +131,22 @@ beforeAll(async () => {
      values ($1,$2,true,0,false)`,
     [profileId, (def.rows[0] as { id: string }).id]
   );
+  // A kind whose status field carries its own name (as `decisionStatus`).
+  const verdict = await q(
+    `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints)
+     values (gen_random_uuid(),'verdict','Verdict','kind','system','pod',null,true,'{}'::jsonb) returning id`
+  );
+  const verdictId = (verdict.rows[0] as { id: string }).id;
+  const status = await q(
+    `insert into property_defs (id, slug, profile_id, workspace_id, value_type, constraints, ui_hints)
+     values (gen_random_uuid(),'verdictStatus',$1,null,'string','{}'::jsonb,'{}'::jsonb) returning id`,
+    [verdictId]
+  );
+  await q(
+    `insert into profile_properties (profile_id, property_def_id, required, display_order, is_lifecycle)
+     values ($1,$2,false,0,true)`,
+    [verdictId, (status.rows[0] as { id: string }).id]
+  );
 }, 120_000);
 
 beforeEach(() => {
@@ -228,5 +244,18 @@ describe("entities.create: properties are validated at write time", () => {
     // The person's write reached the gate (no write-time refusal for them):
     // the refusal came from the repository's materialization.
     expect(h.gate).toHaveBeenCalledTimes(1);
+  });
+
+  it("an agent's status under another key is refused with the kind's own name", async () => {
+    await expect(
+      create({
+        profileSlug: "verdict",
+        title: "Go",
+        properties: { status: "accepted" },
+        agentUserId: AGENT,
+        source: "ai",
+      })
+    ).rejects.toThrow(/its status field is 'verdictStatus'/);
+    expect(h.gate).not.toHaveBeenCalled();
   });
 });

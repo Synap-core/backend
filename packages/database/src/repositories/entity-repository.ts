@@ -234,7 +234,9 @@ export async function validateEntityCreateProperties(
     CreateEntityInput,
     "title" | "properties" | "workspaceId" | "skipValidation"
   >,
-  userId: string
+  userId: string,
+  /** See `PropertyValidationService.validateProperties`. */
+  opts?: { refuseMisnamedLifecycle?: boolean }
 ): Promise<ValidatedEntityCreate> {
   let profile = resolvedProfile;
   let data = input;
@@ -390,7 +392,8 @@ export async function validateEntityCreateProperties(
       await services.propertyValidation.validateProperties(
         propsToValidate,
         profileId,
-        data.workspaceId ?? null
+        data.workspaceId ?? null,
+        opts?.refuseMisnamedLifecycle ? { refuseMisnamedLifecycle: true } : {}
       );
 
     if (!validationResult.valid) {

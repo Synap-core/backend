@@ -269,6 +269,25 @@ describe("capabilities.registry.createVerb — wiring", () => {
     });
   });
 
+  it("files a read-only verb as the skill's `metadata.readOnly` (what the gate auto-runs on)", async () => {
+    mockCreate.mockResolvedValue({
+      id: "skill-3",
+      status: "proposed",
+      proposalId: "prop-2",
+    });
+    mockGetDb.mockResolvedValue(mockDatabase({}).db);
+    const caller = capabilitiesRouter.createCaller(callerCtx());
+
+    await caller.registry.createVerb({ ...input, readOnly: true });
+    expect(mockCreate.mock.calls[0]?.[0]).toMatchObject({
+      metadata: { readOnly: true },
+    });
+
+    mockGetDb.mockResolvedValue(mockDatabase({}).db);
+    await caller.registry.createVerb(input);
+    expect(mockCreate.mock.calls[1]?.[0]?.metadata).toBeUndefined();
+  });
+
   it("still returns the created verb when a container attach is refused, reporting it in `wiring`", async () => {
     mockAddPart.mockRejectedValue(new Error("FORBIDDEN"));
     const { db, updates } = mockDatabase({

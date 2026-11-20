@@ -15,6 +15,7 @@ import { toAutomationDigest, AUTOMATIONS_DIGEST_NOTE } from "./read-lean.js";
 import {
   repeatedBaseSegmentWarning,
   validateCreateVerbInput,
+  createdVerbMetadata,
 } from "../validate-create-verb.js";
 import {
   wireCreatedVerb,
@@ -810,6 +811,7 @@ export const capabilityHandlers: McpHandlerMap = {
       description: input.description,
       providerSpec: providerSpec as unknown as Record<string, unknown>,
       parameters: input.parameters,
+      metadata: createdVerbMetadata(input),
       // Fixed alongside this tool: skills.create's own checkPermissionOrPropose
       // call was missing agentUserId entirely (no input field for it existed),
       // so an agent-initiated create was evaluated as if the human owner did

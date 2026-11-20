@@ -110,15 +110,14 @@ export const sessionCriterionSchema = z
         });
       }
     }
-    if (c.check.kind === "evidence" && !c.check.evidenceKey) {
-      ctx.addIssue({
-        code: "custom",
-        message:
-          "An evidence check names the evidenceKey the agent posts under",
-        path: ["check", "evidenceKey"],
-      });
-    }
-  });
+  })
+  // An evidence check with no evidenceKey is posted under the criterion's own
+  // key: stored filled, so every reader reads one key.
+  .transform((c) =>
+    c.check.kind === "evidence" && !c.check.evidenceKey
+      ? { ...c, check: { ...c.check, evidenceKey: c.key } }
+      : c
+  );
 
 /** A criteria list: at most `MAX_SESSION_CRITERIA`, keys unique. */
 export const sessionCriteriaSchema = z

@@ -78,6 +78,22 @@ export function builtinStamp(
 
 const READABLE_TEXT_TYPES = /^(text\/plain|text\/markdown|text\/x-markdown)\b/i;
 const HTML_TYPES = /^(text\/html|application\/xhtml\+xml)\b/i;
+const JSON_TYPES = /^(application\/([\w.-]+\+)?json|text\/json)\b/i;
+
+/** A JSON answer (a public API), indented; kept as sent when it does not parse. */
+function readJson(body: string, cut: boolean): SiteRead {
+  const raw = body.trim();
+  if (!raw) return siteBlocked("not_found", undefined, "the answer is empty");
+  let text = raw;
+  try {
+    text = JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    // Sent as JSON but not JSON: the text is still what the URL answered.
+  }
+  return cut || text.length > BUILTIN_READ_TEXT_MAX
+    ? { status: "partial", text: text.slice(0, BUILTIN_READ_TEXT_MAX) }
+    : { status: "ok", text };
+}
 
 /** The page itself: fetch through the SSRF door, then extract. */
 async function readPage(
@@ -91,6 +107,7 @@ async function readPage(
   if (!got.ok) return fromGetFailure(got, "the page");
   const ct = got.contentType.trim();
   if (!ct || HTML_TYPES.test(ct)) return extractPage(got.body, url);
+  if (JSON_TYPES.test(ct)) return readJson(got.body, got.truncated);
   if (READABLE_TEXT_TYPES.test(ct)) {
     const text = got.body.trim().slice(0, BUILTIN_READ_TEXT_MAX);
     if (!text) return siteBlocked("not_found", undefined, "the file is empty");

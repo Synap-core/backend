@@ -1549,7 +1549,8 @@ export const createProcs = {
             properties: effectiveProperties,
             workspaceId: resolvedEntityWorkspaceId ?? null,
           },
-          ctx.userId
+          ctx.userId,
+          { refuseMisnamedLifecycle: true }
         );
       }
 

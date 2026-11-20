@@ -178,6 +178,13 @@ export class PropertyValidationService {
        * the parent entity, never the facet.
        */
       enforceRequired?: boolean;
+      /**
+       * Refuse an unknown key whose nearest field is the kind's LIFECYCLE
+       * (`status` on a decision, whose field is `decisionStatus`): stored
+       * verbatim it moves nothing, so the writer is told the right name. For
+       * a new write only; an update re-validates keys an old write stored.
+       */
+      refuseMisnamedLifecycle?: boolean;
     }
   ): Promise<ValidationResult> {
     const errors: string[] = [];
@@ -227,6 +234,17 @@ export class PropertyValidationService {
           effectiveProperties.map((p) => p.slug)
         );
         unmodeled.push(didYouMean ? { key, didYouMean } : { key });
+        if (
+          opts?.refuseMisnamedLifecycle &&
+          didYouMean &&
+          effectiveProperties.some(
+            (p) => p.slug === didYouMean && p.isLifecycle
+          )
+        ) {
+          const message = `Property '${key}' is not a field of this kind: its status field is '${didYouMean}'. Send the value as '${didYouMean}'.`;
+          errors.push(message);
+          issues.push({ key, kind: "invalid", message, didYouMean });
+        }
         logger.debug(
           { profileId, workspaceId, key, didYouMean },
           `Unknown property '${key}' is not modelled by this profile — stored verbatim, not queryable` +
@@ -305,7 +323,11 @@ export class PropertyValidationService {
     properties: Record<string, unknown>,
     profileId: string,
     workspaceId?: string | null,
-    opts?: { title?: string; profileDefaults?: Record<string, unknown> }
+    opts?: {
+      title?: string;
+      profileDefaults?: Record<string, unknown>;
+      refuseMisnamedLifecycle?: boolean;
+    }
   ): Promise<{
     valid: boolean;
     errors: string[];
@@ -324,7 +346,10 @@ export class PropertyValidationService {
       merged,
       profileId,
       workspaceId,
-      { enforceRequired: true }
+      {
+        enforceRequired: true,
+        refuseMisnamedLifecycle: opts?.refuseMisnamedLifecycle,
+      }
     );
     return {
       valid: result.valid,

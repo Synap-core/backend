@@ -250,6 +250,39 @@ describe("PropertyValidationService tells the writer what the kind models", () =
     ]);
   });
 
+  it("refuses a new write naming the lifecycle under another key, with its name", async () => {
+    const refused = await svc.validateEntityCreateForProposal(
+      { status: "accepted" },
+      "p",
+      "ws-1",
+      { title: "Ship it", refuseMisnamedLifecycle: true }
+    );
+    expect(refused.valid).toBe(false);
+    expect(refused.errors).toEqual([
+      "Property 'status' is not a field of this kind: its status field is 'decisionStatus'. Send the value as 'decisionStatus'.",
+    ]);
+    expect(refused.issues[0]).toMatchObject({
+      key: "status",
+      didYouMean: "decisionStatus",
+    });
+    // Advisory everywhere else (an update re-validates keys stored long ago).
+    const advisory = await svc.validateEntityCreateForProposal(
+      { status: "accepted" },
+      "p",
+      "ws-1",
+      { title: "Ship it" }
+    );
+    expect(advisory.valid).toBe(true);
+    // A near miss of a field that is NOT the lifecycle stays advisory.
+    const summary = await svc.validateEntityCreateForProposal(
+      { sumary: "x" },
+      "p",
+      "ws-1",
+      { title: "Ship it", refuseMisnamedLifecycle: true }
+    );
+    expect(summary.valid).toBe(true);
+  });
+
   it("suggests nothing when the bare key matches two fields", async () => {
     vi.spyOn(
       ProfileResolutionService.prototype,
