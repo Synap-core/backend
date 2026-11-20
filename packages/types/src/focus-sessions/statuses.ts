@@ -52,8 +52,9 @@ export type SessionStatus = (typeof SESSION_STATUSES)[number];
  * every status, so a status added to {@link SESSION_STATUSES} and not
  * classified here stops the build. Read by the session transition
  * (`setSessionStatus`, @synap/database), by any status rollup, and by every
- * status SET in this module. Keys in {@link SESSION_STATUSES}' order, so a
- * derived set keeps the order readers always had.
+ * status SET in this module. A derived set takes the order of these keys,
+ * which keep the order each set had as a hand list (the terminal set's
+ * `closed, cancelled, failed` is a published MCP / Hub enum order).
  *
  *   open    forming, scheduled — not started;
  *   active  active;
@@ -72,8 +73,8 @@ export const SESSION_STATUS_DECLARATION = {
   forming: { category: "open" },
   scheduled: { category: "open" },
   closed: { category: "done" },
-  failed: { category: "lost" },
   cancelled: { category: "lost" },
+  failed: { category: "lost" },
   stale: { category: "paused" },
 } as const satisfies Record<SessionStatus, { category: LifecycleCategory }>;
 

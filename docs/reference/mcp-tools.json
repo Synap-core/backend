@@ -4179,7 +4179,7 @@
           "type": "enum",
           "required": false,
           "description": "How the session ended. 'closed' (default) = the work finished. 'cancelled' = abandoned on purpose. 'failed' = attempted and could not be completed. All three run the SAME close (review pack, playbook_run close, ephemeral expiry, close event) — only the recorded outcome differs.",
-          "enum": ["closed", "failed", "cancelled"]
+          "enum": ["closed", "cancelled", "failed"]
         },
         {
           "name": "reason",
@@ -4211,7 +4211,7 @@
           },
           "terminalStatus": {
             "type": "string",
-            "enum": ["closed", "failed", "cancelled"],
+            "enum": ["closed", "cancelled", "failed"],
             "description": "How the session ended. 'closed' (default) = the work finished. 'cancelled' = abandoned on purpose. 'failed' = attempted and could not be completed. All three run the SAME close (review pack, playbook_run close, ephemeral expiry, close event) — only the recorded outcome differs."
           },
           "reason": {
