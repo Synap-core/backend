@@ -3981,7 +3981,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
+          "List playbooks (reusable process templates) visible to you: every member workspace plus pod-wide ones. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4006,13 +4006,18 @@ export const tools = {
             playbookId: {
               type: "string",
               description:
-                "Read ONE playbook in full (its whole definition and its `process`), instead of listing.",
+                "Read ONE playbook in full (definition and `process`).",
             },
             detail: {
               type: "string",
               enum: ["lean", "full"],
               description:
                 "lean (default) = the digest per playbook; full = complete rows (large: pair it with a small limit).",
+            },
+            runs: {
+              type: "string",
+              enum: ["digest"],
+              description: "With playbookId: per stage, how its runs went.",
             },
           },
           required: [],
