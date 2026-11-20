@@ -55,6 +55,8 @@ export const en = {
   "takeBack.done": "Taken back: {what}",
   "takeBack.failed": "Couldn’t take it back",
   "grid.agents": "Agents and how their writes land",
+  "doors.limits": "Daily write limits",
+  "doors.calibration": "Calibration",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -104,4 +106,6 @@ export const fr: Catalog<typeof en> = {
   "takeBack.done": "Retirée : {what}",
   "takeBack.failed": "Impossible de la retirer",
   "grid.agents": "Les agents et la façon dont leurs écritures s’appliquent",
+  "doors.limits": "Limites d’écritures par jour",
+  "doors.calibration": "Calibrage",
 };

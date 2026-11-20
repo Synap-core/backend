@@ -20,9 +20,14 @@
  * a pod default is changed by its switch and a posture row on its agent's
  * page, so a revoke here never fights the setting that wrote it. Receivers:
  * `?agent=`, `?tool=`, `?verdict=`, `?space=`, `?view=`, `?focus=<row id>`.
+ *
+ * Its two tuning pages sit under it: Daily write limits (`/approvals/limits`)
+ * and Calibration (`/approvals/calibration`), doors in the header.
  */
 
 import { Button, addToast } from "@heroui/react";
+import { Activity, Gauge } from "lucide-react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import {
@@ -242,7 +247,36 @@ function ApprovalsInner() {
 
   return (
     <PageShell>
-      <PageHeader title={APPROVALS_TITLE} description={t("description")} />
+      <PageHeader
+        title={APPROVALS_TITLE}
+        description={t("description")}
+        // The two settings that tune approvals have their own pages here
+        // (decision b387ca45 D5: they moved from the desktop).
+        actions={
+          <>
+            <Button
+              as={Link}
+              href={navHref("writeLimits")}
+              size="sm"
+              variant="flat"
+              radius="md"
+              startContent={<Gauge className="h-3.5 w-3.5" />}
+            >
+              {t("doors.limits")}
+            </Button>
+            <Button
+              as={Link}
+              href={navHref("calibration")}
+              size="sm"
+              variant="flat"
+              radius="md"
+              startContent={<Activity className="h-3.5 w-3.5" />}
+            >
+              {t("doors.calibration")}
+            </Button>
+          </>
+        }
+      />
 
       <ListToolbar
         filters={

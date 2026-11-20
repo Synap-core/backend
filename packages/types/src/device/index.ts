@@ -23,6 +23,7 @@ import {
   seatLine,
   type AgentWriteMode,
 } from "../agents/index.js";
+import { CONSOLE_FEATURE_MARKS } from "../console/index.js";
 import { GRANT_PRESETS, resolveHolderAccess } from "../grants/index.js";
 import { resolveObjectNoun, resolveStatusLabel } from "../vocabulary/index.js";
 
@@ -193,8 +194,15 @@ export const DEVICE_MAX_AGENTS = 8;
  */
 export const AGENT_SEATS_FEATURE = "agent-seats";
 
-/** Every feature mark `GET /health` serves (`features`). */
-export const POD_FEATURES: readonly string[] = [AGENT_SEATS_FEATURE];
+/**
+ * Every feature mark `GET /health` serves (`features`): agents inside a
+ * computer, and the console pages a released pod may not serve yet
+ * (`CONSOLE_PAGE_FEATURES`, read by a client through `consolePageServed`).
+ */
+export const POD_FEATURES: readonly string[] = [
+  AGENT_SEATS_FEATURE,
+  ...CONSOLE_FEATURE_MARKS,
+];
 
 /** "Computer" — the one noun, from the vocabulary door. */
 export const COMPUTER_NOUN = resolveObjectNoun(MACHINE_AGENT_TYPE);
