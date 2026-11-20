@@ -139,6 +139,20 @@ export function askCurrentOf(
   return held.kind === "access" ? draftOf(held.access) : null;
 }
 
+/**
+ * An unavailable item in words: `entity.track.read@all` (v1.2: a read that
+ * cannot ride All spaces) → "Read goals everywhere in your pod"; another
+ * place or none → its permission's words.
+ */
+export function unavailableWords(item: string): string {
+  const t = consentT();
+  const [permission, place] = item.split("@");
+  const label = permissionLabel(permission ?? item);
+  return place === "all"
+    ? t("ask.line", { what: label, where: t("place.everywhere") })
+    : label;
+}
+
 export function AskConsent({
   appName,
   view,
@@ -281,7 +295,7 @@ export function AskConsent({
                     key={u}
                     className="flex items-center justify-between gap-3 text-xs text-foreground/80"
                   >
-                    {permissionLabel(u.split("@")[0] ?? u)}
+                    {unavailableWords(u)}
                     <Chip size="sm" variant="flat">
                       {t("cant.notGiven")}
                     </Chip>

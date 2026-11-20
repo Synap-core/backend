@@ -5,7 +5,6 @@
     "agentUsers.remove",
     "aiProviderCredentials.removeForUser",
     "aiProviderCredentials.upsertForUser",
-    "apps.updateAccess",
     "automations.archive",
     "automations.generateFlow",
     "capabilities.applyUpdates",

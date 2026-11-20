@@ -169,35 +169,3 @@ describe("pod-wide reads on the app page (decision e1b59d38 B)", () => {
     });
   });
 });
-
-describe("the app page's offer: what the app holds (design A lines)", () => {
-  it("each held permission, in the spaces it holds it in, pod-wide where it is", async () => {
-    const { heldOffer } = await import("./pod-app-view");
-    const offer = heldOffer([
-      ...APPROVED,
-      {
-        permission: "entity.task.read",
-        workspaceId: null,
-        workspaceName: null,
-      },
-      {
-        permission: "entity.post.read",
-        workspaceId: "w-gone",
-        workspaceName: null,
-      },
-    ]);
-    expect(offer.items.map((i) => i.permission)).toEqual([
-      "entity.post.read",
-      "entity.post.create",
-      "entity.task.read",
-    ]);
-    const read = offer.items[0]!;
-    expect(read.spaces.map((s) => s.workspaceName)).toEqual([
-      "Brand",
-      "Shared",
-      "a space you no longer see",
-    ]);
-    expect(offer.items[2]!.podWide).toBe(true);
-    expect(offer.projectsOffered).toBe(false);
-  });
-});

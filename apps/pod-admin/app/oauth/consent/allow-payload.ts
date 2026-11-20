@@ -11,7 +11,6 @@
  *    `ask.adds` where it already works, plus `askWritePlace` only when the
  *    server says it needs one (Q4).
  */
-import type { AppAccess } from "@synap-core/types/grants";
 import {
   toAccess,
   toApprovedPairs,
@@ -20,10 +19,38 @@ import {
   type ConsentOffer,
 } from "./consent-access";
 
+/** AppAccess v2 as `decideOAuthAuthorization` takes it (mutable lists). */
+export interface AccessInput {
+  version: 2;
+  permissions: string[];
+  read: { spaces: string[] | "all"; projects: string[] | "all" };
+  write: { spaces: string[]; projects: string[] };
+}
+
 export interface AllowPayload {
   approved?: Array<{ permission: string; workspaceId: string | null }>;
-  access?: AppAccess;
-  askWritePlace?: AppAccess["write"];
+  access?: AccessInput;
+  askWritePlace?: { spaces: string[]; projects: string[] };
+}
+
+/** A v2 access in the decide (and `apps.updateAccess`) input's shape. */
+export function accessInput(a: {
+  permissions: readonly string[];
+  read: {
+    spaces: "all" | readonly string[];
+    projects: "all" | readonly string[];
+  };
+  write: { spaces: readonly string[]; projects: readonly string[] };
+}): AccessInput {
+  return {
+    version: 2,
+    permissions: [...a.permissions],
+    read: {
+      spaces: a.read.spaces === "all" ? "all" : [...a.read.spaces],
+      projects: a.read.projects === "all" ? "all" : [...a.read.projects],
+    },
+    write: { spaces: [...a.write.spaces], projects: [...a.write.projects] },
+  };
 }
 
 export function allowPayload(input: {
@@ -43,7 +70,12 @@ export function allowPayload(input: {
   if (!app) return {};
   if (contract?.ask) {
     return contract.ask.needsWritePlace && askWrite
-      ? { askWritePlace: { ...askWrite.write } }
+      ? {
+          askWritePlace: {
+            spaces: [...askWrite.write.spaces],
+            projects: [...askWrite.write.projects],
+          },
+        }
       : {};
   }
   if (app.ask) {
@@ -57,7 +89,7 @@ export function allowPayload(input: {
   if (!offer || !draft) return { approved: [] };
   return {
     approved: toApprovedPairs(draft, offer),
-    ...(contract ? { access: toAccess(draft, offer) } : {}),
+    ...(contract ? { access: accessInput(toAccess(draft, offer)) } : {}),
   };
 }
 
