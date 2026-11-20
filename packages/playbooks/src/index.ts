@@ -2376,13 +2376,16 @@ export interface RunContext {
 
 export interface RunResult {
   /**
-   * Terminal: completed | failed | proposed. Non-terminal: `running` — the
-   * executor dispatched the work but it finishes ASYNCHRONOUSLY (e.g. the
-   * is-agent posts into a channel and the IS responds out-of-band; the
-   * external-agent fires a BYOA webhook and the agent captures back later).
-   * The runner records the run as-is and the run is closed via capture-back.
+   * Terminal: completed | failed | proposed. Non-terminal, the work finishes
+   * ASYNCHRONOUSLY and the run is closed via capture-back:
+   *   `queued`  — handed over, its holder has not taken it yet (the is-agent
+   *               posted the kickoff and enqueued the IS turn; a pull
+   *               hand-off waits for the agent). The holder's claim makes it
+   *               `running`;
+   *   `running` — the executor SAW the holder take it (the external agent's
+   *               provider started a task): this is the claim.
    */
-  status: "running" | "completed" | "failed" | "proposed";
+  status: "queued" | "running" | "completed" | "failed" | "proposed";
   summary?: string;
   /** Ids of artifacts/entities produced (used to write `produced` links). */
   producedIds?: string[];

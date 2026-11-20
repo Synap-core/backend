@@ -67,6 +67,8 @@ import {
   drizzleSql,
   liveRunStatusWhere,
   listHolds,
+  ownerAndActor,
+  runHolder,
   setRunStatus,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
@@ -556,8 +558,9 @@ export async function followPlaybook(
         .where(eq(focusSessions.id, sessionId))
         .returning();
 
-      // The ledger row, WITH the definition pinned. Same five snapshot fields
-      // `create-session.ts` writes — a run executes what it started with.
+      // The ledger row, WITH the definition pinned: a run executes what it
+      // started with. The live session's worker holds it, working already.
+      const owner = await ownerAndActor(tx, userId, agentUserId);
       const [run] = await tx
         .insert(playbookRuns)
         .values({
@@ -566,7 +569,13 @@ export async function followPlaybook(
           sessionId,
           executor: playbook.executor,
           status: "running",
-          createdBy: agentUserId ?? userId,
+          holder: runHolder(
+            agentUserId ? "agent" : "person",
+            agentUserId ?? userId,
+            true
+          ),
+          createdBy: owner.ownerId,
+          agentUserId: owner.agentUserId,
           // THE helper, not a seventh hand-written field list
           // (`run-playbook.ts`). `create-session.ts` still inlines FIVE of its
           // six fields — it omits `criteria` — which is exactly the drift a

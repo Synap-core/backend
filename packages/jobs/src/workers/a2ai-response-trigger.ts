@@ -54,6 +54,9 @@ import {
   messages,
   persistAssistantReply,
   agentOverridesForTurn,
+  claimRun,
+  drizzleSql,
+  playbookRuns,
   RoutedSource,
   type AgentTurnOverrides,
 } from "@synap/database";
@@ -444,6 +447,27 @@ export async function handleA2AIResponseTrigger(
         );
         return;
       }
+    }
+  }
+
+  // The turn starts now: a run on this session waiting for Synap AI is
+  // claimed by it (`queued` → `running`). Never thrown: a failed claim leaves
+  // the run queued for the reaper to judge, never a lost turn.
+  if (job.data.focusSessionId) {
+    try {
+      await claimRun(db, {
+        where: and(
+          eq(playbookRuns.sessionId, job.data.focusSessionId),
+          drizzleSql`${playbookRuns.holder} ->> 'kind' = 'synap_ai'`
+        ),
+        holder: { kind: "synap_ai", id: agentUserId ?? null },
+        reason: "Synap AI started its turn.",
+      });
+    } catch (err) {
+      logger.warn(
+        { err, channelId, focusSessionId: job.data.focusSessionId },
+        "A2AI: the run's claim was not written"
+      );
     }
   }
 

@@ -3,8 +3,9 @@
  * exists, on the model of `setSessionStatus`. Every door that moves a run (the
  * capture applier, the approval replay, the close door, unfollow, revive,
  * reopen, the generate decision, the approved start, cancel, redispatch, the
- * reaper's sweeps) calls this; a run is BORN with its first status (`running`),
- * which is not a move.
+ * reaper's sweeps) calls this; a run is BORN with its first status (`queued`,
+ * or `running` when its holder works it from birth), which is not a move. A
+ * holder's claim moves it `running` through {@link claimRun}.
  *
  * One transaction (the caller's, as a savepoint, or its own):
  *   1. lock the rows that match (`runId` and/or `where`) AND stand in `from`
@@ -29,10 +30,15 @@
  * Not dispatched inline (a caller's transaction may still be open): the
  * sweeper delivers within a minute or two.
  */
-import { and, asc, eq, inArray, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import { RUN_STATUS_DECLARATION } from "@synap-core/types/units";
+import {
+  RUN_STATUS_DECLARATION,
+  runStatusesIn,
+  type RunHolder,
+  type RunHolderKind,
+} from "@synap-core/types/units";
 import {
   decideMoveHold,
   type Hold,
@@ -250,5 +256,59 @@ export async function setRunStatus(
       });
     await insertTransitionOutbox(tx, transitions);
     return { rows, transitions };
+  });
+}
+
+/** A holder named now; `claimed` when it works the run from this moment. */
+export function runHolder(
+  kind: RunHolderKind,
+  id: string | null,
+  claimed = false
+): RunHolder {
+  const now = new Date().toISOString();
+  return { kind, id, assignedAt: now, claimedAt: claimed ? now : null };
+}
+
+/**
+ * The run's `holder` once claimed, as an UPDATE writes it: the kind and id
+ * given fill what the row's holder left open, and a claim already stamped
+ * keeps its time.
+ */
+export function claimedHolderSql(holder: {
+  kind?: RunHolderKind | null;
+  id?: string | null;
+}): SQL {
+  const now = new Date().toISOString();
+  return sql`jsonb_build_object(
+    'kind', coalesce(${holder.kind ?? null}::text, ${playbookRuns.holder} ->> 'kind', 'none'),
+    'id', coalesce(${holder.id ?? null}::text, ${playbookRuns.holder} ->> 'id'),
+    'assignedAt', coalesce(${playbookRuns.holder} ->> 'assignedAt', ${now}::text),
+    'claimedAt', coalesce(${playbookRuns.holder} ->> 'claimedAt', ${now}::text)
+  )`;
+}
+
+/**
+ * THE claim: the run's holder took it, so the run is `running`. Moves a run
+ * still waiting for a claim (`queued`, or `blocked` past its window) and
+ * stamps `holder.claimedAt`. A run already claimed, or ended, is left as it
+ * is: empty `rows`.
+ */
+export async function claimRun(
+  db: Db | Tx,
+  input: {
+    runId?: string;
+    where?: SQL;
+    holder: { kind: RunHolderKind; id: string | null };
+    reason: string;
+  }
+): Promise<SetRunStatusResult> {
+  return setRunStatus(db, {
+    runId: input.runId,
+    where: input.where,
+    from: [...runStatusesIn(["open"]), "blocked"],
+    to: "running",
+    actor: { kind: "system" },
+    reason: input.reason,
+    set: { holder: claimedHolderSql(input.holder) },
   });
 }

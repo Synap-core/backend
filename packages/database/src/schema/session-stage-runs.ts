@@ -20,6 +20,7 @@ import {
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
+import type { RunHolder } from "@synap-core/types/units";
 import type { PlaybookRunExternalAgent } from "./playbook-runs.js";
 
 /**
@@ -109,7 +110,7 @@ export const sessionStageRuns = pgTable(
     stageKey: text("stage_key").notNull(),
     /** 1 on the first entry; a re-entry (an `onFail` return) adds one. */
     attempt: integer("attempt").notNull().default(1),
-    /** The agent working it; NULL = Synap AI (or nobody could take it). */
+    /** The agent working it; NULL = not an agent (see `holder`). */
     runnerAgentUserId: text("runner_agent_user_id"),
     runnerVia: text("runner_via", { enum: STAGE_RUNNER_VIAS }).notNull(),
     presetKey: text("preset_key"),
@@ -132,6 +133,8 @@ export const sessionStageRuns = pgTable(
     requiresReport: jsonb("requires_report"),
     /** Each runner choice passed over, and why (`RunnerPassedOver[]`). */
     passedOver: jsonb("passed_over"),
+    /** Who holds the step: Synap AI, an agent, or nobody (0446). */
+    holder: jsonb("holder").$type<RunHolder>(),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

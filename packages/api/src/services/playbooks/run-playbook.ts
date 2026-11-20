@@ -41,6 +41,9 @@ import {
   listWorkerTargetsInFlight,
   startedByAgentPatch,
   setRunStatus,
+  claimedHolderSql,
+  ownerAndActor,
+  runHolder,
   uniqueViolationConstraint,
   type PlaybookRunWorkerSpec,
 } from "@synap/database";
@@ -2219,6 +2222,7 @@ async function executeSingleRun(
     handOff: handOff ?? null,
     runOn: runOn ?? null,
     stageRunners: input.stageRunners,
+    agentUserId: input.agentUserId ?? null,
   });
 
   // Re-load the session so the returned row reflects the wired channelId.
@@ -2298,6 +2302,8 @@ export async function dispatchRunOnSession(p: {
   runOn?: RunOn | null;
   /** Who works each step (`RunPlaybookInput.stageRunners`), kept on the run's input. */
   stageRunners?: Record<string, PlaybookRunner>;
+  /** The agent that started the run, when one did (the run's actor). */
+  agentUserId?: string | null;
 }): Promise<PlaybookRun> {
   const db = await getDb();
   const { playbook, actorId, params } = p;
@@ -2309,9 +2315,12 @@ export async function dispatchRunOnSession(p: {
     where: eq(focusSessions.id, p.sessionId),
   })) as FocusSession;
   const subjectId = p.subjectId ?? undefined;
+  const owner = await ownerAndActor(db, actorId, p.agentUserId);
 
-  // 4. Insert the run ledger row (status "running"). Snapshot the resolved
-  // definition (D3c) so "what ran" survives later edits to the playbook config.
+  // 4. Insert the run ledger row, `queued` with its holder: it is `running`
+  // only once that holder claims it (the IS turn starting, the agent's
+  // provider task, its first write). Snapshot the resolved definition (D3c)
+  // so "what ran" survives later edits to the playbook config.
   const [run] = await db
     .insert(playbookRuns)
     .values({
@@ -2320,11 +2329,17 @@ export async function dispatchRunOnSession(p: {
       sessionId: session.id,
       executor: executorRef,
       ...(p.runOn ? { runOn: p.runOn } : {}),
-      status: "running",
+      status: "queued",
+      holder: handOff
+        ? runHolder("agent", handOff.agentUserId)
+        : executorRef === "external-agent"
+          ? runHolder("agent", p.runOn?.agentUserId ?? null)
+          : runHolder("synap_ai", null),
       input: p.stageRunners
         ? { ...params, stageRunners: p.stageRunners }
         : params,
-      createdBy: actorId,
+      createdBy: owner.ownerId,
+      agentUserId: owner.agentUserId,
       definitionSnapshot: buildDefinitionSnapshot(playbook),
     })
     .returning();
@@ -2404,7 +2419,7 @@ export async function dispatchRunOnSession(p: {
     // hand-off through `external-agent`, with the agent named as its selector.
     result =
       handOff?.reach === "pull"
-        ? { status: "running" }
+        ? { status: "queued" }
         : await resolveExecutor(executorRef).run({
             workspaceId: p.workspaceId ?? "",
             userId: actorId,
@@ -2728,9 +2743,12 @@ async function latestRunFailedWithinCooldown(
  * run (`services/agent-dispatch/redispatch-on-choice.ts`).
  *
  * COMPARE-AND-SET: written only onto a run that is still LIVE. Every caller
- * writes onto a run it holds live — `runPlaybook` and the one-shot
- * `generate-run` insert it `running`, the re-dispatch claims it `failed →
- * running` — so LIVE is the one expected set, and no caller needs another.
+ * writes onto a run it holds live — `runPlaybook` inserts it `queued`, the
+ * one-shot `generate-run` `running`, the re-dispatch re-queues it — so LIVE
+ * is the one expected set. `queued` (handed over, nobody claimed it yet) is
+ * written only onto a run still queued: a holder that claimed it while the
+ * executor returned keeps its `running`. `running` IS the claim: the
+ * executor saw its holder take it (a provider task started).
  * An executor call can be long, and the run can end under it (the person
  * cancels the session, an IS turn completes it first): that verdict stands.
  * Then nothing is written or settled, it is logged, and the run is returned
@@ -2748,11 +2766,22 @@ export async function recordExecutorResult(
   const externalAgentPatch = result.externalAgent
     ? { externalAgent: result.externalAgent }
     : {};
+  const handedOver = result.status === "queued";
+  const claimPatch =
+    result.status === "running"
+      ? {
+          holder: claimedHolderSql(
+            result.externalAgent
+              ? { kind: "agent", id: result.externalAgent.agentUserId }
+              : {}
+          ),
+        }
+      : {};
   const {
     rows: [updated],
   } = await setRunStatus(db, {
     runId,
-    from: LIVE_RUN_STATUSES,
+    from: handedOver ? "queued" : LIVE_RUN_STATUSES,
     to: result.status,
     // The executor reports; the run's own door records it.
     actor: { kind: "system" },
@@ -2763,6 +2792,7 @@ export async function recordExecutorResult(
       // The hand-off receipt of an external-agent dispatch (0315) — what the
       // status poll and the cancel door read. Absent for every other executor.
       ...externalAgentPatch,
+      ...claimPatch,
     },
   });
   if (!updated) {
@@ -2771,6 +2801,10 @@ export async function recordExecutorResult(
       .from(playbookRuns)
       .where(eq(playbookRuns.id, runId))
       .limit(1);
+    // Claimed while the executor returned: the claim is the newer truth.
+    if (handedOver && current?.status === "running") {
+      return current as PlaybookRun;
+    }
     logger.warn(
       { runId, wanted: result.status, status: current?.status ?? null },
       "recordExecutorResult: the run was no longer live; its verdict stands and the executor's result was not written"

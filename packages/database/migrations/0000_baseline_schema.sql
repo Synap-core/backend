@@ -4566,6 +4566,9 @@ ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "external_agent" jsonb;
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "stop_reason" text;  -- 0361 ('budget' = an unattended run ended at its limit)
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "run_on" jsonb;  -- 0403 (who ran it and why: RunOn)
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "generation" jsonb;  -- 0417 (a one-shot run's record: prompt, model, tokens, proposal)
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "holder" jsonb;  -- 0446 (who holds it, when it was claimed)
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "agent_user_id" text;  -- 0446 (the agent that started it; created_by = the person)
+ALTER TABLE "playbook_runs" ALTER COLUMN "status" SET DEFAULT 'queued';  -- 0446 (born queued, running on claim)
 CREATE INDEX IF NOT EXISTS "idx_playbook_runs_generation_subject"
   ON "playbook_runs" ("playbook_id", (("generation"->>'subjectId')))
   WHERE "generation" IS NOT NULL;
@@ -5074,6 +5077,8 @@ CREATE INDEX IF NOT EXISTS "session_stage_runs_session_stage_idx"
   ON "session_stage_runs" ("session_id", "stage_key");
 -- 0424: a `forEach` step's batches and child runs.
 ALTER TABLE "session_stage_runs" ADD COLUMN IF NOT EXISTS "fan_out" jsonb;
+-- 0446: who holds the step (Synap AI, an agent, or nobody).
+ALTER TABLE "session_stage_runs" ADD COLUMN IF NOT EXISTS "holder" jsonb;
 -- 0270: a session's OWN phases. `expected_outputs` and `criteria` above are
 -- both seeded from the playbook and authorable afterwards; `stages` was the
 -- missing third, and without it a session running no playbook could not have

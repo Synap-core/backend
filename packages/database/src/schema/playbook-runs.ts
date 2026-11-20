@@ -22,7 +22,10 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import type { RunOn } from "@synap-core/types/agents";
-import type { PlaybookRunStatusValue } from "@synap-core/types/units";
+import type {
+  PlaybookRunStatusValue,
+  RunHolder,
+} from "@synap-core/types/units";
 
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef =
@@ -53,10 +56,12 @@ export type PlaybookRunStatus = PlaybookRunStatusValue;
  * budget or step limit — nothing broke, so its automation's breakers SKIP it
  * (`automation-parent-settle.ts`). `stages_left`: its turns kept ending before
  * it reached its last stage — a fault of the run, so the breakers COUNT it
- * (only `budget` is exempt). A text column with no CHECK (0361): a new value
- * needs no migration.
+ * (only `budget` is exempt). `no_effect`: its turn ended with no write, no
+ * output and no room message (`turn-effect.ts`), with nobody to ask; the
+ * breakers count it. A text column with no CHECK (0361): a new value needs no
+ * migration.
  */
-export const RUN_STOP_REASONS = ["budget", "stages_left"] as const;
+export const RUN_STOP_REASONS = ["budget", "stages_left", "no_effect"] as const;
 
 /**
  * `automation_runs.stop_reason`: the parent settle stamps `budget` only when
@@ -228,6 +233,7 @@ export const playbookRuns = pgTable(
       .notNull(),
     status: text("status", {
       enum: [
+        "queued",
         "running",
         "completed",
         "failed",
@@ -235,11 +241,12 @@ export const playbookRuns = pgTable(
         "cancelled",
         "waiting_on_you",
         "stale",
+        "blocked",
       ],
     })
       .$type<PlaybookRunStatus>()
       .notNull()
-      .default("running"),
+      .default("queued"),
     /** The resolved params/input this run was started with. */
     input: jsonb("input").notNull().default({}),
     /** Executor-reported summary on completion. */
@@ -277,12 +284,16 @@ export const playbookRuns = pgTable(
      * model, tokens and the proposal it filed. NULL on every other run.
      */
     generation: jsonb("generation").$type<PlaybookRunGeneration>(),
+    /** Who holds the run and when it claimed it (0446). NULL before 0446. */
+    holder: jsonb("holder").$type<RunHolder>(),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
-    /** Owning principal — human user id or agent-user id. */
+    /** The person the run is for (`ownerAndActor`). */
     createdBy: text("created_by").notNull(),
+    /** The agent that started it, when one did (0446); NULL for a person. */
+    agentUserId: text("agent_user_id"),
   },
   (table) => ({
     playbookIdIdx: index("idx_playbook_runs_playbook_id").on(table.playbookId),

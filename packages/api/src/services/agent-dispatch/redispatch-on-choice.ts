@@ -9,9 +9,10 @@
  * reads as the run param. This reactor listens for that answer's side effect
  * (`focus_session` / `slot_answered`) and dispatches again.
  *
- * IDEMPOTENT: the run is CLAIMED `failed → running` (WHERE status = 'failed'
- * AND external_agent IS NULL) before the executor runs — a second delivery of
- * the event, or a second answer, finds nothing to claim.
+ * IDEMPOTENT: the run is taken back `failed → queued` (WHERE status =
+ * 'failed' AND external_agent IS NULL) before the executor runs — a second
+ * delivery of the event, or a second answer, finds nothing to take. It is
+ * `running` once the chosen agent's provider starts the task.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -24,6 +25,7 @@ import {
   entities,
   focusSessions,
   playbookRuns,
+  runHolder,
   setRunStatus,
 } from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
@@ -66,17 +68,21 @@ export async function redispatchAfterAgentChoice(
     .limit(1);
   if (!failed) return { status: "nothing_to_redispatch" };
 
-  // CLAIM — only the claimer dispatches.
+  // Only the one that takes it back dispatches.
   const {
     rows: [run],
   } = await setRunStatus(db, {
     runId: failed.id,
     where: drizzleSql`${playbookRuns.externalAgent} IS NULL`,
     from: "failed",
-    to: "running",
+    to: "queued",
     actor: { kind: "system" },
     reason: "The person chose an agent: dispatched again.",
-    set: { error: null, completedAt: null },
+    set: {
+      error: null,
+      completedAt: null,
+      holder: runHolder("agent", null),
+    },
   });
   if (!run) return { status: "nothing_to_redispatch" };
 

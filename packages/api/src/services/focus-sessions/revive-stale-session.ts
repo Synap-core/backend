@@ -16,15 +16,21 @@
  *
  * Session → `active` (with `updatedAt` = now: this IS activity). Its stale
  * playbook run(s) → `running`, so the run feed, the needs-you lens and the
- * reaper's next sweep all read it as worked again. Both writes are conditional
+ * reaper's next sweep all read it as worked again.
+ *
+ * An AGENT's write is also its claim: a run on that session handed to it (or
+ * to an agent not named yet) and still `queued` / `blocked` is `running` now
+ * (`claimRun`) — the agent picked up the work it was handed. Both writes are conditional
  * on the stale status AND on the session being the writer's own (`userId` —
  * the human an agent acts for), so a session that is not stale, or a handle
  * that names someone else's session, costs one indexed no-op UPDATE.
  */
 import {
   db,
+  and,
   eq,
   drizzleSql,
+  claimRun,
   focusSessions,
   playbookRuns,
   setRunStatus,
@@ -77,6 +83,7 @@ export function sessionToReviveForWrite(write: {
  */
 export async function reviveSessionForWrite(write: {
   userId: string;
+  agentUserId?: string | null;
   sessionId?: string | null;
   subjectType: string;
   data?: Record<string, unknown>;
@@ -84,6 +91,17 @@ export async function reviveSessionForWrite(write: {
   const sessionId = sessionToReviveForWrite(write);
   if (!sessionId) return;
   try {
+    if (write.agentUserId) {
+      await claimRun(db, {
+        where: and(
+          eq(playbookRuns.sessionId, sessionId),
+          drizzleSql`${playbookRuns.holder} ->> 'kind' = 'agent'`,
+          drizzleSql`coalesce(${playbookRuns.holder} ->> 'id', ${write.agentUserId}) = ${write.agentUserId}`
+        ),
+        holder: { kind: "agent", id: write.agentUserId },
+        reason: "Its agent picked the work up.",
+      });
+    }
     const result = await reviveStaleSession(sessionId, write.userId);
     if (result.sessionRevived) {
       logger.info(

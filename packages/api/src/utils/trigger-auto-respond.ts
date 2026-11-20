@@ -16,7 +16,8 @@
  * RUN channels are live process narration (capture, automation, …): system posts
  * progress; a user free-text flip must still enqueue a real agent turn.
  * Best-effort: the triggering message is already persisted; a failed trigger is
- * logged and swallowed. Returns true iff the job was enqueued.
+ * logged and swallowed. Returns true iff THIS call enqueued the job: a send
+ * pg-boss deduplicated (a job for the same message already queued) is false.
  */
 
 import { db, eq, and } from "@synap/database";
@@ -164,7 +165,7 @@ export async function triggerAutoRespond(params: {
       workspaceId: channel.workspaceId ?? undefined,
       capability: "chat",
     });
-    await getBoss().send(
+    const jobId = await getBoss().send(
       A2AI_TRIGGER_QUEUE,
       {
         channelId: params.channelId,
@@ -192,6 +193,17 @@ export async function triggerAutoRespond(params: {
         singletonKey: params.userMessageId,
       }
     );
+    if (jobId === null) {
+      logger.warn(
+        {
+          channelId: params.channelId,
+          userMessageId: params.userMessageId,
+          reason: "deduplicated",
+        },
+        "triggerAutoRespond: a job for this message is already queued; nothing new was enqueued"
+      );
+      return false;
+    }
     return true;
   } catch (err) {
     // Same invisibility as the eligibility skip above, but a different cause:
