@@ -19,7 +19,7 @@
  * they say so; the short ask only adds permissions (Q4); the token narrowing
  * compares by meaning (review finding 4 of #1196) and never widens.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   addPermissionsToAccess,
   reconsentProposal,
@@ -108,7 +108,24 @@ function requestOf(
 }
 
 /** What the engine (`permits`) answers, for every request of the universe. */
+// The exhaustive universes are pure but CPU-bound (~5 s for the file alone
+// on the devbox). Under a loaded CI shard one of them can pass the 5 s
+// default (Full suite, run 44643201059: failed once, passed on the retry).
+// They are deterministic, so a time limit is the only thing that can fail
+// them by chance: give them room, and read each scope set's table once.
+vi.setConfig({ testTimeout: 60_000 });
+const TABLES = new Map<string, Set<string>>();
+
 function permitsTable(scopes: readonly Scope[]): Set<string> {
+  const key = JSON.stringify(scopes);
+  const hit = TABLES.get(key);
+  if (hit) return hit;
+  const table = computePermitsTable(scopes);
+  TABLES.set(key, table);
+  return table;
+}
+
+function computePermitsTable(scopes: readonly Scope[]): Set<string> {
   const out = new Set<string>();
   for (const p of ASKED)
     for (const ws of [A, B, C, undefined])

@@ -123,6 +123,7 @@ import {
   pairsWithin,
   expandAppAccess,
   parseAppAccess,
+  parsePlace,
   parseRequestPlace,
   permissionWithin,
   PlaceError,
@@ -998,7 +999,10 @@ async function syncAppAgentMemberships(
     const reads = g.permissions.every(
       (p) => parsePermission(p).at(-1) === "read"
     );
-    for (const workspaceId of g.workspaceIds ?? []) {
+    // The spaces it names, read through THE parse (`parsePlace`).
+    const place = parsePlace(g, "app");
+    if (place.kind !== "spaces") continue;
+    for (const workspaceId of place.ids) {
       const prior = roles.get(workspaceId);
       roles.set(
         workspaceId,
@@ -1205,15 +1209,19 @@ function scopeShape(scope: {
   workspaceIds?: readonly string[] | null;
   projectIds?: readonly string[] | null;
 }): GrantInput {
+  // A list copied as a list (sorted), never read for what "no list" means.
+  const ws = sortedIdList(scope.workspaceIds);
+  const pj = sortedIdList(scope.projectIds);
   return {
     permissions: [...scope.permissions].sort(),
-    ...(scope.workspaceIds?.length
-      ? { workspaceIds: [...scope.workspaceIds].sort() }
-      : {}),
-    ...(scope.projectIds?.length
-      ? { projectIds: [...scope.projectIds].sort() }
-      : {}),
+    ...(ws ? { workspaceIds: ws } : {}),
+    ...(pj ? { projectIds: pj } : {}),
   };
+}
+
+/** A non-empty id list, copied and sorted; null for none. */
+function sortedIdList(ids: readonly string[] | null | undefined): string[] | null {
+  return Array.isArray(ids) && ids.length > 0 ? [...ids].sort() : null;
 }
 
 /** What a person may give an app, read now (W3d): their floor per tier. */

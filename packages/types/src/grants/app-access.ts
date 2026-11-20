@@ -688,14 +688,17 @@ export interface GrantScopeLike {
 /** The pieces of a scope: one per permission × named place (W3d). */
 function piecesOf<T extends GrantScopeLike>(scope: T): T[] {
   const out: T[] = [];
-  const ws = scope.workspaceIds?.length ? scope.workspaceIds : null;
-  const pj = scope.projectIds?.length ? scope.projectIds : null;
+  // Its place read through THE parse (`parsePlace`): the spaces it names
+  // (beside a project pin too), else the projects, else none.
+  const place = parsePlace(scope as unknown as AppAccessGrantScope, "app");
+  const ws = placeSpaceIds(place);
+  const pj = placeProjectIds(place);
   for (const permission of scope.permissions) {
-    if (ws) {
+    if (ws.length > 0) {
       // Split by space; any other limit stays on each piece (still ⊆ scope).
       for (const id of ws)
         out.push({ ...scope, permissions: [permission], workspaceIds: [id] });
-    } else if (pj) {
+    } else if (pj.length > 0) {
       for (const id of pj)
         out.push({ ...scope, permissions: [permission], projectIds: [id] });
     } else out.push({ ...scope, permissions: [permission] });

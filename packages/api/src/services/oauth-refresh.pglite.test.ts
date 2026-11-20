@@ -646,9 +646,11 @@ describe("R5 — the refreshed key carries the CURRENT approval", () => {
       { permission: READ, workspaceId: SHARED },
     ]);
     // A door that changes the approval without re-deriving the live key: the
-    // key in hand still reaches both spaces.
+    // key in hand still reaches both spaces. The row is written as before
+    // W3d (pairs, no stored v2): since W3d a stored v2 is the authority, so a
+    // write of the pairs alone clears it, as every repository write does.
     const app = await connection();
-    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
+    await q(`update apps set approved_requests = $1::jsonb, approved_access = null where id = $2`, [
       JSON.stringify([{ permission: READ, workspaceId: SHARED }]),
       app.id,
     ]);
@@ -996,14 +998,14 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
       `select approved_requests from apps where id = $1`,
       [app.id]
     );
-    await q(`update apps set approved_requests = '[]'::jsonb where id = $1`, [
+    await q(`update apps set approved_requests = '[]'::jsonb, approved_access = null where id = $1`, [
       app.id,
     ]);
     const emptied = await refresh(first.refresh);
     expect(emptied.status).toBe(400);
     expect(emptied.body.error).toBe("invalid_grant");
     expect(emptied.body).not.toHaveProperty("access_token");
-    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
+    await q(`update apps set approved_requests = $1::jsonb, approved_access = null where id = $2`, [
       JSON.stringify(before.rows[0]!.approved_requests),
       app.id,
     ]);
@@ -1019,7 +1021,7 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
       [BRAND, SHARED].sort()
     );
     const app = await connection();
-    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
+    await q(`update apps set approved_requests = $1::jsonb, approved_access = null where id = $2`, [
       JSON.stringify([{ permission: READ, workspaceId: SHARED }]),
       app.id,
     ]);
@@ -1042,7 +1044,7 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
     const first = await connect();
     const r1 = await refresh(first.refresh);
     const app = await connection();
-    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
+    await q(`update apps set approved_requests = $1::jsonb, approved_access = null where id = $2`, [
       JSON.stringify([
         { permission: READ, workspaceId: BRAND },
         { permission: CREATE, workspaceId: BRAND },

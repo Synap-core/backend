@@ -429,12 +429,15 @@ const NARROW_MEMO_MAX = 512;
 function cloneScopes(
   scopes: readonly KeyGrant["scopes"][number][]
 ): KeyGrant["scopes"][number][] {
+  // Each list copied as it is (null stays null): a copy, not a reading.
+  const copy = (ids: readonly string[] | null | undefined) =>
+    Array.isArray(ids) ? [...ids] : ids;
   return scopes.map((s) => ({
     ...s,
     permissions: [...s.permissions],
-    ...(s.workspaceIds ? { workspaceIds: [...s.workspaceIds] } : {}),
-    ...(s.projectIds ? { projectIds: [...s.projectIds] } : {}),
-    ...(s.entityIds ? { entityIds: [...s.entityIds] } : {}),
+    workspaceIds: copy(s.workspaceIds),
+    projectIds: copy(s.projectIds),
+    entityIds: copy(s.entityIds),
   }));
 }
 
