@@ -39,7 +39,6 @@ import {
   and,
   db,
   eq,
-  inArray,
   isNull,
   or,
   drizzleSql,
@@ -290,7 +289,7 @@ export async function readExistingPlaybookApp(
     .from(widgetDefinitions)
     .where(
       and(
-        inArray(widgetDefinitions.typeKey, cellKeys),
+        or(...cellKeys.map((k) => eq(widgetDefinitions.typeKey, k))),
         eq(widgetDefinitions.isActive, true),
         or(
           eq(widgetDefinitions.workspaceId, facts.workspaceId),

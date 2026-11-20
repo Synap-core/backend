@@ -12,8 +12,8 @@ import {
   getDb,
   and,
   eq,
-  inArray,
   isNull,
+  or,
   getActingAgentUserId,
   drizzleSql,
 } from "@synap/database";
@@ -141,7 +141,7 @@ export async function resolveCellTypeKey(
     .from(widgetDefinitions)
     .where(
       and(
-        inArray(widgetDefinitions.typeKey, keys),
+        or(...keys.map((k) => eq(widgetDefinitions.typeKey, k))),
         workspaceId
           ? eq(widgetDefinitions.workspaceId, workspaceId)
           : isNull(widgetDefinitions.workspaceId)
@@ -239,9 +239,10 @@ export async function readStoredCellContent(
     .from(widgetDefinitions)
     .where(
       and(
-        inArray(
-          widgetDefinitions.typeKey,
-          cellTypeKeysFor(cell.name, cell.typeKey)
+        or(
+          ...cellTypeKeysFor(cell.name, cell.typeKey).map((k) =>
+            eq(widgetDefinitions.typeKey, k)
+          )
         ),
         workspaceId
           ? eq(widgetDefinitions.workspaceId, workspaceId)
