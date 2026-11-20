@@ -1478,16 +1478,23 @@ const BUILD_TAG_TOKEN =
   /^(?:(?:local|build)-[0-9a-f]{7,}|(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12,})$/i;
 
 /**
- * One word that is a machine token, not a name. Narrow ON PURPOSE — a false
- * positive deletes a real name from the title a person approves:
+ * THE door for "is this string a machine token, not a name a person can
+ * read" — one word only. Every surface that is about to show a stored name
+ * (a session title, a graph neighbour's name) asks this instead of keeping
+ * its own id pattern. Narrow ON PURPOSE — a false positive deletes a real
+ * name from what a person reads:
  *   - a UUID, a build tag (above);
  *   - a dotted id whose last segment is a known ACTION (`entity.create`,
  *     `gmail.send`) — so `report.pdf`, `synap.live`, `j.doe` stay names;
- *   - a snake_case slug only when the object is a Tool, whose identity IS its
- *     key (`routines_horizon`) — `meeting_notes` names a document.
+ *   - a snake_case slug only when `noun` is the Tool noun, whose identity IS
+ *     its key (`routines_horizon`) — `meeting_notes` names a document. With
+ *     no `noun` a snake_case slug is a name.
+ * Surrounding whitespace is ignored; an empty string is not a token (an
+ * empty name is the caller's own case).
  */
-function isMachineToken(text: string, noun: string): boolean {
-  if (/\s/.test(text)) return false;
+export function isMachineToken(raw: string, noun = ""): boolean {
+  const text = raw.trim();
+  if (!text || /\s/.test(text)) return false;
   if (UUID_TOKEN.test(text) || BUILD_TAG_TOKEN.test(text)) return true;
   if (DOTTED_TOKEN.test(text)) {
     return text.slice(text.lastIndexOf(".") + 1) in ACTION_VERBS;
