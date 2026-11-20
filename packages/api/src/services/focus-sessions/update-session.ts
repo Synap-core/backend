@@ -484,6 +484,13 @@ export type UpdateFocusSessionResult =
        * runner, `enterStage`): its runner, the hand-off, the tools it waits on.
        */
       stageRun?: EnterStageResult;
+      /**
+       * The entered stage's CHECK gate held and its `onFail` sent the run
+       * back to `toStage` (active again). `session` is then the row as it
+       * stands after that return, never the stage this call asked for
+       * (finding f9c80d6f).
+       */
+      sentBack?: { toStage: string; failing: string[] };
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -3121,6 +3128,7 @@ export async function updateFocusSession(
   let subjectMove: StageSubjectStatusOutcome | undefined;
   let subjectReached: StageSubjectStatusOutcome | undefined;
   let stageRun: EnterStageResult | undefined;
+  let sentBack: { toStage: string; failing: string[] } | undefined;
   if (params.currentStage !== undefined) {
     const { advanceSessionStage } = await import("./advance-stage.js");
     const advance = await advanceSessionStage({
@@ -3146,6 +3154,16 @@ export async function updateFocusSession(
     // a caller told "active" while the pod has it paused would step straight
     // past the gate it just opened.
     if (advance.paused) gatedStatus = "paused";
+    // The check held and its `onFail` sent the run back (active again, at
+    // that stage): the row moved twice in this call, so the reply reads it
+    // back below rather than echo the stage the call asked for (f9c80d6f).
+    if (advance.onFail) {
+      gatedStatus = undefined;
+      sentBack = {
+        toStage: advance.onFail.toStage,
+        failing: advance.check?.failing ?? [],
+      };
+    }
     // What the advance did to the subject, whenever the entered stage asked
     // for a move: a move that did not happen is never silent.
     const { reportedSubjectMove } = await import("./stage-subject-status.js");
@@ -3301,7 +3319,13 @@ export async function updateFocusSession(
   // than `updated` and carries the `playbookId`, the merged criteria and the
   // merged deliverables. Returning the pre-follow row would tell the caller its
   // attach did nothing.
-  const finalSession = reboundSession ?? followedSession ?? updated;
+  const sentBackSession = sentBack
+    ? ((await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, sessionId),
+      })) as typeof updated | undefined)
+    : undefined;
+  const finalSession =
+    sentBackSession ?? reboundSession ?? followedSession ?? updated;
   return {
     status: "updated",
     session: gatedStatus
@@ -3318,6 +3342,7 @@ export async function updateFocusSession(
     ...(subjectMove ? { subjectMove } : {}),
     ...(subjectReached ? { subjectReached } : {}),
     ...(stageRun ? { stageRun } : {}),
+    ...(sentBack ? { sentBack } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),
     ...(filing ? { filing } : {}),
