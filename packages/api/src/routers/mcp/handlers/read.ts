@@ -653,6 +653,62 @@ export const readHandlers: McpHandlerMap = {
     );
   },
   /**
+   * THE HOMES READS — the twin of Hub `GET /lifecycle/home` and
+   * `GET /lifecycle/moving`: all three call `lifecycle.home` / `lifecycle.moving`,
+   * so an agent reads what each space makes and what is being worked the way
+   * Home draws it (finding bf850fdc). Fence: `HOMES_READ`. Home is every
+   * space, so a key confined to one is refused it, as over Hub; moving reads
+   * that key's space.
+   */
+  synap_get_home: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const view = args.view === undefined ? "spaces" : args.view;
+    if (view !== "spaces" && view !== "moving")
+      return ok({
+        error: `Unknown view '${String(view)}'. Valid values: spaces, moving.`,
+      });
+    const id = (name: "projectId" | "workspaceId") => {
+      const v = args[name];
+      return typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+    };
+    const projectId = id("projectId");
+    if (projectId && !isUuid(projectId))
+      return ok({ error: `projectId is not a valid id: ${projectId}` });
+    const workspaceId = ctx.confinedWorkspaceId ?? id("workspaceId");
+    if (workspaceId && !isUuid(workspaceId))
+      return ok({ error: `workspaceId is not a valid id: ${workspaceId}` });
+    if (view === "spaces" && ctx.confinedWorkspaceId)
+      return ok({
+        error: `This key is confined to workspace ${ctx.confinedWorkspaceId}; view 'spaces' reads every space. Use view 'moving'.`,
+      });
+    const limit =
+      typeof args.limit === "number" && Number.isFinite(args.limit)
+        ? Math.min(100, Math.max(1, Math.floor(args.limit)))
+        : 30;
+    const callerCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      undefined,
+      undefined,
+      undefined,
+      agentUserId
+    );
+    const { lifecycleRouter } = await import("../../lifecycle.js");
+    const caller = lifecycleRouter.createCaller(
+      callerCtx as Parameters<typeof lifecycleRouter.createCaller>[0]
+    );
+    if (view === "spaces")
+      return ok(await caller.home(projectId ? { projectId } : {}));
+    return ok(
+      await caller.moving({
+        ...(projectId ? { projectId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
+        limit,
+      })
+    );
+  },
+  /**
    * THE board read — the twin of Hub `GET /whiteboards/:viewId/scene`: both
    * call `readBoardScene`. A failed read is a tool error naming its `reason`,
    * never an empty board. Shape and arrow text is what anyone on the board

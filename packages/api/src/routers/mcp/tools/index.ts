@@ -3510,6 +3510,39 @@ export const tools = {
         },
       },
       {
+        name: "synap_get_home",
+        annotations: {
+          title: "Get Home: what each space makes and what is moving",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Home as the person sees it, in ONE read — read-only. view 'spaces' (default): every space you see with what it produces (`source`: template or inferred) and, per produced kind, its pipeline in one line (columns by declared status, live, done this week, needs-you, being worked, one headline thing), plus `needsYou` totals; `projectId` lists only that project's spaces. view 'moving': the things with open work on them (a session on it, an in-flight worker), most urgent first, the work under each, `unattached` open sessions on no thing and `leftBehind` (sessions that ended while their thing stayed open). A null count means that part could not be read, never zero. Use it instead of reading every board.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            view: {
+              type: "string",
+              enum: ["spaces", "moving"],
+              description: "spaces (default) or moving.",
+            },
+            projectId: {
+              type: "string",
+              description: "Optional: only this project.",
+            },
+            workspaceId: {
+              type: "string",
+              description: "Optional, view 'moving' only: only this space.",
+            },
+            limit: {
+              type: "number",
+              description:
+                "View 'moving': things to return (default 30, max 100).",
+            },
+          },
+        },
+      },
+      {
         name: "synap_read_board",
         annotations: {
           title: "Read a whiteboard",

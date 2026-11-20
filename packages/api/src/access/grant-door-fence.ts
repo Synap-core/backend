@@ -153,6 +153,42 @@ export function processReadableByGrant(
 const BOARD_SCENE = READS("view", "document", "entity");
 
 /**
+ * THE HOMES READS (`services/lifecycle/homes.ts`): `lifecycle.home` (every
+ * space the person sees, what each produces, its pipelines, needs-you and
+ * being-worked) and `lifecycle.moving` (the things with open work on them,
+ * the unattached sessions and the left-behind ones). Hub `GET /lifecycle/home`
+ * and `GET /lifecycle/moving`, and MCP `synap_get_home`, share this one
+ * declaration (finding bf850fdc: a scoped key met a 403 on both Hub routes and
+ * had no MCP door at all, so it drew sample data).
+ *
+ * Both reads are on the person's floor (`entityReadVisibleWhere`,
+ * `sessionReadableWhere`, the needs-you count), none through a grant clause,
+ * so they cannot narrow to a pin: a key is admitted only when one scope reads
+ * every subject they touch unbounded — the things and their roles, projects,
+ * sessions and their links (subject, worker target), the liveness and
+ * transition events, proposals and room posts (asks, waits), the needs-you
+ * notifications, the person's last-seen mark (`preference`) and the playbook
+ * runs and automation runs a wait names. A key pinned to a space, project or
+ * object stays refused here; it reads its spaces through the doors that
+ * narrow (`GET /flow`, `GET /needs-you`).
+ */
+export const HOMES_READ_SUBJECTS: readonly string[] = [
+  "entity",
+  "facet",
+  "project",
+  "session",
+  "link",
+  "event",
+  "proposal",
+  "channel",
+  "notification",
+  "preference",
+  "playbook",
+  "automation",
+];
+const HOMES_READ = READS(...HOMES_READ_SUBJECTS);
+
+/**
  * ONE proposal by id: tRPC `proposals.get`, the row on the person's
  * visibility floor (`assertProposalVisibleTo`, no grant clause) with the names
  * of the objects it touches. MCP `synap_get_proposal` and Hub
@@ -957,6 +993,11 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // runs: `scopedDb`, subject `playbook`); flows without `playbook.read`
   // and the workers (no seam) come back `withheld`. Same as MCP `synap_get_flow`.
   [/^\/flow\/?$/, FLOW_OF],
+  // THE HOMES READS (`HOMES_READ`): what each space makes and what is being
+  // worked, on the person's floor; only a key reading all of it unbounded.
+  // Same as MCP `synap_get_home`.
+  [/^\/lifecycle\/home\/?$/, HOMES_READ],
+  [/^\/lifecycle\/moving\/?$/, HOMES_READ],
   // THE DESIGN DOOR (Hub `rest/designs.ts`, the service behind design.read and
   // design.catalog). One design is read through `entityReadVisibleWhere`
   // (`accessScopeWhere`, the key's grant ANDed: a design it does not reach is
@@ -1276,6 +1317,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_views: SEAMED,
   // Same door as `GET /flow` (FLOW_OF): the read narrows itself.
   synap_get_flow: FLOW_OF,
+  // Same door as `GET /lifecycle/home` and `/lifecycle/moving` (HOMES_READ).
+  synap_get_home: HOMES_READ,
   // Same door as `GET /whiteboards/:viewId/scene` (BOARD_SCENE).
   synap_read_board: BOARD_SCENE,
   // Aggregate doors: the subjects they read.

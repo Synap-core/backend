@@ -53,6 +53,8 @@ export const HOW_TO_NARROW: Readonly<Record<string, string>> = {
   synap_get_graph:
     "Lower `limit` and page the neighbours with `offset` (use `nextOffset`).",
   synap_get_relations: "Lower `limit` (the newest relations come first).",
+  synap_get_home:
+    "Pass `projectId` to read one project's spaces, or view 'moving' with a lower `limit` (and `workspaceId`).",
   synap_ask: "Call again with detail:'brief' or 'sources', or a lower `limit`.",
   synap_find:
     "Lower `limit` (matches per catalog), or name only the `catalogs` you need.",

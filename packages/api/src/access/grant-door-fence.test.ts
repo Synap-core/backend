@@ -305,6 +305,64 @@ describe("one proposal by id: Hub GET /proposals/:id is the MCP door's rule (fin
   });
 });
 
+describe("the homes reads: Hub GET /lifecycle/home and /moving are MCP synap_get_home's door (finding bf850fdc)", () => {
+  const HOMES = ["/lifecycle/home", "/lifecycle/home/", "/lifecycle/moving"];
+  const PINNED_AI = key({
+    permissions: GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!
+      .grant.permissions,
+    workspaceIds: ["w1"],
+  });
+  const PROJECT_PINNED = key({ permissions: ["*"], projectIds: ["p1"] });
+  /** Reads things and sessions but not the needs-you notifications. */
+  const NO_NOTIFICATIONS = key({
+    permissions: [
+      "entity.*.read",
+      "facet.read",
+      "project.read",
+      "session.read",
+      "link.read",
+      "event.*.read",
+      "proposal.read",
+      "channel.read",
+      "preference.read",
+      "playbook.read",
+      "automation.read",
+    ],
+  });
+  const DENY_ALL = key({ permissions: [] });
+
+  it.each(HOMES)("the AI preset (an agent's key) may GET %s", (path) => {
+    expect(restDoorAllowed("GET", path, AI)).toBe(true);
+    expect(mcpToolAllowed("synap_get_home", true, AI)).toBe(true);
+  });
+
+  it.each(HOMES)(
+    "GET %s is refused a key it cannot narrow to: pinned, or missing a subject",
+    (path) => {
+      // Both reads are on the person's floor: a pinned key would see spaces
+      // and sessions its grant does not reach.
+      expect(restDoorAllowed("GET", path, PINNED_AI)).toBe(false);
+      expect(restDoorAllowed("GET", path, PROJECT_PINNED)).toBe(false);
+      expect(restDoorAllowed("GET", path, NO_NOTIFICATIONS)).toBe(false);
+      expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+      expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+    }
+  );
+
+  it("REST and MCP answer the same for every key: one rule, not two", () => {
+    for (const g of [AI, PINNED_AI, PROJECT_PINNED, NO_NOTIFICATIONS, DENY_ALL])
+      for (const path of HOMES)
+        expect(restDoorAllowed("GET", path, g)).toBe(
+          mcpToolAllowed("synap_get_home", true, g)
+        );
+  });
+
+  it("the board stays unclassified: its governed read is GET /flow", () => {
+    expect(restDoorAllowed("GET", "/lifecycle/board", AI)).toBe(false);
+    expect(restDoorAllowed("GET", "/lifecycle/homes", AI)).toBe(false);
+  });
+});
+
 describe("ids are uuids: a static sibling is never admitted (R1)", () => {
   // Every door that names an id, with the static word a future sibling route
   // could take. Before R1 these were `[^/]+`, so `/projects/summary` would
