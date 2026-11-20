@@ -1,22 +1,23 @@
 /**
  * The OFFICIAL renderer bundle: fetched from the pod's Control Plane, then
- * installed (spec c9b1e4d0 §3d; founder, 19 Nov 2026: available only to pods
- * managed through the control plane, never to a self-hosted pod).
+ * installed (spec c9b1e4d0 §3d; founder, 20 Nov 2026: any pod covered by a
+ * Synap plan, whatever its hosting, replacing managed-only of 19 Nov).
  *
- * A pod cannot tell whether it is managed, so the gate is the Control
+ * A pod cannot tell whether a plan covers it, so the gate is the Control
  * Plane's: `GET {CP}/internal/renderer-bundles/:slug[/:version]` answers only
- * a pod-signed token (purpose `renderers`) of a pod it manages and that is
- * live (control-plane-api `routes/internal.ts`, `official-bundle-gate.ts`).
+ * a pod-signed token (purpose `renderers`) of a live pod covered by a plan, or
+ * a live lab (control-plane-api `routes/internal.ts`, `official-bundle-gate.ts`).
  * Every refusal is FORBIDDEN with a machine reason (`error.data.reasonCode`):
  *
- *   renderer_bundle_no_control_plane  no CONTROL_PLANE_URL (a self-hosted pod)
+ *   renderer_bundle_no_control_plane  no CONTROL_PLANE_URL (a pod no control plane knows)
  *   renderer_bundle_insecure_control_plane
  *                                     CONTROL_PLANE_URL is not https (only
  *                                     localhost / 127.0.0.1 may be http, in
  *                                     development): no token is sent
  *   renderer_bundle_pod_not_enrolled  no pod-signed credential (the route
  *                                     takes no legacy key)
- *   renderer_bundle_managed_only      the CP refused: not a managed, live pod
+ *   renderer_bundle_plan_required     the CP refused: no live plan covers the pod
+ *   renderer_bundle_pod_not_live      the CP refused: it does not see the pod running
  *
  * AUTHENTICITY. The bundle's BYTES are withheld from Synap's public catalog,
  * but its DIGEST is signed: the signed index lists it under its top-level
@@ -59,11 +60,15 @@ export const RENDERER_BUNDLE_INSECURE_CONTROL_PLANE =
   "renderer_bundle_insecure_control_plane" as const;
 export const RENDERER_BUNDLE_POD_NOT_ENROLLED =
   "renderer_bundle_pod_not_enrolled" as const;
-export const RENDERER_BUNDLE_MANAGED_ONLY =
-  "renderer_bundle_managed_only" as const;
+export const RENDERER_BUNDLE_PLAN_REQUIRED =
+  "renderer_bundle_plan_required" as const;
+export const RENDERER_BUNDLE_POD_NOT_LIVE =
+  "renderer_bundle_pod_not_live" as const;
 
-/** The CP's refusal code for a pod it does not manage. */
-const CP_MANAGED_ONLY = "OFFICIAL_BUNDLE_MANAGED_ONLY";
+/** The CP's refusal code for a live pod no Synap plan covers. */
+const CP_PLAN_REQUIRED = "OFFICIAL_BUNDLE_PLAN_REQUIRED";
+/** The CP's refusal code for a pod it does not see running. */
+const CP_POD_NOT_LIVE = "OFFICIAL_BUNDLE_POD_NOT_LIVE";
 /** The CP's refusal code for a legacy (non pod-signed) caller. */
 const CP_POD_JWT_REQUIRED = "POD_JWT_REQUIRED";
 
@@ -175,10 +180,16 @@ export async function fetchOfficialRendererBundle(input: {
     code?: unknown;
     package?: { version?: unknown; definition?: unknown };
   } | null;
-  if (res.status === 403 && body?.code === CP_MANAGED_ONLY) {
+  if (res.status === 403 && body?.code === CP_PLAN_REQUIRED) {
     throw refused(
-      RENDERER_BUNDLE_MANAGED_ONLY,
-      "The official renderers are available only on pods managed through the Synap control plane. Nothing was installed."
+      RENDERER_BUNDLE_PLAN_REQUIRED,
+      "The official renderers come with a Synap plan, and no live plan covers this pod. Nothing was installed."
+    );
+  }
+  if (res.status === 403 && body?.code === CP_POD_NOT_LIVE) {
+    throw refused(
+      RENDERER_BUNDLE_POD_NOT_LIVE,
+      "The control plane does not see this pod as running (it is suspended or still being set up), so it sent no renderers. Nothing was installed."
     );
   }
   if (res.status === 403 && body?.code === CP_POD_JWT_REQUIRED) {
