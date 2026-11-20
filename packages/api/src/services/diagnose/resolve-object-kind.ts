@@ -63,7 +63,7 @@ import {
 import { visibleWorkspaceWhere } from "./workspace.js";
 import { authoredByUser } from "../agent-identity-service.js";
 import { agentReadableBy } from "./agent-scorecard.js";
-import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import { AI_DECISION } from "../../lib/ai-events.js";
 import type { ObjectKind } from "./types.js";
@@ -287,7 +287,12 @@ export async function resolveObjectKind(
             updatedAt: skills.updatedAt,
           })
           .from(skills)
-          .where(and(eq(skills.id, id), visibleSkillsAnyWorkspaceWhere(userId)))
+          .where(
+            and(
+              eq(skills.id, id),
+              visibleSkillsWhere(userId, undefined, { allSpaces: true })
+            )
+          )
           .limit(1);
         if (skillRow)
           return {

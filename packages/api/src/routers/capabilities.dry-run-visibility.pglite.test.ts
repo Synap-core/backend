@@ -46,6 +46,7 @@ import {
   podMembers,
   users,
   projectMembers,
+  spaceAccess,
 } from "@synap/database/schema";
 import { capabilitiesRouter } from "./capabilities.js";
 
@@ -97,12 +98,14 @@ async function seedVerb(
   userId: string,
   scope: "pod" | "user" | "workspace",
   workspaceId: string | null = null
-): Promise<void> {
+): Promise<string> {
+  const id = randomUUID();
   await h.client!.query(
     `insert into skills (id, user_id, workspace_id, slug, kind, scope, name, status, approved)
      values ($1,$2,$3,$4,'declarative',$5,$6,'active',true)`,
-    [randomUUID(), userId, workspaceId, `verbs/${name}`, scope, name]
+    [id, userId, workspaceId, `verbs/${name}`, scope, name]
   );
+  return id;
 }
 
 beforeAll(async () => {
@@ -113,6 +116,7 @@ beforeAll(async () => {
     podMembers,
     users,
     projectMembers,
+    spaceAccess,
   ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));
   }
@@ -129,6 +133,16 @@ beforeAll(async () => {
   await seedVerb("verb.pod", OTHER, "pod");
   await seedVerb("verb.member_ws", OTHER, "workspace", WS_MEMBER);
   await seedVerb("verb.stranger_ws", OTHER, "workspace", WS_STRANGER);
+  const shared = await seedVerb(
+    "verb.shared_ws",
+    OTHER,
+    "workspace",
+    WS_STRANGER
+  );
+  await h.client!.query(
+    `insert into space_access (object_type, object_id, workspace_id) values ('skill', $1, $2)`,
+    [shared, WS_MEMBER]
+  );
 });
 
 const callerFor = (userId: string) =>
@@ -166,6 +180,18 @@ describe("SECURITY — capabilities.dryRun resolves verbs through the one skill 
       "dry-run-unavailable"
     );
     expect(await outcome(USER, "verb.stranger_ws", WS_STRANGER)).toBe(
+      "not_found"
+    );
+  });
+
+  it("a skill of another space shared with a member workspace resolves there, and only there", async () => {
+    expect(await outcome(USER, "verb.shared_ws", WS_MEMBER)).toBe(
+      "dry-run-unavailable"
+    );
+    expect(await outcome(USER, "verb.stranger_ws", WS_MEMBER)).toBe(
+      "not_found"
+    );
+    expect(await outcome(USER, "verb.shared_ws", WS_STRANGER)).toBe(
       "not_found"
     );
   });

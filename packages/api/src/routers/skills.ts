@@ -38,10 +38,7 @@ import {
   deleteLink,
 } from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import {
-  visibleSkillsAnyWorkspaceWhere,
-  visibleSkillsWhere,
-} from "../services/skills/visibility.js";
+import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import {
   assertMayChangeSkill,
   defaultSkillScope,
@@ -546,7 +543,7 @@ export const skillsRouter = router({
           /** When true, return only approved skills (the agent-tool loader uses this). */
           approved: z.boolean().optional(),
           /**
-           * Every space the reader can see, not one (`visibleSkillsAnyWorkspaceWhere`):
+           * Every space the reader can see, not one (`visibleSkillsWhere` with `allSpaces`):
            * the pod-wide lens of a control-plane list. Without it and without
            * `workspaceId`, a space's skills are not listed. Wins over `workspaceId`.
            */
@@ -562,7 +559,7 @@ export const skillsRouter = router({
 
       conditions.push(
         input?.allSpaces
-          ? visibleSkillsAnyWorkspaceWhere(userId)
+          ? visibleSkillsWhere(userId, undefined, { allSpaces: true })
           : visibleSkillsWhere(userId, input?.workspaceId)
       );
       // An EXPIRED rule must stop acting. This is the read the IS
@@ -620,7 +617,7 @@ export const skillsRouter = router({
         where: and(
           eq(skills.id, input.id),
           input.allSpaces
-            ? visibleSkillsAnyWorkspaceWhere(userId)
+            ? visibleSkillsWhere(userId, undefined, { allSpaces: true })
             : visibleSkillsWhere(userId, input.workspaceId)
         ),
       });

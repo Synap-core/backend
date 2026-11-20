@@ -27,11 +27,10 @@ describe("capability registry skill visibility", () => {
     // is normalized to `undefined`; `visibleSkillsWhere` then degrades to
     // `pod OR (user AND userId = caller)` — still owner-aware, still no
     // workspace-scoped rows.
-    // The lensed branch is the selected-workspace predicate; the `allSpaces`
-    // branch (every space the caller can see, 2026-09-28) is the shared
-    // any-workspace predicate — still one door each, never a hand-rolled check.
+    // `allSpaces` (every space the caller can see) is an option of the same
+    // predicate — one door, never a hand-rolled check.
     expect(skillRead).toMatch(
-      /\.where\(\s*ctx\.allSpaces\s*\?\s*visibleSkillsAnyWorkspaceWhere\(\s*ctx\.userId\s*\)\s*:\s*visibleSkillsWhere\(\s*ctx\.userId,\s*ctx\.workspaceId(\s*\?\?\s*undefined)?\s*\)\s*\)/
+      /\.where\(\s*visibleSkillsWhere\(\s*ctx\.userId,\s*ctx\.workspaceId(\s*\?\?\s*undefined)?,\s*\{\s*allSpaces:\s*ctx\.allSpaces,?\s*\}\s*\)\s*\)/
     );
     expect(skillRead).not.toContain("eq(skills.userId, ctx.userId)");
   });

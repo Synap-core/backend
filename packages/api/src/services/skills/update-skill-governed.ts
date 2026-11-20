@@ -30,7 +30,7 @@ import {
   skillCategoryChangeProblem,
 } from "../rules/index.js";
 import { resolveRequiredToolNames } from "./required-tool-names.js";
-import { visibleSkillsAnyWorkspaceWhere } from "./visibility.js";
+import { visibleSkillsWhere } from "./visibility.js";
 
 export interface SkillUpdatePatch {
   name?: string;
@@ -92,7 +92,10 @@ export async function updateSkillGoverned(input: {
     .where(
       and(
         id ? eq(skills.id, id) : eq(skills.slug, slug!),
-        visibleSkillsAnyWorkspaceWhere(input.userId, { includeExpired: true })
+        visibleSkillsWhere(input.userId, undefined, {
+          allSpaces: true,
+          includeExpired: true,
+        })
       )
     )
     .limit(1);

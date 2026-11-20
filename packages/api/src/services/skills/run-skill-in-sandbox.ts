@@ -67,7 +67,7 @@ import {
 import { SKILL_RUNTIME_VERSION } from "./skill-stdlib.js";
 import type { PodFileHandles } from "../capabilities/file-parameters.js";
 import { podFileBodyFor } from "./pod-file-body.js";
-import { visibleSkillsAnyWorkspaceWhere } from "./visibility.js";
+import { visibleSkillsWhere } from "./visibility.js";
 import type {
   RecordedEffect,
   SkillExecutionResult,
@@ -224,7 +224,7 @@ async function providerHostApproved(
         eq(skills.status, "active"),
         eq(skills.approved, true),
         drizzleSql`${skills.providerSpec}->>'tool' = ${provider}`,
-        visibleSkillsAnyWorkspaceWhere(operatorUserId)
+        visibleSkillsWhere(operatorUserId, undefined, { allSpaces: true })
       )
     );
   return verbs.some(
