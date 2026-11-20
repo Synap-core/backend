@@ -164,6 +164,7 @@ import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
 import {
   PlaybookParamsError,
+  playbookRunRefusal,
   promoteSessionToPlaybook,
 } from "../services/playbooks/playbook-lifecycle.js";
 import {
@@ -3385,6 +3386,20 @@ export const playbooksRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `"${playbook.name}" is a pod-wide playbook, so nothing says which workspace this run belongs to. Pass workspaceId (or a subject entity that has one).`,
+        });
+      }
+
+      // USABLE HERE — refused at FILING, by the run door's own rule
+      // (`playbookRunRefusal`, what `resolveRunnablePlaybook` applies when the
+      // run starts), never at approval: an explicit workspaceId naming another
+      // space than the playbook's home used to file a proposal that could only
+      // fail once approved (ticket e93cf92b). Folds into the can-apply
+      // registry of #1166 as its `playbook/run` entry.
+      const notRunnable = playbookRunRefusal(playbook, runWorkspaceId);
+      if (notRunnable) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: notRunnable,
         });
       }
 

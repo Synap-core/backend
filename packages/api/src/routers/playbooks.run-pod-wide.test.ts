@@ -263,8 +263,12 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
     expect(mockRunPlaybook).not.toHaveBeenCalled();
   });
 
-  it("(g) explicit input.workspaceId outranks the playbook's home", async () => {
-    const caller = playbooksRouter.createCaller(ctxWith(null));
+  it("(g) explicit input.workspaceId outranks the ambient one for a pod-wide playbook", async () => {
+    mockScopedFindFirst.mockResolvedValue({
+      ...PLAYBOOK_IN_A,
+      workspaceId: null,
+    });
+    const caller = playbooksRouter.createCaller(ctxWith(WS_A));
     await caller.run({ playbookId: PB_ID, workspaceId: WS_B });
 
     expect(mockRunPlaybook).toHaveBeenCalledWith(
@@ -275,6 +279,35 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
       "user-1",
       { workspaceId: WS_B }
     );
+  });
+
+  it("(g2) explicit workspaceId naming ANOTHER space than the playbook's home is refused at filing, naming the fix (e93cf92b)", async () => {
+    // Until 20 Nov 2026 this was filed (and this test pinned it as correct,
+    // with `runPlaybook` mocked): the gate proposed a run in B for a playbook
+    // that lives in A, and the approval then failed in
+    // `resolveRunnablePlaybook`. Refused now before the gate, by that rule.
+    const caller = playbooksRouter.createCaller(ctxWith(null));
+    await expect(
+      caller.run({ playbookId: PB_ID, workspaceId: WS_B })
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}.`,
+    });
+    expect(mockCheckPermission).not.toHaveBeenCalled();
+    expect(mockRunPlaybook).not.toHaveBeenCalled();
+  });
+
+  it("(g3) a PAUSED playbook is refused at filing, before any proposal", async () => {
+    mockScopedFindFirst.mockResolvedValue({
+      ...PLAYBOOK_IN_A,
+      status: "paused",
+    });
+    const caller = playbooksRouter.createCaller(ctxWith(null));
+    await expect(caller.run({ playbookId: PB_ID })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("is paused"),
+    });
+    expect(mockCheckPermission).not.toHaveBeenCalled();
   });
 
   describe("track STAGE filing (0274)", () => {
