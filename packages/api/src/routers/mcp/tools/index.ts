@@ -7434,8 +7434,7 @@ export const tools = {
             name: { type: "string", description: "New display name." },
             category: {
               type: "string",
-              description:
-                "'rule' = a guideline pushed into all work in its scope (documentation skills only).",
+              description: "'rule' = pushed into all work in scope",
             },
             code: {
               type: "string",

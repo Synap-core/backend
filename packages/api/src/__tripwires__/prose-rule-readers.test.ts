@@ -141,6 +141,10 @@ const READERS: Record<string, Handling> = {
     why: "reads pending rule/create PROPOSALS (target_type 'rule'), not skills rows; a category change is a skill/update proposal",
     evidence: [/const RULE_TARGET_TYPE = RULE_CATEGORY/],
   },
+  "packages/api/src/services/skills/update-skill-governed.ts": {
+    why: "the MCP skill door writes `category` through the one shared check, and warns (never refuses) when a rule's words are over the standing-rules tier",
+    evidence: [/skillCategoryChangeProblem\(/, /ruleOverTierWarning\(/],
+  },
   "packages/api/src/services/skills/same-name-skill.ts": {
     why: "a prose rule is written through the skill doors, so it counts as a twin; only a rule-loop rule is left out",
     evidence: [/->'rule' IS NULL/],
