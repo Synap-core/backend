@@ -610,6 +610,7 @@ export * from "./projectors/index.js";
 export * from "./utils/permissions.js";
 export * from "./utils/automation-owner-access.js";
 export * from "./utils/owner-person.js";
+export * from "./utils/usable-in-space.js";
 export * from "./utils/preferences.js";
 
 // Export sync materializer (shared between API receive + pull worker)

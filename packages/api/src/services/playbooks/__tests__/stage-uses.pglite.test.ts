@@ -91,6 +91,14 @@ beforeAll(async () => {
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     );
+    create table space_access (
+      object_type text not null,
+      object_id uuid not null,
+      workspace_id uuid not null,
+      granted_by text,
+      granted_at timestamptz not null default now(),
+      primary key (object_type, object_id, workspace_id)
+    );
     create table playbook_versions (
       playbook_id uuid not null,
       version integer not null,
@@ -218,7 +226,7 @@ describe("resolveStageUses — a step that is a playbook, pinned at the write do
     ).resolves.toBeDefined();
   });
 
-  it("uses a playbook of the same space or a pod-wide one, never another space's", async () => {
+  it("uses a playbook of the same space, one shared with it, or a pod-wide one", async () => {
     const podWide = await playbook({ name: "Pod render", workspaceId: null });
     const elsewhere = await playbook({
       name: "Their render",
@@ -238,6 +246,19 @@ describe("resolveStageUses — a step that is a playbook, pinned at the write do
         workspaceId: WS,
       })
     ).rejects.toThrow(/another space/);
+    // Shared with this space (a `space_access` grant), it is usable here.
+    await (h.db as any).insert(schema.spaceAccess).values({
+      objectType: "playbook",
+      objectId: elsewhere,
+      workspaceId: WS,
+    });
+    await expect(
+      resolveStageUses({
+        stages: [step("r", { playbookId: elsewhere })],
+        selfId: null,
+        workspaceId: WS,
+      })
+    ).resolves.toBeDefined();
     // A pod-wide playbook runs in any space, so it may only use pod-wide ones.
     const local = await playbook({ name: "Local render" });
     await expect(

@@ -159,6 +159,20 @@ describe("resolveLinkedPlaybooks — the playbook a link names", () => {
     expect(podWide.get("Ship a change")?.id).toBe(ids.shipPod);
     expect(podWide.has("Announce")).toBe(false);
   });
+
+  it("resolves a playbook of another space once it is shared with this one", async () => {
+    const shared = await playbook({ name: "Shared report", workspaceId: WS2 });
+    expect((await resolveLinkedPlaybooks(["shared report"], WS)).size).toBe(0);
+    await h.client!.query(
+      `insert into space_access (object_type, object_id, workspace_id) values ('playbook', $1, $2)`,
+      [shared, WS]
+    );
+    const r = await resolveLinkedPlaybooks(["shared report", shared], WS);
+    expect(r.get("shared report")?.id).toBe(shared);
+    expect(r.get(shared)?.id).toBe(shared);
+    // A grant is per space: a pod-wide playbook still reaches no space's.
+    expect((await resolveLinkedPlaybooks([shared], null)).size).toBe(0);
+  });
 });
 
 describe("findPlaybookLinkCycle — the write-time loop guard", () => {

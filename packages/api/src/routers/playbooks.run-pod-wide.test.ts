@@ -50,6 +50,8 @@ const {
     mockWorkspacesFindFirst: workspacesFindFirst,
     mockGetDb: vi.fn(),
     mockDb: {
+      // No `space_access` row shares a playbook with another space.
+      select: () => ({ from: () => ({ where: async () => [] }) }),
       query: {
         workspaceMembers: {
           findFirst: vi.fn().mockResolvedValue({ role: "editor" }),
@@ -289,7 +291,7 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
       caller.run({ playbookId: PB_ID, workspaceId: WS_B })
     ).rejects.toMatchObject({
       code: "PRECONDITION_FAILED",
-      message: `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}.`,
+      message: `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}, or share it with space ${WS_B}.`,
     });
     expect(mockCheckPermission).not.toHaveBeenCalled();
     expect(mockRunPlaybook).not.toHaveBeenCalled();

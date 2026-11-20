@@ -11,6 +11,7 @@ import {
   type NewRelationDef,
 } from "../schema/relation-defs.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { usableWith } from "../utils/usable-in-space.js";
 import type * as schema from "../schema/index.js";
 
 export interface CreateRelationDefInput {
@@ -41,8 +42,8 @@ export function pickDefForWorkspace<
   let held: T | undefined;
   for (const def of defs) {
     if (def.slug !== slug) continue;
-    // Only rows in the lens or pod-wide rows are candidates.
-    if (def.workspaceId !== null && def.workspaceId !== workspaceId) continue;
+    // Only rows usable in the lens are candidates (its own, or pod-wide).
+    if (!usableWith(def, workspaceId)) continue;
     if (!held || (held.workspaceId === null && def.workspaceId !== null)) {
       held = def;
     }

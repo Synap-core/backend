@@ -25,11 +25,13 @@ import {
   drizzleSql,
   eq,
   inArray,
-  isNull,
   ne,
   or,
   playbookAutomations,
   playbooks,
+  spaceGrantsOf,
+  usableInSpaceWhere,
+  usableWith,
   type SQL,
 } from "@synap/database";
 import type { PlaybookActivator } from "@synap/playbooks";
@@ -59,7 +61,7 @@ interface PlaybookNode {
   stages: unknown;
 }
 
-/** The playbooks a playbook in `workspaceId` may link to: its space and pod-wide, oldest first. */
+/** The playbooks a playbook in `workspaceId` may link to (usable there), oldest first. */
 async function linkablePlaybooks(
   workspaceId: string | null,
   only?: SQL
@@ -76,12 +78,12 @@ async function linkablePlaybooks(
     .where(
       and(
         ne(playbooks.status, "archived"),
-        workspaceId
-          ? or(
-              isNull(playbooks.workspaceId),
-              eq(playbooks.workspaceId, workspaceId)
-            )
-          : isNull(playbooks.workspaceId),
+        usableInSpaceWhere(
+          "playbook",
+          playbooks.id,
+          playbooks.workspaceId,
+          workspaceId
+        ),
         only
       )
     )
@@ -174,14 +176,17 @@ export async function findPlaybookLinkCycle(self: {
       (n) => n.id !== self.id
     ),
   ];
-  // A node sees its own space and pod-wide ones; self is first, so a name
+  // A node sees the playbooks usable in its space; self is first, so a name
   // equal to self's (in its reach) resolves to self.
+  const grants = await spaceGrantsOf(
+    db,
+    "playbook",
+    nodes.map((n) => n.id)
+  );
   const resolve = (ref: string, from: PlaybookNode) =>
     pick(
       ref,
-      nodes.filter(
-        (n) => n.workspaceId === null || n.workspaceId === from.workspaceId
-      )
+      nodes.filter((n) => usableWith(n, from.workspaceId, grants.get(n.id)))
     )?.id ?? (ref === self.id ? SELF : undefined);
   const next = new Map<string, Set<string>>(
     nodes.map((n) => [n.id, new Set()])
