@@ -36,11 +36,17 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { createLink } from "../links/links-service.js";
 import { isOutputRefVisible } from "./assert-output-ref-visible.js";
+import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 
 const logger = createLogger({ module: "focus-sessions/session-inputs" });
 
-/** Statuses a session can take an input in: it is still being worked. */
-const ATTACHABLE_STATUSES = ["active", "paused", "forming"] as const;
+/**
+ * Statuses a session can take an input in: it is still being worked — the
+ * open statuses except `scheduled` (an appointment).
+ */
+const ATTACHABLE_STATUSES = OPEN_SESSION_STATUSES.filter(
+  (s) => s !== "scheduled"
+);
 
 export type AttachSessionInputResult =
   | {

@@ -63,7 +63,11 @@ import type { SQL } from "@synap/database";
 import { parsePullRequestRef, type PullRequestRef } from "@synap-core/types";
 import { holdDevMovesRef, type Hold } from "@synap-core/types/lifecycle";
 import { workClockIn } from "@synap-core/types/work-clock";
-import { isDeliverableOutstanding } from "@synap-core/types/units";
+import {
+  isDeliverableOutstanding,
+  runStatusesIn,
+} from "@synap-core/types/units";
+import { sessionStatusesIn } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { sessionKindWhere } from "./session-kind.js";
 import { attachNextMove } from "./session-path-sections.js";
@@ -80,8 +84,11 @@ const STALE_HOURS = workClockIn("stale", "hours");
 /** Most sessions each move handles per tick (each runs a full door). */
 const BATCH = 200;
 
-/** Statuses an open session stands in that these moves may end. */
-const OPEN = ["active", "paused", "stale"] as const;
+/**
+ * Statuses an open session stands in that these moves may end: started and
+ * not ended (the `active` and `paused` categories: active, paused, stale).
+ */
+const OPEN = sessionStatusesIn(["active", "paused"]);
 
 /**
  * SQL: a RUN session — the session kind's own predicate, NULL-safe. `NOT` of
@@ -307,8 +314,8 @@ const AUTOMATION_RUN_ENDED = [
   "skipped",
   "blocked_by_policy",
 ] as const;
-/** The playbook run statuses after which nothing more runs. */
-const PLAYBOOK_RUN_ENDED = ["completed", "failed", "cancelled"] as const;
+/** The playbook run statuses after which nothing more runs (done or lost). */
+const PLAYBOOK_RUN_ENDED = runStatusesIn(["done", "lost"]);
 
 const sqlList = (values: readonly string[]) =>
   drizzleSql.raw(values.map((v) => `'${v}'`).join(", "));

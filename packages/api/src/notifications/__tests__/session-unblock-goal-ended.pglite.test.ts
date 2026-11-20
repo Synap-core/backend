@@ -342,3 +342,44 @@ describe("a goal ending — the one 'a blocker ended' rule", () => {
     });
   });
 });
+
+// "Delivered" means the work was done, not that the session closed (founder,
+// 2026-11-20). The REAL read (`openBlockerIds` → `readDependencyState` → the
+// row's `verification_report` → `sessionClosedAs` → `deriveOpenBlockers`),
+// from the row the close door writes, with nothing hand-built in between.
+describe("a SESSION blocker that closed — delivered only when the work was done", () => {
+  async function closedSession(title: string, report: unknown) {
+    const id = await session(title, "closed");
+    await q(
+      `update focus_sessions set verification_report = $2 where id = $1`,
+      [id, report === null ? null : JSON.stringify(report)]
+    );
+    return id;
+  }
+
+  it("a blocker closed ANYWAY with required work open still holds the dependent", async () => {
+    // Rules out "closed ⇒ delivered" (SESSION_DELIVERED_STATUSES = ["closed"]).
+    const { openBlockerIds } =
+      await import("../../services/focus-sessions/session-blocked-by.js");
+    const blocker = await closedSession("Half the migration", {
+      checked: "tsc",
+      closedNotDone: { reason: "Ran out of time", criteria: [], outcomes: [] },
+    });
+    const waiting = await session("Ship on top of it", "active");
+    await edge("session", waiting, "session", blocker);
+    expect(await openBlockerIds(waiting)).toEqual([blocker]);
+  });
+
+  it("a blocker closed with nothing recorded open (or no report at all) clears", async () => {
+    // Rules out the over-correction "only an explicit done clears": every
+    // historical close carries no record and must not re-block its chain.
+    const { openBlockerIds } =
+      await import("../../services/focus-sessions/session-blocked-by.js");
+    for (const report of [{ checked: "tsc" }, null]) {
+      const blocker = await closedSession("The whole migration", report);
+      const waiting = await session("Ship on top of it", "active");
+      await edge("session", waiting, "session", blocker);
+      expect(await openBlockerIds(waiting)).toEqual([]);
+    }
+  });
+});

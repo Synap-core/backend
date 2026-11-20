@@ -106,7 +106,10 @@ import {
   cancelRecordMetadataSql,
   type SessionCancelRecord,
 } from "./cancel-session.js";
-import type { SessionVerdict } from "@synap-core/types/focus-sessions";
+import {
+  sessionClosedAs,
+  type SessionVerdict,
+} from "@synap-core/types/focus-sessions";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
 import {
   boundReason,
@@ -1125,11 +1128,12 @@ export async function completeFocusSession(
     // Additive: reactors that do not know it ignore it.
     verdict,
     ...(closedNotDone ? { closedNotDone } : {}),
-    // How the run ended, as a playbook link reads it (`run_ended`): `done`
-    // only when it closed with no required work left open; and whether the
-    // session was only ATTACHED to its playbook, not run under it.
+    // How the run ended, as a playbook link reads it (`run_ended`) and the
+    // dependency rule reads "delivered": THE derivation (`sessionClosedAs`);
+    // and whether the session was only ATTACHED to its playbook, not run
+    // under it. Every exit is terminal; a status that is not reads not_done.
     closedAs:
-      updated.status === "closed" && !closedNotDone ? "done" : "not_done",
+      sessionClosedAs(updated.status, closedNotDone != null) ?? "not_done",
     attached:
       (updated.metadata as Record<string, unknown> | null)?.[
         FOLLOWED_VIA_METADATA_KEY

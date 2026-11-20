@@ -232,6 +232,43 @@ describe("deriveOpenBlockers — dropped vs delivered (founder decision 2026-10-
       deriveOpenBlockers(work, edges, states({ [`${kind}:b`]: state }))
     ).toEqual([]);
   });
+  // "Delivered" means the work was done, not that the session closed (founder,
+  // 2026-11-20). Rules out "closed clears" (SESSION_DELIVERED_STATUSES =
+  // ["closed"], the rule this replaced): the two rules DISAGREE exactly on a
+  // closed session whose `closedAs` is not_done.
+  it("a session CLOSED with required work open (closedAs not_done) holds, marked dropped", () => {
+    const edges = [dep("session", "work", "session", "b")];
+    const state = { status: "closed", closedAs: "not_done" as const };
+    expect(
+      classifyDependencyBlocker("session", "closed", null, "not_done")
+    ).toBe("dropped");
+    expect(
+      deriveOpenBlockers(work, edges, states({ "session:b": state }))
+    ).toEqual([
+      {
+        kind: "session",
+        id: "b",
+        hidden: false,
+        dropped: true,
+        status: "closed",
+      },
+    ]);
+  });
+  // Rules out the over-correction "only an explicit done clears": a closed
+  // row with no close-anyway record (a person's close, every close before
+  // the record existed) delivered, so no historical chain re-blocks.
+  it("a closed session with closedAs done, or none recorded, clears", () => {
+    expect(classifyDependencyBlocker("session", "closed", null, "done")).toBe(
+      "delivered"
+    );
+    expect(classifyDependencyBlocker("session", "closed", null, null)).toBe(
+      "delivered"
+    );
+    // closedAs never makes a not-ended session delivered.
+    expect(classifyDependencyBlocker("session", "active", null, "done")).toBe(
+      "open"
+    );
+  });
   // Rules out "stale settles" (it did: stale ∉ OPEN_SESSION_STATUSES).
   it("a stale session blocker holds as OPEN, not dropped", () => {
     const edges = [dep("session", "work", "session", "b")];

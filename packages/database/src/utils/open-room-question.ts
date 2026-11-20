@@ -33,7 +33,7 @@ import { messages, MessageAuthorType } from "../schema/messages.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import {
   owedSlotExistsIn,
-  OPEN_SESSION_STATUSES,
+  RUN_PARKING_SESSION_STATUSES,
 } from "./owed-slot-predicate.js";
 import { awaitedGatePendingIn } from "./awaited-gate-wait.js";
 
@@ -110,7 +110,7 @@ export function openRoomQuestionIn(channelId: AnyPgColumn | SQL): SQL {
 }
 
 const OPEN_SESSION_SQL_LIST = drizzleSql.raw(
-  OPEN_SESSION_STATUSES.map((s) => `'${s}'`).join(", ")
+  RUN_PARKING_SESSION_STATUSES.map((s) => `'${s}'`).join(", ")
 );
 
 /**

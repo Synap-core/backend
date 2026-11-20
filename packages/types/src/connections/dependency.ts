@@ -15,8 +15,10 @@
  * kind's status vocabulary ({@link classifyDependencyBlocker}):
  *
  *            DELIVERED (clears)     DROPPED (still holds)   OPEN (holds)
- *   session  `closed`               `cancelled` · `failed`  anything else —
- *                                                           incl. `stale`
+ *   session  category `done` and   category `lost`         anything else —
+ *            `closedAs` done        (`cancelled`, `failed`), incl. `stale`
+ *            (`closed`, nothing     or `closed` with
+ *            required left open)    `closedAs` not_done
  *   track    lifecycle category     category `lost`         anything else
  *            `done` (`completed`)   (`archived`: the goal
  *                                   was dropped)
@@ -26,7 +28,10 @@
  *            ({@link ENTITY_DELIVERED_STATUSES})
  *
  * ONLY A DELIVERED BLOCKER CLEARS (founder decision, 2026-10-22). A blocker
- * that ended WITHOUT delivering — cancelled, failed, archived, lost — used to
+ * that ended WITHOUT delivering — cancelled, failed, archived, lost, or a
+ * session closed anyway with required work open (founder, 2026-11-20:
+ * "delivered" means the work was done, not that the session closed;
+ * `sessionClosedAs`, focus-sessions/statuses.ts) — used to
  * settle exactly like a delivered one, so its dependent went ahead as if the
  * work it waited on existed. It now stays a blocker marked `dropped: true`,
  * and the dependent must RE-PLAN: remove the edge (the work no longer needs
@@ -48,11 +53,15 @@
  * cannot SEE is still a blocker: hiding it would read as "free to go", a calm
  * wrong answer. Callers report it as `hidden`, never omit it.
  *
- * Pure. Its one runtime import is the track status declaration, a leaf
- * (`units/track-status.ts`) with no runtime imports; the rest are types.
+ * Pure. Its runtime imports are the session and track status declarations,
+ * leaves (`focus-sessions/statuses.ts`, `units/track-status.ts`); the rest are
+ * types.
  */
 
-import type { TerminalSessionStatus } from "../focus-sessions/statuses.js";
+import {
+  sessionStatusCategory,
+  type SessionClosedAs,
+} from "../focus-sessions/statuses.js";
 import type { LifecycleCategory } from "../lifecycle/option.js";
 import { trackStatusCategory } from "../units/track-status.js";
 
@@ -168,18 +177,6 @@ export function isAdvancesPair(fromType: string, toType: string): boolean {
 /** What became of a blocker — see the table at the top of this module. */
 export type DependencyOutcome = "open" | "delivered" | "dropped";
 
-// Hand-listed only until sessions declare categories (a session status
-// declaration beside the track's); then derived from it like a track's.
-/** A `focus_sessions.status` that DELIVERED — the only one that clears. */
-export const SESSION_DELIVERED_STATUSES = [
-  "closed",
-] as const satisfies readonly TerminalSessionStatus[];
-/** A `focus_sessions.status` that ENDED without delivering. */
-export const SESSION_DROPPED_STATUSES = [
-  "cancelled",
-  "failed",
-] as const satisfies readonly TerminalSessionStatus[];
-
 /**
  * Entity `status` property values that read as DELIVERED, when the reader does
  * not know the kind's lifecycle category. A list, not a derivation: a kind
@@ -240,19 +237,26 @@ function outcomeOfCategory(
 
 /**
  * THE classification — what became of a blocker of this kind, in this status
- * (and, for an entity, this lifecycle category when the reader resolved it).
- * Unknown kinds and unknown values are OPEN: a dependency nobody can reason
- * about stays declared.
+ * (and, for an entity, this lifecycle category when the reader resolved it;
+ * for a session, its `closedAs` when the reader read it). Unknown kinds and
+ * unknown values are OPEN: a dependency nobody can reason about stays
+ * declared.
  */
 export function classifyDependencyBlocker(
   kind: string,
   status: string | null | undefined,
-  category?: LifecycleCategory | null
+  category?: LifecycleCategory | null,
+  closedAs?: SessionClosedAs | null
 ): DependencyOutcome {
   switch (kind) {
-    case "session":
-      if (has(SESSION_DELIVERED_STATUSES, status)) return "delivered";
-      return has(SESSION_DROPPED_STATUSES, status) ? "dropped" : "open";
+    case "session": {
+      // Read off the declaration's categories; a `closed` session delivered
+      // only when it closed with nothing required left open.
+      const outcome = outcomeOfCategory(sessionStatusCategory(status));
+      return outcome === "delivered" && closedAs === "not_done"
+        ? "dropped"
+        : outcome;
+    }
     case "track":
       return outcomeOfCategory(trackStatusCategory(status));
     case "entity": {
@@ -315,9 +319,10 @@ export interface OpenBlocker extends DependencyNodeRef {
   replaces?: DependencyNodeRef;
   hidden: boolean;
   /**
-   * It ENDED without delivering (cancelled, failed, archived, lost) and still
-   * holds the dependent: the work it waited on never happened, so the
-   * dependent re-plans — remove the edge, or link a replacement.
+   * It ENDED without delivering (cancelled, failed, archived, lost, closed
+   * with required work open) and still holds the dependent: the work it
+   * waited on never happened, so the dependent re-plans — remove the edge,
+   * or link a replacement.
    */
   dropped: boolean;
   /** Its own raw status, when the reader may see it. */
@@ -370,7 +375,12 @@ export function deriveOpenBlockers(
     // purpose: what the reader cannot see is never called delivered.
     const visible = state && !state.hidden ? state : undefined;
     const outcome = visible
-      ? classifyDependencyBlocker(ref.kind, visible.status, visible.category)
+      ? classifyDependencyBlocker(
+          ref.kind,
+          visible.status,
+          visible.category,
+          visible.closedAs
+        )
       : "open";
     if (outcome === "delivered") return;
     if (!out.has(k)) {

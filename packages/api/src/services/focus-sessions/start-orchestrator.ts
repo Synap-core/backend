@@ -57,7 +57,10 @@ import {
   type SessionWorkspaceRung,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
+import {
+  SESSION_TITLE_MAX,
+  sessionStatusesIn,
+} from "@synap-core/types/focus-sessions";
 import type { Hold } from "@synap-core/types/lifecycle";
 import type { ExpectedOutput, SlotAnswer } from "@synap/playbooks";
 import { isDeclinedValue } from "@synap-core/types/ask";
@@ -84,8 +87,14 @@ export { ORCHESTRATOR_APPROVAL_SLOT };
 /** The orchestrator's one deliverable before the yes. */
 export const ORCHESTRATOR_PLAN_SLOT = "merged-plan";
 
-/** Statuses a session can be orchestrated from: running, or already paused. */
-const ORCHESTRATABLE = ["active", "paused"] as const;
+/**
+ * Statuses a session can be orchestrated from: started and not ended (the
+ * `active` and `paused` categories), except the reaper's `stale` — a quiet
+ * session is resumed first, then orchestrated.
+ */
+const ORCHESTRATABLE = sessionStatusesIn(["active", "paused"]).filter(
+  (s) => s !== "stale"
+);
 
 /** THE input, parsed by all three transports. */
 export const startOrchestratorInputSchema = z.object({
