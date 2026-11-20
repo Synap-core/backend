@@ -88,6 +88,8 @@ export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
     "a design op (an `ops[]` entry of the builtin verb design.apply) setting a block's props, not a tool",
   set_span:
     "a design op (an `ops[]` entry of the builtin verb design.apply) setting a block's column span at one width class, not a tool",
+  set_start:
+    "a design op (an `ops[]` entry of the builtin verb design.apply) setting the column a block starts at, at one width class, not a tool",
   set_hide:
     "a design op (an `ops[]` entry of the builtin verb design.apply) hiding a block at one width class, not a tool",
   search_web:

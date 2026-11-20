@@ -46,8 +46,8 @@ frame (section 1b). This section is the rules of a frame's page, the Puck data e
   (`label`, `title`) are plain text. A frame's page is slots only: no `zones`. `root.props` holds page settings only.
 - No hex, rgb, px or font family in a prop; colour, spacing and type come from components and tokens.
 - A canvas design (schema-version 3) lays each frame's page on a column grid: `Section` blocks hold it
-  (12 / 8 / 4 columns by the frame's width), a block in a Section or Grid takes `span` and `hide` per width
-  class, and a frame with `pageOf` shows another frame's page at its own width. The full shape is in
+  (12 / 8 / 4 columns by the frame's width), a block in a Section or Grid takes `span`, `start` and `hide`
+  per width class, and a frame with `pageOf` shows another frame's page at its own width. The full shape is in
   `designing-with-real-components`.
 - Motion is not in the props. List it in the design's `motion` property as
   `[{ "trigger": "enter", "target": "SpatialPanel-1", "preset": "fade-rise" }]` with named presets only.
@@ -149,11 +149,13 @@ there: say so, and fall back to section 2.
     own content; give `props.id` to name it in a later op), `update_block {id, props?, unset?}`,
     `move_block {id, frameId?, parentId?, slot?, index?}`, `remove_block {id}`.
   - grid: `set_span {id, class: compact|medium|expanded, span}` (whole columns, 1 to 4 / 8 / 12; `null`
-    clears), `set_hide {id, class, hide}`.
+    clears), `set_start {id, class, start}` (the column the block starts at; with no span it runs to the
+    row's end; start + span − 1 stays within the columns; `null`: the grid places it),
+    `set_hide {id, class, hide}`.
   - whole pages: `replace_page {frameId, page}` (a generated page), `replace_board {board}`.
 - `status: "refused"` changes nothing and names the op's index (`opIndex`), why (`reasons`: an unknown
-  component, a prop value that is not a token step, a span wider than the grid, a block a slot does
-  not take) and the catalog hash. Fix that op and send the batch again. `status: "conflict"`: the
+  component, a prop value that is not a token step, a span wider than the grid or a start and span that
+  run past it, a block a slot does not take) and the catalog hash. Fix that op and send the batch again. `status: "conflict"`: the
   design changed since you read it (`updatedAt` is its time now): read it again. A stored design the
   catalog cannot fully place is refused until you pass `acceptDrops: true`.
 - The answer is `applied`, `created`, `proposed` (a person reviews it: success, do not retry) or
