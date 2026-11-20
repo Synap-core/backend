@@ -92,8 +92,9 @@ describe("automations.create — cron nextRunAt", () => {
   });
 
   it("reads the expression in the trigger's own zone (ticket 592930c8)", async () => {
-    // 06:50 Europe/Paris on a winter morning is 05:50 UTC; the zone used to be
-    // stored and never read, so the rule fired at 06:50 UTC.
+    // 06:50 Asia/Kolkata is 01:20 UTC; the zone used to be stored and never
+    // read, so the rule fired at 06:50 on the worker's clock. (A zone no dev
+    // box or CI runner sits in: the process clock cannot pass by luck.)
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-01-15T00:00:00Z"));
     try {
@@ -104,15 +105,15 @@ describe("automations.create — cron nextRunAt", () => {
 
       const caller = automationsRouter.createCaller(callerCtx());
       await caller.create({
-        name: "Morning brief, Paris",
+        name: "Morning brief, Kolkata",
         triggerType: "cron",
-        triggerConfig: { expression: "50 6 * * *", timezone: "Europe/Paris" },
+        triggerConfig: { expression: "50 6 * * *", timezone: "Asia/Kolkata" },
         flowDefinition: CRON_FLOW,
         status: "active",
       });
 
       expect((captured.values?.nextRunAt as Date).toISOString()).toBe(
-        "2026-01-15T05:50:00.000Z"
+        "2026-01-15T01:20:00.000Z"
       );
     } finally {
       vi.useRealTimers();

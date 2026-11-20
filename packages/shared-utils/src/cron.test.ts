@@ -18,6 +18,17 @@ describe("nextCronRunAt — the zone a trigger names (ticket 592930c8)", () => {
     );
   });
 
+  it("reads any zone, whatever the machine's own clock is", () => {
+    // Neither UTC nor the zone a dev box or CI runner sits in: a parser that
+    // read the process clock passes the Paris rows on a Paris machine.
+    expect(next("50 6 * * *", "2026-01-15T00:00:00Z", "Asia/Kolkata")).toBe(
+      "2026-01-15T01:20:00.000Z"
+    );
+    expect(next("50 6 * * *", "2026-01-15T00:00:00Z", "America/New_York")).toBe(
+      "2026-01-15T11:50:00.000Z"
+    );
+  });
+
   it("crosses the spring DST change (29 March 2026) at the same local time", () => {
     // Saturday 06:00Z: 06:50 Paris (05:50Z) has passed; Sunday is summer time.
     expect(next("50 6 * * *", "2026-03-28T06:00:00Z", "Europe/Paris")).toBe(
