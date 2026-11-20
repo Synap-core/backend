@@ -26,6 +26,10 @@
  * report) is a body that RUNS: its page in the isolated frame, its source a
  * toggle away (`content/html-frame`).
  *
+ * Its detail (the fields and prose) is the entity-detail SLOT: when the one
+ * renderer resolution picks a detail cell the pod can run (`RenderedObject`),
+ * that cell draws it in the module frame; otherwise the planned fields below.
+ *
  * The rules around it (`RulesAroundSection`, `statusOf` reactions): a
  * roll-up that moves it, with its parts' "3 of 5 done", then the rules its
  * own moves set off; omitted when none.
@@ -61,6 +65,7 @@ import { WorkSection } from "../../_lib/object/views/work-section";
 import { objectPage } from "../../_lib/object/content/markdown-model";
 import { RulesAroundSection } from "../../_lib/object/views/rules-around-section";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
+import { RenderedObject } from "../../_lib/object/content/rendered-object";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
 /** The slice of `entities.get({ includeProfile: true })` this page reads. */
@@ -222,21 +227,41 @@ export function EntityView({ id }: { id: string }) {
         self={false}
         sessionHref={(sid) => objectPage("session", sid)}
       />
-      <FieldList
-        plan={plan}
-        omit={[
-          ...proseKeys,
-          ...(summary.propertySlug ? [summary.propertySlug] : []),
-        ]}
+      {/* The entity-detail slot: a detail cell the one resolution picks
+          (its own override, its kind's binding, the bundle's default) draws
+          the record's fields; else the console's own field list. */}
+      <RenderedObject
+        subject={{
+          kind: "entity",
+          slot: "entity-detail",
+          entityId: id,
+          profileSlug,
+          ...(entity.systemData !== undefined
+            ? { systemData: entity.systemData }
+            : {}),
+        }}
+        workspaceId={entity.workspaceId ?? null}
+        title={title}
+        fallback={
+          <>
+            <FieldList
+              plan={plan}
+              omit={[
+                ...proseKeys,
+                ...(summary.propertySlug ? [summary.propertySlug] : []),
+              ]}
+            />
+            {prose.map((field) => (
+              <ContentBlock
+                key={field.key}
+                title={field.label}
+                prepared={prepareContent(field.text, "markdown")}
+                openInApp={openInApp}
+              />
+            ))}
+          </>
+        }
       />
-      {prose.map((field) => (
-        <ContentBlock
-          key={field.key}
-          title={field.label}
-          prepared={prepareContent(field.text, "markdown")}
-          openInApp={openInApp}
-        />
-      ))}
       <RulesAroundSection thingId={id} />
       {!hasBody && connected}
       {hasBody && (
