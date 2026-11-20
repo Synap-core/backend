@@ -212,7 +212,6 @@ export async function readLeftBehind(
              AND entity_facets.deleted_at IS NULL
              AND entity_facets.status_category IN (${stillOpen})
              AND ${and(...roleConds) ?? drizzleSql`TRUE`}
-             AND ${facetGrant ?? drizzleSql`TRUE`}
            ORDER BY entity_facets.updated_at DESC NULLS LAST
            LIMIT 1
         ) f ON TRUE

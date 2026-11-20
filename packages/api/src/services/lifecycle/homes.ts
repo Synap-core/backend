@@ -1093,7 +1093,6 @@ async function resolveMovingIdentities(
     }),
   ]);
   const declaredIds = new Set(declared);
-  const facetGrant = grantReadPredicate(entityFacets);
   const intentOf = new Map(
     spaces.map((s) => [s.id, storedIntentOf(s.settings)])
   );
@@ -1146,10 +1145,7 @@ async function resolveMovingIdentities(
           ),
           eq(profiles.profileKind, "role"),
           isNull(entityFacets.deletedAt),
-          ...roleConds,
-          // The key's grant on the facet itself (`facet.read`, in its space):
-          // a role stage it does not read never names the thing.
-          ...(facetGrant ? [facetGrant] : [])
+          ...roleConds
         )
       ),
   ]);
