@@ -1722,7 +1722,7 @@ export const capabilitiesRouter = router({
       // `data.capabilityId` (the tool row id) or `data.verbId` alone —
       // `CapabilityNodeDef.capabilityId` is OPTIONAL (schema/automations.ts)
       // and the shipped first-party report automation emits four verb-only
-      // nodes (`ensure-report-automation.ts`). A capabilityId-only containment
+      // nodes (base.yaml's report automation). A capabilityId-only containment
       // reports ZERO dependents for the built-in `synap_core` tool — the exact
       // "nothing depends on this" lie this door exists to prevent. So the
       // tool's own verb catalog is ORed in alongside the id match.

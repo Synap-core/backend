@@ -115,7 +115,7 @@ export function collectCapabilitySteps(nodes: unknown[]): CapabilityStepRef[] {
           ? data.verbId
           : null,
       // Genuinely optional and absent in the wild — first-party report
-      // automations emit verb-only capability nodes (ensure-report-automation.ts).
+      // automations emit verb-only capability nodes (base.yaml's report automation).
       // Absence is NORMAL, never a validation failure.
       capabilityId:
         typeof data.capabilityId === "string" && data.capabilityId.trim() !== ""

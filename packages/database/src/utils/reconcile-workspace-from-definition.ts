@@ -1692,7 +1692,7 @@ export async function reconcileWorkspaceFromDefinition(
     // Drift (or a legacy int `seedVersion`) → overwrite flow + description,
     // MERGE-stamp the new hash (NEVER clobber the rest of the metadata bag —
     // `tags`/`createdVia`/`averageExecutionTime` live there; see
-    // ensure-report-automation.ts:1738), and bump the monotonic `version` so a
+    // the retired ensure-report-automation), and bump the monotonic `version` so a
     // run's `definitionSnapshot` reports the right number.
     report.automations.updated.push(auto.name);
     if (!dryRun) {

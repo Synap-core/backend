@@ -120,7 +120,7 @@ describe("tripwire: blastRadius never understates the blast radius", () => {
    * REGRESSION (M1). `CapabilityNodeDef.capabilityId` is OPTIONAL
    * (packages/database/src/schema/automations.ts) and the shipped first-party
    * report automation emits FOUR `type:"capability"` nodes carrying only
-   * `verbId: "ai.generate"` (packages/database/src/utils/ensure-report-automation.ts).
+   * `verbId: "ai.generate"` (the report automation in base.yaml).
    * A `{data:{capabilityId}}` containment matches none of them, so `blastRadius`
    * on the built-in `synap_core` tool reported ZERO dependents while four
    * shipped nodes depended on it.
