@@ -135,7 +135,12 @@ const packet = (over: Partial<ContinuationPacket> = {}) =>
     ...over,
   }) as unknown as ContinuationPacket;
 
-const mark = (state: string) => ({ state, tone: "neutral", glyph: "", rail: "" });
+const mark = (state: string) => ({
+  state,
+  tone: "neutral",
+  glyph: "",
+  rail: "",
+});
 
 /**
  * THE outcomes section (`readSessionOutcomesSection`): Slides delivered but

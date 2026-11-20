@@ -203,28 +203,26 @@ export function workOutcomes(
   return {
     status: "ok",
     counts: section.counts,
-    items: section.outcomes.map(
-      (o): StatusOfWorkOutcome => ({
-        key: o.key,
-        label: o.label,
-        kind: o.kind,
-        owner: o.owner,
-        met: o.met,
-        retired: o.retired,
-        state: o.state.state,
-        ...(o.criteria?.length
-          ? {
-              criteria: o.criteria.map((c) => ({
-                key: c.key,
-                label: c.statement,
-                met: c.met,
-                state: c.state.state,
-                outputKey: o.key,
-              })),
-            }
-          : {}),
-      })
-    ),
+    items: section.outcomes.map((o): StatusOfWorkOutcome => ({
+      key: o.key,
+      label: o.label,
+      kind: o.kind,
+      owner: o.owner,
+      met: o.met,
+      retired: o.retired,
+      state: o.state.state,
+      ...(o.criteria?.length
+        ? {
+            criteria: o.criteria.map((c) => ({
+              key: c.key,
+              label: c.statement,
+              met: c.met,
+              state: c.state.state,
+              outputKey: o.key,
+            })),
+          }
+        : {}),
+    })),
   };
 }
 
