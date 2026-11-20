@@ -133,6 +133,8 @@ export async function executeSkillNode(
     stepRun?: { id: string };
     // CONFUSED-DEPUTY GUARD (see executeCommandStep) — the causal-chain producer.
     producerAgentUserId?: string | null;
+    // The run (its session + the agent that authored the automation).
+    automationRun?: { sessionId: string; agentUserId: string | null } | null;
   }
 ): Promise<unknown> {
   const skillId = data.skillId;
@@ -189,6 +191,7 @@ export async function executeSkillNode(
     parameters: resolvedInputs,
     workspaceId: opts.workspaceId,
     userId: opts.ownerId,
+    ...(opts.automationRun ? { automationRun: opts.automationRun } : {}),
   });
   if (skillDispatch.kind === "deny") {
     throw new Error(

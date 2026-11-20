@@ -987,12 +987,31 @@ export const capabilityHandlers: McpHandlerMap = {
         loadIndex: async () => {
           const { listCapabilities } =
             await import("../../../services/capabilities/capability-registry.js");
-          const caps = await listCapabilities({
-            workspaceId: requestedWorkspaceId ?? null,
-            // The run identity: the owner `automations.create` will stamp
-            // (`visibleSkillsWhere` has a per-user tier).
-            userId: (await ownerAndActor(db, userId, agentUserId)).ownerId,
-          });
+          // Validate against what the RUN will resolve: the owner
+          // `automations.create` stamps (the person), plus the authoring
+          // agent, whose own user-scope skills a run still reaches
+          // (`answeringSkillsWhere`). `visibleSkillsWhere` has a per-user
+          // tier, so validating as one of them alone would refuse the agent's
+          // own skill or accept one the run cannot find. Limit: the agent's
+          // workspace-tier skills are accepted here although the run reads that
+          // tier as the person.
+          const owner = await ownerAndActor(db, userId, agentUserId);
+          const principals = [
+            owner.ownerId,
+            ...(owner.agentUserId && owner.agentUserId !== owner.ownerId
+              ? [owner.agentUserId]
+              : []),
+          ];
+          const caps = (
+            await Promise.all(
+              principals.map((principal) =>
+                listCapabilities({
+                  workspaceId: requestedWorkspaceId ?? null,
+                  userId: principal,
+                })
+              )
+            )
+          ).flat();
           const verbIds = new Set<string>();
           const capabilityIds = new Set<string>();
           for (const cap of caps) {

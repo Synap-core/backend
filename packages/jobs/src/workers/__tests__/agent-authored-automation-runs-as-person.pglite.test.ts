@@ -1,5 +1,5 @@
 /**
- * JOURNEY, run half (consolidation W1; tickets 01b5b0b3, da1199bb): an
+ * JOURNEY, run half: an
  * automation an agent authored and a person approved is OWNED by the person
  * (`created_by`) with the agent as its ACTOR (`agent_user_id`). Its run:
  *   - opens its run session as the PERSON (readable in their lists), the

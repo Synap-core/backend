@@ -20,7 +20,7 @@
  */
 import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { automations, workspaceMembers } from "../schema/index.js";
-import { personOfOwner } from "./owner-person.js";
+import { agentsActingFor, personOfOwner } from "./owner-person.js";
 import {
   AUTOMATION_AUDIENCE_KEY,
   type AutomationAudience,
@@ -58,14 +58,20 @@ export async function automationOwnerHasSpaceAccess(
 }
 
 /**
- * Pause every active automation of the space that runs for `userId` (their
- * agents' included: the person owns them). Returns how many were paused.
+ * Pause every active automation of the space that runs for `userId` or was
+ * written by them or by an agent acting for them (`agentsActingFor`): RBAC is
+ * the owner's, so a removal is what stops an agent's work in that space.
+ * Returns how many were paused.
  */
 export async function pauseAutomationsOfRemovedMember(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
   database: any,
   params: { workspaceId: string; userId: string }
 ): Promise<number> {
+  const actors = [
+    params.userId,
+    ...(await agentsActingFor(database, params.userId)),
+  ];
   const paused: Array<{ id: string }> = await database
     .update(automations)
     .set({
@@ -76,7 +82,43 @@ export async function pauseAutomationsOfRemovedMember(
     .where(
       and(
         eq(automations.workspaceId, params.workspaceId),
-        eq(automations.createdBy, params.userId),
+        or(
+          eq(automations.createdBy, params.userId),
+          inArray(automations.agentUserId, actors)
+        ),
+        eq(automations.status, "active")
+      )
+    )
+    .returning({ id: automations.id });
+  return paused.length;
+}
+
+export const AUTOMATION_AGENT_REMOVED =
+  "Paused: the agent that wrote it was removed.";
+
+/**
+ * Pause every active automation these agents wrote. Call it in the same
+ * transaction that deletes them: the delete nulls `agent_user_id`, and an
+ * automation with no actor is governed as its person, so a deleted agent's
+ * automations would otherwise keep running ungoverned.
+ */
+export async function pauseAutomationsOfAgents(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
+  database: any,
+  agentUserIds: readonly string[]
+): Promise<number> {
+  if (agentUserIds.length === 0) return 0;
+  const paused: Array<{ id: string }> = await database
+    .update(automations)
+    .set({
+      status: "paused",
+      errorMessage: AUTOMATION_AGENT_REMOVED,
+      nextRunAt: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        inArray(automations.agentUserId, [...agentUserIds]),
         eq(automations.status, "active")
       )
     )

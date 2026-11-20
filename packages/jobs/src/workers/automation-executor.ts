@@ -1292,7 +1292,12 @@ async function executeAutomationFlow(params: {
                             inputMapping?: Record<string, string>;
                           },
                           context,
-                          { workspaceId, ownerId, producerAgentUserId }
+                          {
+                            workspaceId,
+                            ownerId,
+                            producerAgentUserId,
+                            automationRun,
+                          }
                         );
                         break;
                       case "capability":
@@ -1728,7 +1733,13 @@ async function executeAutomationFlow(params: {
                   inputMapping?: Record<string, string>;
                 },
                 context,
-                { workspaceId, ownerId, stepRun, producerAgentUserId }
+                {
+                  workspaceId,
+                  ownerId,
+                  stepRun,
+                  producerAgentUserId,
+                  automationRun,
+                }
               );
               break;
             }

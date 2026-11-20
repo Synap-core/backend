@@ -1,19 +1,18 @@
--- 0443 — move the rows an agent owns to the person it works for (consolidation
--- W1). Needs 0442 (the actor column).
+-- 0443 — move the rows an agent owns to the person it works for. Needs 0442.
 --
 -- For every automation and playbook whose owner (`created_by`) is an agent
 -- user (`users.user_type = 'agent'`):
 --   1. the agent is copied into `agent_user_id` FIRST (the governance ladder
 --      reads it: the row keeps being governed as that agent);
---   2. the owner becomes the person:
+--   2. the owner becomes the first person found:
 --        a. the person the approved create proposal was filed for
---           (`proposals.subject_user_id`, an agent there resolved to the
---           person who created it), when the row came from one (the
---           `automation/create` and `playbook/create` executors land the row
---           under the proposal's `target_id`);
---        b. else the person who created the agent (`users.created_by_user_id`,
---           the pod admin who installed a pod-wide agent).
---      Only a human users row qualifies as the new owner.
+--           (`proposals.subject_user_id`; the executors land the row under the
+--           proposal's `target_id`); an agent subject falls through;
+--        b. the one person the agent's keys act for (`api_keys.linked_user_id`,
+--           exactly one distinct person), as the write doors resolve it;
+--        c. the person who created the agent (`users.created_by_user_id`, the
+--           pod admin who installed a pod-wide agent).
+--      Only a human users row qualifies at each rung.
 -- A row whose agent stands for no person (no proposal subject, no creator)
 -- keeps the agent as owner: it is still governed as that agent (step 1). Count
 -- them after the migration with:
@@ -46,16 +45,22 @@ UPDATE "playbooks" AS p
 WITH "moved" AS (
   SELECT a."id",
          COALESCE(
-           (SELECT CASE WHEN s."user_type" = 'agent' THEN s."created_by_user_id" ELSE s."id" END
+           (SELECT s."id"
               FROM "proposals" AS pr
-              JOIN "users" AS s ON s."id" = pr."subject_user_id"
+              JOIN "users" AS s ON s."id" = pr."subject_user_id" AND s."user_type" <> 'agent'
              WHERE pr."target_type" = 'automation'
                AND pr."proposal_type" = 'create'
                AND pr."target_id" = a."id"::text
                AND pr."status" = 'approved'
              ORDER BY pr."created_at" DESC
              LIMIT 1),
-           ag."created_by_user_id"
+           (SELECT min(k."linked_user_id")
+              FROM "api_keys" AS k
+              JOIN "users" AS lp ON lp."id" = k."linked_user_id" AND lp."user_type" <> 'agent'
+             WHERE k."user_id" = ag."id"
+            HAVING count(DISTINCT k."linked_user_id") = 1),
+           (SELECT c."id" FROM "users" AS c
+             WHERE c."id" = ag."created_by_user_id" AND c."user_type" <> 'agent')
          ) AS "person_id"
     FROM "automations" AS a
     JOIN "users" AS ag ON ag."id" = a."created_by" AND ag."user_type" = 'agent'
@@ -63,22 +68,28 @@ WITH "moved" AS (
 UPDATE "automations" AS a
    SET "created_by" = m."person_id"
   FROM "moved" AS m
-  JOIN "users" AS person ON person."id" = m."person_id" AND person."user_type" <> 'agent'
- WHERE a."id" = m."id";
+ WHERE a."id" = m."id"
+   AND m."person_id" IS NOT NULL;
 
 WITH "moved" AS (
   SELECT p."id",
          COALESCE(
-           (SELECT CASE WHEN s."user_type" = 'agent' THEN s."created_by_user_id" ELSE s."id" END
+           (SELECT s."id"
               FROM "proposals" AS pr
-              JOIN "users" AS s ON s."id" = pr."subject_user_id"
+              JOIN "users" AS s ON s."id" = pr."subject_user_id" AND s."user_type" <> 'agent'
              WHERE pr."target_type" = 'playbook'
                AND pr."proposal_type" = 'create'
                AND pr."target_id" = p."id"::text
                AND pr."status" = 'approved'
              ORDER BY pr."created_at" DESC
              LIMIT 1),
-           ag."created_by_user_id"
+           (SELECT min(k."linked_user_id")
+              FROM "api_keys" AS k
+              JOIN "users" AS lp ON lp."id" = k."linked_user_id" AND lp."user_type" <> 'agent'
+             WHERE k."user_id" = ag."id"
+            HAVING count(DISTINCT k."linked_user_id") = 1),
+           (SELECT c."id" FROM "users" AS c
+             WHERE c."id" = ag."created_by_user_id" AND c."user_type" <> 'agent')
          ) AS "person_id"
     FROM "playbooks" AS p
     JOIN "users" AS ag ON ag."id" = p."created_by" AND ag."user_type" = 'agent'
@@ -86,5 +97,5 @@ WITH "moved" AS (
 UPDATE "playbooks" AS p
    SET "created_by" = m."person_id"
   FROM "moved" AS m
-  JOIN "users" AS person ON person."id" = m."person_id" AND person."user_type" <> 'agent'
- WHERE p."id" = m."id";
+ WHERE p."id" = m."id"
+   AND m."person_id" IS NOT NULL;

@@ -33,18 +33,9 @@ import {
   automationsRouter,
   materializeApprovedAutomation,
 } from "./automations.js";
+import { NO_USERS } from "../__tests__/no-users-db.js";
 
 /** insert(...).values(capturedValues).onConflictDoNothing().returning() → [{ id }] */
-/**
- * The owner door (`ownerAndActor`) reads the writer's users row; these fakes
- * have none, so the writer stands for itself (a person).
- */
-const NO_USERS = {
-  select: () => ({
-    from: () => ({ where: () => ({ limit: async () => [] }) }),
-  }),
-};
-
 function insertChain(
   captured: { values?: Record<string, unknown> },
   rows: Array<{ id: string }> = [{ id: "auto-created-1" }]

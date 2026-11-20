@@ -12,8 +12,6 @@ import {
   setRunStatus,
   transitionProposal,
   ownerAndActor,
-  and,
-  isNull,
 } from "@synap/database";
 // `createLinks` is the ONE link door and it lives in @synap/api, not
 // @synap/database — the database package's `ensure-external-channel.ts` says so
@@ -177,6 +175,7 @@ export function registerPlaybookExecutors(): void {
         userId: owner.ownerId,
         workspaceId,
         workspaceRole: ownerMembership.role,
+        approvedAuthorAgentUserId: owner.agentUserId,
       } as unknown as Context);
       const createArgs = {
         ...(isLikelyUUID(proposal.targetId)
@@ -247,19 +246,6 @@ export function registerPlaybookExecutors(): void {
         createArgs as Parameters<typeof playbookCaller.create>[0]
       );
       assertApplied(created);
-      // The replay carries no agent (so it applies), so the actor is stamped
-      // here — only on the row this approval made, never on a same-name one.
-      if (owner.agentUserId && created.playbook?.id === proposal.targetId) {
-        await db
-          .update(playbooks)
-          .set({ agentUserId: owner.agentUserId })
-          .where(
-            and(
-              eq(playbooks.id, created.playbook.id),
-              isNull(playbooks.agentUserId)
-            )
-          );
-      }
 
       await transitionProposal(db, {
         to: ProposalStatus.APPROVED,

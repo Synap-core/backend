@@ -54,19 +54,10 @@ import {
   automationsRouter,
   materializeApprovedAutomation,
 } from "./automations.js";
+import { NO_USERS } from "../__tests__/no-users-db.js";
 
 const WS = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const SOURCE_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
-
-/**
- * The owner door (`ownerAndActor`) reads the writer's users row; these fakes
- * have none, so the writer stands for itself (a person).
- */
-const NO_USERS = {
-  select: () => ({
-    from: () => ({ where: () => ({ limit: async () => [] }) }),
-  }),
-};
 
 function insertChain(captured: { values?: Record<string, unknown> }) {
   const chain = {

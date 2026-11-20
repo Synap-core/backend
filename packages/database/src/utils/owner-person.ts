@@ -58,6 +58,11 @@ export async function personOfOwner(
   return personOfRow(owner);
 }
 
+export interface OwnerAndActor {
+  ownerId: string;
+  agentUserId: string | null;
+}
+
 /**
  * The owner and actor of a row `principalId` writes: a person owns it, the
  * agent is only the actor. Every automation and playbook insert stamps this,
@@ -65,29 +70,16 @@ export async function personOfOwner(
  * `ownerId` falls back to `principalId` for a system id or an agent nobody
  * installed. A failed read throws.
  */
-export interface OwnerAndActor {
-  ownerId: string;
-  agentUserId: string | null;
-}
-
 export async function ownerAndActor(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
   database: any,
   principalId: string,
   agentUserId?: string | null
 ): Promise<OwnerAndActor> {
-  const [row] = (await database
-    .select({
-      id: users.id,
-      userType: users.userType,
-      createdByUserId: users.createdByUserId,
-    })
-    .from(users)
-    .where(eq(users.id, principalId))
-    .limit(1)) as OwnerRow[];
-  const isAgent = row?.userType === "agent";
+  const person = await personOfOwner(database, principalId);
+  const isAgent = person !== undefined && person !== principalId;
   return {
-    ownerId: (row && personOfRow(row)) ?? principalId,
+    ownerId: person ?? principalId,
     agentUserId: agentUserId || (isAgent ? principalId : null),
   };
 }

@@ -671,6 +671,7 @@ const SUPPLEMENTARY_TABLES: Record<
           id: row.id as string,
           workspaceId: row.workspaceId as string,
           createdBy: (row.createdBy as string) ?? "sync",
+          agentUserId: (row.agentUserId as string) ?? null,
           name: (row.name as string) ?? "Synced Automation",
           description: (row.description as string) ?? null,
           triggerType:
@@ -702,6 +703,8 @@ const SUPPLEMENTARY_TABLES: Record<
             : new Date(),
         };
         const updateSet: Partial<typeof automations.$inferInsert> = {
+          createdBy: values.createdBy,
+          agentUserId: values.agentUserId,
           name: values.name,
           description: values.description,
           triggerConfig: values.triggerConfig,

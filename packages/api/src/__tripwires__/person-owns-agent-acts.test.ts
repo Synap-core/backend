@@ -3,16 +3,10 @@ import { readFileSync, readdirSync } from "fs";
 import { join, relative } from "path";
 
 /**
- * TRIPWIRE — a person owns what an agent makes; the agent is only the actor
- * (consolidation W1, founder decision; tickets 01b5b0b3, da1199bb).
- *
- * An automation an agent authored used to be OWNED by the agent
- * (`automations.created_by` = the agent), so every run resolved its runner
- * roster, run session, AI principal and RBAC against the agent: an external
- * runner the person operates was refused and the run session was invisible to
- * the person. 0442 gave the tables an actor column (`agent_user_id`); every
- * door now stamps the OWNER from `ownerAndActor` (owner-person.ts: an agent
- * resolves to its person) and the agent as the actor.
+ * TRIPWIRE — a person owns what an agent makes; the agent is only the actor.
+ * An agent stored as an automation's owner makes its runs resolve the runner,
+ * the session, the AI principal and RBAC as the agent. Every door stamps the
+ * owner from `ownerAndActor` and the agent as `agent_user_id` (0442).
  *
  * Two checks, over every production `.ts` file of `packages/{api,jobs,database}/src`
  * (derived by walking the tree, never a hand list):
@@ -20,8 +14,8 @@ import { join, relative } from "path";
  *  1. Every `.insert(<table>)` of a table that has an actor column — the set is
  *     DERIVED from migration 0442's `ADD COLUMN ... "agent_user_id"` lines —
  *     stamps `createdBy: <x>.ownerId` (a value only `ownerAndActor` yields) and
- *     sets `agentUserId`. Exempt: `routers/sync.ts`, a REPLICA copying a peer
- *     pod's row verbatim (fidelity; it never authors a row).
+ *     sets `agentUserId`. A REPLICA (`routers/sync.ts`) copies a peer's row
+ *     verbatim instead: its row shape must carry `agentUserId`.
  *  2. No owner column anywhere is written as `createdBy: <...>agentUserId ?? ...`
  *     (the "the agent if there is one, else the person" expression that made
  *     agents owners). The tables below have no actor column yet and still
@@ -94,18 +88,23 @@ function actorTables(): string[] {
   );
 }
 
-/** The `{...}` passed to `.values(` after `start`, brace-matched. */
-function valuesBlockAfter(src: string, start: number): string | null {
-  const v = src.indexOf(".values(", start);
-  if (v < 0 || v - start > 400) return null;
-  const open = src.indexOf("{", v);
-  if (open < 0 || open - v > 40) return null;
+/** The brace-matched `{...}` opening at `open`. */
+function braceBlock(src: string, open: number): string | null {
   let depth = 0;
   for (let i = open; i < src.length; i++) {
     if (src[i] === "{") depth++;
     else if (src[i] === "}" && --depth === 0) return src.slice(open, i + 1);
   }
   return null;
+}
+
+/** The `{...}` passed to `.values(` after `start`. */
+function valuesBlockAfter(src: string, start: number): string | null {
+  const v = src.indexOf(".values(", start);
+  if (v < 0 || v - start > 400) return null;
+  const open = src.indexOf("{", v);
+  if (open < 0 || open - v > 40) return null;
+  return braceBlock(src, open);
 }
 
 /** Every insert of an actor table: where, and its values block. */
@@ -146,7 +145,7 @@ const writesAgentAsOwner = (src: string): boolean =>
         !/^\s*(\/\/|\*|\/\*)/.test(line) && AGENT_AS_OWNER_LINE.test(line)
     );
 
-describe("tripwire: a person owns what an agent makes (W1)", () => {
+describe("tripwire: a person owns what an agent makes", () => {
   const tables = actorTables();
 
   it("derives the actor tables from 0442 (non-vacuity)", () => {
@@ -167,6 +166,30 @@ describe("tripwire: a person owns what an agent makes (W1)", () => {
     expect(
       offenders,
       "Stamp `createdBy: owner.ownerId, agentUserId: owner.agentUserId` from `ownerAndActor(db, <writer>, <agent>)` — never an agent as the owner."
+    ).toEqual([]);
+  });
+
+  it("a replica carries the actor of every actor table it copies", () => {
+    const shapes = FILES.filter((f) => REPLICA.has(f.rel)).flatMap(
+      ({ rel, src }) =>
+        tables.flatMap((table) =>
+          [
+            ...src.matchAll(
+              new RegExp(`typeof ${table}\\.\\$inferInsert = \\{`, "g")
+            ),
+          ].map((m) => ({
+            rel,
+            table,
+            block: braceBlock(src, m.index! + m[0].length - 1),
+          }))
+        )
+    );
+    // Non-vacuity: sync.ts replicates automations.
+    expect(shapes.map((s) => s.table)).toContain("automations");
+    expect(
+      shapes
+        .filter((s) => !/\bagentUserId:/.test(s.block ?? ""))
+        .map((s) => `${s.rel}: ${s.table}`)
     ).toEqual([]);
   });
 

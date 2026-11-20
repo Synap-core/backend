@@ -67,8 +67,10 @@ import {
   loadFacetSlugsBatch,
   isUniqueViolation,
   ownerAndActor,
+  verifyPermission,
   type FlowDefinition,
 } from "@synap/database";
+import { requiredPermissionFor } from "@synap/governance-policy";
 import type {
   Playbook,
   PlaybookRun,
@@ -2315,6 +2317,30 @@ export const playbooksRouter = router({
       // caller who may not write must never learn whether the playbook exists,
       // nor receive its row. Only a caller that would have been permitted (to
       // execute OR to propose) reaches the lookup.
+      // The person it is filed for owns it; the agent that wrote it (here, or
+      // the proposal an approval replays) is its actor.
+      const owner = await ownerAndActor(
+        await getDb(),
+        ctx.userId,
+        input.agentUserId ?? ctx.approvedAuthorAgentUserId
+      );
+      // An agent files for its person, never for the approver: a person who
+      // may not create playbooks here cannot have one filed in their name.
+      if (input.agentUserId && ctx.workspaceId) {
+        const allowed = await verifyPermission({
+          db: await getDb(),
+          userId: owner.ownerId,
+          workspace: { id: ctx.workspaceId },
+          requiredPermission: requiredPermissionFor("create"),
+        });
+        if (!allowed.allowed) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "The person this agent works for cannot create playbooks in this space.",
+          });
+        }
+      }
       const isAiCaller =
         Boolean(input.agentUserId) ||
         input.source === "ai" ||
@@ -2395,11 +2421,6 @@ export const playbooksRouter = router({
       // callers both miss the peek and race the insert — the unique index makes
       // the loser a unique-violation, and we return the winner instead of a 500
       // or a second clone (mirrors insertPendingProposal / rememberFact).
-      const owner = await ownerAndActor(
-        database,
-        ctx.userId,
-        input.agentUserId
-      );
       let created: Playbook;
       let reused = false;
       try {
@@ -2479,7 +2500,7 @@ export const playbooksRouter = router({
         // `schedule` row in playbook_automations) that the cron scheduler fires.
         await materializePlaybookCronAutomation(created, {
           userId: ctx.userId,
-          agentUserId: input.agentUserId,
+          agentUserId: owner.agentUserId,
         });
 
         // W6 Layer-2 context skill — persist the AI-generated "how to run this

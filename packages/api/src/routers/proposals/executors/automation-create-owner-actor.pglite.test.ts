@@ -1,5 +1,5 @@
 /**
- * JOURNEY, approval half (consolidation W1): an agent files `automation/create`
+ * JOURNEY, approval half: an agent files `automation/create`
  * and a person approves it. The automation is OWNED by the person the proposal
  * was filed for (`proposals.subject_user_id`) — never the approver, never the
  * agent — and records the agent as its ACTOR (`agent_user_id`).
@@ -39,9 +39,7 @@ vi.mock("@synap/events", async (importOriginal) => ({
   emitSideEffects: () => undefined,
 }));
 
-import { is, SQL } from "drizzle-orm";
-import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
-import * as schema from "@synap/database/schema";
+import { pgliteAllTablesDdl } from "../../../__tests__/pglite-ddl.js";
 import { proposalExecRegistry } from "../execution-registry.js";
 import { registerAutomationExecutors } from "./automation.js";
 
@@ -50,44 +48,6 @@ const APPROVER = "admin-1"; // another member who approves
 const AGENT = "agent-1"; // works for PERSON
 const POD_AGENT = "agent-pod"; // pod-wide key: installed by APPROVER
 const WS = randomUUID();
-
-const BASIC =
-  /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
-function sqlDefault(d: unknown): string {
-  if (is(d, SQL)) {
-    return (d as SQL).queryChunks
-      .map((c) => {
-        const v = (c as { value?: unknown }).value;
-        return Array.isArray(v) ? v.join("") : "";
-      })
-      .join("");
-  }
-  if (typeof d === "string") return `'${d.replace(/'/g, "''")}'`;
-  if (typeof d === "number" || typeof d === "boolean") return String(d);
-  if (d && typeof d === "object") return `'${JSON.stringify(d)}'::jsonb`;
-  return "";
-}
-function ddlFor(table: PgTable): string {
-  const cfg = getTableConfig(table);
-  const cols = cfg.columns.map((c) => {
-    const t = c.getSQLType();
-    const type = t.endsWith("[]")
-      ? t
-      : BASIC.test(t)
-        ? t.replace(/\(.*\)/, "")
-        : "text";
-    const def =
-      !c.hasDefault ||
-      (c.default !== null &&
-        typeof c.default === "object" &&
-        !is(c.default, SQL) &&
-        !/^json/.test(type))
-        ? ""
-        : sqlDefault(c.default);
-    return `"${c.name}" ${type}${c.primary ? " primary key" : ""}${def ? ` default ${def}` : ""}`;
-  });
-  return `create table if not exists "${cfg.name}" (${cols.join(", ")});`;
-}
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
@@ -194,9 +154,7 @@ async function approve(p: {
 }
 
 beforeAll(async () => {
-  for (const value of Object.values(schema)) {
-    if (is(value, PgTable)) await h.client!.exec(ddlFor(value as PgTable));
-  }
+  await h.client!.exec(pgliteAllTablesDdl());
   registerAutomationExecutors();
 }, 120_000);
 

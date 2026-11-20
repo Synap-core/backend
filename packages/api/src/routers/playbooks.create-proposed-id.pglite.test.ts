@@ -227,13 +227,38 @@ describe("an approved playbook create keeps its proposal's id", () => {
     const out = await fileAndApprove(promised, gated.data);
     expect(await playbookIdsNamed("Prospect list A")).toEqual([promised]);
     expect((out as { primaryId?: string }).primaryId).toBe(promised);
-    // The person it was filed for owns it; the agent that wrote it is its
-    // actor (consolidation W1).
+    // The person it was filed for owns it; the agent that wrote it is its actor.
     const { rows } = await q(
       `select created_by, agent_user_id from playbooks where id = $1`,
       [promised]
     );
     expect(rows).toEqual([{ created_by: OWNER, agent_user_id: AGENT }]);
+  });
+
+  it("an agent filing for a person who may not create playbooks here is refused at filing: nothing is proposed", async () => {
+    const viewer = "viewer-1";
+    await q(`insert into users (id, email) values ($1, $2)`, [
+      viewer,
+      "v@x.test",
+    ]);
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'viewer')`,
+      [randomUUID(), WS, viewer]
+    );
+    await expect(
+      playbooksRouter
+        .createCaller({
+          authenticated: true,
+          userId: viewer,
+          workspaceId: WS,
+          workspaceRole: "viewer",
+        } as never)
+        .create({
+          ...definition("Prospect list V"),
+          agentUserId: AGENT,
+        } as never)
+    ).rejects.toThrow(/cannot create playbooks/);
+    expect(h.gate).not.toHaveBeenCalled();
   });
 
   it("a proposal filed before the gate minted an id is adopted too", async () => {

@@ -185,8 +185,8 @@ describe("record_observation — who the dev-loop sweep runs as", () => {
   });
 
   it("an agent-authored automation: the fact is the person's, the event, the trigger hop and the sweep name the agent", async () => {
-    // The person owns it (`ownerId`); the agent that authored it is its actor
-    // (consolidation W1), carried on the run's chain.
+    // The person owns it (`ownerId`); the agent that authored it is its actor,
+    // carried on the run's chain.
     await record({
       automationContext: { ...chain, actorAgentUserId: "agent-1" },
     });

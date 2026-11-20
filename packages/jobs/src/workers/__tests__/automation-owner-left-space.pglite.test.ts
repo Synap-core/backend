@@ -190,7 +190,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   h.commandCalls = 0;
   await h.client!.exec(
-    "delete from automations; delete from automation_runs; delete from automation_step_runs; delete from users; delete from workspace_members;"
+    "delete from automations; delete from automation_runs; delete from automation_step_runs; delete from users; delete from workspace_members; delete from api_keys;"
   );
   await q(
     `insert into users (id, email, user_type) values ($1, 'm@x.test', 'human'), ($2, 'l@x.test', 'human')`,
@@ -262,5 +262,29 @@ describe("removing a member pauses what runs for them in that space", () => {
     expect((await automationRow(own)).status).toBe("paused");
     expect((await automationRow(agents)).status).toBe("paused");
     expect((await automationRow(others)).status).toBe("active");
+  });
+
+  it("pauses what an agent acting for the person wrote, even when someone else owns it", async () => {
+    // An agent MEMBER provisioned for LEFT: its key acts for LEFT.
+    const forLeft = randomUUID();
+    const forMember = randomUUID();
+    await q(
+      `insert into users (id, email, user_type, created_by_user_id) values ($1, 'f@x.test', 'agent', $3), ($2, 'g@x.test', 'agent', $3)`,
+      [forLeft, forMember, MEMBER]
+    );
+    await q(
+      `insert into api_keys (id, user_id, linked_user_id) values ($1, $2, $3), ($4, $5, $6)`,
+      [randomUUID(), forLeft, LEFT, randomUUID(), forMember, MEMBER]
+    );
+    const written = await automation(MEMBER, forLeft);
+    const untouched = await automation(MEMBER, forMember);
+
+    await pauseAutomationsOfRemovedMember(db, {
+      workspaceId: WS,
+      userId: LEFT,
+    });
+
+    expect((await automationRow(written)).status).toBe("paused");
+    expect((await automationRow(untouched)).status).toBe("active");
   });
 });
