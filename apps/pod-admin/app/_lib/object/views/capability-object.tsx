@@ -45,10 +45,14 @@ import {
   SelectItem,
   Switch,
 } from "@heroui/react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { PRESENCE_BATCH_MAX } from "@synap-core/types/presence";
 import { resolveServiceName } from "@synap-core/types/service-marks";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  buildObjectActionTitle,
+  resolveLineageEdgeLabel,
+} from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import {
   useEnableMany,
@@ -56,18 +60,27 @@ import {
   useSetToolEnabled,
 } from "../../presence/use-request-doors";
 import { readableError } from "../../../../lib/format";
+import { readableDescription } from "../../../../lib/marketplace";
 import { ExitLink } from "../../../../lib/exit-link";
 import { openIn } from "../../../../lib/open-in";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import {
+  ResourceRow,
   ResourceRowEmpty,
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../../(admin)/components/resource-row";
 import {
+  addOnParentHref,
+  addOnRows,
   CAPABILITY_READ_OPTIONS,
   CATALOG_INPUT,
+  type AddOnRow,
 } from "../../../(admin)/tools/_lib/tools-model";
+import type {
+  CardLike,
+  CompositionLike,
+} from "../../../(admin)/tools/_lib/installed-model";
 import {
   toolGroups,
   type CardVerbLike,
@@ -83,6 +96,7 @@ import { actionModeChoices, isActionRunMode } from "../action-mode-model";
 import { resolveActionRunModeLabel } from "@synap-core/types/vocabulary";
 import type { ActionRunMode } from "@synap-core/types/governance-rules";
 import { ToolRuns } from "./tool-runs";
+import { kindIcon } from "../kind-icon";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import { useSetActionMode } from "../../presence/use-sensitive-actions";
@@ -103,6 +117,7 @@ export function CapabilityObject({
   viewerIsPodAdmin: boolean;
 }) {
   const utils = trpc.useUtils();
+  const router = useRouter();
   const container = trpc.capabilities.containers.get.useQuery(
     { id },
     { retry: false }
@@ -266,6 +281,16 @@ export function CapabilityObject({
   }
 
   const card = (catalog.data ?? []).find((c) => c.id === id);
+  // ADD-ONS (founder decision D6): the base this one extends, and the add-ons
+  // installed on this one, from the container read.
+  const parent = container.data?.extends ?? null;
+  const addOns = addOnRows(
+    container.data?.addOns ?? [],
+    catalog.isSuccess ? (catalog.data as readonly CardLike[]) : null,
+    compositions.isSuccess
+      ? (compositions.data as readonly CompositionLike[])
+      : null
+  );
   const composition = (compositions.data ?? []).find((c) => c.id === id);
   const space = workspaceId
     ? (spaces.data ?? []).find((s) => s.id === workspaceId)
@@ -353,9 +378,27 @@ export function CapabilityObject({
     header: {
       kind: "capability",
       title: card?.name ?? cap.name,
-      summary:
-        next?.hint ??
-        (catalog.isLoading ? undefined : "Its state couldn’t be read."),
+      // What it is (its own description, when written for a reader), then the
+      // pod's next-step sentence. An add-on's page names what it does here;
+      // its base's Add-ons card shows the same line.
+      summary: (() => {
+        const hint =
+          next?.hint ??
+          (catalog.isLoading ? undefined : "Its state couldn’t be read.");
+        const description = readableDescription(cap.description);
+        if (!description) return hint;
+        return (
+          <>
+            <span
+              data-capability-description=""
+              className="block text-foreground/80"
+            >
+              {description}
+            </span>
+            {hint && <span className="mt-1 block">{hint}</span>}
+          </>
+        );
+      })(),
       // Nothing until both halves answered or failed: a mark that flips from
       // "On" to "2 failed runs" a second later would be read as the answer.
       status:
@@ -376,6 +419,22 @@ export function CapabilityObject({
         ),
     },
     facts: [
+      ...(parent
+        ? [
+            {
+              label: resolveLineageEdgeLabel("extends", "outgoing"),
+              value: (
+                <a
+                  href={addOnParentHref(parent.id)}
+                  data-addon-parent=""
+                  className="text-primary underline-offset-2 hover:underline"
+                >
+                  {parent.name}
+                </a>
+              ),
+            },
+          ]
+        : []),
       { label: "Space", value: spaceName ?? "Whole pod" },
       ...(card?.connection?.required && card.connection.provider
         ? [{ label: "Account", value: card.connection.provider }]
@@ -441,6 +500,11 @@ export function CapabilityObject({
               Turns on {offCount} actions. One confirmation.
             </p>
           )}
+          {parent && (
+            <p className="text-[12.5px] text-foreground/65">
+              {toolsT()("addOn.why", { base: parent.name })}
+            </p>
+          )}
           {!canToggle && verbs.length > 0 && (
             <p className="text-[12.5px] text-foreground/65">
               {whoTurnsVerbsOn(workspaceId ? spaceName : null)}
@@ -448,6 +512,13 @@ export function CapabilityObject({
           )}
           {verbsBody}
         </section>
+        {addOns.length > 0 && (
+          <AddOnsSection
+            base={card?.name ?? cap.name}
+            rows={addOns}
+            onOpen={(href) => router.push(href)}
+          />
+        )}
         <ToolRuns
           tool={{ capabilityId: id }}
           flows={capabilityFlows(composition?.members ?? [])}
@@ -463,6 +534,51 @@ export function CapabilityObject({
       ...(card ? { raw: card } : {}),
     },
   });
+}
+
+const AddOnIcon = kindIcon("capability");
+
+/**
+ * Its add-ons (founder decision D6): each one is its own tool with its own
+ * page, listed here so the base says what extends it. Omitted when it has none.
+ */
+function AddOnsSection({
+  base,
+  rows,
+  onOpen,
+}: {
+  base: string;
+  rows: AddOnRow[];
+  onOpen: (href: string) => void;
+}) {
+  const t = toolsT();
+  return (
+    <section
+      className="flex flex-col gap-2"
+      data-addons=""
+      aria-label={t("addOns.title")}
+    >
+      <h2 className="text-[13px] font-medium text-foreground">
+        {t("addOns.title")}
+      </h2>
+      <p className="text-[12.5px] text-foreground/65">
+        {t("addOns.why", { base })}
+      </p>
+      <div className="-mx-2 divide-y divide-foreground/[0.05]">
+        {rows.map((a) => (
+          <ResourceRow
+            key={a.id}
+            Icon={AddOnIcon}
+            primary={a.name}
+            secondary={a.description ?? undefined}
+            status={a.status}
+            onSelect={() => onOpen(a.href)}
+            wrap
+          />
+        ))}
+      </div>
+    </section>
+  );
 }
 
 /**

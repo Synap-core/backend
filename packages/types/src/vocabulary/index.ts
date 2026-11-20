@@ -931,6 +931,10 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   assigned_to: { outgoing: "Assigned to", incoming: "Assigned agent" },
   // session --orchestrated_by--> session: coordinated by that orchestrator.
   orchestrated_by: { outgoing: "Orchestrated by", incoming: "Orchestrates" },
+  // capability(add-on) --extends--> capability(base) (founder decision D6):
+  // the add-on runs through its base. From the base's side the row is the
+  // add-on that extends it.
+  extends: { outgoing: "Add-on of", incoming: "Extended by" },
 };
 
 export function resolveLineageEdgeLabel(

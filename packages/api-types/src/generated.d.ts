@@ -9270,6 +9270,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  *   track               --advances-->          workspace    (the goal moves that pillar of its project; metadata.primary)
  *   participant(agent)  --dispatched_via-->    tool         (BINDING: how the pod hands this agent work — tools.config.agentBinding)
  *   participant(agent)  --assigned_to-->       playbook|profile|project|workspace (who takes that work by default — route())
+ *   capability(add-on)  --extends-->           capability (base)  (an add-on's base, written by the applier)
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
@@ -9408,7 +9409,19 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * clears. ONE producer: `services/focus-sessions/start-orchestrator.ts`
  * (same owner at both ends). The Hub REST links door lists and refuses it.
  */
- | "orchestrated_by";
+ | "orchestrated_by"
+/**
+ * capability(add-on) --extends--> capability(base). The add-on is its own
+ * container, package and listing; its actions run through its base's tool
+ * rows and are members of the add-on only (founder decision D6, document
+ * b387ca45 §6). ONE producer: the capability applier
+ * (`services/capabilities/addon.ts`, called by
+ * `createCapabilityFromDefinition` for a definition with `extends`), after it
+ * found the base installed. Readers: the add-on reads
+ * (`loadAddOnParents` / `loadAddOnsOf`), the catalog card's base-tool fallback. The Hub
+ * REST links door lists and refuses it: an install writes it, never a key.
+ */
+ | "extends";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /** The normalized state of an external agent's task (the `status` verb). */
@@ -22690,6 +22703,13 @@ export interface FindByIntentResult extends Partial<Record<ObjectCatalog, FindOb
 	/** Present only when no catalog produced a single match. */
 	noConfidentMatch?: NoConfidentMatch;
 }
+/** One container as the add-on reads name it. */
+export interface AddOnRef {
+	id: string;
+	name: string;
+	description: string | null;
+	workspaceId: string | null;
+}
 /** A skill or tool row. `kind` absent = skill (the execute door's shape). */
 export interface CapabilityRef {
 	kind?: "skill" | "tool";
@@ -23357,6 +23377,16 @@ export interface CapabilityComposition {
 	 * `workspaceId` is null (pod-wide).
 	 */
 	workspaceName?: string | null;
+	/**
+	 * ADD-ON (founder decision D6): the base capability this container extends
+	 * (`capability --extends--> capability`), batched in LIST mode only. `null`
+	 * when it is not an add-on, or its base is not visible to the reader;
+	 * `undefined` from single-object callers that do not load it.
+	 */
+	extends?: {
+		id: string;
+		name: string;
+	} | null;
 	provenance: {
 		contentHash?: string;
 		templateKey?: string;
@@ -23509,6 +23539,17 @@ export interface CreateCapabilityResult {
 		}[];
 		/** The capability CONTAINER the seeded tools + skills are grouped under. */
 		container: {
+			/**
+			 * ADD-ON only: the base it extends, and its actions that are still
+			 * members of the base because `removePart` refused (reported, like
+			 * `partsNotAttached`: they show on both pages until a pod admin re-runs
+			 * the install).
+			 */
+			addOnOf?: {
+				id: string;
+				name: string;
+				partsNotMoved: number;
+			};
 			id: string;
 			name: string;
 			/**
@@ -33661,7 +33702,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				meta: object;
 				output: {
+					addOns: AddOnRef[];
 					capability: CapabilityRow;
+					extends: AddOnRef | null;
 					parts: {
 						builtins: {
 							approved: boolean;

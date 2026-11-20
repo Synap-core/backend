@@ -2312,7 +2312,10 @@ export type LinkType =
   | "advances"
   // session --orchestrated_by--> session: coordinated by that orchestrator
   // (not lineage, not a dependency; the wait is the child's hold).
-  | "orchestrated_by";
+  | "orchestrated_by"
+  // capability(add-on) --extends--> capability(base): written by the
+  // capability applier only (founder decision D6).
+  | "extends";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {
@@ -2802,6 +2805,19 @@ export interface CapabilityDefinition {
   vault?: CapabilityVaultDef[];
   tools: CapabilityToolDef[];
   skills: CapabilitySkillDef[];
+  /**
+   * ADD-ON: the `key` of the base capability this one extends (founder
+   * decision D6, document b387ca45 §6), e.g. `"apify"`. An add-on is its own
+   * container, package and listing; it declares no tool or credential of its
+   * own: its skills `require` the base's tools by name, so its actions run
+   * through the base's tool rows and stop when the base's access is off. The
+   * applier refuses it until the base is installed in a scope that covers it,
+   * and records `capability --extends--> capability` (`services/capabilities/
+   * addon.ts`). The catalog authors it once, here; the manifest's
+   * `{kind: capability, relation: require}` dependency on the base is derived
+   * from it and checked by `catalog validate`.
+   */
+  extends?: string;
   /**
    * Content-addressed hash of this template's canonical definition, injected by
    * the Control Plane into the served definition (flows through
