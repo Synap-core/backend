@@ -46,7 +46,14 @@ describe("a pod app on Connected", () => {
   it("its old pairs need a review: the mark says so", () => {
     const out = render(
       <AppCard
-        app={{ ...base, pod_app: pod({ reconsent: { reason: "widens", was: [], proposed: access } }) } as unknown as App}
+        app={
+          {
+            ...base,
+            pod_app: pod({
+              reconsent: { reason: "widens", was: [], proposed: access },
+            }),
+          } as unknown as App
+        }
       />
     );
     expect(out).toContain("Needs your review");

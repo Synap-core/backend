@@ -52,15 +52,40 @@ const pod: PodAppInfo = {
 const offer = (over: Partial<AccessOfferView> = {}): AccessOfferView => ({
   asked: {
     permissions: [
-      { permission: "entity.post.read", tier: "read", reason: null, kindGroup: null, allSpaces: false, offerable: true },
-      { permission: "entity.post.create", tier: "write", reason: null, kindGroup: null, allSpaces: false, offerable: true },
-      { permission: "document.read", tier: "read", reason: null, kindGroup: null, allSpaces: false, offerable: true },
+      {
+        permission: "entity.post.read",
+        tier: "read",
+        reason: null,
+        kindGroup: null,
+        allSpaces: false,
+        offerable: true,
+      },
+      {
+        permission: "entity.post.create",
+        tier: "write",
+        reason: null,
+        kindGroup: null,
+        allSpaces: false,
+        offerable: true,
+      },
+      {
+        permission: "document.read",
+        tier: "read",
+        reason: null,
+        kindGroup: null,
+        allSpaces: false,
+        offerable: true,
+      },
     ],
     templates: [],
   },
   places: {
     read: { allSpaces: false, spaces: [CONTENT, ECO], projects: [LAUNCH] },
-    write: { spaces: [CONTENT, ECO], projects: [LAUNCH], suggestedSpaceIds: [] },
+    write: {
+      spaces: [CONTENT, ECO],
+      projects: [LAUNCH],
+      suggestedSpaceIds: [],
+    },
   },
   current: {
     version: 2,

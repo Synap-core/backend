@@ -375,7 +375,8 @@ export const fr: Catalog<typeof en> = {
   "page.heading": "Accès",
   "page.applies":
     "Une modification s’applique tout de suite : son accès actuel s’arrête, et le suivant contient ce que vous avez enregistré. Il ne peut jamais obtenir plus que ce qu’il a demandé ; pour donner plus, il redemande.",
-  "page.offerFailed": "Impossible de lire ce qu’il a demandé. Rien n’a été modifié.",
+  "page.offerFailed":
+    "Impossible de lire ce qu’il a demandé. Rien n’a été modifié.",
   "page.nothing": "Il n’a encore aucun accès.",
   "page.confirmHere":
     "Synap garde désormais un seul « où » par app. Voici son accès sous cette forme ; rien ne change avant votre confirmation ici, ou à sa prochaine connexion.",
