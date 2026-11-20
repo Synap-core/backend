@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 126 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 127 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -50,6 +50,7 @@ The pod's MCP server lists 126 tools. A new agent key lists the `entry` tools; t
 | [`synap_ask_person`](#synap_ask_person)                                   | Ask the person                    | entry        | no        |
 | [`synap_needs_you`](#synap_needs_you)                                     | What needs the person             | sessions     | yes       |
 | [`synap_get_flow`](#synap_get_flow)                                       | Get the flow of a kind or role    | read         | yes       |
+| [`synap_get_home`](#synap_get_home)                                       | Get Home or Moving now            | read         | yes       |
 | [`synap_read_board`](#synap_read_board)                                   | Read a whiteboard                 | read         | yes       |
 | [`synap_list_sessions`](#synap_list_sessions)                             | List focus sessions               | sessions     | yes       |
 | [`synap_get_work_graph`](#synap_get_work_graph)                           | Get the work graph                | sessions     | yes       |
@@ -870,6 +871,19 @@ How a kind's or role's work flows in a space, in ONE read — read-only. `states
 | `workspaceId` | string | no       | Optional: the space. Omitted = every space you see.        |
 | `projectId`   | string | no       | Optional: only this project's things.                      |
 | `firstN`      | number | no       | Cards per state (default 10, max 50); counts are exact.    |
+
+## synap_get_home
+
+**Get Home or Moving now** · Group: `read` · readOnlyHint: true · openWorldHint: false
+
+Home or Moving now, in ONE read — read-only. view 'home' (default): each space you see with what it produces and, per kind, its pipeline (columns, live, done this week), needs-you, being-worked and one headline thing. view 'moving': things with open work (sessions, workers), most urgent first, plus `unattached` sessions and `leftBehind` things. `withheld` = parts your grant does not read.
+
+| Parameter     | Type   | Required | Description                                         |
+| ------------- | ------ | -------- | --------------------------------------------------- |
+| `view`        | enum   | no       | home (default) or moving. One of: `home`, `moving`. |
+| `projectId`   | string | no       | Optional: only this project's spaces and things.    |
+| `workspaceId` | string | no       | moving only, optional: only this space.             |
+| `limit`       | number | no       | moving only: things (default 30, max 100).          |
 
 ## synap_read_board
 

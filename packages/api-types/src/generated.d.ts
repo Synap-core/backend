@@ -48897,6 +48897,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					source: "inferred" | "template";
 					workspaceId: string;
 				}[];
+				withheld?: ("beingWorked" | "homeLastSeenAt" | "needsYou" | "otherSpaces")[] | undefined;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
