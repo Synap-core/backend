@@ -816,3 +816,141 @@ describe("span, start and hide per width class: every block has them, checked by
     expect(r.dropped).toHaveLength(2);
   });
 });
+
+describe("migration: a plain-text label where the catalog has a slot becomes a Text block", () => {
+  const labels: CanvasSchema = {
+    ...schema,
+    SpatialChip: { children: { kind: "slot", allow: ["Text"] } },
+    SpatialCard: { header: { kind: "slot" }, children: { kind: "slot" } },
+    IconOnly: { children: { kind: "slot", allow: ["SpatialGlyph"] } },
+  };
+  const textOf = (b: PageBlock | undefined, prop: string) =>
+    (b?.props[prop] as PageBlock[] | undefined)?.map((t) => [
+      t.type,
+      t.props.text,
+    ]);
+
+  it("a schema-1 page keeps a button's, a chip's and a card header's text, nested too; nothing is dropped", () => {
+    const r = parseBoard(
+      {
+        root: { props: {} },
+        content: [
+          { type: "SpatialButton", props: { id: "b", children: "Start work" } },
+          {
+            type: "SpatialCard",
+            props: {
+              id: "c",
+              header: "Peek: Fleet design",
+              children: [
+                {
+                  type: "SpatialChip",
+                  props: { id: "ch", children: "Needs you 1" },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      labels
+    );
+    if (!r.ok) throw new Error(r.error);
+    expect(r.dropped).toEqual([]);
+    const [button, card] = r.board.frames[0]!.page.content;
+    expect(textOf(button, "children")).toEqual([["Text", "Start work"]]);
+    expect(textOf(card, "header")).toEqual([["Text", "Peek: Fleet design"]]);
+    expect(
+      textOf((card!.props.children as PageBlock[])[0], "children")
+    ).toEqual([["Text", "Needs you 1"]]);
+    // The new blocks get ids like any other.
+    expect(
+      ids(r.board.frames[0]!.page.content).every(
+        (id) => typeof id === "string" && id !== ""
+      )
+    ).toBe(true);
+  });
+
+  it("a v2 item keeps its label the same way", () => {
+    const r = parseBoard(
+      {
+        format: LEGACY_BOARD_FORMAT,
+        frames: [{ id: "f1", name: "Home", x: 0, y: 0, w: 1440, h: 900 }],
+        items: [
+          {
+            id: "b1",
+            component: "SpatialButton",
+            props: { children: "Go" },
+            frame: "f1",
+            x: 0,
+            y: 0,
+          },
+        ],
+      },
+      labels
+    );
+    if (!r.ok) throw new Error(r.error);
+    expect(r.dropped).toEqual([]);
+    expect(textOf(r.board.frames[0]!.page.content[0], "children")).toEqual([
+      ["Text", "Go"],
+    ]);
+  });
+
+  it("a slot that does not take Text, an empty string and a prop that is not a slot are still dropped and named", () => {
+    const r = parseBoard(
+      {
+        root: { props: {} },
+        content: [
+          { type: "IconOnly", props: { id: "i", children: "x" } },
+          { type: "SpatialButton", props: { id: "b", children: "  " } },
+          {
+            type: "Heading",
+            props: { id: "h", text: "Hi", subtitle: "not declared" },
+          },
+        ],
+      },
+      labels
+    );
+    expect(r.ok && r.dropped).toEqual([
+      { kind: "bad-prop", type: "IconOnly", prop: "children" },
+      { kind: "bad-prop", type: "SpatialButton", prop: "children" },
+      { kind: "bad-prop", type: "Heading", prop: "subtitle" },
+    ]);
+  });
+
+  it("a v3 board is not migrated: a string in a slot there is dropped and named, never lifted", () => {
+    const r = parseBoard(
+      {
+        format: BOARD_FORMAT,
+        frames: [
+          {
+            id: "f1",
+            name: "Home",
+            x: 0,
+            y: 0,
+            w: 1440,
+            h: 900,
+            page: {
+              root: { props: {} },
+              content: [
+                { type: "SpatialButton", props: { id: "b", children: "Go" } },
+              ],
+            },
+          },
+        ],
+      },
+      labels
+    );
+    expect(r.ok && r.dropped).toEqual([
+      { kind: "bad-prop", type: "SpatialButton", prop: "children" },
+    ]);
+  });
+
+  it("without a schema nothing is lifted (only the shape is read)", () => {
+    const r = parseBoard({
+      root: { props: {} },
+      content: [{ type: "SpatialButton", props: { id: "b", children: "Go" } }],
+    });
+    expect(r.ok && r.board.frames[0]!.page.content[0]!.props.children).toBe(
+      "Go"
+    );
+  });
+});
