@@ -206,7 +206,7 @@ const verifiedTickets = new WeakMap<object, string>();
 
 /**
  * The room gate's answer for a socket that came with a pod app's ROOM TICKET
- * (0433): the ticket is claimed ONCE, for this room's document only (another
+ * (0438): the ticket is claimed ONCE, for this room's document only (another
  * document, expired, already used → refused), and the socket gets the LESSER
  * of what the ticket allows (decided from the app connection's grant when it
  * was made) and what the document's own floor allows now: a read ticket never
@@ -842,7 +842,7 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
   //      (`verifyHandshakeUser`, shared with `/presence`). A client-asserted
   //      `userId` alone is refused. `workspaceId`, if sent, is ignored: it is
   //      client-supplied and never load-bearing. A pod app sends a ROOM
-  //      TICKET as `token` instead (0433): its person is checked here, and
+  //      TICKET as `token` instead (0438): its person is checked here, and
   //      gate 2 claims it once for its one document
   //      (`authorizeTicketRoomAccess`).
   //   2. the room gate (namespace middleware, installed further down): WHAT

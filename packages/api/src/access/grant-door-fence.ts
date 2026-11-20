@@ -1166,7 +1166,7 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // No pod row: the static routing rules, the text sent classified, the tabs
   // sent clustered by the intelligence service.
   [/^\/routing\/resolve\/?$/, SEAMED],
-  // A pod app's live-room ticket (0433). Writes no pod data (the ticket row
+  // A pod app's live-room ticket (0438). Writes no pod data (the ticket row
   // only): the document is read through `resolveDocumentRoomAccess`, i.e.
   // `scopedDb` with the key's grant ANDed (a view-owned canvas through its
   // view), and edit needs the grant's `document.update` / `view.update_content`

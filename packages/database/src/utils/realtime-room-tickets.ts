@@ -1,5 +1,5 @@
 /**
- * Realtime room tickets (0433) — the ONE store behind how a pod app opens a
+ * Realtime room tickets (0438) — the ONE store behind how a pod app opens a
  * live Yjs room. Shared by the api (`POST /api/hub/realtime/room-ticket`
  * mints) and the realtime server (the `/yjs` gate claims, the ticket sweep
  * re-checks), which run as two processes: the ticket is a row, never memory.

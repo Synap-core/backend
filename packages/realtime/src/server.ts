@@ -386,7 +386,7 @@ httpServer.listen(PORT, "0.0.0.0", () => {
 
 // A socket opened with a device token closes when its device ends.
 startDeviceSocketSweep();
-// A pod app's room-ticket sockets end with its connection (0433).
+// A pod app's room-ticket sockets end with its connection (0438).
 startTicketSocketSweep();
 // Every open /presence socket: its credential, handshake rooms and joined
 // rooms are re-checked periodically.

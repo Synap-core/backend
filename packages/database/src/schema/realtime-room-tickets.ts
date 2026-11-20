@@ -1,5 +1,5 @@
 /**
- * Realtime room tickets (0433): how a pod APP opens a live Yjs room.
+ * Realtime room tickets (0438): how a pod APP opens a live Yjs room.
  *
  * A pod app holds its person's connection token (an `app_person` api key) on
  * its own server, never in the browser. To open a document's live room from
@@ -15,7 +15,7 @@
  */
 import { pgTable, text, timestamp, uuid, index } from "drizzle-orm/pg-core";
 
-/** What a ticket lets its socket do (0433 `realtime_room_tickets_access_check`). */
+/** What a ticket lets its socket do (0438 `realtime_room_tickets_access_check`). */
 export const ROOM_TICKET_ACCESS = ["read", "edit"] as const;
 export type RoomTicketAccess = (typeof ROOM_TICKET_ACCESS)[number];
 
