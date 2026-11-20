@@ -156,6 +156,66 @@ export function placeBeyondPodWideReads(
 /** A place that is not the pod: what a scope reaches beyond its pod-wide reads. */
 export type SpacesOrAnywhere = Exclude<Place, { readonly kind: "pod" }>;
 
+/**
+ * Where a scope's ROWS sit, by space, beyond its pod-wide reads: the question
+ * of a door that bounds what it shows or routes by space (the role rows a key
+ * finds, the spaces a capture may land in). It does NOT say the scope covers
+ * those spaces whole: a project or object pin beside them still narrows the
+ * rows inside them (`permits`, the read clause).
+ *
+ *  - `"anywhere"`: a scope with no space, project or object pin;
+ *  - the named spaces of a `spaces` place, pinned inside them or not;
+ *  - none (`[]`) for a scope pinned to projects or objects with no space: no
+ *    space is named, and there is no project-to-space mapping here (a
+ *    project's spaces count only for a project-only session,
+ *    `session-counted-spaces.ts`; "only project X" is no space, decision
+ *    51ad8d1e F3). An empty project list, which `permits` reads as no project
+ *    at all, names none either; nor does a scope that permits nothing
+ *    (`{permissions: []}`, the deny-all `narrowKeyGrant` leaves);
+ *  - null: a pod-wide read, which reaches no space beyond reading its kinds.
+ */
+export function spacesOfScopeRows(
+  scope: PlaceScopeLike
+): "anywhere" | readonly string[] | null {
+  if (scope.permissions.length === 0) return [];
+  const place = placeBeyondPodWideReads(scope);
+  if (place === null) return null;
+  switch (place.kind) {
+    case "spaces":
+      return place.ids;
+    case "projects":
+      return [];
+    case "unbounded":
+      return scope.projectIds != null || scope.entityIds != null
+        ? []
+        : "anywhere";
+    default:
+      return assertNeverPlace(place);
+  }
+}
+
+/**
+ * The spaces a scope covers WHOLE, beyond its pod-wide reads: the question of
+ * a door that hands out a space itself (a membership: join it, add an AI to
+ * it as an editor). Only a scope with no project or object pin covers a
+ * space whole, the rule `grantCoversSpace` (`ensure-template.ts`) and
+ * `namedPermissionPermits` (`grant-write-check.ts`) already apply:
+ *
+ *  - `"anywhere"`: a scope with no space, project or object pin;
+ *  - the named spaces of a scope pinned to spaces only;
+ *  - none (`[]`) for any scope pinned to projects or objects, beside spaces
+ *    or not (its rows sit inside spaces, it covers none whole), an empty
+ *    project list, and a scope that permits nothing;
+ *  - null: a pod-wide read.
+ */
+export function spacesCoveredWhole(
+  scope: PlaceScopeLike
+): "anywhere" | readonly string[] | null {
+  const rows = spacesOfScopeRows(scope);
+  if (rows === null) return null;
+  return scope.projectIds != null || scope.entityIds != null ? [] : rows;
+}
+
 /** One request as a connect proposal, `approved_requests` or `synap_grant` carry it. */
 export interface PlaceRequestLike {
   readonly permission: string;

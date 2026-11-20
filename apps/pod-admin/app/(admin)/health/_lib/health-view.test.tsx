@@ -111,7 +111,7 @@ describe("HealthBody states", () => {
     // Runs left the console: the door opens Work in the app.
     expect(out).not.toContain('href="/runs"');
     expect(out).toContain('href="synap://open/app/sessions?view=moving"');
-    expect(out).toContain('href="/rules"');
+    expect(out).toContain('href="/automations"');
     expect(out).toContain('href="/agents"');
     expect(out).toContain("Restart a service");
     expect(out).toContain("The database is never restarted from here.");

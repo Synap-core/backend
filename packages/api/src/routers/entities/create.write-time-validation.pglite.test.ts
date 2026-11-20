@@ -195,6 +195,28 @@ describe("entities.create: properties are validated at write time", () => {
     expect(out).toMatchObject({ status: "proposed", proposalId: "prop-1" });
   });
 
+  it("a caller-requested review (forcePropose) reaches the gate; without it the gate is told false", async () => {
+    // The design door (design.apply, self-gated) asks for review this way
+    // when the outer capability gate said propose: dropped here, the
+    // agent's create could auto-approve past that review.
+    await create({
+      title: "Founder working preference",
+      properties: { uo_category: "preferences" },
+      agentUserId: AGENT,
+      source: "ai",
+      forcePropose: true,
+    });
+    await create({
+      title: "Founder working preference",
+      properties: { uo_category: "preferences" },
+      agentUserId: AGENT,
+      source: "ai",
+    });
+    expect(h.gate).toHaveBeenCalledTimes(2);
+    expect(h.gate.mock.calls[0]![0]).toMatchObject({ forcePropose: true });
+    expect(h.gate.mock.calls[1]![0]).toMatchObject({ forcePropose: false });
+  });
+
   it("a person's bad create is still refused by the repository", async () => {
     h.gate.mockResolvedValue({ allowed: true });
     await expect(

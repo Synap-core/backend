@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * Agents & work's landing: the agents, one row each — who it is, how its
+ * Approvals › Grid's head (it was Agents & work's landing): the agents, one row each — who it is, how its
  * writes land (the choice in force as a mark, the pod's own sentence under
  * it), and two doors: "Change" opens the agent's page, where the ONE control
  * for it lives (`agentUsers.setPosture`), and "Why, per space" opens the grid
  * narrowed to that agent. Above them, the pod default those rows follow, with
- * its door to Settings. The full grid is the deep layer (`?view=grid`).
+ * its door to Settings. The full grid follows it.
  */
 
 import { Button } from "@heroui/react";

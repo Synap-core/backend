@@ -1,29 +1,28 @@
 "use client";
 
 /**
- * Governance › Agents & work — the agents first, the grid as the deep layer
- * (founder, 2 Nov 2026: "simplify Agents & work"). Three views of one read,
+ * Approvals › Grid — today's agent × work matrix, folded into Approvals
+ * (decision b387ca45 D5; it was Governance › Agents & work). One read,
  * `governanceRules.matrix({ lens: "pod" })` (pod admins only — the `(admin)`
  * proxy gate and the procedure's own `assertPodAdmin`):
  *
- *   (none)          the agents, one row each: how its writes land, a door to
- *                   its page (where the one control for that lives) and a
- *                   door "Why, per space" (`_lib/agent-list.tsx`);
- *   ?agent=<id>     that agent's row of the grid alone, each cell opening WHY;
- *   ?view=grid      every agent × each space's processes, its Other work and
- *                   the locked platform floors (type → computer → agent).
+ *   ?view=grid             the pod default, the agents (how each one's writes
+ *                          land, its page, "Why, per space") and every agent ×
+ *                          each space's processes, its Other work and the
+ *                          locked platform floors (type → computer → agent);
+ *   ?view=grid&agent=<id>  that agent's row of the grid alone, each cell
+ *                          opening WHY (Widen / Revoke).
  *
- * States: skeleton · failed + Retry (a failed read is never an empty matrix) ·
- * INVITE when there are no agents · EXPLAIN when no space has a process or
- * when the asked-for agent is not in the read · a banner when the read was
- * `partial`.
+ * The page's header and its one filter row are the Approvals page's. States:
+ * skeleton · failed + Retry (a failed read is never an empty matrix) · INVITE
+ * when there are no agents · EXPLAIN when no space has a process or when the
+ * asked-for agent is not in the read · a banner when the read was `partial`.
  */
 
 import { Button, Snippet } from "@heroui/react";
-import { AlertTriangle, ArrowLeft, Bot, Lock, Workflow } from "lucide-react";
+import { AlertTriangle, Bot, Lock, Workflow } from "lucide-react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AGENT_MATRIX_LIMITS,
   MATRIX_MARKS,
@@ -32,12 +31,10 @@ import {
   type MatrixMark,
 } from "@synap-core/types/agent-matrix";
 import { resolveMatrixMarkLabel } from "@synap-core/types/vocabulary";
-import { trpc } from "../../../../lib/trpc";
-import { agentHref, navHref } from "../../../../lib/console-nav";
-import { useT } from "../../../../lib/i18n/locale-provider";
+import { trpc } from "../../../../../lib/trpc";
+import { agentHref } from "../../../../../lib/console-nav";
+import { useT } from "../../../../../lib/i18n/locale-provider";
 import {
-  AGENT_PARAM,
-  VIEW_PARAM,
   agentOnlyRows,
   agentRowKey,
   agentsAndWorkHref,
@@ -49,38 +46,27 @@ import {
   toggleExpanded,
   visibleRows,
   type MatrixRow,
-} from "../../../../lib/agent-matrix/matrix-view-model";
-import { ResourceRowError } from "../../components/resource-row";
-import {
-  PageFallback,
-  PageHeader,
-  PageShell,
-} from "../../components/page-header";
-import { AgentList, PodDefaultLine } from "./_lib/agent-list";
-import { en, fr } from "./_lib/copy";
-import { MatrixGrid } from "./_lib/matrix-grid";
-import { toneTextClass } from "./_lib/mark-tone";
-import { WhyDrawer, type WhyTarget } from "./_lib/why-drawer";
+} from "../../../../../lib/agent-matrix/matrix-view-model";
+import { ResourceRowError } from "../../../components/resource-row";
+import { AgentList, PodDefaultLine } from "./agent-list";
+import { en, fr } from "./copy";
+import { MatrixGrid } from "./matrix-grid";
+import { toneTextClass } from "./mark-tone";
+import { WhyDrawer, type WhyTarget } from "./why-drawer";
 
 const CATALOGS = { en, fr };
 const LEGEND: MatrixMark[] = ["auto", "ask", "off", "mixed"];
-const BASE = navHref("governance");
 
-export default function AgentsAndWorkPage() {
-  return (
-    <Suspense fallback={<PageFallback />}>
-      <AgentsAndWork />
-    </Suspense>
-  );
-}
-
-function AgentsAndWork() {
+export function ApprovalsGrid({
+  agentId,
+  base,
+}: {
+  /** `?agent=`: that agent's row alone. */
+  agentId: string | null;
+  /** The Approvals page's own path, for the agents' "Why, per space" doors. */
+  base: string;
+}) {
   const t = useT(CATALOGS);
-  const params = useSearchParams();
-  const agentId = params.get(AGENT_PARAM);
-  const view =
-    params.get(VIEW_PARAM) === "grid" ? "grid" : agentId ? "agent" : "list";
-
   const query = trpc.governanceRules.matrix.useQuery(
     { lens: "pod" },
     { staleTime: 30_000 }
@@ -88,31 +74,8 @@ function AgentsAndWork() {
   const state = matrixState(query);
   const matrix = query.data;
 
-  const agentName =
-    view === "agent" && matrix && agentId
-      ? (findRow(matrix, agentRowKey(agentId))?.label ?? null)
-      : null;
-
   return (
-    <PageShell>
-      {view !== "list" && <BackToList />}
-      <PageHeader
-        title={
-          view === "grid"
-            ? t("grid.title")
-            : view === "agent"
-              ? (agentName ?? t("title"))
-              : t("title")
-        }
-        description={
-          view === "grid"
-            ? t("grid.description")
-            : view === "agent"
-              ? t("agent.description")
-              : t("description")
-        }
-      />
-
+    <>
       {state === "loading" && <MatrixSkeleton />}
 
       {state === "failed" && (
@@ -129,47 +92,28 @@ function AgentsAndWork() {
       {state === "ready" && matrix && (
         <div className="flex flex-col gap-4">
           {matrix.partial && <PartialBanner partial={matrix.partial} />}
-          {view === "list" && (
-            <>
-              <PodDefaultLine />
-              <AgentList
-                agents={matrixAgents(matrix)}
-                whyHref={(id) => agentsAndWorkHref(BASE, { agentUserId: id })}
-              />
-              <Link
-                href={agentsAndWorkHref(BASE, "grid")}
-                className="inline-flex min-h-10 items-center self-start text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
-              >
-                {t("grid.open")}
-              </Link>
-            </>
-          )}
-          {view === "agent" && agentId && (
+          {agentId ? (
             <OneAgentGrid
               matrix={matrix}
               agentUserId={agentId}
               onRefetch={() => void query.refetch()}
             />
-          )}
-          {view === "grid" && (
-            <WholeGrid matrix={matrix} onRefetch={() => void query.refetch()} />
+          ) : (
+            <>
+              <PodDefaultLine />
+              <AgentList
+                agents={matrixAgents(matrix)}
+                whyHref={(id) => agentsAndWorkHref(base, { agentUserId: id })}
+              />
+              <WholeGrid
+                matrix={matrix}
+                onRefetch={() => void query.refetch()}
+              />
+            </>
           )}
         </div>
       )}
-    </PageShell>
-  );
-}
-
-function BackToList() {
-  const t = useT(CATALOGS);
-  return (
-    <Link
-      href={BASE}
-      className="mb-2 inline-flex min-h-8 items-center gap-1 text-[12.5px] text-foreground/65 hover:text-foreground"
-    >
-      <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
-      {t("back")}
-    </Link>
+    </>
   );
 }
 

@@ -26,8 +26,16 @@
  *        and in the reach of those spaces, the role's own: never of another
  *        key space. Adding a role never shows a record in a space the person
  *        did not grant the app, nor one that space could not see.
- *  - A scope NOT limited to spaces that permits the write at the row's own
- *    workspace passes with no reach clause.
+ *  - A scope NOT limited at all (no space, project or object pin) that
+ *    permits the write at the row's own workspace passes with no reach
+ *    clause. A scope pinned to projects or objects (no space) is limited:
+ *      · on a STAMPED role it takes a space pin's reach clause: the record
+ *        readable by the key and in the role's space reach (`inReachOf`);
+ *      · on a SHARED role (no space holds the row) its permit counts only on
+ *        a record the key reads (its project's, its objects'), the one reach
+ *        it has;
+ *      · it finds no role row by itself (`roleRowInKeyReach`): the role read
+ *        clause has no project path.
  *
  * Every role write is checked in the role's own space(s) and needs the record
  * in their reach: a key's other spaces never lend it. A role row outside every
@@ -60,8 +68,8 @@ import { grantRequestKey } from "@synap/governance-policy";
 import {
   holderOfGrant,
   parsePlace,
-  placeBeyondPodWideReads,
   placeSpaceIds,
+  spacesOfScopeRows,
 } from "@synap-core/types/grants";
 import {
   keyGrantReadClause,
@@ -118,8 +126,17 @@ export async function roleWriteGrantSpace(
     return { denied: outOfReach(write, [stored]) };
   }
 
-  // A shared role. A scope not limited to spaces may write it pod scope.
-  if (!denial) return { space: null };
+  // A shared role, stored pod-wide: a scope pinned to spaces never permits
+  // it there. A scope not limited at all writes it pod scope on its permit
+  // alone; one pinned to projects or objects only on a record the key reads.
+  if (!denial) {
+    if (
+      (await permittedUnlimited(write, null, grant)) ||
+      (await readByKey(target.entityId, grant))
+    )
+      return { space: null };
+    return { denied: unreadRecord(write) };
+  }
 
   if (door === "update") {
     const space = target.facetId
@@ -163,9 +180,13 @@ export async function roleWriteGrantSpace(
  * of them, or a shared row they read (`sharedRoleRowsInSpacesWhere`). Outside
  * it the row is not found, as an attach onto a record the key cannot read is,
  * never a refusal that names another space. No grant, or a scope not limited
- * to spaces: every row the person's floor finds. A pod-wide READ scope
- * (`placeBeyondPodWideReads`, decision e1b59d38 "B") writes nothing, so it does
- * not count as one.
+ * to spaces (no space, project or object pin): every row the person's floor
+ * finds. A pod-wide READ scope (`spacesOfScopeRows`, decision
+ * e1b59d38 "B") writes nothing, so it does not count as one. A scope pinned to
+ * projects (or objects) with no space finds no role row: a role row IS a
+ * space's (D1), the role's read clause has no project path (`entity_facets`
+ * in `GRANT_READ_SPECS`), and a project covers no whole space (decision
+ * 51ad8d1e F3). Fail closed, as a role row outside every key space is.
  */
 export async function roleRowInKeyReach(
   facetId: string,
@@ -173,12 +194,7 @@ export async function roleRowInKeyReach(
 ): Promise<boolean> {
   if (
     !grant ||
-    grant.scopes.some((scope) => {
-      // A project pin is not limited to spaces (as before projects were a
-      // place); its projects narrow at `permits` (W1).
-      const kind = placeBeyondPodWideReads(scope)?.kind;
-      return kind === "unbounded" || kind === "projects";
-    })
+    grant.scopes.some((scope) => spacesOfScopeRows(scope) === "anywhere")
   )
     return true;
   const spaces = keySpaces(grant);
@@ -210,15 +226,20 @@ function keySpaces(grant: KeyGrant): string[] {
   ];
 }
 
-/** A scope with no space limit permits `write` in `space` on its own. */
+/**
+ * A scope with no space, project or object limit permits `write` in `space` on
+ * its own (`space` null: a shared role's pod scope). A scope pinned to
+ * projects or objects is NOT unlimited: it writes a role only on a record the
+ * key reads, never by its permit alone (decision 51ad8d1e F3).
+ */
 async function permittedUnlimited(
   write: Omit<GrantWriteInput, "workspaceId">,
-  space: string,
+  space: string | null,
   grant: KeyGrant
 ): Promise<boolean> {
-  // Its pod-wide reads ride along: the write check refuses them per verb.
+  // A pod-wide read never permits a write: it is not one either.
   const unlimited = grant.scopes.filter(
-    (scope) => parsePlace(scope, holderOfGrant(grant)).kind !== "spaces"
+    (scope) => spacesOfScopeRows(scope) === "anywhere"
   );
   if (unlimited.length === 0) return false;
   return (
@@ -227,6 +248,30 @@ async function permittedUnlimited(
       { ...grant, scopes: unlimited }
     )) === null
   );
+}
+
+/** The record is live and readable by the key (any of its scopes). */
+async function readByKey(entityId: string, grant: KeyGrant): Promise<boolean> {
+  const [row] = await db
+    .select({ id: entities.id })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.id, entityId),
+        isNull(entities.deletedAt),
+        keyGrantReadClause(entities, grant)
+      )
+    )
+    .limit(1);
+  return Boolean(row);
+}
+
+/** A pinned key's change of a shared role on a record it cannot read. */
+function unreadRecord(write: Omit<GrantWriteInput, "workspaceId">): string {
+  const { subject, action } = grantRequestKey(write.subjectType, write.action);
+  const message = `This key's grant does not allow "${subject}.${action}" on a record it cannot read: a key limited to projects or records changes a shared role only on a record it reads.`;
+  recordGrantDenial(message, `${subject}.${action}`);
+  return message;
 }
 
 /**

@@ -251,10 +251,12 @@ async function pickedOutOfReach(
   const grant = getRequestGrant();
   if (!grant) return null;
   for (const r of rows) {
+    // Its project is read from the stored row `data.id` names
+    // (`grant-write-check.ts`: a non-create write is placed where the row
+    // lives now), so no `projectId` rides here.
     const write = {
       subjectType: "focus_session",
       action: "orchestrate",
-      projectId: r.projectId,
       data: { id: r.id },
     };
     // Where the session COUNTS for a grant: its own space, or for a
@@ -359,6 +361,16 @@ export async function startOrchestrator(p: {
     agentUserId: p.agentUserId ?? undefined,
     workspaceId: placement.workspaceId ?? undefined,
     projectId: placement.projectId ?? undefined,
+    // The key's project pin is checked on the placement's project only when
+    // EVERY picked session is filed there (then it is where they all live).
+    // A first-row fallback over sessions of different projects places
+    // nothing for a key: a project pin is then refused at rung 0, so a key
+    // pinned to P never orchestrates a session of Q (the filing rule,
+    // `grant-write-check.ts`).
+    ...(placement.projectId &&
+    rows.every((r) => r.projectId === placement.projectId)
+      ? { grantProjectIdIsStored: true }
+      : {}),
     subjectType: "focus_session",
     action: "orchestrate",
     source: "intelligence",

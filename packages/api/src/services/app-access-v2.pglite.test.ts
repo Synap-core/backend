@@ -3,8 +3,10 @@
  *
  *  - `grantsForApprovedRequests` (v2 when the pairs lift) permits EXACTLY
  *    what the per-space grants (`grantsForPairs`, the pre-W2 function)
- *    permit, on fixtures shaped like the pod's real connections (a chat app's
- *    pod-wide reads, Content Studio / CRM per-space rows, mixed rows);
+ *    permit, and puts the app in the same spaces as viewer or editor, on
+ *    fixtures shaped like the pod's real connections (a chat app's pod-wide
+ *    reads, Content Studio / CRM per-space rows, mixed rows, synap-chat as it
+ *    asks today, and the subsumption the W3c lift reads by meaning);
  *  - `grantsForApp` reads the stored v2, and a v2 left stale by a write that
  *    bypassed the repository never wins over the pairs;
  *  - `appRequestsWithin` compares v2 against v2 and still refuses a forged
@@ -43,6 +45,7 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { AppRepository } from "@synap/database";
 import {
+  liftApprovedRequests,
   parsePermission,
   parsePlace,
   permits,
@@ -125,6 +128,27 @@ function placedPairs(scopes: readonly Scope[]) {
   return [...out].sort();
 }
 
+/**
+ * Where the app is PUT, read the way the app doors read a scope: each space
+ * as viewer (reads only) or editor, and the pod for a scope with no space.
+ */
+function placement(scopes: readonly Scope[]) {
+  const roles = new Map<string, string>();
+  for (const s of scopes) {
+    const place = parsePlace(s, "app");
+    const where =
+      place.kind === "spaces" || place.kind === "projects"
+        ? place.ids.map((id) => `${place.kind}:${id}`)
+        : [place.kind];
+    const writes = s.permissions.some(
+      (p) => parsePermission(p).at(-1) !== "read"
+    );
+    for (const w of where)
+      if (roles.get(w) !== "editor") roles.set(w, writes ? "editor" : "viewer");
+  }
+  return [...roles].map(([w, r]) => `${w}=${r}`).sort();
+}
+
 const inEach = (perms: string[], spaces: string[]): Pair[] =>
   spaces.flatMap((workspaceId) =>
     perms.map((permission) => ({ permission, workspaceId }))
@@ -179,6 +203,65 @@ const FIXTURES: Record<string, { pairs: Pair[]; lifts: boolean }> = {
     ],
     lifts: false,
   },
+  // synap-chat as it asks today (site.config.ts): reads of named kinds and
+  // subjects pod-wide, and in each chosen space every-kind reads (entity,
+  // document, relation), reads that cannot be pod-wide (track, agent) and its
+  // acts. Its reads sit at two widths and v2 has one read place: "all" would
+  // read every kind everywhere (widens) and drop track/agent reads (narrows).
+  "synap-chat as it asks today: kinds pod-wide, every kind per space": {
+    pairs: [
+      ...podWide([
+        "playbook.read",
+        "session.read",
+        "project.read",
+        "entity.task.read",
+        "entity.person.read",
+        "entity.deal.read",
+      ]),
+      ...inEach(
+        [
+          "playbook.run",
+          "session.update",
+          "agent.read",
+          "track.read",
+          "entity.read",
+          "document.read",
+          "relation.read",
+          "chat.stream",
+        ],
+        [CONTENT, BRAND]
+      ),
+    ],
+    lifts: false,
+  },
+  // Subsumption (W3c): entity.person.read in BRAND adds nothing beside
+  // entity.read in BRAND. The key comparison re-consented it.
+  "subsumption: every-kind reads per space beside a kind's read": {
+    pairs: [
+      ...inEach(["entity.read"], [CONTENT, BRAND]),
+      ...inEach(["entity.person.read", "entity.person.create"], [CONTENT]),
+    ],
+    lifts: true,
+  },
+  // W3c: the space read is kept by the pod-wide read, and the space stays
+  // the app's (it writes there).
+  "a pod-wide read beside the same read in a space it writes in": {
+    pairs: [
+      ...podWide(["entity.decision.read"]),
+      ...inEach(["entity.decision.read", "entity.decision.create"], [CONTENT]),
+    ],
+    lifts: true,
+  },
+  // Review of #1196: the "all" grants drop entity.*.read (not pod-wide) and
+  // * covers it in CONTENT, so the GRANTS match, but the v2 document would
+  // name entity.*.read at the pod: it must never be stored.
+  "a read off the pod-wide list under * beside a pod-wide read": {
+    pairs: [
+      ...inEach(["*", "entity.*.read"], [CONTENT]),
+      ...podWide(["entity.note.read"]),
+    ],
+    lifts: false,
+  },
   "a forged or stale row: writes with no space": {
     pairs: [
       ...inEach(["entity.note.read"], [CONTENT]),
@@ -197,11 +280,12 @@ beforeAll(async () => {
 
 describe("grantsForApprovedRequests — v2 grants equal the per-space grants", () => {
   for (const [label, { pairs, lifts }] of Object.entries(FIXTURES)) {
-    it(`${label}: same permits, same places${lifts ? ", at most 4 scopes" : ", kept per space"}`, () => {
+    it(`${label}: same permits, same placement${lifts ? ", at most 4 scopes" : ", kept per space"}`, () => {
       const before = grantsForPairs(pairs) as Scope[];
       const after = grantsForApprovedRequests(pairs) as Scope[];
       expect(permitsTable(after, pairs)).toEqual(permitsTable(before, pairs));
-      expect(placedPairs(after)).toEqual(placedPairs(before));
+      expect(placement(after)).toEqual(placement(before));
+      expect("access" in liftApprovedRequests(pairs)).toBe(lifts);
       if (lifts) {
         expect(after.length).toBeLessThanOrEqual(4);
       } else {
@@ -240,6 +324,18 @@ describe("grantsForApp — the stored v2, never a stale one", () => {
       approvedAccess: v2([CONTENT, BRAND, ECOSYSTEM]),
     }) as Scope[];
     expect(placedPairs(grants)).toEqual([`entity.post.read@spaces:${CONTENT}`]);
+  });
+
+  // Rules out: a revoke that cleared the pairs re-attaching the old reach
+  // through the v2 left beside them (review of #1183).
+  it("empty or missing pairs beside a valid stored v2 mint no grants", () => {
+    const stored = v2([CONTENT, BRAND]);
+    expect(
+      grantsForApp({ approvedRequests: [], approvedAccess: stored })
+    ).toEqual([]);
+    expect(
+      grantsForApp({ approvedRequests: null, approvedAccess: stored })
+    ).toEqual([]);
   });
 
   it("no v2 lifts the pairs at read time; an invalid v2 is no v2", () => {
@@ -411,6 +507,24 @@ describe("backfillAppAccess — dry run, then apply", () => {
         "Narrows",
         FIXTURES["a pod-wide read beside the same read in one space"]!.pairs
       ),
+      chatToday: await insertApp(
+        "synap-chat",
+        FIXTURES[
+          "synap-chat as it asks today: kinds pod-wide, every kind per space"
+        ]!.pairs
+      ),
+      subsumed: await insertApp(
+        "Subsumed",
+        FIXTURES[
+          "subsumption: every-kind reads per space beside a kind's read"
+        ]!.pairs
+      ),
+      podBesideWrite: await insertApp(
+        "Pod beside write",
+        FIXTURES[
+          "a pod-wide read beside the same read in a space it writes in"
+        ]!.pairs
+      ),
       none: await insertApp("Not approved", null),
     };
   });
@@ -419,15 +533,30 @@ describe("backfillAppAccess — dry run, then apply", () => {
     const report = await backfillAppAccess({ apply: false });
     expect(report).toMatchObject({
       apply: false,
-      apps: 5,
-      liftable: 1,
+      apps: 8,
+      liftable: 3,
       already: 0,
       written: 0,
-      reconsent: { total: 4, widens: 2, narrows: 1, unplaceable: 1 },
+      // W3c: the old synap-chat fixture (no write in its spaces) now
+      // re-consents because it NARROWS (track.read per space, and the two
+      // spaces it only reads), not because a key differs.
+      reconsent: { total: 5, widens: 2, narrows: 2, unplaceable: 1 },
     });
-    expect(report.rows.find((r) => r.appId === ids.studio)?.outcome).toBe(
-      "would-lift"
-    );
+    const row = (id: string) => report.rows.find((r) => r.appId === id);
+    for (const id of [ids.studio, ids.subsumed, ids.podBesideWrite])
+      expect(row(id)?.outcome).toBe("would-lift");
+    expect(row(ids.chat)).toMatchObject({
+      outcome: "reconsent",
+      reason: "narrows",
+      example: `would lose track.read in space:${CONTENT}`,
+    });
+    // synap-chat as it asks today cannot lift without widening: "all"
+    // spaces would read every kind everywhere.
+    expect(row(ids.chatToday)).toMatchObject({
+      outcome: "reconsent",
+      reason: "widens",
+      example: "would allow entity.read in pod",
+    });
     expect(
       report.rows.find((r) => r.appId === ids.byTemplate)?.example
     ).toMatch(/^would allow entity\.(post|asset)\.(read|create) in space:/);
@@ -436,14 +565,21 @@ describe("backfillAppAccess — dry run, then apply", () => {
 
   it("apply writes v2 for the liftable rows only, and a re-run changes nothing", async () => {
     const report = await backfillAppAccess({ apply: true });
-    expect(report).toMatchObject({ liftable: 1, written: 1, changed: 0 });
+    expect(report).toMatchObject({ liftable: 3, written: 3, changed: 0 });
     expect(await accessOf(ids.studio)).toMatchObject({
       version: 2,
       read: { spaces: [CONTENT, BRAND, ECOSYSTEM] },
       write: { spaces: [CONTENT, BRAND, ECOSYSTEM] },
     });
+    expect(await accessOf(ids.podBesideWrite)).toEqual({
+      version: 2,
+      permissions: ["entity.decision.read", "entity.decision.create"],
+      read: { spaces: "all", projects: [] },
+      write: { spaces: [CONTENT], projects: [] },
+    });
     for (const id of [
       ids.chat,
+      ids.chatToday,
       ids.byTemplate,
       ids.forged,
       ids.narrows,
@@ -451,6 +587,6 @@ describe("backfillAppAccess — dry run, then apply", () => {
     ])
       expect(await accessOf(id)).toBeNull();
     const again = await backfillAppAccess({ apply: true });
-    expect(again).toMatchObject({ liftable: 1, already: 1, written: 0 });
+    expect(again).toMatchObject({ liftable: 3, already: 3, written: 0 });
   });
 });

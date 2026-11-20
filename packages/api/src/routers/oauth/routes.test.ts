@@ -237,6 +237,7 @@ vi.mock("../../services/app-connect.js", () => ({
     permissions.map((permission) => ({ permission, workspaces: [] })),
   oauthAppPodWideKinds: async () => [],
   oauthAppPodWideOffer: () => [],
+  kindGroupIndex: () => new Map(),
   currentOAuthApproval: async () => [],
 }));
 

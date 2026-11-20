@@ -29,6 +29,7 @@ import {
   startedByAgentPatch,
   insertFocusSessionRow,
   workspacePlacementPatchFromProposal,
+  getRequestGrant,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -60,6 +61,7 @@ import {
   sessionTwinLockKey,
 } from "../../../services/focus-sessions/find-open-session-twin.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { approvedSessionGoal } from "../../../services/focus-sessions/session-update-goal.js";
 import { isUndoableSessionPatch } from "../../../services/focus-sessions/session-undo.js";
 import {
@@ -900,6 +902,25 @@ export function registerFocusSessionExecutors(): void {
           typeof innerData.subjectEntityId === "string"
         ) {
           set.subjectEntityId = innerData.subjectEntityId;
+        }
+        // DEFENCE IN DEPTH (the filing rule, W1 review N1): approving a
+        // filing under a key's grant needs a write on the session where it
+        // lives now, with no project (`filesIntoProject`). The decide fence
+        // already refuses a project pin (`proposalIsFiling`).
+        if (
+          getRequestGrant() &&
+          ("projectId" in innerData || "trackId" in innerData)
+        ) {
+          const denial = await grantWriteDenial({
+            subjectType: "focus_session",
+            action: "update",
+            workspaceId: session.workspaceId ?? null,
+            data: { id: sessionId },
+            filesIntoProject: true,
+          });
+          if (denial) {
+            throw new TRPCError({ code: "FORBIDDEN", message: denial });
+          }
         }
         // FILING. Carried by `updateFocusSession`'s gate payload in the same
         // hunk as this arm. The target is re-floored at approval: the project

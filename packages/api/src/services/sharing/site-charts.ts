@@ -783,6 +783,7 @@ export async function unpublishChartsFromSite(
     action: "update",
     workspaceId: site.workspaceId ?? undefined,
     projectId: site.resourceId,
+    storedProjectIds: [site.resourceId],
     data: { op: "unpublish_charts", siteId: site.id },
   });
   if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });

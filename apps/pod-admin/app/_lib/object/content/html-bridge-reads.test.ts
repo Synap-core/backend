@@ -64,8 +64,16 @@ describe("the page bridge — through the console's own client", () => {
         list: proc("entities.list", { items: [] }),
         get: proc("entities.get", { entity: { id: "e1" } }),
       },
-      views: { list: proc("views.list", []) },
-      profiles: { list: proc("profiles.list", []) },
+      views: {
+        list: proc("views.list", []),
+        get: proc("views.get", { view: { id: "v1", type: "kanban" } }),
+        execute: proc("views.execute", { entities: [] }),
+      },
+      profiles: {
+        list: proc("profiles.list", []),
+        get: proc("profiles.get", { id: "pr1", slug: "deal" }),
+      },
+      propertyDefs: { list: proc("propertyDefs.list", []) },
       lifecycle: {
         board: proc("lifecycle.board", { columns: [] }),
         throughput: proc("lifecycle.throughput", { buckets: [] }),
@@ -74,6 +82,7 @@ describe("the page bridge — through the console's own client", () => {
           needsYou: { total: 3, bySpace: [{ workspaceId: SPACE, count: 1 }] },
         }),
         moving: proc("lifecycle.moving", { items: [] }),
+        get: proc("lifecycle.get", { profileSlug: "deal", options: [] }),
       },
       signals: {
         list: proc("signals.list", { items: [] }),
@@ -287,6 +296,8 @@ describe("the page bridge — through the console's own client", () => {
           id: "e1",
           documentId: "d1",
           playbookId: "pb1",
+          identifier: "deal",
+          profileId: "pr1",
         })
       );
       expect(calls.length, op).toBe(1);
@@ -377,6 +388,76 @@ describe("the page bridge — through the console's own client", () => {
         id: "q2",
         error: '"playbook.scorecard" needs a playbookId.',
       },
+    ]);
+  });
+
+  it("a view adapter's reads: the view by id, a kind, its fields and lifecycle IN the page's space", async () => {
+    const { calls, send } = wired(SPACE);
+    const spoof = { workspaceId: "other", projectId: "p9", filters: [1] };
+    await send(
+      query("views.get", { id: "v1", includeContent: false, ...spoof })
+    );
+    await send(query("views.execute", { id: "v1", ...spoof }, "q2"));
+    await send(query("profiles.get", { identifier: "deal", fill: true }, "q3"));
+    await send(
+      query("propertyDefs.list", { profileId: "pr1", ...spoof }, "q4")
+    );
+    await send(query("lifecycle.get", { profileSlug: "deal", ...spoof }, "q5"));
+    expect(calls).toEqual([
+      { path: "views.get", input: { id: "v1" }, opts: undefined },
+      { path: "views.execute", input: { id: "v1" }, opts: undefined },
+      {
+        path: "profiles.get",
+        input: { identifier: "deal" },
+        opts: { context: { workspaceId: SPACE } },
+      },
+      {
+        path: "propertyDefs.list",
+        input: { profileIds: ["pr1"] },
+        opts: { context: { workspaceId: SPACE } },
+      },
+      {
+        path: "lifecycle.get",
+        input: { profileSlug: "deal", workspaceId: SPACE },
+        opts: undefined,
+      },
+    ]);
+  });
+
+  it("a page in no space reads a kind's lifecycle at the pod's base, and its fields with no space", async () => {
+    const { calls, send } = wired(null);
+    await send(query("lifecycle.get", { profileSlug: "deal" }));
+    await send(query("propertyDefs.list", { profileId: "pr1" }, "q2"));
+    expect(calls.map((c) => [c.path, c.input, c.opts])).toEqual([
+      ["lifecycle.get", { profileSlug: "deal", workspaceId: null }, undefined],
+      ["propertyDefs.list", { profileIds: ["pr1"] }, undefined],
+    ]);
+  });
+
+  it("a view the pod refuses this viewer reaches the page as that error, never empty", async () => {
+    const { posted, send } = wired(SPACE, new Set(["views.execute"]));
+    await send(query("views.execute", { id: "v1" }));
+    expect(posted[0]!.message).toEqual({
+      type: "synap:query:result",
+      id: "q1",
+      error: "views.execute: not found",
+    });
+  });
+
+  it("a view adapter read missing its id asks the pod nothing", async () => {
+    const { calls, posted, send } = wired(SPACE);
+    await send(query("profiles.get", {}, "q2"));
+    expect(calls).toEqual([]);
+    expect(posted.map((p) => p.message.error)).toEqual([
+      '"profiles.get" needs an identifier.',
+    ]);
+  });
+
+  it("fields with no profileId are every field the space can see (the board asks with no input)", async () => {
+    const { calls, send } = wired(SPACE);
+    await send(query("propertyDefs.list", {}));
+    expect(calls.map((c) => [c.path, c.input])).toEqual([
+      ["propertyDefs.list", undefined],
     ]);
   });
 

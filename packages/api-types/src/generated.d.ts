@@ -3774,6 +3774,13 @@ export type DeviceRecommendationReason =
  | "other-seat"
 /** Nothing on this computer matches. */
  | "new";
+/** One `synap_requests` entry that lists its kinds (F4), as declared. */
+export interface RequestedKindGroup {
+	/** The every-kind permission it names (`entity.read`, `entity.create`…). */
+	permission: string;
+	/** Its kinds, each once, in the order given. */
+	kinds: string[];
+}
 /**
  * Per-user presentation and explicit-open state for user-facing resources.
  */
@@ -18970,6 +18977,15 @@ export interface KeyRequestView {
 	createdAt: Date;
 	expiresAt: Date;
 }
+/** One `synap_requests` entry that listed its kinds (F4), as declared. */
+export type OAuthAppKindGroup = RequestedKindGroup;
+/** A project the consenting person may give an app a permission in. */
+export interface OAuthAppOfferProject {
+	projectId: string;
+	projectName: string;
+	/** Its home space, or null for a project that lives in no space. */
+	workspaceId: string | null;
+}
 /** One permission a pod app asks for, and the spaces it may be given in. */
 export interface OAuthAppOfferItem {
 	permission: string;
@@ -18983,6 +18999,22 @@ export interface OAuthAppOfferItem {
 		workspaceId: string;
 		workspaceName: string;
 	}>;
+	/**
+	 * With `kindGroups` (the consent screen): the entry this permission was
+	 * declared in when that entry listed its kinds (F4: `{permission:
+	 * "entity.read", kinds}`), else null. Items that share one draw as ONE row
+	 * ("Records: N kinds"). Display only: the permission is still given and
+	 * checked per kind (D4).
+	 */
+	kindGroup?: OAuthAppKindGroup | null;
+	/**
+	 * With `projects` (the consent screen, app permissions W3c): the projects
+	 * the person may give this permission in, by name — every project they can
+	 * see for a read, only those they may write in for anything else
+	 * (`oauthAppProjectOffer`). Offered only: no consent mints a project grant
+	 * yet.
+	 */
+	projects?: OAuthAppOfferProject[];
 }
 /** How an app's writes land, as its page shows it. */
 export interface AppWriteModeView {
@@ -19114,7 +19146,9 @@ export interface OAuthAppConsent {
 	homepage: string | null;
 	/**
 	 * Each permission the app asked for AND declared, with the spaces this
-	 * person may give it in (`oauthAppOffer`). An empty list means the person
+	 * person may give it in (`oauthAppOffer`), with its kinds group (F4) and
+	 * the projects it may be given in (W3c: offered only, nothing mints a
+	 * project grant yet). An empty list means the person
 	 * has no space to give that permission in. `reason`: the document's own
 	 * `synap_requests[].reason` (display text, `displayReason`), or null —
 	 * the developer's words, shown as text, never a reason to trust the app.
@@ -19127,8 +19161,12 @@ export interface OAuthAppConsent {
 	 * = "pod"`, decision e1b59d38 "B"): each a read of one named kind, one tick
 	 * each, shown in their own section. Ticked, each is sent as
 	 * `{ permission, workspaceId: null }`. Never also in `permissions`.
+	 * `kindGroup`: the entry it was declared in when that entry listed its
+	 * kinds (F4), else null; items that share one draw as ONE row ("Records:
+	 * N kinds"), as in `permissions`.
 	 */
 	podWide: Array<{
+		kindGroup?: OAuthAppKindGroup | null;
 		permission: string;
 		reason: string | null;
 	}>;
@@ -38915,6 +38953,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					properties?: Record<string, unknown> | undefined;
 					status?: string | undefined;
 				}[] | undefined;
+				forcePropose?: boolean | undefined;
 				global?: boolean | undefined;
 				homeWorkspaceId?: string | undefined;
 				profileId?: string | undefined;

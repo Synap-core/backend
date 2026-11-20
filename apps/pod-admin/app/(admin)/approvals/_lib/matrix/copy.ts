@@ -1,5 +1,5 @@
 /**
- * Agents & work's words for its list of agents and its doors, as catalogs
+ * Approvals › Grid's words for its list of agents and its doors, as catalogs
  * (`@synap-core/types/i18n`): English is the source and the type. The grid
  * and its why-drawer keep their English words for now. A mode's name comes
  * from THE list (`AGENT_WRITE_MODE_CHOICES`, @synap-core/types/agents), its
@@ -9,9 +9,6 @@
 import type { Catalog } from "@synap-core/types/i18n";
 
 export const en = {
-  title: "Agents & work",
-  description:
-    "How each agent’s writes land, and what it may do in each space’s work.",
   "podDefault.on":
     "Pod default: agents act directly on what can be undone, each change with Undo.",
   "podDefault.off": "Pod default: agents ask before every change.",
@@ -28,13 +25,6 @@ export const en = {
   "row.why": "Why, per space",
   "row.why.aria": "What {name} may do in each space, and why",
   showAll: "Show all {count} agents",
-  "grid.open": "Compare every agent in one grid",
-  "grid.title": "Every agent, every space",
-  "grid.description":
-    "What each agent may do in each space’s work — and why. Open a cell for its reasons.",
-  back: "All agents",
-  "agent.description":
-    "What it may do in each space’s work, and why. Open a cell for its reasons.",
   "agent.missing": "This agent is not in the grid",
   "agent.missingHint":
     "It was removed, or the pod has more agents than the grid holds.",
@@ -42,9 +32,6 @@ export const en = {
 } as const;
 
 export const fr: Catalog<typeof en> = {
-  title: "Agents et travail",
-  description:
-    "Comment s’appliquent les écritures de chaque agent, et ce qu’il peut faire dans le travail de chaque espace.",
   "podDefault.on":
     "Par défaut : les agents agissent directement sur ce qui peut être annulé, chaque modification avec Annuler.",
   "podDefault.off":
@@ -63,13 +50,6 @@ export const fr: Catalog<typeof en> = {
   "row.why": "Pourquoi, par espace",
   "row.why.aria": "Ce que {name} peut faire dans chaque espace, et pourquoi",
   showAll: "Afficher les {count} agents",
-  "grid.open": "Comparer tous les agents dans une grille",
-  "grid.title": "Tous les agents, tous les espaces",
-  "grid.description":
-    "Ce que chaque agent peut faire dans le travail de chaque espace, et pourquoi. Ouvrez une case pour ses raisons.",
-  back: "Tous les agents",
-  "agent.description":
-    "Ce qu’il peut faire dans le travail de chaque espace, et pourquoi. Ouvrez une case pour ses raisons.",
   "agent.missing": "Cet agent n’est pas dans la grille",
   "agent.missingHint":
     "Il a été retiré, ou le pod compte plus d’agents que la grille n’en contient.",

@@ -146,6 +146,14 @@ export const createProcs = {
         /** Agent user ID when action is performed by an AI agent */
         agentUserId: z.string().uuid().optional(),
         /**
+         * Caller-requested review: force this create through the proposal path
+         * even when it would otherwise auto-approve (the update door's
+         * `forcePropose`, same rule). Set by the design door when the outer
+         * capability gate asked for review (`design.apply`, a self-gated verb).
+         * Never DOWNGRADES governance; honored on the agent and AI paths only.
+         */
+        forcePropose: z.boolean().optional(),
+        /**
          * Host-stamped identity of a framed view originating this write.
          *
          * SECURITY: this is the view's IDENTITY, not a trust assertion. Trust is
@@ -1556,6 +1564,7 @@ export const createProcs = {
         subjectType: "entity",
         action: "create",
         source: input.source,
+        forcePropose: input.forcePropose === true,
         lifecycleMove: initialLifecycleMove,
         issuer,
         reasoning: input.reasoning,

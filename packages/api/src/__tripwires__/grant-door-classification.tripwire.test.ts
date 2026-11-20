@@ -748,6 +748,13 @@ const GRANT_CHECKED_DEEPER: Readonly<
     ],
     why: "a key limited to spaces files an import only when its grant allows each operation in the import's space (grantWriteDenial: entity.<kind>.create, facet.create, relation.create, entity.<kind>.update for a linked record), before any session, intake or proposal is written (finding c54ff30e)",
   },
+  "POST /designs/apply": {
+    chain: [
+      { name: "applyDesign", file: "services/designs/design-door.ts" },
+      { name: "update", file: "routers/entities/mutate.ts" },
+    ],
+    why: "the design door writes the design through entities.update (and entities.create for create_design or a revision): checkPermissionOrPropose, whose rung 0 checks entity.ui-design.update / .create in the design's space",
+  },
   "POST /playbooks/:id/run": {
     chain: [
       {

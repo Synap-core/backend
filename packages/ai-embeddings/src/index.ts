@@ -1,7 +1,7 @@
 /**
  * @synap/ai-embeddings - Embeddings Package
  *
- * Open-source package for generating embeddings (vector representations of text).
+ * Package for generating embeddings (vector representations of text).
  * Used by the Data Pod for semantic search and vector indexing.
  *
  * @example

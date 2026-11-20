@@ -175,3 +175,52 @@ describe("Hub PATCH — an agent's track filing is its own proposal", () => {
     });
   });
 });
+
+describe("Hub PATCH — a goal filing is never covered by a project pin (W1 filing rule)", () => {
+  let findFirstSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    h.gated = [];
+    h.respond = (p) =>
+      p.forcePropose
+        ? {
+            proposalId: "44444444-4444-4444-8444-444444444444",
+            proposalType: "update",
+            summary: "File",
+          }
+        : STOP;
+    findFirstSpy = vi
+      .spyOn(db.query.focusSessions, "findFirst")
+      .mockResolvedValue({
+        id: SESSION_ID,
+        userId: USER_ID,
+        workspaceId: null,
+        title: "Shell work",
+        goal: "Ship the work shell",
+        status: "active",
+        agentIds: [AGENT_ID],
+        criteria: [],
+        expectedOutputs: [],
+      } as never);
+  });
+  afterEach(() => findFirstSpy.mockRestore());
+
+  it("a person's goal filing asks rung 0 with grantFilesIntoProject", async () => {
+    await patch({ trackId: TRACK_ID });
+    expect(h.gated).toHaveLength(1);
+    expect(h.gated[0]!.grantFilesIntoProject).toBe(true);
+    expect(h.gated[0]!.data).toMatchObject({ trackId: TRACK_ID });
+  });
+
+  it("an agent's goal filing gate asks with it; the rest of its patch does not", async () => {
+    await patch({ trackId: TRACK_ID, progress: 40 }, AGENT_ID);
+    const [filing, rest] = h.gated;
+    expect(filing!.grantFilesIntoProject).toBe(true);
+    expect(rest!.grantFilesIntoProject).toBeUndefined();
+  });
+
+  it("CONTROL — a patch that files nothing carries no filing flag", async () => {
+    await patch({ progress: 40 });
+    expect(h.gated[0]!.grantFilesIntoProject).toBeUndefined();
+  });
+});

@@ -28,7 +28,7 @@ import { FactsGrid } from "../facts-grid";
 import { ConfirmModal } from "../../../(admin)/components/confirm-modal";
 import { StatusPill } from "../../../(admin)/components/status-pill";
 import { statusPillFor } from "../../../(admin)/components/status-tone";
-import { runResultMessage } from "../../../(admin)/rules/_lib/rule-rows";
+import { runResultMessage } from "../../../(admin)/automations/_lib/rule-rows";
 import {
   flowNoun,
   runActions,
