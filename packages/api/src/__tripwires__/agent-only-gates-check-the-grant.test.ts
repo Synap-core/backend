@@ -35,8 +35,20 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 const ROUTERS = join(process.cwd(), "src/routers");
 
-/** A door listed here is reported as a known gap (none today). */
-const EXEMPT = new Set<string>([]);
+/**
+ * A door listed here is not reported. Each entry says why its grant check is
+ * real but out of the scanner's sight; a known gap is never parked here.
+ */
+const EXEMPT = new Set<string>([
+  // The agent branch is a refusal (an agent gets no live room). Every other
+  // key is bounded by its grant in the service the route calls
+  // (`services/realtime/room-ticket.ts`): the document is read through
+  // scopedDb under the grant, and `edit` needs `grantDeniedKey` to pass for
+  // document.update (or view.update_content on a canvas's view), else the
+  // ticket is read-only. Proven red without it: room-ticket.test.ts "read
+  // when the grant only reads" / "... only in ANOTHER space".
+  "hub-protocol/rest/realtime.ts:post /realtime/room-ticket",
+]);
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((f) => {

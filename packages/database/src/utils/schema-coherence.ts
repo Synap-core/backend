@@ -2278,6 +2278,19 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0432_compute_lease_kept.sql",
   },
 
+  // Realtime room tickets (0438): every pod app's room ticket is written and
+  // claimed here; absence means no app could open a live room (42P01).
+  {
+    table: "realtime_room_tickets",
+    column: "consumed_at",
+    addedBy: "0438_realtime_room_tickets.sql",
+  },
+  {
+    table: "realtime_room_tickets",
+    column: "api_key_id",
+    addedBy: "0438_realtime_room_tickets.sql",
+  },
+
   // Document passages (0358b) — a document body as recall-sized units, and
   // the per-document state the revision sweep reads. Absence means every
   // passage job and sweep tick would fail (42P01).
