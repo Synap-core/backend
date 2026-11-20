@@ -381,7 +381,8 @@ describe("a tool's page reads the approval rows", () => {
     );
     // Never the old lie: an action with no row of its own is NOT "asks first".
     expect(html).not.toContain('data-everyone-from="default"');
-    expect(text(html)).toContain("As the whole tool: Runs on its own");
+    expect(text(html)).toContain("Same as the tool");
+    expect(text(html)).toContain("It follows the whole tool: runs on its own.");
   });
 
   it("a row on one action outranks the tool's row", () => {
@@ -411,6 +412,11 @@ describe("a tool's page reads the approval rows", () => {
     expect(html).toContain("data-approval-exceptions");
     expect(html).toContain(`href="/agents/${AGENT}"`);
     expect(text(html)).toContain("Take back");
+    // On a tool's page the line is titled by WHO it is for; the action
+    // (narrower than the tool) leads the second line, never the tool's name.
+    const line = html.slice(html.indexOf("data-approval-exceptions"));
+    expect(text(line)).toMatch(/Scout\s+Hcloud list servers ·/);
+    expect(text(line)).not.toContain("(Hetzner Cloud)");
     // The exception is not every AI's mode.
     expect(html).not.toContain('data-everyone-mode="auto"');
   });

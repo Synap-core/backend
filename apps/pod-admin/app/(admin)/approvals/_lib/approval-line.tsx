@@ -64,7 +64,9 @@ export const MODE_ICON: Record<ActionRunMode, LucideIcon> = {
  * its way back. The same line on Approvals, a tool's page and an agent's page
  * (lane W3): `doors` adds that page's own doors (the tool, Approvals), and
  * `readOnly` (a member's view of a tool) draws words with no door and no way
- * back, which only a pod admin has.
+ * back, which only a pod admin has. `byWho` (a tool's page, where the tool
+ * is already known) titles the line by WHO it is for, with `detail` (the
+ * action, when narrower than the whole tool) leading the second line.
  */
 export function ApprovalLine({
   row,
@@ -73,6 +75,8 @@ export function ApprovalLine({
   onTakeBack,
   doors,
   readOnly = false,
+  byWho = false,
+  detail = null,
 }: {
   row: ApprovalRowLike;
   title: string;
@@ -80,6 +84,8 @@ export function ApprovalLine({
   onTakeBack?: () => void;
   doors?: ReactNode;
   readOnly?: boolean;
+  byWho?: boolean;
+  detail?: string | null;
 }) {
   const t = useT(CATALOGS);
   const mode = approvalMode(row.verdict);
@@ -91,13 +97,17 @@ export function ApprovalLine({
     <div data-row-id={row.id} className="rounded-md transition-shadow">
       <ResourceRow
         Icon={ShieldCheck}
-        primary={title}
+        primary={byWho ? who : title}
         // who · where · from: one line, the agent and the origin doors when
         // they have a page, so the right side holds only the mark and the way
         // back.
         secondary={
           <>
-            {row.agentUserId && !readOnly ? (
+            {byWho ? (
+              detail ? (
+                `${detail} ·`
+              ) : null
+            ) : row.agentUserId && !readOnly ? (
               <Link
                 href={agentHref(row.agentUserId)}
                 data-approval-agent=""

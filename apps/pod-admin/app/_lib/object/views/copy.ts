@@ -31,6 +31,7 @@ export const en = {
   "tool.approvals.failed": "Its approvals couldn’t be read.",
   "tool.approvals.modeFailed": "How it runs couldn’t be read.",
   "tool.approvals.retry": "Retry",
+  "tool.approvals.agentDoor": "Its agent",
   "tool.approvals.notChanged": "The pod didn’t change how it runs.",
   "tool.approvals.whoSets": "A pod admin sets how it runs for every AI.",
   "tool.approvals.all": "Every approval on this tool",
@@ -77,6 +78,7 @@ export const fr: Catalog<typeof en> = {
   "tool.approvals.failed": "Ses approbations n’ont pas pu être lues.",
   "tool.approvals.modeFailed": "Son mode d’exécution n’a pas pu être lu.",
   "tool.approvals.retry": "Réessayer",
+  "tool.approvals.agentDoor": "Son agent",
   "tool.approvals.notChanged": "Le pod n’a pas changé son mode d’exécution.",
   "tool.approvals.whoSets":
     "Un administrateur du pod règle son mode pour toutes les IA.",
