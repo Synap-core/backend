@@ -30,6 +30,8 @@ vi.mock("@synap/database", async (importOriginal) => {
             workspaceId: h.existing.workspaceId,
             category: h.existing.category ?? null,
             metadata: h.existing.metadata ?? null,
+            name: h.existing.name ?? "House style",
+            body: h.existing.body ?? null,
           },
         ]
       : [];
@@ -283,5 +285,28 @@ describe("synap_update_skill — category", () => {
     expect(r.isError).toBe(true);
     expect(r.text).toContain("category");
     expect(h.permCalls).toHaveLength(0);
+  });
+  it("warns, never refuses, when a rule's words are over the standing-rules tier", async () => {
+    h.perm = { proposalId: "prop-big" };
+    h.existing = { ...h.existing!, body: "x".repeat(8_004) };
+    const r = await call({ id: SKILL_ID, category: "rule" }, AGENT);
+
+    const out = JSON.parse(r.text) as { status: string; warnings?: string[] };
+    expect(out.status).toBe("proposed");
+    expect(out.warnings?.[0]).toContain("standing-rules tier");
+  });
+
+  it("no warning for a rule that fits, nor for a big skill that is not a rule", async () => {
+    h.perm = { proposalId: "prop-fit" };
+    const fits = JSON.parse(
+      (await call({ id: SKILL_ID, category: "rule" }, AGENT)).text
+    ) as { warnings?: string[] };
+    expect(fits.warnings).toBeUndefined();
+
+    h.existing = { ...h.existing!, body: "x".repeat(8_004) };
+    const notRule = JSON.parse(
+      (await call({ id: SKILL_ID, description: "d" }, AGENT)).text
+    ) as { warnings?: string[] };
+    expect(notRule.warnings).toBeUndefined();
   });
 });

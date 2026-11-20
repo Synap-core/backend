@@ -24,7 +24,11 @@
  */
 import { and, db, eq, skills } from "@synap/database";
 import { skillKindAfterUpdate, skillsRouter } from "../../routers/skills.js";
-import { skillCategoryChangeProblem } from "../rules/index.js";
+import {
+  RULE_CATEGORY,
+  ruleOverTierWarning,
+  skillCategoryChangeProblem,
+} from "../rules/index.js";
 import { resolveRequiredToolNames } from "./required-tool-names.js";
 import { visibleSkillsAnyWorkspaceWhere } from "./visibility.js";
 
@@ -50,8 +54,13 @@ export type UpdateSkillGovernedResult =
   | { status: "not_found" }
   /** Refused before the gate, in words the caller can act on. */
   | { status: "invalid"; message: string }
-  | { status: "updated"; skillId: string }
-  | { status: "proposed"; skillId: string; proposalId: string };
+  | { status: "updated"; skillId: string; warnings?: string[] }
+  | {
+      status: "proposed";
+      skillId: string;
+      proposalId: string;
+      warnings?: string[];
+    };
 
 export async function updateSkillGoverned(input: {
   /** A tRPC caller context for the acting person (e.g. createHubProtocolCallerContext). */
@@ -76,6 +85,8 @@ export async function updateSkillGoverned(input: {
       workspaceId: skills.workspaceId,
       category: skills.category,
       metadata: skills.metadata,
+      name: skills.name,
+      body: skills.body,
     })
     .from(skills)
     .where(
@@ -126,12 +137,21 @@ export async function updateSkillGoverned(input: {
     ...(requiredToolIds !== undefined ? { requiredToolIds } : {}),
     ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
   });
+  // A rule's words go into every piece of work in its scope, inside a fixed
+  // tier: say so when they cannot fit. A warning, never a refusal.
+  const resultingCategory = patch.category ?? row.category;
+  const overTier =
+    resultingCategory === RULE_CATEGORY
+      ? ruleOverTierWarning(patch.name ?? row.name, patch.body ?? row.body)
+      : null;
+  const warnings = overTier ? { warnings: [overTier] } : {};
   if (result.status === "proposed") {
     return {
       status: "proposed",
       skillId: row.id,
       proposalId: result.proposalId,
+      ...warnings,
     };
   }
-  return { status: "updated", skillId: row.id };
+  return { status: "updated", skillId: row.id, ...warnings };
 }

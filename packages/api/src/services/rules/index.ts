@@ -434,6 +434,28 @@ export function skillCategoryChangeProblem(input: {
 }
 
 /**
+ * The IS STANDING RULES tier, in tokens: MIRROR of
+ * `DEFAULT_SKILL_BLOCK_TOKENS.RULES` (synap-intelligence-service
+ * `apps/intelligence-hub/src/tools/dynamic-skill-loader.ts`), pinned there by
+ * `dynamic-skill-loader.budget-mirror.tripwire.test.ts`. A rule over it is
+ * never pushed whole: the IS skips it and names it. Authoring only WARNS.
+ */
+export const STANDING_RULES_TIER_TOKENS = 2_000;
+
+/**
+ * The warning for a rule whose words are over the tier, or null when it fits.
+ * Same estimate the IS budgets with (`estimateSkillTokens`, ceil(chars / 4)).
+ */
+export function ruleOverTierWarning(
+  name: string,
+  words: string | null | undefined
+): string | null {
+  const tokens = Math.ceil((words ?? "").length / 4);
+  if (tokens <= STANDING_RULES_TIER_TOKENS) return null;
+  return `The rule "${name}" is ~${tokens} tokens, over the ~${STANDING_RULES_TIER_TOKENS}-token standing-rules tier: agents will see it named as skipped, not its words. Shorten it, or split it into smaller rules.`;
+}
+
+/**
  * Re-validate a stored scope blob. Same contract as `readRuleRouting`: stored
  * JSONB is DATA, so an unrecognised `kind` degrades to the narrowest honest
  * answer (`pod` — what the row already defaulted to before `projectId`
