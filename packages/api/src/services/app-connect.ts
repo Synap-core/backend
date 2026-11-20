@@ -1220,7 +1220,9 @@ function scopeShape(scope: {
 }
 
 /** A non-empty id list, copied and sorted; null for none. */
-function sortedIdList(ids: readonly string[] | null | undefined): string[] | null {
+function sortedIdList(
+  ids: readonly string[] | null | undefined
+): string[] | null {
   return Array.isArray(ids) && ids.length > 0 ? [...ids].sort() : null;
 }
 
