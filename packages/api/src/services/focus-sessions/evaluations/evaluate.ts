@@ -10,8 +10,12 @@
  *                an execution ERROR — is `unmeasured` with the reason, never `fail`.
  *   judge      — the IS criteria judge, never the model that worked the session.
  *                It reads the produced work's CONTENT (`judge-material.ts`),
- *                not only the output labels. A judge that could not run
- *                records nothing and says why.
+ *                not only the output labels. A judge that could not run (an
+ *                AI quota 429, a timeout, no judge model) records the
+ *                criterion `unmeasured` with why and when to retry
+ *                (`judgeUnavailable`, record.ts rule 5): never a fail, never
+ *                an attempt, and a stage's check never sends the run back for
+ *                it (`stage-gate.ts`).
  *   human      — left unmeasured until the owner grades it.
  *
  * "Pending" = not already passing, not human-graded, attempts remaining. Every
@@ -58,12 +62,14 @@ import {
   checkGateFailing,
 } from "../../playbooks/stage-gate.js";
 import {
-  MAX_NON_HUMAN_ATTEMPTS,
+  countsAsAttempt,
   criterionExhaustedNews,
   escalateFailingCriteria,
   listSessionEvaluations,
   recordSessionEvaluation,
   summarizeEvaluations,
+  MAX_NON_HUMAN_ATTEMPTS,
+  type JudgeUnavailable,
   type SessionEvaluationRow,
   type SessionEvaluationSummary,
 } from "./record.js";
@@ -140,13 +146,17 @@ export type EvaluateSessionResult =
       resumed: boolean;
     } & SessionEvaluationSummary);
 
-/** Pure: which criteria still need a non-human check. */
+/**
+ * Pure: which criteria still need a non-human check. A row recording that the
+ * judge could not run is no attempt (record.ts rule 5): the judge is asked
+ * again.
+ */
 export function pendingCriteria(
   criteria: SessionCriterion[],
-  rows: readonly Pick<
+  rows: readonly (Pick<
     SessionEvaluationRow,
     "criterionKey" | "evaluatorKind" | "verdict"
-  >[],
+  > & { evidence?: unknown })[],
   latest: readonly Pick<SessionEvaluationRow, "criterionKey" | "verdict">[]
 ): SessionCriterion[] {
   const current = new Map(latest.map((r) => [r.criterionKey, r.verdict]));
@@ -155,8 +165,39 @@ export function pendingCriteria(
     if (current.get(c.key) === "pass") return false;
     const mine = rows.filter((r) => r.criterionKey === c.key);
     if (mine.some((r) => r.evaluatorKind === "human")) return false;
-    return mine.length < MAX_NON_HUMAN_ATTEMPTS;
+    return mine.filter(countsAsAttempt).length < MAX_NON_HUMAN_ATTEMPTS;
   });
+}
+
+/** Longest failure text kept on a judge-unavailable row. */
+const JUDGE_UNAVAILABLE_REASON_MAX = 300;
+
+/**
+ * Why the judge could not run and when to try again (record.ts rule 5), from
+ * the transport's attributed error or the judge's own "nobody could grade"
+ * answer. A spent AI quota (HTTP 429, `account_quota_exceeded`) waits for the
+ * quota; anything else (a timeout, a provider down) is worth a retry soon.
+ * Either way a person can grade the criterion by hand. Pure.
+ */
+export function judgeUnavailable(cause: unknown): JudgeUnavailable {
+  const message =
+    typeof cause === "string"
+      ? cause
+      : cause instanceof Error
+        ? cause.message
+        : String(cause);
+  const status = (cause as { status?: unknown } | null)?.status;
+  const quota = status === 429 || /\b429\b|quota/i.test(message);
+  const reason =
+    message.length > JUDGE_UNAVAILABLE_REASON_MAX
+      ? `${message.slice(0, JUDGE_UNAVAILABLE_REASON_MAX - 1)}…`
+      : message;
+  return {
+    reason,
+    retry: quota
+      ? "The AI quota is spent: evaluate the session again (synap_evaluate_session) once the quota resets or credits are added, or a person grades the criterion by hand."
+      : "Evaluate the session again (synap_evaluate_session) in a few minutes, or a person grades the criterion by hand.",
+  };
 }
 
 /**
@@ -266,6 +307,7 @@ export async function evaluateSession(
       evaluatorId?: string | null;
       evidence?: Record<string, unknown>;
       rationale?: string;
+      judgeUnavailable?: JudgeUnavailable;
     }
   ) => {
     const out = await recordSessionEvaluation({
@@ -280,7 +322,17 @@ export async function evaluateSession(
     if (out.status === "recorded" && out.exhausted) exhausted.push(c);
     results.push(
       out.status === "recorded"
-        ? { key: c.key, status: "recorded", verdict, escalated: false }
+        ? {
+            key: c.key,
+            status: "recorded",
+            verdict,
+            escalated: false,
+            ...(extra.judgeUnavailable
+              ? {
+                  reason: `The judge could not run: ${extra.judgeUnavailable.reason}. ${extra.judgeUnavailable.retry}`,
+                }
+              : {}),
+          }
         : {
             key: c.key,
             status: "skipped",
@@ -354,6 +406,21 @@ export async function evaluateSession(
       judged.push(c);
     }
   }
+
+  // The judge could not run for these criteria: each is recorded UNMEASURED
+  // with why (record.ts rule 5), never a fail and never an attempt.
+  const recordJudgeUnavailable = async (
+    group: readonly SessionCriterion[],
+    cause: unknown
+  ) => {
+    const why = judgeUnavailable(cause);
+    for (const c of group) {
+      await record(c, "unmeasured", {
+        rationale: `The judge could not run: ${why.reason}`,
+        judgeUnavailable: why,
+      });
+    }
+  };
 
   if (judged.length > 0) {
     try {
@@ -458,11 +525,12 @@ export async function evaluateSession(
           for (const c of group) {
             const v = byKey.get(c.key);
             if (judgement.decider === "none" || !judgement.model || !v) {
-              results.push({
-                key: c.key,
-                status: "skipped",
-                reason: v?.rationale || "No judge could grade this criterion.",
-              });
+              // The IS answered, but no judge graded it (no model it may
+              // use): the judge could not run for this criterion.
+              await recordJudgeUnavailable(
+                [c],
+                v?.rationale || "No judge could grade this criterion."
+              );
               continue;
             }
             await record(c, v.verdict, {
@@ -471,15 +539,17 @@ export async function evaluateSession(
             });
           }
         } catch (err) {
-          const reason = `The judge could not run: ${err instanceof Error ? err.message : String(err)}`;
-          for (const c of group)
-            results.push({ key: c.key, status: "skipped", reason });
+          await recordJudgeUnavailable(group, err);
         }
       }
     } catch (err) {
-      const reason = `The judge could not run: ${err instanceof Error ? err.message : String(err)}`;
-      for (const c of judged)
-        results.push({ key: c.key, status: "skipped", reason });
+      // Nothing was asked yet (the service or the material could not be
+      // read): the judge could not run for any of them.
+      const answered = new Set(results.map((r) => r.key));
+      await recordJudgeUnavailable(
+        judged.filter((c) => !answered.has(c.key)),
+        err
+      );
     }
   }
 

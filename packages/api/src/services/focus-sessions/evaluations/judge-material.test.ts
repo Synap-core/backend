@@ -142,6 +142,7 @@ vi.mock("@synap/intelligence-client", async (importOriginal) => ({
 import { documents, entities } from "@synap/database";
 import { hydrationScopeWhere } from "../../object-graph/graph-service.js";
 import { evaluateSession } from "./evaluate.js";
+import { recordSessionEvaluation } from "./record.js";
 import {
   buildJudgeMaterial,
   fairShares,
@@ -252,10 +253,21 @@ describe("judge rung — material is the work, not the labels", () => {
     h.outputsThrow = true;
     const out = await evaluateSession({ sessionId: "s-1", userId: "u-1" });
     expect(h.judgeCalls).toHaveLength(0);
+    // Unmeasured, with why (record.ts rule 5) — never a pass or a fail.
     expect(out.status === "evaluated" && out.results[0]).toMatchObject({
       key: "mapped",
-      status: "skipped",
+      status: "recorded",
+      verdict: "unmeasured",
     });
+    expect(recordSessionEvaluation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        criterionKey: "mapped",
+        verdict: "unmeasured",
+        judgeUnavailable: expect.objectContaining({
+          reason: expect.stringContaining("outputs read failed"),
+        }),
+      })
+    );
   });
 });
 
@@ -367,7 +379,8 @@ describe("judge rung — an IS still capped at 8000 (deploy order)", () => {
     expect(h.judgeCalls).toHaveLength(2);
     expect(out.status === "evaluated" && out.results[0]).toMatchObject({
       key: "mapped",
-      status: "skipped",
+      status: "recorded",
+      verdict: "unmeasured",
     });
   });
 });

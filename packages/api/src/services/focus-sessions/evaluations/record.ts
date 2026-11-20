@@ -26,6 +26,14 @@
  *      at work.
  *   4. NO SELF-GRADING. A `judge` row whose evaluator is the agent that worked
  *      the session (its caller, its roster, or the model it ran on) is refused.
+ *   5. A JUDGE THAT COULD NOT RUN IS NOT AN ATTEMPT (finding 881e0b61). When
+ *      the judge itself failed (an AI quota 429, a timeout, no judge model),
+ *      the criterion gets an `unmeasured` row that SAYS so
+ *      (`evidence.judgeUnavailable`, {@link isJudgeUnavailableRow}): the
+ *      reason is recorded on the criterion, it spends none of the attempts
+ *      rule 2 bounds, it is never escalated as "still not passing", and it
+ *      never replaces a verdict a judge did give. A later judge run or a
+ *      person's grade supersedes it.
  *
  * Serialised on the session row (`FOR UPDATE`) so two concurrent evaluations
  * cannot both read "1 attempt so far" and write a third.
@@ -67,6 +75,59 @@ import { attestExpectedOutput } from "../satisfy-expected-output.js";
 export const MAX_NON_HUMAN_ATTEMPTS = 2;
 
 /**
+ * Where a judge-unavailable row says why (rule 5): `evidence.judgeUnavailable
+ * = { reason, retry }` on an `unmeasured` judge row.
+ */
+export const JUDGE_UNAVAILABLE_EVIDENCE_KEY = "judgeUnavailable";
+
+/** Why the judge could not run, and when to try again (rule 5). */
+export interface JudgeUnavailable {
+  /** The failure, as the transport attributed it (clipped). */
+  reason: string;
+  /** What to do and when: run the evaluation again, or a person grades it. */
+  retry: string;
+}
+
+/** What the rule-5 readers take; `evidence` absent = an ordinary row. */
+export type EvaluationMarkLike = Pick<
+  SessionEvaluationRow,
+  "verdict" | "evaluatorKind"
+> & { evidence?: unknown };
+
+/**
+ * Is this row the record of a judge that could NOT run (rule 5)? Such a row
+ * is `unmeasured` and is never an attempt. Pure.
+ */
+export function isJudgeUnavailableRow(row: EvaluationMarkLike): boolean {
+  if (row.evaluatorKind !== "judge" || row.verdict !== "unmeasured") {
+    return false;
+  }
+  const mark = (row.evidence as Record<string, unknown> | null)?.[
+    JUDGE_UNAVAILABLE_EVIDENCE_KEY
+  ];
+  return !!mark && typeof mark === "object";
+}
+
+/** The judge-unavailable record of a row, or null (rule 5). Pure. */
+export function judgeUnavailableOf(
+  row: EvaluationMarkLike
+): JudgeUnavailable | null {
+  if (!isJudgeUnavailableRow(row)) return null;
+  const mark = (row.evidence as Record<string, unknown>)[
+    JUDGE_UNAVAILABLE_EVIDENCE_KEY
+  ] as { reason?: unknown; retry?: unknown };
+  return {
+    reason: typeof mark.reason === "string" ? mark.reason : "",
+    retry: typeof mark.retry === "string" ? mark.retry : "",
+  };
+}
+
+/** Does this row count toward the attempt bound (rule 2)? Non-human, and not a judge that could not run. */
+export function countsAsAttempt(row: EvaluationMarkLike): boolean {
+  return row.evaluatorKind !== "human" && !isJudgeUnavailableRow(row);
+}
+
+/**
  * The registry type this file produces — declared under the lowercase name
  * `notificationType` first, deliberately. `notification-producer-allowlist.test.ts`
  * proves a registry row has a producer by scanning source for the literal next
@@ -104,6 +165,12 @@ export interface RecordSessionEvaluationParams {
   evaluatorId?: string | null;
   evidence?: Record<string, unknown>;
   rationale?: string | null;
+  /**
+   * The JUDGE could not run (rule 5): records an `unmeasured` judge row that
+   * carries why and when to retry, spends no attempt and names no model.
+   * `verdict` must be `unmeasured` and `evaluatorKind` `judge`.
+   */
+  judgeUnavailable?: JudgeUnavailable;
 }
 
 export type RecordSessionEvaluationResult =
@@ -174,15 +241,24 @@ export async function recordSessionEvaluation(
     if (!criterion) return { status: "unknown_criterion" as const };
 
     const prior = await tx
-      .select({ evaluatorKind: sessionEvaluations.evaluatorKind })
+      .select({
+        evaluatorKind: sessionEvaluations.evaluatorKind,
+        verdict: sessionEvaluations.verdict,
+        evidence: sessionEvaluations.evidence,
+      })
       .from(sessionEvaluations)
       .where(
         and(
           eq(sessionEvaluations.sessionId, sessionId),
           eq(sessionEvaluations.criterionKey, criterionKey)
         )
+      )
+      .orderBy(
+        asc(sessionEvaluations.createdAt),
+        asc(sessionEvaluations.attempt)
       );
-    const nonHuman = prior.filter((r) => r.evaluatorKind !== "human").length;
+    const nonHuman = prior.filter(countsAsAttempt).length;
+    const unavailable = params.judgeUnavailable;
 
     let evaluatorId = params.evaluatorId ?? null;
     if (evaluatorKind === "human") {
@@ -194,10 +270,33 @@ export async function recordSessionEvaluation(
           reason: `"${criterionKey}" was already graded by a person — that verdict is final.`,
         };
       }
-      if (nonHuman >= MAX_NON_HUMAN_ATTEMPTS) {
+      if (unavailable) {
+        if (evaluatorKind !== "judge" || params.verdict !== "unmeasured") {
+          return {
+            status: "refused" as const,
+            reason:
+              "Only an unmeasured judge row can say the judge could not run.",
+          };
+        }
+        // Rule 5: never over a verdict a judge GAVE (a fail stands until a
+        // judge or a person grades again), and once per outage, not per call.
+        const last = prior[prior.length - 1];
+        if (last && last.verdict !== "unmeasured") {
+          return {
+            status: "refused" as const,
+            reason: `The judge could not run (${unavailable.reason}); the earlier verdict "${last.verdict}" stands. ${unavailable.retry}`,
+          };
+        }
+        if (last && isJudgeUnavailableRow(last)) {
+          return {
+            status: "refused" as const,
+            reason: `The judge could not run (${unavailable.reason}), as already recorded. ${unavailable.retry}`,
+          };
+        }
+      } else if (nonHuman >= MAX_NON_HUMAN_ATTEMPTS) {
         return { status: "attempts_exhausted" as const, attempts: nonHuman };
       }
-      if (evaluatorKind === "judge") {
+      if (evaluatorKind === "judge" && !unavailable) {
         if (!evaluatorId) {
           return {
             status: "refused" as const,
@@ -211,7 +310,8 @@ export async function recordSessionEvaluation(
           };
         }
       }
-      if (!evaluatorId) evaluatorId = agentUserId ?? userId;
+      // A judge that could not run names no evaluator: nobody graded it.
+      if (!evaluatorId && !unavailable) evaluatorId = agentUserId ?? userId;
     }
 
     const [evaluation] = await tx
@@ -225,13 +325,19 @@ export async function recordSessionEvaluation(
         verdict: params.verdict,
         evaluatorKind,
         evaluatorId,
-        evidence: params.evidence ?? {},
+        evidence: unavailable
+          ? {
+              ...(params.evidence ?? {}),
+              [JUDGE_UNAVAILABLE_EVIDENCE_KEY]: unavailable,
+            }
+          : (params.evidence ?? {}),
         rationale: params.rationale ?? null,
       })
       .returning();
 
     const exhausted =
       evaluatorKind !== "human" &&
+      !unavailable &&
       params.verdict !== "pass" &&
       nonHuman + 1 >= MAX_NON_HUMAN_ATTEMPTS &&
       isCriterionRequired(criterion);
@@ -319,7 +425,7 @@ export async function escalateFailingCriteria(params: {
   for (const criterion of criteria) {
     const mine = rows.filter((r) => r.criterionKey === criterion.key);
     if (mine.some((r) => r.evaluatorKind === "human")) continue;
-    const attempts = mine.filter((r) => r.evaluatorKind !== "human").length;
+    const attempts = mine.filter(countsAsAttempt).length;
     if (attempts < MAX_NON_HUMAN_ATTEMPTS) continue;
     if (latest.get(criterion.key) === "pass") continue;
     // After any commit: the owed-slot door takes its own row lock.

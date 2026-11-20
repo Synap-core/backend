@@ -206,7 +206,15 @@ export interface AdvanceSessionStageResult {
    * A `check` gate's outcome: whether the left stage's required criteria pass,
    * and which do not. Present only when the stage entered is check-gated.
    */
-  check?: { passed: boolean; failing: string[] };
+  check?: {
+    passed: boolean;
+    failing: string[];
+    /**
+     * The held keys are judge criteria the judge could not grade (finding
+     * 881e0b61): unmeasured, so the run was NOT sent back (`onFail`).
+     */
+    judgeUnavailable?: string[];
+  };
   /**
    * The forward half of stage ↔ subject status: what happened to the entered
    * stage's `subjectStatus` (written / proposed / skipped + why / failed).
@@ -485,7 +493,13 @@ export async function advanceSessionStage(
       changed: true,
       gated: true,
       paused: gate.paused,
-      check: { passed: gate.passed, failing: gate.failing },
+      check: {
+        passed: gate.passed,
+        failing: gate.failing,
+        ...(gate.judgeUnavailable?.length
+          ? { judgeUnavailable: gate.judgeUnavailable }
+          : {}),
+      },
       ...slots,
     };
     if (!gate.paused) {
@@ -512,7 +526,10 @@ export async function advanceSessionStage(
     // A HOLDING check gate whose stage declares `onFail` returns the run there
     // (un-paused, through this same door) instead of leaving it parked. The
     // hold's `metadata.checkGate` record stays — it is why the run went back.
-    if (!input.viaOnFail) {
+    // NEVER for a check the judge could not grade (finding 881e0b61): an
+    // unmeasured criterion is not a failed one, so the run stays here,
+    // paused, until the judge runs again or a person grades it.
+    if (!input.viaOnFail && !gate.judgeUnavailable?.length) {
       const back = await returnToOnFailStage({ ...input, fromStage });
       if (back) result.onFail = { toStage: back };
     }

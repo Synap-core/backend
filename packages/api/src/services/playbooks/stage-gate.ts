@@ -270,6 +270,14 @@ export interface StageGateSubject {
 export interface CheckMeasure {
   failing: string[];
   reason?: string;
+  /**
+   * Set when EVERY failing key is a judge criterion the judge could not
+   * grade (finding 881e0b61: an AI quota 429): the check is UNMEASURED, not
+   * failed. It still holds (unmeasured is never passed), but it never sends
+   * the run back (`onFail`): the stage stands, paused, until the judge runs
+   * again or a person grades the criterion.
+   */
+  judgeUnavailable?: string[];
 }
 
 export interface StageGateAdvance {
@@ -300,6 +308,12 @@ export interface CheckGateResult {
   paused: boolean;
   /** Why it held, in words — when the subject can say (a track does). */
   reason?: string;
+  /**
+   * The held keys are judge criteria the judge could not grade
+   * ({@link CheckMeasure.judgeUnavailable}): the hold is unmeasured, and the
+   * advance door must not send the run back for it.
+   */
+  judgeUnavailable?: string[];
 }
 
 export type StageGateOutcome =
@@ -401,10 +415,12 @@ async function applyCheckGate(
       paused: false,
     };
   }
-  const { failing, reason } = await subject.checkFailing(fromStage);
+  const { failing, reason, judgeUnavailable } =
+    await subject.checkFailing(fromStage);
   if (failing.length === 0) {
     return { kind: "check", stageKey, passed: true, failing, paused: false };
   }
+  const unmeasured = judgeUnavailable?.length ? { judgeUnavailable } : {};
   const paused = await subject.pause(
     {
       on: "thing",
@@ -419,6 +435,7 @@ async function applyCheckGate(
         fromStage,
         failing,
         ...(reason ? { reason } : {}),
+        ...unmeasured,
       },
     }
   );
@@ -429,6 +446,7 @@ async function applyCheckGate(
     failing,
     paused,
     ...(reason ? { reason } : {}),
+    ...unmeasured,
   };
 }
 
@@ -606,7 +624,7 @@ export function sessionGateSubject(
         sessionId: params.sessionId,
         playbookId: params.playbookId ?? null,
       });
-      return checkGateHold(
+      const hold = checkGateHold(
         {
           stages: proc?.stages ?? [],
           expectedOutputs: row?.expectedOutputs ?? [],
@@ -615,6 +633,32 @@ export function sessionGateSubject(
         },
         fromStage
       );
+      // Held only because the JUDGE could not run (finding 881e0b61): every
+      // failing key is a judge criterion whose current grade records that
+      // (record.ts rule 5). Unmeasured, not failed: the gate still holds,
+      // says why and when to retry, and the run is never sent back for it.
+      const { judgeUnavailableOf } =
+        await import("../focus-sessions/evaluations/record.js");
+      const unavailable = hold.failing.map((key) => {
+        const criterion = result.criteria.find((c) => c.key === key);
+        const latest = result.evaluations.find((e) => e.criterionKey === key);
+        return criterion?.check.kind === "judge" && latest
+          ? judgeUnavailableOf(latest)
+          : null;
+      });
+      const first = unavailable[0];
+      if (
+        hold.failing.length === 0 ||
+        !first ||
+        unavailable.some((u) => u === null)
+      ) {
+        return hold;
+      }
+      return {
+        failing: hold.failing,
+        judgeUnavailable: hold.failing,
+        reason: `The check of "${fromStage}" is not measured: the judge could not grade ${hold.failing.join(", ")} (${first.reason}). ${first.retry} The run stays at this stage; it is not sent back.`,
+      };
     },
     proposal: {
       targetType: STAGE_GATE_TARGET_TYPE,
