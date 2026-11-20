@@ -68,6 +68,7 @@ async function sessionWithRun(opts: {
   sessionStatus: string;
   runStatus: string;
   userId?: string;
+  holder?: { kind: string; id: string | null };
 }): Promise<{ sess: string; run: string }> {
   const sess = randomUUID();
   await q(
@@ -77,9 +78,21 @@ async function sessionWithRun(opts: {
   );
   const run = randomUUID();
   await q(
-    `insert into playbook_runs (id, playbook_id, session_id, executor, status, started_at, created_by, input)
-     values ($1, $2, $3, 'external-agent', $4, now() - interval '30 hours', 'u1', '{}'::jsonb)`,
-    [run, randomUUID(), sess, opts.runStatus]
+    `insert into playbook_runs (id, playbook_id, session_id, executor, status, started_at, created_by, input, holder)
+     values ($1, $2, $3, 'external-agent', $4, now() - interval '30 hours', 'u1', '{}'::jsonb, $5::jsonb)`,
+    [
+      run,
+      randomUUID(),
+      sess,
+      opts.runStatus,
+      opts.holder
+        ? JSON.stringify({
+            ...opts.holder,
+            assignedAt: new Date(Date.now() - 3_600_000).toISOString(),
+            claimedAt: null,
+          })
+        : null,
+    ]
   );
   return { sess, run };
 }
@@ -91,7 +104,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    "delete from focus_sessions; delete from playbook_runs;"
+    "delete from focus_sessions; delete from playbook_runs; delete from lifecycle_transition_outbox;"
   );
 });
 
@@ -186,6 +199,129 @@ describe("reviveSessionForWrite — the gate's hook", () => {
       data: { id: b.sess, status: "closed" },
     });
     expect(await statusOf("focus_sessions", b.sess)).toBe("stale");
+  });
+});
+
+const holderOf = async (run: string) =>
+  (
+    await q<{
+      holder: { kind: string; id: string | null; claimedAt: string | null };
+    }>(`select holder from playbook_runs where id = $1`, [run])
+  ).rows[0]!.holder;
+
+describe("an agent's write is its claim on the run handed to it", () => {
+  it("its queued or blocked run goes running, claimed by it", async () => {
+    for (const runStatus of ["queued", "blocked"]) {
+      const { sess, run } = await sessionWithRun({
+        sessionStatus: "active",
+        runStatus,
+        holder: { kind: "agent", id: "agent-1" },
+      });
+      await reviveSessionForWrite({
+        userId: "u1",
+        agentUserId: "agent-1",
+        sessionId: sess,
+        subjectType: "entity",
+      });
+      expect(await statusOf("playbook_runs", run)).toBe("running");
+      const holder = await holderOf(run);
+      expect(holder).toMatchObject({ kind: "agent", id: "agent-1" });
+      expect(holder.claimedAt).not.toBeNull();
+    }
+  });
+
+  it("an agent not named yet is named by its claim", async () => {
+    const { sess, run } = await sessionWithRun({
+      sessionStatus: "active",
+      runStatus: "queued",
+      holder: { kind: "agent", id: null },
+    });
+    await reviveSessionForWrite({
+      userId: "u1",
+      agentUserId: "agent-2",
+      sessionId: sess,
+      subjectType: "entity",
+    });
+    expect(await statusOf("playbook_runs", run)).toBe("running");
+    expect((await holderOf(run)).id).toBe("agent-2");
+  });
+
+  it("another agent's write, a person's write, or a Synap AI run: no claim", async () => {
+    const other = await sessionWithRun({
+      sessionStatus: "active",
+      runStatus: "queued",
+      holder: { kind: "agent", id: "agent-1" },
+    });
+    await reviveSessionForWrite({
+      userId: "u1",
+      agentUserId: "agent-9",
+      sessionId: other.sess,
+      subjectType: "entity",
+    });
+    expect(await statusOf("playbook_runs", other.run)).toBe("queued");
+
+    await reviveSessionForWrite({
+      userId: "u1",
+      sessionId: other.sess,
+      subjectType: "entity",
+    });
+    expect(await statusOf("playbook_runs", other.run)).toBe("queued");
+
+    const synapAi = await sessionWithRun({
+      sessionStatus: "active",
+      runStatus: "queued",
+      holder: { kind: "synap_ai", id: null },
+    });
+    await reviveSessionForWrite({
+      userId: "u1",
+      agentUserId: "agent-1",
+      sessionId: synapAi.sess,
+      subjectType: "entity",
+    });
+    expect(await statusOf("playbook_runs", synapAi.run)).toBe("queued");
+  });
+});
+
+describe("an approved hand-off revives the run instead of landing on a dead one", () => {
+  it("a blocked or stale run waits again for the approved agent, its session active; a verdict stands", async () => {
+    const { requeueRunForHandOff } = await import("../agent-hand-off.js");
+    for (const [sessionStatus, runStatus] of [
+      ["active", "blocked"],
+      ["stale", "stale"],
+      ["active", "queued"],
+    ] as const) {
+      const { sess, run } = await sessionWithRun({
+        sessionStatus,
+        runStatus,
+        holder: { kind: "agent", id: "agent-1" },
+      });
+      expect(
+        await requeueRunForHandOff({
+          sessionId: sess,
+          ownerId: "u1",
+          agentId: "agent-2",
+          proposalId: randomUUID(),
+        })
+      ).toBe(1);
+      expect(await statusOf("playbook_runs", run)).toBe("queued");
+      const holder = await holderOf(run);
+      expect(holder).toMatchObject({ kind: "agent", id: "agent-2" });
+      expect(holder.claimedAt).toBeNull();
+      expect(await statusOf("focus_sessions", sess)).toBe("active");
+    }
+    const ended = await sessionWithRun({
+      sessionStatus: "active",
+      runStatus: "failed",
+    });
+    expect(
+      await requeueRunForHandOff({
+        sessionId: ended.sess,
+        ownerId: "u1",
+        agentId: "agent-2",
+        proposalId: randomUUID(),
+      })
+    ).toBe(0);
+    expect(await statusOf("playbook_runs", ended.run)).toBe("failed");
   });
 });
 

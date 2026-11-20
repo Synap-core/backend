@@ -29,7 +29,8 @@ import {
   setRunStatus,
 } from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
-import type { PlaybookStage, RunResult } from "@synap/playbooks";
+import type { ExecutorRef, PlaybookStage, RunResult } from "@synap/playbooks";
+import type { PlaybookRun } from "@synap/database/schema";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { isDeclinedValue } from "@synap-core/types/ask";
 import { resolveExecutor } from "../playbooks/executors/registry.js";
@@ -85,16 +86,34 @@ export async function redispatchAfterAgentChoice(
     },
   });
   if (!run) return { status: "nothing_to_redispatch" };
+  return {
+    status: "redispatched",
+    runId: run.id,
+    runStatus: await redispatchRun(run, "external-agent"),
+  };
+}
 
-  const session = await db.query.focusSessions.findFirst({
-    where: eq(focusSessions.id, sessionId),
-  });
+/**
+ * Dispatch a run the caller already took back (`queued`) through `executor`
+ * again, on the SAME row and session, and record what the executor says
+ * (`recordExecutorResult`). Shared by "Choose an agent" answered and a
+ * blocked run the person starts again (`run-blocked-ask.ts`).
+ */
+export async function redispatchRun(
+  run: PlaybookRun,
+  executor: ExecutorRef
+): Promise<RunResult["status"]> {
+  const session = run.sessionId
+    ? await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, run.sessionId),
+      })
+    : undefined;
   if (!session) {
     await recordExecutorResult(run.id, {
       status: "failed",
       error: "re-dispatch: the session no longer exists",
     });
-    return { status: "redispatched", runId: run.id, runStatus: "failed" };
+    return "failed";
   }
   let subjectName: string | undefined;
   let subjectProfile: string | undefined;
@@ -119,7 +138,7 @@ export async function redispatchAfterAgentChoice(
 
   let result: RunResult;
   try {
-    result = await resolveExecutor("external-agent").run({
+    result = await resolveExecutor(executor).run({
       workspaceId: run.workspaceId ?? session.workspaceId ?? "",
       userId: run.createdBy,
       playbookId: run.playbookId,
@@ -143,7 +162,7 @@ export async function redispatchAfterAgentChoice(
     };
   }
   await recordExecutorResult(run.id, result);
-  return { status: "redispatched", runId: run.id, runStatus: result.status };
+  return result.status;
 }
 
 /**

@@ -37,6 +37,15 @@
  * marked `stale` with its session (not terminal: no `completedAt`, no parent
  * settle, the session stays open), and the next write attributed to that
  * session revives both (`reviveStaleSession`, api).
+ *
+ * A RUN NOBODY CLAIMED is `blocked`, never failed (founder, 20 Nov 2026). A
+ * run is born `queued` with its holder and is `running` only once that holder
+ * claims it. Past its holder's window — Synap AI {@link WORK_CLOCK}.live, an
+ * agent or anyone else {@link WORK_CLOCK}.quiet, counted from when the holder
+ * was named — it moves to `blocked` with the reason and who was passed over,
+ * and the person is asked (`run-blocked-ask.ts`, api). While its session
+ * waits on the person (a hand-off waiting for approval included) the clock
+ * does not run.
  */
 
 import {
@@ -48,6 +57,7 @@ import {
   drizzleSql,
   playbookRuns,
   focusSessions,
+  users,
   sessionWaitsOnPersonWhere,
   stageRunWaitsWhere,
   stageRunAgentLiveWhere,
@@ -55,15 +65,111 @@ import {
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { workClockIn } from "@synap-core/types/work-clock";
+import { WORK_CLOCK, workClockIn } from "@synap-core/types/work-clock";
+import type { RunHolder } from "@synap-core/types/units";
+import type { RunOn } from "@synap-core/types/agents";
 import { closeSessionViaDoor } from "../utils/session-close.js";
 import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
 
 const logger = createLogger({ module: "playbook-run-reaper" });
 
 export const PLAYBOOK_RUN_REAPER_QUEUE = "playbook-run-reaper";
-/** Every 30min — playbook runs are long-lived; no need for the 5min automation cadence. */
-export const PLAYBOOK_RUN_REAPER_CRON = "*/30 * * * *";
+/** Every 5 min: an unclaimed Synap AI run is blocked after {@link WORK_CLOCK}.live. */
+export const PLAYBOOK_RUN_REAPER_CRON = "*/5 * * * *";
+
+/** How long a holder has to claim a run, by who it is. */
+export function claimWindowMinutes(kind: RunHolder["kind"]): number {
+  return workClockIn(kind === "synap_ai" ? "live" : "quiet", "minutes");
+}
+
+/**
+ * A `queued` run past its holder's claim window, whose session does not wait
+ * on the person. A run born before holders (no `holder`) is judged from its
+ * start, as Synap AI's.
+ */
+export const RUN_UNCLAIMED = and(
+  eq(playbookRuns.status, "queued"),
+  drizzleSql`coalesce((${playbookRuns.holder} ->> 'assignedAt')::timestamptz, ${playbookRuns.startedAt})
+    < now() - (CASE WHEN coalesce(${playbookRuns.holder} ->> 'kind', 'synap_ai') = 'synap_ai'
+                    THEN ${claimWindowMinutes("synap_ai")}::int
+                    ELSE ${claimWindowMinutes("agent")}::int END * interval '1 minute')`,
+  drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`
+)!;
+
+/** Who could have taken it and did not, in the words the person reads. */
+function passedOverWords(runOn: RunOn | null): string[] {
+  const out: string[] = [];
+  if (runOn?.passedOver) {
+    out.push(
+      `${runOn.passedOver.name ?? "your agent"} (${runOn.passedOver.why.replace(/_/g, " ")})`
+    );
+  }
+  for (const p of runOn?.runnerPassedOver ?? []) {
+    out.push(
+      `${p.name ?? `choice ${p.choice + 1}`} (${p.why.replace(/_/g, " ")})`
+    );
+  }
+  return out;
+}
+
+/**
+ * Mark each unclaimed run `blocked`, one move per run so each carries its own
+ * reason: who was waited for, how long, and who was passed over. The move
+ * records a hold on the person; `run-blocked-ask.ts` (api) asks them.
+ */
+async function blockUnclaimedRuns(): Promise<number> {
+  const rows = await db
+    .select({
+      id: playbookRuns.id,
+      holder: playbookRuns.holder,
+      runOn: playbookRuns.runOn,
+    })
+    .from(playbookRuns)
+    .where(RUN_UNCLAIMED);
+  if (rows.length === 0) return 0;
+  const holderIds = [
+    ...new Set(
+      rows
+        .map((r) => (r.holder as RunHolder | null)?.id)
+        .filter((v): v is string => !!v)
+    ),
+  ];
+  const names = new Map(
+    (holderIds.length
+      ? await db
+          .select({ id: users.id, name: users.name })
+          .from(users)
+          .where(inArray(users.id, holderIds))
+      : []
+    ).map((u) => [u.id, u.name])
+  );
+  let blocked = 0;
+  for (const r of rows) {
+    const holder = (r.holder as RunHolder | null) ?? null;
+    const kind = holder?.kind ?? "synap_ai";
+    const who =
+      kind === "synap_ai"
+        ? "Synap AI"
+        : kind === "none"
+          ? "nobody"
+          : ((holder?.id ? names.get(holder.id) : null) ?? "its agent");
+    const passed = passedOverWords((r.runOn as RunOn | null) ?? null);
+    const reason =
+      `Nobody started this run: ${who} did not pick it up within ${claimWindowMinutes(kind)} minutes.` +
+      (passed.length > 0 ? ` Passed over: ${passed.join("; ")}.` : "");
+    const { rows: moved } = await setRunStatus(db, {
+      runId: r.id,
+      where: RUN_UNCLAIMED,
+      from: "queued",
+      to: "blocked",
+      actor: { kind: "system" },
+      reason,
+      defaultHold: { on: "person", reason },
+    });
+    blocked += moved.length;
+  }
+  return blocked;
+}
 
 /**
  * A 'running' playbook run older than this whose session shows no recent
@@ -189,6 +295,15 @@ const RUN_IS_REAPABLE = or(RUN_IS_STALE, IS_RUN_IS_QUIET)!;
 /** Called by the cron scheduler every ~30 minutes. */
 export async function handlePlaybookRunReaper(): Promise<void> {
   try {
+    // 000. UNCLAIMED: a run its holder never took is blocked on the person.
+    const blocked = await blockUnclaimedRuns();
+    if (blocked > 0) {
+      logger.info(
+        { blocked },
+        "Playbook run reaper blocked runs nobody claimed"
+      );
+    }
+
     // 00. UNPARK: a waiting run whose session no longer owes the person
     //     (answered, closed, gone) goes back to `running`, so the sweeps
     //     below judge it like any other run. The completing doors finish a

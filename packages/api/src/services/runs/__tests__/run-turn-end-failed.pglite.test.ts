@@ -282,6 +282,9 @@ describe("a run that cannot go on ends failed, and its session closes failed", (
       schema.notifications,
       schema.notificationPreferences,
       schema.lifecycleTransitionOutbox,
+      // What a turn did (`turn-effect.ts`): its writes and its room posts.
+      schema.events,
+      schema.chatTurns,
     ]) {
       await h.client!.exec(pgliteTableDdl(t as unknown as PgTable));
     }
@@ -413,6 +416,63 @@ describe("a run that cannot go on ends failed, and its session closes failed", (
     expect(r.json).toEqual({ status: "failed" });
     expect((await runOf(runId)).status).toBe("failed");
     expect((await sessionOf(sessionId)).status).toBe("failed");
+  });
+
+  it("an unattended turn that wrote nothing ends failed(no_effect), counted by the breakers; one that wrote completes", async () => {
+    const empty = await seedRun({ origin: "automation" });
+    const r = await completeRun(empty.sessionId, {
+      outcome: "completed",
+      turnKey: randomUUID(),
+    });
+    expect(r.json).toEqual({ status: "failed" });
+    const run = await runOf(empty.runId);
+    expect(run.status).toBe("failed");
+    expect(run.stop_reason).toBe("no_effect");
+    expect(run.error).toContain("without doing anything");
+    expect(h.settled).toEqual([{ playbookRunId: empty.runId }]);
+    expect((await sessionOf(empty.sessionId)).status).toBe("failed");
+
+    const wrote = await seedRun({ origin: "automation" });
+    await q(
+      `insert into proposals (id, session_id, status, proposal_type, target_type, target_id, created_by, created_at)
+       values ($1, $2, 'auto_approved', 'entity.create', 'entity', $3, $4, now())`,
+      [randomUUID(), wrote.sessionId, randomUUID(), IS_AGENT]
+    );
+    expect(
+      (
+        await completeRun(wrote.sessionId, {
+          outcome: "completed",
+          turnKey: randomUUID(),
+        })
+      ).json
+    ).toEqual({ status: "completed" });
+    expect((await runOf(wrote.runId)).status).toBe("completed");
+  });
+
+  it("an agent's room message is an effect; an attended empty turn asks the person instead of completing", async () => {
+    const posted = await seedRun({ origin: "automation" });
+    await q(
+      `insert into messages (id, channel_id, content, role, author_type, user_id, timestamp)
+       values ($1, $2, 'Here is the summary', 'assistant', 'ai_agent', $3, now())`,
+      [randomUUID(), posted.channelId, IS_AGENT]
+    );
+    expect(
+      (
+        await completeRun(posted.sessionId, {
+          outcome: "completed",
+          turnKey: randomUUID(),
+        })
+      ).json
+    ).toEqual({ status: "completed" });
+
+    const attended = await seedRun();
+    const r = await completeRun(attended.sessionId, {
+      outcome: "completed",
+      agentType: "meta",
+      turnKey: randomUUID(),
+    });
+    expect(r.json).toEqual({ status: "waiting_on_you" });
+    expect((await runOf(attended.runId)).status).toBe("waiting_on_you");
   });
 
   it("refuses a failed outcome without a failure reason, and a stop reason on a failure", async () => {

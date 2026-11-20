@@ -537,6 +537,7 @@ export { registerStageChildReactor } from "./services/playbooks/stage-child.js";
 export { registerDecisionAskReactor } from "./services/decisions/decision-ask-reactor.js";
 export { retireUnaskedDecisionAsks } from "./services/decisions/retire-unasked-decision-asks.js";
 export { registerAgentChoiceRedispatchReactor } from "./services/agent-dispatch/redispatch-on-choice.js";
+export { registerRunBlockedReactors } from "./services/runs/run-blocked-ask.js";
 // Session recall runner — apps/api fills the @synap/jobs `registerSessionRecallRunner`
 // slot with it at boot.
 export { runSessionRecall } from "./services/focus-sessions/session-recall.js";

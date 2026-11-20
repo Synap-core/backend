@@ -102,7 +102,7 @@ afterAll(async () => {
 // `awaited-gate-wait.pglite.test.ts`. Here it only has to exist.
 beforeAll(async () => {
   await client.exec(
-    `create table proposals (id uuid primary key, session_id uuid, status text, proposal_type text);`
+    `create table proposals (id uuid primary key, session_id uuid, status text, proposal_type text, target_type text);`
   );
 });
 

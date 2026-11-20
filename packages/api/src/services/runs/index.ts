@@ -308,7 +308,9 @@ function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
       return [status];
     case "proposed":
     case "paused":
-      return []; // automation_runs has no "proposed"/"paused"
+    case "queued":
+    case "blocked":
+      return []; // automation_runs has none of these
   }
 }
 
@@ -347,6 +349,8 @@ function chatStatusValues(status: RunStatus): ChatTurnStatusValue[] {
     case "blocked_by_policy":
     case "waiting_on_you":
     case "paused":
+    case "queued":
+    case "blocked":
       return []; // chat_turns has none of these
   }
 }

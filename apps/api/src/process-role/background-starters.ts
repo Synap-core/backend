@@ -383,6 +383,9 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
       // "Choose an agent" answered ⇒ the run that owed it is re-dispatched
       // through the same executor path, idempotently.
       api.registerAgentChoiceRedispatchReactor();
+      // A run nobody claimed was blocked by the run reaper ⇒ its person is
+      // asked; their answer starts it again, keeps waiting, or stops it.
+      api.registerRunBlockedReactors();
       // The self-healing card's answer links each agent to its program (D10).
       api.registerAgentTemplateAnswerReactor();
       // Same close event again: a session that ENDED with required criteria
