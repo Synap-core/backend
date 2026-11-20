@@ -1243,7 +1243,8 @@ describe("homes — a key bounded by a grant", () => {
       ],
       clientId: null,
     }) as KeyGrant;
-  const onDev = grantOf(["entity.deal.read", "session.read"], [DEV]);
+  // Built per test: DEV is set in `beforeAll`, after this block is collected.
+  const onDev = () => grantOf(["entity.deal.read", "session.read"], [DEV]);
 
   it("home lists only the spaces and kinds its grant reads, and says what it withheld", async () => {
     const whole = await caller().home();
@@ -1252,7 +1253,7 @@ describe("homes — a key bounded by a grant", () => {
       expect.arrayContaining([DEV, MISC, LIB, CRM])
     );
 
-    const home = await runWithGrant(onDev, () => caller().home());
+    const home = await runWithGrant(onDev(), () => caller().home());
     expect(home.spaces.map((s) => s.workspaceId)).toEqual([DEV]);
     expect(home.spaces[0]!.produces.map((p) => p.profileSlug)).toEqual([
       "deal",
@@ -1302,7 +1303,7 @@ describe("homes — a key bounded by a grant", () => {
         expect.arrayContaining([T.neg, T.misc])
       );
 
-      const moving = await runWithGrant(onDev, () => caller().moving());
+      const moving = await runWithGrant(onDev(), () => caller().moving());
       expect(moving.items.map((i) => i.entityId)).toEqual([T.neg]);
       expect(moving.items.every((i) => i.workspaceId === DEV)).toBe(true);
       expect(moving.unattached).toEqual([]);
