@@ -61,9 +61,8 @@ const logger = createLogger({ module: "playbook-cron-automation" });
  * (the unique index's COALESCE sentinel), ordered updated_at DESC so a concurrent
  * 23505 recovery converges on the same winner the migration's soft-archive kept.
  *
- * Exported so both automation-writing playbook doors that live OUTSIDE the
- * automations router (this module + `playbooks.saveFlow`) recover 23505 the same
- * way, without re-deriving the identity predicate a third time.
+ * Used by this module's 23505 recovery, so a playbook-written automation
+ * resolves a name clash the same way the automations router does.
  */
 export async function findNonArchivedAutomationByName(
   db: Awaited<ReturnType<typeof getDb>>,

@@ -72,7 +72,6 @@
     "playbooks.automations.removeAutomation",
     "playbooks.enrollments.enroll",
     "playbooks.enrollments.unenroll",
-    "playbooks.saveFlow",
     "playbooks.setRunChoice",
     "preferences.setIntelligenceService",
     "preferences.updateViewMode",

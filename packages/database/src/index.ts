@@ -306,8 +306,8 @@ export {
 
 // The report automation ("Generate report") was RETIRED as a hardcoded flow.
 // Its single source is now base.yaml (@synap-core/workspace-templates), applied
-// by the base-template reconcile on `workspaces.get`. See git history of
-// utils/ensure-report-automation.ts (deleted) for the v1–v15 prompt rationale.
+// by the base-template reconcile on `workspaces.get`. See git history of the deleted
+// utils/ensure-report-automation.ts for the v1–v15 prompt rationale.
 
 // Export ensureDefaultRelationDefs utility
 export {
