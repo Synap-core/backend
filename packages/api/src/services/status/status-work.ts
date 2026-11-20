@@ -67,6 +67,7 @@ import type { RecordedHold } from "@synap-core/types/lifecycle";
 import { createLogger } from "@synap-core/core";
 import { openLink } from "../../utils/deep-links.js";
 import { sessionStatusFloor } from "./status-floor.js";
+import { closedNotDoneRecordedSql } from "../focus-sessions/session-closed-as.js";
 import { sessionSubjectWhere } from "../focus-sessions/session-subject-where.js";
 import {
   notReceiptWhere,
@@ -234,6 +235,18 @@ export async function readStatusWork(
     for (const { row } of l.items) sessions.set(row.id, row);
   }
   const ids = [...sessions.keys()];
+  const closedNotDoneIds = new Set(
+    ids.length === 0
+      ? []
+      : (
+          await db
+            .select({ id: focusSessions.id })
+            .from(focusSessions)
+            .where(
+              and(inArray(focusSessions.id, ids), closedNotDoneRecordedSql())
+            )
+        ).map((r) => r.id)
+  );
   const [{ projectContinuationPacket }, { readSessionOutcomesSection }] =
     await Promise.all([
       import("../focus-sessions/continuation-packet.js"),
@@ -335,6 +348,7 @@ export async function readStatusWork(
             stages: row.stages,
             currentStage: row.currentStage ?? null,
             closedAt: row.closedAt ?? null,
+            closedNotDone: closedNotDoneIds.has(id),
           },
           on: "self",
           kind: projectSessionKind(row),

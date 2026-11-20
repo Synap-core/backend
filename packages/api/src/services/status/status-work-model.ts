@@ -40,6 +40,7 @@ import {
 } from "@synap-core/types/units";
 import {
   resolveSessionTitle,
+  sessionClosedAs,
   sessionStatusCategory,
 } from "@synap-core/types/focus-sessions";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
@@ -68,6 +69,8 @@ export interface WorkSessionRow {
   stages: unknown;
   currentStage: string | null;
   closedAt: Date | string | null;
+  /** The close-anyway record is on the row (`closedNotDoneRecordedSql`). */
+  closedNotDone: boolean;
 }
 
 /** The newest playbook run of the session, as read. */
@@ -267,7 +270,8 @@ export function workItemOf(input: {
   const finished =
     !stop &&
     !!row.playbookId &&
-    (run?.status === "completed" || row.status === "closed");
+    (run?.status === "completed" ||
+      sessionClosedAs(row.status, row.closedNotDone) === "done");
 
   const packet = "failed" in input.packet ? null : input.packet;
   const failed = "failed" in input.packet ? input.packet.failed : "";
