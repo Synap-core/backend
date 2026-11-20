@@ -56,7 +56,11 @@ import {
   withCapabilityPage,
 } from "../../../services/capabilities/bind-capability-renderer.js";
 import { getDb, getRequestGrant, eq } from "@synap/database";
-import { processReadableByGrant } from "../../../access/grant-door-fence.js";
+import {
+  processReadableByGrant,
+  runsDigestReadableByGrant,
+} from "../../../access/grant-door-fence.js";
+import { readRunsDigest } from "../../../services/playbooks/runs-digest.js";
 import { AccessContext, scopedDb } from "../../../access/index.js";
 import { assertKeyMayWrite } from "../../../utils/assert-key-may-write.js";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
@@ -485,6 +489,15 @@ export const buildHandlers: McpHandlerMap = {
       typeof args.playbookId === "string" && args.playbookId.trim()
         ? args.playbookId.trim()
         : null;
+    // RUNS DIGEST (task 4d23c009): how this playbook's runs went per stage,
+    // instead of its definition: ~2k chars where reading the runs one by one
+    // hit the reply cap (finding 18becda0).
+    const runs = args.runs;
+    if (runs !== undefined && (runs !== "digest" || !playbookId)) {
+      return toolError(
+        `Tool '${toolName}': runs takes 'digest', with a playbookId.`
+      );
+    }
     if (playbookId) {
       const one = await getPlaybookDoor(playbookDoorIdentity(ctx), playbookId);
       if (one.kind !== "result") {
@@ -495,27 +508,38 @@ export const buildHandlers: McpHandlerMap = {
               : `Playbook ${playbookId} not found among your visible playbooks.`,
         });
       }
-      const stages = Array.isArray(one.result.stages) ? one.result.stages : [];
-      // `stagesRevision` vouches that THIS reply holds the stored stages
-      // whole: a whole-list `synap_update_playbook` needs it back. The reply
-      // cap drops it from a reply it has to cut (`WHOLE_READ_MARKS`).
-      const revision = { stagesRevision: stagesRevision(stages) };
-      // ITS STAGES IN PAGES (ticket 8493079e): `limit` / `offset` page the
-      // stages alone, so a playbook too large for one reply reads whole.
-      if (args.limit !== undefined || args.offset !== undefined) {
-        const { page, paging } = pageSlice(
-          stages,
-          args,
-          PLAYBOOK_STAGES_PAGE_DEFAULT,
-          PLAYBOOK_STAGES_PAGE_MAX
-        );
-        return ok({
-          id: one.result.id,
-          name: one.result.name,
-          stages: page,
-          paging,
-          ...(page.length === stages.length ? revision : {}),
-        });
+      if (runs === "digest") {
+        // Withheld or failed is said, never a digest of zero runs.
+        if (!runsDigestReadableByGrant(getRequestGrant())) {
+          return ok({
+            playbookId,
+            runsDigest: null,
+            runsDigestWithheld:
+              "Your key's grant does not read this playbook's sessions.",
+          });
+        }
+        try {
+          return ok(
+            await readRunsDigest(
+              { userId: ctx.userId, agentUserId: ctx.agentUserId ?? null },
+              one.result as {
+                id: string;
+                name?: string | null;
+                stages?: unknown;
+              }
+            )
+          );
+        } catch (err) {
+          logger.warn(
+            { err, playbookId },
+            "synap_list_playbooks: the runs digest read failed"
+          );
+          return ok({
+            playbookId,
+            runsDigest: null,
+            runsDigestError: "The playbook's runs could not be read.",
+          });
+        }
       }
       // A key whose grant does not read every part a process composes
       // (automations, sessions, skills, tools) gets the playbook alone, and

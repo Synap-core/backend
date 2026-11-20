@@ -147,6 +147,22 @@ export function processReadableByGrant(
 }
 
 /**
+ * THE RUNS DIGEST (`services/playbooks/runs-digest.ts`): MCP
+ * `synap_list_playbooks({ playbookId, runs: 'digest' })` (classified
+ * `playbook`) counts the playbook's run sessions and their verdicts. A key
+ * this door does not bound gets `runsDigestWithheld`, never a digest of zero
+ * runs.
+ */
+export const RUNS_DIGEST_READ = READS("playbook", "session");
+
+/** May this request's key read a playbook's runs digest (null grant = a person, always)? */
+export function runsDigestReadableByGrant(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return !isFencedGrant(grant) || grantBoundsDoor(RUNS_DIGEST_READ, grant!);
+}
+
+/**
  * The board read (`readBoardScene`): Hub `GET /whiteboards/:viewId/scene` and
  * MCP `synap_read_board` call the same function, so they share this one
  * declaration.
