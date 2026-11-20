@@ -1032,7 +1032,8 @@ export async function executeCapability(input: {
           // never splits identical runs.
           ...((input.reasoning ?? capabilityRunReasoning(parameters))
             ? {
-                reasoning: input.reasoning ?? capabilityRunReasoning(parameters),
+                reasoning:
+                  input.reasoning ?? capabilityRunReasoning(parameters),
               }
             : {}),
           // Carry the 1-of-N connection selector so an APPROVED run resolves the
