@@ -5,70 +5,41 @@
  * when nothing did. The IS's word that its turn `completed` says only that it
  * did not fail; a turn that wrote nothing completes no run.
  *
- * Something reached the pod, since the turn started, attributed to the run's
- * session:
- *   - a write: a proposal filed in the session (applied at once or pending
- *     the person), or an agent's write on the session's event spine (its
- *     auto-applied bookkeeping receipts, outputs included). Transitions are
- *     the pod's own moves, never the agent's write;
- *   - a room message an agent posted, other than the turn's own reply.
+ * Something reached the pod = an agent's MARK on the run's session since the
+ * turn started (`sessionLastAgentMarkSql`, the needs-you evidence minus the
+ * turns themselves): a room message, a write filed in the session (a
+ * proposal applied at once or pending the person, an output, any event).
  *
  * The turn started when its triggering message was posted (`turnKey`, when
- * it names one in the room), else at `fallbackSince`.
+ * it names one), else at `fallbackSince`.
  *
  * THROWS on a failed read: the caller must not take an unread turn for an
  * empty one.
  */
 import {
-  chatTurns,
   db,
   drizzleSql,
-  events,
+  focusSessions,
   messages,
-  proposals,
+  sessionLastAgentMarkSql,
 } from "@synap/database";
 import { isUuid } from "@synap-core/types/property-render";
 import { rowsOf } from "../../utils/execute-rows.js";
 
 export async function turnHadEffect(p: {
   sessionId: string;
-  channelId: string | null;
   turnKey?: string | null;
   fallbackSince: Date;
 }): Promise<boolean> {
-  const fallback = p.fallbackSince.toISOString();
+  const fallback = drizzleSql`${p.fallbackSince.toISOString()}::timestamptz`;
   const key = p.turnKey && isUuid(p.turnKey) ? p.turnKey : null;
   const since = key
-    ? drizzleSql`coalesce((SELECT ${messages.timestamp} FROM ${messages} WHERE ${messages.id} = ${key}::uuid), ${fallback}::timestamptz)`
-    : drizzleSql`${fallback}::timestamptz`;
-  const ownReply = key
-    ? drizzleSql`AND ${messages.id} NOT IN (SELECT ${chatTurns.assistantMessageId} FROM ${chatTurns} WHERE ${chatTurns.userMessageId} = ${key}::uuid)`
-    : drizzleSql``;
-  const roomMessage = p.channelId
-    ? drizzleSql`OR EXISTS (
-        SELECT 1 FROM ${messages}
-        WHERE ${messages.channelId} = ${p.channelId}::uuid
-          AND ${messages.timestamp} >= ${since}
-          AND ${messages.authorType} = 'ai_agent'
-          ${ownReply}
-      )`
-    : drizzleSql``;
+    ? drizzleSql`coalesce((SELECT ${messages.timestamp} FROM ${messages} WHERE ${messages.id} = ${key}::uuid), ${fallback})`
+    : fallback;
   const result = await db.execute(drizzleSql`
-    SELECT (
-      EXISTS (
-        SELECT 1 FROM ${proposals}
-        WHERE ${proposals.sessionId} = ${p.sessionId}::uuid
-          AND ${proposals.createdAt} >= ${since}
-      )
-      OR EXISTS (
-        SELECT 1 FROM ${events}
-        WHERE ${events.sessionId} = ${p.sessionId}::uuid
-          AND ${events.timestamp} >= ${since}
-          AND ${events.isAgent} = true
-          AND ${events.type} NOT LIKE '%.transition.completed'
-      )
-      ${roomMessage}
-    ) AS effect
+    SELECT coalesce(${sessionLastAgentMarkSql("fs")} >= ${since}, false) AS effect
+    FROM ${focusSessions} fs
+    WHERE fs.id = ${p.sessionId}::uuid
   `);
   return rowsOf<{ effect: boolean }>(result)[0]?.effect === true;
 }

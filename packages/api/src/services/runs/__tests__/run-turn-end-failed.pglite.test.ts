@@ -284,7 +284,8 @@ describe("a run that cannot go on ends failed, and its session closes failed", (
       schema.lifecycleTransitionOutbox,
       // What a turn did (`turn-effect.ts`): its writes and its room posts.
       schema.events,
-      schema.chatTurns,
+      // Who works each step (0422): a completed turn reads it first.
+      schema.sessionStageRuns,
     ]) {
       await h.client!.exec(pgliteTableDdl(t as unknown as PgTable));
     }
@@ -434,8 +435,8 @@ describe("a run that cannot go on ends failed, and its session closes failed", (
 
     const wrote = await seedRun({ origin: "automation" });
     await q(
-      `insert into proposals (id, session_id, status, proposal_type, target_type, target_id, created_by, created_at)
-       values ($1, $2, 'auto_approved', 'entity.create', 'entity', $3, $4, now())`,
+      `insert into proposals (id, session_id, status, proposal_type, target_type, target_id, created_by, agent_user_id, created_at)
+       values ($1, $2, 'auto_approved', 'entity.create', 'entity', $3, $4, $4, now())`,
       [randomUUID(), wrote.sessionId, randomUUID(), IS_AGENT]
     );
     expect(

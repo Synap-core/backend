@@ -129,7 +129,7 @@ describe("the IS executor renders its kickoff through the same renderer", () => 
       currentStage: "draft",
       stages: [STAGE],
     } as never);
-    expect(result.status).toBe("running");
+    expect(result.status).toBe("queued");
     const sent = insertChannelMessage.mock.calls[0]![0].content;
     // The exact bytes the executor posted before the renderer was shared.
     expect(sent).toBe(

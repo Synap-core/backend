@@ -96,8 +96,8 @@ async function queued(opts: {
   if (opts.handOffPending) {
     await q(
       `insert into proposals (id, session_id, status, proposal_type, target_type, target_id)
-       values ($1, $2, 'pending', 'assign_agent', 'focus_session', $2)`,
-      [randomUUID(), sess]
+       values ($1, $2, 'pending', 'assign_agent', 'focus_session', $3)`,
+      [randomUUID(), sess, sess]
     );
   }
   return { run: id, sess };

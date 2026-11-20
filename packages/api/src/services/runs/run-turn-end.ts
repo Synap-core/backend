@@ -1433,7 +1433,6 @@ async function turnHadAnEffect(
   try {
     return await turnHadEffect({
       sessionId: session.id,
-      channelId: session.channelId,
       turnKey: turnKey ?? null,
       fallbackSince: previous ? new Date(previous.at) : run.startedAt,
     });
