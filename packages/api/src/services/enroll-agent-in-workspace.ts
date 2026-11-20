@@ -22,8 +22,8 @@ export type AgentEnrollmentResult =
 export async function enrollAgentInWorkspace(params: {
   workspaceId: string;
   agentUserId: string;
-  /** Membership role to grant on first enrollment. Default "editor". */
-  role?: "viewer" | "editor" | "admin" | "owner";
+  /** Membership role to grant on first enrollment. Default "editor". An agent never owns a space. */
+  role?: "viewer" | "editor" | "admin";
 }): Promise<AgentEnrollmentResult> {
   const { workspaceId, agentUserId, role = "editor" } = params;
 

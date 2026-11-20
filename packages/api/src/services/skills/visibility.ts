@@ -31,7 +31,7 @@
  * It is a SQL predicate, not a post-fetch filter, so `limit`/`offset` and any
  * count stay honest. It is vacuously true for a row that is not a rule.
  */
-import { and, eq, inArray, or, type SQL } from "@synap/database";
+import { and, eq, or, type SQL } from "@synap/database";
 import { skills } from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { ruleNotExpiredWhere } from "../rules/expiry.js";
@@ -44,12 +44,6 @@ export interface SkillVisibilityOptions {
    * waives.
    */
   includeExpired?: boolean;
-  /**
-   * A second owner whose user-scope skills are visible too: the agent that
-   * authored an automation, whose run resolves skills as its owner (the
-   * person). Without it a skill the agent made for itself fails mid-run.
-   */
-  alsoUserId?: string | null;
 }
 
 export function visibleSkillsWhere(
@@ -57,14 +51,14 @@ export function visibleSkillsWhere(
   workspaceId?: string,
   options?: SkillVisibilityOptions
 ): SQL {
-  const own = options?.alsoUserId
-    ? inArray(skills.userId, [userId, options.alsoUserId])
-    : eq(skills.userId, userId);
   const tiers = !workspaceId
-    ? or(eq(skills.scope, "pod"), and(eq(skills.scope, "user"), own))!
+    ? or(
+        eq(skills.scope, "pod"),
+        and(eq(skills.scope, "user"), eq(skills.userId, userId))
+      )!
     : or(
         eq(skills.scope, "pod"),
-        and(eq(skills.scope, "user"), own),
+        and(eq(skills.scope, "user"), eq(skills.userId, userId)),
         and(
           eq(skills.scope, "workspace"),
           eq(skills.workspaceId, workspaceId),

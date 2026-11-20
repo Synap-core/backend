@@ -1,8 +1,8 @@
 /**
- * An automation runs as its owner (the person); a skill its authoring agent
- * made for itself (`scope: "user"`, `skills.user_id` = the agent) must still
- * be found by its steps. `executeCapability` resolves the verb with the run's
- * agent (`automationRun.agentUserId`) as a second user-scope owner.
+ * An automation runs as its owner (the person). A skill its agent made is the
+ * person's (`skills.user_id` = the person, `agent_user_id` = the agent: the
+ * skill doors and 0445 stamp it so), so a step finds it through the person's
+ * own lens; the run's agent widens nothing.
  *
  * Real: the skill lookup (`answeringSkillsWhere` → `visibleSkillsWhere`) on
  * PGlite. Stubbed: the gate, which answers `deny` so the test stops once the
@@ -45,22 +45,31 @@ const { executeCapability } = await import("./execute-capability.js");
 
 const PERSON = "person-1";
 const AGENT = "agent-1";
+const ORPHAN = "agent-orphan";
 const VERB = "digest_my_inbox";
+const ORPHAN_VERB = "orphan_digest";
 
 beforeAll(async () => {
   await h.client!.exec(pgliteSchemaDdl([skills]));
   await h.client!.query(
-    `insert into skills (id, name, kind, scope, user_id, status, approved)
-     values ($1, $2, 'code', 'user', $3, 'active', true)`,
-    [randomUUID(), VERB, AGENT]
+    `insert into skills (id, name, kind, scope, user_id, agent_user_id, status, approved)
+     values ($1, $2, 'code', 'user', $3, $4, 'active', true)`,
+    [randomUUID(), VERB, PERSON, AGENT]
+  );
+  // An agent nobody installed keeps its own row (0445 finds no person).
+  await h.client!.query(
+    `insert into skills (id, name, kind, scope, user_id, agent_user_id, status, approved)
+     values ($1, $2, 'code', 'user', $3, $3, 'active', true)`,
+    [randomUUID(), ORPHAN_VERB, ORPHAN]
   );
 }, 60_000);
 
 const run = (
+  verbId: string,
   automationRun: { sessionId: string; agentUserId: string | null } | null
 ) =>
   executeCapability({
-    verbId: VERB,
+    verbId,
     parameters: {},
     workspaceId: null,
     userId: PERSON,
@@ -68,14 +77,20 @@ const run = (
     automationRun,
   });
 
-describe("an agent-authored automation's step finds the agent's own skill", () => {
-  it("with the run's agent, the skill is found (the gate answers)", async () => {
-    const out = await run({ sessionId: randomUUID(), agentUserId: AGENT });
+describe("an agent-authored automation's step finds the skill its agent made", () => {
+  it("the person owns the skill, so the run finds it (the gate answers)", async () => {
+    const out = await run(VERB, {
+      sessionId: randomUUID(),
+      agentUserId: AGENT,
+    });
     expect(out).toMatchObject({ kind: "deny", reason: "reached the gate" });
   });
 
-  it("CONTROL: a person's own automation does not see another user's skill", async () => {
-    const out = await run({ sessionId: randomUUID(), agentUserId: null });
+  it("the run's agent widens nothing: another user's skill stays out of reach", async () => {
+    const out = await run(ORPHAN_VERB, {
+      sessionId: randomUUID(),
+      agentUserId: ORPHAN,
+    });
     expect(out.kind).toBe("not_found");
   });
 });

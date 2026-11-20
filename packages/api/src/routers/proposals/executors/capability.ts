@@ -987,9 +987,8 @@ export function registerCapabilityExecutors(): void {
   // to the insert. It is a CREATE, so no id is read at all — the row mints its
   // own, exactly as the direct path does.
   //
-  // AUTHOR: `createdBy: proposal.agentUserId ?? userId` mirrors the direct
-  // path's `input.agentUserId ?? userId` — the agent wrote it, the human only
-  // approved it.
+  // OWNER: the person it was proposed for, never the approver; the agent that
+  // wrote it is the actor (`resolveOrCreateContainer` stamps both).
   registerProposalExecutor({
     key: "capability/create",
     async execute({ proposal, userId, input, deps }) {
@@ -1045,7 +1044,8 @@ export function registerCapabilityExecutors(): void {
 
       await resolveOrCreateContainer(db, {
         workspaceId: wsLens,
-        createdBy: proposal.agentUserId ?? userId,
+        createdBy: proposal.subjectUserId ?? proposal.agentUserId ?? userId,
+        agentUserId: proposal.agentUserId,
         name,
         description: (inner.description as string | null) ?? undefined,
         templateKey,

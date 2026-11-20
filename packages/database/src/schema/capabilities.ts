@@ -33,8 +33,10 @@ export const capabilities = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     /** Nullable = pod-wide (visible to all workspaces). */
     workspaceId: uuid("workspace_id"),
-    /** Owning principal — human user id or agent-user id. */
+    /** Owner: the person (an agent only if nobody installed it). */
     createdBy: text("created_by").notNull(),
+    /** Actor: the agent that authored it, null for a person's own (0445). FK in SQL. */
+    agentUserId: text("agent_user_id"),
     name: text("name").notNull(),
     description: text("description"),
     /**
@@ -72,6 +74,9 @@ export const capabilities = pgTable(
       table.workspaceId
     ),
     createdByIdx: index("idx_capabilities_created_by").on(table.createdBy),
+    agentUserIdIdx: index("idx_capabilities_agent_user_id").on(
+      table.agentUserId
+    ),
     templateKeyIdx: index("idx_capabilities_template_key").on(
       table.templateKey
     ),

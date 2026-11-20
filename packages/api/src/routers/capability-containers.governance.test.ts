@@ -102,6 +102,11 @@ vi.mock("@synap/database", () => ({
   isNull: vi.fn((a) => ({ op: "isNull", a })),
   inArray: vi.fn((a, b) => ({ op: "inArray", a, b })),
   desc: vi.fn((a) => ({ op: "desc", a })),
+  ownerAndActor: async (
+    _db: unknown,
+    principalId: string,
+    agentUserId?: string | null
+  ) => ({ ownerId: principalId, agentUserId: agentUserId ?? null }),
 }));
 
 vi.mock("../utils/permission-check.js", () => ({

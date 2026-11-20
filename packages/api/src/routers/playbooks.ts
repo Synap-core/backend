@@ -2526,7 +2526,8 @@ export const playbooksRouter = router({
               body: input.contextSkill.body,
               scope: "workspace",
               workspaceId: ctx.workspaceId,
-              userId: input.agentUserId ?? ctx.userId,
+              userId: owner.ownerId,
+              agentUserId: owner.agentUserId,
               status: "active",
               // Born-approved only for a trusted human author (mirrors
               // insertSkillGoverned). An agent-authored body stays unapproved and

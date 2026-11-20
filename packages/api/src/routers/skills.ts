@@ -26,6 +26,7 @@ import {
   desc,
   inArray,
   getActingAgentUserId,
+  ownerAndActor,
   userVisibleWhere,
   type SQL,
 } from "@synap/database";
@@ -463,11 +464,14 @@ export async function insertSkillGoverned(
         })
       : bornOn;
 
+  const owner = await ownerAndActor(db, values.userId, authorAgentUserId);
   const [skill] = await db
     .insert(skills)
     .values({
       ...values,
       id: skillId,
+      userId: owner.ownerId,
+      agentUserId: owner.agentUserId,
       status: "active",
       approved,
     })
@@ -1536,11 +1540,13 @@ export const skillsRouter = router({
       //    become the bypass the shared door exists to prevent. Normally an agent create
       //    returns `proposed` before reaching here — this closes the case where
       //    a governance rule has widened `skill/create` to auto for an agent.
+      const owner = await ownerAndActor(db, userId, input.agentUserId);
       const [skill] = await db
         .insert(skills)
         .values({
           id: skillId,
-          userId,
+          userId: owner.ownerId,
+          agentUserId: owner.agentUserId,
           // Pod-wide by default: only stamp a workspace when the caller explicitly
           // narrows to one. No workspace context → pod-wide (NULL).
           workspaceId: input.workspaceId ?? null,

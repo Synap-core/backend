@@ -797,11 +797,6 @@ export async function createWorkspaceFromDefinition(
   if (systemSlug) settings.systemSlug = systemSlug;
   if (opts.workspaceType) settings.workspaceType = opts.workspaceType;
   if (opts.linkedAgentId) settings.linkedAgentId = opts.linkedAgentId;
-  // Agent workspaces invert the normal hierarchy: the AI agent is owner
-  // (creative authority) and the human is admin (irreversibility guard).
-  if (opts.workspaceType === "agent") {
-    settings.governanceMode = "agent-owned";
-  }
 
   // 1. Create workspace
   const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);
