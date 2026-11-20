@@ -270,6 +270,12 @@ export interface StageGateSubject {
 export interface CheckMeasure {
   failing: string[];
   reason?: string;
+  /**
+   * Every miss is a criterion the AI judge could not grade (the call failed):
+   * nothing was judged, so the gate HOLDS and never sends the run back to its
+   * `onFail` stage. The owner's grade, or a later evaluation, resumes it.
+   */
+  notJudged?: boolean;
 }
 
 export interface StageGateAdvance {
@@ -300,6 +306,8 @@ export interface CheckGateResult {
   paused: boolean;
   /** Why it held, in words — when the subject can say (a track does). */
   reason?: string;
+  /** It held only because the AI judge could not run ({@link CheckMeasure}). */
+  notJudged?: boolean;
 }
 
 export type StageGateOutcome =
@@ -401,7 +409,7 @@ async function applyCheckGate(
       paused: false,
     };
   }
-  const { failing, reason } = await subject.checkFailing(fromStage);
+  const { failing, reason, notJudged } = await subject.checkFailing(fromStage);
   if (failing.length === 0) {
     return { kind: "check", stageKey, passed: true, failing, paused: false };
   }
@@ -429,6 +437,7 @@ async function applyCheckGate(
     failing,
     paused,
     ...(reason ? { reason } : {}),
+    ...(notJudged ? { notJudged } : {}),
   };
 }
 
@@ -486,9 +495,43 @@ export function checkGateFailing(
  */
 export function checkGateHold(
   input: StageOutcomesInput & { stages: unknown },
-  fromStage: string
+  fromStage: string,
+  notJudged?: ReadonlyMap<string, string>
 ): CheckMeasure {
   const stage = readStageOutcomes(input.stages, fromStage, input);
+  // The judge could not run on criteria this check needed. When those are
+  // the ONLY misses, the work was never graded: the gate holds with the
+  // failure in words and the owner's way out, and is not a failed check.
+  if (notJudged && notJudged.size > 0 && stage.unmet.length > 0) {
+    // An unmet outcome is unjudged when every criterion still open on it is
+    // one the judge could not grade: a real verdict among them, or a declared
+    // output nothing judges, is a miss and keeps today's path (`onFail`).
+    const unjudged = (key: string): string[] | null => {
+      const outcome = stage.outcomes.find((o) => o.key === key);
+      if (!outcome) return null;
+      const open =
+        outcome.source === "criterion"
+          ? [outcome.key]
+          : (outcome.criteria ?? []).filter((c) => !c.met).map((c) => c.key);
+      return open.length > 0 && open.every((k) => notJudged.has(k))
+        ? open
+        : null;
+    };
+    const blocked = stage.unmet.map(unjudged);
+    if (blocked.every((keys): keys is string[] => keys !== null)) {
+      const criteria = [...new Set(blocked.flat())];
+      const why = [...new Set(criteria.flatMap((k) => notJudged.get(k) ?? []))];
+      return {
+        failing: stage.unmet,
+        notJudged: true,
+        reason: [
+          ...why,
+          `The check of "${fromStage}" holds here instead of failing: the owner can grade ${criteria.map((k) => `"${k}"`).join(", ")} by hand to move on.`,
+          ...stage.unmetOutputs.map(owedOutputHint),
+        ].join(" "),
+      };
+    }
+  }
   if (stage.unmetOutputs.length === 0) return { failing: stage.unmet };
   return {
     failing: stage.unmet,
@@ -606,6 +649,15 @@ export function sessionGateSubject(
         sessionId: params.sessionId,
         playbookId: params.playbookId ?? null,
       });
+      // The judge criteria this evaluation could not grade because the AI
+      // call failed, with that failure in words (`evaluate.ts`).
+      const notJudged = new Map(
+        result.results.flatMap((r) =>
+          r.status === "skipped" && r.failureClass && r.reason
+            ? [[r.key, r.reason] as const]
+            : []
+        )
+      );
       return checkGateHold(
         {
           stages: proc?.stages ?? [],
@@ -613,7 +665,8 @@ export function sessionGateSubject(
           criteria: result.criteria,
           evaluations: result.evaluations,
         },
-        fromStage
+        fromStage,
+        notJudged
       );
     },
     proposal: {

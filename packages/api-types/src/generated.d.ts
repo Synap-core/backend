@@ -27131,6 +27131,13 @@ export interface CriterionRunOutcome {
 	verdict?: EvaluationVerdict;
 	reason?: string;
 	escalated?: boolean;
+	/**
+	 * Set on a `skipped` judge criterion when the judge could not run: the AI
+	 * failure class, read by the one failure door (`utils/ai-failure.ts`). It is
+	 * not a verdict on the work, so a check gate whose only misses carry it
+	 * holds the stage instead of sending the run back (`stage-gate.ts`).
+	 */
+	failureClass?: AiFailureClass;
 }
 /** A near-goal open session in the same scope — a suggestion, never a block. */
 export interface SessionTwinCandidate {
