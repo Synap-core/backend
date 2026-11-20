@@ -498,10 +498,7 @@ export async function isReadOnlyTool(toolName: string): Promise<boolean> {
 // (`services/focus-sessions/session-statuses.ts`) so services can import it
 // without pulling this file's hub-protocol router in. Re-exported here so every
 // existing importer is unchanged — one declaration, two names for it.
-import {
-  OPEN_SESSION_STATUSES,
-  IN_FLIGHT_SESSION_STATUSES,
-} from "../../../services/focus-sessions/session-statuses.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
 import { ambientWorkWhere } from "../../../services/focus-sessions/session-kind.js";
 import {
   resolveWorkSession,
