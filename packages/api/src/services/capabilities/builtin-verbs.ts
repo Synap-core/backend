@@ -22,6 +22,7 @@
 import { z } from "zod";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
 import { CATALOG_DETAILS } from "@synap-core/types/design-board";
+import { withMarketplaceKindAliases } from "@synap-core/types/marketplace-source";
 import {
   renderText,
   type TextTemplateMiss,
@@ -2404,20 +2405,24 @@ const marketSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
 
 const marketInstallParams = z.object({
   slug: z.string().min(1).max(200),
-  kind: z.enum([
-    "capability",
-    "automation",
-    "template",
-    "cell",
-    "skill",
-    "view",
-    // An agent template (`runMarketInstall` case "agent", one write:
-    // `installAgentTemplate`). The browser routes an `agent` package here.
-    "agent",
-    // Synap's renderer bundle (`applyMarketInstall` → `installOfficialRendererBundle`):
-    // fetched from this pod's control plane, managed pods only.
-    "renderer-bundle",
-  ]),
+  // The Control Plane's names are accepted too: `workflow` is an automation,
+  // as `synap market --type` lists it (237175b5).
+  kind: withMarketplaceKindAliases(
+    z.enum([
+      "capability",
+      "automation",
+      "template",
+      "cell",
+      "skill",
+      "view",
+      // An agent template (`runMarketInstall` case "agent", one write:
+      // `installAgentTemplate`). The browser routes an `agent` package here.
+      "agent",
+      // Synap's renderer bundle (`applyMarketInstall` → `installOfficialRendererBundle`):
+      // fetched from this pod's control plane, managed pods only.
+      "renderer-bundle",
+    ])
+  ),
   version: z.string().max(100).optional(),
   params: z.record(z.string(), z.unknown()).optional(),
   /**
