@@ -116,6 +116,13 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return {
     ...actual,
+    // The owner door's users read is not this suite's subject (the journey
+    // tests run the real one): the writer stands for itself.
+    ownerAndActor: async (
+      _db: unknown,
+      ownerId: string,
+      agentUserId?: string | null
+    ) => ({ ownerId, agentUserId: agentUserId ?? null }),
     getDb: async () => db,
     // The run status door is pinned on PGlite (run-status.pglite.test.ts); here
     // a recorded result is the run as moved.

@@ -66,6 +66,7 @@ beforeAll(async () => {
       id uuid primary key default gen_random_uuid(),
       workspace_id uuid,
       created_by text not null,
+      agent_user_id text,
       name text not null,
       description text,
       goal_template text not null,

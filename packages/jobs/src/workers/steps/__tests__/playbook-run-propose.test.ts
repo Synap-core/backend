@@ -127,7 +127,7 @@ beforeEach(() => {
 
 describe("playbook_run — propose mode files a proposal and starts nothing", () => {
   it("files ONE playbook/run proposal carrying rule, playbook, params and subject", async () => {
-    h.selectResults.push([], [{ userType: "human" }]);
+    h.selectResults.push([]);
     const out = await executePlaybookRun(
       {
         playbookId: "pb-1",
@@ -181,7 +181,7 @@ describe("playbook_run — propose mode files a proposal and starts nothing", ()
   });
 
   it("the node's project/track ride with the proposal (replayed by the approval executor)", async () => {
-    h.selectResults.push([], [{ userType: "human" }]);
+    h.selectResults.push([]);
     await executePlaybookRun(
       {
         playbookId: "pb-1",
@@ -220,7 +220,7 @@ describe("playbook_run — propose mode files a proposal and starts nothing", ()
   });
 
   it("the rule's own goal (mustache resolved now) and agent ride with the proposal", async () => {
-    h.selectResults.push([], [{ userType: "human" }]);
+    h.selectResults.push([]);
     await executePlaybookRun(
       {
         playbookId: "pb-1",
@@ -241,14 +241,14 @@ describe("playbook_run — propose mode files a proposal and starts nothing", ()
     expect(row.data.data.agentType).toBe("sales");
   });
 
-  it("an agent-owned rule proposes AS that agent", async () => {
-    h.selectResults.push([], [{ userType: "agent" }]);
+  it("an agent-authored rule proposes AS that agent, for the person who owns it", async () => {
+    h.selectResults.push([]);
     await executePlaybookRun(
       { playbookName: "Qualify a lead", mode: "propose" },
       context({}),
       "ws-1",
-      "agent-1",
-      AUTOMATION as never
+      "person-1",
+      { ...AUTOMATION, actorAgentUserId: "agent-1" } as never
     );
     const row = (
       h.insertPendingProposalMock.mock.calls as unknown[][]
@@ -257,6 +257,7 @@ describe("playbook_run — propose mode files a proposal and starts nothing", ()
       data: { data: Record<string, unknown> };
     };
     expect(row.agentUserId).toBe("agent-1");
+    expect((row as { subjectUserId?: string }).subjectUserId).toBe("person-1");
     // Name-only node: the approval executor resolves it through the ONE door.
     expect(row.data.data.playbookName).toBe("Qualify a lead");
     expect(row.data.data.playbookId).toBeUndefined();
@@ -270,7 +271,7 @@ describe("playbook_run — propose mode files a proposal and starts nothing", ()
       message:
         'Nothing ran: "Research a Question" uses skills that are not enabled yet (source-triage). A request to enable them is waiting for the owner\'s review: https://pod/open/p-1',
     });
-    h.selectResults.push([], [{ userType: "human" }]);
+    h.selectResults.push([]);
     await expect(
       executePlaybookRun(
         { playbookName: "Research a Question", mode: "propose" },
@@ -352,7 +353,7 @@ describe("propose mode — one run per (playbook, subject) at a time", () => {
   });
 
   it("no run in flight → the proposal is filed as before", async () => {
-    h.selectResults.push([], [{ userType: "human" }]);
+    h.selectResults.push([]);
     const out = await executePlaybookRun(
       { playbookId: PB, mode: "propose" },
       context({ subjectId: "ent-1" }),
@@ -367,7 +368,7 @@ describe("propose mode — one run per (playbook, subject) at a time", () => {
   });
 
   it("no subject → nothing to ask (a run over nothing is not a duplicate)", async () => {
-    h.selectResults.push([], [{ userType: "human" }]);
+    h.selectResults.push([]);
     await executePlaybookRun(
       { playbookId: PB, mode: "propose" },
       context({}),
