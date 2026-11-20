@@ -222,7 +222,7 @@ export const buildHandlers: McpHandlerMap = {
     // Define-time check BEFORE the gate: a source that cannot mount in the
     // frame is refused now, with its line and its fix, instead of becoming a
     // proposal a person approves and then watches fail on every open.
-    const { assertCellSourceMounts } =
+    const { assertCellSourceMounts, resolveCellTypeKey } =
       await import("../../../services/cells/define-cell.js");
     const advice = await assertCellSourceMounts({
       name: parsed.data.name,
@@ -293,6 +293,12 @@ export const buildHandlers: McpHandlerMap = {
         summary: perm.summary,
         reviewPath: perm.reviewPath,
         reviewUrl: perm.reviewUrl,
+        // The key approval will write: bind it with synap_promote_cell_to_renderer.
+        typeKey: await resolveCellTypeKey(
+          { name: parsed.data.name },
+          cellWorkspaceId,
+          await getDb()
+        ),
         ...(perm.deduped ? { deduped: true } : {}),
         // Words, colour, accessibility: what the author can still fix.
         ...(advice.length > 0 ? { advice } : {}),
@@ -658,6 +664,7 @@ export const buildHandlers: McpHandlerMap = {
       name: args.name,
       goalTemplate: args.goalTemplate,
       description: args.description as string | undefined,
+      reasoning: readReasoning(args),
       stages: args.stages as PlaybookStageInput[] | undefined,
       status: args.status as
         "draft" | "active" | "paused" | "archived" | undefined,
@@ -1513,6 +1520,7 @@ export const buildHandlers: McpHandlerMap = {
       workspaceId: skillWorkspaceId,
       scope: skillWorkspaceId ? "workspace" : "pod",
       slug: skillSlug,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       name: args.name,
       description: args.description as string | undefined,
       body: skillBody,
@@ -1599,6 +1607,9 @@ export const buildHandlers: McpHandlerMap = {
         `Tool '${toolName}': nothing to change — pass body, description, name, code, parameters, timeoutSeconds and/or requiredTools.`
       );
     }
+    // After the empty-patch check: a reason alone is not a change.
+    const skillReasoning = readReasoning(args);
+    if (skillReasoning) patch.reasoning = skillReasoning;
     const callerCtx = await createHubProtocolCallerContext(
       userId,
       apiKeyScopes,

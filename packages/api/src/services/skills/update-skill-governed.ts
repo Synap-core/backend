@@ -33,6 +33,8 @@ export interface SkillUpdatePatch {
   /** Tool NAMES, resolved under the skill's own workspace lens. The set
    *  REPLACES the declared one. */
   requiredTools?: string[];
+  /** WHY this edit — shown to the reviewer when an agent's edit is proposed. */
+  reasoning?: string;
 }
 
 export type UpdateSkillGovernedResult =

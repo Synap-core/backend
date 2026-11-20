@@ -6,7 +6,7 @@
  * given. The compile (and the unknown/secret property checks) stay in
  * `entityListFiltersWhere`, which `entities.list` runs.
  */
-import type { ViewFilter } from "@synap-core/types";
+import { isViewFilterField, type ViewFilter } from "@synap-core/types";
 import {
   EntityListFiltersSchema,
   filteredPropertySlugs,
@@ -15,6 +15,17 @@ import {
 export type ParsedListFilters =
   | { ok: true; filters: ViewFilter[] | undefined }
   | { ok: false; error: string };
+
+function barePropertyField(filter: unknown): unknown {
+  if (!filter || typeof filter !== "object") return filter;
+  const f = filter as { field?: unknown };
+  return typeof f.field === "string" &&
+    f.field !== "" &&
+    !f.field.includes(".") &&
+    !isViewFilterField(f.field)
+    ? { ...f, field: `properties.${f.field}` }
+    : filter;
+}
 
 /**
  * `raw`: a JSON string (query string) or an already-parsed array (MCP).
@@ -38,6 +49,9 @@ export function parseEntityListFiltersInput(
       };
     }
   }
+  // With a kind named, a bare field that is not a core column is that kind's
+  // property: `recommendation` reads as `properties.recommendation`.
+  if (profileSlug && Array.isArray(value)) value = value.map(barePropertyField);
   const parsed = EntityListFiltersSchema.safeParse(value);
   if (!parsed.success) {
     return {

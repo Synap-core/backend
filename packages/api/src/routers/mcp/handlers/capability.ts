@@ -711,6 +711,7 @@ export const capabilityHandlers: McpHandlerMap = {
       // the SAME source synap_create_verb reads). Lands on the resulting
       // `capability.run` proposal's session_id column; null outside a session.
       sessionId: sessionId ?? null,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     // Surface the same discriminated outcome the hub door returns, in a shape
     // the agent reads naturally (proposed is NOT an error). A `kind:"error"`
@@ -813,6 +814,7 @@ export const capabilityHandlers: McpHandlerMap = {
       // so an agent-initiated create was evaluated as if the human owner did
       // it directly. Now threaded through, mirroring entities.ts's pattern.
       agentUserId: agentUserId ?? undefined,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
 
     // WIRING — the MCP door used to write NONE of the edges the tRPC door
@@ -1127,6 +1129,7 @@ export const capabilityHandlers: McpHandlerMap = {
         (args.status as "draft" | "active" | "paused" | "error" | undefined) ??
         "active",
       metadata,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },

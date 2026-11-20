@@ -97,6 +97,8 @@ export async function createPlaybookDoor(
     name: unknown;
     goalTemplate: unknown;
     description?: string;
+    /** WHY this write, shown to the reviewer of a proposal (governance gate). */
+    reasoning?: string;
     stages?: PlaybookStageInput[];
     status?: PlaybookStatus;
     /**
@@ -171,6 +173,7 @@ export async function createPlaybookDoor(
     name: input.name,
     goalTemplate: input.goalTemplate,
     description: input.description,
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     // `playbooks.create` validates these with `playbookStagesSchema` (category
     // required, keys unique); this only types the untyped input.
     stages: input.stages,

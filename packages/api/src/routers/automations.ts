@@ -2552,6 +2552,8 @@ export const automationsRouter = router({
           source: z
             .enum(["user", "ai", "intelligence", "system", "agent"])
             .optional(),
+          /** WHY — shown to the reviewer when an agent's create is proposed. */
+          reasoning: z.string().max(2000).optional(),
         })
         .superRefine(validateAiAutomationDataContract)
     )
@@ -2601,6 +2603,7 @@ export const automationsRouter = router({
           // EventSources — normalize via the canonical guard before this reaches
           // the top-level event source.
           source: normalizeEventSource(input.source),
+          ...(input.reasoning ? { reasoning: input.reasoning } : {}),
           // Widened (object-proposal manifest W1): carry the FULL create input so
           // an approved proposal materializes a real automation via
           // automationsRouter.create — not just a labelled shell. This branch is

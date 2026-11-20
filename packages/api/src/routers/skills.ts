@@ -679,6 +679,8 @@ export const skillsRouter = router({
          * here in a way it is not in Zapier.
          */
         draft: z.boolean().default(false),
+        /** WHY — shown to the reviewer when an agent's create is proposed. */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -696,6 +698,7 @@ export const skillsRouter = router({
         automationIds: input.automationIds,
         ...(input.sentence ? { sentence: input.sentence } : {}),
         ...(input.draft ? { draft: true } : {}),
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
         auditSource: "rules.createRule",
       });
       // CONTRACT, deliberate and different from the Hub REST door (which maps
@@ -1315,6 +1318,8 @@ export const skillsRouter = router({
          *  skill is gated by the agent's grant/role, not silently evaluated
          *  as if the human owner created it directly. */
         agentUserId: z.string().uuid().optional(),
+        /** WHY — shown to the reviewer when an agent's create is proposed. */
+        reasoning: z.string().max(2000).optional(),
         /** Free-form metadata bag persisted on the skill row — e.g. the
          *  marketplace source-link (`marketSource`) a standalone-install stamps
          *  so a published fix can reconcile the installed skill. */
@@ -1446,6 +1451,7 @@ export const skillsRouter = router({
         workspaceId: input.workspaceId,
         subjectType: "skill",
         action: "create",
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
         // Widened (object-proposal manifest W1): carry the FULL resolved insert
         // shape (matching insertSkillGoverned's `values`) so an approved proposal
         // materializes a real skill via the shared insertSkillGoverned door. Only
@@ -1682,6 +1688,8 @@ export const skillsRouter = router({
          * skill's baseline could never advance past the first reconcile.
          */
         metadata: z.record(z.string(), z.unknown()).optional(),
+        /** WHY — shown to the reviewer when an agent's edit is proposed. */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1692,6 +1700,7 @@ export const skillsRouter = router({
       const {
         id,
         agentUserId: _agentUserId,
+        reasoning,
         metadata: metadataPatch,
         requiredToolIds: requestedToolIds,
         ...updateData
@@ -1791,6 +1800,7 @@ export const skillsRouter = router({
         workspaceId: existingSkill.workspaceId || undefined,
         subjectType: "skill",
         action: "update",
+        ...(reasoning ? { reasoning } : {}),
         // Widened (gate-payload sufficiency): `{ id }` described NO change, so an
         // approved skill-update proposal had nothing to apply. Carry the raw
         // patch (`updateData` = input minus `id`/`agentUserId`/`metadata`, plus

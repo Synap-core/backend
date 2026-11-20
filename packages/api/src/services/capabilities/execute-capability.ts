@@ -499,6 +499,8 @@ export async function executeCapability(input: {
   agentUserId?: string | null;
   /** Runtime 1-of-N connection selector (Wave 4) — passed to a provider verb. */
   connectionSelector?: ConnectionSelector | null;
+  /** WHY this run — the agent's own reason, shown on the proposal it files. */
+  reasoning?: string;
   /**
    * Resolve `verbId` by PROVENANCE: only a skill whose `requires` edge points at
    * this tool row can answer. A verb NAME is not an identity — a pod that went
@@ -1028,8 +1030,11 @@ export async function executeCapability(input: {
           // rides in `parameters`; hoisted to where the review card reads it
           // (`request.reasoning`). `reasoning` is a volatile dedup key, so this
           // never splits identical runs.
-          ...(capabilityRunReasoning(parameters)
-            ? { reasoning: capabilityRunReasoning(parameters) }
+          ...((input.reasoning ?? capabilityRunReasoning(parameters))
+            ? {
+                reasoning:
+                  input.reasoning ?? capabilityRunReasoning(parameters),
+              }
             : {}),
           // Carry the 1-of-N connection selector so an APPROVED run resolves the
           // same connection the original call intended (see runResolvedSkill).

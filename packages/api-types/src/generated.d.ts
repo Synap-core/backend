@@ -33088,6 +33088,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				metadata?: Record<string, unknown> | undefined;
 				name: string;
+				reasoning?: string | undefined;
 				source?: "agent" | "ai" | "intelligence" | "system" | "user" | undefined;
 				state?: Record<string, unknown> | undefined;
 				status?: "active" | "draft" | "error" | "paused" | undefined;
@@ -34026,6 +34027,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				idempotencyKey?: string | undefined;
 				parameters?: Record<string, unknown> | undefined;
+				reasoning?: string | undefined;
 				sessionId?: string | undefined;
 				skillId?: string | undefined;
 				sourceMessageId?: string | undefined;
@@ -55224,6 +55226,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				metadata?: Record<string, unknown> | undefined;
 				name: string;
 				phase?: string | undefined;
+				reasoning?: string | undefined;
 				settings?: Record<string, unknown> | undefined;
 				status?: "active" | "archived" | "completed" | undefined;
 				subjectEntityId?: string | undefined;
@@ -58643,6 +58646,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: "recovery_code";
 				} | undefined;
 				providerSpec?: Record<string, unknown> | undefined;
+				reasoning?: string | undefined;
 				requiredToolIds?: string[] | undefined;
 				scope?: "pod" | "user" | "workspace" | undefined;
 				slug?: string | undefined;
@@ -58672,6 +58676,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expiresAt?: string | undefined;
 				factSkillId?: string | undefined;
 				intent: string;
+				reasoning?: string | undefined;
 				scope: {
 					kind: "pod" | "user" | "workspace";
 					projectId?: string | undefined;
@@ -59072,6 +59077,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name?: string | undefined;
 				parameters?: Record<string, unknown> | undefined;
 				providerSpec?: Record<string, unknown> | undefined;
+				reasoning?: string | undefined;
 				requiredToolIds?: string[] | undefined;
 				scope?: "pod" | "user" | "workspace" | undefined;
 				timeoutSeconds?: number | undefined;
@@ -59093,6 +59099,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				factSkillId?: string | undefined;
 				id: string;
 				intent: string;
+				reasoning?: string | undefined;
 				scope: {
 					kind: "pod" | "user" | "workspace";
 					projectId?: string | undefined;

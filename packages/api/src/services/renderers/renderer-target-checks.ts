@@ -33,7 +33,7 @@ import { TRPCError } from "@trpc/server";
 
 import { resolveObjectKind } from "../diagnose/resolve-object-kind.js";
 import { authoredByUser } from "../agent-identity-service.js";
-import { cellTypeKeyFor } from "../cells/define-cell.js";
+import { cellTypeKeysFor } from "../cells/define-cell.js";
 import {
   SLOT_TO_CONTENT_KIND,
   type RendererSlot,
@@ -161,7 +161,7 @@ export async function assertCellBindable(input: {
       typeof inner.typeKey === "string" && inner.typeKey !== ""
         ? inner.typeKey
         : undefined;
-    return cellTypeKeyFor(inner.name, typeKey) === cellKey;
+    return cellTypeKeysFor(inner.name, typeKey).includes(cellKey);
   });
   if (awaitingReview) return;
 

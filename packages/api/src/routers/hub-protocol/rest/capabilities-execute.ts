@@ -327,6 +327,7 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       sourceMessageId,
       sessionId,
       idempotencyKey,
+      reasoning,
       channelId,
     } = body;
     const { userId } = lens;
@@ -355,6 +356,7 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         // Caller idempotency: makes an external-send verb at-most-once across
         // retries instead of falling back to the derived content-hash window.
         idempotencyKey,
+        reasoning,
         // A pod app's intent action: what it asked, for the approval screen.
         intentRequest,
       });

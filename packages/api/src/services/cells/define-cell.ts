@@ -13,6 +13,7 @@ import {
   and,
   eq,
   isNull,
+  or,
   getActingAgentUserId,
   drizzleSql,
 } from "@synap/database";
@@ -24,6 +25,7 @@ import {
   type CellSourceFinding,
   type CellSourceRefusalCode,
 } from "@synap-core/types/renderables";
+import { slugify } from "../sharing/site-config.js";
 import { execFieldsChanged } from "../capabilities/skill-exec-fields.js";
 import {
   cellContentFingerprint,
@@ -103,11 +105,51 @@ export type CellSourceAdvice = CellSourceFinding<CellSourceAdviceCode>[];
 
 /** The typeKey `defineCell` writes for this name, when none is given. */
 export function cellTypeKeyFor(name: string, typeKey?: string): string {
-  const slug = name
+  // Accents folded (`Page cédant` -> `page-cedant`), by the one slug helper.
+  return typeKey ?? `generated:${slugify(name) ?? ""}`;
+}
+
+/**
+ * Every key a cell of this name may be stored under: today's, then the one
+ * minted before accents were folded (`generated:page-c-dant`). Cells written
+ * under the old key keep resolving, binding and updating in place.
+ */
+export function cellTypeKeysFor(name: string, typeKey?: string): string[] {
+  const current = cellTypeKeyFor(name, typeKey);
+  if (typeKey) return [current];
+  const legacy = `generated:${name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-  return typeKey ?? `generated:${slug}`;
+    .replace(/^-|-$/g, "")}`;
+  return legacy === current ? [current] : [current, legacy];
+}
+
+/**
+ * The typeKey a write of this cell lands on: the stored row's when the cell
+ * already exists under the pre-accent-folding key (updated in place, never
+ * duplicated under the new one), else {@link cellTypeKeyFor}.
+ */
+export async function resolveCellTypeKey(
+  cell: { name: string; typeKey?: string },
+  workspaceId: string | null,
+  reader: CellRowReader
+): Promise<string> {
+  const keys = cellTypeKeysFor(cell.name, cell.typeKey);
+  if (keys.length === 1) return keys[0];
+  const rows = await reader
+    .select({ typeKey: widgetDefinitions.typeKey })
+    .from(widgetDefinitions)
+    .where(
+      and(
+        or(...keys.map((k) => eq(widgetDefinitions.typeKey, k))),
+        workspaceId
+          ? eq(widgetDefinitions.workspaceId, workspaceId)
+          : isNull(widgetDefinitions.workspaceId)
+      )
+    );
+  return rows.some((r) => r.typeKey === keys[0])
+    ? keys[0]
+    : (rows[0]?.typeKey ?? keys[0]);
 }
 
 /**
@@ -197,7 +239,11 @@ export async function readStoredCellContent(
     .from(widgetDefinitions)
     .where(
       and(
-        eq(widgetDefinitions.typeKey, cellTypeKeyFor(cell.name, cell.typeKey)),
+        or(
+          ...cellTypeKeysFor(cell.name, cell.typeKey).map((k) =>
+            eq(widgetDefinitions.typeKey, k)
+          )
+        ),
         workspaceId
           ? eq(widgetDefinitions.workspaceId, workspaceId)
           : isNull(widgetDefinitions.workspaceId)
@@ -556,7 +602,7 @@ async function writeCell(
   );
   const workspaceId = input.workspaceId ?? null;
 
-  const typeKey = cellTypeKeyFor(input.name, input.typeKey);
+  const typeKey = await resolveCellTypeKey(input, workspaceId, db);
 
   const viewTypes = normalizeStringList(input.viewTypes);
   const externalHosts = normalizeStringList(input.externalHosts);

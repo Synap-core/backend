@@ -478,6 +478,8 @@ export interface InstallationAskInput {
   action: InstallationRequestAction;
   version?: string | null;
   sessionId?: string;
+  /** The asker's own WHY, appended to the card's sentence. */
+  reasoning?: string;
   /**
    * The pod does not have the capability yet: check it against Synap's
    * catalog definition, and add it from the catalog when the install is
@@ -701,7 +703,9 @@ export async function requestInstallation(
       ? addition
         ? `${input.filedByPod.reasoning} ${reasoningFor(input, !!live, addition, change)}`
         : input.filedByPod.reasoning
-      : reasoningFor(input, !!live, addition, change),
+      : input.reasoning
+        ? `${reasoningFor(input, !!live, addition, change)} Why: ${input.reasoning}`
+        : reasoningFor(input, !!live, addition, change),
     data: {
       id: computer.id,
       computerId: computer.id,
