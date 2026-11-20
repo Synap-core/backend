@@ -238,6 +238,10 @@
       "types": "./dist/proposals/ended.d.ts",
       "import": "./dist/proposals/ended.js"
     },
+    "./proposals/landed": {
+      "types": "./dist/proposals/landed.d.ts",
+      "import": "./dist/proposals/landed.js"
+    },
     "./proposals/cannot-apply": {
       "types": "./dist/proposals/cannot-apply.d.ts",
       "import": "./dist/proposals/cannot-apply.js"

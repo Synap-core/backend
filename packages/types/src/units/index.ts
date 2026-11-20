@@ -26,3 +26,4 @@ export * from "./proposal-status.js";
 export * from "./outcome.js";
 export * from "./status-of.js";
 export * from "./pillar-health.js";
+export * from "./object-next.js";
