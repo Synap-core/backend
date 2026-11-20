@@ -84,6 +84,7 @@ describe("applyMarketInstall — a capability package is unwrapped", () => {
       key: "apify",
       created: { tools: [] },
       webhooks: [],
+      dependencies: [],
     });
   });
 

@@ -109,7 +109,10 @@ import {
   type CapabilityDefinition,
   type LoopDefinition,
 } from "@synap/playbooks";
-import type { WorkspaceDefinitionInput } from "@synap/database";
+import type {
+  TemplateDependency,
+  WorkspaceDefinitionInput,
+} from "@synap/database";
 import type { Context } from "../../context.js";
 import { assertPackageTierAccess } from "../../utils/tier-check.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
@@ -124,6 +127,7 @@ import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 // its call site, mirroring the approve-executors, so this module never pulls the
 // post-workspace layer graph into an eager import cycle.
 import type { PackagePostWorkspaceBody } from "../package-apply-post-workspace.js";
+import type { ResolvedPackageDependency } from "../package-dependency-resolver.js";
 import { installCellFromDefinition } from "../cells/install-cell-from-definition.js";
 import {
   buildMarketSource,
@@ -563,13 +567,23 @@ export const capabilityInstallParamsSchema = z.record(z.string(), z.unknown());
  * one manual step on the provider's side, so every install door shows it. Only
  * here: a reconcile or a package dependency re-applies the definition without
  * minting a URL nobody is shown.
+ *
+ * Before anything is written it ensures the package's `require` dependencies
+ * (`ensureCapabilityRequires`): a capability that requires another installs it
+ * first, and is refused when it cannot.
  */
 export async function applyCapabilityDefinition(
   definition: unknown,
   params: Record<string, unknown> | undefined,
   ctx: Context,
   opts: CreateCapabilityOptions = {}
-): Promise<CreateCapabilityResult & { webhooks: InstalledToolWebhook[] }> {
+): Promise<
+  CreateCapabilityResult & {
+    webhooks: InstalledToolWebhook[];
+    dependencies: ResolvedPackageDependency[];
+  }
+> {
+  const dependencies = await ensureCapabilityRequires(definition, ctx);
   const result = await createCapabilityFromDefinition(
     // A CP capability PACKAGE arrives wrapped (`{capability:{…}}`): unwrap it
     // here, where every door converges (`capabilityElementOf`).
@@ -588,7 +602,73 @@ export async function applyCapabilityDefinition(
     result.created.tools,
     requireUserId(ctx.userId)
   );
-  return { ...result, webhooks };
+  return { ...result, webhooks, dependencies };
+}
+
+/**
+ * The `dependencies` a capability declares: on the package (`{capability,
+ * dependencies}`) or on a bare definition. The Control Plane's capability
+ * routes serve only `definition.capability`, so a definition resolved from
+ * them carries none; a full package (a supplied payload, an added source's
+ * listing) does.
+ */
+function capabilityDependenciesOf(definition: unknown): TemplateDependency[] {
+  const declared = [
+    bagOf(definition)?.dependencies,
+    bagOf(capabilityElementOf(definition))?.dependencies,
+  ].find(Array.isArray) as unknown[] | undefined;
+  return (declared ?? []).filter(
+    (dep): dep is TemplateDependency => !!textOf(bagOf(dep)?.slug)
+  );
+}
+
+/**
+ * Install what a capability `require`s, through the one dependency resolver
+ * (`resolvePackageDependencies`, the workspace package path's Step 0), before
+ * the capability itself. A capability is no overlay: a `compose` dependency is
+ * refused. A required capability that ends absent refuses the install, since
+ * the capability's actions would fail at run time on the missing tools.
+ */
+async function ensureCapabilityRequires(
+  definition: unknown,
+  ctx: Context
+): Promise<ResolvedPackageDependency[]> {
+  const dependencies = capabilityDependenciesOf(definition);
+  if (dependencies.length === 0) return [];
+  const element = bagOf(capabilityElementOf(definition));
+  const name =
+    textOf(element?.name) ?? textOf(element?.key) ?? "This capability";
+  const composed = dependencies.find((d) => d.relation === "compose");
+  if (composed)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `"${name}" declares \`compose\` on "${composed.slug}": a capability can only \`require\` another package. Nothing was installed.`,
+    });
+  const { resolvePackageDependencies } =
+    await import("../package-dependency-resolver.js");
+  const { installed } = await resolvePackageDependencies({
+    definition: { dependencies },
+    userId: requireUserId(ctx.userId),
+    agentUserId: ctx.agentUserId ?? undefined,
+    selfSlug: textOf(element?.key) ?? undefined,
+  });
+  const missing = installed.filter(
+    (d) => d.kind === "capability" && d.action === "required-absent"
+  );
+  if (missing.length > 0)
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `"${name}" requires ${missing
+        .map((d) => `"${d.slug}"`)
+        .join(
+          ", "
+        )}, which could not be installed, so "${name}" was not installed. ${missing
+        .map((d) => d.message)
+        .filter(Boolean)
+        .join(" ")}`,
+      cause: { code: "CAPABILITY_REQUIRE_ABSENT", missing },
+    });
+  return installed;
 }
 
 /**
@@ -1327,6 +1407,7 @@ export async function applyMarketInstall(
       key: result.capabilityKey,
       created: result.created,
       webhooks: result.webhooks,
+      dependencies: result.dependencies,
     };
   }
 
