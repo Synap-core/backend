@@ -2413,6 +2413,9 @@ const marketInstallParams = z.object({
     // An agent template (`runMarketInstall` case "agent", one write:
     // `installAgentTemplate`). The browser routes an `agent` package here.
     "agent",
+    // Synap's renderer bundle (`applyMarketInstall` → `installOfficialRendererBundle`):
+    // fetched from this pod's control plane, managed pods only.
+    "renderer-bundle",
   ]),
   version: z.string().max(100).optional(),
   params: z.record(z.string(), z.unknown()).optional(),

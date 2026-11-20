@@ -1079,6 +1079,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
     /^\/errors\/[^/]+\/?$/,
     REFUSED("Pod internals: the cause of every server error on the pod."),
   ],
+  // The installed renderer bundle's host modules (`rest/renderers.ts`): the
+  // licensed kit's code (React, the kit, the tokens CSS), served only to a
+  // full key's host. A narrowly scoped key (an app, a site) never fetches it.
+  [
+    /^\/renderers\/host-modules\/?$/,
+    REFUSED("The renderer kit's code: only a full key's host fetches it."),
+  ],
   // A person's channels (`listPersonChannels`, services/channels/
   // person-channels.ts): the record through `entityReadVisibleWhere`, its
   // channels through `channelVisibilityWhere` (a channel follows its person,

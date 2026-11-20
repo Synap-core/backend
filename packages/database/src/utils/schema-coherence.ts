@@ -2290,6 +2290,24 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "api_key_id",
     addedBy: "0438_realtime_room_tickets.sql",
   },
+  // Renderer bundles (0436): the install writes both tables and pod admin
+  // reads them on every page that draws pod content; absence means every
+  // install and every host-module read would fail (42P01).
+  {
+    table: "renderer_bundles",
+    column: "set_sha256",
+    addedBy: "0436_renderer_bundles.sql",
+  },
+  {
+    table: "renderer_bundles",
+    column: "defaults",
+    addedBy: "0436_renderer_bundles.sql",
+  },
+  {
+    table: "renderer_host_modules",
+    column: "sha256",
+    addedBy: "0436_renderer_bundles.sql",
+  },
 
   // Document passages (0358b) — a document body as recall-sized units, and
   // the per-document state the revision sweep reads. Absence means every

@@ -267,6 +267,8 @@ export type { ProvenanceKind } from "./provenance.js";
 // rung 2.8 wiring land in a separate wave.
 export * from "./governance-rules.js";
 export * from "./renderer-bindings.js";
+// Renderer bundles (0436): a bundle row + its one host-module set.
+export * from "./renderer-bundles.js";
 
 // Governance Ceilings (0236) — the store for NUMERIC governance limits (sibling
 // to governance_rules' verdicts). First axis: daily_write_count → rung 2.56.

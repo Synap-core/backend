@@ -385,6 +385,15 @@ export interface DefineCellInput {
    * Absent ⇒ the cell is defined and placed nowhere, as before.
    */
   placeOn?: CellPlacement;
+  /**
+   * Write INSIDE the caller's transaction (a renderer bundle installs its
+   * cells and its host modules as one act, `installRendererBundle`). The
+   * change is then NOT emitted here: the caller emits each written cell with
+   * `emitCellWritten` once its transaction committed, so a rolled-back act
+   * never tells a browser to refresh a cell that is not there. Not with
+   * `placeOn` (that act opens its own transaction).
+   */
+  tx?: DbOrTx;
   /** Acting user — stamped on the realtime event; with `placeOn`, the view's writer. */
   userId: string;
 }
@@ -450,6 +459,14 @@ export async function defineCell(input: DefineCellInput): Promise<DefinedCell> {
     throw new AgentCellRequiresProposalError(input.name);
   }
   const placeOn = input.placeOn;
+  if (input.tx) {
+    if (placeOn) {
+      throw new Error(
+        "defineCell: a cell written in the caller's transaction cannot also be placed"
+      );
+    }
+    return writeCell(input, input.tx, { deferEvent: true });
+  }
   if (!placeOn) return writeCell(input, await getDb());
 
   // Define AND place, one act: refused before any write when the view cannot
@@ -491,7 +508,8 @@ export async function defineCell(input: DefineCellInput): Promise<DefinedCell> {
   };
 }
 
-function emitCellWritten(
+/** Tell connected hosts a cell changed; after the commit that wrote it. */
+export function emitCellWritten(
   cell: Pick<DefinedCell, "typeKey" | "changeType">,
   input: Pick<DefineCellInput, "userId" | "workspaceId">
 ): void {

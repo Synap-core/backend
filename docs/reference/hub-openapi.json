@@ -34812,6 +34812,63 @@
         }
       }
     },
+    "/renderers/host-modules": {
+      "get": {
+        "tags": ["Renderers"],
+        "summary": "Read the installed renderer bundle's host modules",
+        "description": "The host-module set (React, react-dom, the JSX runtimes, the kit, the tokens CSS) of the renderer bundle installed on this pod, with `ETag: \"sha256:<setSha256>\"`. Send it back as `If-None-Match` to get 304 while the set is unchanged.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "The host modules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "setSha256": { "type": "string" },
+                    "modules": {
+                      "type": "object",
+                      "additionalProperties": { "type": "string" }
+                    },
+                    "kitExports": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "required": ["setSha256", "modules", "kitExports"]
+                }
+              }
+            }
+          },
+          "304": { "description": "The set the caller holds is current" },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No renderer bundle installed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/whiteboards/{viewId}/scene": {
       "get": {
         "tags": ["Views"],

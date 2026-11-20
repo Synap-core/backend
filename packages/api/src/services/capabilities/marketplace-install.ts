@@ -158,6 +158,7 @@ import { requireUserId } from "../../utils/user-scoped.js";
 import { capabilityElementOf, skillElementOf } from "./package-element.js";
 import { installAgentTemplate } from "../agent-templates/install.js";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
+import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
 
 const logger = createLogger({ module: "marketplace-install" });
 
@@ -590,8 +591,16 @@ export async function applyCapabilityDefinition(
   return { ...result, webhooks };
 }
 
+/**
+ * What `market.install` installs: a catalog kind, or a RENDERER BUNDLE
+ * (`renderer-bundle`, spec c9b1e4d0 §3d). A bundle is never in the catalog
+ * cache (the CP withholds its definition from every public read) and installs
+ * only from Synap's control plane, so it never reaches `lookupCatalogEntry`.
+ */
+export type MarketInstallKind = CatalogKind | typeof RENDERER_BUNDLE_KIND;
+
 export interface ApplyMarketInstallInput {
-  kind: CatalogKind;
+  kind: MarketInstallKind;
   slug: string;
   /**
    * The catalog source id the target is listed under (`synap`, or a source a
@@ -1147,6 +1156,48 @@ async function assertNoPodWideKindChange(
 }
 
 /**
+ * A renderer bundle installs from Synap's control plane only: the official
+ * source, and never a supplied definition (the control plane's managed-pod
+ * gate is the point, and a payload would walk around it).
+ */
+function assertRendererBundleRequest(
+  input: { definition?: Record<string, unknown> },
+  official: boolean
+): void {
+  if (!official) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A renderer bundle installs only from Synap's catalog, through this pod's control plane.",
+      cause: { code: "MARKET_SOURCE_REFUSED" },
+    });
+  }
+  if (input.definition) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A renderer bundle is never installed from a supplied definition: this pod fetches it from its control plane.",
+    });
+  }
+}
+
+/** `market.install` kind `renderer-bundle`: fetch from the CP, admit, install. */
+async function applyRendererBundleInstall(
+  input: ApplyMarketInstallInput,
+  official: boolean
+): Promise<Record<string, unknown>> {
+  assertRendererBundleRequest(input, official);
+  const { installOfficialRendererBundle } =
+    await import("../renderers/official-renderer-bundle.js");
+  const result = await installOfficialRendererBundle({
+    slug: input.slug,
+    version: input.version ?? null,
+    userId: input.userId,
+  });
+  return { kind: RENDERER_BUNDLE_KIND, ...result };
+}
+
+/**
  * The ONE apply function per kind. Called by BOTH the direct-operator path
  * (market.install builtin verb, no agent involved) and the `capability.install`
  * approve-executor (post-approval re-entry) — never re-implemented twice.
@@ -1167,6 +1218,10 @@ export async function applyMarketInstall(
       message:
         "A supplied definition installs only as a Synap package — a package from another source installs from its own signed listing.",
     });
+  }
+  // A renderer bundle: Synap's control plane only, never a payload.
+  if (input.kind === RENDERER_BUNDLE_KIND) {
+    return applyRendererBundleInstall(input, source.official);
   }
   const entry = input.definition
     ? null
@@ -2045,7 +2100,7 @@ export async function applyMarketInstall(
 
 export interface RunMarketInstallInput {
   slug: string;
-  kind: CatalogKind;
+  kind: MarketInstallKind;
   /**
    * The catalog source: omitted (or `synap`) = the official source; an added
    * source's id otherwise. A bare request never reaches an added source.
@@ -2098,11 +2153,15 @@ export async function runMarketInstall(
   input: RunMarketInstallInput
 ): Promise<MarketInstallOutcome> {
   const source = await resolveMarketSource(input.source);
-  const entry = await lookupCatalogEntry(
-    input.kind,
-    input.slug,
-    source.cacheKey
-  );
+  // A renderer bundle is refused BEFORE a proposal is filed when no approval
+  // could install it (another source, a payload); it has no cache row.
+  if (input.kind === RENDERER_BUNDLE_KIND) {
+    assertRendererBundleRequest(input, source.official);
+  }
+  const entry =
+    input.kind === RENDERER_BUNDLE_KIND
+      ? null
+      : await lookupCatalogEntry(input.kind, input.slug, source.cacheKey);
   // Capability resolves by key even without a cache row — opt-in caps
   // (syncByDefault:false) never enter cp_catalog_cache but the CP serves them by
   // key (applyMarketInstall re-resolves via fetchCPCapabilityTemplate). The same
