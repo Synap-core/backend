@@ -47,11 +47,6 @@ declare const STATUS_SIGNALS: readonly [
 	"main_red_unowned"
 ];
 export type StatusSignal = (typeof STATUS_SIGNALS)[number];
-declare const SESSION_CLOSE_OUTCOMES: readonly [
-	"done",
-	"not_done"
-];
-export type SessionClosedAs = (typeof SESSION_CLOSE_OUTCOMES)[number];
 export interface GrantDraft {
 	/** Permission patterns, `<subject>[.<kind>].<action>`. */
 	readonly permissions: readonly string[];
@@ -1979,7 +1974,6 @@ declare const ACTIVITY_OUTCOMES: readonly [
 	"reverted",
 	"waiting",
 	"running",
-	"paused",
 	"stopped"
 ];
 export type ActivityOutcome = (typeof ACTIVITY_OUTCOMES)[number];
@@ -16911,18 +16905,8 @@ export interface RunCostRecord {
  * unified feed — the "you did something on the pod, I got no way to see it" gap.
  */
 export type FlowType = "agent_write" | "automation" | "capability" | "capture" | "chat" | "playbook" | "session";
-declare const RUN_STATUSES: readonly [
-	"running",
-	"completed",
-	"failed",
-	"proposed",
-	"cancelled",
-	"skipped",
-	"blocked_by_policy",
-	"waiting_on_you",
-	"paused"
-];
-export type RunStatus = (typeof RUN_STATUSES)[number];
+/** Normalised lifecycle across all ledgers. */
+export type RunStatus = "blocked_by_policy" | "cancelled" | "completed" | "failed" | "proposed" | "running" | "skipped" | "waiting_on_you";
 /** One run, ledger-agnostic. */
 export interface UnifiedRun {
 	/** Run id (the ledger row id; the captureId for a capture run). */
@@ -20227,10 +20211,9 @@ export interface OpenBlocker extends DependencyNodeRef {
 	replaces?: DependencyNodeRef;
 	hidden: boolean;
 	/**
-	 * It ENDED without delivering (cancelled, failed, archived, lost, closed
-	 * with required work open) and still holds the dependent: the work it
-	 * waited on never happened, so the dependent re-plans — remove the edge,
-	 * or link a replacement.
+	 * It ENDED without delivering (cancelled, failed, archived, lost) and still
+	 * holds the dependent: the work it waited on never happened, so the
+	 * dependent re-plans — remove the edge, or link a replacement.
 	 */
 	dropped: boolean;
 	/** Its own raw status, when the reader may see it. */
@@ -20917,13 +20900,6 @@ export interface PacketChildItem {
 	title: string;
 	status: string;
 	statusLabel: string;
-	/**
-	 * How it ENDED (`sessionClosedAs`): on a session-edge item (`blockedBy`,
-	 * `unblocks`, parent, children), so a blocker that closed with required
-	 * work open reads as not delivered (`openBlockerTitle`); `null` = not
-	 * ended. Absent on items of other sections.
-	 */
-	closedAs?: SessionClosedAs | null;
 }
 /**
  * A session of an EARLIER stage of this session's track, with what it produced.
@@ -29819,7 +29795,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				actor?: string | undefined;
 				cursor?: string | undefined;
 				limit?: number | undefined;
-				outcome?: "failed" | "paused" | "proposed" | "rejected" | "reverted" | "running" | "stopped" | "succeeded" | "waiting" | undefined;
+				outcome?: "failed" | "proposed" | "rejected" | "reverted" | "running" | "stopped" | "succeeded" | "waiting" | undefined;
 				projectId?: string | undefined;
 				sessionId?: string | undefined;
 				since?: string | undefined;
@@ -52096,6 +52072,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: PlaybookRunChoice;
 		}>;
+		saveFlow: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId?: string | undefined;
+				flowDefinition: {
+					edges: unknown[];
+					nodes: unknown[];
+				};
+				playbookId: string;
+				reasoning?: string | undefined;
+				source?: string | undefined;
+			};
+			meta: object;
+			output: {
+				automationId: string | null;
+				message: string;
+				proposalId: string;
+				status: "proposed";
+			} | {
+				automationId: string;
+				message: string;
+				proposalId: string | null;
+				status: "updated";
+			} | {
+				automationId: string;
+				message: string;
+				proposalId: string | null;
+				status: "created";
+			};
+		}>;
 		scorecard: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				playbookId: string;
@@ -55316,9 +55321,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					readonly status: "unavailable";
 				} | null | undefined;
 				phaseCategory: PlaybookStageCategory;
-				pillars?: {
+				pillars?: Pillar[] | {
 					readonly status: "unavailable";
-				} | Pillar[] | undefined;
+				} | undefined;
 				project: {
 					colorSlot: number | null;
 					createdAt: Date;
@@ -55338,9 +55343,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					workspaceId: string | null;
 				};
-				rootHealth?: {
+				rootHealth?: ProjectRootHealth | {
 					readonly status: "unavailable";
-				} | ProjectRootHealth | undefined;
+				} | undefined;
 				subject: ProjectSubject | null;
 				usedWorkspaceIds: string[];
 				usedWorkspaces: UsedWorkspaceRef[];
@@ -57341,7 +57346,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					subjectEntityId?: string | undefined;
 					workspaceId?: string | undefined;
 				} | undefined;
-				status?: "blocked_by_policy" | "cancelled" | "completed" | "failed" | "paused" | "proposed" | "running" | "skipped" | "waiting_on_you" | undefined;
+				status?: "cancelled" | "completed" | "failed" | "proposed" | "running" | "skipped" | undefined;
 			};
 			meta: object;
 			output: RunsPage;
