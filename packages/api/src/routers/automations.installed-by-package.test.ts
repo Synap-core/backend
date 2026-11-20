@@ -122,7 +122,7 @@ describe("installedByPackage is never the caller's to write", () => {
   });
 
   it("an agent's create never carries it into the proposal", async () => {
-    mockGetDb.mockResolvedValue({});
+    mockGetDb.mockResolvedValue({ ...NO_USERS });
     mockCheckPermission.mockResolvedValue({
       proposalId: "p1",
       proposalType: "automation.create",

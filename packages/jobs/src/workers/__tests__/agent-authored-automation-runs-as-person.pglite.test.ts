@@ -63,7 +63,8 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 // THE LADDER, keyed on the principal it judges: the agent's ladder says
 // "propose" for this write; a person is not an agent.
-vi.mock("@synap/database/agent-governance", () => ({
+vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   resolveAgentGovernanceDecision: async (input: { agentUserId: string }) => {
     h.ladder.push(input.agentUserId);
     return input.agentUserId === AGENT
