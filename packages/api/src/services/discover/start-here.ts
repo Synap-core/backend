@@ -114,7 +114,7 @@ export async function readHandedToYou(
       users,
       sessionStartedByAgentSql,
     } = await import("@synap/database");
-    const { OPEN_SESSION_STATUSES } =
+    const { IN_FLIGHT_SESSION_STATUSES } =
       await import("@synap-core/types/focus-sessions");
     const { movedWithinDaysSql } = await import("../status/status-facts.js");
     // Reach is exclusive (THE route): a bound agent is handed work through its
@@ -153,10 +153,7 @@ export async function readHandedToYou(
         and(
           eq(focusSessions.userId, userId),
           or(
-            inArray(
-              focusSessions.status,
-              OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
-            ),
+            inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
             and(stale, staleInWindow)
           ),
           drizzleSql`${agentUserId} = ANY(${focusSessions.agentIds})`,

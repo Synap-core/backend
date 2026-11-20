@@ -66,7 +66,6 @@ import {
   desc,
   drizzleSql,
   liveRunStatusWhere,
-  LIVE_RUN_STATUSES,
   setRunStatus,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
@@ -81,7 +80,10 @@ import {
   type SessionCriterion,
 } from "@synap/playbooks";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
-import { nameSharedKeyOutputs } from "@synap-core/types/units";
+import {
+  nameSharedKeyOutputs,
+  LIVE_RUN_STATUSES,
+} from "@synap-core/types/units";
 import { paramOwedSlots, PARAM_SLOT_CIRCUMSTANCE } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";

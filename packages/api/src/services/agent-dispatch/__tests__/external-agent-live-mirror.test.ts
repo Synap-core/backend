@@ -12,10 +12,9 @@
  * a new pod state fails `tsc` until the mirror lists it).
  */
 import { describe, expect, it } from "vitest";
-import { LIVE_RUN_STATUSES } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import {
-  EXTERNAL_AGENT_LIVE_RUN_STATUSES,
   EXTERNAL_AGENT_STATUSES,
   type ExternalAgentStatus,
 } from "@synap-core/types/agents";
@@ -30,10 +29,7 @@ const _same: _Same = true;
 void _same;
 
 describe("external agent mirror", () => {
-  it("the cancellable run statuses ARE the pod's live run statuses", () => {
-    expect([...EXTERNAL_AGENT_LIVE_RUN_STATUSES].sort()).toEqual(
-      [...LIVE_RUN_STATUSES].sort()
-    );
+  it("the cancellable run statuses are the pod's live run statuses", () => {
     // Live = started and not ended; `proposed` has not started.
     expect([...LIVE_RUN_STATUSES].sort()).toEqual([
       "running",

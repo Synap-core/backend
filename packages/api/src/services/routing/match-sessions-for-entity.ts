@@ -34,15 +34,13 @@ import {
   links,
   playbooks,
 } from "@synap/database";
-import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
+import { IN_FLIGHT_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import type { RouteCandidate } from "./suggest-routes.js";
 
 // SESSION-KIND-LENS-EXEMPT: a narrow projection into `RouteCandidate`s (id,
 // name, goal text, kind signal) — no session row reaches a consumer, so there
 // is no page for the kind / triage lenses to attach to.
 
-/** Sessions that are being worked — the open ones; `scheduled` has not started yet. */
-const RUNNING_STATUSES = OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled");
 /** Pool bound per entity before ranking (the ranker caps the reply). */
 const SESSION_POOL = 25;
 
@@ -69,7 +67,7 @@ export async function loadSessionCandidates(input: {
     .where(
       and(
         eq(focusSessions.userId, input.userId),
-        inArray(focusSessions.status, [...RUNNING_STATUSES]),
+        inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
         or(
           eq(focusSessions.subjectEntityId, input.entityId),
           // OR of scalar `=` params, never `= ANY(array)` (postgres.js

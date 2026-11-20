@@ -1,18 +1,8 @@
 /**
- * Status SETS read off a machine's declaration — THE way a reader names "the
- * statuses of these categories" (a session's open ones, a run's ended ones)
- * without hand-copying the words.
- *
- * Every declared machine (`SESSION_STATUS_DECLARATION`,
- * `RUN_STATUS_DECLARATION`, ...) maps each stored word to one of the five
- * categories. A list written out by hand drifts the day a word is added or
- * re-classified; a set derived here moves with the declaration. A reader that
- * deliberately differs from a category set (leaves one word out on purpose)
- * derives the set and names the exception beside it, never a second literal.
- * `__tripwires__/status-lists-derived.tripwire.test.ts` fails a new hand list.
- *
- * A leaf: its one import is a type, so the dependency-free status leaves
- * (`focus-sessions/statuses.ts`, `units/run-status.ts`) may import it.
+ * Status sets and categories read off a machine's declaration, so no reader
+ * hand-copies status words (`__tripwires__/status-lists-derived.tripwire.test.ts`
+ * fails a new hand list). A leaf with one type import: the status leaves may
+ * import it.
  */
 import type { LifecycleCategory } from "./option.js";
 
@@ -42,4 +32,14 @@ export function statusesInCategories<
   return Object.keys(declaration).filter((s) =>
     wanted.has(declaration[s]!.category)
   ) as StatusOfCategory<D, C>[];
+}
+
+/** The category of `status` in `declaration`; `null` for a value it does not declare. */
+export function categoryOf(
+  declaration: StatusDeclaration,
+  status: string | null | undefined
+): LifecycleCategory | null {
+  return status != null && Object.hasOwn(declaration, status)
+    ? declaration[status]!.category
+    : null;
 }

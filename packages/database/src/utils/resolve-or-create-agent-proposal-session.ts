@@ -29,7 +29,7 @@
  */
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
+import { IN_FLIGHT_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { workspaces } from "../schema/workspaces.js";
@@ -102,14 +102,6 @@ export function resolveClientKey(input: {
   );
 }
 
-/**
- * Statuses a client's current session may hold: the pod's open statuses
- * except `scheduled` (a future slot).
- */
-const CLIENT_SESSION_STATUSES = OPEN_SESSION_STATUSES.filter(
-  (s) => s !== "scheduled"
-);
-
 export interface ClientSession {
   id: string;
   /** True when this door auto-opened it (not started by the client itself). */
@@ -176,7 +168,7 @@ export async function findClientSession(
     .where(
       and(
         eq(focusSessions.userId, userId),
-        inArray(focusSessions.status, [...CLIENT_SESSION_STATUSES]),
+        inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
         sql`${focusSessions.metadata} ->> 'clientKey' = ${clientKey}`,
         onlyAutoOpened ? sql`${autoOpened}` : undefined,
         // An auto-opened session is the client's CURRENT one only while it saw

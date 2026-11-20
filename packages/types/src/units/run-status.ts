@@ -7,6 +7,7 @@
  */
 import type { LifecycleCategory } from "../lifecycle/option.js";
 import {
+  categoryOf,
   statusesInCategories,
   type StatusOfCategory,
 } from "../lifecycle/category-sets.js";
@@ -58,10 +59,7 @@ export const RUN_STATUS_DECLARATION = {
 export function runStatusCategory(
   status: string | null | undefined
 ): LifecycleCategory | null {
-  if (status == null) return null;
-  return Object.hasOwn(RUN_STATUS_DECLARATION, status)
-    ? RUN_STATUS_DECLARATION[status as PlaybookRunStatusValue].category
-    : null;
+  return categoryOf(RUN_STATUS_DECLARATION, status);
 }
 
 /**

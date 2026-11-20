@@ -8,10 +8,10 @@ import {
   eq,
   inArray,
   getWorkspaceMembership,
-  LIVE_RUN_STATUSES,
   setRunStatus,
   transitionProposal,
 } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 // `createLinks` is the ONE link door and it lives in @synap/api, not
 // @synap/database — the database package's `ensure-external-channel.ts` says so
 // explicitly. Importing it from @synap/database is a compile error, which is how

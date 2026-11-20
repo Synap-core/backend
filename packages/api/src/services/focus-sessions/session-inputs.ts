@@ -36,17 +36,9 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { createLink } from "../links/links-service.js";
 import { isOutputRefVisible } from "./assert-output-ref-visible.js";
-import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "./session-statuses.js";
 
 const logger = createLogger({ module: "focus-sessions/session-inputs" });
-
-/**
- * Statuses a session can take an input in: it is still being worked — the
- * open statuses except `scheduled` (an appointment).
- */
-const ATTACHABLE_STATUSES = OPEN_SESSION_STATUSES.filter(
-  (s) => s !== "scheduled"
-);
 
 export type AttachSessionInputResult =
   | {
@@ -97,7 +89,9 @@ export async function attachSessionInput(input: {
     )
     .limit(1);
   if (!session) return { status: "not_found", what: "session" };
-  if (!(ATTACHABLE_STATUSES as readonly string[]).includes(session.status)) {
+  if (
+    !(IN_FLIGHT_SESSION_STATUSES as readonly string[]).includes(session.status)
+  ) {
     return { status: "closed", sessionStatus: session.status };
   }
 
