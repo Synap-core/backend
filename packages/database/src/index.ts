@@ -501,6 +501,7 @@ export {
 export {
   RUN_PAUSE_DEFAULT_HOLD,
   claimRun,
+  claimRunAsAgent,
   claimedHolderSql,
   runHolder,
   setRunStatus,

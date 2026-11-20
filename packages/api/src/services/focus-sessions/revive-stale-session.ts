@@ -20,17 +20,16 @@
  *
  * An AGENT's write is also its claim: a run on that session handed to it (or
  * to an agent not named yet) and still `queued` / `blocked` is `running` now
- * (`claimRun`) — the agent picked up the work it was handed. Both writes are conditional
+ * (`claimRunAsAgent`) — the agent picked up the work it was handed. Both writes are conditional
  * on the stale status AND on the session being the writer's own (`userId` —
  * the human an agent acts for), so a session that is not stale, or a handle
  * that names someone else's session, costs one indexed no-op UPDATE.
  */
 import {
   db,
-  and,
   eq,
   drizzleSql,
-  claimRun,
+  claimRunAsAgent,
   focusSessions,
   playbookRuns,
   setRunStatus,
@@ -91,17 +90,6 @@ export async function reviveSessionForWrite(write: {
   const sessionId = sessionToReviveForWrite(write);
   if (!sessionId) return;
   try {
-    if (write.agentUserId) {
-      await claimRun(db, {
-        where: and(
-          eq(playbookRuns.sessionId, sessionId),
-          drizzleSql`${playbookRuns.holder} ->> 'kind' = 'agent'`,
-          drizzleSql`coalesce(${playbookRuns.holder} ->> 'id', ${write.agentUserId}) = ${write.agentUserId}`
-        ),
-        holder: { kind: "agent", id: write.agentUserId },
-        reason: "Its agent picked the work up.",
-      });
-    }
     const result = await reviveStaleSession(sessionId, write.userId);
     if (result.sessionRevived) {
       logger.info(
@@ -114,6 +102,16 @@ export async function reviveSessionForWrite(write: {
       { err, sessionId },
       "stale-session revive failed — the write proceeds, the session stays stale"
     );
+  }
+  if (write.agentUserId) {
+    try {
+      await claimRunAsAgent(db, sessionId, write.agentUserId);
+    } catch (err) {
+      logger.error(
+        { err, sessionId },
+        "the agent's claim on its run failed — the write proceeds, the run stays queued"
+      );
+    }
   }
 }
 

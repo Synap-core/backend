@@ -312,3 +312,24 @@ export async function claimRun(
     set: { holder: claimedHolderSql(input.holder) },
   });
 }
+
+/**
+ * An agent's acknowledgment of the work handed to it — its first write
+ * attributed to the session, or its wait on the session's answers: the run
+ * of that session handed to it (or to an agent not named yet) is claimed.
+ */
+export async function claimRunAsAgent(
+  db: Db | Tx,
+  sessionId: string,
+  agentUserId: string
+): Promise<SetRunStatusResult> {
+  return claimRun(db, {
+    where: and(
+      eq(playbookRuns.sessionId, sessionId),
+      sql`${playbookRuns.holder} ->> 'kind' = 'agent'`,
+      sql`coalesce(${playbookRuns.holder} ->> 'id', ${agentUserId}) = ${agentUserId}`
+    ),
+    holder: { kind: "agent", id: agentUserId },
+    reason: "Its agent picked the work up.",
+  });
+}
