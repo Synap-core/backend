@@ -19,8 +19,8 @@
  * person leaving the space is what ends its access.
  */
 import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
-import { automations, workspaceMembers } from "../schema/index.js";
-import { agentsOfPerson, personOfOwner } from "./owner-person.js";
+import { automations, users, workspaceMembers } from "../schema/index.js";
+import { personOfOwner } from "./owner-person.js";
 import {
   AUTOMATION_AUDIENCE_KEY,
   type AutomationAudience,
@@ -66,10 +66,13 @@ export async function pauseAutomationsOfRemovedMember(
   database: any,
   params: { workspaceId: string; userId: string }
 ): Promise<number> {
-  const owners = [
-    params.userId,
-    ...(await agentsOfPerson(database, params.userId)),
-  ];
+  const agents: Array<{ id: string }> = await database
+    .select({ id: users.id })
+    .from(users)
+    .where(
+      and(eq(users.userType, "agent"), eq(users.createdByUserId, params.userId))
+    );
+  const owners = [params.userId, ...agents.map((a) => a.id)];
   const paused: Array<{ id: string }> = await database
     .update(automations)
     .set({
