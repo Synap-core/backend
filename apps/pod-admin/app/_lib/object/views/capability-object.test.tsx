@@ -21,6 +21,9 @@ const h = vi.hoisted(() => ({
   container: null as unknown,
   approveCalls: [] as unknown[],
   switches: new Map<string, (on: boolean) => void>(),
+  /** `governanceRules.listAll`'s rows; `rulesFailed` = the read failed. */
+  rules: [] as unknown[],
+  rulesFailed: false,
 }));
 
 vi.mock("../../../../lib/trpc", async () => {
@@ -85,7 +88,37 @@ vi.mock("../../../../lib/trpc", async () => {
         },
       },
       governanceRules: {
-        // Each action asks first, the pod's answer when no rule names it.
+        // The approval rows (lane W3): the page reads its tool's rows here.
+        listAll: {
+          useQuery: () =>
+            h.rulesFailed
+              ? {
+                  data: undefined,
+                  isLoading: false,
+                  isSuccess: false,
+                  isError: true,
+                  error: {
+                    message: "boom",
+                    data: { code: "INTERNAL_SERVER_ERROR" },
+                  },
+                  refetch: () => undefined,
+                }
+              : {
+                  data: { rules: h.rules },
+                  isLoading: false,
+                  isSuccess: true,
+                  isError: false,
+                  error: null,
+                  refetch: () => undefined,
+                },
+        },
+        create: {
+          useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+        },
+        revoke: {
+          useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+        },
+        // Whether each action may run on its own (a public post never may).
         actionModes: {
           useQuery: (input: { actions: string[] }) => ({
             data: {
@@ -191,6 +224,8 @@ beforeEach(() => {
   h.approveCalls.length = 0;
   h.switches.clear();
   h.container = null;
+  h.rules = [];
+  h.rulesFailed = false;
 });
 
 describe("a capability whose access to the service is off", () => {
@@ -293,5 +328,118 @@ describe("an add-on's page", () => {
     expect(page).toContain("Apify");
     expect(page).toContain("It runs through Apify’s access");
     expect(html).not.toContain("data-addons");
+  });
+});
+
+/* ── "When an AI uses it": the approval rows (lane W3) ─────────────────── */
+
+const AGENT = "44444444-4444-4444-8444-444444444444";
+let seq = 0;
+const rule = (over: Record<string, unknown>) => ({
+  id: `rule-${++seq}`,
+  principalKind: "any",
+  agentUserId: null,
+  agentLabel: null,
+  principalClass: null,
+  scopeKind: "pod",
+  workspaceId: null,
+  targetKind: "capability",
+  targetPattern: CAP,
+  targetProfile: null,
+  verdict: "auto",
+  sourceProposalId: null,
+  createdBy: "user:founder",
+  ...over,
+});
+
+describe("a tool's page reads the approval rows", () => {
+  it("names each action in words, never its raw id (finding 47ff4216)", () => {
+    h.card = hetzner();
+    const html = render();
+    const page = text(html);
+    // The catalog labels the action with its id; the page says it in words.
+    expect(page).not.toMatch(/>\s*hcloud_create_server\s*</);
+    expect(html).not.toMatch(/>hcloud_create_server</);
+    expect(page).toContain("Hcloud create server");
+  });
+
+  it("no row: every AI asks first, by default, on the tool and each action", () => {
+    h.card = hetzner();
+    const html = render();
+    expect(html).toContain(
+      'data-everyone-mode="ask" data-everyone-from="default"'
+    );
+    expect(html).not.toContain('data-everyone-mode="auto"');
+  });
+
+  it("everyone × the whole tool → auto: the top control says so and each action follows it", () => {
+    h.card = hetzner();
+    h.rules = [rule({ targetPattern: CAP, verdict: "auto" })];
+    const html = render();
+    expect(html).toContain(
+      'data-everyone-mode="auto" data-everyone-from="tool"'
+    );
+    // Never the old lie: an action with no row of its own is NOT "asks first".
+    expect(html).not.toContain('data-everyone-from="default"');
+    expect(text(html)).toContain("As the whole tool: Runs on its own");
+  });
+
+  it("a row on one action outranks the tool's row", () => {
+    h.card = hetzner();
+    h.rules = [
+      rule({ targetPattern: CAP, verdict: "auto" }),
+      rule({ targetPattern: "hcloud_create_server", verdict: "deny" }),
+    ];
+    const html = render();
+    expect(html).toContain(
+      'data-everyone-mode="never" data-everyone-from="action"'
+    );
+  });
+
+  it("an agent's exception is listed under its action, a door to the agent with Take back", () => {
+    h.card = hetzner();
+    h.rules = [
+      rule({
+        principalKind: "agent",
+        agentUserId: AGENT,
+        agentLabel: "Scout",
+        targetPattern: "hcloud_list_servers",
+        verdict: "auto",
+      }),
+    ];
+    const html = render();
+    expect(html).toContain("data-approval-exceptions");
+    expect(html).toContain(`href="/agents/${AGENT}"`);
+    expect(text(html)).toContain("Take back");
+    // The exception is not every AI's mode.
+    expect(html).not.toContain('data-everyone-mode="auto"');
+  });
+
+  it("a member reads the rows without doors or a way back", () => {
+    h.card = hetzner();
+    h.rules = [
+      rule({
+        principalKind: "agent",
+        agentUserId: AGENT,
+        agentLabel: "Scout",
+        targetPattern: CAP,
+      }),
+    ];
+    const html = render(false);
+    expect(html).toContain("data-approval-exceptions");
+    expect(html).not.toContain(`href="/agents/${AGENT}"`);
+    expect(text(html)).not.toContain("Take back");
+    expect(text(html)).toContain("A pod admin sets how it runs for every AI.");
+  });
+
+  it("a failed read says so with a retry, never 'asks first'", () => {
+    h.card = hetzner();
+    h.rulesFailed = true;
+    const html = render();
+    expect(html).toContain("data-approvals-failed");
+    const page = text(html);
+    expect(page).toContain("Its approvals couldn’t be read.");
+    expect(page).toContain("Retry");
+    expect(html).not.toContain("data-everyone-mode");
   });
 });

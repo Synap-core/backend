@@ -1,7 +1,7 @@
 /**
  * Where an agent's trust is changed, for this viewer. The page that widens or
  * revokes what an agent may do alone is the console's Approvals grid,
- * narrowed to THIS agent (`/approvals?view=grid&agent=<id>`: each cell's
+ * narrowed to THIS agent (`/approvals?view=work&agent=<id>`: each cell's
  * Widen / Revoke). How its writes land pod-wide is set on its own page, above this
  * door (`agentUsers.setPosture`). What an agent may do is
  * running the pod, and pod admin runs the pod (decision 94cd8636), yet the

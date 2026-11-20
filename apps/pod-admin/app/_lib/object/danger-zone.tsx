@@ -11,6 +11,7 @@
 import { useState, type ReactNode } from "react";
 import { Accordion, AccordionItem, Button } from "@heroui/react";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
+import { DISCLOSURE_INDICATOR_PROPS } from "./disclosure";
 
 export interface DangerAction {
   key: string;
@@ -46,6 +47,7 @@ export function DangerZone({
         <AccordionItem
           key="danger"
           aria-label={title}
+          {...DISCLOSURE_INDICATOR_PROPS}
           title={
             <span className="text-[12.5px] text-status-down">{title}</span>
           }

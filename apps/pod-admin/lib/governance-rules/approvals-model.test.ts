@@ -284,3 +284,59 @@ describe("a tool is named by its words, never its raw id", () => {
     }
   });
 });
+
+describe("lane W3: the catalog's id-shaped labels, skill ids and member tool rows", () => {
+  const RAW = /\b[a-z0-9]+(?:_[a-z0-9]+)+\b/;
+  const CARDS = [
+    {
+      id: "cap-apify",
+      name: "Apify",
+      // The catalog labels most actions with their id (capability-registry).
+      verbs: [
+        {
+          verbId: "apify_run_actor",
+          label: "apify_run_actor",
+          skillId: "skill-run",
+        },
+      ],
+    },
+  ];
+  const toolName = toolNamesOf(CARDS, [
+    { id: "cap-apify", members: [{ kind: "tool", id: "tool-row-apify" }] },
+  ]);
+
+  it("an action labelled with its id is named in words, with its tool", () => {
+    const title = approvalTitle(row({ targetPattern: "apify_run_actor" }), {
+      toolName,
+    });
+    expect(title).not.toMatch(RAW);
+    expect(title).toMatch(/\(Apify\)$/);
+  });
+
+  it("a row naming the action's skill row id reads the same words", () => {
+    expect(
+      approvalTitle(row({ targetPattern: "skill-run" }), { toolName })
+    ).toBe(
+      approvalTitle(row({ targetPattern: "apify_run_actor" }), { toolName })
+    );
+  });
+
+  it("a row naming a member tool row (made from a grant) reads the tool", () => {
+    expect(
+      approvalTitle(row({ targetPattern: "tool-row-apify" }), { toolName })
+    ).toBe("Apify");
+  });
+
+  it("the Tool filter can hold a whole tool: the page's toolKey groups its actions", () => {
+    const toolKey = (r: ApprovalRowLike) =>
+      r.targetPattern === "apify_run_actor" ? "cap-apify" : approvalToolKey(r);
+    const f = { agent: null, tool: "cap-apify", verdict: null, space: null };
+    expect(
+      approvalMatches(row({ targetPattern: "apify_run_actor" }), f, toolKey)
+    ).toBe(true);
+    // Without it, the filter matches the pattern itself (W2's behaviour).
+    expect(approvalMatches(row({ targetPattern: "apify_run_actor" }), f)).toBe(
+      false
+    );
+  });
+});
