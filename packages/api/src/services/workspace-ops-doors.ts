@@ -28,6 +28,7 @@ import {
   type WorkspacePrimarySurface,
 } from "@synap/database";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
+import { resolveConfinedWorkspace } from "../routers/hub-protocol/confine-workspace.js";
 import { workspacesRouter } from "../routers/workspaces.js";
 import { entitiesRouter } from "../routers/entities.js";
 import { profilesRouter } from "../routers/profiles.js";
@@ -111,11 +112,21 @@ export async function setStartPageDoor(
   });
 }
 
-/** Move entities into a workspace (best-effort per entity). */
+/**
+ * Move entities into a workspace (best-effort per entity). A key bound to a
+ * workspace moves records only into it (403 otherwise, TF-1): the procedure
+ * takes the destination from its input, and the binding confines only the
+ * caller context's workspace.
+ */
 export async function moveEntitiesDoor(
   actor: WorkspaceOpsActor,
   input: { entityIds: string[]; workspaceId: string; reason?: string }
 ) {
+  resolveConfinedWorkspace(
+    actor.keyType,
+    actor.keyWorkspaceId,
+    input.workspaceId
+  );
   const ctx = await callerCtx(actor, null);
   return entitiesRouter.createCaller(ctx).moveToWorkspace({
     entityIds: input.entityIds,

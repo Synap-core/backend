@@ -10,7 +10,7 @@
  * person can write, and an agent that is no member of B moved records into B.
  *
  * Driven through the one door MCP `synap_move_entities` and Hub
- * `POST /workspaces/move-entities` share (`moveEntitiesDoor`) → tRPC
+ * `POST /entities/move` share (`moveEntitiesDoor`) → tRPC
  * `entities.moveToWorkspace` → the REAL `checkPermissionOrPropose` (grant
  * rung, membership RBAC, agent ladder, the proposal insert), on PGlite with
  * every @synap/database table. The key's grant and acting agent are entered
