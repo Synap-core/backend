@@ -73,6 +73,7 @@ async function insertProposal(p: {
   status: string;
   proposalType: string;
   targetType: string;
+  targetId?: string;
   data: Record<string, unknown>;
 }): Promise<string> {
   const id = randomUUID();
@@ -83,7 +84,7 @@ async function insertProposal(p: {
       id,
       WS,
       p.targetType,
-      randomUUID(),
+      p.targetId ?? randomUUID(),
       p.proposalType,
       p.status,
       PERSON,
@@ -169,7 +170,7 @@ describe("stampLanded — what an approval made, written once", () => {
     ]);
   });
 
-  it("joins the apply's records; a run's primary is its session, a key is nothing", async () => {
+  it("joins the apply's records; a run's primary is its session, a key is no object", async () => {
     const s1 = randomUUID();
     const s2 = randomUUID();
     const run = await insertProposal({
@@ -184,10 +185,12 @@ describe("stampLanded — what an approval made, written once", () => {
       { kind: "session", id: s2, role: "created" },
     ]);
 
+    const agentId = randomUUID();
     const key = await insertProposal({
       status: "approved",
       proposalType: "connect",
       targetType: "agent",
+      targetId: agentId,
       data: {},
     });
     await stampLanded(key, {
@@ -195,7 +198,10 @@ describe("stampLanded — what an approval made, written once", () => {
       primaryKind: null,
       effect: { applied: "verified", rows: 1, ids: [randomUUID()], subject: "api_keys" },
     });
-    expect(await landedOf(key)).toEqual([]);
+    // The key and the grant are not objects; the agent it connected is.
+    expect(await landedOf(key)).toEqual([
+      { kind: "agent", id: agentId, role: "updated" },
+    ]);
   });
 
   it("a verified effect's ids land under the kind of the table it wrote", async () => {

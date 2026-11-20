@@ -14,6 +14,7 @@ import {
   landedFromRecord,
   landedKindOf,
   landedRoleOf,
+  landedTargetOf,
   type ProposalLandedRef,
 } from "@synap-core/types/proposals/landed";
 import { isLikelyUUID } from "@synap-core/types/proposals";
@@ -25,7 +26,13 @@ const APPLIED = new Set(["approved", "auto_approved", "partially_approved"]);
 
 /** What an approval landed, from the row as the apply left it and its result. Pure. */
 export function landedOfApproval(input: {
-  row: { proposalType?: string | null; targetType?: string | null; data?: unknown };
+  row: {
+    status?: string | null;
+    proposalType?: string | null;
+    targetType?: string | null;
+    targetId?: string | null;
+    data?: unknown;
+  };
   result: Pick<ProposalExecutorResult, "primaryId" | "primaryKind" | "effect">;
 }): ProposalLandedRef[] {
   const out = [...landedFromRecord(input.row.data)];
@@ -47,6 +54,10 @@ export function landedOfApproval(input: {
   if (effect?.applied === "verified") {
     for (const id of effect.ids ?? []) add(effect.subject, id);
   }
+  if (out.length === 0) {
+    const target = landedTargetOf(input.row);
+    if (target) out.push(target);
+  }
   return out;
 }
 
@@ -67,6 +78,7 @@ export async function stampLanded(
         status: true,
         proposalType: true,
         targetType: true,
+        targetId: true,
         data: true,
       },
     });

@@ -272,9 +272,20 @@ export function proposalLanded(row: ProposalLandedRow): ProposalLandedRef[] {
   if (stamp) return stamp;
   const recorded = landedFromRecord(row.data);
   if (recorded.length > 0) return recorded;
+  const target = landedTargetOf(row);
+  return target ? [target] : [];
+}
+
+/**
+ * An applied row's target as what it landed, with the role its verb gives:
+ * what is left to say when nothing else recorded what the apply touched.
+ */
+export function landedTargetOf(
+  row: ProposalLandedRow
+): ProposalLandedRef | null {
   const role = landedRoleOf(row);
-  const target = role ? intentObject(row) : null;
-  return target && role ? [{ ...target, role }] : [];
+  const target = role && isApplied(row) ? intentObject(row) : null;
+  return target && role ? { ...target, role } : null;
 }
 
 /** One object a proposal names, for every surface. */
