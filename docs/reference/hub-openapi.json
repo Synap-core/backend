@@ -6953,8 +6953,10 @@
         "properties": {
           "kitId": { "type": "string" },
           "hash": { "type": "string" },
+          "detail": { "type": "string", "enum": ["summary", "full"] },
           "components": { "type": "object", "additionalProperties": {} },
           "layout": { "type": "object", "additionalProperties": {} },
+          "unknown": { "type": "array", "items": { "type": "string" } },
           "grid": { "type": "object", "additionalProperties": {} },
           "frames": {},
           "generatedAt": { "type": "string" },
@@ -6971,7 +6973,7 @@
             "required": ["kitId", "hash", "react", "files"]
           }
         },
-        "required": ["kitId", "hash", "components", "layout", "grid"]
+        "required": ["kitId", "hash", "detail", "components", "layout", "grid"]
       },
       "DesignKitFile": {
         "type": "object",
@@ -53431,7 +53433,7 @@
       "get": {
         "tags": ["Designs"],
         "summary": "The design catalog the pod checks designs against",
-        "description": "The installed `design` capability's catalog snapshot: the kit (`kitId`, `hash`), its components and their props, the canvas blocks (`layout`), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets. With `appId`, the catalog of that app's designs: when the app names its own kit (`design-kit`), the kit's components with Synap's canvas blocks, a hash naming both, and `kit` (React major, the two code files' sha256, how a dropped block starts). 412 when no catalog is installed or the app's kit cannot be read (never an empty catalog, never Synap's in place of the app's).",
+        "description": "The installed `design` capability's catalog snapshot: the kit (`kitId`, `hash`), its components and their props, the canvas blocks (`layout`), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets. With `appId`, the catalog of that app's designs: when the app names its own kit (`design-kit`), the kit's components with Synap's canvas blocks, a hash naming both, and `kit` (React major, the two code files' sha256, how a dropped block starts). 412 when no catalog is installed or the app's kit cannot be read (never an empty catalog, never Synap's in place of the app's). `detail=summary` answers prop names and kinds only; `components=A,B` answers those blocks in full. `hash` is in every answer.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -53443,6 +53445,28 @@
             "required": false,
             "description": "The app (devplane_app) whose designs to check: its own kit when it names one (`design-kit`), else Synap's.",
             "name": "appId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["summary", "full"],
+              "description": "full (default here): every prop spec. summary: every block's prop names and kinds, no select options."
+            },
+            "required": false,
+            "description": "full (default here): every prop spec. summary: every block's prop names and kinds, no select options.",
+            "name": "detail",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Comma-separated block names (kit components or canvas blocks): only these, in full. Names the catalog does not declare come back in `unknown`."
+            },
+            "required": false,
+            "description": "Comma-separated block names (kit components or canvas blocks): only these, in full. Names the catalog does not declare come back in `unknown`.",
+            "name": "components",
             "in": "query"
           }
         ],
@@ -53456,7 +53480,7 @@
             }
           },
           "400": {
-            "description": "Not an app",
+            "description": "Not an app, or a bad `detail` / `components`",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
