@@ -37,9 +37,9 @@
  *   `case "custom"`, so it falls through to `default` and compiles to the
  *   DAILY expression. An option labelled "custom" that silently means "every
  *   day" is the silent-mangle this file exists to prevent.
- * • A timezone control. Nothing on the pod
- *   reads the timezone the grammar stores, so a picker for it would be a
- *   control whose value has no consumer. Refusing a field is honest.
+ * • A timezone control. The pod reads a stored `timezone` (the scheduler's
+ *   `nextCronRunAt`, `@synap/shared-utils`), but every entry below is the
+ *   pod's UTC schedule; a picker is a later composition, like the time one.
  *
  * ── Why the labels are local copy and not the vocabulary door ──────────────
  * `.claude/rules/vocabulary.md` forbids a local label map for a domain value,
@@ -70,25 +70,13 @@ export interface CronRecurrence {
 const AT = "09:00";
 
 /**
- * The zone every dated label names, because the pod schedules in it.
- *
- * ⚠️ A BARE HOUR HERE WAS A LIE. `computeNextRunAt` matches with process-local
- * accessors, so a rule fires on the WORKER's clock; a reader in Paris seeing
- * "Every Monday at 09:00" got 11:00 in summer. Nothing errors, nothing looks
- * empty — the rule simply runs at an hour nobody chose, which is the worst
- * shape a defect can have on this surface.
- *
- * It is safe to state UTC only because the runner image now PINS it
- * (`synap-backend/deploy/Dockerfile`, `ENV TZ=UTC`). Before that it was UTC by
- * accident — `node:20-alpine` ships no `/etc/localtime` — and a label may not
- * assert something that is merely likely.
- *
- * ⚠️ This is a HONEST LABEL, not the fix. The fix is per-author zones:
- * `toBackendTrigger` already stores `timezone: cronTimezone ?? "UTC"` and
- * NOTHING reads it back — a stamp nobody earned. When `computeNextRunAt` reads
- * it and relay defaults it to the device zone, these labels can drop the suffix
- * and say the user's own time. Until then, naming the zone is the only
- * statement that is true for every reader.
+ * The zone every OFFERED label names. An offered recurrence carries no
+ * `cronTimezone`, so `toBackendTrigger` stores `timezone: "UTC"` and the
+ * scheduler reads it in UTC (`nextCronRunAt`, `@synap/shared-utils`, ticket
+ * 592930c8: until then the stored zone was never read and every rule ran on
+ * the worker's clock). A label always names its zone: a bare "09:00" read in
+ * Paris is an hour nobody chose. A stored rule with its own zone says that
+ * zone ({@link cronWords}).
  */
 const ZONE = "UTC";
 
@@ -206,11 +194,16 @@ function joinWords(words: readonly string[]): string {
 /**
  * A cron expression as words, in the phrasing of {@link CRON_RECURRENCES}
  * ("Every day at 09:00 UTC", "Every Monday at 09:00 UTC", "On the 1st of the
- * month, at 09:00 UTC"). Only the shapes `parseCron` round-trips are phrased —
- * a step, range or list it would misread (`*\/15`) returns null, never a
- * confident wrong sentence.
+ * month, at 09:00 UTC"), naming the zone the trigger is read in (`timezone`,
+ * the stored `triggerConfig.timezone`; absent = UTC): "Every day at 06:50
+ * Europe/Paris". Only the shapes `parseCron` round-trips are phrased — a step,
+ * range or list it would misread (`*\/15`) returns null, never a confident
+ * wrong sentence.
  */
-export function cronWords(expression: string): string | null {
+export function cronWords(
+  expression: string,
+  timezone?: string | null
+): string | null {
   const parts = expression.trim().split(/\s+/);
   if (parts.length !== 5) return null;
   const [m, h, dom, mon, dow] = parts as [
@@ -227,7 +220,7 @@ export function cronWords(expression: string): string | null {
   if (h === "*") return dom === "*" && dow === "*" ? "Every hour" : null;
 
   const parsed = parseCron(expression.trim());
-  const at = `at ${parsed.cronTime} ${ZONE}`;
+  const at = `at ${parsed.cronTime} ${timezone || ZONE}`;
   switch (parsed.cronFrequency) {
     case "daily":
       return `Every day ${at}`;

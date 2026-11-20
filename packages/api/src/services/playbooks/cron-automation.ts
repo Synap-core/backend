@@ -14,8 +14,9 @@
  *   - the playbooks `create` / `update` tRPC mutations, and
  *   - the workspace-definition materializer (`automations[]` → playbook_run).
  *
- * Cron `nextRunAt` is computed by REUSING the scheduler's `computeNextRunAt`
- * (imported from the worker) — there is deliberately no second cron parser here.
+ * Cron `nextRunAt` is the pod's one cron clock, `nextCronRunAt`
+ * (`@synap/shared-utils`), the one the scheduler fires with. A playbook
+ * schedule names no zone, so it is read in UTC like its trigger says.
  *
  * Pure domain side effect — the caller MUST have already gated the parent
  * mutation (checkPermissionOrPropose); these automation writes ride that
@@ -37,8 +38,7 @@ import {
 import type { Playbook } from "@synap/database/schema";
 import type { PlaybookSchedule, PlaybookScheduleMode } from "@synap/playbooks";
 import { normalizePlaybookScheduleMode } from "@synap/playbooks";
-// Reuse the scheduler's cron parser — do NOT add a second one.
-import { computeNextRunAt } from "@synap/jobs/workers/automation-cron-scheduler.js";
+import { nextCronRunAt } from "@synap/shared-utils";
 // Same validator the automations create/update door runs — this module writes
 // `automations` directly and would otherwise bypass it entirely.
 import { flowValidationErrorMessage } from "../automations/validate-flow.js";
@@ -329,7 +329,7 @@ export async function materializePlaybookCronAutomation(
     // Who each run is handed to — also the user's words on the schedule.
     handToAgentId: schedule.handToAgentId,
   });
-  const nextRunAt = computeNextRunAt(schedule.cron, new Date());
+  const nextRunAt = nextCronRunAt(schedule.cron, new Date());
 
   // This path writes `automations` DIRECTLY, so it never meets the create/update
   // door's `flowValidationErrorMessage`. Run the SAME validator here: the flow is

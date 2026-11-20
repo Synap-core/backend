@@ -129,6 +129,7 @@ import {
   isUnboundedFullAccess,
 } from "../access/grant-door-fence.js";
 import { TRPCError } from "@trpc/server";
+import { isCronTimezone, nextCronRunAt } from "@synap/shared-utils";
 import {
   decodeDefinitionCursor,
   encodeDefinitionCursor,
@@ -536,62 +537,6 @@ async function loadFlowValidationResolvers(
 }
 
 /**
- * Compute next cron run time by forward-scanning from a base date.
- * Supports standard 5-field cron (minute hour dayOfMonth month dayOfWeek).
- */
-function computeNextCronRunAt(cronExpr: string, fromDate: Date): Date | null {
-  const parts = cronExpr.trim().split(/\s+/);
-  if (parts.length !== 5) return null;
-
-  const [minExpr, hourExpr, domExpr, monthExpr, dowExpr] = parts;
-  const dayNames: Record<string, number> = {
-    SUN: 0,
-    MON: 1,
-    TUE: 2,
-    WED: 3,
-    THU: 4,
-    FRI: 5,
-    SAT: 6,
-  };
-
-  function matches(field: string, value: number): boolean {
-    if (field === "*") return true;
-    if (field.startsWith("*/")) {
-      const step = parseInt(field.slice(2), 10);
-      return step > 0 && value % step === 0;
-    }
-    for (const v of field.split(",")) {
-      if (v.includes("-")) {
-        const [s, e] = v.split("-").map(Number);
-        if (value >= s && value <= e) return true;
-        continue;
-      }
-      const resolved = dayNames[v.toUpperCase()] ?? parseInt(v, 10);
-      if (resolved === value) return true;
-    }
-    return false;
-  }
-
-  const candidate = new Date(fromDate);
-  candidate.setSeconds(0, 0);
-  candidate.setMinutes(candidate.getMinutes() + 1);
-
-  for (let i = 0; i < 366 * 24 * 60; i++) {
-    if (
-      matches(minExpr, candidate.getMinutes()) &&
-      matches(hourExpr, candidate.getHours()) &&
-      matches(domExpr, candidate.getDate()) &&
-      matches(monthExpr, candidate.getMonth() + 1) &&
-      matches(dowExpr, candidate.getDay())
-    ) {
-      return candidate;
-    }
-    candidate.setMinutes(candidate.getMinutes() + 1);
-  }
-  return null;
-}
-
-/**
  * One-line human summary of an entity-create trigger for a UI card: the kind
  * the rule's filter names, or any entity when it names none.
  */
@@ -677,6 +622,27 @@ function assertValidAudience(triggerConfig: unknown): void {
 }
 
 /**
+ * CREATE/UPDATE-DOOR GATE for a cron trigger's `timezone` — asked of the SAME
+ * clock the scheduler fires with (`isCronTimezone` → `nextCronRunAt`), so the
+ * door never stores a zone the scheduler would park as unschedulable. Absent =
+ * UTC, every row written before zones were read.
+ */
+function assertValidCronTimezone(
+  triggerType: string,
+  triggerConfig: Record<string, unknown>
+): void {
+  if (triggerType !== "cron") return;
+  const timezone = triggerConfig.timezone;
+  if (timezone === undefined || timezone === null) return;
+  if (typeof timezone !== "string" || !isCronTimezone(timezone)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Unknown time zone ${JSON.stringify(timezone)}: triggerConfig.timezone must be an IANA time zone name such as "Europe/Paris" or "UTC" (leave it out for UTC).`,
+    });
+  }
+}
+
+/**
  * CREATE/UPDATE-DOOR GATE for an AI fan-out over an unfiltered `query` — THE
  * rule (`unfilteredAiFanoutError`, @synap-core/types/automations). Only the
  * flow being submitted is checked; a stored automation is never rewritten.
@@ -736,6 +702,7 @@ async function prepareAutomationForMaterialization(
   }
   assertValidDailyCap(input.triggerConfig);
   assertValidAudience(input.triggerConfig);
+  assertValidCronTimezone(input.triggerType, input.triggerConfig);
 
   const resolvers = await loadFlowValidationResolvers(
     database,
@@ -955,7 +922,13 @@ async function insertAutomationAfterGovernance(
   let nextRunAt: Date | null = null;
   if (status === "active" && input.triggerType === "cron") {
     const expression = input.triggerConfig.expression as string | undefined;
-    if (expression) nextRunAt = computeNextCronRunAt(expression, new Date());
+    if (expression) {
+      nextRunAt = nextCronRunAt(
+        expression,
+        new Date(),
+        input.triggerConfig.timezone as string | undefined
+      );
+    }
   }
 
   // Insert with 23505 recovery against automations_workspace_name_active_uq
@@ -2779,6 +2752,10 @@ export const automationsRouter = router({
         }
         assertValidDailyCap(input.triggerConfig);
         assertValidAudience(input.triggerConfig);
+        assertValidCronTimezone(
+          effectiveTriggerType,
+          input.triggerConfig as Record<string, unknown>
+        );
         // A malformed source declaration is refused before any proposal.
         declaredWebhookSource(effectiveTriggerType, input.triggerConfig);
       }
@@ -2937,6 +2914,32 @@ export const automationsRouter = router({
           stableStringify(updates.triggerConfig) !==
             stableStringify(existing.triggerConfig));
       if (definitionChanged) updates.version = (existing.version ?? 1) + 1;
+
+      // A live cron row whose schedule changed is re-stamped NOW: an edited
+      // time or zone moves the next run, not the one after the old slot.
+      const storedTriggerType = updates.triggerType ?? existing.triggerType;
+      const triggerChanged =
+        (updates.triggerType !== undefined &&
+          updates.triggerType !== existing.triggerType) ||
+        (updates.triggerConfig !== undefined &&
+          stableStringify(updates.triggerConfig) !==
+            stableStringify(existing.triggerConfig));
+      if (
+        triggerChanged &&
+        storedTriggerType === "cron" &&
+        (updates.status ?? existing.status) === "active"
+      ) {
+        const triggerConfig = (updates.triggerConfig ??
+          existing.triggerConfig) as Record<string, unknown>;
+        const expression = triggerConfig?.expression as string | undefined;
+        updates.nextRunAt = expression
+          ? nextCronRunAt(
+              expression,
+              new Date(),
+              triggerConfig?.timezone as string | undefined
+            )
+          : null;
+      }
 
       await database
         .update(automations)
@@ -3103,7 +3106,11 @@ export const automationsRouter = router({
         const triggerConfig = existing.triggerConfig as Record<string, unknown>;
         const cronExpression = triggerConfig?.expression as string | undefined;
         if (cronExpression) {
-          nextRunAt = computeNextCronRunAt(cronExpression, new Date());
+          nextRunAt = nextCronRunAt(
+            cronExpression,
+            new Date(),
+            triggerConfig?.timezone as string | undefined
+          );
         }
       }
 

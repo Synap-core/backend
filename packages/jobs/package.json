@@ -52,7 +52,6 @@
     "@synap/storage": "workspace:*",
     "ai": "^4.0.0",
     "drizzle-orm": "^0.45.1",
-    "cron-parser": "^4.9.0",
     "drizzle-zod": "0.8.3",
     "pg-boss": "^10.1.5",
     "zod": "^4.6.7"

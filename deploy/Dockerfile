@@ -89,23 +89,14 @@ ENV SYNAP_GIT_REPO=$GIT_REPO
 ARG BUILD_AT=""
 ENV SYNAP_BUILD_AT=$BUILD_AT
 
-# ── The cron scheduler's timezone, PINNED rather than inherited ─────────────
-# `computeNextRunAt` (packages/jobs/.../automation-cron-scheduler.ts) matches a
-# cron expression with `getHours`/`getDate`/`getDay`/`getMonth` — PROCESS-LOCAL
-# accessors. So every scheduled rule fires on this container's clock.
-#
-# That was already UTC, but only because `node:*-alpine` ships no
-# `/etc/localtime` and Node falls back — true by ACCIDENT, not by declaration,
-# and silently changed by any base-image or host that supplies a zone. A
-# schedule that shifts by an hour produces no error and no empty state: the
-# rule just runs at a time nobody chose. Declaring it makes the guarantee real,
-# and makes the user-facing "09:00 UTC" labels honest rather than lucky.
-#
-# ⚠️ This is NOT per-user timezones. `toBackendTrigger` stores
-# `timezone: cronTimezone ?? "UTC"` and NOTHING reads it back — a stamp nobody
-# earned. The real fix is teaching `computeNextRunAt` that stored value and
-# defaulting it to the author's device zone; until then a user outside UTC must
-# be TOLD the zone, never shown a bare local-looking hour.
+# ── The process timezone, PINNED rather than inherited ──────────────────────
+# Cron automations no longer read this clock: `nextCronRunAt`
+# (packages/shared-utils/src/cron.ts) reads each rule's own
+# `triggerConfig.timezone`, UTC when absent (ticket 592930c8). Process-local
+# readers remain (the matcher's `today` window, filter-operators.ts), and the
+# zone was UTC only because `node:*-alpine` ships no `/etc/localtime` — true by
+# ACCIDENT, silently changed by any base image or host that supplies one.
+# Declaring it keeps the "UTC" those readers state honest rather than lucky.
 ENV TZ=UTC
 
 RUN apk add --no-cache postgresql-client dumb-init

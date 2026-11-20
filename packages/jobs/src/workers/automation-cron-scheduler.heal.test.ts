@@ -7,7 +7,7 @@
  * row that never got its `nextRunAt` stamped is structurally invisible to the
  * scheduler for the rest of time (two live crons had fired ZERO times in 8
  * days). The scheduler now repairs such rows itself, using the SAME
- * `computeNextRunAt` parser as the post-run update.
+ * `nextCronRunAt` clock as the post-run update.
  *
  * Locked semantics:
  *  - the heal SELECT is narrowed by `isNull(automations.next_run_at)`. Without
