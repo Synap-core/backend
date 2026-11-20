@@ -154,6 +154,10 @@ import {
 } from "./failure-projection.js";
 import { buildProposalChanges } from "./changes.js";
 import { resolveObjectRefs, type ProposalObjectRef } from "./object-refs.js";
+import {
+  resolveLandedObjects,
+  type ProposalLandedObject,
+} from "./landed-read.js";
 import { resolveStatusMoves, type ProposalStatusMove } from "./status-move.js";
 import {
   resolveSessionBefore,
@@ -455,6 +459,12 @@ type DisplayEnrichedProposal = ProposalRow &
      * absent = unknown. See `object-refs.ts`.
      */
     objectRefs?: Record<string, ProposalObjectRef>;
+    /**
+     * What its approval landed — the objects it created, updated or linked —
+     * that the viewer may read, each with its next step. Applied rows only.
+     * See `landed-read.ts`.
+     */
+    landed?: ProposalLandedObject[];
     /**
      * A lifecycle move (`entity.transition`) read on the object: the status
      * property, from/to with the kind's own labels and categories, and the
@@ -1523,6 +1533,19 @@ export async function enrichProposalsForDisplay(
     { userId, roster: opts.roster ?? false }
   );
 
+  // LANDED — what an applied row's approval made, each with its next step.
+  const landedByRow = await resolveLandedObjects(
+    rows.map((row) => ({
+      status: row.status,
+      proposalType: row.proposalType,
+      targetType: row.targetType,
+      targetId: row.targetId,
+      data: row.data,
+      workspaceId: row.workspaceId ?? null,
+    })),
+    { userId, roster: opts.roster ?? false }
+  );
+
   // STATUS MOVES — a lifecycle move named by the kind's own options, for a
   // subject the viewer may read under the row's lens (same lens as
   // `resolveEntityTitle`).
@@ -2019,6 +2042,7 @@ export async function enrichProposalsForDisplay(
         : {}),
       ...(policyReason ? { policyReason } : {}),
       ...(objectRefsByRow[idx] ? { objectRefs: objectRefsByRow[idx] } : {}),
+      ...(landedByRow[idx] ? { landed: landedByRow[idx] } : {}),
       ...(statusMoveByRow[idx] ? { statusMove: statusMoveByRow[idx] } : {}),
       ...(sessionBeforeByRow[idx] ? { before: sessionBeforeByRow[idx] } : {}),
       ...(nameResolvers.resolveCapabilityCallLabel(row, payload)
