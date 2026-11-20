@@ -140,14 +140,15 @@ function resolveAllRelativeImports(file: string): Map<string, string> {
   const out = resolveRelativeImports(file);
   const src = readFileSync(file, "utf8");
   for (const m of src.matchAll(
-    /\{([^}]*)\}\s*=\s*await\s+import\(\s*"(\.[^"]+)"\s*\)/g
+    /\{([\w\s,:]*)\}\s*=\s*await\s+import\(\s*"(\.[^"]+)"\s*\)/g
   )) {
     let target = resolve(dirname(file), m[2].replace(/\.js$/, ".ts"));
     if (!existsSync(target)) target = target.replace(/\.ts$/, "/index.ts");
     if (!existsSync(target)) continue;
     for (const part of m[1].split(",")) {
       const [orig, alias] = part.trim().split(/\s*:\s*/);
-      if (orig) out.set((alias ?? orig).trim(), target);
+      const local = (alias ?? orig ?? "").trim();
+      if (/^\w+$/.test(local)) out.set(local, target);
     }
   }
   return out;

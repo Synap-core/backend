@@ -41,6 +41,7 @@ import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
 import {
   ok,
+  readReasoning,
   requireScope,
   type McpToolContext,
   type CallToolResult,
