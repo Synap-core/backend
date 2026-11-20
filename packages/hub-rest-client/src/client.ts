@@ -1086,12 +1086,24 @@ export class HubRestClient {
    */
   async getBrandKit(options?: {
     format?:
-      "json" | "css" | "frame-md" | "od-design-system" | "dtcg" | "synap-css";
+      | "json"
+      | "css"
+      | "frame-md"
+      | "od-design-system"
+      | "dtcg"
+      | "synap-css"
+      | "css-shadcn";
     projectId?: string;
     workspaceId?: string;
   }): Promise<{
     format:
-      "json" | "css" | "frame-md" | "od-design-system" | "dtcg" | "synap-css";
+      | "json"
+      | "css"
+      | "frame-md"
+      | "od-design-system"
+      | "dtcg"
+      | "synap-css"
+      | "css-shadcn";
     content: string;
     hash: string;
     brandWorkspaceId: string;

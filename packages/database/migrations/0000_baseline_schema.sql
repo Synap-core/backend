@@ -364,6 +364,8 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_reasons" jsonb NOT NULL DEFAULT '{}'::jsonb;
 -- 0379: the permissions it asks for pod-wide (`synap_requests[].scope = "pod"`).
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_pod_wide" text[] NOT NULL DEFAULT '{}';
+-- 0437: the entries that list their kinds (`synap_requests[].kinds`), as declared.
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_kind_groups" jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
@@ -5338,6 +5340,23 @@ CREATE INDEX IF NOT EXISTS "compute_leases_created_idx"
 CREATE INDEX IF NOT EXISTS "compute_leases_resource_idx"
   ON "compute_leases" ("user_id", "resource_id") WHERE "state" = 'active';
 
+-- Realtime room tickets (0438): a pod app's single-use, 60 s ticket for ONE
+-- document's live Yjs room (sha256 only). Mirrors 0438.
+CREATE TABLE IF NOT EXISTS "realtime_room_tickets" (
+  "ticket_hash"  text        PRIMARY KEY,
+  "user_id"      text        NOT NULL,
+  "document_id"  uuid        NOT NULL,
+  "access"       text        NOT NULL,
+  "api_key_id"   uuid        NOT NULL,
+  "expires_at"   timestamptz NOT NULL,
+  "consumed_at"  timestamptz,
+  "created_at"   timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "realtime_room_tickets_access_check"
+    CHECK ("access" IN ('read', 'edit'))
+);
+CREATE INDEX IF NOT EXISTS "realtime_room_tickets_expires_idx"
+  ON "realtime_room_tickets" ("expires_at");
+
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.
 CREATE TABLE IF NOT EXISTS "account_recovery_codes" (
@@ -5427,6 +5446,8 @@ CREATE TABLE IF NOT EXISTS "apps" (
   "logo_url"          text,
   "mode"              text        NOT NULL DEFAULT 'specific',
   "approved_requests" jsonb,
+  -- 0434: the approval in its v2 form (what + where per tier), or NULL.
+  "approved_access"   jsonb,
   "metadata"          jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "last_used_at"      timestamptz,
   "created_at"        timestamptz NOT NULL DEFAULT now(),

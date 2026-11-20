@@ -2,7 +2,7 @@
 
 /**
  * One rule (an `automation`), the one object page — drawn by `/open/automation/:id`
- * in the receiver card and by `/rules/[id]` in the console (`ObjectFrame`).
+ * in the receiver card and by `/automations/[id]` in the console (`ObjectFrame`).
  *
  * Read doors are user-floored (`automations.get` / `automations.listRuns`,
  * `protectedProcedure`), so a member who was sent the link reads what the pod

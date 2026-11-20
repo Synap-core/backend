@@ -511,6 +511,9 @@ export function registerAgentUsersRoutes(app: HubHono): void {
             action: "update",
             workspaceId,
             projectId,
+            // The target project, found by `setAgentAssignment`: a stored
+            // place, not a lens (`grant-write-check.ts`).
+            ...(projectId ? { storedProjectIds: [projectId] } : {}),
           });
           if (denial) {
             throw new TRPCError({

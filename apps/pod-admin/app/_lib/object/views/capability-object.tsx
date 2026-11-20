@@ -49,7 +49,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { PRESENCE_BATCH_MAX } from "@synap-core/types/presence";
 import { resolveServiceName } from "@synap-core/types/service-marks";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  buildObjectActionTitle,
+  resolveLineageEdgeLabel,
+} from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import {
   useEnableMany,
@@ -400,7 +403,7 @@ export function CapabilityObject({
       ...(parent
         ? [
             {
-              label: toolsT()("fact.addOnOf"),
+              label: resolveLineageEdgeLabel("extends", "outgoing"),
               value: (
                 <a
                   href={addOnParentHref(parent.id)}

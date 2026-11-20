@@ -63,7 +63,8 @@ function skill(over: Partial<SkillLike> = {}): SkillLike {
   return {
     id: "s-instr",
     name: "Dogfood journal",
-    slug: "rules/dogfood-journal",
+    // Not a `rules/` slug: a rule is never a Tool (`lib/rule-skill.ts`).
+    slug: "house/dogfood-journal",
     kind: "instruction",
     description: "File what you hit",
     approved: true,
@@ -201,7 +202,7 @@ describe("search, filter and counts", () => {
     expect(matchesToolSearch(gmail, "mail read")).toBe(true); // description words
     expect(matchesToolSearch(gmail, "csv")).toBe(false);
     const journal = items.find((i) => i.type === "instruction")!;
-    expect(matchesToolSearch(journal, "rules/dogfood")).toBe(true); // slug
+    expect(matchesToolSearch(journal, "house/dogfood")).toBe(true); // slug
   });
 
   it("filters by type and search together", () => {

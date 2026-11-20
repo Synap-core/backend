@@ -22,8 +22,8 @@ describe("activeNavId", () => {
     expect(activeNavId("/workspaces")).toBe("spaces");
     expect(activeNavId("/workspaces/ws-1")).toBe("spaces");
     expect(activeNavId("/marketplace/some-pack")).toBe("marketplace");
-    expect(activeNavId("/governance/agents")).toBe("governance");
-    expect(activeNavId("/governance")).toBe("governance");
+    expect(activeNavId("/approvals")).toBe("approvals");
+    expect(activeNavId("/rules")).toBe("rules");
   });
 
   it("matches on segment boundaries only", () => {
@@ -108,13 +108,52 @@ describe("navFor: the client scope of the one table", () => {
   it("folds Automations into Processes: not listed, lit by Processes, still linked", () => {
     const all = ids(navFor("admin", { allTools: true })).flat();
     expect(all).toContain("processes");
-    expect(all).not.toContain("rules");
-    expect(activeNavId("/rules")).toBe("processes");
-    expect(activeNavId("/rules/a1")).toBe("processes");
+    expect(all).not.toContain("automations");
+    expect(activeNavId("/automations")).toBe("processes");
+    expect(activeNavId("/automations/a1")).toBe("processes");
     expect(activeNavId("/processes/p1")).toBe("processes");
-    expect(navHref("rules", { filter: "never-ran" })).toBe(
-      "/rules?filter=never-ran"
+    expect(navHref("automations", { filter: "never-ran" })).toBe(
+      "/automations?filter=never-ran"
     );
+  });
+
+  it("sends Automations' old /rules links to /automations, and keeps /rules for Rules", () => {
+    const redirects = consoleRedirects();
+    expect(redirects).toContainEqual({
+      source: "/rules/:id",
+      destination: "/automations/:id",
+      permanent: false,
+    });
+    for (const key of ["filter", "process"]) {
+      expect(
+        redirects.some(
+          (r) =>
+            r.source === "/rules" &&
+            r.destination === "/automations" &&
+            r.has?.[0]?.key === key
+        ),
+        key
+      ).toBe(true);
+    }
+    // The bare page is Rules now, never redirected away.
+    expect(redirects.filter((r) => r.source === "/rules" && !r.has)).toEqual(
+      []
+    );
+    expect(navHref("rules")).toBe("/rules");
+  });
+
+  it("folds Agents & work into Approvals: its old links land on the grid", () => {
+    const redirects = consoleRedirects();
+    expect(redirects).toContainEqual({
+      source: "/governance/agents",
+      destination: "/approvals?view=grid",
+      permanent: false,
+    });
+    expect(redirects).toContainEqual({
+      source: "/governance",
+      destination: "/approvals",
+      permanent: false,
+    });
   });
 
   it("scopes only the navigation: every client item is an item of the table", () => {
@@ -138,6 +177,8 @@ describe("consoleRedirects", () => {
     ).toEqual([
       ["/audit", "section=queue", "/review", false],
       ["/audit", "section=proposals", "/review", false],
+      ["/rules", "filter=(?<filter>.+)", "/automations", false],
+      ["/rules", "process=(?<process>.+)", "/automations", false],
       ["/trust-keys", "section=api-keys", "/keys", false],
       ["/marketplace", "tab=installed", "/tools?type=capabilities", false],
       ["/marketplace", "tab=tools", "/tools?type=capabilities", false],
@@ -152,6 +193,9 @@ describe("consoleRedirects", () => {
       ["/overview", null, "/home", false],
       ["/templates", null, "/processes", false],
       ["/templates/:id", null, "/processes/:id", false],
+      ["/rules/:id", null, "/automations/:id", false],
+      ["/governance/agents", null, "/approvals?view=grid", false],
+      ["/governance", null, "/approvals", false],
       ["/origins", null, "/applications", false],
       ["/people", null, "/members", false],
       ["/connectors", null, "/sources", false],

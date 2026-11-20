@@ -253,7 +253,16 @@ export function grantHoldsAction(
   });
 }
 
-/** Is ONE scope pinned to some spaces, projects or objects? */
+/**
+ * Is ONE scope pinned to some spaces, projects or objects? A project pin is
+ * narrowed exactly like a space pin (app-permission plan 8189ae7c, W1): the
+ * row reads behind `SEAMED` and `NARROWED` doors AND the grant clause, and
+ * `grant-read.ts` gives sessions, proposals, channels, views, goals, records,
+ * their bodies and edges a project path (`projectReach`), so a project-pinned
+ * key passes those doors and reads the project's rows. An aggregate `READS`
+ * door cannot narrow row by row, so it refuses a project pin as it refuses a
+ * space pin. Events have no project path (`scopeReadsDevEvents`).
+ */
 function scopeIsPinned(scope: GrantScope): boolean {
   return Boolean(scope.workspaceIds || scope.projectIds || scope.entityIds);
 }
@@ -948,6 +957,18 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // runs: `scopedDb`, subject `playbook`); flows without `playbook.read`
   // and the workers (no seam) come back `withheld`. Same as MCP `synap_get_flow`.
   [/^\/flow\/?$/, FLOW_OF],
+  // THE DESIGN DOOR (Hub `rest/designs.ts`, the service behind design.read and
+  // design.catalog). One design is read through `entityReadVisibleWhere`
+  // (`accessScopeWhere`, the key's grant ANDed: a design it does not reach is
+  // a 404). The catalog is the installed `design` capability's snapshot (no
+  // person's row): given to a key that reads some kind, the designs it
+  // validates. Admitted when one live scope grants `entity.<some kind>.read`.
+  [/^\/designs\/catalog\/?$/, NARROWED("entity", [])],
+  // An app's kit file (W6, `services/designs/app-kit.ts`): the app read
+  // through `entityReadVisibleWhere`, each file through `readableFileEntity`
+  // (`scopedDb`, the key's grant ANDed). Same admission as the catalog.
+  [/^\/designs\/kit\/?$/, NARROWED("entity", [])],
+  [route("/designs/:id"), NARROWED("entity", [])],
   // THE PROCESS READ (one playbook whole, or a space's process cards): see
   // `PROCESS_READ` for the subjects it composes.
   [route("/playbooks/:id/process"), PROCESS_READ],
@@ -1145,6 +1166,12 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // No pod row: the static routing rules, the text sent classified, the tabs
   // sent clustered by the intelligence service.
   [/^\/routing\/resolve\/?$/, SEAMED],
+  // A pod app's live-room ticket (0438). Writes no pod data (the ticket row
+  // only): the document is read through `resolveDocumentRoomAccess`, i.e.
+  // `scopedDb` with the key's grant ANDed (a view-owned canvas through its
+  // view), and edit needs the grant's `document.update` / `view.update_content`
+  // (`grantDeniedKey`, services/realtime/room-ticket.ts).
+  [/^\/realtime\/room-ticket\/?$/, SEAMED],
   [/^\/rules\/classify\/?$/, SEAMED],
   [/^\/capture\/cluster-tabs\/?$/, SEAMED],
   // Writes nothing: reads one file entity through `scopedDb` (grant ANDed,

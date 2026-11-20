@@ -51,7 +51,7 @@ describe("consoleHref", () => {
   it("builds page links on the origin", () => {
     expect(consoleHref(ORIGIN, { page: "members" })).toBe(`${ORIGIN}/members`);
     expect(consoleHref(`${ORIGIN}/`, { page: "governance" })).toBe(
-      `${ORIGIN}/governance/agents`
+      `${ORIGIN}/approvals`
     );
     expect(consoleHref(ORIGIN, { page: "accountSecurity" })).toBe(
       `${ORIGIN}/settings/security`

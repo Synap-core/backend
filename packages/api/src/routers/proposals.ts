@@ -12,6 +12,7 @@
  * verbatim) plus re-exports of everything an external importer needs.
  */
 
+import { withProposalTargetPlace } from "../access/proposal-target-place.js";
 import {
   isPresenceCode,
   presenceProofSchema,
@@ -2940,7 +2941,11 @@ export const proposalsRouter = router({
         });
       }
       // D3: undo executes with the reviewer's authority — where the key reaches.
-      assertMayDecideProposalAt("approve", "undo", proposal);
+      assertMayDecideProposalAt(
+        "approve",
+        "undo",
+        await withProposalTargetPlace(proposal)
+      );
 
       // Recovery: a proposal already in the TERMINAL `reverted` status can be
       // re-proposed back to PENDING — but ONLY via reopen (a plain `revert({})`

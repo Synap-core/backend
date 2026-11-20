@@ -1121,14 +1121,35 @@ describe("M1 — a PROJECT-bounded key rejects in its project, not outside it (r
     const OTHER = randomUUID();
     const inProject = randomUUID();
     const elsewhere = randomUUID();
-    for (const [id, project] of [
-      [inProject, PROJECT],
-      [elsewhere, OTHER],
+    // A proposal is in a project when its TARGET is (W1 review: its own
+    // `project_id` is a provenance tag): one about a record filed in
+    // PROJECT, one STAMPED PROJECT about a record filed in OTHER.
+    const recordIn = randomUUID();
+    const recordOut = randomUUID();
+    for (const [project] of [[PROJECT], [OTHER]] as const) {
+      await q(
+        `insert into projects (id, user_id, workspace_id, name) values ($1,$2,$3,'p')`,
+        [project, OWNER, SALES]
+      );
+    }
+    for (const [record, project] of [
+      [recordIn, PROJECT],
+      [recordOut, OTHER],
+    ] as const) {
+      await q(
+        `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, source_kind, target_kind)
+         values ($1,$2,$3,$4,$5,'belongs_to_project','entity','entity')`,
+        [randomUUID(), OWNER, SALES, record, project]
+      );
+    }
+    for (const [id, record] of [
+      [inProject, recordIn],
+      [elsewhere, recordOut],
     ] as const) {
       await q(
         `insert into proposals (id, target_type, target_id, proposal_type, workspace_id, project_id, status, data, created_by, agent_user_id)
-         values ($1,'probe','probe-target','noop',$2,$3,'pending','{}'::jsonb,$4,null)`,
-        [id, SALES, project, OWNER]
+         values ($1,'entity',$2,'noop',$3,$4,'pending','{}'::jsonb,$5,null)`,
+        [id, record, SALES, PROJECT, OWNER]
       );
     }
     const projectKey: KeyGrant = {
@@ -1244,6 +1265,67 @@ describe("T5 — never wider than the consent; the app's lifecycle reaches it", 
       await repo.setApprovedRequests(appId, APPROVED);
     }
   });
+
+  // W3a: a sign-in scope pinned to a project (or objects) beside its spaces
+  // was read as those whole spaces, so narrowing re-minted it from pairs
+  // WITHOUT the pin: a narrower approval widened the token to every row of
+  // Sales. W3d narrows BY MEANING (`narrowKeyGrant` → `scopesWithinBound`):
+  // a MIXED token keeps its unpinned scope (narrowed), keeps a project-pinned
+  // scope only WITH its pin and only where the approval still holds it, and
+  // drops an object-pinned one. Never a pinned scope re-minted without it.
+  it.each(["project_ids", "entity_ids"])(
+    "narrowing keeps the unpinned scope and never re-mints the one pinned by %s without its pin",
+    async (pin) => {
+      const t = await signIn(OWNER);
+      const keyId = (await keyRow(t)).id;
+      // Pin every scope the sign-in minted...
+      await q(
+        `update grants set ${pin} = $2::uuid[] where api_key_id = $1 and revoked_at is null`,
+        [keyId, `{${randomUUID()}}`]
+      );
+      // ...and add ONE unpinned scope beside them: read people in Sales.
+      await q(
+        `insert into grants (id, api_key_id, principal_user_id, on_behalf_of, permissions, workspace_ids, created_by, client_id, expires_at)
+         select gen_random_uuid(), api_key_id, principal_user_id, on_behalf_of, '{entity.person.read}'::text[], $2::uuid[], created_by, client_id, expires_at
+           from grants where api_key_id = $1 and revoked_at is null limit 1`,
+        [keyId, `{${SALES}}`]
+      );
+      const repo = new AppRepository(h.db as never);
+      await repo.setApprovedRequests(
+        appId,
+        APPROVED.filter((r) => r.workspaceId === SALES)
+      );
+      try {
+        await applyApprovedReach(appId);
+        expect((await keyRow(t)).is_active).toBe(true);
+        const live = (
+          await q<{
+            permissions: string[];
+            workspace_ids: string[] | null;
+            project_ids: string[] | null;
+            entity_ids: string[] | null;
+          }>(
+            `select permissions, workspace_ids, project_ids, entity_ids from grants where api_key_id = $1 and revoked_at is null`,
+            [keyId]
+          )
+        ).rows;
+        // The unpinned scope survives, narrowed: people in Sales, nothing else.
+        const unpinned = live.filter(
+          (g) => !g.project_ids?.length && !g.entity_ids?.length
+        );
+        expect(unpinned.map((g) => [g.permissions, g.workspace_ids])).toEqual([
+          [["entity.person.read"], [SALES]],
+        ]);
+        // An object pin is never kept; a project pin only with its pin, in
+        // Sales only (the approval left).
+        expect(live.filter((g) => g.entity_ids?.length)).toEqual([]);
+        for (const g of live.filter((x) => x.project_ids?.length))
+          expect(g.workspace_ids).toEqual([SALES]);
+      } finally {
+        await repo.setApprovedRequests(appId, APPROVED);
+      }
+    }
+  );
 
   it("rotating the app's own key keeps the person signed in; revoking the app ends it", async () => {
     const t = await signIn(OWNER);

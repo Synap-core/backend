@@ -106,6 +106,10 @@ design on read (a page becomes one frame) and every save writes 3.
 
 Find before you create: `synap_find` for an existing `ui-design` on the same `target-surface`.
 
+When the pod has the `design` capability installed, create and change designs through its three verbs
+(section 2b), not raw entity writes: the pod then checks every block against the catalog before it
+lands. The rules below still say what a design holds.
+
 - Create with `synap_create_entity`, `profileSlug: "ui-design"`, a title, and properties:
   `target-surface` (app and screen), `design-scope` (`component` or `page`; a canvas is `page`), `design-goal` (the job the
   screen does; the critique judges against it), `design-json`, `components-used` (the distinct `type`
@@ -121,6 +125,41 @@ Find before you create: `synap_find` for an existing `ui-design` on the same `ta
 - Revise with `synap_update_entity`, writing `design-json` and `components-used` together.
 - `proposed` is success: a person reviews the write. Do not retry.
 - Never save a screenshot as the design, and never mirror components into the pod as entities.
+
+## 2b. The design door: `design.read`, `design.catalog`, `design.apply`
+
+Three verbs of the `design` capability (`synap_run_capability`). Without it installed they are not
+there: say so, and fall back to section 2.
+
+- **`design.catalog`** (read): the installed kit (`kitId`, `hash`), its `components` and their props
+  (a slot is a prop of kind `slot`, with `allow` when it takes only some blocks), the canvas blocks
+  (`layout`: Section, Box, Stack, Row, Grid, Heading, Text, Motion; their spacing, radius and colour
+  props take token steps), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets.
+  Read it before you design; never guess a component or a prop value.
+- **`design.read {designId}`** (read): the design (`status`, `updatedAt`, `appId`, whether it is
+  `editable`), its `board`, an outline per frame (width class, columns, block ids and types), and
+  `dropped`: what the catalog cannot place. Keep `updatedAt`: it is your `baseUpdatedAt`.
+- **`design.apply {designId, baseUpdatedAt, ops}`** (write): ops applied in order, all or nothing.
+  - `create_design {title, appId?, projectId?}`, first and with no `designId`: a new design for that
+    app (`devplane_app`), filed into the project. The rest of the batch fills it.
+  - frames: `add_frame {preset: desktop|laptop|tablet|phone, name?, id?, pageOf?}` (`pageOf`: this
+    frame shows that frame's page at its own width),
+    `update_frame {frameId, name?, preset?, x?, y?, w?, h?}`, `remove_frame {frameId}`.
+  - blocks: `add_block {frameId, parentId?, slot?, index?, type, props?}` (no `parentId`: the page's
+    own content; give `props.id` to name it in a later op), `update_block {id, props?, unset?}`,
+    `move_block {id, frameId?, parentId?, slot?, index?}`, `remove_block {id}`.
+  - grid: `set_span {id, class: compact|medium|expanded, span}` (whole columns, 1 to 4 / 8 / 12; `null`
+    clears), `set_hide {id, class, hide}`.
+  - whole pages: `replace_page {frameId, page}` (a generated page), `replace_board {board}`.
+- `status: "refused"` changes nothing and names the op's index (`opIndex`), why (`reasons`: an unknown
+  component, a prop value that is not a token step, a span wider than the grid, a block a slot does
+  not take) and the catalog hash. Fix that op and send the batch again. `status: "conflict"`: the
+  design changed since you read it (`updatedAt` is its time now): read it again. A stored design the
+  catalog cannot fully place is refused until you pass `acceptDrops: true`.
+- The answer is `applied`, `created`, `proposed` (a person reviews it: success, do not retry) or
+  `revised`: a design past its review (`approved` and after) is never written; the change becomes a
+  new design in `draft` (`revisedFrom` names the old one).
+- `design.apply` never moves `design-status`: that stays section 4's move with `expectedStatus`.
 
 ## 3. Critique: three tiers, not equally trusted
 

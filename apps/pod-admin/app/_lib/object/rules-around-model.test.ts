@@ -92,7 +92,7 @@ describe("When this moves", () => {
       )
     ).toBe("Last proposed a move");
     expect(ruleAroundHref(entry())).toBe(
-      "/rules/declared%3Arollup%3Arel%3Apost%3Acampaign"
+      "/automations/declared%3Arollup%3Arel%3Apost%3Acampaign"
     );
   });
 });

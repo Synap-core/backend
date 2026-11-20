@@ -152,6 +152,12 @@ vi.mock("../stage-advance.js", () => ({
 vi.mock("../session-process.js", () => ({
   loadSessionProcess: async () => h.proc,
 }));
+// The orchestrator hold (D-O1) is its own rule with its own suite
+// (`start-orchestrator.pglite.test.ts`); nothing here is orchestrated.
+vi.mock("../orchestrator-hold.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  orchestratorHolding: async () => null,
+}));
 
 import { syncProcessOnEvent } from "../process-sync.js";
 

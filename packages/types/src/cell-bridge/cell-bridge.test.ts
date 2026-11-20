@@ -363,7 +363,7 @@ describe("the host's tokens in the frame", () => {
 });
 
 describe("the read allowlist", () => {
-  it("is the desktop's view-frame reads (with the lens page), documents.get, flow.of and the work reads, nothing more", () => {
+  it("is the desktop's view-frame reads (with the lens page), documents.get, flow.of, the work reads and a view adapter's reads, nothing more", () => {
     expect([...CELL_BRIDGE_READ_OP_NAMES].sort()).toEqual(
       [
         "entities.list",
@@ -384,6 +384,11 @@ describe("the read allowlist", () => {
         "playbook.process",
         "playbook.scorecard",
         "project.pillars",
+        "views.get",
+        "views.execute",
+        "profiles.get",
+        "propertyDefs.list",
+        "lifecycle.get",
       ].sort()
     );
   });

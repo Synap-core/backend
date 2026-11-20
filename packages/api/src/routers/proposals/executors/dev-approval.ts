@@ -19,7 +19,6 @@ import {
 } from "../../../services/focus-sessions/session-metadata.js";
 import {
   DEV_DEPLOY_APPROVAL_TYPE,
-  DEV_GATE_LEGACY_STAGES,
   DEV_PLAN_APPROVAL_TYPE,
   stageAfterDevGate,
 } from "../../../services/proposals/dev-approval.js";
@@ -38,8 +37,9 @@ import { reportApproved } from "./shared.js";
  *
  * ── THESE EXECUTORS RECORD. THEY DO NOT RUN. ────────────────────────────────
  * Apply = stamp the decision on the session (`metadata.devLoop`), advance
- * `current_stage`, emit the realtime update, flip the proposal to APPROVED. That
- * is the ENTIRE effect. The proposal payload carries a `gateCommand` /
+ * `current_stage` when the session's playbook names the gate (else the stage
+ * is left where it stands: W6, finding 9351820d), emit the realtime update,
+ * flip the proposal to APPROVED. That is the ENTIRE effect. The proposal payload carries a `gateCommand` /
  * `deployCommand` string, and NOTHING here executes it: the agent on the server
  * polls its session, reads the stamp, and acts under its own credentials on its
  * own machine.
@@ -82,8 +82,8 @@ interface DevLoopStamp {
   };
 }
 
-/** The legacy stamp per gate — see `DEV_GATE_LEGACY_STAGES`. */
-const STAGE_AFTER = DEV_GATE_LEGACY_STAGES;
+type DevGateType =
+  typeof DEV_PLAN_APPROVAL_TYPE | typeof DEV_DEPLOY_APPROVAL_TYPE;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -98,12 +98,16 @@ function asString(value: unknown): string {
 /**
  * Where the session stands after this gate: the stage after the gate stage of
  * the playbook it follows (the run's frozen definition first, the playbook row
- * second — the same precedence the stage gates use), else the legacy stamp.
+ * second — the same precedence the stage gates use), else null: no stage
+ * names the gate, so the approval moves no stage. It used to write a legacy
+ * stamp (`plan_approved` / `deploy_approved`, `DEV_GATE_LEGACY_STAGES`) over
+ * the session's real stage (finding 9351820d); the approval is recorded in
+ * `metadata.devLoop` and the agent is woken (`wakeAgentOnDevDecision`).
  */
 async function stageAfterApproval(
   session: { id: string; playbookId: string | null },
-  type: keyof typeof STAGE_AFTER
-): Promise<string> {
+  type: DevGateType
+): Promise<string | null> {
   const [run] = await db
     .select({ definitionSnapshot: playbookRuns.definitionSnapshot })
     .from(playbookRuns)
@@ -129,7 +133,7 @@ async function stageAfterApproval(
     const fromPlaybook = stageAfterDevGate(row?.stages, type);
     if (fromPlaybook) return fromPlaybook;
   }
-  return STAGE_AFTER[type];
+  return null;
 }
 
 /**
@@ -140,7 +144,7 @@ async function stageAfterApproval(
  */
 async function applyDevApproval(
   args: ProposalExecutorArgs,
-  type: keyof typeof STAGE_AFTER,
+  type: DevGateType,
   buildStamp: (
     payload: Record<string, unknown>,
     base: { approvedAt: string; approvedBy: string; proposalId: string }
@@ -207,7 +211,8 @@ async function applyDevApproval(
   const mergedDevLoop = { ...existingDevLoop, ...stamp };
 
   // The approval IS the gate: the stage after it is entered here, and the
-  // stage ledger (0382) records it in this same UPDATE.
+  // stage ledger (0382) records it in this same UPDATE. No stage names the
+  // gate: the stage is left as it stands.
   const nextStage = await stageAfterApproval(session, type);
   const updated = await db
     .update(focusSessions)
@@ -215,9 +220,9 @@ async function applyDevApproval(
       metadata: mergeSessionMetadata({
         [DEV_LOOP_METADATA_KEY]: mergedDevLoop,
       }),
-      currentStage: nextStage,
-      ...(nextStage !== (session.currentStage ?? null)
+      ...(nextStage !== null && nextStage !== (session.currentStage ?? null)
         ? {
+            currentStage: nextStage,
             stageHistory: appendSessionStageHistory({
               fromStage: session.currentStage ?? null,
               toStage: nextStage,

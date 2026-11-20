@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
 import { SYNAP_CORE_DEFINITION } from "./ensure-synap-core.js";
+import { DESIGN_VERB_PARAMETERS } from "@synap-core/types/design-board";
 
 /**
  * TRIPWIRE — the builtin verb catalog is coherent with the handler contract.
@@ -99,6 +100,18 @@ const CATALOGS: CatalogSource[] = [
   // for its verbs.
   ...PUBLISHED_CAPABILITY_FILES.map((file) =>
     readCatalog(file, JSON.parse(readFileSync(file, "utf8")) as unknown)
+  ),
+  // A MARKET capability whose package lives in the one catalog home (app-bases
+  // `capabilities/design.capability.json`), not in this repo: its param
+  // contract is exported as data and the package carries it verbatim (pinned
+  // on the app-bases side), so the contract read here is the one shipped.
+  readCatalog(
+    "market capability `design` (@synap-core/types/design-board DESIGN_VERB_PARAMETERS)",
+    {
+      skills: Object.entries(DESIGN_VERB_PARAMETERS).map(
+        ([name, parameters]) => ({ name, parameters })
+      ),
+    }
   ),
 ];
 

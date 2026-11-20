@@ -17,6 +17,7 @@
  * - Complete audit trail.
  */
 
+import { withProposalTargetPlace } from "../access/proposal-target-place.js";
 import { presenceInput } from "../utils/presence-input.js";
 import { presenceProofSchema } from "@synap-core/types/presence";
 import { assertPresenceForApproval } from "../services/presence/gate.js";
@@ -1041,7 +1042,11 @@ export const secretsVaultRouter = router({
         });
       }
       // D3: a key bounded to some spaces grants only there.
-      assertMayDecideProposalAt("approve", "approve", proposalRow);
+      assertMayDecideProposalAt(
+        "approve",
+        "approve",
+        await withProposalTargetPlace(proposalRow)
+      );
 
       // Workspace from the request, not the UI. If the proposal is workspace-
       // scoped, require the approver to be a member of THAT workspace (defense

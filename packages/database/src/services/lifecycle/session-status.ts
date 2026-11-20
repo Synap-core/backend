@@ -24,7 +24,7 @@
  * The transitions are not dispatched inline (a caller's own transaction may
  * still be open): the sweeper delivers them within a minute or two.
  */
-import { and, asc, eq, inArray, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
@@ -235,6 +235,32 @@ export async function setSessionStatus(
 }
 
 /**
+ * A stage move whose caller read another stage: the session's step moved
+ * meanwhile (an agent's manual advance racing a step that advanced by
+ * itself, W6). Nothing was written. `code` is what the doors duck-type on,
+ * like {@link LifecycleConflictError}'s.
+ */
+export class SessionStageConflictError extends Error {
+  readonly code = "STAGE_STALE" as const;
+  constructor(
+    readonly expectedStage: string | null,
+    readonly actualStage: string | null
+  ) {
+    super(
+      `The step moved meanwhile: expected "${expectedStage ?? "none"}", it is now "${actualStage ?? "none"}".`
+    );
+    this.name = "SessionStageConflictError";
+  }
+}
+
+/** `current_stage` is the stage the mover read (null: none). */
+export function sessionStageIs(stage: string | null): SQL {
+  return stage === null
+    ? isNull(focusSessions.currentStage)
+    : eq(focusSessions.currentStage, stage);
+}
+
+/**
  * A session row PATCH that may carry a status — the update doors (tRPC and
  * Hub REST PATCH, the MCP `update_session`, the `focus_session/update`
  * approval replay). With a status it is a move through
@@ -262,9 +288,21 @@ export async function writeSessionPatch(
      * entity's `moveStatus`. Absent: from whatever it stands at.
      */
     expectedStatus?: SessionStatus | null;
+    /**
+     * With a stage in `set`: the stage the mover READ (null: none). The write
+     * is then a compare-and-set on `current_stage`, and a session whose step
+     * moved meanwhile throws {@link SessionStageConflictError} (nothing is
+     * written). Absent: no stage check.
+     */
+    expectedStage?: string | null;
   }
 ): Promise<FocusSession[]> {
   const { status, ...rest } = input.set;
+  const stageWhere =
+    input.expectedStage === undefined
+      ? undefined
+      : sessionStageIs(input.expectedStage);
+  let rows: FocusSession[];
   if (status === undefined) {
     if (input.hold) {
       throw new HoldRefusedError({
@@ -273,31 +311,48 @@ export async function writeSessionPatch(
         message: HOLD_NOT_A_PAUSE_MESSAGE,
       });
     }
-    return db
+    rows = await db
       .update(focusSessions)
       .set(rest)
-      .where(eq(focusSessions.id, input.sessionId))
+      .where(and(eq(focusSessions.id, input.sessionId), stageWhere))
       .returning();
+  } else {
+    const expected = input.expectedStatus ?? null;
+    ({ rows } = await setSessionStatus(db, {
+      sessionId: input.sessionId,
+      where: stageWhere,
+      from: expected ? [expected] : SESSION_STATUSES,
+      to: status,
+      actor: input.actor,
+      proposalId: input.proposalId,
+      set: rest,
+      hold: input.hold,
+      occurredAt: input.occurredAt,
+      appId: input.appId,
+    }));
   }
-  const expected = input.expectedStatus ?? null;
-  const { rows } = await setSessionStatus(db, {
-    sessionId: input.sessionId,
-    from: expected ? [expected] : SESSION_STATUSES,
-    to: status,
-    actor: input.actor,
-    proposalId: input.proposalId,
-    set: rest,
-    hold: input.hold,
-    occurredAt: input.occurredAt,
-    appId: input.appId,
-  });
-  if (expected && rows.length === 0) {
-    // Nothing moved: gone (empty, as before) or stale (a conflict).
+  if (rows.length === 0 && (stageWhere || input.expectedStatus)) {
+    // Nothing written: gone (empty, as before) or stale (a conflict).
     const [now] = await db
-      .select({ status: focusSessions.status })
+      .select({
+        status: focusSessions.status,
+        currentStage: focusSessions.currentStage,
+      })
       .from(focusSessions)
       .where(eq(focusSessions.id, input.sessionId));
-    if (now) throw new LifecycleConflictError(expected, now.status);
+    if (
+      now &&
+      input.expectedStage !== undefined &&
+      (now.currentStage ?? null) !== input.expectedStage
+    ) {
+      throw new SessionStageConflictError(
+        input.expectedStage,
+        now.currentStage ?? null
+      );
+    }
+    if (now && input.expectedStatus) {
+      throw new LifecycleConflictError(input.expectedStatus, now.status);
+    }
   }
   return rows;
 }

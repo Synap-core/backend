@@ -284,7 +284,7 @@ export type LinkType =
    * (`services/capabilities/addon.ts`, called by
    * `createCapabilityFromDefinition` for a definition with `extends`), after it
    * found the base installed. Readers: the add-on reads
-   * (`readAddOnRelations`), the catalog card's base-tool fallback. The Hub
+   * (`loadAddOnParents` / `loadAddOnsOf`), the catalog card's base-tool fallback. The Hub
    * REST links door lists and refuses it: an install writes it, never a key.
    */
   | "extends";

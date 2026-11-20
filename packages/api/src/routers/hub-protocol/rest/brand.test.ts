@@ -142,7 +142,7 @@ describe("GET /brand/kit", () => {
     expect(body.reason).toBeUndefined();
   });
 
-  describe("token formats (dtcg, synap-css)", () => {
+  describe("token formats (dtcg, synap-css, css-shadcn)", () => {
     const DTCG = {
       surface: {
         background: {
@@ -196,6 +196,23 @@ describe("GET /brand/kit", () => {
       expect(body.hash).toBe(dtcg.hash);
     });
 
+    it("format=css-shadcn serves the same brand as shadcn's variables (a client app's kit), under the same hash", async () => {
+      h.kitSource = [S_COLOR, TOKEN_SET];
+      const dtcg = (await (
+        await buildApp().request("/brand/kit?format=dtcg")
+      ).json()) as Record<string, string>;
+      const res = await buildApp().request("/brand/kit?format=css-shadcn");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, string>;
+      expect(body.format).toBe("css-shadcn");
+      expect(JSON.parse(body.content!)).toEqual({
+        vars: {},
+        light: { "--background": "#ffffff" },
+        dark: { "--background": "#1a1a1a" },
+      });
+      expect(body.hash).toBe(dtcg.hash);
+    });
+
     it("a brand with no DTCG token set serves an empty set, never the kit", async () => {
       h.kitSource = [S_COLOR];
       const dtcg = (await (
@@ -217,9 +234,9 @@ describe("GET /brand/kit", () => {
     expect((await buildApp().request("/brand/kit?format=pdf")).status).toBe(
       400
     );
-    expect(
-      (await buildApp().request("/brand/kit?format=css-shadcn")).status
-    ).toBe(400);
+    expect((await buildApp().request("/brand/kit?format=scss")).status).toBe(
+      400
+    );
     expect((await buildApp().request("/brand/kit?projectId=nope")).status).toBe(
       400
     );

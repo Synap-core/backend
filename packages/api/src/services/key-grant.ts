@@ -295,7 +295,9 @@ export function describeOwnGrant(
       const parsed = parsePlace(scope, holder);
       if (parsed.kind === "pod") place = "pod";
       else if (parsed.kind === "unbounded") place = "anywhere";
-      else spaceIds = parsed.ids;
+      else if (parsed.kind === "spaces") spaceIds = parsed.ids;
+      // A project place names no space: `spaces` with none, its projects in
+      // `projectIds` (fail closed, never `anywhere`).
     } catch (err) {
       if (!(err instanceof PlaceError)) throw err;
     }

@@ -17,6 +17,20 @@
  * table with no workspace column, a project-restricted grant on a table with
  * no project path) also fails closed.
  *
+ * PROJECT REACH (app-permission plan 8189ae7c, W1, 19 Nov 2026). A grant
+ * restricted to projects P reads the rows IN P: an entity filed in P (its
+ * `belongs_to_project` edge, `projectLensWhere`), a session, view or goal
+ * whose `project_id` is P, the project row itself, a proposal whose TARGET
+ * is in P (`proposal-target-place.ts`), and what follows them (a body
+ * follows its entity, an edge both of its ends, a session's room its
+ * session, who is on a goal the goal). A channel is in P only as the room of
+ * a session of P. Each table says so
+ * in `projectReach`; a table without one still fails closed. THE FILING
+ * RULE keeps this safe: filing a row into a project needs a write on that row
+ * where it lives now, and a project write never covers the
+ * `belongs_to_project` edge (grant-write-check.ts reads a row's project where
+ * it lives now; a filing carries no project, `filesIntoProject`).
+ *
  * SPACE REACH (founder "option 1", 2026-10-23). A grant restricted to spaces
  * X reads what a MEMBER of X reads there, not only the rows stamped with X: a
  * pod-wide person or company with a live role in X is X's data too, and so is
@@ -114,7 +128,9 @@ import {
 import {
   sessionCountsInSpacesWhere,
   sessionRoomCountsInSpacesWhere,
+  sessionRoomInProjectsWhere,
 } from "./session-counted-spaces.js";
+import { proposalTargetInProjectsWhere } from "./proposal-target-place.js";
 
 export interface GrantReadSpec {
   /** The grant subject (governance spelling): `entity`, `document`, … */
@@ -123,8 +139,13 @@ export interface GrantReadSpec {
   workspaceColumn?: AnyPgColumn;
   /** Qualified subjects: the kind columns (profile slug wins over legacy type). */
   kind?: { typeColumn: AnyPgColumn; profileIdColumn: AnyPgColumn };
-  /** How a project-restricted grant narrows this table (entity id column). */
-  projectEntityColumn?: AnyPgColumn;
+  /**
+   * How a project-restricted grant narrows this table: the rows IN one of
+   * `projects` (projects table ids). Unset = a project pin reads none of it
+   * (fails closed). `scope` is the grant scope being read, for a row that
+   * follows ANOTHER table's grant (a channel follows its person).
+   */
+  projectReach?: (projects: string[], scope: GrantScope) => SQL;
   /**
    * What a space-restricted grant reaches BEYOND `workspaceColumn ∈ spaces`:
    * the rows a member of those spaces sees through a role (ORed with the
@@ -153,7 +174,8 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     entities,
     spec("entity", entities, {
       kind: { typeColumn: entities.type, profileIdColumn: entities.profileId },
-      projectEntityColumn: entities.id,
+      // Filed in the project (`belongs_to_project`).
+      projectReach: (ids) => projectLensWhere(entities.id, ids),
       // (a) a live facet stamped in a granted space, (b) a pod-wide entity
       // wearing a live pod-wide facet whose role is granted to one, or (c) a
       // pod-wide entity whose HOME is one (decision e1b59d38 "A").
@@ -189,6 +211,21 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
             spaces
           )
         )!,
+      // A body follows its entity: the document of a live entity filed in
+      // one of the projects.
+      projectReach: (ids) =>
+        inArray(
+          documents.id,
+          db
+            .select({ id: entities.documentId })
+            .from(entities)
+            .where(
+              and(
+                isNull(entities.deletedAt),
+                projectLensWhere(entities.id, ids)
+              )
+            )
+        ),
     }),
   ],
   // An edge between a space entity and a pod-wide one is stamped with that
@@ -199,6 +236,23 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     relations,
     spec("relation", relations, {
       spaceReach: (spaces, scope) => worksAtRoleLinkWhere(spaces, scope),
+      // An edge follows its entities: BOTH ends in one of the projects (the
+      // project itself is in it, so an entity's `belongs_to_project` edge to
+      // P is read with P). One end outside would name a record the project
+      // does not hold.
+      // PER PROJECT (review of #1197, as works_at per space): both ends in
+      // the SAME project. Read over the union of a scope's projects, an
+      // edge from a record of P to a record of Q came back, which a scope
+      // per project never reads.
+      projectReach: (ids) =>
+        or(
+          ...ids.map((id) =>
+            and(
+              projectLensWhere(relations.sourceEntityId, [id]),
+              projectLensWhere(relations.targetEntityId, [id])
+            )
+          )
+        )!,
     }),
   ],
   [
@@ -207,15 +261,52 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
       spaceReach: (spaces) => sharedRoleRowsInSpacesWhere(spaces),
     }),
   ],
-  [views, spec("view", views)],
-  [projects, spec("project", projects)],
-  [projectTracks, spec("track", projectTracks)],
+  // A view pinned to or shared with the project (`views.project_id`, 0276).
+  [
+    views,
+    spec("view", views, {
+      projectReach: (ids) => inArray(views.projectId, ids),
+    }),
+  ],
+  [
+    projects,
+    spec("project", projects, {
+      projectReach: (ids) => inArray(projects.id, ids),
+    }),
+  ],
+  [
+    projectTracks,
+    spec("track", projectTracks, {
+      projectReach: (ids) => inArray(projectTracks.projectId, ids),
+    }),
+  ],
   // No workspace of its own: a grant on the GOAL reads who is on it.
   [
     trackParticipants,
-    spec("track", {}, { idColumn: trackParticipants.trackId }),
+    spec(
+      "track",
+      {},
+      {
+        idColumn: trackParticipants.trackId,
+        projectReach: (ids) =>
+          inArray(
+            trackParticipants.trackId,
+            db
+              .select({ id: projectTracks.id })
+              .from(projectTracks)
+              .where(inArray(projectTracks.projectId, ids))
+          ),
+      }
+    ),
   ],
-  [proposals, spec("proposal", proposals)],
+  // In a project when what it is ABOUT is (its target row), never by its
+  // `project_id`, a provenance tag (`proposal-target-place.ts`).
+  [
+    proposals,
+    spec("proposal", proposals, {
+      projectReach: (ids) => proposalTargetInProjectsWhere(ids),
+    }),
+  ],
   // "Later" (0381): one person's setting aside of a request. No workspace of
   // its own: a grant on the REQUEST reads it; a space grant reads none.
   [
@@ -229,6 +320,7 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     focusSessions,
     spec("session", focusSessions, {
       spaceReach: (spaces) => sessionCountsInSpacesWhere(spaces),
+      projectReach: (ids) => inArray(focusSessions.projectId, ids),
     }),
   ],
   [sessionEvaluations, spec("session", sessionEvaluations)],
@@ -250,6 +342,14 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
           channelFollowsEntityWhere(scope),
           sessionRoomCountsInSpacesWhere(spaces)
         )!,
+      // DELIBERATE DEFAULT (W1 review, 19 Nov 2026, until the founder
+      // decides otherwise): under a project pin, ONLY the room of a session
+      // filed in the project. `channels.project_id` is set with no grant
+      // check (channel create / resolve doors), and a channel following its
+      // record would hand an app pinned to P a person's whole external
+      // email or WhatsApp history once that person is filed in P. Both fail
+      // closed for a project pin.
+      projectReach: (ids) => sessionRoomInProjectsWhere(ids),
     }),
   ],
   [events, spec("event", events)],
@@ -373,8 +473,21 @@ export function channelFollowsEntityWhere(scope: GrantScope): SQL {
  * company's lead role never saw who works there (CRM G17). Nothing else is
  * widened: another edge type, an edge stamped in a space, or an end the scope
  * does not read stays out.
+ *
+ * PER SPACE (W3d, review finding 3 of #1196, pod knowledge 0245b542): a scope
+ * naming several spaces is read as one scope per space, so the role and BOTH
+ * ends are read in the SAME space. Read once over the merged list, an edge
+ * whose role is in A and whose ends are read only through B's reach was
+ * revealed, which per-space scopes (every app grant before W2) never did.
  */
 export function worksAtRoleLinkWhere(spaces: string[], scope: GrantScope): SQL {
+  if (spaces.length > 1) {
+    return or(
+      ...spaces.map((space) =>
+        worksAtRoleLinkWhere([space], { ...scope, workspaceIds: [space] })
+      )
+    )!;
+  }
   const entityClause = grantReadClause(entities, scope);
   const readable = (endColumn: AnyPgColumn) =>
     exists(
@@ -463,8 +576,8 @@ export function grantReadClause(
     parts.push(inArray(s.idColumn, [...grant.entityIds]));
   }
   if (grant.projectIds) {
-    if (!s.projectEntityColumn) return NONE;
-    parts.push(projectLensWhere(s.projectEntityColumn, [...grant.projectIds]));
+    if (!s.projectReach) return NONE;
+    parts.push(s.projectReach([...grant.projectIds], grant));
   }
 
   const defined = parts.filter((p): p is SQL => p !== undefined);

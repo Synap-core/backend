@@ -51,8 +51,26 @@ export function resolveSpacesLabel(
 }
 
 /**
+ * Projects by name, after the noun: "project Acme", "projects Acme and
+ * Beta", then a count ("3 projects"). A project whose name the caller does
+ * not know is never shown as its raw id: one reads "a project", two "2
+ * projects". Lower case, for a sentence; `resolvePlaceLabel` capitalizes it.
+ */
+export function resolveProjectsPhrase(
+  ids: readonly string[],
+  names?: Readonly<Record<string, string>>
+): string {
+  const one = resolveObjectNoun("project").toLowerCase();
+  const many = resolveObjectNounPlural("project").toLowerCase();
+  const known = ids.map((id) => names?.[id]);
+  if (ids.length > 2 || known.some((n) => !n))
+    return ids.length === 1 ? `a ${one}` : `${ids.length} ${many}`;
+  return `${ids.length > 1 ? many : one} ${andList(known as string[])}`;
+}
+
+/**
  * A place as a heading or a chip: "Everywhere in your pod", "Anywhere you can
- * reach", "Sales and Finance", "3 spaces".
+ * reach", "Sales and Finance", "3 spaces", "Project Acme".
  */
 export function resolvePlaceLabel(
   place: Place,
@@ -65,6 +83,10 @@ export function resolvePlaceLabel(
       return UNBOUNDED_HEADING;
     case "spaces":
       return resolveSpacesLabel(place.ids, names);
+    case "projects": {
+      const phrase = resolveProjectsPhrase(place.ids, names);
+      return phrase.charAt(0).toUpperCase() + phrase.slice(1);
+    }
     default:
       return unreachablePlace(place);
   }
@@ -72,7 +94,7 @@ export function resolvePlaceLabel(
 
 /**
  * A place after a verb, in a sentence: "everywhere in your pod", "anywhere
- * you can reach", "in Sales and Finance".
+ * you can reach", "in Sales and Finance", "in project Acme".
  */
 export function resolvePlacePhrase(
   place: Place,
@@ -85,12 +107,14 @@ export function resolvePlacePhrase(
       return ANYWHERE_YOU_CAN_REACH;
     case "spaces":
       return `in ${resolveSpacesLabel(place.ids, names)}`;
+    case "projects":
+      return `in ${resolveProjectsPhrase(place.ids, names)}`;
     default:
       return unreachablePlace(place);
   }
 }
 
-/** A fourth place kind fails to compile here, before it reads as a wrong place. */
+/** A new place kind fails to compile here, before it reads as a wrong place. */
 function unreachablePlace(place: never): never {
   throw new Error(`Unknown place: ${JSON.stringify(place)}`);
 }

@@ -86,6 +86,10 @@ import {
   decideOAuthAuthorization,
   getOAuthConsentContext,
 } from "./oauth/consent.js";
+import {
+  AccessWritePlaceInputSchema,
+  AppAccessInputSchema,
+} from "../services/app-access-input.js";
 import { OAuthError } from "./oauth/protocol.js";
 import { CIMD_MAX_BYTES } from "./oauth/client-metadata.js";
 import { readKeyDetail } from "../services/key-detail.js";
@@ -1636,6 +1640,11 @@ export const apiKeysRouter = router({
           )
           .max(512)
           .optional(),
+        // A pod app (W3d): the person's AppAccess v2. Untrusted — the pod's
+        // ceiling bounds it (`connectOAuthAppAccess`). Wins over `approved`.
+        access: AppAccessInputSchema.optional(),
+        // The short ask (W3d, Q4): where its first change lands.
+        askWritePlace: AccessWritePlaceInputSchema.optional(),
         // "Sign in with Synap": the `appSignIn.fingerprint` the screen
         // rendered — an approval is only for exactly what was shown.
         appSignInFingerprint: z.string().max(128).optional(),

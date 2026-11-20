@@ -8,6 +8,7 @@
  * before the privileged `governance_rules` insert (see the comment inline).
  */
 
+import { withProposalTargetPlace } from "../../access/proposal-target-place.js";
 import { settleGenerateRunOnDecision } from "../../services/playbooks/generate-run-decision.js";
 import { TRPCError } from "@trpc/server";
 import { twinsShownOnCard } from "../../services/duplicates/find-duplicate-candidates.js";
@@ -634,7 +635,11 @@ export async function applyProposalApproval(args: {
   // spaces / projects / objects approves only there (a person's app sign-in
   // token "cannot approve outside these spaces"). A signed-in session holds
   // no grant and is unaffected.
-  assertMayDecideProposalAt("approve", "approve", args.proposal);
+  assertMayDecideProposalAt(
+    "approve",
+    "approve",
+    await withProposalTargetPlace(args.proposal)
+  );
   // A person signed in to an app may approve its OWN AI's proposals unless
   // the app's owner turned that off (PR #29 M2, app-sign-in-policy.ts).
   const viaApp = await assertAppSignInMayApprove(args.proposal);

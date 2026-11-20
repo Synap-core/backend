@@ -69,6 +69,12 @@ export interface AccessModel {
   /** Where full access holds (state `full`); null otherwise. */
   readonly fullPlace: Place | null;
   /**
+   * Each place full access holds in, a place a wider one covers left out.
+   * One entry, except spaces beside projects: no single place is their
+   * union (`joinPlaces` widens it to the pod), so the sentence names both.
+   */
+  readonly fullPlaces: readonly Place[];
+  /**
    * Per tier, each place it reaches and what there — widest place first,
    * labels a wider place already covers left out. Empty = it cannot.
    */
@@ -206,6 +212,16 @@ export function accessModelOfParts(
     fullGroups.length > 0
       ? fullGroups.map((g) => g.place).reduce(joinPlaces)
       : null;
+  const fullPlaces = mergeNamedPlaces(
+    fullGroups
+      .map((g) => g.place)
+      .filter(
+        (p, _i, all) =>
+          !all.some(
+            (o) => o !== p && placeCovers(o, p) && placeKey(o) !== placeKey(p)
+          )
+      )
+  );
 
   const tier = (t: AccessTier): TierReach[] => {
     const entries = groups
@@ -234,8 +250,8 @@ export function accessModelOfParts(
     for (const e of entries) {
       const same = merged.findIndex(
         (m) =>
-          m.place.kind === "spaces" &&
-          e.place.kind === "spaces" &&
+          (m.place.kind === "spaces" || m.place.kind === "projects") &&
+          m.place.kind === e.place.kind &&
           sameLabels(m.labels, e.labels)
       );
       if (same >= 0)
@@ -245,7 +261,7 @@ export function accessModelOfParts(
         };
       else merged.push(e);
     }
-    const width = { unbounded: 0, pod: 1, spaces: 2 } as const;
+    const width = { unbounded: 0, pod: 1, spaces: 2, projects: 3 } as const;
     return merged.sort((a, b) => width[a.place.kind] - width[b.place.kind]);
   };
 
@@ -264,9 +280,23 @@ export function accessModelOfParts(
   return {
     state,
     fullPlace,
+    fullPlaces,
     tiers,
     places: groups.map((g) => g.place),
   };
+}
+
+/** Named places of one kind join into one (two space lists, two project lists). */
+function mergeNamedPlaces(places: readonly Place[]): Place[] {
+  const out: Place[] = [];
+  for (const p of places) {
+    const same = out.findIndex(
+      (o) => (o.kind === "spaces" || o.kind === "projects") && o.kind === p.kind
+    );
+    if (same >= 0) out[same] = joinPlaces(out[same]!, p);
+    else if (!out.some((o) => placeKey(o) === placeKey(p))) out.push(p);
+  }
+  return out;
 }
 
 function sameLabels(
@@ -372,9 +402,12 @@ export function describeAccess(
   });
   if (model.state === "nothing") return out(HOLDER_NO_ACCESS_SENTENCE);
   if (model.state === "full") {
+    const said = model.fullPlaces.some((p) => p.kind === "unbounded")
+      ? []
+      : model.fullPlaces;
     const where =
-      model.fullPlace && model.fullPlace.kind !== "unbounded"
-        ? ` ${resolvePlacePhrase(model.fullPlace, names)}`
+      said.length > 0
+        ? ` ${said.map((p) => resolvePlacePhrase(p, names)).join(" and ")}`
         : "";
     return out(`${GRANT_FULL_ACCESS_SENTENCE}${where}`);
   }

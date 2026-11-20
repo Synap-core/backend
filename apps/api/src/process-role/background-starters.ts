@@ -784,6 +784,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         // Pod default D2 (approval signal 1): a stage's approved work moves its
         // subject to the stage's `onApproved`, through the status door.
         registerReactionEffect(api.reachStageStatusReactionEffect);
+        // W6: a step whose work is all met moves on, through THE advance door.
+        registerReactionEffect(api.advanceStageReactionEffect);
         // A parent rolls up along a relation that declares it (pod
         // default 1) through THE thing's door; the relations' declarations
         // join the one list; and each rule's pause is its row in the rule
