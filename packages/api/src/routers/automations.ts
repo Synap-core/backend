@@ -2572,11 +2572,7 @@ export const automationsRouter = router({
       await assertKeyMayActAsFlowOwner({ ...ctx, agentUserId });
 
       const askedWorkspaceId = input.workspaceId ?? null;
-      await prepareAutomationForMaterialization(
-        database,
-        input,
-        owner.ownerId
-      );
+      await prepareAutomationForMaterialization(database, input, owner.ownerId);
       // Filed in the space its playbooks run in (6c15da33): said, never silent.
       const placedNote =
         input.workspaceId && input.workspaceId !== askedWorkspaceId
