@@ -11,37 +11,45 @@ import { join, relative } from "path";
  * Two checks, over every production `.ts` file of `packages/{api,jobs,database}/src`
  * (derived by walking the tree, never a hand list):
  *
- *  1. Every `.insert(<table>)` of a table that has an actor column — the set is
- *     DERIVED from migration 0442's `ADD COLUMN ... "agent_user_id"` lines —
- *     stamps `createdBy: <x>.ownerId` (a value only `ownerAndActor` yields) and
- *     sets `agentUserId`. A REPLICA (`routers/sync.ts`) copies a peer's row
+ *  1. Every `.insert(<table>)` of a table 0442 gave an actor column (DERIVED
+ *     from its `ADD COLUMN ... "agent_user_id"` lines) stamps
+ *     `createdBy: <x>.ownerId` (a value only `ownerAndActor` yields) and sets
+ *     `agentUserId`. A REPLICA (`routers/sync.ts`) copies a peer's row
  *     verbatim instead: its row shape must carry `agentUserId`.
- *  2. No owner column anywhere is written as `createdBy: <...>agentUserId ?? ...`
- *     (the "the agent if there is one, else the person" expression that made
- *     agents owners). The tables below have no actor column yet and still
- *     store the agent as owner; they are a frozen list (a follow-up moves
- *     them), so a NEW site fails.
+ *  1b. Every insert of a table 0445 gave an actor column whose values name
+ *     `agentUserId` stamps its owner (`createdBy:` or `userId:`) from `.ownerId` and
+ *     sets `agentUserId`. A person's or the system's own insert names none.
+ *  2. No owner is written as `<owner key>: <...>agentUserId ?? ...` (the "the
+ *     agent if there is one, else the person" expression that made agents
+ *     owners): `createdBy:` / `ownerId:` on any code line, `userId:` inside an
+ *     insert's values. The playbook_runs writers below still store the agent
+ *     as the run's creator; they are a frozen list (a follow-up moves them),
+ *     so a NEW site fails.
  *
  * WHAT IT DOES NOT SEE (measured by reading the scan, not assumed): an owner
- * column written under another key name (`userId:` on skills/views/artifacts),
- * a `createdBy` fed from a variable that holds an agent id without the `??`
- * shape, and a raw SQL insert. Check 1 is per insert site; check 2 per code
- * line (comment lines are skipped), granular to the FILE for the frozen list.
+ * fed from a variable that holds an agent id without the `??` shape (a key
+ * that acts for nobody makes `ctx.userId` the agent itself: `ownerAndActor`
+ * at the doors answers that), a `userId:` written outside an insert's values
+ * (a spread object built earlier), and a raw SQL insert. Checks 1 and 1b are
+ * per insert site; check 2 per code line (comment lines are skipped),
+ * granular to the FILE for the frozen list.
  */
 
 const PACKAGES = join(process.cwd(), "..");
 const SCANNED = ["api/src", "jobs/src", "database/src"];
 
-/** Writers of tables with no actor column yet (follow-up), frozen. */
+/** Writers of playbook_runs, which has no actor column yet (follow-up), frozen. */
 const KNOWN_AGENT_AS_OWNER = new Set<string>([
-  "api/src/routers/tools.ts", // tools.created_by — capability-gate owner-bypass reads it
-  "api/src/routers/proposals/executors/tool.ts",
-  "api/src/routers/capability-containers.ts", // capabilities.created_by
-  "api/src/routers/proposals/executors/capability.ts",
-  "api/src/services/focus-sessions/create-session.ts", // playbook_runs.created_by — the activity feed reads it as actor
+  "api/src/services/focus-sessions/create-session.ts", // the activity feed reads it as actor
   "api/src/services/focus-sessions/follow-playbook.ts",
-  // proposals.created_by: overloaded "who filed it", not an owner (the owner
-  // floor is proposals.subject_user_id).
+]);
+
+/**
+ * `proposals.created_by` is who FILED it, not an owner: the owner floor is
+ * `proposals.subject_user_id`, so an agent there is correct. Exact, like the
+ * frozen list.
+ */
+const FILER_NOT_OWNER = new Set<string>([
   "api/src/services/app-access-ask.ts",
   "api/src/services/app-connect.ts",
   "api/src/services/playbooks/stage-gate.ts",
@@ -71,10 +79,10 @@ const FILES = SCANNED.flatMap((d) => tsFiles(join(PACKAGES, d))).map((f) => ({
   src: readFileSync(f, "utf8"),
 }));
 
-/** Tables 0442 gave an actor column, as their drizzle export names. */
-function actorTables(): string[] {
+/** Tables a migration gave an actor column, as their drizzle export names. */
+function actorTables(migration: string): string[] {
   const sql = readFileSync(
-    join(PACKAGES, "database/migrations/0442_owner_actor_columns.sql"),
+    join(PACKAGES, "database/migrations", migration),
     "utf8"
   );
   const tables = [
@@ -135,22 +143,48 @@ function stampsOwnerAndActor(block: string | null): boolean {
   );
 }
 
-const AGENT_AS_OWNER_LINE = /\bcreatedBy:\s*\(?\s*[\w.?]*agentUserId\s*\?\?/;
+const isComment = (line: string) => /^\s*(\/\/|\*|\/\*)/.test(line);
+const codeOf = (text: string) =>
+  text
+    .split("\n")
+    .filter((l) => !isComment(l))
+    .join("\n");
+
+/** A 0445 insert that names an agent stamps the owner from `ownerAndActor`. */
+function namesAgentWithoutOwnerStamp(block: string | null): boolean {
+  if (block === null) return true;
+  const code = codeOf(block);
+  if (!/agentUserId/.test(code)) return false;
+  return !(
+    /\b(createdBy|userId):\s*[\w.]+\.ownerId\s*,/.test(code) &&
+    /\bagentUserId[:,]/.test(code)
+  );
+}
+
+const AGENT_AS_OWNER_LINE =
+  /\b(createdBy|ownerId):\s*\(?\s*[\w.?]*agentUserId\s*\?\?/;
+const AGENT_AS_USER_ID_LINE = /\buserId:\s*\(?\s*[\w.?]*agentUserId\s*\?\?/;
 /** Per code line: a comment that quotes the old shape is not a write. */
 const writesAgentAsOwner = (src: string): boolean =>
   src
     .split("\n")
-    .some(
-      (line) =>
-        !/^\s*(\/\/|\*|\/\*)/.test(line) && AGENT_AS_OWNER_LINE.test(line)
-    );
+    .some((line) => !isComment(line) && AGENT_AS_OWNER_LINE.test(line)) ||
+  [...src.matchAll(/\.insert\(\s*\w+\s*\)/g)].some((m) =>
+    codeOf(valuesBlockAfter(src, m.index!) ?? "")
+      .split("\n")
+      .some((line) => AGENT_AS_USER_ID_LINE.test(line))
+  );
 
 describe("tripwire: a person owns what an agent makes", () => {
-  const tables = actorTables();
+  const tables = actorTables("0442_owner_actor_columns.sql");
+  const laterTables = actorTables("0445_owner_actor_more_tables.sql");
 
-  it("derives the actor tables from 0442 (non-vacuity)", () => {
+  it("derives the actor tables from 0442 and 0445 (non-vacuity)", () => {
     expect(tables).toEqual(
       expect.arrayContaining(["automations", "playbooks"])
+    );
+    expect(laterTables).toEqual(
+      expect.arrayContaining(["tools", "capabilities", "skills"])
     );
     expect(FILES.length).toBeGreaterThan(500);
   });
@@ -166,6 +200,22 @@ describe("tripwire: a person owns what an agent makes", () => {
     expect(
       offenders,
       "Stamp `createdBy: owner.ownerId, agentUserId: owner.agentUserId` from `ownerAndActor(db, <writer>, <agent>)` — never an agent as the owner."
+    ).toEqual([]);
+  });
+
+  it("every 0445 insert that names an agent stamps the owner from ownerAndActor and the actor", () => {
+    const inserts = actorInserts(FILES, laterTables);
+    // Non-vacuity: the agent-reachable doors (tool create + approval, the
+    // container door, the skill doors, the rule door, the context skill).
+    const naming = inserts.filter((i) =>
+      /agentUserId/.test(codeOf(i.block ?? ""))
+    );
+    expect(naming.length).toBeGreaterThanOrEqual(6);
+    expect(
+      inserts
+        .filter((i) => namesAgentWithoutOwnerStamp(i.block))
+        .map((i) => `${i.rel}: insert(${i.table})`),
+      "Stamp the owner from `ownerAndActor(db, <writer>, <agent>)` (`.ownerId`) and `agentUserId: owner.agentUserId`."
     ).toEqual([]);
   });
 
@@ -194,16 +244,16 @@ describe("tripwire: a person owns what an agent makes", () => {
   });
 
   it("no owner column is written as `agentUserId ?? <person>` outside the frozen follow-up list", () => {
+    const listed = new Set([...KNOWN_AGENT_AS_OWNER, ...FILER_NOT_OWNER]);
     const offenders = FILES.filter(
-      ({ rel, src }) =>
-        !KNOWN_AGENT_AS_OWNER.has(rel) && writesAgentAsOwner(src)
+      ({ rel, src }) => !listed.has(rel) && writesAgentAsOwner(src)
     ).map((f) => f.rel);
     expect(offenders).toEqual([]);
-    // The frozen list stays exact: a site that got fixed leaves it.
-    const stale = [...KNOWN_AGENT_AS_OWNER].filter(
+    // Both lists stay exact: a site that got fixed leaves them.
+    const stale = [...listed].filter(
       (rel) => !FILES.some((f) => f.rel === rel && writesAgentAsOwner(f.src))
     );
-    expect(stale, "remove fixed files from KNOWN_AGENT_AS_OWNER").toEqual([]);
+    expect(stale, "remove fixed files from the lists").toEqual([]);
   });
 
   it("self-check: the scans still see what they hunt", () => {
@@ -227,5 +277,24 @@ describe("tripwire: a person owns what an agent makes", () => {
       writesAgentAsOwner("  // `createdBy: input.agentUserId ?? input.userId`")
     ).toBe(false);
     expect(writesAgentAsOwner(good)).toBe(false);
+    // An owner under another key, inside an insert's values.
+    const badSkill = `await db.insert(skills).values({\n  id,\n  userId: input.agentUserId ?? ctx.userId,\n  approved: !input.agentUserId,\n});`;
+    const goodSkill = `await db.insert(skills).values({\n  id,\n  userId: owner.ownerId,\n  agentUserId: owner.agentUserId,\n  approved: !input.agentUserId,\n});`;
+    expect(writesAgentAsOwner(badSkill)).toBe(true);
+    expect(writesAgentAsOwner(goodSkill)).toBe(false);
+    // A parameter object is not an owner column.
+    expect(
+      writesAgentAsOwner("promote({\n  userId: input.agentUserId ?? ctx.userId,\n});")
+    ).toBe(false);
+    const blockOf = (src: string) =>
+      actorInserts([{ rel: "x.ts", src }], laterTables)[0]!.block;
+    expect(namesAgentWithoutOwnerStamp(blockOf(badSkill))).toBe(true);
+    expect(namesAgentWithoutOwnerStamp(blockOf(goodSkill))).toBe(false);
+    // A system insert names no agent.
+    expect(
+      namesAgentWithoutOwnerStamp(
+        blockOf(`await db.insert(skills).values({\n  userId: ownerUserId,\n  approved: true,\n});`)
+      )
+    ).toBe(false);
   });
 });
