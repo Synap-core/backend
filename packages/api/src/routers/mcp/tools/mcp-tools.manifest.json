@@ -118,7 +118,7 @@
             "items": {
               "type": "object"
             },
-            "description": "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading."
+            "description": "View filters {field, operator, value}, ANDed (max 10). field: title, type, status, createdAt, updatedAt, or a property of profileSlug (bare name or properties.<name>). See skill system/synap/reading."
           },
           "includeFacets": {
             "type": "boolean",
@@ -480,6 +480,13 @@
             "type": "string",
             "enum": ["full"],
             "description": "Pass 'full' to receive complete profile rows (including renderer and uiHints columns) and full relation-type rows (displayName, description, isDirectional, inverseLabel). Omit for the lean digest (default): profile digests plus relation-type slugs grouped by lens."
+          },
+          "slugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Only these kind slugs (max 50)."
           },
           "limit": {
             "type": "number",
@@ -3598,6 +3605,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why you make this write, shown to the reviewer."
+          },
           "name": {
             "type": "string",
             "description": "Playbook display name."
@@ -5685,6 +5696,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why you make this write, shown to the reviewer."
+          },
           "name": {
             "type": "string",
             "description": "Project display name"
@@ -8080,6 +8095,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why you make this write, shown to the reviewer."
+          },
           "capabilityKey": {
             "type": "string",
             "description": "The capability's catalog slug, e.g. media-ffmpeg (market.search `slug`)."
@@ -8158,6 +8177,11 @@
             "type": "string",
             "minLength": 1
           },
+          "reasoning": {
+            "description": "Why you run this, shown to the reviewer.",
+            "type": "string",
+            "maxLength": 2000
+          },
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
@@ -8182,6 +8206,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why you make this write, shown to the reviewer."
+          },
           "toolName": {
             "type": "string",
             "description": "The NAME of the already-installed tool this verb calls (e.g. 'apify_api'). Must already exist — this tool never creates a new tool/connection."
@@ -8315,6 +8343,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why you make this write, shown to the reviewer."
+          },
           "name": {
             "type": "string",
             "description": "Automation display name."
@@ -8528,6 +8560,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why you make this write, shown to the reviewer."
+          },
           "intent": {
             "type": "string",
             "description": "The rule in the user's own words — this IS the rule an agent reads later, so keep their phrasing rather than paraphrasing it into a spec."
@@ -8774,6 +8810,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why you make this write, shown to the reviewer."
+          },
           "ruleId": {
             "type": "string",
             "description": "UUID of the rule to edit (the `ruleId` from synap_create_rule's receipt, or `data.materialized.ruleId` on its approved proposal)."
@@ -9113,6 +9153,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why you make this write, shown to the reviewer."
+          },
           "name": {
             "type": "string",
             "description": "Stable skill name (e.g. 'normalize_phone_numbers')."
@@ -9221,6 +9265,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why you make this write, shown to the reviewer."
+          },
           "slug": {
             "type": "string",
             "description": "The skill's slug (e.g. 'biz/business-plan')."
