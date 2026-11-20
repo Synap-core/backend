@@ -265,7 +265,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Pages: `limit` (default 50) + `offset`; a reply with `nextOffset` has more — pass it back as `offset`. Returns lean rows by default (id, title, kind, status and the kind's selected properties; `omitted` names what each row left out — pass those keys in `fields` or read one object with synap_get_entity); detail:'full' returns unprojected rows.",
+      "description": "List entities for a user filtered by profileSlug. For content/semantic recall use synap_ask. Pages: `limit` (default 50) + `offset`; a reply with `nextOffset` has more — pass it back as `offset`. Returns lean rows by default (id, title, kind, status and the kind's selected properties; `omitted` names what each row left out — pass those keys in `fields` or read one object with synap_get_entity); detail:'full' returns unprojected rows.",
       "parameters": [
         {
           "name": "detail",
@@ -346,7 +346,7 @@
           "name": "filters",
           "type": "array<object>",
           "required": false,
-          "description": "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading."
+          "description": "Filters {field, operator, value}, ANDed, max 10. field: title|type|status|createdAt|updatedAt or a property of profileSlug (bare name ok). Skill system/synap/reading."
         },
         {
           "name": "includeFacets",
@@ -425,7 +425,7 @@
           "filters": {
             "type": "array",
             "items": { "type": "object" },
-            "description": "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading."
+            "description": "Filters {field, operator, value}, ANDed, max 10. field: title|type|status|createdAt|updatedAt or a property of profileSlug (bare name ok). Skill system/synap/reading."
           },
           "includeFacets": {
             "type": "boolean",
@@ -1036,7 +1036,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List all available entity types (profiles) AND the relation types you may link them with. ALWAYS call at session start before creating entities or relations. Never assume 'deal', custom types or a relation slug exist — workspaces differ. Returns { profiles, relationTypes }: a lightweight digest per profile (id, slug, displayName, profileKind, entityScope, applicableKinds on roles, description ≤120 chars, workspaceId), and relationTypes as slugs grouped by lens ([{workspaceId:null, slugs}] = valid everywhere, plus per-workspace groups listing only the slugs that workspace adds). detail:'full' returns complete profile rows and full relation-type rows (displayName, description, isDirectional, inverseLabel). A relation `type` on synap_capture / synap_link_entities must be one of those slugs; any other slug is rejected with the valid list. If the relation read failed you get `relationTypesError` instead of `relationTypes`. Without a workspaceId, profiles are merged across your workspaces; a workspace whose profiles could not be read is named in `workspacesFailed` (its kinds are missing from `profiles`), never silently dropped. No property schemas here or in synap_orient. A kind's fields, enums and required keys: call synap_get_entity on any existing entity of that kind (its `effectiveProperties`); over HTTP, GET /api/hub/discover?profileSlugs=<slug>. For a kind with no entities yet, a write that breaks the schema is rejected with the valid fields quoted — fix and resend once.",
+      "description": "List all available entity types (profiles) AND the relation types you may link them with. ALWAYS call at session start before creating entities or relations. Never assume 'deal', custom types or a relation slug exist — workspaces differ. Returns { profiles, relationTypes }: a lightweight digest per profile (id, slug, displayName, profileKind, entityScope, applicableKinds on roles, description ≤120 chars, workspaceId), and relationTypes as slugs grouped by lens ([{workspaceId:null, slugs}] = valid everywhere, plus per-workspace groups listing only the slugs that workspace adds). detail:'full' returns complete profile rows and full relation-type rows (displayName, description, isDirectional, inverseLabel). A relation `type` on synap_capture / synap_link_entities must be one of those slugs; any other slug is rejected with the valid list. If the relation read failed you get `relationTypesError` instead of `relationTypes`. Without a workspaceId, profiles are merged across your workspaces; a workspace whose profiles could not be read is named in `workspacesFailed` (its kinds are missing), never silently dropped. No property schemas here or in synap_orient. A kind's fields, enums and required keys: call synap_get_entity on any existing entity of that kind (its `effectiveProperties`). For a kind with no entities yet, a write that breaks the schema is rejected with the valid fields quoted — fix and resend once.",
       "parameters": [
         {
           "name": "workspaceId",
@@ -1050,6 +1050,12 @@
           "required": false,
           "description": "Pass 'full' to receive complete profile rows (including renderer and uiHints columns) and full relation-type rows (displayName, description, isDirectional, inverseLabel). Omit for the lean digest (default): profile digests plus relation-type slugs grouped by lens.",
           "enum": ["full"]
+        },
+        {
+          "name": "slugs",
+          "type": "array<string>",
+          "required": false,
+          "description": "Only these kind slugs (max 50)."
         },
         {
           "name": "limit",
@@ -1075,6 +1081,11 @@
             "type": "string",
             "enum": ["full"],
             "description": "Pass 'full' to receive complete profile rows (including renderer and uiHints columns) and full relation-type rows (displayName, description, isDirectional, inverseLabel). Omit for the lean digest (default): profile digests plus relation-type slugs grouped by lens."
+          },
+          "slugs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Only these kind slugs (max 50)."
           },
           "limit": { "type": "number", "description": "Page size, default 40" },
           "offset": { "type": "number", "description": "From nextOffset" }
@@ -6132,6 +6143,12 @@
       "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator, or a cron synap_create_automation with a playbook_run node. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
       "parameters": [
         {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why, shown to the reviewer."
+        },
+        {
           "name": "name",
           "type": "string",
           "required": true,
@@ -6247,6 +6264,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why, shown to the reviewer."
+          },
           "name": { "type": "string", "description": "Playbook display name." },
           "goalTemplate": {
             "type": "string",
@@ -8368,6 +8389,12 @@
       "description": "Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). You MUST pass evidenceEntityIds: at least 5 existing entity ids that would belong to this project, or the create is rejected. A project with the same name is reused; a similar one, or the same one still waiting for review, does not block: the create is filed for review showing it, so reuse it instead of making a near-duplicate. An agent call lands as a proposal unless governance has widened it: status=\"proposed\" is SUCCESS — say it is awaiting review, do not retry.",
       "parameters": [
         {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why, shown to the reviewer."
+        },
+        {
           "name": "name",
           "type": "string",
           "required": true,
@@ -8414,6 +8441,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why, shown to the reviewer."
+          },
           "name": { "type": "string", "description": "Project display name" },
           "description": { "type": "string" },
           "workspaceId": {
@@ -12437,8 +12468,14 @@
         "destructiveHint": false,
         "openWorldHint": true
       },
-      "description": "Ask to install a capability on one of the person's computers, or on the pod. Find it first with synap_run_capability market.search (kind capability): each entry says where it runs and, for a computer tool, which of the person's computers can take it (`computers[].canInstall`). One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on \"Installs from the pod\" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer \"pod\"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer's worker runs it, read the result with synap_list_installations.",
+      "description": "Ask to install a capability on one of the person's computers, or on the pod. Find it with synap_run_capability market.search (kind capability); `computers[].canInstall` says which computer can take it. One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on \"Installs from the pod\" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer \"pod\"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer's worker runs it, read the result with synap_list_installations.",
       "parameters": [
+        {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why, shown to the reviewer."
+        },
         {
           "name": "capabilityKey",
           "type": "string",
@@ -12474,6 +12511,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why, shown to the reviewer."
+          },
           "capabilityKey": {
             "type": "string",
             "description": "The capability's catalog slug, e.g. media-ffmpeg (market.search `slug`)."
@@ -12539,13 +12580,19 @@
           "name": "connectionSelector",
           "type": "object",
           "required": false,
-          "description": "Which of the capability's connections this run uses, when it has more than one. `connectionId` names a specific connection; `contextObjectId` names the connection bound to that context object. Omit to use the only/default connection — a selector matching nothing fails the run."
+          "description": "Which of the capability's connections this run uses, when it has more than one. `connectionId` names a specific connection; `contextObjectId` names the connection bound to that context object. Omit to use the only/default connection."
         },
         {
           "name": "idempotencyKey",
           "type": "string",
           "required": false,
           "description": "Optional: a stable key that correlates retries of THIS run. Note: a direct capability run has NO automatic content dedup — a retried call CAN produce a second external effect (e.g. a second send). Pass a key when the effect must be at-most-once; the key is recorded on the run."
+        },
+        {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why, shown to the reviewer."
         },
         {
           "name": "sessionId",
@@ -12586,7 +12633,7 @@
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           },
           "connectionSelector": {
-            "description": "Which of the capability's connections this run uses, when it has more than one. `connectionId` names a specific connection; `contextObjectId` names the connection bound to that context object. Omit to use the only/default connection — a selector matching nothing fails the run.",
+            "description": "Which of the capability's connections this run uses, when it has more than one. `connectionId` names a specific connection; `contextObjectId` names the connection bound to that context object. Omit to use the only/default connection.",
             "type": "object",
             "properties": {
               "connectionId": { "type": "string" },
@@ -12597,6 +12644,11 @@
             "description": "Optional: a stable key that correlates retries of THIS run. Note: a direct capability run has NO automatic content dedup — a retried call CAN produce a second external effect (e.g. a second send). Pass a key when the effect must be at-most-once; the key is recorded on the run.",
             "type": "string",
             "minLength": 1
+          },
+          "reasoning": {
+            "description": "Why, shown to the reviewer.",
+            "type": "string",
+            "maxLength": 2000
           },
           "sessionId": {
             "type": "string",
@@ -12622,6 +12674,12 @@
       },
       "description": "Add a new DECLARATIVE verb (a deterministic provider HTTP call — no code execution) to an ALREADY-INSTALLED, already-credentialed tool — e.g. teach 'apify_api' a new 'apify_search_reddit_actors' verb without a dev-session/redeploy. Creates a kind='declarative' skill only; rejects any request implying code/instruction/builtin execution. `toolName` MUST already exist (installed + visible to the caller) or this is refused — it never creates a new tool/connection as a side effect. Governed the same as every other write: may return status='proposed' for review. Discover installed tools with synap_list_capabilities first.",
       "parameters": [
+        {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why, shown to the reviewer."
+        },
         {
           "name": "toolName",
           "type": "string",
@@ -12693,6 +12751,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why, shown to the reviewer."
+          },
           "toolName": {
             "type": "string",
             "description": "The NAME of the already-installed tool this verb calls (e.g. 'apify_api'). Must already exist — this tool never creates a new tool/connection."
@@ -12891,8 +12953,14 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron): native scheduling. A playbook_run node starts a playbook's session on any trigger. Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
+      "description": "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron): native scheduling. A playbook_run node starts a playbook's session on any trigger. Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
       "parameters": [
+        {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why, shown to the reviewer."
+        },
         {
           "name": "name",
           "type": "string",
@@ -12960,6 +13028,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why, shown to the reviewer."
+          },
           "name": {
             "type": "string",
             "description": "Automation display name."
@@ -13146,6 +13218,12 @@
       "description": "Turn a stated standing intent into a RULE — the COMPILED door, and the one to reach for whenever the user says 'always…', 'from now on…', 'never…', 'every Monday…', or states a preference that should outlive this conversation. Send their own words as `intent`.\n• `intent` alone → a FACT rule: durable prose ('Acme prefers async') that any agent reads later while reasoning. Legitimate and complete.\n• `intent` + `sentence` → BEHAVIOUR: the door compiles your WHEN/WHERE/THEN into a real automation, or refuses. A rule that describes something running is never stored as prose that cannot run.\nUSE THIS INSTEAD OF synap_create_automation / synap_create_skill for a standing intent. Those are raw primitives — they persist whatever you hand them, so a bad trigger installs 'active' and silently never fires, and an instruction skill only ever sits there as text. This door verifies the compiled artifact against the runtime BEFORE anything is saved. (Reach for synap_create_automation directly only when you are authoring a flow that is not a user-stated rule — a multi-step pipeline with its own data contract.)\nWHAT IT REJECTS, and why each rejection is real: a WHEN naming an event no emitter produces (the automation could never match); a WHERE row with a field but no value (dropping it would widen the rule beyond what was written); a THEN with no configured action (a trigger wired to nothing); `run_command` (the command step has no receiver and throws every run — use an AI step). A refusal comes back as status='denied' with `failure.clause` (WHEN | WHERE | THEN) and a reason written for a human. FIX THAT CLAUSE AND RESEND — it is a verdict, not a transient error, and re-sending it unchanged will fail identically.\nIf the intent describes something that should run and you send no `sentence`, the receipt carries `needsBehaviour` — the rule was saved as prose and will not execute; say so rather than reporting it as in effect.\nScope: pod-wide by default; pass `workspaceId` for a domain rule, `projectId` for the cross-cutting lens. A `projectId` limit is only enforceable on WHEN events that carry a project — entity.*, entity_facet.*, external_message.*, channel_message.*, focus_session.*, proposal.* — and is REFUSED (status='denied', clause WHEN) on any other trigger (e.g. a schedule); drop the project or pick one of those events. `expiresAt` makes the rule stop applying — pass one whenever the intent is situational ('while we're in the launch push'), because a standing rule with no expiry is one the user must remember to revoke.\nGoverned like every write: status='proposed' is SUCCESS, not an error — surface the returned link as a markdown link and never report a proposed rule as already in effect.",
       "parameters": [
         {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why, shown to the reviewer."
+        },
+        {
           "name": "intent",
           "type": "string",
           "required": true,
@@ -13192,6 +13270,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why, shown to the reviewer."
+          },
           "intent": {
             "type": "string",
             "description": "The rule in the user's own words — this IS the rule an agent reads later, so keep their phrasing rather than paraphrasing it into a spec."
@@ -13411,6 +13493,12 @@
       "description": "Propose a CORRECTION to an existing rule — the governed edit door, the same one the app's rule editor uses. Reach for it when a rule you (or anyone) wrote no longer matches the facts: change its wording, its WHEN/WHERE/THEN, its scope or its review date. Never delete-and-recreate a rule to change it — that loses its id, its run history and its lineage.\nFULL SHAPE, not a patch: send the rule as it should be stored. `intent` and `scope` are REQUIRED and replace the stored ones (send the old wording/scope unchanged if you are only fixing the sentence). `expiresAt` and `sentence` have THREE states: omit to KEEP the stored value, `null` to CLEAR it (a `null` sentence makes the rule prose-only and retires its automation), a value to REPLACE it. `draft` defaults to false — editing a draft rule therefore ACTIVATES it, which recompiles the sentence and is refused by clause if it still has a hole; pass `draft: true` to keep it a draft.\n`ruleId`: the `ruleId` on synap_create_rule's receipt. If that create came back `proposed`, call synap_get_proposal with its proposalId after a person approved it — the id is `data.materialized.ruleId`. There is no dedicated rule listing on MCP. A workspace rule is only found under its workspace (pass its `workspaceId`); `not_found` means no rule with that id is visible to you.\nRefusals are the same as synap_create_rule's: status='denied' with `failure.clause` (WHEN | WHERE | THEN) — fix that clause and resend.\nGoverned like every write: status='proposed' is SUCCESS, not an error — nothing changes until a person approves it. Surface the returned link as a markdown link and never report a proposed edit as already in effect.",
       "parameters": [
         {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why, shown to the reviewer."
+        },
+        {
           "name": "ruleId",
           "type": "string",
           "required": true,
@@ -13469,6 +13557,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why, shown to the reviewer."
+          },
           "ruleId": {
             "type": "string",
             "description": "UUID of the rule to edit (the `ruleId` from synap_create_rule's receipt, or `data.materialized.ruleId` on its approved proposal)."
@@ -13881,6 +13973,12 @@
       "description": "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both: read synap_load_skill('system/synap/code-skills') first for the runtime (the async (args, context) wrapper, callProvider and its return shape, hubProtocol reads, propose.entity, limits). A code skill that calls an installed tool with callProvider should declare it in `requiredTools`, so a run is approved once, not once more per call. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until a person approves its proposal — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. That one approval also turns it on: there is no separate enable step (an edit to its code later turns it off until approved again). One name per skill in a scope: a create under a name that already exists here is refused with that skill's id — change it with synap_update_skill instead. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
       "parameters": [
         {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why, shown to the reviewer."
+        },
+        {
           "name": "name",
           "type": "string",
           "required": true,
@@ -13957,6 +14055,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why, shown to the reviewer."
+          },
           "name": {
             "type": "string",
             "description": "Stable skill name (e.g. 'normalize_phone_numbers')."
@@ -14057,6 +14159,12 @@
       "description": "Revise an existing skill on this pod — its `body` (the teaching prose), `description` or `name`, and for a CODE skill its `code`, `parameters`, `timeoutSeconds` and `requiredTools` — by `slug` (the ref synap_load_skill resolves) or `id`. Use it when a skill you authored goes stale or its code has a bug; never create a second skill under the same name or a new slug as a twin. Governed like every write: status='proposed' is success. An agent rewrite of a skill's body, and any change to what a code skill runs (code, parameters, timeout, a tool added to requiredTools), leaves it UNAPPROVED until the owner approves it again — so do not report it as live: synap_list_capabilities shows it `not_enabled` with the link to hand the person.",
       "parameters": [
         {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why, shown to the reviewer."
+        },
+        {
           "name": "slug",
           "type": "string",
           "required": false,
@@ -14120,6 +14228,10 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "reasoning": {
+            "type": "string",
+            "description": "Why, shown to the reviewer."
+          },
           "slug": {
             "type": "string",
             "description": "The skill's slug (e.g. 'biz/business-plan')."

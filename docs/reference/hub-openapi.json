@@ -3383,6 +3383,11 @@
             "minLength": 1,
             "description": "A stable key correlating retries of THIS logical run, so an external-send verb is at-most-once. Omitted → a content hash is derived."
           },
+          "reasoning": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Why, shown to the reviewer."
+          },
           "channelId": {
             "type": "string",
             "description": "Instruction-provenance: the acting channel of this agent turn. A run triggered from an untrusted-origin channel force-proposes instead of auto-running."
@@ -55420,6 +55425,7 @@
                     "required": ["trigger", "conditions", "actions"]
                   },
                   "draft": { "type": "boolean", "default": false },
+                  "reasoning": { "type": "string", "maxLength": 2000 },
                   "agentUserId": { "type": "string", "format": "uuid" },
                   "userId": { "type": "string", "format": "uuid" }
                 },
