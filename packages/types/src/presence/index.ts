@@ -572,6 +572,8 @@ export const SENSITIVE_ACTIONS = {
   // A key or a client an app or AI service holds, or what it may do.
   "apps.issueKey": "setup",
   "apps.setWriteMode": "setup",
+  // What a pod app may do and where (W3d): it may widen within its ask.
+  "apps.updateAccess": "setup",
   "apps.setRedirectUris": "setup",
   "apps.setSignInPolicy": "setup",
   "intelligenceRegistry.register": "setup",
@@ -639,6 +641,7 @@ export const SENSITIVE_ACTION_TOKENS = {
   "apiKeys.setMachineDefaults": { action: "update", objectKind: "machine" },
   "apps.issueKey": { action: "create", objectKind: "api_key" },
   "apps.setWriteMode": { action: "update", objectKind: "app" },
+  "apps.updateAccess": { action: "update", objectKind: "app" },
   "apps.setRedirectUris": { action: "update", objectKind: "app" },
   "apps.setSignInPolicy": { action: "update", objectKind: "app" },
   "intelligenceRegistry.register": {

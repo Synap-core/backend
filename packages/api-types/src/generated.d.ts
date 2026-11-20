@@ -91,6 +91,73 @@ export interface KeyDraft {
 	/** What it may touch, where, and for how long. */
 	readonly grant: GrantDraft;
 }
+declare const APP_ACCESS_VERSION: 2;
+/** What an app may be given by one person, read from its ask and their floor. */
+export interface AppAccessCeiling {
+	/** Every permission the app asked for (and declared), each exactly. */
+	readonly permissions: readonly string[];
+	/**
+	 * The asked reads that may hold in All spaces: declared pod-wide by the app
+	 * AND a pod-wide read (`isPodWideReadPermission`).
+	 */
+	readonly allSpacesReads: readonly string[];
+	/** Where the person may give a read. */
+	readonly read: {
+		readonly projects: readonly string[];
+		readonly spaces: readonly string[];
+	};
+	/** Where the person may give a write. */
+	readonly write: {
+		readonly projects: readonly string[];
+		readonly spaces: readonly string[];
+	};
+}
+/** A space as a screen shows it. */
+export interface NamedSpace {
+	readonly id: string;
+	readonly name: string;
+	/** The template it was made from (`workspaces.package_slug`), or null. */
+	readonly templateSlug: string | null;
+}
+/** A project as a screen shows it. */
+export interface NamedProject {
+	readonly id: string;
+	readonly name: string;
+	/** Its home space, or null for a project in no space. */
+	readonly workspaceId: string | null;
+}
+/** A v2 access with names: what a screen shows. */
+export interface NamedAppAccess {
+	readonly version: typeof APP_ACCESS_VERSION;
+	readonly permissions: readonly string[];
+	readonly read: {
+		/** "all" under All spaces too (Q1: every project is included). */
+		readonly projects: "all" | readonly NamedProject[];
+		readonly spaces: "all" | readonly NamedSpace[];
+	};
+	readonly write: {
+		readonly projects: readonly NamedProject[];
+		readonly spaces: readonly NamedSpace[];
+	};
+}
+/** One old pair a re-consent shows as "was", with its place named. */
+export interface ReconsentWas {
+	readonly permission: string;
+	readonly place: {
+		/** null for the pod. */
+		readonly id: string | null;
+		readonly kind: "pod" | "project" | "space";
+		readonly name: string;
+	};
+}
+/** Why a connection asks again, as a screen shows it (Q3). */
+export interface ReconsentView {
+	readonly reason: "narrows" | "too-large" | "unplaceable" | "widens";
+	/** What it holds now, pair by pair, named. */
+	readonly was: readonly ReconsentWas[];
+	/** The v2 pre-fill, clamped to what the person may give now. */
+	readonly proposed: NamedAppAccess;
+}
 declare const PROVIDE_SECRET_USES: readonly [
 	"once",
 	"session"
@@ -19058,6 +19125,18 @@ export interface PodAppView {
 	verified: boolean;
 	/** What the person approved, per space — what Narrow edits. */
 	approved: NamedApprovedRequest[];
+	/**
+	 * What it may do and where, v2, named (W3d): the stored access, or the
+	 * exact lift of its pairs; null when it must re-consent (`reconsent`).
+	 */
+	access: NamedAppAccess | null;
+	/**
+	 * Its old pairs cannot become v2 as they are (Q3): Connected shows "Needs
+	 * your review". Its old access keeps working until W5. `proposed` is the
+	 * pairs' v2 form, NOT clamped here (the editor, `apps.accessOffer`, clamps
+	 * it to what the person may give now).
+	 */
+	reconsent: ReconsentView | null;
 	/** When this person last connected it (the newest consent). */
 	connected_at: Date | null;
 	/** The newest use of any of its access tokens. */
@@ -19087,6 +19166,44 @@ export interface AdminPodAppGroup {
 	/** Members whose connection is live. */
 	live: number;
 	members: AdminPodAppMember[];
+}
+/** What an app asked, in v2 terms: one item per permission (W3d). */
+export interface AccessAskedItem {
+	permission: string;
+	tier: "read" | "write";
+	/** The developer's words (`synap_requests[].reason`), shown as text. */
+	reason: string | null;
+	/** The F4 entry it was declared in, to draw ONE row per group. */
+	kindGroup: OAuthAppKindGroup | null;
+	/** May it hold in All spaces (declared pod-wide AND a pod-wide read)? */
+	allSpaces: boolean;
+	/** Can the person give it anywhere? false: the "can't give" fold. */
+	offerable: boolean;
+}
+/** The places the person may give, per tier, named (W3d). */
+export interface AccessPlacesOffer {
+	read: {
+		/** Every asked read may ride All spaces. */
+		allSpaces: boolean;
+		projects: NamedProject[];
+		spaces: NamedSpace[];
+	};
+	write: {
+		projects: NamedProject[];
+		spaces: NamedSpace[];
+		/** Write spaces made from a declared template: the pre-tick ([] = none). */
+		suggestedSpaceIds: string[];
+	};
+}
+/** The asked access and what the person may give, read now (W3d). */
+export interface AccessOffer {
+	asked: {
+		permissions: AccessAskedItem[];
+		templates: string[];
+	};
+	places: AccessPlacesOffer;
+	/** The same, as the ceiling every v2 approval is checked against. */
+	ceiling: AppAccessCeiling;
 }
 /** One pair resolved to a space the person may give it in. */
 export interface ResolvedAskPair {
@@ -19207,6 +19324,12 @@ export interface OAuthAppConsent {
 	 * them to what it holds; nothing it holds is shown or changed here.
 	 */
 	ask: OAuthAppAsk | null;
+	/**
+	 * The consent in v2 terms (W3d): what the new screen reads. Always set by
+	 * the server; optional so a screen or fixture written before W3d still
+	 * types (additive).
+	 */
+	access?: OAuthAppAccessConsent;
 }
 /** What the short consent shows (`OAuthAppConsent.ask`). */
 export interface OAuthAppAsk {
@@ -19217,6 +19340,38 @@ export interface OAuthAppAsk {
 	/** Pairs it asked for that the person cannot give it (`perm@place`). */
 	unavailable: string[];
 	/** The app's page in pod admin ("See everything it has"), once connected. */
+	connectionPublicId: string | null;
+}
+/**
+ * The consent in v2 terms (app permissions W3d, decision fc37f740 design A):
+ * what the app asked, the places the person may give per tier, what it holds
+ * now, why it asks again, and the short ask. Contract: pod document be6caecc
+ * ("W3d consent contract"). Allow sends an `AppAccess` (`access`) or, for the
+ * short ask, nothing but Q4's `askWritePlace`.
+ */
+export interface OAuthAppAccessConsent {
+	asked: {
+		permissions: AccessAskedItem[];
+		templates: string[];
+	};
+	places: AccessPlacesOffer;
+	/** Already connected: what it holds now (stored v2, or the exact lift of its pairs). */
+	current: NamedAppAccess | null;
+	/** Its old pairs cannot become v2 as they are (Q3): never auto-allow. */
+	reconsent: ReconsentView | null;
+	/** The short consent, v2: null for the full screen. */
+	ask: OAuthAppAccessAsk | null;
+}
+/** The short consent in v2 terms: it only adds permissions (Q4 aside). */
+export interface OAuthAppAccessAsk {
+	/** "Content Studio asks to also read notes". */
+	title: string;
+	/** The permissions it adds, as the asked items. */
+	adds: AccessAskedItem[];
+	/** Q4: it has no write place and asks its first write: show the write picker. */
+	needsWritePlace: boolean;
+	/** What it asked that the person cannot give (`perm@place`, or a permission). */
+	unavailable: string[];
 	connectionPublicId: string | null;
 }
 export interface OAuthConsentContext {
@@ -31054,12 +31209,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		decideOAuthAuthorization: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				access?: {
+					permissions: string[];
+					read: {
+						projects: string[] | "all";
+						spaces: string[] | "all";
+					};
+					version: 2;
+					write: {
+						projects: string[];
+						spaces: string[];
+					};
+				} | undefined;
 				appSignInFingerprint?: string | undefined;
 				approve: boolean;
 				approved?: {
 					permission: string;
 					workspaceId: string | null;
 				}[] | undefined;
+				askWritePlace?: {
+					projects: string[];
+					spaces: string[];
+				} | undefined;
 				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
@@ -31753,6 +31924,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		accessOffer: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				publicId: string;
+			};
+			meta: object;
+			output: {
+				asked: AccessOffer["asked"];
+				current: NamedAppAccess | null;
+				places: AccessPlacesOffer;
+				reconsent: ReconsentView | null;
+			};
+		}>;
 		adminGet: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				publicId: string;
@@ -32350,6 +32533,86 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: AppWriteModeView;
+		}>;
+		updateAccess: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				access: {
+					permissions: string[];
+					read: {
+						projects: string[] | "all";
+						spaces: string[] | "all";
+					};
+					version: 2;
+					write: {
+						projects: string[];
+						spaces: string[];
+					};
+				};
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+				publicId: string;
+			};
+			meta: object;
+			output: {
+				agent_user_id: string | null;
+				approved_requests: AppApprovedRequest[] | null;
+				created_at: Date;
+				description: string | null;
+				grants: {
+					clientId: string | null;
+					createdAt: Date;
+					entityIds: string[] | null;
+					id: string;
+					label: string | null;
+					permissions: string[];
+					projectIds: string[] | null;
+					revokedAt: Date | null;
+					workspaceIds: string[] | null;
+				}[];
+				id: string;
+				last_used_at: Date | null;
+				logo_url: string | null;
+				mode: "oauth" | "specific";
+				name: string;
+				pending_request: {
+					proposal_id: string;
+					requested_at: Date;
+					requests: AppApprovedRequest[];
+				} | null;
+				person_may_decide_own_agent_proposals: boolean;
+				public_id: string;
+				redirect_uris: string[];
+				removed_at: Date | null;
+				revoked_at: Date | null;
+			};
 		}>;
 	}>>;
 	artifacts: import("@trpc/server").TRPCBuiltRouter<{
@@ -53020,7 +53283,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				action: {
 					input: unknown;
-					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
 				};
 			} | {
 				oauthConsent: {

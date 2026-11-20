@@ -692,8 +692,9 @@ describe("grantScopesForAccess — v2 with projects (no lift makes one yet)", ()
     expect(isPodWideReadPermission(R_TRACK)).toBe(false);
   });
 
-  // Rules out: "all projects" read as the pod.
-  it('"all" projects makes no scope yet (fail closed until the engine pins every project)', () => {
+  // Rules out: "all projects" read as the pod. W3d mints it as the projects
+  // resolved at the mint (`allProjects`); without them, nothing.
+  it('"all" projects mints nothing without the projects resolved at the mint (fail closed)', () => {
     expect(
       grantScopesForAccess(
         access({ permissions: [R_NOTE], read: { spaces: [], projects: "all" } })
