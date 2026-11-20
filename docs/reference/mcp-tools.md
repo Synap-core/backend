@@ -1006,7 +1006,7 @@ Escalation L4 — crystallize AFTER a session succeeded and the process is clear
 
 **List processes** · Group: `build` · readOnlyHint: true · openWorldHint: false
 
-List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.
+List playbooks (reusable process templates) visible to you: every member workspace plus pod-wide ones. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.
 
 | Parameter     | Type   | Required | Description                                                                                                                 |
 | ------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -1014,8 +1014,9 @@ List playbooks (reusable process/session templates) visible to you across the po
 | `status`      | enum   | no       | Optional status filter. One of: `draft`, `active`, `paused`, `archived`.                                                    |
 | `limit`       | number | no       | Page size (1–100, default 25).                                                                                              |
 | `cursor`      | string | no       | nextCursor of the prior reply                                                                                               |
-| `playbookId`  | string | no       | Read ONE playbook in full (its whole definition and its `process`), instead of listing.                                     |
+| `playbookId`  | string | no       | Read ONE playbook in full (definition and `process`).                                                                       |
 | `detail`      | enum   | no       | lean (default) = the digest per playbook; full = complete rows (large: pair it with a small limit). One of: `lean`, `full`. |
+| `runs`        | enum   | no       | With playbookId: per stage, how its runs went. One of: `digest`.                                                            |
 
 ## synap_match_playbooks
 
