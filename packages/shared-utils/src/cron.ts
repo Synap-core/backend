@@ -1,23 +1,14 @@
 /**
  * THE cron clock of the pod: when a cron trigger next fires, in the zone its
- * author set. One function for every door that stamps `automations.next_run_at`
- * (the automations create / update / activate door, the playbook schedule, the
- * scheduler's post-run update and its self-heal), so no two of them can read
- * the same rule at different hours.
- *
- * Built on `cron-parser`, which reads standard cron: a day-of-month and a
- * day-of-week both set match EITHER (`0 9 1 * 1` = the 1st and every Monday),
- * `a-b/N` steps, names (`MON`, `JAN`), `L` and `#`. The two hand-written
- * parsers it replaces matched the process clock, ANDed the two day fields and
- * had no `a-b/N` (ticket 592930c8: a rule set to 06:50 Europe/Paris fired at
- * 06:50 UTC, because the stored `timezone` was never read).
+ * author set (standard cron via `cron-parser`: day-of-month and day-of-week both
+ * set match EITHER). Every door that stamps `automations.next_run_at` reads it.
  */
 import cronParser from "cron-parser";
 
 const { parseExpression } = cronParser;
 
 /** The zone of a cron trigger that names none — every row written before zones were read. */
-export const DEFAULT_CRON_TIMEZONE = "UTC";
+const DEFAULT_CRON_TIMEZONE = "UTC";
 
 /**
  * The next moment after `from` that `expression` matches, read in `timezone`
@@ -42,6 +33,21 @@ export function nextCronRunAt(
   } catch {
     return null;
   }
+}
+
+/** The next slot of a stored cron `triggerConfig` (`expression`, `timezone`); null without one. */
+export function nextCronRunAtFor(
+  triggerConfig: unknown,
+  from: Date
+): Date | null {
+  const config = (triggerConfig ?? {}) as Record<string, unknown>;
+  return typeof config.expression === "string"
+    ? nextCronRunAt(
+        config.expression,
+        from,
+        typeof config.timezone === "string" ? config.timezone : undefined
+      )
+    : null;
 }
 
 /**

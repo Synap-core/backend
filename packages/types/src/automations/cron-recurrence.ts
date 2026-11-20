@@ -70,13 +70,9 @@ export interface CronRecurrence {
 const AT = "09:00";
 
 /**
- * The zone every OFFERED label names. An offered recurrence carries no
- * `cronTimezone`, so `toBackendTrigger` stores `timezone: "UTC"` and the
- * scheduler reads it in UTC (`nextCronRunAt`, `@synap/shared-utils`, ticket
- * 592930c8: until then the stored zone was never read and every rule ran on
- * the worker's clock). A label always names its zone: a bare "09:00" read in
- * Paris is an hour nobody chose. A stored rule with its own zone says that
- * zone ({@link cronWords}).
+ * The zone every OFFERED label names: an offered recurrence is stored with
+ * `timezone: "UTC"`, and a bare "09:00" is an hour nobody chose. A stored rule
+ * with its own zone says that zone ({@link cronWords}).
  */
 const ZONE = "UTC";
 

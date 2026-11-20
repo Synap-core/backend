@@ -131,7 +131,7 @@ import {
   isUnboundedFullAccess,
 } from "../access/grant-door-fence.js";
 import { TRPCError } from "@trpc/server";
-import { isCronTimezone, nextCronRunAt } from "@synap/shared-utils";
+import { isCronTimezone, nextCronRunAtFor } from "@synap/shared-utils";
 import {
   decodeDefinitionCursor,
   encodeDefinitionCursor,
@@ -953,17 +953,10 @@ async function insertAutomationAfterGovernance(
     triggerType: input.triggerType,
     triggerConfig: input.triggerConfig,
   });
-  let nextRunAt: Date | null = null;
-  if (status === "active" && input.triggerType === "cron") {
-    const expression = input.triggerConfig.expression as string | undefined;
-    if (expression) {
-      nextRunAt = nextCronRunAt(
-        expression,
-        new Date(),
-        input.triggerConfig.timezone as string | undefined
-      );
-    }
-  }
+  const nextRunAt =
+    status === "active" && input.triggerType === "cron"
+      ? nextCronRunAtFor(input.triggerConfig, new Date())
+      : null;
 
   // Insert with 23505 recovery against automations_workspace_name_active_uq
   // (0230). Re-authoring the same automation (MCP create_automation, a capability
@@ -2973,16 +2966,10 @@ export const automationsRouter = router({
         storedTriggerType === "cron" &&
         (updates.status ?? existing.status) === "active"
       ) {
-        const triggerConfig = (updates.triggerConfig ??
-          existing.triggerConfig) as Record<string, unknown>;
-        const expression = triggerConfig?.expression as string | undefined;
-        updates.nextRunAt = expression
-          ? nextCronRunAt(
-              expression,
-              new Date(),
-              triggerConfig?.timezone as string | undefined
-            )
-          : null;
+        updates.nextRunAt = nextCronRunAtFor(
+          updates.triggerConfig ?? existing.triggerConfig,
+          new Date()
+        );
       }
 
       await database
@@ -3144,19 +3131,10 @@ export const automationsRouter = router({
       const proposed = await proposeAgentActivation(ctx.userId, existing);
       if (proposed) return proposed;
 
-      // For cron triggers, compute the next run time
-      let nextRunAt: Date | null = null;
-      if (existing.triggerType === "cron") {
-        const triggerConfig = existing.triggerConfig as Record<string, unknown>;
-        const cronExpression = triggerConfig?.expression as string | undefined;
-        if (cronExpression) {
-          nextRunAt = nextCronRunAt(
-            cronExpression,
-            new Date(),
-            triggerConfig?.timezone as string | undefined
-          );
-        }
-      }
+      const nextRunAt =
+        existing.triggerType === "cron"
+          ? nextCronRunAtFor(existing.triggerConfig, new Date())
+          : null;
 
       await database
         .update(automations)

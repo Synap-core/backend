@@ -89,14 +89,9 @@ ENV SYNAP_GIT_REPO=$GIT_REPO
 ARG BUILD_AT=""
 ENV SYNAP_BUILD_AT=$BUILD_AT
 
-# ── The process timezone, PINNED rather than inherited ──────────────────────
-# Cron automations no longer read this clock: `nextCronRunAt`
-# (packages/shared-utils/src/cron.ts) reads each rule's own
-# `triggerConfig.timezone`, UTC when absent (ticket 592930c8). Process-local
-# readers remain (the matcher's `today` window, filter-operators.ts), and the
-# zone was UTC only because `node:*-alpine` ships no `/etc/localtime` — true by
-# ACCIDENT, silently changed by any base image or host that supplies one.
-# Declaring it keeps the "UTC" those readers state honest rather than lucky.
+# The process clock is UTC by declaration, not by the base image's accident:
+# process-local readers (the matcher's `today` window) state "UTC". Cron rules
+# read their own zone (packages/shared-utils/src/cron.ts).
 ENV TZ=UTC
 
 RUN apk add --no-cache postgresql-client dumb-init

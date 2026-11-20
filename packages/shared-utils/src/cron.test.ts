@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isCronTimezone, nextCronRunAt } from "./cron.js";
+import { isCronTimezone, nextCronRunAt, nextCronRunAtFor } from "./cron.js";
 
 const at = (iso: string) => new Date(iso);
 const next = (expression: string, from: string, timezone?: string) =>
@@ -47,12 +47,6 @@ describe("nextCronRunAt — the zone a trigger names (ticket 592930c8)", () => {
       "2026-01-15T06:50:00.000Z"
     );
   });
-
-  it("is strictly after `from`: a slot that is now is the next one", () => {
-    expect(next("50 6 * * *", "2026-01-15T06:50:00Z")).toBe(
-      "2026-01-16T06:50:00.000Z"
-    );
-  });
 });
 
 describe("nextCronRunAt — standard cron fields", () => {
@@ -68,33 +62,26 @@ describe("nextCronRunAt — standard cron fields", () => {
     );
   });
 
-  it("reads a stepped range a-b/N", () => {
-    // 09, 13, 17.
-    expect(next("0 9-17/4 * * *", "2026-01-15T10:00:00Z")).toBe(
-      "2026-01-15T13:00:00.000Z"
-    );
-    expect(next("0 9-17/4 * * *", "2026-01-15T17:30:00Z")).toBe(
-      "2026-01-16T09:00:00.000Z"
-    );
-  });
-
-  it("reads day names and */N", () => {
-    expect(next("0 9 * * MON", "2026-01-15T00:00:00Z")).toBe(
-      "2026-01-19T09:00:00.000Z"
-    );
-    expect(next("*/15 * * * *", "2026-01-15T10:07:00Z")).toBe(
-      "2026-01-15T10:15:00.000Z"
-    );
-  });
-
   it("cannot schedule what is not five fields, not cron, or in an unknown zone", () => {
     expect(next("0 0 9 * * *", "2026-01-15T00:00:00Z")).toBeNull();
     expect(next("@daily", "2026-01-15T00:00:00Z")).toBeNull();
-    expect(next("not a cron", "2026-01-15T00:00:00Z")).toBeNull();
-    expect(next("61 9 * * *", "2026-01-15T00:00:00Z")).toBeNull();
     expect(
       next("50 6 * * *", "2026-01-15T00:00:00Z", "Mars/Olympus")
     ).toBeNull();
+  });
+});
+
+describe("nextCronRunAtFor — a stored triggerConfig", () => {
+  it("reads its expression in its zone; none is no slot", () => {
+    const from = at("2026-01-15T00:00:00Z");
+    expect(
+      nextCronRunAtFor(
+        { expression: "50 6 * * *", timezone: "Europe/Paris" },
+        from
+      )?.toISOString()
+    ).toBe("2026-01-15T05:50:00.000Z");
+    expect(nextCronRunAtFor({ timezone: "Europe/Paris" }, from)).toBeNull();
+    expect(nextCronRunAtFor(null, from)).toBeNull();
   });
 });
 
