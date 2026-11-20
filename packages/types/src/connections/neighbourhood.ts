@@ -251,6 +251,9 @@ export const LINK_EDGE_ROLES = {
   // session --orchestrated_by--> session: the child works FOR its
   // orchestrator, read like `member_of`. Not a wait (the hold is).
   orchestrated_by: { outgoing: "servesAndBlocks", incoming: "work" },
+  // capability(add-on) --extends--> capability(base): which tool an add-on
+  // runs through — configuration, like `dispatched_via`, not work or lineage.
+  extends: RELATED,
 } as const satisfies Readonly<Record<string, EdgeRole>>;
 
 /**

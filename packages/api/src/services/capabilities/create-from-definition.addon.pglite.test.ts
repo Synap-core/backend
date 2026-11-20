@@ -261,13 +261,20 @@ describe("an add-on on an installed base", () => {
   });
 
   it("declaring a tool of its own is refused", async () => {
+    // Its own key and action, so a refusal that fails to happen cannot hand
+    // a later test a tool or a skill it should have made itself.
     await expect(
       install({
-        ...LINKEDIN_PROFILES,
-        tools: [{ name: "apify_api", kind: "api" }],
+        key: "apify-own-tool",
+        name: "Own tool",
+        extends: "apify",
+        vault: [],
+        tools: [{ name: "own_tool_api", kind: "api" }],
+        skills: [skill("own_tool_action", "pod", ["own_tool_api"])],
       })
     ).rejects.toThrow(/declares no tool or credential of its own/);
-    expect(await containerByKey("apify-linkedin-profiles")).toBeUndefined();
+    expect(await containerByKey("apify-own-tool")).toBeUndefined();
+    expect(await skillId("own_tool_action")).toEqual([]);
   });
 
   it("installs as its own container and records which tool it extends", async () => {

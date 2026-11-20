@@ -242,6 +242,8 @@ const LEAF_OUTSIDE_FILES: Readonly<Record<string, string>> = {
   // define-time check reads instead of its own regexes (cell-source-checks).
   "../cell-bridge/network-loads.js": "../cell-bridge/network-loads.ts",
   "../cell-bridge/external-origins.js": "../cell-bridge/external-origins.ts",
+  // The frame's size cap, which the renderer-bundle check applies to cells.
+  "../cell-bridge/frame-size.js": "../cell-bridge/frame-size.ts",
 };
 const IMPORT_FROM = /^\s*(?:import|export)[^;]*?from\s+"([^"]+)"/gm;
 

@@ -12,7 +12,11 @@
 
 import { createHash, randomBytes } from "crypto";
 import { db, and, eq, isNull, gt } from "@synap/database";
-import { oauthClients, oauthAuthorizationCodes } from "@synap/database/schema";
+import {
+  oauthClients,
+  oauthAuthorizationCodes,
+  type RequestedKindGroup,
+} from "@synap/database/schema";
 
 import type { FirstPartyRedirectRule } from "./protocol.js";
 
@@ -50,6 +54,12 @@ export interface StoredClient {
   requestedTemplates?: string[];
   /** CIMD only: the permissions the document declares POD-WIDE (0379). */
   requestedPodWide?: string[];
+  /**
+   * CIMD only: the entries that list their kinds, as declared (0437, F4);
+   * `requestedPermissions` holds them expanded per kind. Empty on a copy
+   * cached before 0437.
+   */
+  requestedKindGroups?: RequestedKindGroup[];
   clientUri?: string | null;
   initiateLoginUri?: string | null;
   metadataFetchedAt?: Date | null;
@@ -68,6 +78,8 @@ export interface CimdClientInput {
   requestedReasons: Record<string, string>;
   requestedTemplates: string[];
   requestedPodWide: string[];
+  /** The entries that list their kinds (0437, F4); absent = none. */
+  requestedKindGroups?: RequestedKindGroup[];
   clientUri: string | null;
   initiateLoginUri: string | null;
   metadataFetchedAt: Date;
@@ -193,6 +205,7 @@ export async function upsertCimdClient(
     requestedReasons: input.requestedReasons,
     requestedTemplates: input.requestedTemplates,
     requestedPodWide: input.requestedPodWide,
+    requestedKindGroups: input.requestedKindGroups ?? [],
     clientUri: input.clientUri,
     initiateLoginUri: input.initiateLoginUri,
     metadataFetchedAt: input.metadataFetchedAt,

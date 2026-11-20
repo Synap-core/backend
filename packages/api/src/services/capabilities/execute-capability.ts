@@ -1210,6 +1210,12 @@ export async function executeCapability(input: {
  *   A capability.run proposal would have stored the call's parameters and
  *   its approval written the run result to recall (decision abaaa696).
  *
+ *   design.apply → `applyDesign` (services/designs): writes the design through
+ *   the governed entity door, told `forcePropose`, so the review is ONE
+ *   entity proposal carrying the design's diff (plan 0fc746f4 §2.6). A
+ *   capability.run proposal would have been a second gate in front of it,
+ *   showing the ops instead of the design, and replayed as the approver.
+ *
  * Tighten-only: only a `propose` verdict is handed down (a deny stays a deny,
  * a dry-run a dry-run, an unattended run with no review surface is refused
  * as before), and the handler's grant check still runs before anything. A
@@ -1221,6 +1227,7 @@ export const SELF_GATED_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "messaging.send",
   "market.install",
   "inbound_source.connect",
+  "design.apply",
 ]);
 
 function isSelfGatedBuiltin(skill: { kind: string; name: string }): boolean {

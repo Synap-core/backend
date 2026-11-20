@@ -243,6 +243,40 @@ export async function readForPage(
           include: ["pillars"],
         })
       );
+    // What a view adapter reads to draw (renderer bundles): the view by id
+    // (unlensed, the pod floors it), its rows by its STORED query (no
+    // ephemeral filters), a kind and its fields and lifecycle IN the page's
+    // space. A refusal (a view this viewer may not read, no space for the
+    // fields) reaches the page as that error, never as an empty answer.
+    case "views.get":
+      return client.views.get.query({
+        id: required(op, "an id", str(p.id)),
+      });
+    case "views.execute":
+      return client.views.execute.query({
+        id: required(op, "an id", str(p.id)),
+      });
+    case "profiles.get":
+      return client.profiles.get.query(
+        { identifier: required(op, "an identifier", str(p.identifier)) },
+        ws ? { context: { workspaceId: ws } } : undefined
+      );
+    case "propertyDefs.list": {
+      // Fields are read in a space (the procedure needs one): a page in no
+      // space gets the pod's refusal as its error. With a profileId, that
+      // kind's fields; without one, every field the space can see (the board
+      // adapter asks with no input).
+      const profileId = str(p.profileId);
+      return client.propertyDefs.list.query(
+        profileId ? { profileIds: [profileId] } : undefined,
+        ws ? { context: { workspaceId: ws } } : undefined
+      );
+    }
+    case "lifecycle.get":
+      return client.lifecycle.get.query({
+        profileSlug: required(op, "a profileSlug", str(p.profileSlug)),
+        workspaceId: lens.workspaceId,
+      });
     default: {
       // Every op of the one table has a case: a new op fails the build here.
       const unanswered: never = op;

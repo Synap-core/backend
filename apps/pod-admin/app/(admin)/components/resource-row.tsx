@@ -34,7 +34,8 @@ const CATALOGS = { en, fr };
 interface ResourceRowProps {
   Icon: LucideIcon;
   primary: string;
-  secondary?: string;
+  /** The line under it: words, or words holding a door (an origin link). */
+  secondary?: ReactNode;
   /** Optional right-aligned status. Absent = healthy / no-op. */
   status?: { kind: StatusKind; label: string };
   /** Optional click handler — called when the body (not actions) is clicked. */

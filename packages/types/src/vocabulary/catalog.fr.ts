@@ -478,6 +478,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.grant.progressive": "Octroi en cours",
   "action.read_again.imperative": "Relire",
   "action.read_again.past": "Lu",
+  "action.apply.imperative": "Appliquer",
+  "action.apply.past": "Appliqué",
   // ── Statuses: `status.<token>` (a participle alone is masculine, D4) ──
   "status.pending": "En attente",
   "status.approved": "Approuvé",

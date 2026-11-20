@@ -78,8 +78,11 @@ import {
   db,
   focusSessions,
   eq,
+  sessionStageIs,
   setSessionStatus,
+  type StatusMoveActor,
 } from "@synap/database";
+import type { TransitionCause } from "@synap-core/types/lifecycle";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
@@ -152,11 +155,42 @@ export interface AdvanceSessionStageInput {
    * (`enterStage`, spec 7111934d §2.4).
    */
   stageRunner?: PlaybookRunner | null;
+  /**
+   * COMPARE-AND-SET on `current_stage` (W6): the stage the mover READ (null:
+   * none). A `"door"` write lands only while the session still stands there;
+   * a session whose step moved meanwhile answers `stale` and nothing is
+   * written, emitted or gated, so a manual advance and a step that advanced
+   * by itself never jump two steps. A `"caller"` door checks it in its own
+   * UPDATE. Absent: no check (the door's historical callers).
+   */
+  expectedStage?: string | null;
+  /**
+   * The step advances BY ITSELF (W6, `advance-if-stage-met.ts`): nobody
+   * asked, so the subject moves as the `system` — never as the session's
+   * owner, who decided nothing — with the move that caused it. Such a move
+   * also needs the session `active` (its compare-and-set holds the status
+   * too: a person's pause or a close between the plan and the write wins),
+   * and writes the COLUMN FIRST, under that compare-and-set, then the
+   * subject: two triggers racing for one step write it once, and only the
+   * one that wrote it reports `changed` (its log row is the only one). The
+   * follow that the subject's move fires finds the stage already there.
+   */
+  bySystem?: { cause?: TransitionCause | null };
 }
 
 export interface AdvanceSessionStageResult {
   /** False when `toStage` equals the stage the session was already on. */
   changed: boolean;
+  /**
+   * The `expectedStage` no longer held: the session's step moved meanwhile.
+   * Nothing was written; re-read it and decide again.
+   */
+  stale?: {
+    expectedStage: string | null;
+    currentStage: string | null;
+    /** Set when the session stood in another status than `active` (`bySystem`). */
+    status?: string;
+  };
   /** True when the stage entered declares a gate (human or check). */
   gated: boolean;
   /**
@@ -276,9 +310,26 @@ export async function advanceSessionStage(
     return { ...UNCHANGED, refused };
   }
 
+  // COMPARE-AND-SET (W6): read before the subject leads, so a stale mover
+  // moves nothing; the column write below holds it again.
+  if (input.expectedStage !== undefined && input.stageWrite === "door") {
+    const stale = await staleStage(
+      session.id,
+      input.expectedStage,
+      !!input.bySystem
+    );
+    if (stale) return { ...UNCHANGED, stale };
+  }
+
   // STEP = STATUS (see the header): the subject moves, the run follows it.
+  // Not for a step that advanced by itself: its column is written first
+  // (`bySystem`).
   let subjectFirst: StageSubjectStatusOutcome | undefined;
-  if (input.stageWrite === "door" && !input.skipSubjectWrite) {
+  if (
+    input.stageWrite === "door" &&
+    !input.skipSubjectWrite &&
+    !input.bySystem
+  ) {
     subjectFirst = await moveSubjectFirst(input);
     if (
       (subjectFirst?.status === "written" ||
@@ -309,14 +360,31 @@ export async function advanceSessionStage(
     via: "advance" as const,
   };
   if (input.stageWrite === "door") {
-    await db
+    const written = await db
       .update(focusSessions)
       .set({
         currentStage: toStage,
         stageHistory: appendSessionStageHistory(move),
         updatedAt: new Date(),
       })
-      .where(eq(focusSessions.id, session.id));
+      .where(
+        and(
+          eq(focusSessions.id, session.id),
+          input.expectedStage === undefined
+            ? undefined
+            : sessionStageIs(input.expectedStage),
+          input.bySystem ? eq(focusSessions.status, "active") : undefined
+        )
+      )
+      .returning({ id: focusSessions.id });
+    if (written.length === 0 && input.expectedStage !== undefined) {
+      const stale = await staleStage(
+        session.id,
+        input.expectedStage,
+        !!input.bySystem
+      );
+      return { ...UNCHANGED, ...(stale ? { stale } : {}) };
+    }
   } else {
     await db
       .update(focusSessions)
@@ -394,6 +462,7 @@ export async function advanceSessionStage(
             toStage,
             userId,
             agentUserId: input.agentUserId ?? null,
+            ...subjectMover(input),
           });
 
   const slots = stageSlots ? { stageSlots } : {};
@@ -429,6 +498,7 @@ export async function advanceSessionStage(
           fromStage,
           userId,
           agentUserId: input.agentUserId ?? null,
+          ...subjectMover(input),
         });
         if (pass.reached) result.subjectReached = pass.reached;
         result.subjectStatus = pass.entered;
@@ -459,6 +529,48 @@ export async function advanceSessionStage(
     proposalType: gate.proposalType,
     ...slots,
   };
+}
+
+/**
+ * Who moves the subject when the step advanced by itself: the `system`, with
+ * the move that caused it (`bySystem`). Otherwise nothing: the writer moves
+ * it as the agent or the person who advanced.
+ */
+function subjectMover(input: AdvanceSessionStageInput): {
+  actor?: StatusMoveActor;
+  cause?: TransitionCause;
+} {
+  if (!input.bySystem) return {};
+  return {
+    actor: { kind: "system", userId: input.userId },
+    ...(input.bySystem.cause ? { cause: input.bySystem.cause } : {}),
+  };
+}
+
+/**
+ * Where the session stands when it is not where the mover read it (`expected`
+ * stage, and `active` for the system's move); else null.
+ */
+async function staleStage(
+  sessionId: string,
+  expected: string | null,
+  needsActive: boolean
+): Promise<AdvanceSessionStageResult["stale"] | null> {
+  const [row] = await db
+    .select({
+      currentStage: focusSessions.currentStage,
+      status: focusSessions.status,
+    })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, sessionId))
+    .limit(1);
+  if (!row) return null;
+  const currentStage = row.currentStage ?? null;
+  if (currentStage !== expected)
+    return { expectedStage: expected, currentStage };
+  return needsActive && row.status !== "active"
+    ? { expectedStage: expected, currentStage, status: row.status as string }
+    : null;
 }
 
 /** Session statuses process-sync's follow moves (`FOLLOWING_SESSION_STATUSES`). */
@@ -504,6 +616,7 @@ async function moveSubjectFirst(
       toStage,
       userId: input.userId,
       agentUserId: input.agentUserId ?? null,
+      ...subjectMover(input),
     });
   } catch (err) {
     logger.warn(

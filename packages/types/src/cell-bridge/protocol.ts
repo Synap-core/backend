@@ -4,9 +4,9 @@
  * iframe-protocol.ts`: `synap:query` / `synap:mutate` with an `id`, answered
  * by `synap:query:result` / `synap:mutate:result` carrying the same `id`).
  *
- * Only the read path and the write REFUSAL are here: a host of this version
- * answers reads and refuses every write (writes come later, through the
- * proposal door).
+ * A PAGE host (a stored HTML page, `host.ts`) answers reads and refuses every
+ * write. A MODULE host (`frame-host.ts`) also forwards the typed writes of
+ * `write-ops.ts` to the pod's governed doors.
  */
 
 /** Frame → host. */
@@ -24,14 +24,22 @@ export type CellBridgeFrameMessage =
       payload: unknown;
     };
 
-/** Host → frame. Exactly one of `data` / `error` is meaningful. */
+/**
+ * Host → frame. Exactly one of `data` / `error` is meaningful on a read. A
+ * write's answer is what the pod said: `approved` (applied), `proposed` (sent
+ * for review, `proposalId`) or `denied` (`error` says why). A page host only
+ * ever answers `denied` (`CELL_BRIDGE_WRITE_REFUSED`); a module host answers
+ * all three (`createCellFrameHost`, `frame-host.ts`).
+ */
 export type CellBridgeHostMessage =
   | { type: "synap:query:result"; id: string; data?: unknown; error?: string }
   | {
       type: "synap:mutate:result";
       id: string;
-      status: "denied";
-      error: string;
+      status: "approved" | "proposed" | "denied";
+      data?: unknown;
+      proposalId?: string;
+      error?: string;
     };
 
 const MAX_ID_LENGTH = 100;

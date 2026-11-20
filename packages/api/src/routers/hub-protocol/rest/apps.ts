@@ -444,7 +444,7 @@ export function registerAppsRoutes(app: HubHono): void {
         await repo.listForOwner(userId, { includeRevoked: true })
       ).filter((r) => r.app.mode === "oauth");
       const keys = await repo.keysByApp(rows.map((r) => r.app.publicId));
-      const pod = await podAppViews(rows, keys);
+      const pod = await podAppViews(rows, keys, userId);
       return c.json({
         apps: rows.map((row) => ({
           ...serializeApp(row),

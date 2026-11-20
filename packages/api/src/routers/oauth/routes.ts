@@ -52,6 +52,7 @@ import { cleanLoginHint } from "@synap-core/types/sign-in";
 import {
   AppAccessAskSyntaxError,
   formatSynapAsk,
+  parseRequestPlace,
   parseSynapAsk,
   withAppRequestScope,
 } from "@synap-core/types/grants";
@@ -596,7 +597,19 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
     // so the app can say "Connected as …" without another call.
     // Each pair carries its explicit place (`scope`, access model B) beside
     // `workspaceId`; an SDK that reads only `workspaceId` keeps working.
-    synap_grant: minted.grant.map(withAppRequestScope),
+    // Additive since app permissions W2: `projectId` (null: no pair names a
+    // project yet; an app's projects are its v2 access) and `place`, the
+    // pair's parsed `Place` ({kind:"spaces", ids} | {kind:"pod"} |
+    // {kind:"projects", ids}), so an SDK reads one shape for every place.
+    synap_grant: minted.grant.map((r) => ({
+      ...withAppRequestScope(r),
+      projectId: null,
+      place: parseRequestPlace(r, "app"),
+    })),
+    // Additive since W3d: what the token reaches as an AppAccess v2, with
+    // names (`NamedAppAccess`), its projects included, which no pair can
+    // say. null for a connection that keeps its pairs until it re-consents.
+    synap_access: minted.access,
     synap_user: minted.user,
     // Which app this connection is on the pod, and the pod-admin page where
     // the person narrows or revokes it (null: no valid POD_ADMIN_URL).

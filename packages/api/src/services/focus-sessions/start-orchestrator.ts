@@ -31,6 +31,13 @@
  * Owner floor everywhere: a picked session the caller does not own is
  * NOT_FOUND (an existence oracle otherwise), the same floor as `spawned_from`
  * and `blocked_by`. Nothing is written before the gate says yes.
+ *
+ * Key reach, per picked session ({@link pickedOutOfReach}): the gate checks
+ * the key's grant in ONE place (where the orchestrator is filed), but the
+ * write pauses a session in EVERY picked space. So, before the gate, a key
+ * bound to one workspace may pick only sessions in it, and a key's grant
+ * must allow the move (`session.update`) on each picked session's space and
+ * project; one outside it refuses the whole ask (403, nothing written).
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -41,6 +48,7 @@ import {
   eq,
   inArray,
   focusSessions,
+  getRequestGrant,
   links,
   users,
   readWorkspacePlacementRung,
@@ -51,8 +59,15 @@ import {
 import { createLogger } from "@synap-core/core";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
 import type { Hold } from "@synap-core/types/lifecycle";
-import type { ExpectedOutput } from "@synap/playbooks";
+import type { ExpectedOutput, SlotAnswer } from "@synap/playbooks";
+import { isDeclinedValue } from "@synap-core/types/ask";
+import { ORCHESTRATOR_APPROVAL_SLOT } from "@synap/jobs/utils/orchestrator-hold.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  grantDeniedKey,
+  recordGrantDenial,
+} from "../../utils/grant-write-check.js";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
 
 const logger = createLogger({ module: "start-orchestrator" });
 
@@ -61,8 +76,11 @@ export const ORCHESTRATOR_MIN_SESSIONS = 2;
 export const ORCHESTRATOR_MAX_SESSIONS = 12;
 export const ORCHESTRATOR_BRIEF_MAX = 4000;
 
-/** The person's yes: the slot every picked session's hold waits on. */
-export const ORCHESTRATOR_APPROVAL_SLOT = "plan-approval";
+/**
+ * The person's yes: the slot every picked session's hold waits on. Declared
+ * in @synap/jobs, where the stage-move rule reads it (`orchestrator-hold.ts`).
+ */
+export { ORCHESTRATOR_APPROVAL_SLOT };
 /** The orchestrator's one deliverable before the yes. */
 export const ORCHESTRATOR_PLAN_SLOT = "merged-plan";
 
@@ -125,6 +143,11 @@ type ChildRow = {
   workspaceId: string | null;
   /** The space-ladder rung that placed it (`readWorkspacePlacementRung`). */
   workspaceRung: SessionWorkspaceRung | null;
+  /**
+   * Its `metadata`, kept whole: the grant check reads where it COUNTS from
+   * it (`SessionPlace`, `access/session-counted-spaces.ts`).
+   */
+  metadata: unknown;
   projectId: string | null;
   trackId: string | null;
 };
@@ -153,9 +176,12 @@ async function loadOwnedSessions(
       )
     );
   return new Map(
-    rows.map(({ metadata, ...r }) => [
+    rows.map((r) => [
       r.id,
-      { ...r, workspaceRung: readWorkspacePlacementRung(metadata) } as ChildRow,
+      {
+        ...r,
+        workspaceRung: readWorkspacePlacementRung(r.metadata),
+      } as ChildRow,
     ])
   );
 }
@@ -200,6 +226,52 @@ export function orchestratorPlacement(rows: readonly ChildRow[]): {
   };
 }
 
+/**
+ * Why the calling key may not orchestrate these sessions, or null. Checked for
+ * EACH picked session, since the write pauses every one of them: a key bound
+ * to a workspace reaches only the sessions in it (`resolveConfinedWorkspace`'s
+ * contract; a session in no space is outside it too, as a bound key never
+ * lists one), and a key's grant must allow the move where each one COUNTS
+ * (`sessionGrantWorkspaceId`, `access/session-counted-spaces.ts`: its own
+ * space, or for a project-only session one of its project's spaces) and on
+ * its project, the request the gate would derive (`focus_session/orchestrate`
+ * folds to `session.update`). The refusal names only the key's own binding or
+ * the id the caller sent, never the space it was refused in.
+ */
+async function pickedOutOfReach(
+  rows: readonly ChildRow[],
+  boundWorkspaceId: string | null
+): Promise<string | null> {
+  if (
+    boundWorkspaceId &&
+    rows.some((r) => r.workspaceId !== boundWorkspaceId)
+  ) {
+    return `This key is confined to workspace ${boundWorkspaceId}: every picked session must be in it.`;
+  }
+  const grant = getRequestGrant();
+  if (!grant) return null;
+  for (const r of rows) {
+    // Its project is read from the stored row `data.id` names
+    // (`grant-write-check.ts`: a non-create write is placed where the row
+    // lives now), so no `projectId` rides here.
+    const write = {
+      subjectType: "focus_session",
+      action: "orchestrate",
+      data: { id: r.id },
+    };
+    // Where the session COUNTS for a grant: its own space, or for a
+    // project-only session the first of its project's spaces the grant
+    // permits this write in (the one rule every write door reads).
+    const workspaceId = await sessionGrantWorkspaceId(r, write, grant);
+    const denied = await grantDeniedKey({ ...write, workspaceId }, grant);
+    if (!denied) continue;
+    const message = `This key's grant does not allow "${denied.key}" on session ${r.id}, so it cannot orchestrate it.`;
+    recordGrantDenial(message, denied.key, { clientId: grant.clientId });
+    return message;
+  }
+  return null;
+}
+
 const sessionName = (r: ChildRow) =>
   (r.title?.trim() || r.goal.trim()).slice(0, 80);
 
@@ -215,6 +287,8 @@ export async function startOrchestrator(p: {
   userId: string;
   agentUserId?: string | null;
   input: unknown;
+  /** The calling key's workspace binding (`keyWorkspaceId`), if any. */
+  boundWorkspaceId?: string | null;
 }): Promise<StartOrchestratorResult> {
   const parsed = startOrchestratorInputSchema.safeParse(p.input);
   if (!parsed.success) {
@@ -256,6 +330,11 @@ export async function startOrchestrator(p: {
     });
   }
 
+  const outOfReach = await pickedOutOfReach(rows, p.boundWorkspaceId ?? null);
+  if (outOfReach) {
+    throw new TRPCError({ code: "FORBIDDEN", message: outOfReach });
+  }
+
   let agentName: string | null = null;
   if (input.agentId) {
     const [agent] = await db
@@ -282,6 +361,16 @@ export async function startOrchestrator(p: {
     agentUserId: p.agentUserId ?? undefined,
     workspaceId: placement.workspaceId ?? undefined,
     projectId: placement.projectId ?? undefined,
+    // The key's project pin is checked on the placement's project only when
+    // EVERY picked session is filed there (then it is where they all live).
+    // A first-row fallback over sessions of different projects places
+    // nothing for a key: a project pin is then refused at rung 0, so a key
+    // pinned to P never orchestrates a session of Q (the filing rule,
+    // `grant-write-check.ts`).
+    ...(placement.projectId &&
+    rows.every((r) => r.projectId === placement.projectId)
+      ? { grantProjectIdIsStored: true }
+      : {}),
     subjectType: "focus_session",
     action: "orchestrate",
     source: "intelligence",
@@ -335,7 +424,7 @@ export function orchestratorHold(orchestratorSessionId: string): Hold {
     until: {
       moves: `answer:${orchestratorSessionId}/${ORCHESTRATOR_APPROVAL_SLOT}`,
     },
-  } as Hold;
+  };
 }
 
 function orchestratorSlots(n: number): ExpectedOutput[] {
@@ -360,7 +449,7 @@ function orchestratorSlots(n: number): ExpectedOutput[] {
         stakes: "commitment",
       },
     },
-  ] as ExpectedOutput[];
+  ];
 }
 
 function childNote(p: {
@@ -569,4 +658,73 @@ export async function applyOrchestration(p: {
     channelId: orchestrator.channelId ?? null,
     children: outcomes,
   };
+}
+
+/**
+ * Is this answer to `plan-approval` a NO? The confirm's "no", or a refusal
+ * to answer (`declined`). Any other answer (the yes, plain words) lets the
+ * orchestrator go on.
+ */
+export function isPlanDeclined(value: SlotAnswer["value"]): boolean {
+  if (isDeclinedValue(value)) return true;
+  const v = value as { type?: unknown; confirmed?: unknown } | null | undefined;
+  return v?.type === "confirm" && v.confirmed === false;
+}
+
+/**
+ * A NO TO THE PLAN (founder decision D-O2, 18 Nov 2026): the sessions the
+ * orchestrator held resume exactly as they were — the answer ends their wait
+ * (`answer:<orchestrator>/plan-approval`), so the hold-resume job moves each
+ * back to the status it left, its stage untouched — and the orchestrator
+ * CLOSES, `cancelled` with the reason "Plan declined", through the one close
+ * door (`completeFocusSession`), as the person's own act (they answered).
+ * A yes changes nothing here: the sessions resume, the orchestrator goes on.
+ *
+ * Only an orchestrator: the slot is `plan-approval` and some session is
+ * `orchestrated_by` this one. Returns null when it is not that (no close
+ * asked), else what the close did; never throws (the answer already landed).
+ */
+export async function closeOrchestratorOnDeclinedPlan(p: {
+  sessionId: string;
+  userId: string;
+  slot: ExpectedOutput;
+  answer: SlotAnswer;
+}): Promise<{ closed: true } | { closed: false; error: string } | null> {
+  if (p.slot.key !== ORCHESTRATOR_APPROVAL_SLOT) return null;
+  if (!isPlanDeclined(p.answer.value)) return null;
+  try {
+    const [held] = await db
+      .select({ fromId: links.fromId })
+      .from(links)
+      .where(
+        and(
+          eq(links.toType, "session"),
+          eq(links.toId, p.sessionId),
+          eq(links.linkType, "orchestrated_by")
+        )
+      )
+      .limit(1);
+    if (!held) return null;
+    const { completeFocusSession } = await import("./complete-session.js");
+    const closed = await completeFocusSession({
+      sessionId: p.sessionId,
+      userId: p.userId,
+      terminalStatus: "cancelled",
+      cancelReason: "Plan declined",
+      summary: "Plan declined",
+    });
+    if (!closed) {
+      return { closed: false, error: "the orchestrator session was not found" };
+    }
+    return { closed: true };
+  } catch (err) {
+    logger.warn(
+      { err, orchestratorId: p.sessionId },
+      "orchestrator not closed after its plan was declined"
+    );
+    return {
+      closed: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }

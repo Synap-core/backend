@@ -41,6 +41,7 @@ import { StatusPill } from "../../components/status-pill";
 import { TOOLS_CATALOGS } from "./copy";
 import type { CardLike, CompositionLike } from "./installed-model";
 import {
+  addOnOfLine,
   CAPABILITY_READ_OPTIONS,
   CATALOG_INPUT,
   filterTools,
@@ -358,7 +359,7 @@ function ToolCard({ item, where }: { item: ToolItem; where: string }) {
         <StatusPill kind={item.status.kind} label={item.status.label} />
         <span className="truncate">
           {item.addOnOf
-            ? `${t("row.addOnOf", { base: item.addOnOf.name })} · ${where}`
+            ? `${addOnOfLine(item.addOnOf.name)} · ${where}`
             : where}
         </span>
       </div>

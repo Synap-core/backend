@@ -1,6 +1,7 @@
 {
   "name": "@synap/database",
   "version": "0.1.1",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -45,6 +46,11 @@
       "types": "./dist/utils/person-devices.d.ts",
       "import": "./dist/utils/person-devices.js",
       "default": "./dist/utils/person-devices.js"
+    },
+    "./realtime-room-tickets": {
+      "types": "./dist/utils/realtime-room-tickets.d.ts",
+      "import": "./dist/utils/realtime-room-tickets.js",
+      "default": "./dist/utils/realtime-room-tickets.js"
     },
     "./is-delegation": {
       "types": "./dist/utils/is-delegation.d.ts",

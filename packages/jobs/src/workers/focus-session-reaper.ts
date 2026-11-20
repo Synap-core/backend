@@ -112,6 +112,70 @@ export const FOCUS_SESSION_REAPER_CRON = "0 * * * *"; // every hour
 export const REAPER_STALE_HOURS = workClockIn("stale", "hours");
 
 /**
+ * SQL over a `focus_sessions` row: it stands paused on a CURRENT hold that
+ * waits on the person — `until.moves` = `answer:<session>/<slot>` or
+ * `proposal:<id>` (`HoldWaitRef`) — and that wait is still OPEN: the asking
+ * session has not ended and its slot (by key or label, any case, as
+ * `holdWaitSlotMatches`) carries no answer, or the proposal is pending. Such
+ * a session is quiet because it waits (a session held for an orchestrator's
+ * plan-approval, an agent asleep on its ask), not abandoned. A wait that is
+ * met or over is the hold-resume job's to wake, so it is not exempt.
+ *
+ * The CURRENT hold is the one `listHolds` reads: the session's latest
+ * transition (by record time, row time, id) paused it, and it still stands
+ * in that status. Raw table names, as `stageRunWaitsWhere`.
+ */
+export function focusSessionHoldWaitsWhere(): SQL {
+  const moves = drizzleSql.raw(`(hw.transition->'hold'->'until'->>'moves')`);
+  const subjectId = (a: string) =>
+    drizzleSql.raw(
+      `coalesce(${a}.transition->>'subjectId', ${a}.transition->>'entityId')`
+    );
+  const subjectType = (a: string) =>
+    drizzleSql.raw(`coalesce(${a}.transition->>'subjectType', 'entity')`);
+  const recorded = (a: string) =>
+    drizzleSql.raw(
+      `coalesce((${a}.transition->>'recordedAt')::timestamptz, ${a}.created_at)`
+    );
+  return drizzleSql`EXISTS (
+    SELECT 1 FROM lifecycle_transition_outbox hw
+     WHERE ${subjectType("hw")} = 'focus_session'
+       AND ${subjectId("hw")} = ${focusSessions.id}::text
+       AND hw.transition->>'category' = 'paused'
+       AND hw.transition->>'to' = ${focusSessions.status}
+       AND ${moves} ~ '^(answer|proposal):'
+       AND NOT EXISTS (
+         SELECT 1 FROM lifecycle_transition_outbox hn
+          WHERE ${subjectId("hn")} = ${subjectId("hw")}
+            AND ${subjectType("hn")} = ${subjectType("hw")}
+            AND (${recorded("hn")}, hn.created_at, hn.transition_id)
+              > (${recorded("hw")}, hw.created_at, hw.transition_id)
+       )
+       AND (
+         EXISTS (
+           SELECT 1 FROM proposals wp
+            WHERE ${moves} = 'proposal:' || lower(wp.id::text)
+              AND wp.status = 'pending'
+         )
+         OR EXISTS (
+           SELECT 1 FROM focus_sessions asker
+            WHERE ${moves} LIKE 'answer:' || lower(asker.id::text) || '/%'
+              AND asker.status NOT IN ('closed', 'cancelled', 'failed')
+              AND NOT EXISTS (
+                SELECT 1 FROM jsonb_array_elements(
+                  CASE WHEN jsonb_typeof(asker.expected_outputs) = 'array'
+                       THEN asker.expected_outputs ELSE '[]'::jsonb END
+                ) slot
+                 WHERE (slot->'answer'->>'answeredAt') IS NOT NULL
+                   AND lower(trim(substr(${moves}, length('answer:' || asker.id::text || '/') + 1)))
+                       IN (lower(trim(slot->>'key')), lower(trim(slot->>'label')))
+              )
+         )
+       )
+  )`;
+}
+
+/**
  * The staleness predicate, exported so a test can lock its SHAPE: it must key
  * off `updated_at` (bumped by every real touch — progress/stage/goal/output/
  * metadata patch), NEVER `started_at`, or a long-running-but-actively-worked
@@ -132,6 +196,10 @@ export const SESSION_IS_STALE = and(
   // A step that waits on a child run or on tools being installed (0422) is
   // waiting, not idle (runner engine spec 7111934d, risk 3).
   drizzleSql`NOT ${stageRunWaitsWhere(focusSessions.id)}`,
+  // A session paused on a wait for the person's answer or decision (held
+  // for an orchestrator's plan-approval, asleep on its own ask) is waiting,
+  // not idle.
+  drizzleSql`NOT ${focusSessionHoldWaitsWhere()}`,
   // An open import waits on the person (curating can take days): its
   // `importCuration.phase` is the liveness signal, not `updatedAt`. A LIBRARY
   // run ("Kept from <device>, <day>") is not a curation: it is done once its

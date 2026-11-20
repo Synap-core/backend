@@ -558,12 +558,14 @@ export function placeReachNote(kind: Place["kind"]): string {
       return "It reads these in every space and outside any space, as you can. It cannot change them.";
     case "unbounded":
       return "It reaches anything you can reach in your pod, as you can.";
+    case "projects":
+      return "It sees what is filed in these projects, in any space, as you can see it.";
     default:
       return unreachableKind(kind);
   }
 }
 
-/** A fourth place kind fails to compile in `placeReachNote`. */
+/** A new place kind fails to compile in `placeReachNote`. */
 function unreachableKind(kind: never): never {
   throw new Error(`Unknown place kind: ${String(kind)}`);
 }

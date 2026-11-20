@@ -141,6 +141,8 @@ vi.mock("../../messaging/post-message.js", async (importOriginal) => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
+  db as testDb,
+  setSessionStatus,
   focusSessions,
   lifecycleTransitionOutbox,
   playbooks,
@@ -233,6 +235,20 @@ async function seed(
     ]
   );
   return id;
+}
+
+/**
+ * Pause `id` the way a check gate does: its hold is `check:<stageKey>` (W6:
+ * the gate releases only a session its own hold still holds).
+ */
+async function holdOnCheckGate(id: string, stageKey: string): Promise<void> {
+  await setSessionStatus(testDb as never, {
+    sessionId: id,
+    from: "active",
+    to: "paused",
+    actor: { kind: "system", userId: USER },
+    hold: { on: "thing", ref: `check:${stageKey}`, reason: "held by check" },
+  });
 }
 
 const rowsFor = (sessionId: string) =>
@@ -665,7 +681,6 @@ describe("session evaluations", () => {
     const staged = [{ ...CRITERIA[0], stageKey: "build" }];
     const id = await seed({
       criteria: staged,
-      status: "paused",
       metadata: {
         checkGate: {
           stageKey: "ship",
@@ -675,6 +690,7 @@ describe("session evaluations", () => {
         keep: 1,
       },
     });
+    await holdOnCheckGate(id, "ship");
     const out = await evaluateSession({
       sessionId: id,
       userId: USER,
@@ -695,17 +711,17 @@ describe("session evaluations", () => {
     };
     const onShip = await seed({
       criteria: staged,
-      status: "paused",
       metadata: { checkGate: gate },
     });
+    await holdOnCheckGate(onShip, "ship");
     await q(`update focus_sessions set current_stage = 'ship' where id = $1`, [
       onShip,
     ]);
     const movedOn = await seed({
       criteria: staged,
-      status: "paused",
       metadata: { checkGate: gate },
     });
+    await holdOnCheckGate(movedOn, "ship");
     await q(`update focus_sessions set current_stage = 'later' where id = $1`, [
       movedOn,
     ]);

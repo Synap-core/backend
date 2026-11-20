@@ -72,6 +72,12 @@ export type Place = {
 		...string[]
 	];
 	readonly kind: "spaces";
+} | {
+	readonly ids: readonly [
+		string,
+		...string[]
+	];
+	readonly kind: "projects";
 };
 export interface KeyDraft {
 	/** What the person calls it. Required. */
@@ -84,6 +90,73 @@ export interface KeyDraft {
 	readonly uses: readonly string[];
 	/** What it may touch, where, and for how long. */
 	readonly grant: GrantDraft;
+}
+declare const APP_ACCESS_VERSION: 2;
+/** What an app may be given by one person, read from its ask and their floor. */
+export interface AppAccessCeiling {
+	/** Every permission the app asked for (and declared), each exactly. */
+	readonly permissions: readonly string[];
+	/**
+	 * The asked reads that may hold in All spaces: declared pod-wide by the app
+	 * AND a pod-wide read (`isPodWideReadPermission`).
+	 */
+	readonly allSpacesReads: readonly string[];
+	/** Where the person may give a read. */
+	readonly read: {
+		readonly projects: readonly string[];
+		readonly spaces: readonly string[];
+	};
+	/** Where the person may give a write. */
+	readonly write: {
+		readonly projects: readonly string[];
+		readonly spaces: readonly string[];
+	};
+}
+/** A space as a screen shows it. */
+export interface NamedSpace {
+	readonly id: string;
+	readonly name: string;
+	/** The template it was made from (`workspaces.package_slug`), or null. */
+	readonly templateSlug: string | null;
+}
+/** A project as a screen shows it. */
+export interface NamedProject {
+	readonly id: string;
+	readonly name: string;
+	/** Its home space, or null for a project in no space. */
+	readonly workspaceId: string | null;
+}
+/** A v2 access with names: what a screen shows. */
+export interface NamedAppAccess {
+	readonly version: typeof APP_ACCESS_VERSION;
+	readonly permissions: readonly string[];
+	readonly read: {
+		/** "all" under All spaces too (Q1: every project is included). */
+		readonly projects: "all" | readonly NamedProject[];
+		readonly spaces: "all" | readonly NamedSpace[];
+	};
+	readonly write: {
+		readonly projects: readonly NamedProject[];
+		readonly spaces: readonly NamedSpace[];
+	};
+}
+/** One old pair a re-consent shows as "was", with its place named. */
+export interface ReconsentWas {
+	readonly permission: string;
+	readonly place: {
+		/** null for the pod. */
+		readonly id: string | null;
+		readonly kind: "pod" | "project" | "space";
+		readonly name: string;
+	};
+}
+/** Why a connection asks again, as a screen shows it (Q3). */
+export interface ReconsentView {
+	readonly reason: "narrows" | "too-large" | "unplaceable" | "widens";
+	/** What it holds now, pair by pair, named. */
+	readonly was: readonly ReconsentWas[];
+	/** The v2 pre-fill, clamped to what the person may give now. */
+	readonly proposed: NamedAppAccess;
 }
 declare const PROVIDE_SECRET_USES: readonly [
 	"once",
@@ -3195,6 +3268,43 @@ export interface StatusOfWorkNextMove {
 	sessionId?: string;
 	url?: string;
 }
+/**
+ * A criterion that checks a declared output (it names it by `outputKey`, the
+ * outcome projection's rule 7), as `synap_get_session`'s outcomes nest it.
+ */
+export interface StatusOfWorkCriterion {
+	key: string;
+	/** The criterion's statement ("Every slide has a picture"). */
+	label: string;
+	/** Its current verdict is `pass`. */
+	met: boolean;
+	/** THE mark's state (`UNIT_STATES`), from the one derivation. */
+	state: UnitState;
+	/** The key of the output it checks: the outcome it is listed under. */
+	outputKey: string;
+}
+/**
+ * One declared outcome of the session (`projectSessionOutcomes`, the read
+ * behind `synap_get_session`'s `outcomes`): a declared output, a criterion,
+ * or an output with the criteria that check it.
+ */
+export interface StatusOfWorkOutcome {
+	/** The slot's key, or the criterion's. */
+	key: string;
+	label: string;
+	/** The output's kind (`report`, `document`, …), or `"fact"` for a criterion. */
+	kind: string;
+	/** Who yields it. */
+	owner: "agent" | "human";
+	/** Delivered, or proven (its required criteria pass). */
+	met: boolean;
+	/** Let go when its session was cancelled: neither met nor owed. */
+	retired: boolean;
+	/** THE mark's state (`UNIT_STATES`), the vocabulary `synap_get_session` uses. */
+	state: UnitState;
+	/** The criteria that check this output; absent when none does. */
+	criteria?: StatusOfWorkCriterion[];
+}
 /** Who has the session now (the packet's `holder`). */
 export interface StatusOfWorkHolder {
 	kind: "agent" | "nobody" | "person";
@@ -3247,6 +3357,19 @@ export interface StatusOfWorkItem {
 		items: StatusOfWorkProposal[];
 		status: "ok";
 		total: number;
+	} | StatusOfWorkUnavailable;
+	/**
+	 * What it must yield, in declared order, each met or not (`counts` over the
+	 * outcomes not retired); `items: []` = it declares none. Absent = a pod
+	 * from before this field: it does not say.
+	 */
+	outcomes?: {
+		counts: {
+			met: number;
+			total: number;
+		};
+		items: StatusOfWorkOutcome[];
+		status: "ok";
 	} | StatusOfWorkUnavailable;
 	/** Its CURRENT hold, when it stands paused under one. */
 	hold?: RecordedHold | StatusOfWorkUnavailable;
@@ -3768,6 +3891,13 @@ export type DeviceRecommendationReason =
  | "other-seat"
 /** Nothing on this computer matches. */
  | "new";
+/** One `synap_requests` entry that lists its kinds (F4), as declared. */
+export interface RequestedKindGroup {
+	/** The every-kind permission it names (`entity.read`, `entity.create`…). */
+	permission: string;
+	/** Its kinds, each once, in the order given. */
+	kinds: string[];
+}
 /**
  * Per-user presentation and explicit-open state for user-facing resources.
  */
@@ -6605,27 +6735,6 @@ export interface CatalogSyncStamp {
 	retirementsUnreported?: true;
 }
 /**
- * Apps — a developer's application identity (App Connect v1, 2026-10-06).
- *
- * The object a developer registers is an APPLICATION; its `public_id`
- * (`app_<uuid>`) is the app's stable id AND the `client_id` its grant carries
- * (`grants.client_id`). The bearer is an API key (`api_keys`), unchanged — an
- * app never holds a secret of its own beyond the key minted for it.
- *
- * `approved_requests` is what the app ASKED for and a human APPROVED
- * (`[{ permission, workspaceId }]`); it is the exact list the key issue turns
- * into grants — ONE per workspace, never their cross product
- * (`grantsForApprovedRequests`, services/app-connect.ts; client_id = public_id).
- * It is written ONLY by the `app/connect` approval executor — never at register
- * time, so a proposal with no plaintext and a key minted only on demand means
- * no secret ever rests in a proposal.
- *
- * The app acts as its own agent user (`agent_user_id`, 0313) — see
- * `ensureAppAgent` (api services/app-connect.ts).
- *
- * ONE write door: `AppRepository` (repositories/app-repository.ts).
- */
-/**
  * One entry of `apps.approved_requests` — a permission bounded to a workspace,
  * or, with `workspaceId: null`, a POD-WIDE read ("everywhere in your pod",
  * founder decision e1b59d38 "B", 2026-10-30). Null is allowed ONLY for a
@@ -9161,6 +9270,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  *   track               --advances-->          workspace    (the goal moves that pillar of its project; metadata.primary)
  *   participant(agent)  --dispatched_via-->    tool         (BINDING: how the pod hands this agent work — tools.config.agentBinding)
  *   participant(agent)  --assigned_to-->       playbook|profile|project|workspace (who takes that work by default — route())
+ *   capability(add-on)  --extends-->           capability (base)  (an add-on's base, written by the applier)
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
@@ -9299,7 +9409,19 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * clears. ONE producer: `services/focus-sessions/start-orchestrator.ts`
  * (same owner at both ends). The Hub REST links door lists and refuses it.
  */
- | "orchestrated_by";
+ | "orchestrated_by"
+/**
+ * capability(add-on) --extends--> capability(base). The add-on is its own
+ * container, package and listing; its actions run through its base's tool
+ * rows and are members of the add-on only (founder decision D6, document
+ * b387ca45 §6). ONE producer: the capability applier
+ * (`services/capabilities/addon.ts`, called by
+ * `createCapabilityFromDefinition` for a definition with `extends`), after it
+ * found the base installed. Readers: the add-on reads
+ * (`loadAddOnParents` / `loadAddOnsOf`), the catalog card's base-tool fallback. The Hub
+ * REST links door lists and refuses it: an install writes it, never a key.
+ */
+ | "extends";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /** The normalized state of an external agent's task (the `status` verb). */
@@ -18951,6 +19073,15 @@ export interface KeyRequestView {
 	createdAt: Date;
 	expiresAt: Date;
 }
+/** One `synap_requests` entry that listed its kinds (F4), as declared. */
+export type OAuthAppKindGroup = RequestedKindGroup;
+/** A project the consenting person may give an app a permission in. */
+export interface OAuthAppOfferProject {
+	projectId: string;
+	projectName: string;
+	/** Its home space, or null for a project that lives in no space. */
+	workspaceId: string | null;
+}
 /** One permission a pod app asks for, and the spaces it may be given in. */
 export interface OAuthAppOfferItem {
 	permission: string;
@@ -18964,6 +19095,22 @@ export interface OAuthAppOfferItem {
 		workspaceId: string;
 		workspaceName: string;
 	}>;
+	/**
+	 * With `kindGroups` (the consent screen): the entry this permission was
+	 * declared in when that entry listed its kinds (F4: `{permission:
+	 * "entity.read", kinds}`), else null. Items that share one draw as ONE row
+	 * ("Records: N kinds"). Display only: the permission is still given and
+	 * checked per kind (D4).
+	 */
+	kindGroup?: OAuthAppKindGroup | null;
+	/**
+	 * With `projects` (the consent screen, app permissions W3c): the projects
+	 * the person may give this permission in, by name — every project they can
+	 * see for a read, only those they may write in for anything else
+	 * (`oauthAppProjectOffer`). Offered only: no consent mints a project grant
+	 * yet.
+	 */
+	projects?: OAuthAppOfferProject[];
 }
 /** How an app's writes land, as its page shows it. */
 export interface AppWriteModeView {
@@ -18991,6 +19138,18 @@ export interface PodAppView {
 	verified: boolean;
 	/** What the person approved, per space — what Narrow edits. */
 	approved: NamedApprovedRequest[];
+	/**
+	 * What it may do and where, v2, named (W3d): the stored access, or the
+	 * exact lift of its pairs; null when it must re-consent (`reconsent`).
+	 */
+	access: NamedAppAccess | null;
+	/**
+	 * Its old pairs cannot become v2 as they are (Q3): Connected shows "Needs
+	 * your review". Its old access keeps working until W5. `proposed` is the
+	 * pairs' v2 form, NOT clamped here (the editor, `apps.accessOffer`, clamps
+	 * it to what the person may give now).
+	 */
+	reconsent: ReconsentView | null;
 	/** When this person last connected it (the newest consent). */
 	connected_at: Date | null;
 	/** The newest use of any of its access tokens. */
@@ -19020,6 +19179,44 @@ export interface AdminPodAppGroup {
 	/** Members whose connection is live. */
 	live: number;
 	members: AdminPodAppMember[];
+}
+/** What an app asked, in v2 terms: one item per permission (W3d). */
+export interface AccessAskedItem {
+	permission: string;
+	tier: "read" | "write";
+	/** The developer's words (`synap_requests[].reason`), shown as text. */
+	reason: string | null;
+	/** The F4 entry it was declared in, to draw ONE row per group. */
+	kindGroup: OAuthAppKindGroup | null;
+	/** May it hold in All spaces (declared pod-wide AND a pod-wide read)? */
+	allSpaces: boolean;
+	/** Can the person give it anywhere? false: the "can't give" fold. */
+	offerable: boolean;
+}
+/** The places the person may give, per tier, named (W3d). */
+export interface AccessPlacesOffer {
+	read: {
+		/** Every asked read may ride All spaces. */
+		allSpaces: boolean;
+		projects: NamedProject[];
+		spaces: NamedSpace[];
+	};
+	write: {
+		projects: NamedProject[];
+		spaces: NamedSpace[];
+		/** Write spaces made from a declared template: the pre-tick ([] = none). */
+		suggestedSpaceIds: string[];
+	};
+}
+/** The asked access and what the person may give, read now (W3d). */
+export interface AccessOffer {
+	asked: {
+		permissions: AccessAskedItem[];
+		templates: string[];
+	};
+	places: AccessPlacesOffer;
+	/** The same, as the ceiling every v2 approval is checked against. */
+	ceiling: AppAccessCeiling;
 }
 /** One pair resolved to a space the person may give it in. */
 export interface ResolvedAskPair {
@@ -19095,7 +19292,9 @@ export interface OAuthAppConsent {
 	homepage: string | null;
 	/**
 	 * Each permission the app asked for AND declared, with the spaces this
-	 * person may give it in (`oauthAppOffer`). An empty list means the person
+	 * person may give it in (`oauthAppOffer`), with its kinds group (F4) and
+	 * the projects it may be given in (W3c: offered only, nothing mints a
+	 * project grant yet). An empty list means the person
 	 * has no space to give that permission in. `reason`: the document's own
 	 * `synap_requests[].reason` (display text, `displayReason`), or null —
 	 * the developer's words, shown as text, never a reason to trust the app.
@@ -19108,8 +19307,12 @@ export interface OAuthAppConsent {
 	 * = "pod"`, decision e1b59d38 "B"): each a read of one named kind, one tick
 	 * each, shown in their own section. Ticked, each is sent as
 	 * `{ permission, workspaceId: null }`. Never also in `permissions`.
+	 * `kindGroup`: the entry it was declared in when that entry listed its
+	 * kinds (F4), else null; items that share one draw as ONE row ("Records:
+	 * N kinds"), as in `permissions`.
 	 */
 	podWide: Array<{
+		kindGroup?: OAuthAppKindGroup | null;
 		permission: string;
 		reason: string | null;
 	}>;
@@ -19134,6 +19337,12 @@ export interface OAuthAppConsent {
 	 * them to what it holds; nothing it holds is shown or changed here.
 	 */
 	ask: OAuthAppAsk | null;
+	/**
+	 * The consent in v2 terms (W3d): what the new screen reads. Always set by
+	 * the server; optional so a screen or fixture written before W3d still
+	 * types (additive).
+	 */
+	access?: OAuthAppAccessConsent;
 }
 /** What the short consent shows (`OAuthAppConsent.ask`). */
 export interface OAuthAppAsk {
@@ -19144,6 +19353,38 @@ export interface OAuthAppAsk {
 	/** Pairs it asked for that the person cannot give it (`perm@place`). */
 	unavailable: string[];
 	/** The app's page in pod admin ("See everything it has"), once connected. */
+	connectionPublicId: string | null;
+}
+/**
+ * The consent in v2 terms (app permissions W3d, decision fc37f740 design A):
+ * what the app asked, the places the person may give per tier, what it holds
+ * now, why it asks again, and the short ask. Contract: pod document be6caecc
+ * ("W3d consent contract"). Allow sends an `AppAccess` (`access`) or, for the
+ * short ask, nothing but Q4's `askWritePlace`.
+ */
+export interface OAuthAppAccessConsent {
+	asked: {
+		permissions: AccessAskedItem[];
+		templates: string[];
+	};
+	places: AccessPlacesOffer;
+	/** Already connected: what it holds now (stored v2, or the exact lift of its pairs). */
+	current: NamedAppAccess | null;
+	/** Its old pairs cannot become v2 as they are (Q3): never auto-allow. */
+	reconsent: ReconsentView | null;
+	/** The short consent, v2: null for the full screen. */
+	ask: OAuthAppAccessAsk | null;
+}
+/** The short consent in v2 terms: it only adds permissions (Q4 aside). */
+export interface OAuthAppAccessAsk {
+	/** "Content Studio asks to also read notes". */
+	title: string;
+	/** The permissions it adds, as the asked items. */
+	adds: AccessAskedItem[];
+	/** Q4: it has no write place and asks its first write: show the write picker. */
+	needsWritePlace: boolean;
+	/** What it asked that the person cannot give (`perm@place`, or a permission). */
+	unavailable: string[];
 	connectionPublicId: string | null;
 }
 export interface OAuthConsentContext {
@@ -22432,6 +22673,13 @@ export interface FindByIntentResult extends Partial<Record<ObjectCatalog, FindOb
 	/** Present only when no catalog produced a single match. */
 	noConfidentMatch?: NoConfidentMatch;
 }
+/** One container as the add-on reads name it. */
+export interface AddOnRef {
+	id: string;
+	name: string;
+	description: string | null;
+	workspaceId: string | null;
+}
 /** A skill or tool row. `kind` absent = skill (the execute door's shape). */
 export interface CapabilityRef {
 	kind?: "skill" | "tool";
@@ -22872,6 +23120,10 @@ export type ReactionDo =
  | {
 	effect: "reach_stage_status";
 }
+/** Advance the session to its next stage (the one advance door, W6). */
+ | {
+	effect: "advance_stage";
+}
 /**
  * Roll the parent up (decision D5): when every non-lost part is done and
  * at least one is, the parent moves to `to`, else to its next status
@@ -23095,6 +23347,16 @@ export interface CapabilityComposition {
 	 * `workspaceId` is null (pod-wide).
 	 */
 	workspaceName?: string | null;
+	/**
+	 * ADD-ON (founder decision D6): the base capability this container extends
+	 * (`capability --extends--> capability`), batched in LIST mode only. `null`
+	 * when it is not an add-on, or its base is not visible to the reader;
+	 * `undefined` from single-object callers that do not load it.
+	 */
+	extends?: {
+		id: string;
+		name: string;
+	} | null;
 	provenance: {
 		contentHash?: string;
 		templateKey?: string;
@@ -23247,6 +23509,17 @@ export interface CreateCapabilityResult {
 		}[];
 		/** The capability CONTAINER the seeded tools + skills are grouped under. */
 		container: {
+			/**
+			 * ADD-ON only: the base it extends, and its actions that are still
+			 * members of the base because `removePart` refused (reported, like
+			 * `partsNotAttached`: they show on both pages until a pod admin re-runs
+			 * the install).
+			 */
+			addOnOf?: {
+				id: string;
+				name: string;
+				partsNotMoved: number;
+			};
 			id: string;
 			name: string;
 			/**
@@ -26872,6 +27145,18 @@ export type AnswerExpectedOutputResult = {
 	/** `true` ⇒ the slot was the person's and is now back with the agent. */
 	handedBack: boolean;
 	kind: string;
+	/**
+	 * A NO to an orchestrator's `plan-approval` (decision D-O2): the
+	 * orchestrator was closed (`cancelled`, "Plan declined") through the
+	 * one close door, or why not. The held sessions resume either way (the
+	 * answer ends their wait). Absent for every other answer.
+	 */
+	planDeclined?: {
+		closed: true;
+	} | {
+		closed: false;
+		error: string;
+	};
 	session: {
 		agentIds: string[];
 		channelId: string | null;
@@ -30965,12 +31250,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		decideOAuthAuthorization: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				access?: {
+					permissions: string[];
+					read: {
+						projects: string[] | "all";
+						spaces: string[] | "all";
+					};
+					version: 2;
+					write: {
+						projects: string[];
+						spaces: string[];
+					};
+				} | undefined;
 				appSignInFingerprint?: string | undefined;
 				approve: boolean;
 				approved?: {
 					permission: string;
 					workspaceId: string | null;
 				}[] | undefined;
+				askWritePlace?: {
+					projects: string[];
+					spaces: string[];
+				} | undefined;
 				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
@@ -31664,6 +31965,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		accessOffer: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				publicId: string;
+			};
+			meta: object;
+			output: {
+				asked: AccessOffer["asked"];
+				current: NamedAppAccess | null;
+				places: AccessPlacesOffer;
+				reconsent: ReconsentView | null;
+			};
+		}>;
 		adminGet: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				publicId: string;
@@ -32261,6 +32574,86 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: AppWriteModeView;
+		}>;
+		updateAccess: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				access: {
+					permissions: string[];
+					read: {
+						projects: string[] | "all";
+						spaces: string[] | "all";
+					};
+					version: 2;
+					write: {
+						projects: string[];
+						spaces: string[];
+					};
+				};
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+				publicId: string;
+			};
+			meta: object;
+			output: {
+				agent_user_id: string | null;
+				approved_requests: AppApprovedRequest[] | null;
+				created_at: Date;
+				description: string | null;
+				grants: {
+					clientId: string | null;
+					createdAt: Date;
+					entityIds: string[] | null;
+					id: string;
+					label: string | null;
+					permissions: string[];
+					projectIds: string[] | null;
+					revokedAt: Date | null;
+					workspaceIds: string[] | null;
+				}[];
+				id: string;
+				last_used_at: Date | null;
+				logo_url: string | null;
+				mode: "oauth" | "specific";
+				name: string;
+				pending_request: {
+					proposal_id: string;
+					requested_at: Date;
+					requests: AppApprovedRequest[];
+				} | null;
+				person_may_decide_own_agent_proposals: boolean;
+				public_id: string;
+				redirect_uris: string[];
+				removed_at: Date | null;
+				revoked_at: Date | null;
+			};
 		}>;
 	}>>;
 	artifacts: import("@trpc/server").TRPCBuiltRouter<{
@@ -33248,7 +33641,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				meta: object;
 				output: {
+					addOns: AddOnRef[];
 					capability: CapabilityRow;
+					extends: AddOnRef | null;
 					parts: {
 						builtins: {
 							approved: boolean;
@@ -38880,6 +39275,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					properties?: Record<string, unknown> | undefined;
 					status?: string | undefined;
 				}[] | undefined;
+				forcePropose?: boolean | undefined;
 				global?: boolean | undefined;
 				homeWorkspaceId?: string | undefined;
 				profileId?: string | undefined;
@@ -52930,7 +53326,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				action: {
 					input: unknown;
-					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
 				};
 			} | {
 				oauthConsent: {

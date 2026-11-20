@@ -260,6 +260,8 @@ describe("a base tool with add-ons", () => {
   it("a tool with no add-on draws no Add-ons card", () => {
     h.card = hetzner();
     const html = render();
+    // No description on the row: the header keeps the pod's sentence alone.
+    expect(html).not.toContain("data-capability-description");
     expect(html).not.toContain("data-addons");
     expect(text(html)).not.toContain("Add-on of");
   });
@@ -269,11 +271,21 @@ describe("an add-on's page", () => {
   it("names its parent tool, linked to the parent's page", () => {
     h.card = hetzner();
     h.container = {
-      capability: { id: CAP, name: "Hetzner Cloud", workspaceId: null },
+      capability: {
+        id: CAP,
+        name: "Hetzner Cloud",
+        description: "Enriches one person from a public LinkedIn profile link.",
+        workspaceId: null,
+      },
       extends: { id: BASE, name: "Apify" },
       addOns: [],
     };
     const html = render();
+    // Its own page says what it does, not only its parent's card.
+    expect(html).toContain("data-capability-description");
+    expect(text(html)).toContain(
+      "Enriches one person from a public LinkedIn profile link."
+    );
     expect(html).toContain(`href="${addOnParentHref(BASE)}"`);
     expect(addOnParentHref(BASE)).toContain(BASE);
     const page = text(html);

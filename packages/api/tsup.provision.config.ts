@@ -8,6 +8,7 @@ export default defineConfig({
     "scripts/run-conversions": "src/scripts/run-conversions-cli.ts",
     "scripts/backfill-session-spaces":
       "src/scripts/backfill-session-spaces-cli.ts",
+    "scripts/backfill-app-access": "src/scripts/backfill-app-access-cli.ts",
   },
   format: ["esm"],
   sourcemap: true,

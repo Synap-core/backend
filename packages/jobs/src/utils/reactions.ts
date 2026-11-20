@@ -91,6 +91,8 @@ export type ReactionDo =
   | { effect: "pause_session" }
   /** Move the subject to the stage's `onApproved` (the status door, `moveStatus`). */
   | { effect: "reach_stage_status" }
+  /** Advance the session to its next stage (the one advance door, W6). */
+  | { effect: "advance_stage" }
   /**
    * Roll the parent up (decision D5): when every non-lost part is done and
    * at least one is, the parent moves to `to`, else to its next status
@@ -186,7 +188,29 @@ export const BUILT_IN_REACTIONS: readonly ReactionDeclaration[] = [
     source: "built_in",
     enabled: true,
   },
+  {
+    // W6 (decision D5 a): a step advances by itself once every required
+    // outcome of the stage the session stands on is met. A grade is not a
+    // move: the grade doors fire this same rule as a fact
+    // (`advance-if-stage-met.ts`). Never into a stage a person gates, never
+    // out of one waiting for a named approval. After the reach above, so a
+    // stage's approved status lands before the next stage's.
+    id: "builtin:stage-met-advances",
+    title: "A step whose work is all met moves on to the next step",
+    when: { subjectType: "slot", category: ["done"] },
+    via: { link: "slot_stage" },
+    do: { effect: "advance_stage" },
+    order: 40,
+    // The subject move the advance makes may fire the rules on that thing
+    // (a roll-up), as a person's advance does; MAX_REACTION_DEPTH bounds it.
+    chains: true,
+    source: "built_in",
+    enabled: true,
+  },
 ];
+
+/** A step's own advance is fired by a grade too (not a transition). */
+export const STAGE_MET_REACTION_ID = "builtin:stage-met-advances";
 
 /** A pull request merge is not a transition: default 3's other trigger. */
 export const OUTCOME_MET_REACTION_ID = "builtin:outcome-met-where-filed";

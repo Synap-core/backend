@@ -49,7 +49,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { PRESENCE_BATCH_MAX } from "@synap-core/types/presence";
 import { resolveServiceName } from "@synap-core/types/service-marks";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  buildObjectActionTitle,
+  resolveLineageEdgeLabel,
+} from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import {
   useEnableMany,
@@ -57,6 +60,7 @@ import {
   useSetToolEnabled,
 } from "../../presence/use-request-doors";
 import { readableError } from "../../../../lib/format";
+import { readableDescription } from "../../../../lib/marketplace";
 import { ExitLink } from "../../../../lib/exit-link";
 import { openIn } from "../../../../lib/open-in";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
@@ -374,9 +378,27 @@ export function CapabilityObject({
     header: {
       kind: "capability",
       title: card?.name ?? cap.name,
-      summary:
-        next?.hint ??
-        (catalog.isLoading ? undefined : "Its state couldn’t be read."),
+      // What it is (its own description, when written for a reader), then the
+      // pod's next-step sentence. An add-on's page names what it does here;
+      // its base's Add-ons card shows the same line.
+      summary: (() => {
+        const hint =
+          next?.hint ??
+          (catalog.isLoading ? undefined : "Its state couldn’t be read.");
+        const description = readableDescription(cap.description);
+        if (!description) return hint;
+        return (
+          <>
+            <span
+              data-capability-description=""
+              className="block text-foreground/80"
+            >
+              {description}
+            </span>
+            {hint && <span className="mt-1 block">{hint}</span>}
+          </>
+        );
+      })(),
       // Nothing until both halves answered or failed: a mark that flips from
       // "On" to "2 failed runs" a second later would be read as the answer.
       status:
@@ -400,7 +422,7 @@ export function CapabilityObject({
       ...(parent
         ? [
             {
-              label: toolsT()("fact.addOnOf"),
+              label: resolveLineageEdgeLabel("extends", "outgoing"),
               value: (
                 <a
                   href={addOnParentHref(parent.id)}
