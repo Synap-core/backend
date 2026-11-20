@@ -44,6 +44,7 @@
     "synap_get_file": 729,
     "synap_get_flow": 1238,
     "synap_get_graph": 1315,
+    "synap_get_home": 840,
     "synap_get_project": 357,
     "synap_get_proposal": 1448,
     "synap_get_relations": 641,

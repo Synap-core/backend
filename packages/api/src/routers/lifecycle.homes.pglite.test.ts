@@ -181,7 +181,7 @@ vi.mock("../services/runs/session-liveness.js", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { lifecycleRouter } from "./lifecycle.js";
 import { preferencesRouter } from "./preferences.js";
-import { db as pgDb } from "@synap/database";
+import { db as pgDb, runWithGrant, type KeyGrant } from "@synap/database";
 
 const USER = "user-1";
 const AGENT = "agent-1";
@@ -1225,5 +1225,99 @@ describe("home: last seen, on the pod", () => {
     await q(`delete from user_preferences`);
     await prefs("someone-else").markHomeSeen();
     expect((await caller().home()).homeLastSeenAt).toBeNull();
+  });
+});
+
+/**
+ * A key bounded by a grant (finding bf850fdc: a scoped agent key was refused
+ * Hub `GET /lifecycle/home` and `/lifecycle/moving`, and there was no MCP
+ * door). The reads narrow it themselves (`homesGrantOf`): a grant on one
+ * space never lists, counts or moves another space's things. DEV and MISC
+ * both produce `deal`, so a DEV-only grant that saw MISC would be the leak.
+ */
+describe("homes — a key bounded by a grant", () => {
+  const grantOf = (permissions: string[], workspaceIds: string[] | null) =>
+    ({
+      scopes: [
+        { permissions, workspaceIds, projectIds: null, entityIds: null },
+      ],
+      clientId: null,
+    }) as KeyGrant;
+  const onDev = grantOf(["entity.deal.read", "session.read"], [DEV]);
+
+  it("home lists only the spaces and kinds its grant reads, and says what it withheld", async () => {
+    const whole = await caller().home();
+    expect(whole.withheld).toBeUndefined();
+    expect(whole.spaces.map((s) => s.workspaceId)).toEqual(
+      expect.arrayContaining([DEV, MISC, LIB, CRM])
+    );
+
+    const home = await runWithGrant(onDev, () => caller().home());
+    expect(home.spaces.map((s) => s.workspaceId)).toEqual([DEV]);
+    expect(home.spaces[0]!.produces.map((p) => p.profileSlug)).toEqual([
+      "deal",
+    ]);
+    // DEV's own deal counts, as the person sees them.
+    const own = whole.spaces.find((s) => s.workspaceId === DEV)!.produces[0]!;
+    expect(home.spaces[0]!.produces[0]!.total).toBe(own.total);
+    expect(home.withheld).toEqual([
+      "otherSpaces",
+      "needsYou",
+      "homeLastSeenAt",
+    ]);
+    expect(home.needsYou).toMatchObject({ total: null, podLevel: null });
+    expect(home.needsYou.bySpace.map((b) => b.workspaceId)).toEqual([DEV]);
+    expect(home.homeLastSeenAt).toBeNull();
+
+    // The same grant on MISC sees MISC, never DEV.
+    const onMisc = await runWithGrant(
+      grantOf(["entity.deal.read", "session.read"], [MISC]),
+      () => caller().home()
+    );
+    expect(onMisc.spaces.map((s) => s.workspaceId)).toEqual([MISC]);
+  });
+
+  it("home: a kind the grant does not read is not listed; no session.read withholds being-worked", async () => {
+    const leadsOnly = await runWithGrant(
+      grantOf(["entity.lead.read"], [DEV]),
+      () => caller().home()
+    );
+    expect(leadsOnly.spaces).toEqual([]);
+
+    const noSessions = await runWithGrant(
+      grantOf(["entity.deal.read"], [DEV]),
+      () => caller().home()
+    );
+    expect(noSessions.withheld).toContain("beingWorked");
+    expect(noSessions.spaces[0]!.produces[0]!.beingWorked).toBeNull();
+  });
+
+  it("moving shows only the things and sessions of the granted space", async () => {
+    await session({ subject: T.neg, workspace: DEV, mins: 4 });
+    await session({ subject: T.misc, workspace: MISC, mins: 3 });
+    await session({ workspace: MISC, mins: 2, title: "Loose in Misc" });
+    try {
+      const whole = await caller().moving();
+      expect(whole.items.map((i) => i.entityId)).toEqual(
+        expect.arrayContaining([T.neg, T.misc])
+      );
+
+      const moving = await runWithGrant(onDev, () => caller().moving());
+      expect(moving.items.map((i) => i.entityId)).toEqual([T.neg]);
+      expect(moving.items.every((i) => i.workspaceId === DEV)).toBe(true);
+      expect(moving.unattached).toEqual([]);
+      for (const lb of moving.leftBehind?.items ?? [])
+        expect(lb.workspaceId).toBe(DEV);
+    } finally {
+      await q(`update focus_sessions set status = 'closed'`);
+    }
+  });
+
+  it("moving refuses a key that reads no session (never 'nothing is moving')", async () => {
+    await expect(
+      runWithGrant(grantOf(["entity.deal.read"], [DEV]), () =>
+        caller().moving()
+      )
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

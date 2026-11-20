@@ -70,8 +70,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /library/readers",
   "GET /library/search",
   "GET /lifecycle/board",
-  "GET /lifecycle/home",
-  "GET /lifecycle/moving",
   "GET /lifecycle/throughput",
   "GET /links",
   "GET /manifest",
@@ -136,4 +134,4 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
 ];
 
 /** The baseline's size when it was cut; it only goes down. */
-export const UNCLASSIFIED_READ_ROUTES_CAP = 116;
+export const UNCLASSIFIED_READ_ROUTES_CAP = 114;
