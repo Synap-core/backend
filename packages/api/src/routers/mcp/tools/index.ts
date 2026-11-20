@@ -6157,7 +6157,7 @@ export const tools = {
             config: {
               type: "object",
               description:
-                "View configuration (groupBy, sortBy, filters, etc.)",
+                "View configuration. Table columns: visibleColumns (property slugs, in order), hiddenColumns, columnWidths; grouping: groupByField.",
             },
             initialContent: {
               type: "object",
@@ -6864,7 +6864,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Add a new DECLARATIVE verb (a deterministic provider HTTP call — no code execution) to an ALREADY-INSTALLED, already-credentialed tool — e.g. teach 'apify_api' a new 'apify_search_reddit_actors' verb without a dev-session/redeploy. Creates a kind='declarative' skill only; rejects any request implying code/instruction/builtin execution. `toolName` MUST already exist (installed + visible to the caller) or this is refused — it never creates a new tool/connection as a side effect. Governed the same as every other write: may return status='proposed' for review. Discover installed tools with synap_list_capabilities first.",
+          "Add a new DECLARATIVE verb (a deterministic provider HTTP call — no code execution) to an ALREADY-INSTALLED, already-credentialed tool. Creates a kind='declarative' skill only; rejects any request implying code/instruction/builtin execution. `toolName` MUST already exist (installed + visible to the caller) or this is refused — it never creates a new tool/connection as a side effect. Governed the same as every other write: may return status='proposed' for review. Discover installed tools with synap_list_capabilities first.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6918,7 +6918,7 @@ export const tools = {
             readOnly: {
               type: "boolean",
               description:
-                "true when the call changes nothing anywhere (a lookup, even over POST): once the person approves the verb, agent runs skip review. Shown on the proposal; turning it on later needs approval again.",
+                "true when the call changes nothing (a lookup, even over POST): once approved, agent runs skip review. Turning it on later needs approval again.",
             },
             workspaceId: {
               type: "string",
