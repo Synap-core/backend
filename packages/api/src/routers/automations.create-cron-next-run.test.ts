@@ -104,6 +104,7 @@ describe("automations.create — cron nextRunAt", () => {
     try {
       const captured: { values?: Record<string, unknown> } = {};
       mockGetDb.mockResolvedValue({
+        ...NO_USERS,
         insert: vi.fn(() => insertChain(captured)),
       });
 
@@ -126,7 +127,7 @@ describe("automations.create — cron nextRunAt", () => {
 
   it("refuses a time zone the cron clock does not know, and writes nothing", async () => {
     const insert = vi.fn(() => insertChain({}));
-    mockGetDb.mockResolvedValue({ insert });
+    mockGetDb.mockResolvedValue({ ...NO_USERS, insert });
 
     const caller = automationsRouter.createCaller(callerCtx());
     await expect(
