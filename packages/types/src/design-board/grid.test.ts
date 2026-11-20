@@ -4,7 +4,13 @@
  */
 import { describe, expect, it } from "vitest";
 import { FRAME_PRESETS } from "./board.js";
-import { GRID_COLUMNS, cleanGridProp, widthClassOf } from "./grid.js";
+import {
+  GRID_COLUMNS,
+  cleanGridProp,
+  fitStartToSpan,
+  fitsPlacement,
+  widthClassOf,
+} from "./grid.js";
 
 describe("the page grid", () => {
   it("12 / 8 / 4 columns at expanded / medium / compact", () => {
@@ -43,5 +49,28 @@ describe("the page grid", () => {
       bad: true,
     });
     expect(cleanGridProp("span", 3)).toEqual({ value: undefined, bad: true });
+  });
+
+  it("a stored start keeps a column of the class; an undefined class is not set, and not bad", () => {
+    expect(
+      cleanGridProp("start", { compact: 4, medium: 0, expanded: undefined })
+    ).toEqual({ value: { compact: 4 }, bad: true });
+    expect(cleanGridProp("start", { expanded: undefined })).toEqual({
+      value: undefined,
+      bad: false,
+    });
+  });
+
+  it("a start fits with its span (s + n - 1 <= columns); with no span it runs to the row's end", () => {
+    expect(fitsPlacement("expanded", 9, 4)).toBe(true);
+    expect(fitsPlacement("expanded", 10, 4)).toBe(false);
+    expect(fitsPlacement("compact", 4, undefined)).toBe(true);
+    expect(
+      fitStartToSpan({ expanded: 10, compact: 2 }, { expanded: 4, compact: 3 })
+    ).toEqual({ value: { compact: 2 }, bad: true });
+    expect(fitStartToSpan(undefined, { expanded: 4 })).toEqual({
+      value: undefined,
+      bad: false,
+    });
   });
 });

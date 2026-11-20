@@ -77,7 +77,7 @@ export const DESIGN_VERB_PARAMETERS: Readonly<
         maxItems: 200,
         items: { type: "object" },
         description:
-          "The ops, applied in order, all or nothing: create_design {title, appId?, projectId?} (first only), add_frame {preset, name?, id?, pageOf?, x?, y?}, update_frame {frameId, name?, preset?, x?, y?, w?, h?}, remove_frame {frameId}, add_block {frameId, parentId?, slot?, index?, type, props?}, update_block {id, props?, unset?}, move_block {id, frameId?, parentId?, slot?, index?}, remove_block {id}, set_span {id, class, span}, set_hide {id, class, hide}, replace_page {frameId, page}, replace_board {board}.",
+          "The ops, applied in order, all or nothing: create_design {title, appId?, projectId?} (first only), add_frame {preset, name?, id?, pageOf?, x?, y?}, update_frame {frameId, name?, preset?, x?, y?, w?, h?}, remove_frame {frameId}, add_block {frameId, parentId?, slot?, index?, type, props?}, update_block {id, props?, unset?}, move_block {id, frameId?, parentId?, slot?, index?}, remove_block {id}, set_span {id, class, span}, set_start {id, class, start}, set_hide {id, class, hide}, replace_page {frameId, page}, replace_board {board}.",
       },
       acceptDrops: {
         type: "boolean",

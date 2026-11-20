@@ -88,7 +88,7 @@ function schemaProblem(label: string, raw: unknown): string | null {
     if (!isObj(fields)) return `${label}.${name} is not an object of props.`;
     for (const [prop, spec] of Object.entries(fields)) {
       if (GRID_PROPS.includes(prop))
-        return `${label}.${name} declares \`${prop}\`, which every block already has (span and hide per width class).`;
+        return `${label}.${name} declares \`${prop}\`, which every block already has (span, start and hide per width class).`;
       if (!fieldSpecOk(spec))
         return `${label}.${name}.${prop} is not a prop spec the canvas knows.`;
     }

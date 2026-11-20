@@ -28,7 +28,15 @@
  * design door (`services/designs`, verbs `design.*`) and the Design app share
  * this one parser.
  */
-import { GRID_PROPS, cleanGridProp } from "./grid.js";
+import {
+  GRID_PROPS,
+  SPAN_PROP,
+  START_PROP,
+  cleanGridProp,
+  fitStartToSpan,
+  type Span,
+  type Start,
+} from "./grid.js";
 import type { CanvasSchema, FieldSpec, ListSpec } from "./schema.js";
 
 /** The format of a v3 board. */
@@ -324,7 +332,7 @@ function cleanBlocks(
           ? cleanBlocks(value, schema, dropped, depth + 1)
           : value;
       else if (GRID_PROPS.includes(key)) {
-        // Span and hide per width class (grid.ts): every block has them.
+        // Span, start and hide per width class (grid.ts): every block has them.
         const grid = cleanGridProp(key, value);
         if (grid.bad)
           dropped.push({ kind: "bad-prop", type: b.type, prop: key });
@@ -359,6 +367,17 @@ function cleanBlocks(
           );
         else props[key] = value;
       }
+    }
+    if (fields && props[START_PROP] !== undefined) {
+      // A start and a span fit the class's columns together (grid.ts).
+      const start = fitStartToSpan(
+        props[START_PROP] as Start,
+        props[SPAN_PROP] as Span | undefined
+      );
+      if (start.bad)
+        dropped.push({ kind: "bad-prop", type: b.type, prop: START_PROP });
+      if (start.value) props[START_PROP] = start.value;
+      else delete props[START_PROP];
     }
     out.push({ type: b.type, props: props as PageBlock["props"] });
   }

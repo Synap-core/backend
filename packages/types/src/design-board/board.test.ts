@@ -723,7 +723,7 @@ describe("viewport frames: a frame may show another frame's page (`pageOf`)", ()
   });
 });
 
-describe("span and hide per width class: every block has them, checked by the one door", () => {
+describe("span, start and hide per width class: every block has them, checked by the one door", () => {
   const block = (props: Record<string, unknown>) =>
     parseBoard(
       board(
@@ -759,6 +759,49 @@ describe("span and hide per width class: every block has them, checked by the on
       { kind: "bad-prop", type: "Text", prop: "span" },
       { kind: "bad-prop", type: "Text", prop: "hide" },
     ]);
+  });
+
+  it("a start column fits its class with the span: kept as written; past the columns it is dropped and named, the span stays", () => {
+    const fits = block({
+      span: { expanded: 4, compact: 2 },
+      start: { expanded: 9, compact: 3, medium: 8 },
+    });
+    if (!fits.ok) throw new Error("fixture");
+    expect(fits.dropped).toEqual([]);
+    expect(fits.board.frames[0]!.page.content[0]!.props).toMatchObject({
+      span: { expanded: 4, compact: 2 },
+      // No span at medium: from column 8 to the row's end.
+      start: { expanded: 9, compact: 3, medium: 8 },
+    });
+    const past = block({
+      span: { expanded: 4 },
+      start: { expanded: 10, medium: 2 },
+    });
+    if (!past.ok) throw new Error("fixture");
+    expect(past.board.frames[0]!.page.content[0]!.props).toMatchObject({
+      span: { expanded: 4 },
+      start: { medium: 2 },
+    });
+    expect(past.dropped).toEqual([
+      { kind: "bad-prop", type: "Text", prop: "start" },
+    ]);
+  });
+
+  it("a start that keeps nothing goes entirely; a class set to undefined (a cleared field) is simply not set", () => {
+    const gone = block({ span: { expanded: 12 }, start: { expanded: 2 } });
+    if (!gone.ok) throw new Error("fixture");
+    expect(gone.board.frames[0]!.page.content[0]!.props).not.toHaveProperty(
+      "start"
+    );
+    expect(gone.dropped).toEqual([
+      { kind: "bad-prop", type: "Text", prop: "start" },
+    ]);
+    const cleared = block({ start: { expanded: undefined, compact: 2 } });
+    if (!cleared.ok) throw new Error("fixture");
+    expect(cleared.dropped).toEqual([]);
+    expect(cleared.board.frames[0]!.page.content[0]!.props.start).toEqual({
+      compact: 2,
+    });
   });
 
   it("a span that is not an object, or keeps nothing, goes entirely", () => {

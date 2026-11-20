@@ -5,11 +5,18 @@
  * (600 / 1024, measured on the page's container).
  *
  * A block placed in a grid (a Section, or a Grid inside one) may say, per
- * width class, how many columns it spans and whether it is hidden: the only
- * per-width overrides a block has (D5). Both are props of the block:
+ * width class, how many columns it spans, which column it starts at and
+ * whether it is hidden: the only per-width overrides a block has (D5, and the
+ * founder's start column of 20 Nov 2026). All three are props of the block:
  *
- *   span  { compact?: 1-4, medium?: 1-8, expanded?: 1-12 }   absent = full width
- *   hide  { compact?: boolean, medium?: boolean, expanded?: boolean }
+ *   span   { compact?: 1-4, medium?: 1-8, expanded?: 1-12 }   absent = full width
+ *   start  { compact?: 1-4, medium?: 1-8, expanded?: 1-12 }   absent = the grid places it
+ *   hide   { compact?: boolean, medium?: boolean, expanded?: boolean }
+ *
+ * At one class a block starting at column s spans its span from there
+ * (`grid-column: s / span n`), or, with no span, to the row's end (`s / -1`):
+ * absent span still means "as wide as it can". A start and a span must fit
+ * the class's columns together (s + n - 1 <= columns, `fitsPlacement`).
  *
  * The data half moved from app-bases `apps/ui-gallery/src/design/grid.ts`; how
  * a cell draws them (custom properties, the resize handle) stays in the app.
@@ -43,11 +50,14 @@ export function widthClassOf(width: number): WidthClass {
 }
 
 export const SPAN_PROP = "span";
+export const START_PROP = "start";
 export const HIDE_PROP = "hide";
 /** The props every block has on top of its component's own (a component declaring one of them is refused it). */
-export const GRID_PROPS: readonly string[] = [SPAN_PROP, HIDE_PROP];
+export const GRID_PROPS: readonly string[] = [SPAN_PROP, START_PROP, HIDE_PROP];
 
 export type Span = Partial<Record<WidthClass, number>>;
+/** The column (1-based) a block starts at, per width class. */
+export type Start = Partial<Record<WidthClass, number>>;
 export type Hide = Partial<Record<WidthClass, boolean>>;
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -64,23 +74,58 @@ export const fitsSpan = (cls: WidthClass, n: unknown): n is number =>
   n <= GRID_COLUMNS[cls];
 
 /**
- * A `span` or `hide` value as stored: only width classes, a whole number of
- * columns the class has (1 to its columns) for `span`, a boolean for `hide`.
- * `value` keeps what fits (undefined when nothing does); `bad` says something
- * was left out, so the one door can name it.
+ * A block starting at column `start` and spanning `span` columns (none: to
+ * the row's end) stays inside this class's columns.
+ */
+export const fitsPlacement = (
+  cls: WidthClass,
+  start: number,
+  span: number | undefined
+): boolean => start + (span ?? 1) - 1 <= GRID_COLUMNS[cls];
+
+/**
+ * A `span`, `start` or `hide` value as stored: only width classes, a whole
+ * number of the class's columns (1 to its columns) for `span` and `start`, a
+ * boolean for `hide`. A class whose value is `undefined` is not set (an editor
+ * field cleared; JSON never carries it). `value` keeps what fits (undefined
+ * when nothing does); `bad` says something was left out, so the one door can
+ * name it.
  */
 export function cleanGridProp(
   prop: string,
   raw: unknown
-): { value: Span | Hide | undefined; bad: boolean } {
+): { value: Span | Start | Hide | undefined; bad: boolean } {
   if (!isObj(raw)) return { value: undefined, bad: true };
   const value: Record<string, number | boolean> = {};
   let bad = false;
   for (const [k, v] of Object.entries(raw)) {
+    if (v === undefined) continue;
     const fits =
       isWidthClass(k) &&
-      (prop === SPAN_PROP ? fitsSpan(k, v) : typeof v === "boolean");
+      (prop === HIDE_PROP ? typeof v === "boolean" : fitsSpan(k, v));
     if (fits) value[k] = v as number | boolean;
+    else bad = true;
+  }
+  return { value: Object.keys(value).length > 0 ? value : undefined, bad };
+}
+
+/**
+ * A block's cleaned `start` against its cleaned `span`: a class whose start
+ * and span together run past the class's columns loses its start (the span
+ * is the older, wider-known prop). Returns the start that fits (undefined
+ * when none does) and whether one was left out. Pure.
+ */
+export function fitStartToSpan(
+  start: Start | undefined,
+  span: Span | undefined
+): { value: Start | undefined; bad: boolean } {
+  if (!start) return { value: undefined, bad: false };
+  const value: Start = {};
+  let bad = false;
+  for (const cls of WIDTH_CLASSES) {
+    const s = start[cls];
+    if (s === undefined) continue;
+    if (fitsPlacement(cls, s, span?.[cls])) value[cls] = s;
     else bad = true;
   }
   return { value: Object.keys(value).length > 0 ? value : undefined, bad };

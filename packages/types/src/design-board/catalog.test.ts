@@ -64,13 +64,19 @@ describe("readDesignCatalog", () => {
     ).toMatchObject({ ok: false, error: expect.stringMatching(/both/) });
   });
 
-  it("refuses a component that declares span or hide itself (every block has them)", () => {
+  it("refuses a component that declares span, start or hide itself (every block has them)", () => {
     expect(
       readDesignCatalog({
         ...good,
         components: { X: { span: { kind: "number" } } },
       })
     ).toMatchObject({ ok: false, error: expect.stringMatching(/span/) });
+    expect(
+      readDesignCatalog({
+        ...good,
+        components: { X: { start: { kind: "slot" } } },
+      })
+    ).toMatchObject({ ok: false, error: expect.stringMatching(/`start`/) });
   });
 });
 
