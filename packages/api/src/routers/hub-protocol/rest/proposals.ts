@@ -37,6 +37,7 @@ import {
   readJsonBody,
 } from "./_shared.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
+import { filingRefusalOf } from "../../../services/proposals/can-apply.js";
 import { getRequestGrant } from "@synap/database";
 import { isFencedGrant } from "../../../access/grant-door-fence.js";
 import { fencedProposalVerdict } from "../../../access/fenced-proposal.js";
@@ -1356,6 +1357,23 @@ export function registerProposalsRoutes(app: HubHono): void {
       });
       return c.json({ id: proposal.id, status: "pending" });
     } catch (err) {
+      // A proposal its approval would refuse (the one filing check): the
+      // caller's error, answered with its sentence and code, not a failure.
+      const refused = filingRefusalOf(err);
+      if (refused) {
+        logger.info(
+          {
+            reasonCode: refused.reasonCode,
+            targetType: body.targetType,
+            proposalType: body.proposalType,
+          },
+          "createProposal refused at filing: it cannot apply"
+        );
+        return c.json(
+          { error: refused.message, code: refused.reasonCode },
+          400
+        );
+      }
       logger.error({ err }, "createProposal failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

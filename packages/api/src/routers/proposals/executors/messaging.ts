@@ -377,11 +377,12 @@ async function executeChannelSend(args: {
   }
 
   let sent: Awaited<ReturnType<typeof sendExternalMessage>> | null = null;
-  // Not a connection yet (the reach is read live at every approval): the
-  // send is HELD, kept PENDING with its text, never APPROVAL_FAILED (CRM
-  // Messages contract b4f8c2cd, B). It becomes sendable once they connect.
-  // The same for a LinkedIn account past today's limit or paused by
-  // LinkedIn: held until the next day (`linkedin-account-limits.ts`).
+  // Not a connection yet, or no LinkedIn profile on file (the reach is read
+  // live at every approval): the send is HELD, kept PENDING with its text,
+  // never APPROVAL_FAILED (CRM Messages contract b4f8c2cd, B). It becomes
+  // sendable once they connect. The same for a LinkedIn account past today's
+  // limit or paused by LinkedIn: held until the next day
+  // (`linkedin-account-limits.ts`).
   let heldRecord: HeldSend | null = null;
   try {
     await dispatchExternalOnce(input.proposalId, async () => {
@@ -422,6 +423,19 @@ async function executeChannelSend(args: {
           heldRecord = result.held;
         } else if (result.errorClass === "not_connected") {
           heldRecord = heldSend(result.error ?? "Not a connection yet.");
+        } else if (
+          result.errorClass === "missing_field" &&
+          result.providerRef?.toLowerCase() === "linkedin"
+        ) {
+          // No LinkedIn profile (or id) on file for them: only the person
+          // can fix their record, so the send is kept, held (plan 8032a127
+          // D1); it goes out on an approval after the record is fixed.
+          heldRecord = heldSend(
+            result.error ?? "No LinkedIn profile on file.",
+            new Date(),
+            "missing_field",
+            result.missing
+          );
         }
         return {
           delivered: false,

@@ -55313,9 +55313,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					readonly status: "unavailable";
 				} | null | undefined;
 				phaseCategory: PlaybookStageCategory;
-				pillars?: Pillar[] | {
+				pillars?: {
 					readonly status: "unavailable";
-				} | undefined;
+				} | Pillar[] | undefined;
 				project: {
 					colorSlot: number | null;
 					createdAt: Date;
@@ -55335,9 +55335,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					workspaceId: string | null;
 				};
-				rootHealth?: ProjectRootHealth | {
+				rootHealth?: {
 					readonly status: "unavailable";
-				} | undefined;
+				} | ProjectRootHealth | undefined;
 				subject: ProjectSubject | null;
 				usedWorkspaceIds: string[];
 				usedWorkspaces: UsedWorkspaceRef[];

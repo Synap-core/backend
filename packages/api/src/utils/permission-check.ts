@@ -695,7 +695,8 @@ export type PermissionResult =
       /**
        * A typed refusal: `DENIED_BY_RULE` = a person's stored "Never" for this
        * agent and this kind of act (0381). The reason text opens with it too,
-       * for doors that forward only the text.
+       * for doors that forward only the text. Or the code of a proposal
+       * that cannot apply, refused when filed (`can-apply.ts`).
        */
       reasonCode?: string;
       /**
@@ -4068,13 +4069,18 @@ export async function createPendingProposal(
    * the caller's transaction and notifications are SKIPPED here — the caller must
    * invoke notifyProposalCreated() AFTER the tx commits (see createProposal).
    */
-  tx?: DbTx
+  tx?: DbTx,
+  /**
+   * `canApplyAsked`: the caller asked the one filing check itself, before
+   * the event it writes first (`createEventBackedProposal`).
+   */
+  opts: { canApplyAsked?: true } = {}
 ) {
   // Public shape unchanged (returns the row) so the many simple callers stay
   // as-is; they still benefit transparently from the SSOT's dedup guard (they
   // get the existing row back, no duplicate). Only createProposal needs the
   // `deduped` signal — it uses createPendingProposalRow directly.
-  const { proposal } = await createPendingProposalRow(input, tx);
+  const { proposal } = await createPendingProposalRow(input, tx, opts);
   return proposal;
 }
 
@@ -4132,8 +4138,38 @@ export async function resolveAgentRunReceipt(input: {
  */
 async function createPendingProposalRow(
   input: CreatePendingProposalInput,
-  tx?: DbTx
+  tx?: DbTx,
+  opts: {
+    /**
+     * The caller asked the one filing check itself, before its transaction
+     * (`createProposal`). Every other caller is asked here.
+     */
+    canApplyAsked?: true;
+  } = {}
 ): Promise<InsertPendingProposalResult> {
+  // CAN IT APPLY? The ONE check per proposal kind (`can-apply.ts`, plan
+  // 8032a127 D1), asked here because every API door files through this row:
+  // a proposal its approval would refuse is refused NOW, before a receipt
+  // session is minted or a row inserted, with the approval's own sentence.
+  // A read that fails files as before. Its own reads go through the caller's
+  // transaction when there is one.
+  if (!opts.canApplyAsked) {
+    const { proposalCannotApply, ProposalCannotApplyError } =
+      await import("../services/proposals/can-apply.js");
+    const cannotApply = await proposalCannotApply({
+      targetType: input.targetType,
+      targetId: input.targetId,
+      proposalType: input.proposalType,
+      data: input.data,
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? null,
+      agentUserId: input.agentUserId ?? null,
+      sessionId: input.sessionId ?? null,
+      ...(tx ? { reader: tx } : {}),
+    });
+    if (cannotApply) throw new ProposalCannotApplyError(cannotApply);
+  }
+
   // Wave 2 — agent writes without a session get packaged into a focus session
   // (teammate metaphor). Humans and already-sessioned callers are untouched.
   // Never mint for focus_session self-writes (recursion). Best-effort.
@@ -4911,6 +4947,30 @@ async function createProposal(args: {
   // `.requested` append failure now ROLLS BACK the proposal instead of being
   // swallowed — an un-traceable proposal is worse than a surfaced error.
   // Notifications run AFTER commit (never hold the tx across network/queue work).
+  //
+  // CAN IT APPLY? The ONE filing check (`can-apply.ts`), asked HERE, before
+  // the transaction: its reads are not the transaction's, and a proposal its
+  // approval would refuse writes neither the event nor the row. It comes
+  // back as this gate's denial, with the approval's own sentence and code.
+  const { proposalCannotApply } =
+    await import("../services/proposals/can-apply.js");
+  const cannotApply = await proposalCannotApply({
+    targetType: singularType,
+    targetId,
+    proposalType: action,
+    data: storedData,
+    userId,
+    workspaceId: workspaceId ?? null,
+    agentUserId: attributionAgentUserId ?? null,
+    sessionId: sessionId ?? null,
+  });
+  if (cannotApply) {
+    return {
+      denied: true,
+      reason: cannotApply.message,
+      reasonCode: cannotApply.reasonCode,
+    };
+  }
   const { proposal, pendingInput, deduped, superseded } = await db.transaction(
     async (tx) => {
       let reqEventId = requestedEventId;
@@ -4961,7 +5021,9 @@ async function createProposal(args: {
         proposal: created,
         deduped,
         superseded,
-      } = await createPendingProposalRow(pendingInput, tx);
+      } = await createPendingProposalRow(pendingInput, tx, {
+        canApplyAsked: true,
+      });
       return { proposal: created, pendingInput, deduped, superseded };
     }
   );
