@@ -17,8 +17,9 @@
  *     its items in its goal; the parent pauses, its step row waits;
  *   - 70 items, batch 10: seven batches, never more than three running, the
  *     next one starting as one ends; the last close finishes the step;
- *   - a failed child: the parent still finishes the step, moves on, stops
- *     waiting on that child, and its agent is told which part failed;
+ *   - a child that did not deliver (failed, cancelled, or closed with required
+ *     work open): the step ends failed, the parent stops waiting on that
+ *     child, stays on the step, and its agent is told which part did not;
  *   - a replayed close starts nothing and settles nothing twice;
  *   - `max` caps the items; a step that `uses` a playbook runs that playbook;
  *   - `over` naming no list: the step fails and the room says why;
@@ -243,10 +244,28 @@ const systemLines = (channelId: string) =>
     [channelId]
   ).then((r) => r.rows.map((m) => m.content));
 
-async function endChild(id: string, status: "closed" | "failed" | "cancelled") {
+async function endChild(
+  id: string,
+  status: "closed" | "failed" | "cancelled",
+  closedNotDone = false
+) {
   await q(
-    `update focus_sessions set status = $2, closed_at = now() where id = $1`,
-    [id, status]
+    `update focus_sessions set status = $2, closed_at = now(), verification_report = $3::jsonb where id = $1`,
+    [
+      id,
+      status,
+      JSON.stringify(
+        closedNotDone
+          ? {
+              closedNotDone: {
+                reason: "Ran out of time",
+                criteria: [],
+                outcomes: [],
+              },
+            }
+          : null
+      ),
+    ]
   );
 }
 
@@ -505,16 +524,16 @@ describe("a batch whose run never started", () => {
     const { sessionId, channelId } = await orphan(60);
     expect(await sweepOrphanedFanOuts()).toBe(1);
     const step = await stepRow(sessionId);
-    expect(step.status).toBe("done");
+    expect(step.status).toBe("failed");
     expect(step.fan_out!.children[0]!.status).toBe("failed");
     const parent = await session(sessionId);
     expect(parent.status).toBe("active");
-    expect(parent.current_stage).toBe("summarize");
+    expect(parent.current_stage).not.toBe("summarize");
     expect(
       (await systemLines(channelId)).find((l) =>
-        l.startsWith("Step Review is done")
+        l.startsWith("Step Review failed")
       )
-    ).toContain("part 1 failed.");
+    ).toContain("part 1 did not");
   });
 
   it("a batch claimed a minute ago is still starting: the sweep leaves it", async () => {
@@ -525,7 +544,7 @@ describe("a batch whose run never started", () => {
 });
 
 describe("the children close", () => {
-  it("one failed: the parent still finishes the step, stops waiting on it, moves on and names it", async () => {
+  it("one failed: the step ends failed, the parent stops waiting on it, stays on the step and names it", async () => {
     const { sessionId, channelId } = await startParent(REVIEW, {
       findingIds: ids(70),
     });
@@ -562,25 +581,51 @@ describe("the children close", () => {
     expect(await settleStageChild(kids[2]!.id)).toEqual({
       status: "fan_out_done",
       failed: [2],
-      toStage: "summarize",
     });
 
     const parent = await session(sessionId);
     expect(parent.status).toBe("active");
-    expect(parent.current_stage).toBe("summarize");
-    expect((await stepRow(sessionId)).status).toBe("done");
+    expect(parent.current_stage).not.toBe("summarize");
+    expect((await stepRow(sessionId)).status).toBe("failed");
     const told = (await systemLines(channelId)).find((l) =>
-      l.startsWith("Step Review is done")
+      l.startsWith("Step Review failed")
     );
-    expect(told).toContain("2 of 3 runs delivered; part 2 failed.");
+    expect(told).toContain("2 of 3 runs delivered; part 2 did not");
     expect(told).toContain(`part 2 (30 items)`);
     expect(told).toContain("FAILED");
     // The run's agent gets one turn with what each child did.
     const turns = h.turns.filter((t) =>
-      String(t.content).startsWith("Step Review is done")
+      String(t.content).startsWith("Step Review failed")
     );
     expect(turns).toHaveLength(1);
     // The turn answers the room line it was told in (the door reads it).
     expect(turns[0]!.userMessageId).toBeTruthy();
+  });
+
+  it("one closed with required work open is not delivered: the step ends failed and names the child", async () => {
+    const { sessionId, channelId } = await startParent(REVIEW, {
+      findingIds: ids(70),
+    });
+    const kids = await children(sessionId);
+    await endChild(kids[0]!.id, "closed");
+    await settleStageChild(kids[0]!.id);
+    await endChild(kids[1]!.id, "closed", true);
+    await settleStageChild(kids[1]!.id);
+    await endChild(kids[2]!.id, "closed");
+    expect(await settleStageChild(kids[2]!.id)).toEqual({
+      status: "fan_out_done",
+      failed: [2],
+    });
+    const step = await stepRow(sessionId);
+    expect(step.status).toBe("failed");
+    expect(step.fan_out!.children[1]).toMatchObject({
+      status: "failed",
+      error: "closed with required work open",
+    });
+    expect((await session(sessionId)).current_stage).not.toBe("summarize");
+    const told = (await systemLines(channelId)).find((l) =>
+      l.startsWith("Step Review failed")
+    );
+    expect(told).toContain(kids[1]!.id);
   });
 });

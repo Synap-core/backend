@@ -65,6 +65,7 @@ import {
   type PlaybookStageUses,
 } from "@synap/playbooks";
 import type { RunOn } from "@synap-core/types/agents";
+import type { SessionClosedAs } from "@synap-core/types/focus-sessions";
 import { countedNoun } from "@synap-core/types/vocabulary";
 import { createLogger } from "@synap-core/core";
 import {
@@ -679,24 +680,31 @@ export async function startStageForEach(p: {
 export async function settleFanOutChild(p: {
   child: { id: string; userId: string };
   ended: string;
+  closedAs: SessionClosedAs | null;
   parent: { id: string; userId: string };
   stageOf: StageOf & { forEachIndex: number };
 }): Promise<SettleStageChildResult> {
   const { child, parent, stageOf } = p;
   const index = stageOf.forEachIndex;
   const status: StageFanOutChild["status"] =
-    p.ended === "closed"
+    p.closedAs === "done"
       ? "done"
-      : p.ended === "failed"
-        ? "failed"
-        : "cancelled";
+      : p.ended === "cancelled"
+        ? "cancelled"
+        : "failed";
   try {
     // Compare and set: only the batch still running, by this child, settles.
     const fanOut = await changeFanOut(stageOf.stageRunId, (f) => {
       const c = f.children[index];
       if (!c || c.status !== "running") return null;
       if (c.sessionId && c.sessionId !== child.id) return null;
-      return withChild(f, index, { status, sessionId: child.id });
+      return withChild(f, index, {
+        status,
+        sessionId: child.id,
+        ...(p.ended === "closed" && status === "failed"
+          ? { error: "closed with required work open" }
+          : {}),
+      });
     });
     if (!fanOut) return { status: "settled_already" };
     if (status !== "done") {
@@ -808,7 +816,10 @@ async function finishIfAllEnded(
 ): Promise<SettleStageChildResult | null> {
   const [row] = await db
     .update(sessionStageRuns)
-    .set({ status: "done", endedAt: new Date() })
+    .set({
+      status: drizzleSql`CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' <> 'done') THEN 'failed' ELSE 'done' END`,
+      endedAt: new Date(),
+    })
     .where(
       and(
         eq(sessionStageRuns.id, stageRunId),
@@ -889,6 +900,7 @@ async function finishIfAllEnded(
   );
   let toStage: string | undefined;
   if (
+    failed.length === 0 &&
     next &&
     !nextGated &&
     owed.length === 0 &&
@@ -907,17 +919,20 @@ async function finishIfAllEnded(
   const done = fanOut.children.length - failed.length;
   const head =
     failed.length > 0
-      ? `Step ${stageName} is done: ${done} of ${countedNoun(fanOut.children.length, "run")} delivered; ${failed.map((n) => `part ${n}`).join(", ")} failed.`
+      ? `Step ${stageName} failed: ${done} of ${countedNoun(fanOut.children.length, "run")} delivered; ${failed.map((n) => `part ${n}`).join(", ")} did not (closed with required work open, failed or cancelled).`
       : `Step ${stageName} is done: all ${countedNoun(fanOut.children.length, "run")} delivered.`;
-  const then = toStage
-    ? `The run moved on to step ${nameOf(next!)}.`
-    : !next
-      ? "It was the last step: close the run when it is done."
-      : owed.length > 0
-        ? `Make ${owed.join(", ")} from their results, then move on.`
-        : nextGated
-          ? `The next step, ${nameOf(next)}, is gated: move on when it is right to.`
-          : "The run moved meanwhile: pick up from where it is.";
+  const then =
+    failed.length > 0
+      ? "The run stays on this step: run the failed parts again, or move on when it is right to."
+      : toStage
+        ? `The run moved on to step ${nameOf(next!)}.`
+        : !next
+          ? "It was the last step: close the run when it is done."
+          : owed.length > 0
+            ? `Make ${owed.join(", ")} from their results, then move on.`
+            : nextGated
+              ? `The next step, ${nameOf(next)}, is gated: move on when it is right to.`
+              : "The run moved meanwhile: pick up from where it is.";
   await tellRunAgent(
     parent,
     runAgent,
