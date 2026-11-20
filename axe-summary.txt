@@ -26,6 +26,10 @@ after a05b-app-page-projects light desktop violations=0 incomplete=color-contras
 after a05b-app-page-projects light phone violations=0 incomplete=color-contrast
 after a05b-app-page-projects dark desktop violations=0 incomplete=color-contrast
 after a05b-app-page-projects dark phone violations=0 incomplete=color-contrast
+after a05c-app-page-review light desktop violations=0 incomplete=color-contrast
+after a05c-app-page-review light phone violations=0 incomplete=color-contrast
+after a05c-app-page-review dark desktop violations=0 incomplete=color-contrast
+after a05c-app-page-review dark phone violations=0 incomplete=color-contrast
 after a06-in-noprojects light desktop violations=0 incomplete=aria-valid-attr-value,color-contrast
 after a06-in-noprojects light phone violations=0 incomplete=aria-valid-attr-value,color-contrast
 after a06-in-noprojects dark desktop violations=0 incomplete=aria-valid-attr-value,color-contrast
@@ -62,6 +66,14 @@ after a12-write-sheet light desktop violations=0 incomplete=color-contrast
 after a12-write-sheet light phone violations=0 incomplete=color-contrast
 after a12-write-sheet dark desktop violations=0 incomplete=color-contrast
 after a12-write-sheet dark phone violations=0 incomplete=color-contrast
+after a13-connected light desktop violations=1 incomplete=color-contrast
+    color-contrast(2): .bg-warning\/20 > .flex-1.text-inherit.font-normal | .bg-primary\/20 > .flex-1.text-inherit.font-normal
+after a13-connected light phone violations=1 incomplete=color-contrast
+    color-contrast(2): .bg-warning\/20 > .flex-1.text-inherit.font-normal | .bg-primary\/20 > .flex-1.text-inherit.font-normal
+after a13-connected dark desktop violations=1 incomplete=color-contrast
+    color-contrast(2): .bg-warning\/20 > .flex-1.text-inherit.font-normal | .bg-primary\/20 > .flex-1.text-inherit.font-normal
+after a13-connected dark phone violations=1 incomplete=color-contrast
+    color-contrast(2): .bg-warning\/20 > .flex-1.text-inherit.font-normal | .bg-primary\/20 > .flex-1.text-inherit.font-normal
 before b01-connect-chat light desktop violations=0 incomplete=aria-prohibited-attr,aria-valid-attr-value,color-contrast
 before b01-connect-chat light phone violations=0 incomplete=aria-prohibited-attr,aria-valid-attr-value,color-contrast
 before b01-connect-chat dark desktop violations=0 incomplete=aria-prohibited-attr,aria-valid-attr-value,color-contrast
