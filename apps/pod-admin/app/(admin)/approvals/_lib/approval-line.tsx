@@ -100,25 +100,30 @@ export function ApprovalLine({
         primary={byWho ? who : title}
         // who · where · from: one line, the agent and the origin doors when
         // they have a page, so the right side holds only the mark and the way
-        // back.
+        // back. `byWho`: [the action ·] where · from (WHO is the title).
         secondary={
           <>
             {byWho ? (
               detail ? (
-                `${detail} ·`
+                `${detail} · `
               ) : null
-            ) : row.agentUserId && !readOnly ? (
-              <Link
-                href={agentHref(row.agentUserId)}
-                data-approval-agent=""
-                className="text-foreground/85 underline-offset-2 hover:underline"
-              >
-                {who}
-              </Link>
             ) : (
-              who
-            )}{" "}
-            · {where} · {t("row.fromLabel")}{" "}
+              <>
+                {row.agentUserId && !readOnly ? (
+                  <Link
+                    href={agentHref(row.agentUserId)}
+                    data-approval-agent=""
+                    className="text-foreground/85 underline-offset-2 hover:underline"
+                  >
+                    {who}
+                  </Link>
+                ) : (
+                  who
+                )}
+                {" · "}
+              </>
+            )}
+            {where} · {t("row.fromLabel")}{" "}
             {origin.href && !readOnly ? (
               <Link
                 href={origin.href}

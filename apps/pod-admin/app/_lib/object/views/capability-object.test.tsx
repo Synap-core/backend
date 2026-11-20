@@ -415,8 +415,10 @@ describe("a tool's page reads the approval rows", () => {
     // On a tool's page the line is titled by WHO it is for; the action
     // (narrower than the tool) leads the second line, never the tool's name.
     const line = html.slice(html.indexOf("data-approval-exceptions"));
-    expect(text(line)).toMatch(/Scout\s+Hcloud list servers ·/);
+    expect(text(line)).toMatch(/Scout Hcloud list servers · Pod-wide · From:/);
     expect(text(line)).not.toContain("(Hetzner Cloud)");
+    // Never a stray separator: no "· ·", no line that starts with "·".
+    expect(text(line)).not.toMatch(/·\s*·/);
     // The exception is not every AI's mode.
     expect(html).not.toContain('data-everyone-mode="auto"');
   });
@@ -433,6 +435,10 @@ describe("a tool's page reads the approval rows", () => {
     ];
     const html = render(false);
     expect(html).toContain("data-approval-exceptions");
+    // A whole-tool row has no action: its second line starts with where.
+    const line = text(html.slice(html.indexOf("data-approval-exceptions")));
+    expect(line).toMatch(/Scout Pod-wide · From:/);
+    expect(line).not.toMatch(/Scout · /);
     expect(html).not.toContain(`href="/agents/${AGENT}"`);
     expect(text(html)).not.toContain("Take back");
     expect(text(html)).toContain("A pod admin sets how it runs for every AI.");
