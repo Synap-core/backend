@@ -52070,35 +52070,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: PlaybookRunChoice;
 		}>;
-		saveFlow: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				agentUserId?: string | undefined;
-				flowDefinition: {
-					edges: unknown[];
-					nodes: unknown[];
-				};
-				playbookId: string;
-				reasoning?: string | undefined;
-				source?: string | undefined;
-			};
-			meta: object;
-			output: {
-				automationId: string | null;
-				message: string;
-				proposalId: string;
-				status: "proposed";
-			} | {
-				automationId: string;
-				message: string;
-				proposalId: string | null;
-				status: "updated";
-			} | {
-				automationId: string;
-				message: string;
-				proposalId: string | null;
-				status: "created";
-			};
-		}>;
 		scorecard: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				playbookId: string;
