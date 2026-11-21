@@ -14,8 +14,10 @@
  *   - the tick rides `proposals.approve`, which an agent's credential never
  *     reaches (`refuseAgentProposalApprover`), and an app's sign-in is refused
  *     here too (`assertPersonSetsActionMode`);
- *   - `create_verb` takes no such field (its input schema strips unknown keys),
- *     and an agent's proposed skill carries no `metadata` but a box's;
+ *   - `create_verb` takes no such field (its input schema strips unknown keys
+ *     and any `metadata` bag). Its `readOnly` claim (`metadata.readOnly`) is a
+ *     separate path: the person sees it on the same card and approves it with
+ *     the verb; it writes no run-mode rule;
  *   - a rule written by an agent's credential is refused
  *     (`governanceRules.create`, `assertPersonSetsActionMode`).
  *

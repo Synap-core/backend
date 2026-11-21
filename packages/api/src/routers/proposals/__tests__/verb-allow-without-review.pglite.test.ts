@@ -393,7 +393,7 @@ describe("an agent can never set it", () => {
     expect(await nextRun(verb)).toEqual({ decision: "run" });
   });
 
-  it("not at create: create_verb takes no tick and no read-only claim (they are dropped)", () => {
+  it("not at create: create_verb takes no tick (dropped); its readOnly claim is its own declaration, no metadata bag", () => {
     const res = validateCreateVerbInput({
       toolName: "apify_api",
       verbName: "fr_company_lookup",
@@ -406,7 +406,9 @@ describe("an agent can never set it", () => {
     expect(res.ok).toBe(true);
     const data = (res as { data: Record<string, unknown> }).data;
     expect(data).not.toHaveProperty("allowWithoutReview");
-    expect(data).not.toHaveProperty("readOnly");
+    // `readOnly` is create_verb's own declaration since #1237 (stored as
+    // `metadata.readOnly`, shown on the review card): kept, and not the tick.
+    expect(data.readOnly).toBe(true);
     expect(data).not.toHaveProperty("metadata");
   });
 });
