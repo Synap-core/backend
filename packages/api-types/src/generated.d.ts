@@ -27242,6 +27242,25 @@ export interface SessionTargetsWrite {
 	/** Already targets of this session: nothing written. */
 	already: string[];
 }
+export type BlockerKey = {
+	blockerEntityId: string;
+	blockerTrackId?: never;
+} | {
+	blockerEntityId?: never;
+	blockerTrackId: string;
+};
+export type UnitBlockerReason = "cycle" | "denied" | "error" | "not_found" | "self_blocker";
+export type UnitBlockerReport = BlockerKey & ({
+	inserted: number;
+	status: "linked";
+} | {
+	proposalId: string;
+	status: "proposed";
+} | {
+	message?: string;
+	reason: UnitBlockerReason;
+	status: "failed";
+});
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink = {
 	/**
@@ -42310,7 +42329,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				adopted?: true | undefined;
 				agentIds: string[] | null;
-				blockerLinks?: CreateTimeBlockerReport[] | undefined;
+				blockerLinks?: (CreateTimeBlockerReport | UnitBlockerReport)[] | undefined;
 				channelId: string | null;
 				closedAt: Date | null;
 				correlationId: string | null;
@@ -61359,6 +61378,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: (ProposedOutcome & {
+				pendingTrackId: string;
+			} & {
 				missingDomains: string[];
 			} & {
 				entityId: string;
@@ -61408,6 +61429,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: (ProposedOutcome & {
+				pendingTrackId: string;
+			} & {
 				missingDomains: string[];
 			}) | {
 				status: "exists" | "started";
@@ -61547,6 +61570,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: (ProposedOutcome & {
+				pendingTrackId: string;
+			} & {
 				missingDomains: string[];
 			}) | {
 				status: "exists" | "started";
@@ -61561,6 +61586,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: (ProposedOutcome & {
+				pendingTrackId: string;
+			} & {
 				missingDomains: string[];
 			}) | {
 				status: "exists" | "started";
