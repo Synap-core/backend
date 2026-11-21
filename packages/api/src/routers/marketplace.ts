@@ -16,7 +16,10 @@
  *   install    — `runMarketInstall`: the source's trust level decides; a person
  *                installs (confirming code, network reach and the use of
  *                existing connections from a trusted source), an agent
- *                proposes where allowed. Any other key is refused.
+ *                proposes where allowed. Any other key is refused. It also
+ *                takes kind `renderer-bundle` (Synap's renderers, fetched from
+ *                the pod's control plane): Pod updates' Renderers row installs
+ *                through this door, the same core `market.install` runs.
  *   sources.*  — where the catalog comes from. Reading is for pod admins;
  *                CHANGING a source (add, trust, key re-approval, switch,
  *                remove) is for a signed-in PERSON who administers the pod —
@@ -28,6 +31,7 @@
  */
 
 import { presenceProofSchema } from "@synap-core/types/presence";
+import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
 import { assertPresenceForRequest } from "../services/presence/gate.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -1080,6 +1084,11 @@ export const marketplaceRouter = router({
   install: credentialProcedure
     .input(
       targetSchema.extend({
+        // Every catalog kind, and Synap's renderer bundle: never in the
+        // catalog, so never listed or previewed here, but installed by the
+        // same core (`runMarketInstall` refuses it from another source or
+        // with a payload, and fetches it from the control plane).
+        kind: z.union([kindSchema, z.literal(RENDERER_BUNDLE_KIND)]),
         workspaceId: z.string().uuid().optional(),
         version: z.string().max(100).optional(),
         params: z.record(z.string(), z.unknown()).optional(),
