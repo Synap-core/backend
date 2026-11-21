@@ -5,7 +5,7 @@ import {
 } from "../profile-resolution-service.js";
 import {
   PropertyValidationService,
-  misnamedLifecycleKeys,
+  moveMisnamedLifecycle,
 } from "../property-validation-service.js";
 import { PropertyValueType } from "../../schema/property-defs.js";
 
@@ -253,17 +253,45 @@ describe("PropertyValidationService tells the writer what the kind models", () =
     ]);
   });
 
-  it("names an unknown key whose nearest field is the lifecycle (and no other near miss)", async () => {
+  it("validates the kind's status sent under another key as its field, and says it moved", async () => {
     const res = await svc.validateEntityCreateForProposal(
-      { status: "accepted", sumary: "x" },
+      { status: "Accepted_", sumary: "x" },
       "p",
       "ws-1",
       { title: "Ship it" }
     );
-    expect(res.valid).toBe(true);
-    expect(misnamedLifecycleKeys(res.unmodeled, res.modeled)).toEqual([
-      { key: "status", field: "decisionStatus" },
-    ]);
+    expect(res.moved).toEqual([{ key: "status", field: "decisionStatus" }]);
+    // Checked as `decisionStatus`: the near-miss value is caught there.
+    expect(res.issues[0]).toMatchObject({
+      key: "decisionStatus",
+      kind: "not_in_options",
+    });
+    expect(res.unmodeled).toContainEqual({
+      key: "status",
+      didYouMean: "decisionStatus",
+      movedTo: "decisionStatus",
+    });
+    // Another near miss (not the lifecycle) stays advisory, unmoved.
+    expect(res.unmodeled).toContainEqual({
+      key: "sumary",
+      didYouMean: "summary",
+    });
+  });
+
+  it("never moves over a value the status field already has", async () => {
+    const res = await svc.validateEntityCreateForProposal(
+      { status: "accepted", decisionStatus: "proposed" },
+      "p",
+      "ws-1",
+      { title: "Ship it" }
+    );
+    expect(res.moved).toEqual([]);
+    expect(
+      moveMisnamedLifecycle(
+        { status: "accepted", decisionStatus: "proposed" },
+        [{ key: "status", field: "decisionStatus" }]
+      ).properties
+    ).toEqual({ status: "accepted", decisionStatus: "proposed" });
   });
 
   it("suggests nothing when the bare key matches two fields", async () => {

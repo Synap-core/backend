@@ -38,6 +38,8 @@ export interface UnmodeledProperty {
   key: string;
   /** Closest VALID property slug, when one is close enough to be a likely typo. */
   didYouMean?: string;
+  /** The kind's status field the value was moved to (a batch create). */
+  movedTo?: string;
 }
 
 /**
@@ -81,6 +83,28 @@ export function misnamedLifecycleKeys(
       ? [{ key: u.key, field: u.didYouMean }]
       : []
   );
+}
+
+/**
+ * `properties` with each misnamed lifecycle key moved to its field, never over
+ * a value the field already has. Pure; `moved` is what actually moved.
+ */
+export function moveMisnamedLifecycle(
+  properties: Record<string, unknown>,
+  misnamed: ReadonlyArray<{ key: string; field: string }>
+): {
+  properties: Record<string, unknown>;
+  moved: Array<{ key: string; field: string }>;
+} {
+  const out = { ...properties };
+  const moved = misnamed.filter(
+    (m) => Object.hasOwn(out, m.key) && !Object.hasOwn(out, m.field)
+  );
+  for (const { key, field } of moved) {
+    out[field] = out[key];
+    delete out[key];
+  }
+  return { properties: out, moved };
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -331,26 +355,45 @@ export class PropertyValidationService {
     unmodeled: UnmodeledProperty[];
     modeled: ModeledField[];
     issues: PropertyIssue[];
+    /**
+     * The kind's status sent under another key, validated as its field: the
+     * caller moves it in its own bag with `moveMisnamedLifecycle` (a batch
+     * lane), or refuses the write with the field's name (an agent's create).
+     */
+    moved: Array<{ key: string; field: string }>;
   }> {
-    const merged: Record<string, unknown> = {
-      ...(opts?.profileDefaults ?? {}),
-      ...properties,
+    const check = (bag: Record<string, unknown>) => {
+      const merged: Record<string, unknown> = {
+        ...(opts?.profileDefaults ?? {}),
+        ...bag,
+      };
+      if (opts?.title !== undefined && !("title" in merged)) {
+        merged.title = opts.title;
+      }
+      return this.validateProperties(merged, profileId, workspaceId, {
+        enforceRequired: true,
+      });
     };
-    if (opts?.title !== undefined && !("title" in merged)) {
-      merged.title = opts.title;
-    }
-    const result = await this.validateProperties(
-      merged,
-      profileId,
-      workspaceId,
-      { enforceRequired: true }
+    let result = await check(properties);
+    const { properties: movedBag, moved } = moveMisnamedLifecycle(
+      properties,
+      misnamedLifecycleKeys(result.unmodeled, result.modeled)
     );
+    if (moved.length > 0) result = await check(movedBag);
     return {
       valid: result.valid,
       errors: result.errors,
-      unmodeled: result.unmodeled,
+      unmodeled: [
+        ...result.unmodeled,
+        ...moved.map((m) => ({
+          key: m.key,
+          didYouMean: m.field,
+          movedTo: m.field,
+        })),
+      ],
       modeled: result.modeled,
       issues: result.issues,
+      moved,
     };
   }
 

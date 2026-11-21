@@ -27,6 +27,7 @@ import {
   entities,
   KnowledgeFormConflictError,
   completeKnowledgeClaim,
+  moveMisnamedLifecycle,
   normalizeKnowledgeProperties,
 } from "@synap/database";
 import type { RoutingMemory } from "../services/routing-memory.js";
@@ -672,12 +673,18 @@ export async function deepStructureImportItems(
         degradedToNote++;
         degradedByProfile[slug] = (degradedByProfile[slug] ?? 0) + 1;
       } else if (opts.validateEntity && slug !== "note") {
-        const { valid, errors } = await opts.validateEntity({
+        const { valid, errors, moved } = await opts.validateEntity({
           profileSlug: slug,
           title,
           properties: normalizedProperties,
           ...(longBody ? { content: longBody } : {}),
         });
+        if (moved?.length) {
+          normalizedProperties = moveMisnamedLifecycle(
+            normalizedProperties,
+            moved
+          ).properties;
+        }
         if (!valid) {
           deps.logger.warn(
             { profileSlug: slug, title, errors },
