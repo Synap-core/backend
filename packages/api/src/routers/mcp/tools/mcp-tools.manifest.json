@@ -2800,7 +2800,7 @@
           "quote": {
             "type": "string",
             "maxLength": 50000,
-            "description": "The person's own words, verbatim. Required with 'answered'. Over 2000 characters: kept whole as a document (`quoteDocumentId`)."
+            "description": "The person's own words, verbatim. Required with 'answered'. Over 2000 chars: kept as a document (`quoteDocumentId`)."
           },
           "text": {
             "type": "string",
@@ -5364,7 +5364,7 @@
           },
           "documents": {
             "type": "array",
-            "description": "PLAN: documents to create (markdown). Attach one as an entity's ONE body (`entityRef`/`entityId`; not with long `content`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
+            "description": "PLAN: documents to create (markdown). Attach one as an entity's ONE body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
             "items": {
               "type": "object",
               "properties": {

@@ -3316,7 +3316,7 @@ export const tools = {
             quote: {
               type: "string",
               maxLength: ASK_LIMITS.relayQuoteMaxChars,
-              description: `The person's own words, verbatim. Required with 'answered'. Over ${ASK_LIMITS.answerTextMaxChars} characters: kept whole as a document (\`quoteDocumentId\`).`,
+              description: `The person's own words, verbatim. Required with 'answered'. Over ${ASK_LIMITS.answerTextMaxChars} chars: kept as a document (\`quoteDocumentId\`).`,
             },
             text: {
               type: "string",
@@ -4574,7 +4574,7 @@ export const tools = {
             documents: {
               type: "array",
               description:
-                "PLAN: documents to create (markdown). Attach one as an entity's ONE body (`entityRef`/`entityId`; not with long `content`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
+                "PLAN: documents to create (markdown). Attach one as an entity's ONE body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
               items: {
                 type: "object",
                 properties: {
