@@ -678,9 +678,11 @@ async function mergeStageSlotsOnEntry(
  * The `onFail` return for a check gate that held: resolve the entered stage's
  * `onFail.toStage` (key or name), un-pause the run (guarded on `paused`), and
  * advance it there through THIS door with `viaOnFail` set. Returns the stage it
- * went to, or null when the stage declares no (resolvable) `onFail`.
+ * went to, or null when the stage declares no (resolvable) `onFail`. Also the
+ * re-graded AI hold's way back (`ai-held-gate.ts`): a check that held while AI
+ * was out and really fails once it is back goes where a fresh fail goes.
  */
-async function returnToOnFailStage(
+export async function returnToOnFailStage(
   input: AdvanceSessionStageInput & { fromStage: string | null }
 ): Promise<string | null> {
   const { session, toStage } = input;

@@ -176,7 +176,10 @@ export const skills = pgTable(
 
     // ── Ownership ────────────────────────────────────────────────────────
 
+    /** Owner: the person (an agent only if nobody installed it). */
     userId: text("user_id").notNull(),
+    /** Actor: the agent that authored it, null for a person's own. FK in SQL. */
+    agentUserId: text("agent_user_id"),
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {
       onDelete: "cascade",
     }),
@@ -443,6 +446,7 @@ export const skills = pgTable(
   (table) => ({
     slugIdx: uniqueIndex("idx_skills_slug").on(table.slug),
     userIdIdx: index("skills_user_id_idx").on(table.userId),
+    agentUserIdIdx: index("skills_agent_user_id_idx").on(table.agentUserId),
     workspaceIdIdx: index("skills_workspace_id_idx").on(table.workspaceId),
     statusIdx: index("skills_status_idx").on(table.status),
     approvedIdx: index("idx_skills_approved").on(table.approved),

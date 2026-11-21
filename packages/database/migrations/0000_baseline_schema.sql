@@ -2334,6 +2334,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS "knowledge_facts_dedup_uq"
 CREATE TABLE IF NOT EXISTS "skills" (
   "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"         text    NOT NULL,
+  -- 0445: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"   text    REFERENCES "users"("id") ON DELETE SET NULL,
   "workspace_id"    uuid    REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "kind"            text    NOT NULL DEFAULT 'code',
   "scope"           text    NOT NULL DEFAULT 'pod',
@@ -2397,6 +2399,7 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "input_map" jsonb;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "url_patterns" text[];
 
 CREATE INDEX IF NOT EXISTS "skills_user_id_idx"     ON "skills" ("user_id");
+CREATE INDEX IF NOT EXISTS "skills_agent_user_id_idx" ON "skills" ("agent_user_id");
 CREATE INDEX IF NOT EXISTS "skills_workspace_id_idx" ON "skills" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "skills_status_idx"       ON "skills" ("status");
 CREATE INDEX IF NOT EXISTS "idx_skills_approved"     ON "skills" ("approved");
@@ -4394,6 +4397,8 @@ CREATE TABLE IF NOT EXISTS "tools" (
   "id"             uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id"   uuid,
   "created_by"     text        NOT NULL,
+  -- 0445: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"  text        REFERENCES "users"("id") ON DELETE SET NULL,
   "name"           text        NOT NULL,
   "description"    text,
   "kind"           text        NOT NULL,
@@ -4418,6 +4423,7 @@ ALTER TABLE "tools" ADD COLUMN IF NOT EXISTS "auth_binding" text NOT NULL DEFAUL
 CREATE INDEX IF NOT EXISTS "idx_tools_workspace_id" ON "tools" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_tools_kind"         ON "tools" ("kind");
 CREATE INDEX IF NOT EXISTS "idx_tools_approved"     ON "tools" ("approved");
+CREATE INDEX IF NOT EXISTS "idx_tools_agent_user_id" ON "tools" ("agent_user_id");
 -- Generalized from the old nango://-only index (mig 0132 → 0140): ONE pod-wide
 -- tool per distinct non-null credential_ref, scheme-agnostic. NULL credential_ref
 -- (builtin/script) and workspace-scoped tools are excluded.
@@ -4431,6 +4437,8 @@ CREATE TABLE IF NOT EXISTS "capabilities" (
   "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id" uuid,
   "created_by"   text        NOT NULL,
+  -- 0445: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id" text       REFERENCES "users"("id") ON DELETE SET NULL,
   "name"         text        NOT NULL,
   "description"  text,
   "approved"     boolean     NOT NULL DEFAULT false,
@@ -4443,6 +4451,7 @@ CREATE TABLE IF NOT EXISTS "capabilities" (
 );
 CREATE INDEX IF NOT EXISTS "idx_capabilities_workspace_id" ON "capabilities" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_capabilities_created_by"   ON "capabilities" ("created_by");
+CREATE INDEX IF NOT EXISTS "idx_capabilities_agent_user_id" ON "capabilities" ("agent_user_id");
 CREATE INDEX IF NOT EXISTS "idx_capabilities_template_key" ON "capabilities" ("template_key");
 -- NULL workspace_id coalesced to a sentinel so pod-wide containers participate
 -- in uniqueness (plain UNIQUE would treat NULLs as distinct). 0242.

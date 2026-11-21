@@ -141,12 +141,19 @@ async function executeTemplateApplyApproval({
     })
   );
   const workspaceId = applied.workspaceId;
+  const refusals = layerTwoRefusals(applied, input.proposalId);
 
   // Stamp the produced workspaceId onto the proposal row so clients/revert
   // can recover it (ProposalMaterializedRecord has no workspaceIds field —
-  // store as a sibling lifecycle key next to materialized).
-  await markApproved(proposal, input.proposalId, userId, applied);
-  const refusals = layerTwoRefusals(applied, input.proposalId);
+  // store as a sibling lifecycle key next to materialized), with what the
+  // apply did (`runResult`).
+  await markApproved(
+    proposal,
+    input.proposalId,
+    userId,
+    applied,
+    applyRunResult(applied, refusals, packageSlug)
+  );
 
   // Report to IS telemetry (fire-and-forget — never blocks)
   reportApproved(deps, proposal, input.proposalId);
@@ -208,7 +215,8 @@ async function markApproved(
   proposal: ProposalExecutorArgs["proposal"],
   proposalId: string,
   userId: string,
-  applied: TemplateApplyResult
+  applied: TemplateApplyResult,
+  runResult: TemplateApplyRunResult
 ): Promise<void> {
   await transitionProposal(db, {
     to: ProposalStatus.APPROVED,
@@ -216,6 +224,7 @@ async function markApproved(
       data: {
         ...((proposal.data as Record<string, unknown> | null | undefined) ??
           {}),
+        runResult,
         materializedWorkspaceId: applied.workspaceId,
         materializeStatus: applied.materializeStatus,
         // Every space THIS approval minted (the template's own, then each
@@ -274,6 +283,36 @@ function layerTwoRefusals(
     );
   }
   return applied.warning ? [applied.warning] : [];
+}
+
+/** What an approved template apply did, stamped on the proposal (`data.runResult`). */
+type TemplateApplyRunResult =
+  { finished: true } | { finished: false; reason: string };
+
+/**
+ * Whether the approved apply finished, and when not, the pod's sentence for
+ * why. Perso pod, 18 Nov 2026 (8ef951e8): Operations' update read "approved"
+ * twice while its new playbook waited on a proposal and the version never
+ * moved, and the reason went only to the approve reply, so the proposal never
+ * said it. The approval stays APPROVED (a layer-2 failure never fails the
+ * door, decision 3 of 2026-10-13); the row says what the apply did.
+ */
+function applyRunResult(
+  applied: TemplateApplyResult,
+  refusals: string[],
+  slug: string | undefined
+): TemplateApplyRunResult {
+  if (refusals.length > 0)
+    return { finished: false, reason: refusals.join(" ") };
+  const version = applied.pendingVersionStamp;
+  if (!version || applied.finished?.versionStamped) return { finished: true };
+  const run = slug
+    ? ` Run \`synap templates update ${slug}\` to finish it.`
+    : "";
+  return {
+    finished: false,
+    reason: `Not finished: the update did not reach version ${version}.${run}`,
+  };
 }
 
 /** Register the workspace/* approve executors. */
@@ -1079,8 +1118,18 @@ export function registerWorkspaceExecutors(): void {
         })
       );
       const workspaceId = applied.workspaceId;
-      await markApproved(proposal, input.proposalId, userId, applied);
       const refusals = layerTwoRefusals(applied, input.proposalId);
+      await markApproved(
+        proposal,
+        input.proposalId,
+        userId,
+        applied,
+        applyRunResult(
+          applied,
+          refusals,
+          inner.packageSlug as string | undefined
+        )
+      );
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -1179,6 +1228,7 @@ export function registerWorkspaceExecutors(): void {
         ...((proposal.data as Record<string, unknown> | null | undefined) ??
           {}),
         materializedWorkspaceId: workspaceId,
+        runResult: applyRunResult(applied, refusals, templateSlug),
         ...(report
           ? {
               reconcile: {

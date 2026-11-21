@@ -1885,6 +1885,7 @@ const captureBaseRouter = router({
         const r = result as {
           degraded?: unknown;
           degradedReason?: unknown;
+          degradedDetail?: { failureClass?: unknown };
           extraction?: {
             text?: unknown;
             textTruncated?: unknown;
@@ -1942,6 +1943,12 @@ const captureBaseRouter = router({
                     typeof r.degradedReason === "string"
                       ? r.degradedReason
                       : "unknown",
+                  // What the degraded-capture sweep reads to re-structure it
+                  // later as the same actor (`restructure-degraded-captures.ts`).
+                  ...(typeof r.degradedDetail?.failureClass === "string"
+                    ? { failureClass: r.degradedDetail.failureClass }
+                    : {}),
+                  agentUserId: ctx.agentUserId ?? null,
                 },
               }
             : {}),

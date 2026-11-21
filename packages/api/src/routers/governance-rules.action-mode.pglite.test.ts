@@ -427,3 +427,72 @@ describe("what never runs on its own", () => {
     ]);
   });
 });
+
+/* ── Finding ac28928c: the mode read ranks rows as the gate does ──────────── */
+
+/** Every AI × the pod × ACTION, through the human door. */
+const everyoneOn = (verdict: "auto" | "propose" | "deny", extra = {}) =>
+  caller(ALICE).create({
+    principalKind: "any",
+    scopeKind: "pod",
+    targetKind: "capability",
+    targetPattern: ACTION,
+    verdict,
+    ...extra,
+  });
+
+async function idsOf(action: string) {
+  const { rows } = await q<{ id: string; verdict: string }>(
+    `select id, verdict from governance_rules where target_pattern = $1 and revoked_at is null order by verdict`,
+    [action]
+  );
+  return rows;
+}
+
+describe("an auto and an asks-first row tie: the page reads what the gate does", () => {
+  it("the mode reads 'asks first', and the next run asks first", async () => {
+    await caller(ALICE).setActionMode({ action: ACTION, mode: "auto" });
+    await everyoneOn("propose");
+    expect((await idsOf(ACTION)).map((r) => r.verdict)).toEqual([
+      "auto",
+      "propose",
+    ]);
+    const read = await caller(ALICE).actionModes({ actions: [ACTION] });
+    expect(read.modes[0]).toMatchObject({ action: ACTION, mode: "ask" });
+    expect(await nextRun(ACTION, SKILL_ID)).toMatchObject({
+      decision: "propose",
+    });
+  });
+});
+
+describe("one call replaces rows in one transaction", () => {
+  it("create with replacesRuleIds: the new row stands, the old one is taken back", async () => {
+    await caller(ALICE).setActionMode({ action: ACTION, mode: "auto" });
+    const [old] = await idsOf(ACTION);
+    const res = await everyoneOn("deny", { replacesRuleIds: [old!.id] });
+    expect(await idsOf(ACTION)).toEqual([
+      { id: res.rule!.id, verdict: "deny" },
+    ]);
+    expect(await nextRun(ACTION, SKILL_ID)).toMatchObject({
+      decision: "deny",
+    });
+  });
+
+  it("a row it may not take back refuses the whole call: nothing is written", async () => {
+    await caller(ALICE).setActionMode({ action: ACTION, mode: "auto" });
+    const [old] = await idsOf(ACTION);
+    const err = await errorOf(
+      everyoneOn("deny", { replacesRuleIds: [old!.id, randomUUID()] })
+    );
+    expect(err.code).toBe("NOT_FOUND");
+    expect(await idsOf(ACTION)).toEqual([{ id: old!.id, verdict: "auto" }]);
+  });
+
+  it("revoke with moreIds takes back a tie in one call", async () => {
+    await caller(ALICE).setActionMode({ action: ACTION, mode: "auto" });
+    await everyoneOn("propose");
+    const [a, b] = await idsOf(ACTION);
+    await caller(ALICE).revoke({ id: a!.id, moreIds: [b!.id] });
+    expect(await idsOf(ACTION)).toEqual([]);
+  });
+});

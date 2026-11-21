@@ -417,6 +417,10 @@ export {
   type RunCalBackfillResult,
 } from "./services/calcom/run-cal-backfill.js";
 export {
+  sweepDegradedCaptures,
+  type DegradedSweepResult,
+} from "./services/captures/restructure-degraded-captures.js";
+export {
   runFirefliesIngest,
   type RunFirefliesIngestInput,
   type RunFirefliesIngestResult,
@@ -550,6 +554,12 @@ export { registerGoalLoopReactor } from "./services/tracks/goal-loop-reactor.js"
 // Exported for @synap/jobs' `registerHoldResumeFollowUp` IoC slot (W4): what
 // a goal's or a session's hold resume owes after the move.
 export { holdResumeFollowUp } from "./services/lifecycle/hold-resume-follow-up.js";
+// Exported for @synap/jobs' `registerAiHeldGateRegrader` IoC slot: a check
+// gate held because AI was not available grades again when AI is back.
+export { regradeAiHeldGate } from "./services/focus-sessions/ai-held-gate.js";
+// Exported for @synap/jobs' `registerAiAvailabilityNotifier` IoC slot: the
+// payers' notice when the pulled AI availability changes (W3 C5).
+export { notifyAiAvailabilityChange } from "./services/ai-availability/notify.js";
 export { meetOutcomesReactionEffect } from "./services/reactions/meet-outcomes-effect.js";
 export { reachStageStatusReactionEffect } from "./services/reactions/reach-stage-status-effect.js";
 export { advanceStageReactionEffect } from "./services/reactions/advance-stage-effect.js";

@@ -61,6 +61,12 @@ export const en = {
   // the verb on the button, named, and Cancel focused beside it.
   "decide.confirmIrreversible": "{verb} · can’t be undone",
   "decide.confirmCancel": "Cancel",
+  // An AI-made verb's own request: the person may let it run without review
+  // (founder, 21 Nov 2026). Taken back on the tool's page.
+  "decide.allowWithoutReview":
+    "From now on, let AIs run “{action}” without asking",
+  "decide.allowWithoutReviewHint":
+    "Its runs stop coming here for review. You can take this back on its tool’s page.",
   "decide.recorded": "Recorded in the",
   "outcome.approved": "You approved this change: it’s now in your pod.",
   "outcome.auto_approved":
@@ -177,6 +183,10 @@ export const fr: Catalog<typeof en> = {
   "decide.pickFirst": "Choisissez d’abord la fiche de chaque élément.",
   "decide.confirmIrreversible": "{verb} · irréversible",
   "decide.confirmCancel": "Annuler",
+  "decide.allowWithoutReview":
+    "Désormais, laisser les IA lancer « {action} » sans vous demander",
+  "decide.allowWithoutReviewHint":
+    "Ses lancements ne passeront plus par votre revue. Vous pouvez revenir dessus sur la page de son outil.",
   "decide.recorded": "Enregistré dans",
   "outcome.approved":
     "Vous avez approuvé ce changement\u00a0: il est maintenant dans votre pod.",

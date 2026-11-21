@@ -10,7 +10,7 @@ import {
   getWorkspaceMembership,
   setRunStatus,
   transitionProposal,
-  ownerAndActor,
+  ownerOfProposal,
 } from "@synap/database";
 import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 // `createLinks` is the ONE link door and it lives in @synap/api, not
@@ -152,11 +152,7 @@ export function registerPlaybookExecutors(): void {
           message: "No workspace access",
         });
       }
-      const owner = await ownerAndActor(
-        db,
-        proposal.subjectUserId ?? proposal.agentUserId ?? userId,
-        proposal.agentUserId
-      );
+      const owner = await ownerOfProposal(db, proposal, userId);
       const ownerMembership =
         owner.ownerId === userId
           ? membership

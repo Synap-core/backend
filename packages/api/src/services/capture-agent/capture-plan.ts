@@ -30,6 +30,7 @@ import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
 } from "@synap-core/types/focus-sessions";
+import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import {
   skillAuthoringProblem,
   skillSlugProblem,
@@ -896,6 +897,44 @@ export function validatePlanOperations(
       default:
         return;
     }
+  });
+
+  // ONE body per entity (ticket 9fd9c3d5): a document step's `entityRef` /
+  // `entityId` makes it the entity's BODY, and an entity's long `content`
+  // becomes its body too. Two bodies for one entity failed at approval
+  // (`body-replace-guard`) and rolled the whole plan back; refused here,
+  // before anything is filed, naming which one to keep.
+  const bodyFrom = new Map<string, string>();
+  operations.forEach((op) => {
+    const ref = (op as { ref?: unknown }).ref;
+    if (
+      op.op === "create_entity" &&
+      typeof ref === "string" &&
+      !op.existingEntityId &&
+      typeof op.content === "string" &&
+      shouldMaterializeAsDocument(op.content)
+    ) {
+      bodyFrom.set(`ref:${ref}`, "its long `content`");
+    }
+  });
+  operations.forEach((op, i) => {
+    if (op.op !== "create_document") return;
+    const target = op.entityRef
+      ? `ref:${op.entityRef}`
+      : op.entityId
+        ? `id:${op.entityId}`
+        : null;
+    if (!target) return;
+    const name = op.entityRef ?? op.entityId;
+    const first = bodyFrom.get(target);
+    if (first) {
+      push(
+        i,
+        `entity ${name} already gets its body from ${first}; an entity has ONE body. Keep one: drop the entity's \`content\` (this document becomes its body), or file this document on a session (\`sessionRef\`/\`sessionId\`) instead of \`entityRef\`/\`entityId\`.`
+      );
+      return;
+    }
+    bodyFrom.set(target, `document "${op.ref}"`);
   });
 
   // One parent per session: a `parentRef` and a `spawned_from` link from the

@@ -64,6 +64,8 @@ export const en = {
   "toolsGrid.cellAria": "{who}: {mode}. Open the tool",
   "toolsGrid.empty": "No approval names a tool yet.",
   "toolsGrid.failed": "Couldn’t load the tools these approvals name.",
+  "doors.limits": "Daily write limits",
+  "doors.calibration": "Calibration",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -123,4 +125,6 @@ export const fr: Catalog<typeof en> = {
   "toolsGrid.empty": "Aucune approbation ne nomme encore d’outil.",
   "toolsGrid.failed":
     "Impossible de charger les outils que ces approbations nomment.",
+  "doors.limits": "Limites d’écritures par jour",
+  "doors.calibration": "Calibrage",
 };

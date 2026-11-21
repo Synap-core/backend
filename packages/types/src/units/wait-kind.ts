@@ -14,13 +14,15 @@
  * `thing` (other work), `date` (the calendar), `nobody` (a deliberate park).
  *
  * ONE map table ({@link WAIT_KIND_FROM}) says which kind each existing value
- * gives: a hold's `on`, a hold's dev ref (`pr:` / `main:` / `job:`), an owed
- * slot's `blockedReason`, and the waiting-on source. The mapping FUNCTION is
+ * gives: a hold's `on`, a hold's dev ref (`pr:` / `main:` / `job:` / `ai:`),
+ * the AI availability an `ai:` hold waits out, an owed slot's
+ * `blockedReason`, and the waiting-on source. The mapping FUNCTION is
  * `waitKindOf` (`./goal.ts`, beside `waitingOnReasonOf`).
  *
  * Pure and import-free at run time: `./state.ts` reads it, and Relay, the
  * browser and the CLI import `./state.ts`.
  */
+import type { AiAvailabilityKind } from "../ai-availability/index.js";
 import type { HoldDevRef, HoldOn } from "../lifecycle/hold.js";
 
 /** Every wait kind, in the order of the taxonomy (c3a662b2 §3). */
@@ -119,7 +121,11 @@ export function waitKindBall(
  *    pause that said nothing) it names no wait, so it reads as a park.
  *  - `dev`: a hold whose `until.moves` names a dev fact. It outranks `on`:
  *    `pr:` waits on the PR's checks and landing, `main:` on a red main,
- *    `job:` on a devbox job.
+ *    `job:` on a devbox job, `ai:` on the AI service (the vendor) when the
+ *    pod knows no payer state.
+ *  - `ai`: an `ai:` hold while the pod's AI availability names a state
+ *    (outranks `dev.ai`): whoever pays must act on credits, a plan or a
+ *    payment (`payment`); the AI service itself is out (`vendor`).
  *  - `blockedReason`: an owed slot's class of blocker; `none` = a slot with
  *    no reason (a question, a param, an ask).
  *  - `source`: what the pod found the wait in (`WaitingOnSource`); a work
@@ -144,6 +150,16 @@ export const WAIT_KIND_FROM = {
     pr: "ci",
     main: "red_main",
     job: "devbox_job",
+    ai: "vendor",
+  },
+  ai: {
+    credits_low: "payment",
+    credits_empty: "payment",
+    suspended: "payment",
+    not_entitled: "payment",
+    budget_paused: "vendor",
+    provider_issue: "vendor",
+    service_down: "vendor",
   },
   blockedReason: {
     credential: "access",
@@ -174,6 +190,7 @@ export const WAIT_KIND_FROM = {
 } as const satisfies {
   hold: Record<HoldOn, WaitKind>;
   dev: Record<HoldDevRef["kind"], WaitKind>;
+  ai: Record<Exclude<AiAvailabilityKind, "ok">, WaitKind>;
   blockedReason: Record<string, WaitKind>;
   source: Record<string, WaitKind>;
 };

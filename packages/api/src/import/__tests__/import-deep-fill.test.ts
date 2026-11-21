@@ -275,3 +275,53 @@ describe("deep import — schema preflight", () => {
     expect(validateEntity).not.toHaveBeenCalled();
   });
 });
+
+describe("deep import — the kind's status under another key", () => {
+  it("is filed under the status field through the shared create validator", async () => {
+    const { makeEntitySchemaValidator } =
+      await import("../../services/import/structuring.js");
+    const { PropertyValidationService } = await import("@synap/database");
+    const profiles = {
+      resolveProfile: async (slug: string) =>
+        slug === "decision" ? { id: "p-decision", defaultValues: {} } : null,
+      getEffectiveProperties: async () => [
+        {
+          slug: "decisionStatus",
+          valueType: "string",
+          required: false,
+          defaultValue: null,
+          constraints: { enum: ["proposed", "accepted"] },
+          displayOrder: 0,
+          isLifecycle: true,
+        },
+      ],
+    } as never;
+    const res = await deepStructureImportItems(
+      [item()],
+      clientReturning([
+        {
+          tempId: "t1",
+          profileSlug: "decision",
+          title: "Billing moves to annual plans only",
+          properties: { status: "accepted" },
+          confidence: 0.9,
+        },
+      ]),
+      {
+        validSlugs: new Set(["decision", "note"]),
+        includeProvenance: false,
+        validateEntity: makeEntitySchemaValidator(
+          profiles,
+          new PropertyValidationService(profiles),
+          { userId: "u1", workspaceId: null }
+        ),
+      },
+      deps
+    );
+    const ops = createOps(
+      res.operations as unknown as Array<Record<string, unknown>>
+    );
+    expect(ops[0].profileSlug).toBe("decision");
+    expect(ops[0].properties).toEqual({ decisionStatus: "accepted" });
+  });
+});

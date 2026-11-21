@@ -5,6 +5,7 @@
  */
 
 import { parseBoxDeclaration } from "../../services/box-runs/box-spec.js";
+import { declaredReadOnly } from "../../services/capabilities/capability-drift.js";
 import type {
   ProposalFieldDrift,
   ProposalReviewChange,
@@ -334,6 +335,14 @@ export function buildProposalChanges(
         )
       : null;
   const promotesBox = boxDeclaration?.ok === true;
+  // `readOnly: true` on a skill: once approved, every agent run of it skips
+  // review (the gate's read-only short-circuit). Named as that consequence.
+  const promotesReadOnly =
+    declaredReadOnly(
+      data.metadata && typeof data.metadata === "object"
+        ? (data.metadata as Record<string, unknown>)
+        : null
+    ) === true;
 
   // The playbook STRUCTURE keys, promoted for the same reason (see the block
   // after the allowedHosts promotion): resolved here so the fallback can skip
@@ -361,7 +370,11 @@ export function buildProposalChanges(
     // opaque. When the promotion fires, this blob is a strict duplicate of it
     // plus noise (marketSource baselines, run counters) — the exact thing the
     // promotion exists to displace.
-    if (key === "metadata" && (promotesAllowedHosts || promotesBox)) continue;
+    if (
+      key === "metadata" &&
+      (promotesAllowedHosts || promotesBox || promotesReadOnly)
+    )
+      continue;
     // Promoted below as readable rows; the raw copy would be a duplicate.
     if (key === "stages" && promotedStages) continue;
     if (key === "scope" && promotesScope) continue;
@@ -453,14 +466,28 @@ export function buildProposalChanges(
     }
   }
 
+  // Field label, like the rows above: no vocabulary token to resolve. First on
+  // the card: approving it lets every later agent run skip review.
+  if (promotesReadOnly) {
+    changes.unshift({
+      path: "metadata.readOnly",
+      label: "Runs without review once approved",
+      operation,
+      before: undefined,
+      after: "Yes: declared read-only, so every agent run skips review",
+      valueType: "string",
+    });
+  }
+
   // ── The rest of a promoted bag: one row per key ────────────────────────────
   // The raw `metadata` row is skipped when a promotion fires, so every other
   // key it carries (a `readOnly` that makes every agent run automatic, for
   // one) gets its own row: a promotion displaces the blob, never what is in it.
-  if (promotesAllowedHosts || promotesBox) {
+  if (promotesAllowedHosts || promotesBox || promotesReadOnly) {
     const promoted = new Set([
       ...(promotesAllowedHosts ? ["allowedHosts"] : []),
       ...(promotesBox ? ["box"] : []),
+      ...(promotesReadOnly ? ["readOnly"] : []),
     ]);
     for (const [key, value] of Object.entries(
       data.metadata as Record<string, unknown>

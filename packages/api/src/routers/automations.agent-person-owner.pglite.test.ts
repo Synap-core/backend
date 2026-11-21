@@ -103,7 +103,11 @@ async function automationRow(): Promise<{ status: string; name: string }> {
 }
 
 beforeAll(async () => {
-  for (const table of [database.users, database.automations]) {
+  for (const table of [
+    database.users,
+    database.automations,
+    database.podMembers,
+  ]) {
     if (is(table, PgTableClass)) await h.client!.exec(ddlFor(table));
   }
   const user = (id: string, type: string, createdBy: string | null) =>
@@ -195,6 +199,32 @@ describe("assertWorkspaceWrite: the pod-wide rung", () => {
     await refused(PERSON, "77777777-7777-4777-8777-777777777777");
     // an explicit null owner
     await refused(PERSON, null);
+  });
+});
+
+describe("ownerAndActor", () => {
+  it("an agent nobody is recorded as installing is owned by the pod owner", async () => {
+    await expect(database.ownerAndActor(h.db, ORPHAN_AGENT)).resolves.toEqual({
+      ownerId: ORPHAN_AGENT,
+      agentUserId: ORPHAN_AGENT,
+    });
+    // A former owner who left, then the live one (oldest live owner wins).
+    await h.client!.query(
+      `insert into pod_members (id, user_id, pod_role, created_at, removed_at)
+       values (gen_random_uuid(), $1, 'owner', '2025-01-01', '2025-06-01'),
+              (gen_random_uuid(), $2, 'owner', '2025-02-01', null)`,
+      [OTHER_PERSON, PERSON]
+    );
+    await expect(database.ownerAndActor(h.db, ORPHAN_AGENT)).resolves.toEqual({
+      ownerId: PERSON,
+      agentUserId: ORPHAN_AGENT,
+    });
+    // An agent with an installer still goes to that person.
+    await expect(database.ownerAndActor(h.db, OTHER_AGENT)).resolves.toEqual({
+      ownerId: OTHER_PERSON,
+      agentUserId: OTHER_AGENT,
+    });
+    await h.client!.exec(`delete from pod_members;`);
   });
 });
 

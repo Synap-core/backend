@@ -43,7 +43,12 @@ import {
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import type { Hold } from "@synap-core/types/lifecycle";
+import { HOLD_AI_MOVES, type Hold } from "@synap-core/types/lifecycle";
+import { resolveAiFailureState } from "@synap-core/types/ai-availability";
+import {
+  describeAiFailure,
+  type AiFailureClass,
+} from "../../utils/ai-failure.js";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   readCriteria,
@@ -276,6 +281,14 @@ export interface CheckMeasure {
    * `onFail` stage. The owner's grade, or a later evaluation, resumes it.
    */
   notJudged?: boolean;
+  /**
+   * With `notJudged`: every failure that kept the judge from running is an AI
+   * AVAILABILITY state (credits, plan, payment, provider, service:
+   * `resolveAiFailureState`), not a one-off fault. The hold then also waits
+   * on `ai:available`, so AI coming back re-grades the gate by itself
+   * (`ai-held-gate.ts`). Any other failure holds for the owner's grade only.
+   */
+  aiUnavailable?: boolean;
 }
 
 export interface StageGateAdvance {
@@ -409,27 +422,13 @@ async function applyCheckGate(
       paused: false,
     };
   }
-  const { failing, reason, notJudged } = await subject.checkFailing(fromStage);
+  const measure = await subject.checkFailing(fromStage);
+  const { failing, reason, notJudged } = measure;
   if (failing.length === 0) {
     return { kind: "check", stageKey, passed: true, failing, paused: false };
   }
-  const paused = await subject.pause(
-    {
-      on: "thing",
-      ref: `check:${stageKey}`,
-      reason:
-        reason ??
-        `The check of "${fromStage}" did not pass: ${failing.join(", ")}.`,
-    },
-    {
-      [CHECK_GATE_METADATA_KEY]: {
-        stageKey,
-        fromStage,
-        failing,
-        ...(reason ? { reason } : {}),
-      },
-    }
-  );
+  const { hold, metadataPatch } = checkGatePause(stageKey, fromStage, measure);
+  const paused = await subject.pause(hold, metadataPatch);
   return {
     kind: "check",
     stageKey,
@@ -438,6 +437,40 @@ async function applyCheckGate(
     paused,
     ...(reason ? { reason } : {}),
     ...(notJudged ? { notJudged } : {}),
+  };
+}
+
+/**
+ * The hold a check gate that did not pass records, and its `checkGate`
+ * record: waiting on the check itself (`check:<stage>`, the ref
+ * `heldByCheckGate` recognises), and, when the judge could not run because AI
+ * is not available, also on AI coming back (`until: ai:available`, a wait on
+ * an outside party).
+ */
+export function checkGatePause(
+  stageKey: string,
+  fromStage: string,
+  measure: CheckMeasure
+): { hold: Hold; metadataPatch: Record<string, unknown> } {
+  const { failing, reason } = measure;
+  const aiWait = measure.notJudged === true && measure.aiUnavailable === true;
+  return {
+    hold: {
+      on: aiWait ? "external" : "thing",
+      ref: `check:${stageKey}`,
+      reason:
+        reason ??
+        `The check of "${fromStage}" did not pass: ${failing.join(", ")}.`,
+      ...(aiWait ? { until: { moves: HOLD_AI_MOVES } } : {}),
+    },
+    metadataPatch: {
+      [CHECK_GATE_METADATA_KEY]: {
+        stageKey,
+        fromStage,
+        failing,
+        ...(reason ? { reason } : {}),
+      },
+    },
   };
 }
 
@@ -651,14 +684,13 @@ export function sessionGateSubject(
       });
       // The judge criteria this evaluation could not grade because the AI
       // call failed, with that failure in words (`evaluate.ts`).
-      const notJudged = new Map(
-        result.results.flatMap((r) =>
-          r.status === "skipped" && r.failureClass && r.reason
-            ? [[r.key, r.reason] as const]
-            : []
-        )
+      const couldNotRun = result.results.flatMap((r) =>
+        r.status === "skipped" && r.failureClass && r.reason
+          ? [{ key: r.key, reason: r.reason, failureClass: r.failureClass }]
+          : []
       );
-      return checkGateHold(
+      const notJudged = new Map(couldNotRun.map((r) => [r.key, r.reason]));
+      const measure = checkGateHold(
         {
           stages: proc?.stages ?? [],
           expectedOutputs: row?.expectedOutputs ?? [],
@@ -668,6 +700,10 @@ export function sessionGateSubject(
         fromStage,
         notJudged
       );
+      return measure.notJudged &&
+        couldNotRun.every((r) => isAvailabilityFailure(r.failureClass))
+        ? { ...measure, aiUnavailable: true }
+        : measure;
     },
     proposal: {
       targetType: STAGE_GATE_TARGET_TYPE,
@@ -678,6 +714,15 @@ export function sessionGateSubject(
       playbookId: params.playbookId ?? null,
     },
   };
+}
+
+/**
+ * A failure class that proves an AI availability state (credits, plan,
+ * payment, budget, provider, service), read through the one classification
+ * (`resolveAiFailureState` over the class's wire code), never a list here.
+ */
+function isAvailabilityFailure(failureClass: AiFailureClass): boolean {
+  return resolveAiFailureState(describeAiFailure(failureClass).code) !== null;
 }
 
 /**

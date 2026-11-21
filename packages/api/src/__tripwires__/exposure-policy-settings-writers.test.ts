@@ -174,13 +174,13 @@ const CLASSIFIED: Record<string, { sites: number; why: string }> = {
     sites: 1,
     why: "replica upsert of a synced row",
   },
-  // Key-targeted SQL too: the agent-preset re-provision MERGES three fixed
+  // Key-targeted SQL too: the agent-preset re-provision MERGES two fixed
   // code keys into the stored blob (`settings || {…}`), so every other key,
   // controlPlane and exposurePolicy included, survives it. It used to REPLACE
   // the whole blob, which silently reset the owner's policy to the default.
   "packages/api/src/utils/agent-workspace-preset.ts": {
     sites: 1,
-    why: "settings || {workspaceType, linkedAgentId, governanceMode}",
+    why: "settings || {workspaceType, linkedAgentId}",
   },
 };
 

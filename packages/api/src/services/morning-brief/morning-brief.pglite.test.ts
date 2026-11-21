@@ -639,6 +639,7 @@ describe("what counts as delivered", () => {
           goal: null,
           status: "active",
           closedAt: null,
+          closedNotDone: false,
           expectedOutputs: [
             {
               kind: "pull_request",
@@ -654,6 +655,25 @@ describe("what counts as delivered", () => {
       false
     );
     expect(facts.prsMerged).toBe(2);
+  });
+
+  it("a session closed with required work open is not delivered", () => {
+    const row = (closedNotDone: boolean) => ({
+      id: "s",
+      title: "Lane",
+      goal: null,
+      status: "closed",
+      closedAt: hoursAgo(1),
+      closedNotDone,
+      expectedOutputs: [],
+    });
+    const since = new Date(hoursAgo(24));
+    expect(foldDelivered([row(false)], [], since, false).closedTitles).toEqual([
+      "Lane",
+    ]);
+    expect(foldDelivered([row(true)], [], since, false).closedTitles).toEqual(
+      []
+    );
   });
 
   it("since the last digest, else a day, never more than a week", () => {

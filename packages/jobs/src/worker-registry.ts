@@ -53,6 +53,15 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "ai",
   },
   {
+    id: "degraded-capture-sweep",
+    name: "Degraded Capture Sweep",
+    description:
+      "Every 30min, runs the api-side sweep (in-process) which structures text captures that were saved raw because the AI was unavailable or over quota, oldest first, through the Structure again door as the actor who captured them (an agent's capture becomes its proposal). Probes each owner's AI first and stops at the first quota or unavailable answer without marking anything; at most 5 per run and 40 per day; a capture that fails 3 times for another reason is left alone with its reason.",
+    triggers: ["cron:*/30 * * * *"],
+    outputs: ["proposal.created"],
+    category: "ai",
+  },
+  {
     id: "fireflies-ingest",
     name: "Fireflies Transcript Ingest",
     description:
